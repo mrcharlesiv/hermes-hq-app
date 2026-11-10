@@ -1,0 +1,207 @@
+/* [plugin-pages] The page plugin host's stylesheet (Tailwind v4, compiled in the page by @tailwindcss/browser).
+   The dashboard's tokens (muted-foreground, border, card, midground…) are mapped to the --hq-* variables the app
+   writes from its own palette (PluginPageTheme.swift), so a plugin's utility classes and HQ's components follow the
+   app's light/dark look and skin. Component styles sit in @layer components, so a plugin's own utilities win. */
+
+@theme {
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  --font-mondwest: var(--font-sans);
+  --font-courier: var(--font-mono);
+  --font-expanded: var(--font-sans);
+  --font-compressed: var(--font-sans);
+
+  --color-background: var(--hq-bg);
+  --color-background-base: var(--hq-bg);
+  --color-foreground: var(--hq-label);
+  --color-foreground-base: var(--hq-label);
+  --color-midground: var(--hq-label);
+  --color-text-secondary: var(--hq-label2);
+  --color-card: var(--hq-card);
+  --color-card-foreground: var(--hq-label);
+  --color-popover: var(--hq-card);
+  --color-popover-foreground: var(--hq-label);
+  --color-primary: var(--hq-tint);
+  --color-primary-foreground: var(--hq-on-tint);
+  --color-secondary: var(--hq-fill);
+  --color-secondary-foreground: var(--hq-label);
+  --color-muted: var(--hq-fill);
+  --color-muted-foreground: var(--hq-label2);
+  --color-accent: var(--hq-fill);
+  --color-accent-foreground: var(--hq-label);
+  --color-destructive: var(--hq-red);
+  --color-destructive-foreground: #ffffff;
+  --color-success: var(--hq-green);
+  --color-warning: var(--hq-orange);
+  --color-border: var(--hq-separator);
+  --color-input: var(--hq-separator);
+  --color-ring: var(--hq-tint);
+
+  /* [mac] Mac polish #125: Tailwind's text-xs (12 px) is never under the app's smallest on the Mac (--hq-text-min,
+     13 px there and 0 elsewhere, from PluginPageTheme.swift): drawn at 77 %, it came out at 9 pt. */
+  --text-xs: max(0.75rem, var(--hq-text-min, 0px));
+
+  --radius-sm: calc(var(--hq-radius) - 4px);
+  --radius-md: calc(var(--hq-radius) - 2px);
+  --radius-lg: var(--hq-radius);
+  --radius-xl: calc(var(--hq-radius) + 4px);
+}
+
+@layer base {
+  html { -webkit-text-size-adjust: 100%; color-scheme: var(--hq-scheme); }
+  body {
+    margin: 0;
+    background: var(--hq-bg);
+    color: var(--hq-label);
+    font-family: var(--font-sans);
+    font-size: var(--hq-body-size, 15px);
+    line-height: 1.4;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-font-smoothing: antialiased;
+  }
+  #root {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: var(--hq-page-pad-top, 12px) max(var(--hq-page-pad, 16px), env(safe-area-inset-right))
+             calc(28px + env(safe-area-inset-bottom)) max(var(--hq-page-pad, 16px), env(safe-area-inset-left));
+  }
+  a { color: inherit; text-decoration: none; }
+
+  /* [plugin-page-fit] Dashboard plugins are made for a desktop browser; on a phone one long word (a path, a URL, a
+     cron prompt) set a grid or flex item's minimum width and pushed the whole page past the screen (Memory Wiki:
+     637 pt on a 390 pt iPhone). Long words wrap anywhere, so they no longer set a minimum width, and a grid item may
+     shrink to its column (flex items keep theirs, so icons and one-line badges don't get squeezed). Code blocks
+     scroll on their own. These rules sit in the base layer, so a
+     plugin's own utilities (min-w-*, whitespace-*, break-*) still win. */
+  #root { overflow-wrap: anywhere; }
+  #root :where(.grid, .inline-grid) > * { min-width: 0; }
+  #root pre { max-width: 100%; overflow-x: auto; }
+  #root table { max-width: 100%; }
+  #root :where(img, video, canvas, iframe, svg) { max-width: 100%; }
+  ::selection { background: color-mix(in srgb, var(--hq-tint) 30%, transparent); }
+}
+
+@layer components {
+  .hq-card {
+    width: 100%;
+    background: var(--hq-card);
+    color: var(--hq-label);
+    border-radius: var(--hq-radius);
+    border: var(--hq-card-border, 0 solid transparent);
+    overflow: hidden;
+  }
+  .hq-card-header { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px 8px; }
+  .hq-card-title { margin: 0; font-size: 17px; font-weight: 600; line-height: 1.25; letter-spacing: -0.01em; }
+  .hq-card-description { margin: 0; font-size: 13px; color: var(--hq-label2); }
+  .hq-card-content { padding: 0 16px 14px; }
+  .hq-card-content:first-child { padding-top: 14px; }
+
+  .hq-badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    flex-shrink: 0; max-width: 100%; padding: 4px 8px; border-radius: 999px;
+    font-size: max(12px, var(--hq-text-min, 0px)); font-weight: 600; line-height: 1.15;   /* [mac] Mac polish #125 */
+    background: color-mix(in srgb, var(--hq-tint) 15%, transparent); color: var(--hq-tint);
+  }
+  .hq-badge-secondary { background: var(--hq-fill); color: var(--hq-label2); }
+  .hq-badge-outline { background: transparent; box-shadow: inset 0 0 0 1px var(--hq-separator); color: var(--hq-label2); }
+  .hq-badge-destructive { background: color-mix(in srgb, var(--hq-red) 15%, transparent); color: var(--hq-red); }
+  .hq-badge-success { background: color-mix(in srgb, var(--hq-green) 18%, transparent); color: var(--hq-green); }
+  .hq-badge-warning { background: color-mix(in srgb, var(--hq-orange) 18%, transparent); color: var(--hq-orange); }
+
+  .hq-button {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    min-height: 36px; padding: 0 14px; border: 0; border-radius: 10px;
+    font: inherit; font-size: 15px; font-weight: 600; line-height: 1.2;
+    cursor: pointer; -webkit-user-select: none; user-select: none;
+    transition: opacity 0.15s, background-color 0.15s;
+  }
+  .hq-button:active { opacity: 0.6; }
+  .hq-button:disabled { opacity: 0.4; pointer-events: none; }
+  .hq-button-filled { background: var(--hq-tint); color: var(--hq-on-tint); }
+  .hq-button-outlined { background: var(--hq-fill); color: var(--hq-tint); }
+  .hq-button-ghost { background: transparent; color: var(--hq-tint); }
+  .hq-button-destructive { background: var(--hq-red); color: #ffffff; }
+  .hq-button-destructive-plain { background: transparent; color: var(--hq-red); }
+  .hq-button-sm { min-height: 30px; padding: 0 10px; font-size: 14px; border-radius: 8px; }
+  .hq-button-icon, .hq-button-xs { min-height: 32px; width: 32px; padding: 0; }
+  .hq-button svg { width: 15px; height: 15px; }
+
+  .hq-input {
+    width: 100%; min-height: 38px; padding: 8px 12px; border: 0; border-radius: 10px;
+    background: var(--hq-fill); color: var(--hq-label);
+    font: inherit; font-size: 16px; outline: none; -webkit-appearance: none; appearance: none;
+  }
+  .hq-input::placeholder { color: var(--hq-label3); }
+  .hq-input:focus { box-shadow: 0 0 0 2px color-mix(in srgb, var(--hq-tint) 55%, transparent); }
+  .hq-input:disabled { opacity: 0.5; }
+
+  .hq-label { font-size: 13px; font-weight: 500; color: var(--hq-label2); }
+
+  .hq-separator { flex-shrink: 0; width: 100%; height: 1px; background: var(--hq-separator); }
+  .hq-separator-v { width: 1px; height: 100%; }
+
+  .hq-checkbox {
+    display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+    width: 22px; height: 22px; padding: 0; border-radius: 50%;
+    border: 1.5px solid var(--hq-label3); background: transparent; cursor: pointer;
+  }
+  .hq-checkbox[data-state="checked"], .hq-checkbox[data-state="indeterminate"] { background: var(--hq-tint); border-color: var(--hq-tint); }
+  .hq-checkbox:disabled { opacity: 0.4; }
+  .hq-checkbox svg { width: 12px; height: 12px; fill: none; stroke: var(--hq-on-tint); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+  .hq-select { position: relative; width: 100%; }
+  .hq-select select {
+    width: 100%; min-height: 38px; padding: 8px 32px 8px 12px; border: 0; border-radius: 10px;
+    background: var(--hq-fill); color: var(--hq-label);
+    font: inherit; font-size: 16px; -webkit-appearance: none; appearance: none;
+  }
+  .hq-select svg { position: absolute; top: 50%; right: 12px; width: 12px; height: 12px; margin-top: -6px; fill: none; stroke: var(--hq-label2); stroke-width: 1.6; pointer-events: none; }
+
+  .hq-tabs { display: flex; flex-direction: column; gap: 16px; }
+  .hq-tabs-list {
+    display: inline-flex; align-self: flex-start; gap: 2px; max-width: 100%; overflow-x: auto;
+    padding: 2px; border-radius: 9px; background: var(--hq-fill);
+  }
+  .hq-tabs-trigger {
+    padding: 6px 12px; border: 0; border-radius: 7px; background: transparent; color: var(--hq-label);
+    font: inherit; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer;
+  }
+  .hq-tabs-trigger[data-state="active"] { background: var(--hq-segment); font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
+
+  .hq-overlay {
+    position: fixed; inset: 0; z-index: 50;
+    display: flex; align-items: center; justify-content: center; padding: 20px;
+    background: rgba(0, 0, 0, 0.3);
+  }
+  .hq-dialog {
+    width: 100%; max-width: 420px; max-height: 85vh; overflow: auto;
+    border-radius: 24px; border: 0.5px solid var(--hq-glass-edge);
+    background: var(--hq-glass);
+    -webkit-backdrop-filter: blur(28px) saturate(1.6); backdrop-filter: blur(28px) saturate(1.6);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.22);
+    color: var(--hq-label);
+  }
+  .hq-dialog-body { position: relative; display: flex; flex-direction: column; gap: 12px; padding: 20px; }
+  .hq-dialog-header { display: flex; flex-direction: column; gap: 4px; padding-right: 30px; }
+  .hq-dialog-title { margin: 0; font-size: 17px; font-weight: 600; }
+  .hq-dialog-description { margin: 0; font-size: 14px; color: var(--hq-label2); }
+  .hq-dialog-footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 4px; }
+  .hq-confirm .hq-dialog-footer .hq-button { flex: 1; }
+  .hq-dialog-x {
+    position: absolute; top: 14px; right: 14px;
+    display: flex; align-items: center; justify-content: center;
+    width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%; background: var(--hq-fill); cursor: pointer;
+  }
+  .hq-dialog-x svg { width: 10px; height: 10px; fill: none; stroke: var(--hq-label2); stroke-width: 1.8; stroke-linecap: round; }
+
+  .hq-toast {
+    position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom)); z-index: 60;
+    transform: translateX(-50%); max-width: calc(100% - 40px);
+    padding: 10px 16px; border-radius: 999px; border: 0.5px solid var(--hq-glass-edge);
+    background: var(--hq-glass);
+    -webkit-backdrop-filter: blur(28px) saturate(1.6); backdrop-filter: blur(28px) saturate(1.6);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+    font-size: 14px; font-weight: 500; color: var(--hq-label);
+  }
+  .hq-toast-error { color: var(--hq-red); }
+}

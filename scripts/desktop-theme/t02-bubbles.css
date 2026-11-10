@@ -1,0 +1,34 @@
+/* Chat text at the phone's reading size, a step under iOS's 17 pt body for a desktop window. */
+html:root {--conversation-text-font-size:14px}
+
+/* Your messages: a filled bubble on the right, as wide as its text, white type. Painted here, not through the
+   palette's userBubble, which desktop mixes toward the page (and the Message Bubble transparency setting). */
+html:root {--hq-bubble-me:#0053fd}
+html:root.dark {--hq-bubble-me:#3863bf}
+[data-slot='aui_user-message-root'] .composer-human-message:not(.ui-prompt-input__container) {
+  position:relative;width:fit-content;max-width:min(80%,44rem);margin-left:auto;
+  padding:8px 13px;border:0;border-radius:12px 12px 0 12px;
+  background:var(--hq-bubble-me);color:#fff;box-shadow:none;backdrop-filter:none}
+
+[data-slot='aui_user-message-root'] .composer-human-message:not(.ui-prompt-input__container) a {text-decoration:underline;text-underline-offset:.15em}
+[data-slot='aui_user-message-root'] .composer-human-message-container {background:transparent;justify-content:flex-end}
+
+/* A bot's text: a grey bubble on the left, as on the phone (--ios-bubble-bot). Its tool rows stay outside, as the
+   reply's work trail. Only the reply's own text blocks: markdown nested in a tool's output keeps its plain look. */
+html:root {--hq-bubble-bot:#e9e9eb}
+html:root.dark {--hq-bubble-bot:#26282c}
+[data-slot='aui_assistant-message-content'] .aui-md:not(.aui-md .aui-md, details .aui-md) {
+  position:relative;width:fit-content;max-width:min(88%,60rem);box-sizing:border-box;
+  padding:8px 13px;border-radius:12px 12px 12px 0;background:var(--hq-bubble-bot)}
+/* HQ's Telegram tail: a flare off the bubble's outer bottom corner, curving from its side to a point on the
+   baseline. Filled outside an ellipse centred on the tail box's top inner corner. */
+:is([data-slot='aui_user-message-root'] .composer-human-message:not(.ui-prompt-input__container),[data-slot='aui_assistant-message-content'] .aui-md:not(.aui-md .aui-md, details .aui-md))::after {content:'';position:absolute;bottom:0;width:8px;height:15px;pointer-events:none}
+[data-slot='aui_user-message-root'] .composer-human-message:not(.ui-prompt-input__container)::after {right:-8px;background:radial-gradient(ellipse 100% 100% at 100% 0,transparent 98%,var(--hq-bubble-me) 100%)}
+[data-slot='aui_assistant-message-content'] .aui-md:not(.aui-md .aui-md, details .aui-md)::after {left:-8px;background:radial-gradient(ellipse 100% 100% at 0 0,transparent 98%,var(--hq-bubble-bot) 100%)}
+/* The boxes round a bubble clip it; they clip 8 px out instead, so the tail shows and long text still can't spill. */
+:is([data-slot='aui_assistant-message-content'],[data-slot='aui_user-message-root']) .overflow-hidden:has(:is(.aui-md,.composer-human-message)),
+[data-slot='aui_assistant-message-content'].overflow-hidden, [data-slot='aui_assistant-message-root'].overflow-hidden,
+:is([data-slot='aui_user-message-root'] .composer-human-message:not(.ui-prompt-input__container),[data-slot='aui_assistant-message-content'] .aui-md:not(.aui-md .aui-md, details .aui-md)).overflow-hidden {overflow:clip;overflow-clip-margin:8px}
+[data-slot='aui_user-message-root'] .composer-human-message:not(.ui-prompt-input__container) {overflow:visible}   /* desktop's overflow-y:auto never scrolls (no max height) */
+
+

@@ -1,0 +1,8 @@
+/* Page tabs (Capabilities, Artifacts, Messaging) are iOS's segmented control; boxes on a page are filled cards, not
+   outlines. */
+div:has(> button.group\/text-tab) {gap:0;padding:2px;border-radius:9px;background:var(--hq-fill-3)}
+button.group\/text-tab {height:26px;padding-inline:12px;border-radius:7px;font-size:12px;color:var(--foreground)}
+button.group\/text-tab > span {text-decoration:none !important}
+
+button.group\/text-tab[data-active='true'] {background:var(--hq-cell) !important;font-weight:600;box-shadow:0 3px 8px rgb(0 0 0/.12),0 1px 1px rgb(0 0 0/.04)}
+html:root.dark button.group\/text-tab[data-active='true'] {background:#636366 !important}

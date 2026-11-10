@@ -1,0 +1,20 @@
+{
+ "session_id": "20260929_120000_aabbcc01",
+ "profile": "default",
+ "messages": [
+  {
+   "role": "assistant",
+   "content": "Synthetic history row 299. Readable history. Readable history. Readable history. Readable history. Readable history. Readable history. Readable history. Readable history. Readable history. Readable history. Readable history. Readable history. ",
+   "row_id": 1201,
+   "timestamp": 1791585016
+  }
+ ],
+ "pagination": {
+  "limit": 1,
+  "offset": 0,
+  "order": "latest",
+  "returned": 1,
+  "has_more": true,
+  "next_offset": 1
+ }
+}

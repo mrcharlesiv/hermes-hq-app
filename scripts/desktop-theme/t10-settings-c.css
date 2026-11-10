@@ -1,0 +1,54 @@
+/* Billing: the balance strip and the usage meters are cards too. */
+[data-overlay-surface] main .\@container.mb-6:has(> .grid > .min-w-0 > .text-lg.font-semibold) {padding:9px 14px;border-radius:var(--hq-card-r);background:var(--hq-cell)}
+[data-overlay-surface] main section > .\@container:has(> .\@container > .grid.gap-2.py-3) {padding:0 16px;border-radius:var(--hq-card-r);background:var(--hq-cell)}
+[data-overlay-surface] main section > .\@container > .\@container + .\@container {box-shadow:0 -.5px 0 var(--hq-sep)}
+/* About: the update checks are one card of plain rows, the build facts a second card; no boxes inside boxes. */
+[data-overlay-surface] main .mx-auto.max-w-2xl:has(> [id^='setting-field-about.']) {padding:0!important;background:none!important}
+
+[data-overlay-surface] main [id^='setting-field-about.'].grid {gap:0;padding:0 16px;border-radius:var(--hq-card-r)!important;background:var(--hq-cell)}
+[id^='setting-field-about.'] > .rounded-xl.border {padding:12px 0;border:0;border-radius:0;background:none}
+
+[id^='setting-field-about.'] > * + * {box-shadow:0 -.5px 0 var(--hq-sep)}
+[data-overlay-surface] main .mx-auto.max-w-2xl > dl.rounded-lg.border {gap:0;margin-top:20px;padding:4px 16px;border:0;border-radius:var(--hq-card-r);background:var(--hq-cell)}
+
+[data-overlay-surface] main .mx-auto.max-w-2xl > dl.rounded-lg.border > div + div {box-shadow:0 -.5px 0 var(--hq-sep)}
+/* Keys (Providers › API keys, Tools & Keys): the list is one card; an opened key stays in its row, no ring. */
+[data-overlay-surface] main .grid.gap-2:has(> .scroll-mt-6.rounded-\[6px\]) {gap:0;padding:0 16px;border-radius:var(--hq-card-r);background:var(--hq-cell)}
+[data-overlay-surface] main .scroll-mt-6.rounded-\[6px\] > .group\/card {padding:10px 0;border-radius:0;background:none!important;--tw-ring-shadow:0 0 #0000;box-shadow:none}
+[data-overlay-surface] main .scroll-mt-6.rounded-\[6px\] + .scroll-mt-6.rounded-\[6px\] {box-shadow:0 -.5px 0 var(--hq-sep)}
+/* Tools & Keys names arrive as shouted env-var capitals: small caps keep the acronyms and stop the shouting. */
+[data-overlay-surface] main:has(> div > nav[aria-label='Tools & Keys']) .scroll-mt-6 .h-8.min-w-0 > .truncate {font-variant-caps:all-small-caps;font-size:14px;letter-spacing:.03em}
+[data-overlay-surface] main button.group.grid.rounded-\[6px\]:has(> .flex-col > .font-semibold) {margin-bottom:20px;padding:9px 14px;border-radius:var(--hq-card-r);background:var(--hq-cell)}
+/* Providers › Accounts: each run of account rows is one card, iOS-inset hairlines. */
+[data-overlay-surface] main section.grid.gap-2:has(> :is(button.group.flex,div.group.grid).rounded-\[6px\]) {gap:0}
+[data-overlay-surface] main section.grid.gap-2:has(> :is(button.group.flex,div.group.grid).rounded-\[6px\]) > p {margin:20px 0 6px;padding:0 16px;font-size:12px;font-weight:400;color:var(--hq-label-2)}
+[data-overlay-surface] main section.grid.gap-2 > :is(button.group.flex,div.group.grid).rounded-\[6px\] {border-radius:0;background-color:var(--hq-cell)}
+[data-overlay-surface] main section.grid.gap-2 > :is(button.group.flex,div.group.grid).rounded-\[6px\] + :is(button.group.flex,div.group.grid).rounded-\[6px\] {background-image:linear-gradient(var(--hq-sep),var(--hq-sep));background-size:calc(100% - 32px) .5px;background-position:16px 0;background-repeat:no-repeat}
+[data-overlay-surface] main :not(:is(button.group.flex,div.group.grid).rounded-\[6px\]) + section.grid.gap-2 > :is(button.group.flex,div.group.grid).rounded-\[6px\] {border-top-left-radius:var(--hq-card-r);border-top-right-radius:var(--hq-card-r)}
+[data-overlay-surface] main section.grid.gap-2 > :is(button.group.flex,div.group.grid).rounded-\[6px\]:not(:has(+ :is(button.group.flex,div.group.grid).rounded-\[6px\])) {border-bottom-left-radius:var(--hq-card-r);border-bottom-right-radius:var(--hq-card-r)}
+
+
+/* Keyboard Shortcuts: categories are footnote headers over a card of bindings. */
+[data-overlay-surface] main section:has(> button.group\/kbd-cat) {margin-bottom:20px}
+[data-overlay-surface] main .px-2.py-1\.5:has(> section > button.group\/kbd-cat) {padding:0}
+
+
+[data-overlay-surface] main section:has(> button.group\/kbd-cat) > .flex.rounded-lg {padding:8px 16px;border-radius:0;background-color:var(--hq-cell)}
+[data-overlay-surface] main section:has(> button.group\/kbd-cat) > .flex.rounded-lg + .flex.rounded-lg {background-image:linear-gradient(var(--hq-sep),var(--hq-sep));background-size:calc(100% - 32px) .5px;background-position:16px 0;background-repeat:no-repeat}
+[data-overlay-surface] main section:has(> button.group\/kbd-cat) > .flex.rounded-lg:first-of-type {border-top-left-radius:var(--hq-card-r);border-top-right-radius:var(--hq-card-r)}
+[data-overlay-surface] main section:has(> button.group\/kbd-cat) > .flex.rounded-lg:last-child {border-bottom-left-radius:var(--hq-card-r);border-bottom-right-radius:var(--hq-card-r)}
+[data-overlay-surface] main section:has(> button.group\/kbd-cat) > .flex.rounded-lg > span {font-size:13px}
+/* Two loose rows in a spaced grid still read as one card (Gateways › Remote URL + Authentication). */
+[data-overlay-surface] main .grid:has(> .\@container + .\@container > .grid.gap-3.py-3):not(.grid.gap-1) {row-gap:0}
+/* Custom endpoints: the saved list and the editor are cards, not outlined boxes. */
+[data-overlay-surface] main section > :is(.divide-y,.grid).rounded-md.border {border:0;border-radius:var(--hq-card-r);background:var(--hq-cell)}
+
+
+/* Uninstall: a plain card; each choice is a row, hairline-separated, nothing outlined in red. */
+[data-overlay-surface] main .mx-auto.max-w-2xl > .rounded-xl.border {padding:9px 14px;border:0;border-radius:var(--hq-card-r);background:var(--hq-cell)}
+[data-overlay-surface] main .mx-auto.max-w-2xl > .rounded-xl.border .mt-1.flex-col.gap-2 {gap:0;margin-top:6px}
+[data-overlay-surface] main .mx-auto.max-w-2xl > .rounded-xl.border button.items-start.rounded-lg.border {padding:11px 0;border:0;border-radius:0;background:none}
+[data-overlay-surface] main .mx-auto.max-w-2xl > .rounded-xl.border button.items-start.rounded-lg.border + button {box-shadow:0 -.5px 0 var(--hq-sep)}
+[id^='setting-field-']:not(.overflow-y-auto > *), .grid.gap-1 > .scroll-mt-6.rounded-lg {border-radius:0}
+[data-overlay-surface] .grid.gap-1:has(> :is(.scroll-mt-6.rounded-lg,.\@container) .grid.gap-3.py-3) + * {margin-top:20px}
+:is([id^='setting-field-'],.grid.gap-1 > .scroll-mt-6.rounded-lg,.grid.gap-1 > .\@container) + :is([id^='setting-field-'],.scroll-mt-6.rounded-lg,.\@container) {box-shadow:0 -.5px 0 var(--hq-sep)}

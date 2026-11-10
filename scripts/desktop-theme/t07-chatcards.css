@@ -1,0 +1,9 @@
+/* Tool approvals: an HQ card in the thread, raised with a shadow when it floats over the chat. */
+[data-slot='tool-approval-stack'] [data-slot='card-stack'] :is([data-slot='card-stack-surface'],[data-slot='card-stack-edge']) {border:0;border-radius:var(--hq-card-r);background:var(--hq-card);box-shadow:none}
+[data-slot='tool-approval-stack'][data-approval-placement='floating'] [data-slot='card-stack'] :is([data-slot='card-stack-surface'],[data-slot='card-stack-edge']) {background:var(--hq-raised);box-shadow:var(--hq-menu-shadow)}
+
+
+
+
+[data-approval-activity][data-glass-opaque] {border-radius:10px}
+:is([data-slot='badge'],[data-slot='kbd']) {border-radius:6px}

@@ -1,0 +1,12 @@
+/* Tabs a size up, with room round the label. */
+:is([data-slot='pane-tab'],[role='tab'][data-tree-tab]) {font-size:12px}
+:is([data-slot='pane-tab'],[role='tab'][data-tree-tab]):not([data-vertical]) {height:24px;padding-inline:4px}
+
+/* A chat's tabs: HQ's title over the conversation. Centred, the open one a semibold capsule that shows the whole
+   name, the others plain grey names; the idle dot goes (a working or waiting tab keeps its signal). */
+[role='tablist']:has(> .contents > [data-tree-tab='workspace']) > .contents > :first-child {margin-left:auto}
+
+[role='tab'][data-tree-tab='workspace'] {max-width:24rem;font-size:12px;color:var(--hq-label-2)}
+
+[role='tab'][data-tree-tab='workspace'][data-active='true'] {font-weight:600;color:var(--foreground)}
+[role='tab'][data-tree-tab='workspace'] .tab-key-hint-icon:has(> * > [class~='bg-(--ui-text-quaternary)']) {display:none}

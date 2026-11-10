@@ -1,0 +1,2 @@
+/* Inside a sheet the page is already grey, so a filled box is a white (dark: raised) cell instead. */
+[data-overlay-surface] :is([class~='border-(--ui-stroke-tertiary)'][class~='bg-(--ui-bg-quinary)'],.rounded-xl.border[class~='bg-(--ui-surface-secondary,transparent)']) {background:var(--hq-cell)}

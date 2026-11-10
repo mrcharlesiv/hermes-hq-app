@@ -1,0 +1,170 @@
+[
+ {
+  "_sent": {
+   "jsonrpc": "2.0",
+   "id": 3,
+   "method": "prompt.submit",
+   "params": {
+    "session_id": "5cc537d1",
+    "text": "Write a long answer",
+    "profile": "default"
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "id": 3,
+  "result": {
+   "status": "streaming",
+   "user_row_id": 1210
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.start",
+   "session_id": "5cc537d1",
+   "payload": {}
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "5cc537d1",
+   "payload": {
+    "text": "word0 "
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "5cc537d1",
+   "payload": {
+    "text": "word1 "
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "5cc537d1",
+   "payload": {
+    "text": "word2 "
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "5cc537d1",
+   "payload": {
+    "text": "word3 "
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "5cc537d1",
+   "payload": {
+    "text": "word4 "
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "5cc537d1",
+   "payload": {
+    "text": "word5 "
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "5cc537d1",
+   "payload": {
+    "text": "word6 "
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "5cc537d1",
+   "payload": {
+    "text": "word7 "
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "5cc537d1",
+   "payload": {
+    "text": "word8 "
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "5cc537d1",
+   "payload": {
+    "text": "word9 "
+   }
+  }
+ },
+ {
+  "_sent": {
+   "jsonrpc": "2.0",
+   "id": 4,
+   "method": "session.interrupt",
+   "params": {
+    "session_id": "5cc537d1",
+    "profile": "default"
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.complete",
+   "session_id": "5cc537d1",
+   "payload": {
+    "text": "Stopped synthetic reply."
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "id": 4,
+  "result": {
+   "status": "interrupted"
+  }
+ }
+]

@@ -1,0 +1,206 @@
+/* ---- Settings frame + shared grouped-card system ----
+   Every rule is scoped to the Settings sheet: the overlay surface that carries the section search. */
+
+/* Search: a full-width capsule at the top of the section list. */
+[data-overlay-surface]>.relative>.absolute.left-1\/2.top-0 {
+  @media (min-width:47.5rem) {left:21px;top:22px;width:calc(14rem - 28px);transform:none;translate:none}
+  &>button {width:100%;height:28px;padding:0 10px;gap:6px;border:0;border-radius:999px;background:var(--hq-fill-3);box-shadow:none;color:var(--hq-label-2);
+    &>svg {width:14px;height:14px}
+    &>span.text-xs {flex:1;text-align:left;font-size:13px;line-height:16px;letter-spacing:-.08px;color:var(--hq-label-2)}
+  }
+}
+
+[data-overlay-surface]:has(>.relative>.left-1\/2.top-0) {
+  /* Section list: a floating white card on the grey sheet, never touching its edges. */
+  @media (min-width:47.5rem) {
+    & [data-glass-raised] .grid[class*='grid-cols-[13rem'] {grid-template-columns:15rem minmax(0,1fr)}
+    & [data-glass-raised] aside {margin:12px 0 12px 12px;padding:56px 8px 20px;gap:2px;border-radius:var(--hq-card-r);background:var(--hq-cell);box-shadow:none;scrollbar-width:thin;scroll-padding-bottom:20px}
+  }
+  & aside {
+    & button:not([data-slot=button]) {min-height:28px;padding-inline:10px;border-radius:999px;font-size:13px;line-height:18px;letter-spacing:-.08px;
+      &:not([aria-current=page])>span {color:var(--ui-text-primary)}
+      &:not([aria-current=page])>:is(svg,i) {color:var(--ui-text-primary);opacity:.7}
+      &>svg {width:15px;height:15px}
+    }
+    & .ml-3\.5 button:not([data-slot=button])>svg {width:14px;height:14px}
+    &>div.h-2:empty {height:12px;flex:none}
+    & [data-slot=button]:has(>.codicon-chevron-right) {color:var(--hq-label-3)}
+    & [data-slot=button]>.codicon-chevron-right {font-size:12px!important;font-weight:700}
+  }
+
+  /* Close: a filled circle aligned with the page title. */
+  & [data-glass-raised]>.pointer-events-none.absolute.inset-x-0.top-0 {
+    &>.pointer-events-auto {top:37px;right:20px}
+    & [data-slot=button]:has(>.codicon-close) {width:32px;height:32px;border-radius:999px;background:var(--hq-fill-3);color:var(--hq-label-2)}
+    & [data-slot=button]>.codicon-close {font-size:12px!important;font-weight:700}
+  }
+
+  /* One centred content column on every page. */
+  & [data-glass-raised] main {padding-top:20px;
+    &>* {width:100%;max-width:68rem;margin-inline:auto}
+  }
+
+  & main {
+    /* Secondary text in HQ's section grey; hairlines keep the app-wide separator token. */
+    --hq-label-2:var(--hq-section);--ui-text-secondary:var(--hq-section);
+
+    /* Hairlines: inset 16px at the leading edge, run to the card's trailing edge (iOS). The card pads its rows 16px on
+       both sides, so every row after the first reaches out over the trailing padding and pads it back. */
+    & :is(:is([id^=setting-field-],[id^=aux-task-],.\@container,.scroll-mt-6.rounded-lg)+:is([id^=setting-field-],[id^=aux-task-],.\@container,.scroll-mt-6.rounded-lg),section>.grid.gap-1>[data-slot=button],section>.grid.gap-1>[data-slot=button]+*,.h-72+p.mt-2,[id$=translucency] .mt-3.flex-col>.flex,[id$=fallback_providers] .grid.gap-1\.5>div:last-child) {margin-right:-16px;padding-right:16px}
+    /* Loose rows are their own card segments (white, padded 16 both sides): the hairline is drawn inside, from 16px in (important: the reach-out rule above carries a higher :is() specificity). */
+    & :is(.overflow-y-auto,.grid:not(.gap-1),section.mb-6)>:is([id^=setting-field-],.\@container)+:is([id^=setting-field-],.\@container) {margin-right:0!important;box-shadow:none;background:linear-gradient(var(--hq-sep),var(--hq-sep)) 16px 0/100% .5px no-repeat var(--hq-cell)}
+
+    /* Page header: a centred 17pt nav title with a circular back button; the breadcrumb trail goes. */
+    &>.mb-3.flex.shrink-0:has(>nav) {position:relative;min-height:32px;margin-bottom:18px;align-items:center;justify-content:center}
+    &>.mb-3.flex.shrink-0>nav {justify-content:center;gap:0;max-width:calc(100% - 96px);
+      &>span.shrink-0:first-child:not([aria-current]),&>svg {display:none}
+      &>span[aria-current=page] {font-size:13px;line-height:18px;font-weight:600;letter-spacing:-.08px;color:var(--ui-text-primary)}
+      &>[data-slot=button] {position:absolute;left:clamp(1.25rem,4vw,4rem);top:50%;transform:translateY(-50%);width:32px;height:32px;padding:0;border-radius:999px;background:var(--hq-fill-3);font-size:0;color:var(--ui-text-primary);text-decoration:none;
+        &::before {content:'';width:8px;height:8px;margin-left:3px;border:solid currentColor;border-width:0 0 2px 2px;transform:rotate(45deg)}
+        &:hover {background:var(--hq-fill-2)}
+      }
+    }
+
+    /* Section headers (Applies to, Edit Endpoint...): 15pt semibold section grey, aligned with the row text. */
+    & .grid.gap-2.mb-5:has(>.flex.flex-wrap>button.rounded-full.border)>div:first-child,& section>.mb-2\.5.flex:not(.justify-end) {padding-left:16px}
+    & section>.mb-2\.5.flex:not(.justify-end) {font-size:13px;line-height:18px;font-weight:600;letter-spacing:-.08px;color:var(--hq-section)}
+
+    /* "Applies to": capsules that wrap, every agent visible; the chosen one is a tinted capsule, not a solid button. */
+    & .grid.gap-2.mb-5>.flex.flex-wrap.gap-1\.5>button {flex:none;height:24px;padding:0 10px;font-size:12px;line-height:16px;font-weight:400;letter-spacing:0;
+      &[class*=ui-bg-tertiary] {border-color:transparent;background:color-mix(in srgb,var(--hq-link) 15%,transparent);color:var(--hq-link);font-weight:600}
+    }
+
+    /* ---- Rows: text takes the width, the control hugs the trailing inset (SwitchRow / ValueRow) ---- */
+    & .\@container>.grid.gap-3.py-3 {padding-block:12px;min-height:40px;
+      &>.flex.min-w-0:has(>:is(input,[data-slot=input],textarea,[data-slot=popover-anchor])) {min-width:12rem;max-width:22rem}
+      &>.flex.min-w-0:has(>:is(input[type=number],input[inputmode=numeric],[data-slot=input][inputmode=numeric])) {min-width:6rem}
+      &>.min-w-0>.mt-1 {margin-top:4px;font-size:12px;line-height:16px;letter-spacing:-.08px;color:var(--hq-label-2);
+        &>.font-mono {font:inherit;letter-spacing:inherit}
+      }
+      /* Auxiliary models and MoA: quiet ValueRows, no tags, no mono. */
+      &>.min-w-0>.flex span.items-baseline>[data-slot=badge] {padding:0;border:0;background:none;font-size:12px;line-height:16px;font-weight:400;letter-spacing:-.08px;color:var(--hq-label-2)}
+    }
+    & .\@container .min-w-0>a[href] {height:auto;margin-top:4px;padding:0;gap:4px;font-size:12px;line-height:16px;font-weight:400;color:var(--hq-link)}
+    & [id^=setting-field-] :is(input,[data-slot=input]):not(:focus,[type=checkbox],[type=range]) {text-overflow:ellipsis}
+
+    /* ---- Main model ---- */
+    & section:has(>.flex-wrap>[data-slot=select-trigger]) {
+      &>.flex.flex-wrap:not(.mt-3)>[data-slot=select-trigger] {gap:12px;
+        &>[data-slot=select-value] {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      }
+      &>.mt-3>.flex>[data-slot=select-trigger] {color:var(--hq-link)}
+    }
+    & section:has(>.flex-wrap>[data-slot=select-trigger]+[data-slot=select-trigger])>.flex.flex-wrap:not(.mt-3)>[data-slot=button] {flex:1 1 100%;justify-content:flex-start;min-height:30px;margin:0;padding:0;border-radius:0;background:none;box-shadow:0 -.5px 0 var(--hq-sep);font-size:13px;line-height:18px;font-weight:400;letter-spacing:-.08px;color:var(--hq-link)}
+
+    /* Auxiliary "Reset all" and similar trailing actions sit on the footnote's line. */
+    /* Every small text action (Reset all, warning fix, MoA preset actions, Remove): plain 15pt tint. */
+    & :is(section>.mb-2\.5.flex.justify-end,.rounded-md.border.border-amber-400\/60,section>.mb-2.flex.flex-wrap,.\@container .mt-2.flex.flex-wrap.pt-1)>[data-slot=button] {padding-inline:0;font-size:12px;line-height:16px;font-weight:400;letter-spacing:-.08px;color:var(--hq-link)}
+    & section:has(>.mb-2\.5.flex.justify-end+p) {display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;
+      &>* {grid-column:1/-1}
+      &>.mb-2\.5.flex.justify-end {grid-column:2;grid-row:1;margin:0;padding-right:16px}
+      &>.mb-2\.5.flex.justify-end+p {grid-column:1;grid-row:1;padding-left:16px}
+    }
+    /* Warning: an ordinary card with an orange triangle. */
+    & .rounded-md.border.border-amber-400\/60 {gap:4px 12px;padding:9px 14px;border:0;border-radius:var(--hq-card-r);background:var(--hq-cell);
+      &>svg {width:18px;height:18px;color:#ff9500}
+      &>span.grow {font-size:12px;line-height:16px;font-weight:400;letter-spacing:-.08px;color:var(--ui-text-primary);
+        & .font-mono {font-family:inherit;font-size:inherit;font-weight:600}
+      }
+      &>[data-slot=button]:last-child {margin-left:30px}
+    }
+
+    /* MoA preset card: picker row, Enabled switch row, actions row. */
+    & section>.mb-2.flex.flex-wrap {
+      &>label.rounded-sm.border {flex:1 1 100%;box-shadow:0 -.5px 0 var(--hq-sep),0 .5px 0 var(--hq-sep);justify-content:space-between;min-height:32px;padding:0 16px 0 0;border:0;border-radius:0;font-size:13px;line-height:18px;letter-spacing:-.08px;color:var(--ui-text-primary)}
+      &>:is([data-slot=button],input) {margin-block:10px}
+      &>[data-slot=button][data-variant=ghost] {margin-left:16px;color:var(--hq-red-text)}
+      &>[data-slot=button][data-variant=text] {margin-right:4px}
+      &>[data-slot=input] {flex:1 1 10rem;height:32px;min-height:32px;margin-left:auto;margin-right:8px;padding:0 14px;border:0;border-radius:999px;background:var(--hq-fill-3);font-size:13px;text-align:left;box-shadow:none}
+    }
+    & section>.mb-2.text-xs.text-muted-foreground {padding:0 16px;font-size:12px;line-height:16px;color:var(--hq-section);
+      & .font-mono {font-family:inherit;font-size:inherit;color:var(--hq-label-2)}
+    }
+    & .\@container .mt-2.flex.flex-wrap.pt-1 {gap:4px 20px;padding-top:6px;
+      &>[data-slot=select-trigger] {flex:none;width:auto;min-width:0;justify-content:flex-start;margin-left:0;padding-left:0}
+      &>[data-slot=button][data-variant=ghost] {margin-left:auto;color:var(--hq-red-text)}
+    }
+    & section>.grid.gap-1>[data-slot=button][data-variant=textStrong] {justify-content:flex-start;min-height:30px;padding-left:0;font-size:13px;line-height:18px;font-weight:400;letter-spacing:-.08px;color:var(--hq-link);box-shadow:0 -.5px 0 var(--hq-sep)}
+    & section>.grid.gap-1>[data-slot=button]+.\@container {box-shadow:0 -.5px 0 var(--hq-sep)}
+
+    /* Pet: one inset, like every other card; the count is a footnote under a hairline. */
+    & [id^=setting-field-]>div>p.max-w-2xl:first-child+.mt-2>.\@container {padding:0;background:none;box-shadow:none}
+    & .h-72+p.mt-2 {margin-top:0;padding-top:10px;box-shadow:0 -.5px 0 var(--hq-sep);font-size:12px;line-height:16px;letter-spacing:-.08px;color:var(--hq-section)}
+
+    /* Typography: segments never truncate. */
+    & [id^=setting-field-] .inline-grid.auto-cols-fr>button {padding-inline:10px;
+      &>span.truncate {overflow:visible;text-overflow:clip}
+    }
+
+    /* Rows with nested sub-settings (translucency, MoA references): the control stays on the title line,
+       the sub-settings span the full row so their hairlines and trailing edges line up with the card's. */
+    @container (min-width:32rem) {
+      & .\@container>.grid.gap-3.py-3:has(>:nth-child(2)) {grid-template-columns:minmax(0,1fr) auto;column-gap:24px;align-items:center}
+      & .\@container>.grid.gap-3.py-3:has(>.min-w-0>:is(.mt-2.flex-wrap.pt-1,.mt-3.flex-col)) {row-gap:0;
+        &>.min-w-0:not(.flex) {display:contents;
+          &>* {grid-column:1}
+          &>:is(.mt-2.flex-wrap.pt-1,.mt-3.flex-col) {grid-column:1/-1}
+        }
+        &>.flex.min-w-0 {grid-column:2;grid-row:1;align-self:center}
+        &:has(>.min-w-0>.mt-1)>.flex.min-w-0 {grid-row:1/span 2}
+      }
+    }
+
+    /* Language: a tint menu value with HQ's up/down glyph, like every other picker. */
+    & [id$=".language"] [data-slot=popover-trigger] {position:relative;padding:0 13px 0 0;background:none;border:0;box-shadow:none;color:var(--hq-link);font-size:13px;line-height:18px;font-weight:400;letter-spacing:-.08px;
+      &>span>svg:first-child,&>svg:last-child {display:none}
+      &::before,&::after {content:'';position:absolute;right:2px;width:4px;height:4px;border:solid currentColor;transform:rotate(45deg)}
+      &::before {top:calc(50% - 5px);border-width:1.6px 0 0 1.6px}
+      &::after {top:50%;border-width:0 1.6px 1.6px 0}
+    }
+  }
+  html.dark & main .rounded-md.border.border-amber-400\/60>svg {color:#ff9f0a}
+}
+
+/* ---- Fallback models: "Add" is the card's last row ---- */
+#setting-field-fallback_providers .grid.w-full.gap-1\.5 {
+  &>div:last-child {margin-top:8px;box-shadow:0 -.5px 0 var(--hq-sep);
+    &>[data-slot=button] {min-height:30px;margin-bottom:-11px;padding:0;gap:10px;font-size:13px;line-height:18px;font-weight:400;letter-spacing:-.08px;color:var(--hq-link);
+      &>svg {width:20px;height:20px}
+    }
+  }
+  &>p {font-size:12px;line-height:16px;color:var(--hq-label-2)}
+}
+
+/* Auxiliary task actions: plain tint text. */
+[id^=aux-task-] [data-slot=button]:is([data-variant=text],[data-variant=textStrong]) {margin-left:8px;padding-inline:0;font-size:12px;line-height:16px;font-weight:400;letter-spacing:-.08px;color:var(--hq-link);
+  &[data-variant=textStrong] {font-weight:600}
+}
+
+/* ---- Appearance ---- */
+/* Theme tiles: SkinCards — grey tiles, no outlines; the selected one gets a 2px tint stroke. */
+[id^=setting-field-appearance] .grid.gap-3>.group>button {padding:10px;border:0;border-radius:16px;background:var(--hq-grouped);box-shadow:none;--tw-ring-shadow:0 0 #0000;
+  &.border-primary {box-shadow:inset 0 0 0 2px var(--hq-link)}
+  &>.h-20.rounded-xl {height:72px;border-radius:10px;border-color:var(--hq-sep);box-shadow:none}
+  &>.mt-3 {margin-top:8px;padding-inline:2px;
+    &>.mt-0\.5 {font-size:12px;line-height:16px;letter-spacing:-.08px;color:var(--hq-label-2)}
+  }
+}
+
+/* Typography font rows tighten. */
+[id^=setting-field-appearance][id$=-font] .min-w-0>.mt-3 {margin-top:6px;
+  &>div:not(:first-child) {padding-inline:0}
+}
+
+/* Translucency: sub-rows under hairlines. */
+[id$=translucency] .mt-3.flex-col {gap:0;margin-top:8px;
+  &>.flex {min-height:30px;gap:12px;box-shadow:0 -.5px 0 var(--hq-sep);
+    &>span.w-12 {width:4rem;font-size:12px;line-height:16px;letter-spacing:-.08px;color:var(--ui-text-primary)}
+    &>input[type=range] {flex:1 1 auto;width:auto}
+    &>.inline-grid {margin-left:auto}
+    &>span.w-9 {width:3rem;font-size:12px;line-height:16px;color:var(--hq-label-2)}
+  }
+}
+
+/* Settings sidebar: a group's disclosure chevron waits for the pointer, as in a Mac sidebar; an open group keeps it. */
+[data-overlay-surface] button[data-tour^='nav-toggle-'][aria-expanded='false'] {opacity:0}
+[data-overlay-surface] .relative:is(:hover,:focus-within) > button[data-tour^='nav-toggle-'] {opacity:1}

@@ -1,0 +1,32 @@
+/* Command Center's System: a title-sized status, sentence-case labels, the log in a cell at 12px. */
+
+
+
+[data-overlay-surface] main .pt-2 > .mb-2 > .tracking-\[0\.08em\].uppercase {padding-inline:16px;font-size:12px;font-weight:400;letter-spacing:0;text-transform:none;color:var(--hq-label-2)}
+/* Usage chart: input in HQ's tint, output in its green, bars with soft tops. */
+[data-overlay-surface] main [class*='bg-[color:var(--dt-primary)]'] {background:var(--hq-tint);opacity:.85}
+[data-overlay-surface] main [class*='bg-emerald-500'] {background:var(--hq-green)}
+
+
+
+/* Profiles: roomier rows, the path as a caption, SOUL.md's heading as a footnote and its editor in a cell with no
+   dotted focus box. */
+.cm-editor.cm-focused {outline:none}
+[data-overlay-surface] .group\/row.h-7 {height:34px;font-size:13px}
+
+
+[data-overlay-surface] .tracking-\[0\.14em\] + * {padding-inline:16px;font-size:12px;color:var(--hq-label-2)}
+[data-overlay-surface] .flex.h-full.flex-col.overflow-hidden.rounded-md.border[class~='border-(--ui-stroke-tertiary)'] {border-color:transparent;border-radius:var(--hq-card-r);background:var(--hq-cell)}
+
+/* Spawn tree (Agents): each parent's workers in a cell, a footnote heading, 15pt goals; the empty state at title size. */
+
+[data-overlay-surface] .grid.place-items-center:is(.py-12,.py-10) p:is(.text-xs,.text-sm + p) {font-size:12px;color:var(--hq-label-2)}
+[data-overlay-surface] .flex-col.gap-4 > p.shrink-0.text-\[0\.7rem\] {padding-inline:16px;font-size:12px;color:var(--hq-label-2)}
+[data-overlay-surface] section.grid.min-w-0.gap-3:has(> p.tracking-wider) {gap:10px}
+[data-overlay-surface] section.grid.min-w-0.gap-3 > p.tracking-wider {padding-inline:16px;font-size:12px;font-weight:400;letter-spacing:0;text-transform:none;color:var(--hq-label-2)}
+[data-overlay-surface] section.grid.min-w-0.gap-3 > p.tracking-wider + .grid {gap:0;padding:4px 16px;border-radius:var(--hq-card-r);background:var(--hq-cell)}
+[data-overlay-surface] section.grid.min-w-0.gap-3 > p.tracking-wider + .grid > [data-slot='tool-block'] {padding-block:10px}
+[data-overlay-surface] section.grid.min-w-0.gap-3 > p.tracking-wider + .grid > [data-slot='tool-block'] + [data-slot='tool-block'] {box-shadow:inset 0 1px 0 var(--hq-sep)}
+[data-overlay-surface] [data-slot='tool-block'] .text-\[0\.82rem\] {font-size:12px;line-height:16px}
+[data-overlay-surface] [data-slot='tool-block'] .text-\[0\.66rem\] {font-size:12px;line-height:16px;color:var(--hq-label-2)}
+[data-overlay-surface] [data-slot='tool-block'] .text-\[0\.72rem\] {font-size:12px}

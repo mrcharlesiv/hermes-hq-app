@@ -1,0 +1,3 @@
+
+/* iOS shapes: desktop pins its Tailwind corners at 0.2 of their size; the phone uses them whole. */
+html:root {--radius-scalar:1}

@@ -1,0 +1,17 @@
+/* ==== Foundation merge: where the area patches meet. One type scale (SF tracking per size), one segmented control.
+   Loads after global, bubbles, chrome, sidebar, overlays. ==== */
+
+/* The Sessions/Bots switch: a 28 px track and 24 px thumb, so it fits desktop's 28 px pane header (the list paints
+   over anything below it when the sidebar is opaque). */
+[role=tablist]:has(> [data-tree-tab=sessions]) {height:28px;
+  &>[data-tree-tab] {height:24px;font-size:12px;line-height:16px;font-weight:400;&[aria-selected=true] {font-weight:600}& .truncate {font-size:12px;letter-spacing:-.08px}}
+}
+
+/* SF tracking by size, everywhere: 17 → -.43, 15 → -.23, 13 → -.08 (overlays and the title chip used em steps). */
+:is([data-slot$=-item],[data-slot$=sub-trigger]):not([data-slot^=sidebar],[data-slot^=pagin],.group\/label),
+html:root body :is([data-slot=dropdown-menu-search] input,[data-slot=popover-content] :is([data-slot=command-input],[data-slot=command-item]),[role=dialog]:not([data-slot])>[data-slot=command] :is([data-slot=command-input],[data-slot=command-item]),[role=tab][data-tree-tab=workspace] .truncate) {letter-spacing:-.23px}
+html:root body :is([data-slot=dialog-content].max-w-md [data-slot=dialog-description],[role=region]>[data-slot=card-stack] :is([data-slot=alert-title],[data-slot=alert-description]),[data-slot=dropdown-menu-shortcut],[data-slot=context-menu-shortcut]) {letter-spacing:-.08px}
+html:root body :is([data-slot=dropdown-menu-label],[data-slot=context-menu-label],[data-slot=select-label]) {letter-spacing:-.08px}
+
+/* Off-scale leftovers: the Settings/Command Center navigation (14 → subheadline 15) */
+

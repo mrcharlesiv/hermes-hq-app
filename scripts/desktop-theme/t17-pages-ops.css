@@ -1,0 +1,60 @@
+/* Pages over the chat (Jobs, Profiles): their lists at a list's size rather than a file tree's, the page title and
+   the selected item's name a step up, as the headline over an iOS list. */
+[data-overlay-surface] .group\/row:has(> [data-slot='row-button']) {height:32px;flex-shrink:0;font-size:12px;border-radius:8px}
+@media (min-width:47.5rem) {
+  [data-overlay-surface] .shrink-0.flex-col:has(> * > .group\/row > [data-slot='row-button']) {width:16rem}   /* room for job names */
+}
+
+
+
+/* Scheduled jobs: a large title, the jobs in an inset card, and the open job's facts, script and runs as grouped
+   cards with hairlines between rows and sentence-case footnote headings over them. */
+[data-overlay-surface] header > .min-w-0 > h2.text-sm.font-semibold {font-size:17px;line-height:22px;font-weight:700;letter-spacing:-.02em}
+[data-overlay-surface] header > .min-w-0 > h2 + * {font-size:12px;color:var(--hq-label-2)}
+[data-overlay-surface] .inline-flex.border-b:has(> input) {height:32px;margin-bottom:8px;padding:0 10px;border:0;border-radius:10px;background:var(--hq-cell)}
+
+[data-overlay-surface] .overflow-y-auto:has(> .group\/row > [data-slot='row-button']) {padding:4px;border-radius:var(--hq-card-r);background:var(--hq-cell)}
+
+
+[data-overlay-surface] .space-y-4 > header > dl {grid-template-columns:8rem 1fr;gap:0;padding:0 16px;border-radius:var(--hq-card-r);background:var(--hq-cell);font-size:12px}
+
+
+
+
+
+[data-overlay-surface] .space-y-4 .tracking-wider + .flex.flex-col.gap-px {gap:0;padding:0 4px;border-radius:var(--hq-card-r);background:var(--hq-cell)}
+
+
+
+
+/* Command Center's session list: one inset card, a hairline between sessions from the text's left edge. */
+[data-overlay-surface] main ul:has(> li.group.py-2) {margin-block:4px 24px;border-radius:var(--hq-card-r);background:var(--hq-cell)}
+[data-overlay-surface] main ul > li.group.py-2 {position:relative;min-height:42px;padding:8px 12px 8px 16px}
+[data-overlay-surface] main ul > li.group.py-2 + li::before {content:'';position:absolute;top:0;left:16px;right:0;border-top:.5px solid var(--hq-sep)}
+
+
+
+/* Command Center's Maintenance: each section's actions are cells of one card (rounded at the ends, hairlines between),
+   under a sentence-case footnote heading. */
+
+
+[data-overlay-surface] main :is(section,section > div) > .flex.justify-between.gap-3.py-2 {position:relative;min-height:42px;padding:7px 14px;background:var(--hq-cell)}
+[data-overlay-surface] main :is(section,section > div) > :not(.py-2) + .flex.justify-between.gap-3.py-2 {border-radius:var(--hq-card-r) var(--hq-card-r) 0 0}
+[data-overlay-surface] main :is(section,section > div) > .flex.justify-between.gap-3.py-2:last-child {border-bottom-left-radius:var(--hq-card-r);border-bottom-right-radius:var(--hq-card-r)}
+[data-overlay-surface] main :is(section,section > div) > .py-2 + .flex.justify-between.gap-3.py-2::before {content:'';position:absolute;top:0;left:16px;right:0;border-top:.5px solid var(--hq-sep)}
+
+
+
+/* Command Center's Usage: the three totals as tiles, the chart and the top lists as cards. */
+
+[data-overlay-surface] main .grid.grid-cols-2.py-2 > .min-w-0:has(> .tracking-\[0\.12em\]) {padding:9px 14px;border-radius:var(--hq-card-r);background:var(--hq-cell)}
+[data-overlay-surface] main .tracking-\[0\.12em\].uppercase {font-size:12px;font-weight:400;letter-spacing:0;text-transform:none;color:var(--hq-label-2)}
+[data-overlay-surface] main .tracking-\[0\.12em\] + * {font-size:17px;font-weight:700;letter-spacing:-.01em}
+
+
+
+[data-overlay-surface] main section > ul:has(> li.py-1\.5) {border-radius:var(--hq-card-r);background:var(--hq-cell)}
+[data-overlay-surface] main section > ul > li.py-1\.5 {position:relative;min-height:30px;padding:8px 16px}
+[data-overlay-surface] main section > ul > li.py-1\.5 + li::before {content:'';position:absolute;top:0;left:16px;right:0;border-top:.5px solid var(--hq-sep)}
+
+

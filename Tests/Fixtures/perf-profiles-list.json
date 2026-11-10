@@ -1,0 +1,87 @@
+{
+ "active": "default",
+ "profiles": [
+  {
+   "canonical_session": {
+    "billing_provider": "fixture",
+    "cwd": "/fixture",
+    "hidden": true,
+    "id": "20260929_120000_aabbcc01",
+    "last_active": 1790686800,
+    "message_count": 1,
+    "model": "fixture-model",
+    "profile": "default",
+    "profile_name": "default",
+    "source": "desktop",
+    "started_at": 1790686800,
+    "title": "Bot Chat"
+   },
+   "description": "Synthetic voice QA",
+   "is_active": true,
+   "model": "fixture-model",
+   "name": "default",
+   "sessions": [
+    {
+     "billing_provider": "fixture",
+     "cwd": "/fixture",
+     "hidden": true,
+     "id": "20260929_120000_aabbcc01",
+     "last_active": 1790686800,
+     "message_count": 1,
+     "model": "fixture-model",
+     "profile": "default",
+     "profile_name": "default",
+     "source": "desktop",
+     "started_at": 1790686800,
+     "title": "Bot Chat"
+    }
+   ],
+   "ui_meta": {
+    "hermes-bots": {
+     "display_name": "Hermes"
+    }
+   }
+  },
+  {
+   "canonical_session": {
+    "billing_provider": "fixture",
+    "cwd": "/fixture",
+    "hidden": true,
+    "id": "20260929_120000_aabbcc02",
+    "last_active": 1790686800,
+    "message_count": 1,
+    "model": "fixture-model",
+    "profile": "ivy",
+    "profile_name": "ivy",
+    "source": "desktop",
+    "started_at": 1790686800,
+    "title": "Bot Chat"
+   },
+   "description": "Synthetic voice QA",
+   "is_active": false,
+   "model": "fixture-model",
+   "name": "ivy",
+   "sessions": [
+    {
+     "billing_provider": "fixture",
+     "cwd": "/fixture",
+     "hidden": true,
+     "id": "20260929_120000_aabbcc02",
+     "last_active": 1790686800,
+     "message_count": 1,
+     "model": "fixture-model",
+     "profile": "ivy",
+     "profile_name": "ivy",
+     "source": "desktop",
+     "started_at": 1790686800,
+     "title": "Bot Chat"
+    }
+   ],
+   "ui_meta": {
+    "hermes-bots": {
+     "display_name": "Ivy"
+    }
+   }
+  }
+ ]
+}

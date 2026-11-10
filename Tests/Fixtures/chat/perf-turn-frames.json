@@ -1,0 +1,220 @@
+[
+ {
+  "_sent": {
+   "jsonrpc": "2.0",
+   "id": 2,
+   "method": "prompt.submit",
+   "params": {
+    "session_id": "5cc537d1",
+    "text": "Run three steps",
+    "profile": "default"
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+   "status": "streaming",
+   "user_row_id": 1202
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.start",
+   "session_id": "5cc537d1",
+   "payload": {}
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "5cc537d1",
+   "payload": {
+    "text": "Let me "
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "tool.start",
+   "session_id": "5cc537d1",
+   "payload": {
+    "name": "terminal",
+    "tool_id": "performance-tool-0",
+    "args": {
+     "command": "printf synthetic-step-0",
+     "timeout": 5
+    }
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "tool.complete",
+   "session_id": "5cc537d1",
+   "payload": {
+    "name": "terminal",
+    "tool_id": "performance-tool-0",
+    "args": {
+     "command": "printf synthetic-step-0",
+     "timeout": 5
+    },
+    "result": {
+     "stdout": "synthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic o",
+     "stderr": "",
+     "exit_code": 0
+    }
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "5cc537d1",
+   "payload": {
+    "text": "run "
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "tool.start",
+   "session_id": "5cc537d1",
+   "payload": {
+    "name": "terminal",
+    "tool_id": "performance-tool-1",
+    "args": {
+     "command": "printf synthetic-step-1",
+     "timeout": 5
+    }
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "tool.complete",
+   "session_id": "5cc537d1",
+   "payload": {
+    "name": "terminal",
+    "tool_id": "performance-tool-1",
+    "args": {
+     "command": "printf synthetic-step-1",
+     "timeout": 5
+    },
+    "result": {
+     "stdout": "synthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic o",
+     "stderr": "",
+     "exit_code": 0
+    }
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "5cc537d1",
+   "payload": {
+    "text": "three "
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "tool.start",
+   "session_id": "5cc537d1",
+   "payload": {
+    "name": "terminal",
+    "tool_id": "performance-tool-2",
+    "args": {
+     "command": "printf synthetic-step-2",
+     "timeout": 5
+    }
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "tool.complete",
+   "session_id": "5cc537d1",
+   "payload": {
+    "name": "terminal",
+    "tool_id": "performance-tool-2",
+    "args": {
+     "command": "printf synthetic-step-2",
+     "timeout": 5
+    },
+    "result": {
+     "stdout": "synthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic output\nsynthetic o",
+     "stderr": "",
+     "exit_code": 0
+    }
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "5cc537d1",
+   "payload": {
+    "text": "steps. "
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "5cc537d1",
+   "payload": {
+    "text": "All "
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "5cc537d1",
+   "payload": {
+    "text": "done."
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.complete",
+   "session_id": "5cc537d1",
+   "payload": {
+    "text": "Let me run three steps. All done.",
+    "row_id": 1209
+   }
+  }
+ }
+]

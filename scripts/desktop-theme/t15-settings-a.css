@@ -1,0 +1,14 @@
+/* Settings: the options in a readable centred column, as iPad Settings, on cards with HQ's round corners; the list
+   of sections down the side at iOS's row height. */
+
+[id^='setting-field-'] > * > * {min-height:30px}
+[data-overlay-surface] aside button:not([data-slot='button']) {height:auto;min-height:28px;font-size:13px;border-radius:10px;border-color:transparent}
+/* The section list is iPad Settings' sidebar: solid (under Glass desktop leaves it see-through, showing the dimmed
+   window behind the sheet), a hairline from the options, the open page in the tint with white text, the open
+   group's name in the headline weight instead of a boxed fill. */
+
+[data-overlay-surface] aside button:not([data-slot='button']):not([aria-current='page']) {background:transparent}
+[data-overlay-surface] aside button:not([data-slot='button']):not([aria-current='page']):hover {background:var(--hq-fill-3)}
+[data-overlay-surface] aside button[class~='bg-(--ui-bg-tertiary)'] {font-weight:600}
+[data-overlay-surface] aside button[aria-current='page'] {background:var(--hq-tint);color:#fff;font-weight:500}
+[data-overlay-surface] aside button[aria-current='page'] :is(svg,i) {color:#fff}

@@ -1,0 +1,17 @@
+/* Group chats: HQ's room. Each bot's words in a grey bubble under its name and face, yours in blue on the right,
+   at the chat's 15 px instead of desktop's 12 px log lines. */
+:has(> .min-w-0 > [data-slot='group-chat-message-content']) {gap:8px;padding:3px 0;background:none}
+:has(> .min-w-0 > [data-slot='group-chat-message-content']) > .shrink-0 > * {width:30px !important;height:30px !important}
+:has(> [data-slot='group-chat-message-content']) .text-\[0\.7rem\] {font-size:12px;font-weight:600;padding-left:13px}
+:has(> [data-slot='group-chat-message-content']) .text-\[0\.625rem\] {font-size:11px}
+[data-slot='group-chat-message-content'] {width:fit-content;max-width:min(88%,60rem);margin-top:2px;padding:7px 13px;
+  border-radius:18px;background:var(--hq-bubble-bot);color:var(--foreground);font-size:12px;line-height:1.35}
+.bg-\(--chrome-action-hover\):has(> .min-w-0 > [data-slot='group-chat-message-content']) [data-slot='group-chat-message-content'] {
+  margin-left:auto;background:var(--hq-bubble-me);color:#fff}
+/* The room in the same centred column as a chat, its message box the chat's round field at reading size. */
+.flex-col:has(> .border-t > form.grid textarea[data-slot='textarea']) > .overscroll-contain > .grid {width:100%;max-width:var(--composer-width);margin-inline:auto}
+.flex-col:has(> .border-t > form.grid textarea[data-slot='textarea']) > .border-t {border-top-color:transparent;padding:8px 16px 12px}
+.flex-col:has(> .border-t > form.grid textarea[data-slot='textarea']) > .border-t > form {width:100%;max-width:var(--composer-width);margin-inline:auto}
+.flex-col:has(> .border-t > form.grid textarea[data-slot='textarea']) textarea[data-slot='textarea'] {min-height:28px;padding:7px 14px;border-radius:20px;font-size:12px;line-height:16px}
+.bg-\(--chrome-action-hover\):has(> .min-w-0 > [data-slot='group-chat-message-content']) .flex.items-center.gap-2 {justify-content:flex-end}
+.bg-\(--chrome-action-hover\):has(> .min-w-0 > [data-slot='group-chat-message-content']) .flex.items-center.gap-2 > .ml-auto {margin-left:0;order:-1}

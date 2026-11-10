@@ -1,0 +1,16 @@
+/* ---- Sizes and spacing: HQ's own measures (BotRowMetrics, ChatPalette, the iOS list), a step down for a window
+   seen from further away than a phone. ---- */
+
+
+/* Chat: HQ's 6 pt between turns and tight runs of steps; reply text at HQ's 1.3 leading, not desktop's 1.5. */
+/* The conversation in one centred reading column (as Messages and every chat app at desktop width), wide enough
+   that replies don't wrap early; the composer shares its edges. */
+body {--composer-width:52rem}
+
+body {--conversation-turn-gap:6px;--turn-block-gap:8px;--tool-row-gap:4px}
+
+
+/* A reply's time and buttons show on hover; they no longer hold a 32 px blank line under every reply, so the next
+   turn sits HQ's distance below. */
+
+

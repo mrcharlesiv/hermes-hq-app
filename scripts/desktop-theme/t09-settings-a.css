@@ -1,0 +1,18 @@
+/* A sheet is iOS's elevated grouped list: grey page and white cards; in dark the page lifts to #1c1c1e and the cards to
+   #2c2c2e, so the sheet stands off the dimmed window. */
+
+html:root.dark [data-overlay-surface] {--hq-grouped:#1c1c1e;--hq-cell:#2c2c2e}
+
+/* Settings: iOS's grouped list. Grey page, each group of options a white card, hairlines between rows. */
+[data-overlay-surface] [data-glass-raised]:has([id^='setting-field-']) :is(main,div:has(> main)) {background:var(--hq-grouped)}
+:is(:has(> [id^='setting-field-']):not(.overflow-y-auto),[data-overlay-surface] .grid.gap-1:has(> :is(.scroll-mt-6.rounded-lg,.\@container) .grid.gap-3.py-3)) {
+  gap:0;padding:0 16px;border-radius:var(--hq-card-r);background:var(--hq-cell)}
+/* Loose rows (ListRow, or a field straight in the page) run together into one grouped card. */
+[data-overlay-surface] main :is(.overflow-y-auto,:not(:has(> [id^='setting-field-'])):not(.grid.gap-1,[id^='setting-field-'],.scroll-mt-6,.rounded-xl,.border-b,[class*='bg-('])) > :is([id^='setting-field-'],.\@container:has(> .grid.gap-3.py-3)) {padding:0 16px;background:var(--hq-cell)}
+[data-overlay-surface] main :is(.overflow-y-auto,:not(:has(> [id^='setting-field-'])):not(.grid.gap-1,[id^='setting-field-'],.scroll-mt-6,.rounded-xl,.border-b,[class*='bg-('])) > :not(:is([id^='setting-field-'],.\@container:has(> .grid.gap-3.py-3))) + :is([id^='setting-field-'],.\@container:has(> .grid.gap-3.py-3)), [data-overlay-surface] main :is(.overflow-y-auto,:not(:has(> [id^='setting-field-'])):not(.grid.gap-1,[id^='setting-field-'],.scroll-mt-6,.rounded-xl,.border-b,[class*='bg-('])) > :is([id^='setting-field-'],.\@container:has(> .grid.gap-3.py-3)):first-child {border-top-left-radius:var(--hq-card-r);border-top-right-radius:var(--hq-card-r)}
+[data-overlay-surface] main :is(.overflow-y-auto,:not(:has(> [id^='setting-field-'])):not(.grid.gap-1,[id^='setting-field-'],.scroll-mt-6,.rounded-xl,.border-b,[class*='bg-('])) > :is([id^='setting-field-'],.\@container:has(> .grid.gap-3.py-3)):not(:has(+ [id^='setting-field-'], + .\@container > .grid.gap-3.py-3)) {margin-bottom:20px;border-bottom-left-radius:var(--hq-card-r);border-bottom-right-radius:var(--hq-card-r)}
+
+/* A field that opens with its own intro (Pet): the intro reads as the group's header, the rest is the card. */
+[data-overlay-surface] main [id^='setting-field-']:has(> div > p.max-w-2xl:first-child + .mt-2) {padding:0!important;background:none!important;box-shadow:none!important}
+[data-overlay-surface] main [id^='setting-field-'] > div > p.max-w-2xl:first-child:has(+ .mt-2) {padding:0 16px 6px;font-size:12px;color:var(--hq-label-2)}
+[data-overlay-surface] main [id^='setting-field-'] > div > p.max-w-2xl:first-child + .mt-2 {margin-top:0;padding:0 16px;border-radius:var(--hq-card-r);background:var(--hq-cell)}

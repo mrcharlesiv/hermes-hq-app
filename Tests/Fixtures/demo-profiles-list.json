@@ -1,0 +1,733 @@
+{
+ "active": "default",
+ "bot_mode_protocol": true,
+ "profiles": [
+  {
+   "canonical_session": {
+    "id": "20261001_093900_aa000001",
+    "last_active": 1791556746,
+    "message_count": 3,
+    "preview": "Done. Reminder set for 9:00 AM tomorrow: review the pump quote. I will bring the three numbers from the quote with it.",
+    "resolved_id": "20261001_093900_aa000001",
+    "title": "Bot Chat"
+   },
+   "description": "Your right hand",
+   "display_name": "Hermes",
+   "is_active": true,
+   "is_default": true,
+   "last_session": {
+    "id": "20261001_093900_aa000001",
+    "last_active": 1791556746,
+    "message_count": 3,
+    "preview": "Done. Reminder set for 9:00 AM tomorrow: review the pump quote. I will bring the three numbers from the quote with it.",
+    "resolved_id": "20261001_093900_aa000001",
+    "title": "Bot Chat"
+   },
+   "model": "hermes-4",
+   "name": "default",
+   "path": "/home/hermes/profiles/default",
+   "provider": "nous",
+   "sessions": [
+    {
+     "archived": false,
+     "billing_provider": "nous",
+     "cwd": "/home/hermes/app",
+     "ended_at": null,
+     "estimated_cost_usd": 0.42,
+     "hidden": true,
+     "id": "20261001_093900_aa000001",
+     "input_tokens": 41000,
+     "is_active": false,
+     "is_default_profile": true,
+     "last_active": 1791556746,
+     "message_count": 3,
+     "model": "hermes-4",
+     "output_tokens": 3200,
+     "pinned": false,
+     "preview": "Done. Reminder set for 9:00 AM tomorrow: review the pump quote. I will bring the three numbers from the quote with it.",
+     "profile": "default",
+     "profile_name": "default",
+     "source": "desktop",
+     "started_at": 1791556680,
+     "title": "Bot Chat",
+     "tool_call_count": 0,
+     "unread": false
+    }
+   ],
+   "ui_meta": {
+    "dispatch-head": {
+     "blush": false,
+     "color": "peach",
+     "form": "blob",
+     "hat": "none",
+     "look": "slits",
+     "mouth": "none",
+     "seed": 3,
+     "specs": "none",
+     "theme": "shape",
+     "tile": "none",
+     "v": 6
+    },
+    "hermes-bots": {
+     "created": 1790000000000,
+     "description": "Your right hand",
+     "pinned": true,
+     "title": "Hermes"
+    }
+   },
+   "ui_meta_revisions": {
+    "dispatch-head": 1,
+    "hermes-bots": 1
+   },
+   "worker_session": null
+  },
+  {
+   "canonical_session": {
+    "id": "20261001_090500_aa000002",
+    "last_active": 1791554715,
+    "message_count": 2,
+    "preview": "14 new overnight. 3 need you today: the contract redline, the venue deposit, and a reply to Priya. I drafted all three.",
+    "resolved_id": "20261001_090500_aa000002",
+    "title": "Bot Chat"
+   },
+   "description": "Triage, replies and follow-ups",
+   "display_name": "Inbox",
+   "is_active": false,
+   "is_default": false,
+   "last_session": {
+    "id": "20261001_090500_aa000002",
+    "last_active": 1791554715,
+    "message_count": 2,
+    "preview": "14 new overnight. 3 need you today: the contract redline, the venue deposit, and a reply to Priya. I drafted all three.",
+    "resolved_id": "20261001_090500_aa000002",
+    "title": "Bot Chat"
+   },
+   "model": "hermes-4",
+   "name": "inbox",
+   "path": "/home/hermes/profiles/inbox",
+   "provider": "nous",
+   "sessions": [
+    {
+     "archived": false,
+     "billing_provider": "nous",
+     "cwd": "/home/hermes/app",
+     "ended_at": null,
+     "estimated_cost_usd": 0.42,
+     "hidden": true,
+     "id": "20261001_090500_aa000002",
+     "input_tokens": 41000,
+     "is_active": false,
+     "is_default_profile": false,
+     "last_active": 1791554715,
+     "message_count": 2,
+     "model": "hermes-4",
+     "output_tokens": 3200,
+     "pinned": false,
+     "preview": "14 new overnight. 3 need you today: the contract redline, the venue deposit, and a reply to Priya. I drafted all three.",
+     "profile": "inbox",
+     "profile_name": "inbox",
+     "source": "desktop",
+     "started_at": 1791554700,
+     "title": "Bot Chat",
+     "tool_call_count": 0,
+     "unread": false
+    }
+   ],
+   "ui_meta": {
+    "dispatch-head": {
+     "blush": false,
+     "color": "sky",
+     "form": "blob",
+     "hat": "none",
+     "look": "slits",
+     "mouth": "none",
+     "seed": 10,
+     "specs": "none",
+     "theme": "shape",
+     "tile": "none",
+     "v": 6
+    },
+    "hermes-bots": {
+     "created": 1790000000001,
+     "description": "Triage, replies and follow-ups",
+     "pinned": false,
+     "sectionId": "sec-work",
+     "sectionName": "Work",
+     "title": "Inbox"
+    }
+   },
+   "ui_meta_revisions": {
+    "dispatch-head": 1,
+    "hermes-bots": 1
+   },
+   "worker_session": null
+  },
+  {
+   "canonical_session": {
+    "id": "20261001_093800_aa000003",
+    "last_active": 1791556719,
+    "message_count": 14,
+    "preview": "One overlap: Example Notes 3.1 added Markdown export on Monday, no JSON. Ours does both.",
+    "resolved_id": "20261001_093800_aa000003",
+    "title": "Bot Chat"
+   },
+   "description": "Releases, builds and checks",
+   "display_name": "Deploys",
+   "is_active": false,
+   "is_default": false,
+   "last_session": {
+    "id": "20261001_093800_aa000003",
+    "last_active": 1791556719,
+    "message_count": 14,
+    "preview": "One overlap: Example Notes 3.1 added Markdown export on Monday, no JSON. Ours does both.",
+    "resolved_id": "20261001_093800_aa000003",
+    "title": "Bot Chat"
+   },
+   "model": "hermes-4",
+   "name": "deploys",
+   "path": "/home/hermes/profiles/deploys",
+   "provider": "nous",
+   "sessions": [
+    {
+     "archived": false,
+     "billing_provider": "nous",
+     "cwd": "/home/hermes/app",
+     "ended_at": null,
+     "estimated_cost_usd": 0.42,
+     "hidden": true,
+     "id": "20261001_093800_aa000003",
+     "input_tokens": 41000,
+     "is_active": false,
+     "is_default_profile": false,
+     "last_active": 1791556719,
+     "message_count": 14,
+     "model": "hermes-4",
+     "output_tokens": 3200,
+     "pinned": false,
+     "preview": "One overlap: Example Notes 3.1 added Markdown export on Monday, no JSON. Ours does both.",
+     "profile": "deploys",
+     "profile_name": "deploys",
+     "source": "desktop",
+     "started_at": 1791556620,
+     "title": "Bot Chat",
+     "tool_call_count": 7,
+     "unread": false
+    }
+   ],
+   "ui_meta": {
+    "dispatch-head": {
+     "blush": false,
+     "color": "coral",
+     "form": "blob",
+     "hat": "none",
+     "look": "slits",
+     "mouth": "none",
+     "seed": 17,
+     "specs": "none",
+     "theme": "shape",
+     "tile": "none",
+     "v": 6
+    },
+    "hermes-bots": {
+     "created": 1790000000002,
+     "description": "Releases, builds and checks",
+     "pinned": true,
+     "sectionId": "sec-work",
+     "sectionName": "Work",
+     "title": "Deploys"
+    }
+   },
+   "ui_meta_revisions": {
+    "dispatch-head": 1,
+    "hermes-bots": 1
+   },
+   "worker_session": null
+  },
+  {
+   "canonical_session": {
+    "id": "20261001_091200_aa000004",
+    "last_active": 1791555080,
+    "message_count": 2,
+    "preview": "Three papers worth your time this morning:",
+    "resolved_id": "20261001_091200_aa000004",
+    "title": "Bot Chat"
+   },
+   "description": "Reading and summaries",
+   "display_name": "Research",
+   "is_active": false,
+   "is_default": false,
+   "last_session": {
+    "id": "20261001_091200_aa000004",
+    "last_active": 1791555080,
+    "message_count": 2,
+    "preview": "Three papers worth your time this morning:",
+    "resolved_id": "20261001_091200_aa000004",
+    "title": "Bot Chat"
+   },
+   "model": "hermes-4",
+   "name": "research",
+   "path": "/home/hermes/profiles/research",
+   "provider": "nous",
+   "sessions": [
+    {
+     "archived": false,
+     "billing_provider": "nous",
+     "cwd": "/home/hermes/app",
+     "ended_at": null,
+     "estimated_cost_usd": 0.42,
+     "hidden": true,
+     "id": "20261001_091200_aa000004",
+     "input_tokens": 41000,
+     "is_active": false,
+     "is_default_profile": false,
+     "last_active": 1791555080,
+     "message_count": 2,
+     "model": "hermes-4",
+     "output_tokens": 3200,
+     "pinned": false,
+     "preview": "Three papers worth your time this morning:",
+     "profile": "research",
+     "profile_name": "research",
+     "source": "desktop",
+     "started_at": 1791555060,
+     "title": "Bot Chat",
+     "tool_call_count": 0,
+     "unread": false
+    }
+   ],
+   "ui_meta": {
+    "dispatch-head": {
+     "blush": false,
+     "color": "lilac",
+     "form": "blob",
+     "hat": "none",
+     "look": "slits",
+     "mouth": "none",
+     "seed": 24,
+     "specs": "none",
+     "theme": "shape",
+     "tile": "none",
+     "v": 6
+    },
+    "hermes-bots": {
+     "created": 1790000000003,
+     "description": "Reading and summaries",
+     "pinned": true,
+     "sectionId": "sec-work",
+     "sectionName": "Work",
+     "title": "Research"
+    }
+   },
+   "ui_meta_revisions": {
+    "dispatch-head": 1,
+    "hermes-bots": 1
+   },
+   "worker_session": null
+  },
+  {
+   "canonical_session": {
+    "id": "20260929_161000_aa000005",
+    "last_active": 1791407415,
+    "message_count": 2,
+    "preview": "September is reconciled. Two invoices still need your OK before I send them.",
+    "resolved_id": "20260929_161000_aa000005",
+    "title": "Bot Chat"
+   },
+   "description": "Books, invoices and reports",
+   "display_name": "Finance",
+   "is_active": false,
+   "is_default": false,
+   "last_session": {
+    "id": "20260929_161000_aa000005",
+    "last_active": 1791407415,
+    "message_count": 2,
+    "preview": "September is reconciled. Two invoices still need your OK before I send them.",
+    "resolved_id": "20260929_161000_aa000005",
+    "title": "Bot Chat"
+   },
+   "model": "hermes-4",
+   "name": "finance",
+   "path": "/home/hermes/profiles/finance",
+   "provider": "nous",
+   "sessions": [
+    {
+     "archived": false,
+     "billing_provider": "nous",
+     "cwd": "/home/hermes/app",
+     "ended_at": null,
+     "estimated_cost_usd": 0.42,
+     "hidden": true,
+     "id": "20260929_161000_aa000005",
+     "input_tokens": 41000,
+     "is_active": false,
+     "is_default_profile": false,
+     "last_active": 1791407415,
+     "message_count": 2,
+     "model": "hermes-4",
+     "output_tokens": 3200,
+     "pinned": false,
+     "preview": "September is reconciled. Two invoices still need your OK before I send them.",
+     "profile": "finance",
+     "profile_name": "finance",
+     "source": "desktop",
+     "started_at": 1791407400,
+     "title": "Bot Chat",
+     "tool_call_count": 0,
+     "unread": false
+    }
+   ],
+   "ui_meta": {
+    "dispatch-head": {
+     "blush": false,
+     "color": "butter",
+     "form": "blob",
+     "hat": "none",
+     "look": "slits",
+     "mouth": "none",
+     "seed": 31,
+     "specs": "none",
+     "theme": "shape",
+     "tile": "none",
+     "v": 6
+    },
+    "hermes-bots": {
+     "created": 1790000000004,
+     "description": "Books, invoices and reports",
+     "pinned": false,
+     "sectionId": "sec-work",
+     "sectionName": "Work",
+     "title": "Finance"
+    }
+   },
+   "ui_meta_revisions": {
+    "dispatch-head": 1,
+    "hermes-bots": 1
+   },
+   "worker_session": null
+  },
+  {
+   "canonical_session": {
+    "id": "20260928_180000_aa000006",
+    "last_active": 1791327615,
+    "message_count": 2,
+    "preview": "Frost tonight, down to 30°F. I moved the watering to 7 AM and added a reminder to cover the tomatoes.",
+    "resolved_id": "20260928_180000_aa000006",
+    "title": "Bot Chat"
+   },
+   "description": "Watering, frost and planting",
+   "display_name": "Garden",
+   "is_active": false,
+   "is_default": false,
+   "last_session": {
+    "id": "20260928_180000_aa000006",
+    "last_active": 1791327615,
+    "message_count": 2,
+    "preview": "Frost tonight, down to 30°F. I moved the watering to 7 AM and added a reminder to cover the tomatoes.",
+    "resolved_id": "20260928_180000_aa000006",
+    "title": "Bot Chat"
+   },
+   "model": "hermes-4",
+   "name": "garden",
+   "path": "/home/hermes/profiles/garden",
+   "provider": "nous",
+   "sessions": [
+    {
+     "archived": false,
+     "billing_provider": "nous",
+     "cwd": "/home/hermes/app",
+     "ended_at": null,
+     "estimated_cost_usd": 0.42,
+     "hidden": true,
+     "id": "20260928_180000_aa000006",
+     "input_tokens": 41000,
+     "is_active": false,
+     "is_default_profile": false,
+     "last_active": 1791327615,
+     "message_count": 2,
+     "model": "hermes-4",
+     "output_tokens": 3200,
+     "pinned": false,
+     "preview": "Frost tonight, down to 30°F. I moved the watering to 7 AM and added a reminder to cover the tomatoes.",
+     "profile": "garden",
+     "profile_name": "garden",
+     "source": "desktop",
+     "started_at": 1791327600,
+     "title": "Bot Chat",
+     "tool_call_count": 0,
+     "unread": false
+    }
+   ],
+   "ui_meta": {
+    "dispatch-head": {
+     "blush": false,
+     "color": "lime",
+     "form": "blob",
+     "hat": "none",
+     "look": "slits",
+     "mouth": "none",
+     "seed": 38,
+     "specs": "none",
+     "theme": "shape",
+     "tile": "none",
+     "v": 6
+    },
+    "hermes-bots": {
+     "created": 1790000000005,
+     "description": "Watering, frost and planting",
+     "pinned": false,
+     "sectionId": "sec-home",
+     "sectionName": "Home",
+     "title": "Garden"
+    }
+   },
+   "ui_meta_revisions": {
+    "dispatch-head": 1,
+    "hermes-bots": 1
+   },
+   "worker_session": null
+  },
+  {
+   "canonical_session": {
+    "id": "20260927_113000_aa000007",
+    "last_active": 1791217815,
+    "message_count": 2,
+    "preview": "The pump quote came back at $1,840 installed. Want the short version or the full breakdown?",
+    "resolved_id": "20260927_113000_aa000007",
+    "title": "Bot Chat"
+   },
+   "description": "House projects and quotes",
+   "display_name": "Home",
+   "is_active": false,
+   "is_default": false,
+   "last_session": {
+    "id": "20260927_113000_aa000007",
+    "last_active": 1791217815,
+    "message_count": 2,
+    "preview": "The pump quote came back at $1,840 installed. Want the short version or the full breakdown?",
+    "resolved_id": "20260927_113000_aa000007",
+    "title": "Bot Chat"
+   },
+   "model": "hermes-4",
+   "name": "home",
+   "path": "/home/hermes/profiles/home",
+   "provider": "nous",
+   "sessions": [
+    {
+     "archived": false,
+     "billing_provider": "nous",
+     "cwd": "/home/hermes/app",
+     "ended_at": null,
+     "estimated_cost_usd": 0.42,
+     "hidden": true,
+     "id": "20260927_113000_aa000007",
+     "input_tokens": 41000,
+     "is_active": false,
+     "is_default_profile": false,
+     "last_active": 1791217815,
+     "message_count": 2,
+     "model": "hermes-4",
+     "output_tokens": 3200,
+     "pinned": false,
+     "preview": "The pump quote came back at $1,840 installed. Want the short version or the full breakdown?",
+     "profile": "home",
+     "profile_name": "home",
+     "source": "desktop",
+     "started_at": 1791217800,
+     "title": "Bot Chat",
+     "tool_call_count": 0,
+     "unread": false
+    }
+   ],
+   "ui_meta": {
+    "dispatch-head": {
+     "blush": false,
+     "color": "pink",
+     "form": "blob",
+     "hat": "none",
+     "look": "slits",
+     "mouth": "none",
+     "seed": 45,
+     "specs": "none",
+     "theme": "shape",
+     "tile": "none",
+     "v": 6
+    },
+    "hermes-bots": {
+     "created": 1790000000006,
+     "description": "House projects and quotes",
+     "pinned": false,
+     "sectionId": "sec-home",
+     "sectionName": "Home",
+     "title": "Home"
+    }
+   },
+   "ui_meta_revisions": {
+    "dispatch-head": 1,
+    "hermes-bots": 1
+   },
+   "worker_session": null
+  },
+  {
+   "canonical_session": {
+    "id": "20261001_073000_aa000008",
+    "last_active": 1791549015,
+    "message_count": 2,
+    "preview": "Cut it from 410 words to 180. The opening now leads with the export feature; two versions are in the draft.",
+    "resolved_id": "20261001_073000_aa000008",
+    "title": "Bot Chat"
+   },
+   "description": "Drafts, edits and posts",
+   "display_name": "Writing",
+   "is_active": false,
+   "is_default": false,
+   "last_session": {
+    "id": "20261001_073000_aa000008",
+    "last_active": 1791549015,
+    "message_count": 2,
+    "preview": "Cut it from 410 words to 180. The opening now leads with the export feature; two versions are in the draft.",
+    "resolved_id": "20261001_073000_aa000008",
+    "title": "Bot Chat"
+   },
+   "model": "hermes-4",
+   "name": "writing",
+   "path": "/home/hermes/profiles/writing",
+   "provider": "nous",
+   "sessions": [
+    {
+     "archived": false,
+     "billing_provider": "nous",
+     "cwd": "/home/hermes/app",
+     "ended_at": null,
+     "estimated_cost_usd": 0.42,
+     "hidden": true,
+     "id": "20261001_073000_aa000008",
+     "input_tokens": 41000,
+     "is_active": false,
+     "is_default_profile": false,
+     "last_active": 1791549015,
+     "message_count": 2,
+     "model": "hermes-4",
+     "output_tokens": 3200,
+     "pinned": false,
+     "preview": "Cut it from 410 words to 180. The opening now leads with the export feature; two versions are in the draft.",
+     "profile": "writing",
+     "profile_name": "writing",
+     "source": "desktop",
+     "started_at": 1791549000,
+     "title": "Bot Chat",
+     "tool_call_count": 0,
+     "unread": false
+    }
+   ],
+   "ui_meta": {
+    "dispatch-head": {
+     "blush": false,
+     "color": "mint",
+     "form": "blob",
+     "hat": "none",
+     "look": "slits",
+     "mouth": "none",
+     "seed": 52,
+     "specs": "none",
+     "theme": "shape",
+     "tile": "none",
+     "v": 6
+    },
+    "hermes-bots": {
+     "created": 1790000000007,
+     "description": "Drafts, edits and posts",
+     "pinned": false,
+     "sectionId": "sec-work",
+     "sectionName": "Work",
+     "title": "Writing"
+    }
+   },
+   "ui_meta_revisions": {
+    "dispatch-head": 1,
+    "hermes-bots": 1
+   },
+   "worker_session": null
+  },
+  {
+   "canonical_session": {
+    "id": "20260926_150000_aa000009",
+    "last_active": 1791144015,
+    "message_count": 2,
+    "preview": "Flights and hotel are booked. Still open: the airport transfer on the 14th and a dinner reservation.",
+    "resolved_id": "20260926_150000_aa000009",
+    "title": "Bot Chat"
+   },
+   "description": "Trips, bookings and packing",
+   "display_name": "Travel",
+   "is_active": false,
+   "is_default": false,
+   "last_session": {
+    "id": "20260926_150000_aa000009",
+    "last_active": 1791144015,
+    "message_count": 2,
+    "preview": "Flights and hotel are booked. Still open: the airport transfer on the 14th and a dinner reservation.",
+    "resolved_id": "20260926_150000_aa000009",
+    "title": "Bot Chat"
+   },
+   "model": "hermes-4",
+   "name": "travel",
+   "path": "/home/hermes/profiles/travel",
+   "provider": "nous",
+   "sessions": [
+    {
+     "archived": false,
+     "billing_provider": "nous",
+     "cwd": "/home/hermes/app",
+     "ended_at": null,
+     "estimated_cost_usd": 0.42,
+     "hidden": true,
+     "id": "20260926_150000_aa000009",
+     "input_tokens": 41000,
+     "is_active": false,
+     "is_default_profile": false,
+     "last_active": 1791144015,
+     "message_count": 2,
+     "model": "hermes-4",
+     "output_tokens": 3200,
+     "pinned": false,
+     "preview": "Flights and hotel are booked. Still open: the airport transfer on the 14th and a dinner reservation.",
+     "profile": "travel",
+     "profile_name": "travel",
+     "source": "desktop",
+     "started_at": 1791144000,
+     "title": "Bot Chat",
+     "tool_call_count": 0,
+     "unread": false
+    }
+   ],
+   "ui_meta": {
+    "dispatch-head": {
+     "blush": false,
+     "color": "teal",
+     "form": "blob",
+     "hat": "none",
+     "look": "slits",
+     "mouth": "none",
+     "seed": 59,
+     "specs": "none",
+     "theme": "shape",
+     "tile": "none",
+     "v": 6
+    },
+    "hermes-bots": {
+     "created": 1790000000008,
+     "description": "Trips, bookings and packing",
+     "pinned": false,
+     "sectionId": "sec-home",
+     "sectionName": "Home",
+     "title": "Travel"
+    }
+   },
+   "ui_meta_revisions": {
+    "dispatch-head": 1,
+    "hermes-bots": 1
+   },
+   "worker_session": null
+  }
+ ]
+}

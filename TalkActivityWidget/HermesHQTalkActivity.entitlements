@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- [live-steps] The app's own default Keychain access group, where it keeps the push seal keys (Shared/PushSeal.swift):
+	     a reply's Lock Screen card opens the steps the add-on pushes sealed with them (Shared/LiveStepsSeal.swift). Read
+	     only. Same entry as NotificationService.entitlements: team profiles allow every TEAMID.* group, so this needs no
+	     portal capability. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)$(HQ_APP_BUNDLE_ID)</string>
+	</array>
+</dict>
+</plist>

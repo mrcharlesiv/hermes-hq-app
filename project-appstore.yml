@@ -1,0 +1,15 @@
+# The App Store build (owner, 1.0): iPhone only, because the iPad layout is untested on a real iPad. Included by
+# project.yml when HQ_APP_STORE=YES (scripts/ship.py sets it from HQ_APP_STORE=1). The app and both extensions take
+# TARGETED_DEVICE_FAMILY from HQ_DEVICE_FAMILY, so all three bundles say UIDeviceFamily [1].
+settings:
+  base:
+    HQ_DEVICES_CHOICE: iphone
+targets:
+  # [app-store-review] `#if APP_STORE` (App Review 3.1.1 and 5.1.2(i)): the HermesHQNative target's sources also
+  # compile HermesKit, Shared, ShareKit and the rest of its `sources:` list (project.yml), so this one condition
+  # reaches all of it. `$(inherited)` keeps DEBUG in Debug builds; TestFlight/internal/simulator builds never include
+  # this file, so APP_STORE is never set there.
+  HermesHQNative:
+    settings:
+      base:
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) APP_STORE"

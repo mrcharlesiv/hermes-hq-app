@@ -1,0 +1,14 @@
+# The original App Store identity (com.charlesmcdowell.dispatch, ASC app 6816242629 "Hermes HQ"): included by
+# project.yml when HQ_ORIGINAL=YES (scripts/build.sh and scripts/ship.py set it from HQ_IDENTITY=original).
+# [share] The Share extension (com.charlesmcdowell.dispatch.share, docs/spec/3x-share.md) is embedded here and only here.
+# [mac] The Mac app (Mac Catalyst) embeds both extensions too, built with their -mac.entitlements.
+settings:
+  base:
+    HQ_IDENTITY_CHOICE: original
+targets:
+  HermesHQNative:
+    dependencies:
+      - target: HermesHQNotifications
+      - target: HermesHQShare          # [share]
+      - target: HermesHQTalkActivity   # [talk-background] iPhone and iPad only: no Live Activities on the Mac
+        destinationFilters: [iOS]

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- HQ Native's own record (HQ_IDENTITY = native): no push (the relay and the plugin take only the original topic), no
+     App Group. Alerts are local, raised while the app runs. -->
+<dict>
+	<!-- [device-access] Settings › Device Access › Health (Simulator builds use this record too). -->
+	<key>com.apple.developer.healthkit</key>
+	<true/>
+	<key>com.apple.developer.healthkit.access</key>
+	<array/>
+</dict>
+</plist>

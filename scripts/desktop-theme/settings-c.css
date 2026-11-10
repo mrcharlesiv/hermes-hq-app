@@ -1,0 +1,329 @@
+/* ===== settings-c: Billing, Providers, Gateways, Shortcuts, Tools & Keys, Sessions, Plugins, About ===== */
+[data-overlay-surface] main {
+  --s3: rgba(60,60,67,.3);
+  --sd: #ff3b30;
+  --so: #c93400;
+  --sw: var(--hq-fill);
+  --sf: -apple-system,system-ui,sans-serif;
+  --sn: 400 12px/16px var(--sf);
+  --sb: 400 13px/18px var(--sf);
+  --ss: 400 12px/16px var(--sf);
+  --sh: 600 13px/18px var(--sf);
+  --sx: 0 -.5px 0 var(--hq-sep);
+  --sl: var(--hq-label-2);
+  --st: var(--hq-tint);
+  --sr: var(--hq-card-r);
+  --sk: var(--hq-cell);
+  --sp: var(--foreground);
+
+/* --- One section header on every page here: HQSectionLabel at Mac size, 15 semibold label-2, no icon --- */
+:is(.mb-2\.5.flex:has(> :is(.tabler-icon-package,.tabler-icon-credit-card,.tabler-icon-chart-bar)),
+  .mb-2\.5.flex:has(+ p.mb-2 + .grid > [id^=archived-session-]),
+  section:has(.tabler-icon-device-floppy) > .mb-2\.5,
+  .mx-auto.mt-4.max-w-2xl > .mb-2\.5.flex,
+  section.grid.gap-2 > .flex.flex-wrap.items-baseline > .mb-3.flex,
+  section.grid.gap-2:has(> .flex.flex-wrap.items-baseline) > p.mt-3) {
+  margin:0 0 6px;padding:0 16px;min-height:22px;align-items:baseline;
+  font:var(--sh);letter-spacing:-.23px;color:var(--sl);
+  > svg:first-child {display:none}
+  > [data-slot=badge] {padding:0;background:none;font:inherit;color:inherit}
+}
+
+/* --- Shared: footnotes under a card; cards of plain tint rows; captions under a card on a flex-column page --- */
+:has(> p.mb-2 + * :is([id^=archived-session-],.codicon-plug,.tabler-icon-folder-open)) {display:flex;flex-direction:column}
+p.mb-2:has(+ * :is([id^=archived-session-],.codicon-plug,.tabler-icon-folder-open)), div:has(> .mt-6.border-t) > p:is(.mb-1,.mb-4), .border-destructive\/30 > .flex-col > p.text-xs {
+  order:1;margin:6px 0 0;padding:0 16px;font:var(--sn);letter-spacing:-.08px;color:var(--sl)
+}
+/* stacks of actions as one card of 52px tint rows (Gateways actions, Add/Update connection, endpoint editor actions) */
+:is(.mt-6.justify-end.gap-4, div:has(> .mt-6.border-t) > .mt-4.flex, section > .rounded-md > .flex-wrap.gap-2) {
+  flex-direction:column;align-items:stretch;gap:0;padding:0 16px;border-radius:var(--sr);background:var(--sk);
+  > [data-slot=button] {justify-content:flex-start;min-height:32px;padding:0;gap:10px;border-radius:0;background:none;color:var(--st);font:var(--sb);letter-spacing:-.23px}
+  > [data-slot=button] + [data-slot=button] {box-shadow:var(--sx)}
+  > [data-slot=button]:is(.gap-4 > :last-child,:has(> .tabler-icon-device-floppy)) {font-weight:600}
+  > [data-slot=button]:disabled {color:var(--sl)}
+}
+.mt-6.justify-end.gap-4 {margin-top:0}
+/* trailing trash / terminal / pencil glyphs at row size */
+:is(section.grid.gap-2,[id^=archived-session-],section > .divide-y,div:has(> .mt-6.border-t) > .\@container) button:has(> :is(.tabler-icon-trash,.tabler-icon-terminal-2,.tabler-icon-pencil)) {
+  min-width:30px;min-height:30px;
+  > svg {width:18px;height:18px;color:var(--sl)}
+}
+
+/* --- Providers > Accounts: header, local card, Connected card + footer, then "Connect another" as a tint row --- */
+section.grid.gap-2:has(> .flex.flex-wrap.items-baseline) {
+  > * {order:3}
+  > .flex.flex-wrap.items-baseline {order:0;padding-right:16px}
+  > button.group.flex.rounded-\[6px\] {order:1}
+  > p.mt-3 {order:2}
+  > p.mt-3.mt-3.mt-3 {margin-top:30px}
+  > p.-mt-2 {order:4;margin:6px 0 0;font:var(--sn);letter-spacing:-.08px}
+  > [data-slot=button]:last-child {order:5;margin-top:30px;min-height:32px;justify-content:flex-start;padding:0 16px;border-radius:var(--sr);background:var(--sk);color:var(--st);font:var(--sb);letter-spacing:-.23px}
+  > .flex.flex-wrap.items-baseline > [data-slot=button] {color:var(--st);font-weight:400}
+}
+section.grid.gap-2 {
+  > :is(button.group.flex,div.group.grid).rounded-\[6px\] + :is(button.group.flex,div.group.grid).rounded-\[6px\] {border-top-left-radius:0;border-top-right-radius:0}
+  > button.group.flex.rounded-\[6px\] {padding:10px 14px;min-height:40px}
+  > .group.rounded-\[6px\] {
+    button.min-w-0 {padding:10px 14px}
+    p.text-muted-foreground {padding:0!important;margin-top:4px;font:var(--ss);letter-spacing:-.08px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    p.text-\[0\.68rem\] {font:var(--sn);letter-spacing:-.08px;color:var(--sl);white-space:normal}
+  }
+  /* trailing actions in three fixed slots (terminal, trash, chevron) so every row's icons share one column */
+  > div.group.grid.rounded-\[6px\] {
+    > button.min-w-0 {position:relative;padding-right:112px}
+    > div:last-child {display:grid;grid-template-columns:30px 30px 16px;justify-items:center;padding-right:16px;
+      > * {grid-row:1}
+      > :is(svg,button):has(.tabler-icon-terminal-2), > .tabler-icon-terminal-2 {grid-column:1}
+      > button:has(.tabler-icon-trash) {grid-column:2}
+      > .tabler-icon-chevron-right {grid-column:3}
+      > .tabler-icon-terminal-2 {width:18px;height:18px;color:var(--sl)}
+    }
+  }
+  /* status as a plain grey value (HQ "Signed In"), centred at the trailing edge; its check is decoration */
+  span.bg-primary\/10.text-primary {position:absolute;right:0;top:50%;transform:translateY(-50%);padding:0;background:none;font:var(--sb);letter-spacing:-.23px;color:var(--sl);> svg {display:none}}
+}
+
+/* --- Billing: notice as a white card with an orange headline --- */
+.bg-\(--ui-yellow\)\/10 {
+  border-radius:var(--sr);background:var(--sk);padding:10px 14px;
+  > .font-medium:first-child {font-weight:600;color:var(--so)}
+  > .mt-1 {margin-top:2px}
+  > [data-slot=button] {margin-top:8px}
+}
+[data-slot=button]:is(.bg-\(--ui-yellow\)\/10 *, .rounded-lg.p-4 *, .mb-2\.5:has(+ p + * > button > .codicon-plug) *) {padding:0;background:none;font:var(--sb);letter-spacing:-.23px;> :is(.tabler-icon-external-link,.codicon-arrow-right) {display:none}}
+/* Balance / Plan / Auto-refill: LabeledContent rows */
+.mb-6:has(> * > * > .text-lg) {
+  padding-block:0!important;
+  > .grid.gap-3 {grid-template-columns:1fr!important;gap:0}
+  > .grid > .min-w-0:has(> .text-lg) {display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:32px}
+  > .grid > .min-w-0 + .min-w-0 {box-shadow:var(--sx)}
+  > .grid > .min-w-0 > * {margin:0;font:var(--sb);letter-spacing:-.23px;color:var(--sp)}
+  > .grid > .min-w-0 > .text-lg {color:var(--sl)}
+}
+/* usage meters */
+.py-3:has(> * > [data-slot=progress]) {
+  grid-template-columns:minmax(0,1fr) auto!important;row-gap:8px;
+  > .min-w-0:has(> [data-slot=progress]) {grid-column:1/-1;grid-row:2}
+  > .min-w-0:last-child {grid-row:1;grid-column:2;width:auto!important;color:var(--sl)!important}
+  [data-slot=progress] {height:4px;background:var(--hq-fill)}
+  [data-slot=progress] > .bg-\(--ui-green\) {background:var(--st)}
+}
+/* hairlines between stacked rows inset 16px on both sides */
+:is(section:has(> .mb-2\.5 > .tabler-icon-credit-card), div:has(> .mt-6.border-t), .overflow-y-auto:has(#setting-field-gateway\.connection-mode) .grid.gap-3) > .\@container + .\@container {box-shadow:none;background-image:linear-gradient(var(--hq-sep),var(--hq-sep));background-position:16px 0;background-size:calc(100% - 32px) .5px;background-repeat:no-repeat}
+.mb-2\.5.flex:has(> .tabler-icon-credit-card) .ml-auto [data-slot=button] {padding:0;font-weight:400;color:var(--st)}
+/* Payment & credits: 13px subtitles, plain tint actions, quiet values */
+section:has(> .mb-2\.5 > :is(.tabler-icon-credit-card,.tabler-icon-package)) .grid.gap-3.py-3 {
+  > .min-w-0 > .mt-1 {font:var(--ss)!important;letter-spacing:-.08px!important}
+  .opacity-50 {opacity:1}
+  .opacity-50 > [aria-pressed=false], > .flex > [data-slot=button]:disabled {opacity:1;color:var(--s3)}
+  > .flex > [data-slot=button] {min-height:30px;padding:0 2px;background:none;font:var(--sb);letter-spacing:-.23px}
+  /* Buy credits: amount picker on its own line under the text, Buy at the trailing edge */
+  &:has(> .flex > .inline-grid) {grid-template-columns:1fr!important;row-gap:10px;> .flex {justify-self:stretch!important;justify-content:flex-start;flex-wrap:nowrap} > .flex > [data-slot=button] {margin-left:auto}}
+  > .flex > [data-slot=badge] {padding:0;background:none;font-size:12px;font-weight:400}
+  [data-slot=input-group] {width:88px;height:30px;border-radius:999px;font-size:12px;> span {color:var(--sl)} input {padding-left:2px;font-size:12px;text-align:left!important}}
+}
+/* Billing > Plans: one inset-grouped list; the in-page "< Plans" row repeats the nav bar title and back button */
+.mb-2\.5:has(+ .grid > .rounded-lg.p-4) {display:none}
+.grid:has(> .rounded-lg.p-4.gap-3) {
+  grid-template-columns:1fr!important;gap:0;
+  /* icon + name/price, credits as the value, the action trailing */
+  > .rounded-lg.p-4 {display:grid;grid-template-columns:minmax(0,1fr) auto 124px;align-items:center;column-gap:16px;min-height:52px;padding:7px 14px;border-radius:0;
+    background:linear-gradient(var(--hq-sep),var(--hq-sep)) 68px 0/calc(100% - 84px) .5px no-repeat,var(--sk)}
+  > .p-4:first-child {border-radius:var(--sr) var(--sr) 0 0;background:var(--sk)}
+  > .p-4:last-child {border-bottom-left-radius:var(--sr);border-bottom-right-radius:var(--sr)}
+  > * > :first-child {grid-column:1;.min-w-0 > :last-child {margin-top:1px}}
+  > * > :nth-child(2):not(:last-child) {grid-column:2;font:var(--sb);letter-spacing:-.23px}
+  > * > .mt-auto {grid-column:3;justify-self:end;padding:0;margin:0}
+  .rounded-md {border-radius:9px}
+  [data-slot=badge] {gap:6px;padding:0;background:none;font:var(--sb)}
+  [data-slot=badge]::before {content:'';width:5px;height:10px;margin:-3px 4px 0 0;border:solid currentColor;border-width:0 2px 2px 0;transform:rotate(45deg)}
+}
+
+/* --- Gateways > This window --- */
+#setting-field-gateway\.connection-mode {
+  padding:0;background:none;gap:0;
+  > .font-medium:first-child {padding:0 16px 6px;font:var(--sh)}
+  > .grid {grid-template-columns:1fr!important;grid-auto-rows:auto;gap:0;padding:0 16px;border-radius:var(--sr);background:var(--sk)}
+  > .grid > button {min-height:32px;padding:11px 0;border:0;border-radius:0;background:none!important;--tw-ring-shadow:0 0 #0000;
+    + button {box-shadow:var(--sx)}
+    > .flex {gap:8px}
+    > .flex > svg:first-child {width:17px;height:17px;color:var(--sl)}
+    .tabler-icon-check {width:18px;height:18px;stroke-width:2.5}
+    > p {margin-top:2px;padding-left:25px}
+  }
+}
+.overflow-y-auto:has(#setting-field-gateway\.connection-mode) .\@container {
+  .min-w-0 > .mt-1 {font:var(--ss)!important;letter-spacing:-.08px!important}
+}
+/* Remote URL: HQ's Address row - a 15pt grey caption, then the full value, then the explanation */
+.grid.gap-3.py-3:has(input[placeholder*='gateway.example']) {
+  grid-template-columns:1fr!important;row-gap:2px;cursor:text;
+  > .min-w-0:first-child {display:contents}
+  > .min-w-0:first-child > :first-child {font:var(--ss);letter-spacing:-.08px;color:var(--sl)}
+  > .min-w-0:first-child > :not(:first-child) {order:2}
+  > .flex {order:1;justify-self:stretch!important;max-width:none!important}
+  input {padding:0!important;border-radius:0;text-align:left!important;color:var(--sp)!important;caret-color:var(--st)}
+}
+.grid.gap-3.py-3 > .flex > .flex > [data-slot=badge].bg-primary\/10 {padding:0;background:none;font:var(--sb);letter-spacing:-.23px;color:var(--sl);> svg {width:15px;height:15px;stroke-width:2.5;color:var(--st)}}
+.bg-primary\/10:has(> .tabler-icon-check) + [data-variant=outline] {padding:0 4px;background:none;font-size:13px;font-weight:400;color:var(--sd)}
+
+/* --- Gateways > Saved connections: rows as ValueRows, actions as tint text, captions as a footer, Add/Update as a card --- */
+div:has(> .mt-6.border-t) {
+  display:flex;flex-direction:column;
+  > p.mb-4 {margin-top:0}
+  > .mt-6.border-t {order:3;margin-top:30px;padding-top:0;border-top:0}
+  > .mt-4.flex {order:2;margin-top:30px}
+  > .mt-4.flex > [data-slot=button] > svg {width:18px;height:18px}
+  [data-slot=badge] {padding:0;margin-left:2px;background:none;font:var(--ss);letter-spacing:-.08px}
+  > .\@container {margin-bottom:0!important;margin-right:0!important;
+    .min-w-0 > .mt-1 {font-size:12px!important;line-height:16px!important}
+    /* badges sit on the title baseline right after the name; actions stay one centred trailing cluster */
+    span.flex.items-center.gap-2:has(> [data-slot=badge]) {align-items:baseline;gap:6px;> svg {align-self:center}}
+    /* Test is every row's first action: put it last so it forms one trailing column */
+    .flex.items-center.gap-2 > [data-slot=button]:first-child {order:1}
+    .flex.items-center.gap-2 > [data-slot=button]:not(:has(> svg:only-child)) {min-height:30px;padding:0 4px;background:none;font:var(--sb);letter-spacing:-.23px}
+  }
+}
+/* Remote updates: empty state centred in the pane */
+.min-h-48.place-items-center {
+  min-height:60vh;
+  > div > .mt-1 {font:var(--ss);letter-spacing:-.08px;color:var(--sl)}
+}
+
+/* --- Tools & Keys / Providers > API keys --- */
+.grid.gap-2 > .scroll-mt-6.rounded-\[6px\] {border-radius:0}
+:is([id^=credential-key-],[id^=provider-key-]) {
+  /* status: grey "not set" dot dropped (the empty field already says it); the "set" dot becomes a small tint dot after the name */
+  .bg-\(--ui-stroke-secondary\) {display:none}
+  .size-2.bg-primary {order:1;width:7px;height:7px}
+  .flex.items-center.gap-2 > span.truncate.font-medium {font-weight:400}
+  input::placeholder {color:var(--s3)}
+  .flex.items-center.gap-2 > svg {order:2}
+  /* one line at every width: name leading, value trailing (desktop stacks them below @2xl) */
+  @container (width < 42rem) {.\@container > .grid {grid-template-columns:minmax(0,1fr) minmax(8rem,45%);align-items:center}}
+  /* desktop pins @2xl:px-2.5! in a layer, which unlayered !important cannot beat: pull the field out by the same amount, only where that padding applies */
+  @container (width >= 42rem) {input.desktop-input-chrome:not(:focus) {width:calc(100% + 10px);margin-right:-10px}}
+}
+[id^=provider-key-] .grid:has(> input) {column-gap:0}
+.overflow-y-auto > button.group.grid.rounded-\[6px\]:has(> .flex-col > .font-semibold) {width:100%}
+
+/* --- Keyboard shortcuts --- */
+section:has(> button.group\/kbd-cat) {
+  > button.group\/kbd-cat {padding:10px 16px 6px}
+  &:first-child > button.group\/kbd-cat {padding-top:8px}
+  > button.group\/kbd-cat > span {font:var(--sh);letter-spacing:-.23px}
+  > .flex.rounded-lg {min-height:32px;padding:0 16px;gap:12px;
+    > span.flex-1 {font:var(--sb);letter-spacing:-.23px;color:var(--sp)}
+    /* hover-only Clear button: no reserved gutter until the row is hovered or focused */
+    > :is(button[aria-label=Clear],span:empty:last-child) {width:0;min-width:0;margin-left:-12px;overflow:hidden}
+    &:is(:hover,:focus-within) > button[aria-label=Clear] {width:24px;margin-left:0}
+  }
+  button[aria-label=Rebind] {gap:6px}
+  [data-slot=kbd-group] {gap:2px;height:22px;padding:0 8px;border-radius:6px;background:var(--hq-fill-3)}
+  [data-slot=kbd-group]:has(> [class*='_38%']) {padding:0;background:none}
+  [data-slot=kbd] {width:auto;min-width:0;height:auto;padding:0;border:0;border-radius:0;background:none;box-shadow:none;font:var(--ss);color:var(--sp)}
+  [data-slot=kbd][class*='_38%'] {padding:0;background:none;color:var(--st);text-transform:capitalize}
+}
+.pb-3:has(> button.text-\[0\.72rem\]) {padding:0 16px 12px;align-items:baseline;
+  p {font:var(--sn);color:var(--sl)}
+  > button {font-size:12px;color:var(--st)}
+}
+
+/* --- Sessions > Archive & retention / Default project folder --- */
+[id^=archived-session-] {
+  .min-w-0 > div.mt-1:not(.font-mono) {font-size:12px!important;line-height:16px!important}
+  .font-mono.text-\[0\.68rem\] {font-family:var(--sf)}
+  .flex.items-center.gap-1\.5 {gap:12px}
+}
+:is([id^=archived-session-], .overflow-y-auto:has(#setting-field-gateway\.connection-mode) .\@container) [data-variant=textStrong], .\@container [data-slot=button]:has(> .tabler-icon-folder-open) {padding:0;font:var(--sb);letter-spacing:-.23px;color:var(--st);> svg {display:none}}
+.mb-6:has(> p.mb-2 + .\@container .tabler-icon-folder-open) > .\@container {margin-bottom:0!important;.mt-1 {font:var(--ss)}}
+
+/* --- Plugins: list card, footer, then "Manage plugins" as a tint row in its own card --- */
+.grid:has(> button > .codicon-plug) {
+  margin-top:0;padding:0 16px;border:0;border-radius:var(--sr);background:var(--sk);
+  > button {min-height:32px;padding:0}
+  > button > .codicon-plug {display:none}
+  > button > .codicon-chevron-right {font-size:13px!important;color:color-mix(in srgb,var(--sp) 57%,transparent)}
+}
+.mb-2\.5:has(+ p + * > button > .codicon-plug) {
+  order:2;margin:30px 0 0;padding:0 16px;min-height:32px;border-radius:var(--sr);background:var(--sk);
+  > .ml-auto {margin-left:0}
+}
+
+/* --- About > Version & updates --- */
+.mx-auto.max-w-2xl:is(.mt-4,:has(> .border-destructive\/30)) {max-width:none}
+.bg-muted\/20.border {
+  p.font-medium {font:var(--sb);letter-spacing:-.23px}
+  p.mt-1.text-xs {margin-top:2px;font:var(--ss);letter-spacing:-.08px;color:var(--sl)}
+  .tabler-icon-circle-check {width:18px;height:18px;color:var(--hq-green)}
+  /* actions: one full-width tint row under a hairline, like "Mark a Janky Moment" */
+  > .mt-3.flex {margin:11px 0 -12px;min-height:30px;justify-content:space-between;box-shadow:var(--sx);
+    [data-slot=button] {min-height:30px;padding:0;font:var(--sb);letter-spacing:-.23px;color:var(--st);> svg {width:15px;height:15px;color:var(--s3)} > .tabler-icon-refresh {display:none}}
+    a[data-slot=button] {flex-direction:row-reverse}
+  }
+}
+.mx-auto.max-w-2xl > dl.rounded-lg.border {
+  padding-block:0;
+  > div {min-height:32px;align-items:center;padding-block:0;font:var(--sb);letter-spacing:-.23px}
+  > div > dt {color:var(--sp)}
+  > div > dd {color:var(--sl)}
+  > div > dd:is(.font-mono,:has(.font-mono)), > div > dd .font-mono {font:var(--sb);letter-spacing:-.23px}
+  > div > dd.font-mono {overflow:hidden;white-space:nowrap;text-overflow:ellipsis;word-break:normal;min-width:0}
+}
+
+/* --- About > Uninstall: header outside, red destructive rows in a card --- */
+.border-destructive\/30 {
+  padding:0!important;background:none!important;
+  > .flex-col {gap:0}
+  > .flex-col > p.font-medium {padding:0 16px 6px;color:var(--sl)}
+  > .flex-col > .mt-1.flex-col {padding:0 16px;border-radius:var(--sr);background:var(--sk)}
+  .mt-1.flex-col > button {min-height:32px;
+    > svg {margin-top:3px;width:18px;height:18px;color:var(--sd)}
+    .font-medium {font-weight:400;color:var(--sd)}
+    .text-xs {font:var(--ss);letter-spacing:-.08px;color:var(--sl)}
+  }
+}
+
+/* --- Providers > Custom endpoints: the saved-list header holds only a bare count badge (no label text): an untitled section, as HQ --- */
+.mb-2\.5:has(> [data-slot=badge]:only-child):has(+ .divide-y) {display:none}
+section > .divide-y.rounded-md {
+  padding:0 16px;
+  > .grid.p-3 {padding-inline:0;border-color:var(--hq-sep)}
+  :is(.font-semibold,.font-medium) {font:var(--sb);letter-spacing:-.23px}
+  .font-mono {margin-top:2px;font:var(--ss);letter-spacing:-.08px;color:var(--sl)}
+  .mt-1.flex.text-xs {margin-top:2px;color:var(--sl)}
+  [data-slot=button]:has(> .tabler-icon-bolt) {padding:0 4px!important;background:none;> svg {display:none}}
+}
+/* --- Providers > Local models --- */
+.mt-6.justify-center > [data-slot=button] {min-height:30px;padding:0 20px;font:var(--sh);letter-spacing:-.23px}
+.max-w-md.text-center > p.mt-2 {font-size:12px;color:var(--sl)}
+
+/* --- Custom endpoints > Edit: fields as LabeledContent rows, actions as tint rows --- */
+section > .grid.rounded-md.border:has(.tabler-icon-device-floppy) {
+  gap:0;padding:0 16px;
+  > .grid.gap-3, > div.grid {grid-template-columns:minmax(0,1fr)!important;gap:0}
+  label.grid {grid-template-columns:max-content minmax(0,1fr);align-items:center;column-gap:16px;min-height:32px;text-indent:0!important;font:var(--sb);letter-spacing:-.23px;color:var(--sp)}
+  label.grid, fieldset, > .flex.flex-wrap {box-shadow:var(--sx)}
+  > :first-child > label.grid:first-child {box-shadow:none}
+  input.desktop-input-chrome {height:40px;padding:0!important;border:0;border-radius:0;background:none!important;text-align:right;color:var(--sl);caret-color:var(--st)}
+  input::placeholder {color:var(--s3)}
+  [data-slot=popover-anchor] input {padding-right:24px!important}
+  /* a fieldset's flex box never fills its own height: float the legend and the control inside 10px padding instead */
+  fieldset {display:flow-root;padding:10px 0;font:var(--sb);letter-spacing:-.23px;color:var(--sp);
+    > legend {float:left;margin:0;text-indent:0;font-size:13px;line-height:32px;color:var(--sp)}
+    > .inline-grid {float:right;grid-auto-columns:auto;width:auto!important;max-width:calc(100% - 96px)!important;> button {padding:0 10px}}
+  }
+  /* on/off checkboxes as switch rows: label leading, the app's 46x20 switch trailing (the real control, restyled) */
+  > .flex.flex-wrap.items-center.gap-4 {flex-direction:column;align-items:stretch;gap:0;
+    > label {flex-direction:row-reverse;justify-content:space-between;min-height:32px;font:var(--sb);letter-spacing:-.23px;color:var(--sp)}
+    > label + label {box-shadow:var(--sx)}
+    [data-slot=checkbox] {position:relative;width:46px;height:20px;border:0;background:var(--sw)!important;> * {visibility:hidden}
+      &::before {content:'';position:absolute;top:2px;left:2px;width:26px;height:16px;border-radius:999px;background:#fff;box-shadow:var(--hq-thumb-shadow)}
+      &[data-state=checked] {background:var(--hq-green)!important;&::before {left:18px}}
+    }
+  }
+  /* actions sit inside this card: no second card inset */
+  > .flex.flex-wrap.gap-2 {padding:0}
+}
+}
+html.dark [data-overlay-surface] main {--s3:rgba(235,235,245,.3);--sd:#ff453a;--so:#ff9f0a;--sw:var(--hq-fill-2)}

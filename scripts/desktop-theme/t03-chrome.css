@@ -1,0 +1,6 @@
+/* The composer: HQ's message field, one grey capsule with no outline (fill 2 laid on the page, ChatPalette). */
+body {--hq-field:#e9e9ea}
+html:root.dark body {--hq-field:#2f3137}
+html:root body :is([data-slot='composer-root'],[data-slot='composer-root'][data-thread-scrolled-up]) {--composer-fill:var(--hq-field)}
+html:root body [data-slot='composer-surface'] {border-radius:22px;border-color:transparent !important}   /* desktop's is !important */
+

@@ -1,0 +1,125 @@
+[
+ {
+  "name": "raw",
+  "width": 64,
+  "height": 48,
+  "note": "one Raw rect"
+ },
+ {
+  "name": "copyrect-overlap",
+  "width": 64,
+  "height": 48,
+  "note": "Raw, then two overlapping CopyRects"
+ },
+ {
+  "name": "tight-fill",
+  "width": 64,
+  "height": 48,
+  "note": "two Tight Fill rects"
+ },
+ {
+  "name": "tight-copy",
+  "width": 64,
+  "height": 48,
+  "note": "copy filter: 9 raw bytes, a 1-byte length, a 2-byte length, the same zlib stream in a later update"
+ },
+ {
+  "name": "tight-palette",
+  "width": 64,
+  "height": 48,
+  "note": "palette filter: 2 colours packed in bits with padded rows, 5 colours as bytes, 2 colours under 12 bytes"
+ },
+ {
+  "name": "tight-gradient",
+  "width": 64,
+  "height": 48,
+  "note": "gradient filter"
+ },
+ {
+  "name": "tight-reset",
+  "width": 64,
+  "height": 48,
+  "note": "copy filter with reset bits on streams 0 and 3"
+ },
+ {
+  "name": "tight-long",
+  "width": 96,
+  "height": 80,
+  "note": "copy filter with a 3-byte compact length"
+ },
+ {
+  "name": "desktop-size",
+  "width": 40,
+  "height": 30,
+  "note": "a picture, a resize to 40x30, a picture at the new size"
+ },
+ {
+  "name": "ext-desktop-size",
+  "width": 40,
+  "height": 30,
+  "note": "a picture, a resize to 40x30, a picture at the new size"
+ },
+ {
+  "name": "last-rect",
+  "width": 64,
+  "height": 48,
+  "note": "an update of unknown length ended by LastRect, then a normal one"
+ },
+ {
+  "name": "skipped-messages",
+  "width": 64,
+  "height": 48,
+  "note": "colour map, bell and cut text before an update"
+ },
+ {
+  "name": "tight-jpeg",
+  "width": 1280,
+  "height": 800,
+  "note": "a whole frame (65723 bytes, 3-byte length) and a tile (1767 bytes, 2-byte length)",
+  "samples": [
+   [
+    320,
+    200,
+    156,
+    112,
+    65
+   ],
+   [
+    960,
+    200,
+    156,
+    112,
+    65
+   ],
+   [
+    640,
+    400,
+    156,
+    112,
+    65
+   ],
+   [
+    320,
+    600,
+    253,
+    251,
+    251
+   ],
+   [
+    960,
+    600,
+    255,
+    255,
+    255
+   ],
+   [
+    160,
+    124,
+    54,
+    41,
+    34
+   ]
+  ],
+  "tolerance": 40
+ }
+]

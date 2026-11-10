@@ -1,0 +1,1532 @@
+[
+ {
+  "_sent": {
+   "jsonrpc": "2.0",
+   "id": 2,
+   "method": "prompt.submit",
+   "params": {
+    "session_id": "07a49c24",
+    "text": "Finish the Plaid setup.",
+    "profile": "default"
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+   "status": "streaming"
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "sessions.changed",
+   "session_id": null,
+   "payload": {}
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.start",
+   "session_id": "07a49c24",
+   "payload": {},
+   "seq": 1
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "reasoning.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "Sync config rotate rotate "
+   },
+   "seq": 2
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "reasoning.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "webhook element public page device "
+   },
+   "seq": 3
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "reasoning.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "retry package "
+   },
+   "seq": 4
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "reasoning.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "node click page oauth terminal session "
+   },
+   "seq": 5
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "reasoning.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "selector terminal mfa "
+   },
+   "seq": 6
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "reasoning.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "button fail install "
+   },
+   "seq": 7
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "reasoning.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "response wait pagination "
+   },
+   "seq": 8
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "reasoning.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "retry access script "
+   },
+   "seq": 9
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "reasoning.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "secret error json pagination email browser "
+   },
+   "seq": 10
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "reasoning.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "click public secret element "
+   },
+   "seq": 11
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "reasoning.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "response network transaction page field field "
+   },
+   "seq": 12
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "reasoning.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "request development network submit file. "
+   },
+   "seq": 13
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "Institution response code pagination team institution "
+   },
+   "seq": 14
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "browser transaction "
+   },
+   "seq": 15
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "env sync device load item click "
+   },
+   "seq": 16
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "install access account python "
+   },
+   "seq": 17
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "node public backoff load network error "
+   },
+   "seq": 18
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "version exchange webhook "
+   },
+   "seq": 19
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "token access "
+   },
+   "seq": 20
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "oauth. "
+   },
+   "seq": 21
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "tool.generating",
+   "session_id": "07a49c24",
+   "payload": {
+    "name": "patch"
+   },
+   "seq": 22
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "tool.start",
+   "session_id": "07a49c24",
+   "payload": {
+    "tool_id": "call_live_db23917e56",
+    "name": "patch",
+    "context": "/home/hermes/projects/env/src/uri.ts",
+    "args": {
+     "path": "/home/hermes/projects/env/src/uri.ts",
+     "old_string": "package balance selector submit load tab uri token",
+     "new_string": "test verify rotate submit email sandbox phone device login"
+    }
+   },
+   "seq": 23
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "sessions.changed",
+   "session_id": null,
+   "payload": {}
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "tool.complete",
+   "session_id": "07a49c24",
+   "payload": {
+    "tool_id": "call_live_db23917e56",
+    "name": "patch",
+    "args": {
+     "path": "/home/hermes/projects/env/src/uri.ts",
+     "old_string": "package balance selector submit load tab uri token",
+     "new_string": "test verify rotate submit email sandbox phone device login"
+    },
+    "duration_s": 1.06967855432067,
+    "summary": "patch done",
+    "result": {
+     "success": true,
+     "diff": "--- a/x\n+++ b/x\n@@ -1,3 +1,3 @@\n-load rotate code diff error page code selector\n+request public build field session fail pass development wait\n"
+    },
+    "inline_diff": "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-secret email rotate public response pagination\n+exchange config cookie package element pagination script\n"
+   },
+   "seq": 24
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "tool.generating",
+   "session_id": "07a49c24",
+   "payload": {
+    "name": "skill_view"
+   },
+   "seq": 25
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "tool.start",
+   "session_id": "07a49c24",
+   "payload": {
+    "tool_id": "call_live_960f13b336",
+    "name": "skill_view",
+    "context": "",
+    "args": {
+     "name": "code-production"
+    }
+   },
+   "seq": 26
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "tool.complete",
+   "session_id": "07a49c24",
+   "payload": {
+    "tool_id": "call_live_960f13b336",
+    "name": "skill_view",
+    "args": {
+     "name": "code-production"
+    },
+    "duration_s": 1.0005800764009556,
+    "summary": "skill_view done",
+    "result": {
+     "content": "9662 python selector element token item link test institution env token code submit secret production screenshot\n1259 submit account mfa install code secret sandbox link device code cookie\n7373 email mfa pass package diff patch login selector version cookie node test\n6141 oauth request token code cookie item oauth account diff node exchange node package\n8581 load page oauth secret session device production code link pass browser\n4587 rotate browser team page verify production button pass json submit code email\n6114 balance config submit error file development access redirect selector tab pass version\n5561 sync selector submit team email transaction build development phone\n3807 test test institution form sync allowed phone\n8539 page verify patch element pass form secret request team session institution python rotate dashboard\n8489 pagination rotate screenshot load browser folder response mfa click\n6970 error code mfa plaid token response wait sandbox patch sandbox key request response sync\n7293 response key diff fail uri sandbox path public token\n6837 cookie pass sandbox screenshot python screenshot\n8670 production key link allowed button element\n2943 email transaction webhook path test package access build code device path\n3786 button balance rotate folder login webhook development patch item origin patch mfa browser\n3252 version phone submit form sandbox institution patch fail diff install\n4121 access json development load item env token development uri\n3526 secret secret development code version form sandbox development\n8518 env origin email submit production install network exchange package terminal code team browser email python\n7691 version sync retry env redirect public access public access institution\n4023 mfa pagination webhook file version institution institution\n6743 redirect uri retry tab email wait redirect rotate oauth retry verify\n9920 button screenshot pagination patch account code backoff page package\n3253 diff response test test mfa pass email fail selector\n4996 fail wait session cursor page backoff python wait transaction fail account account folder account network uri\n3421 patch submit session team plaid oauth institution node fail login wait script test team selector code\n8489 json json tab click wait element screenshot origin response phone tab webhook click terminal uri cursor\n6808 item email network balance uri python session mfa field institution allowed public account code script selector\n4431 patch retry sandbox build submit production path webhook token uri test production device\n1616 uri verify form node field test device\n9185 key team type browser cursor account dashboard type item pass patch wait balance production tab cookie\n4346 token verify diff institution transaction item transaction page backoff build version click response plaid verify webhook\n7170 browser exchange backoff uri rotate folder origin code type type key env response path field selector\n6726 key pass script login code retry\n6783 sandbox origin diff account node form code account sync patch script allowed sandbox python public team\n6254 production terminal click load form path development load key build\n4384 page account account env development session diff node response type\n7698 item browser browser python env token device transaction selector\n8955 rotate item test backoff token item wait\n9968 allowed load link verify code response terminal node oauth browser uri form allowed\n5720 type browser install type tab pagination balance origin redirect version\n8935 page device file link backoff python mfa python field device\n1362 package screenshot patch rotate uri development network development\n2838 phone transaction button public cursor load phone access package\n8700 mfa page session load retry rotate tab team sync click test\n2279 origin development token path element page browser\n6522 backoff development config element element transaction backoff cookie\n2032 network folder button origin device patch item script\n1453 patch device development type public mfa plaid terminal cursor field version link balance browser click\n3882 browser env form phone balance submit origin oauth origin redirect pass code device login code\n3037 python code production package account development pass exchange device production sync\n4381 field form team transaction script production uri fail patch\n9163 origin install wait path version request\n4990 element code form submit balance field config script page fail key node mfa package\n4615 email key redirect email device install link dashboard request exchange item allowed mfa click form\n8636 python verify pagination wait error load balance public path\n5140 request redirect dashboard cookie verify script element item transaction item patch version link submit\n7368 account backoff file python secret field file script error python phone rotate production\n2864 mfa submit sandbox wait code balance patch\n8434 phone element request test file network sandbox terminal browser button cookie token retry cookie access\n9131 code exchange patch file pagination rotate file browser production code dashboard response code\n4246 access install exchange field type submit element env pagination button env email\n5890 build build page code session item device key\n2900 tab sync field button secret python form form package error key dashboard verify\n1435 node fail error public request rotate origin error pass verify browser screenshot\n8954 cursor backoff mfa public json form session account production access uri code file\n4524 retry folder code token pagination install development page institution mfa request login python python\n6614 page package request field install submit session python allowed verify secret oauth allowed selector cursor network\n6331 pass cursor node field form token build login\n1079 code key cookie type backoff json link account\n1360 item json key mfa diff terminal button type link public session tab login\n2836 phone wait public item script test origin device\n6106 login phone type json dashboard rotate fail transaction wait\n1821 redirect phone uri build request plaid page mfa form element team network click\n9682 field type submit submit production email public script install button wait cookie fail dashboard page mfa\n4452 page rotate code type wait json phone click page token session session key oauth\n3236 rotate login dashboard origin file config phone\n2626 uri login login development link transaction diff transaction balance click token patch transaction\n5520 tab sandbox verify verify button allowed email config\n2274 team device team team package type email element version form test balance\n5273 plaid mfa package sandbox env key response json browser diff request terminal\n1088 request email type email type form path network response\n5633 dashboard submit response institution item selector access balance development sandbox script cursor production cookie\n6435 selector fail production allowed backoff field session node terminal retry secret sandbox\n7567 file element origin form env element access account retry institution fail form webhook field\n9877 transaction fail item uri code cursor screenshot mfa verify browser node secret config test\n1913 session exchange click screenshot node phone load diff load\n4971 public team file sync public rotate load python tab device form type\n7743 link key file cookie json secret login python response env submit development browser file python\n4792 balance sync screenshot folder session exchange backoff file team webhook pass selector package cursor button error\n5218 backoff allowed redirect sandbox cookie sync submit balance item device account phone version webhook screenshot allowed\n5452 tab key terminal origin field form error patch cookie type selector\n4982 click redirect load retry balance element script screenshot build file error production node patch backoff production\n1786 json diff secret exchange pagination redirect retry type version rotate\n1807 rotate path development load sandbox element token verify login\n9915 dashboard transaction json verify page config load\n9883 install browser load script phone tab terminal page selector pagination exchange public fail package response\n1063 node token item backoff email dashboard balance folder env transaction build path\n4513 item access item link json device selector click tab screenshot page institution element\n2256 script button backoff browser institution oauth exchange json patch login backoff patch uri link browser version\n3944 account screenshot error response device file\n1612 pagination patch json cookie token phone session install verify page test access item\n7115 path version page test balance key account request python submit\n3398 account cursor token account token network link institution build plaid terminal redirect webhook mfa\n2613 element file patch wait load selector\n9152 transaction load install build diff sandbox dashboard\n2015 plaid tab rotate response transaction page\n1073 allowed browser request transaction secret key path path test\n7396 redirect secret wait script path folder pass pagination button access error session build pagination patch package\n3232 dashboard item test build public cookie access mfa element item submit form\n7574 redirect install backoff click diff verify login item dashboard path device type production patch redirect\n6807 phone uri cursor form development build oauth env\n9379 selector transaction test error verify file login cursor file allowed path allowed key exchange verify\n3209 verify sync access form browser script browser allowed transaction code access\n9086 folder form field pagination account item build browser\n7657 click balance terminal session code device page build\n6874 login oauth script error balance mfa click config type element patch network uri retry patch plaid\n3113 build backoff plaid json browser account team transaction click retry key install click request pagination email\n9465 request mfa webhook institution link dashboard secret team token tab production type\n9519 build button script account network webhook uri click allowed package sync key mfa tab diff\n8710 python development network script pagination pass origin sandbox pagination version rotate\n3395 backoff uri script error balance error pass team production redirect sandbox request sync diff uri oauth\n3112 build script uri uri session exchange code error pass request\n1114 retry verify screenshot cursor file transaction code\n2623 env cookie script error element institution json code device access email selector\n3610 institution terminal python rotate dashboard account dashboard type uri origin redirect\n2168 network diff response field env plaid install development cookie script mfa selector fail origin\n1396 fail exchange build session token json item secret error env uri item element plaid link secret\n7574 diff sandbox team pagination python patch browser config folder patch development\n7337 click session wait env type exchange error code fail script oauth redirect team click secret\n2460 wait origin load browser access error response item key access secret login cursor file\n2798 element file uri element access phone json allowed fail allowed terminal page cursor selector sync\n3484 version mfa development config pagination transaction code allowed script item development allowed\n6302 token selector oauth env python transaction version folder access\n6568 patch file submit verify allowed submit node exchange response development patch json element request item\n6026 element version cursor env plaid team public click\n8678 item cookie webhook tab network click version sandbox team\n6039 session code retry origin allowed secret dashboard institution item python page\n9263 rotate session secret sync file config oauth token page account dashboard diff link request selector\n8791 backoff python uri key production path\n8567 terminal page pagination cookie button public patch version\n2214 selector transaction script redirect terminal backoff public session config cookie access file\n9946 exchange env cursor json mfa code patch oauth wait env type\n2286 env network config terminal package uri build allowed redirect version\n3031 cursor type backoff account element install type env pass form sync screenshot file\n3368 browser file type exchange public phone code secret diff balance python config type diff pagination env\n8316 pass selector field cookie plaid config email account python uri diff install\n5509 webhook cursor selector submit link plaid element cursor patch json path pass selector fail account button\n9154 code exchange field redirect cursor account test folder rotate device email key balance balance retry\n7209 folder tab team team pass dashboard allowed selector transaction diff pass backoff secret test\n2828 folder code cursor sync selector terminal institution cookie team access path response terminal code link\n2363 node account package type fail institution origin python production oauth path backoff webhook allowed\n6032 test sandbox type key plaid device access redirect access mfa path patch package cookie\n7961 click build transaction diff webhook production form\n8927 uri access origin build sandbox key form institution install token page browser retry production\n5757 button build retry path file selector file fail package oauth folder\n2500 script path mfa node transaction dashboard rotate public button rotate exchange secret dashboard load verify selector\n4444 test dashboard institution oauth item token field device account institution institution pass code page field\n8229 request error login fail build cookie click submit key install page\n4797 tab email key sync device type dashboard login\n9010 script page cookie rotate sandbox fail login node email device\n5692 institution field pass fail webhook wait json login sandbox device submit pagination\n5293 webhook field secret path code button patch browser redirect request click\n6503 type allowed uri page path pagination install code fail package development\n8869 phone pass webhook form origin load link diff backoff dashboard\n2770 webhook submit email sandbox token email browser sandbox field install page development test device\n4610 element verify plaid element network test\n9063 uri balance webhook code exchange uri transaction mfa pagination selector page allowed dashboard secret exchange env\n4604 submit access link exchange folder element\n5789 key load patch transaction allowed form uri access webhook link uri token click access\n1408 version json pass cookie diff diff install load token test button package webhook sandbox pass version\n2962 balance form version pagination cookie key backoff env code folder device sandbox sync env retry\n9121 form mfa mfa screenshot version submit click node dashboard env\n2663 version item balance item webhook form json\n1134 tab cookie element exchange verify email patch uri page code wait button load button uri\n8197 fail response oauth plaid install screenshot response\n7114 selector button cookie node dashboard sandbox institution element load\n1021 pass item package json node transaction patch token patch package request\n9637 type allowed load json submit browser token wait wait install script request patch public env\n3467 login folder path click mfa key dashboard phone development install\n8536 config browser click cursor pass network link backoff cookie package\n6699 browser webhook phone redirect network submit\n6669 public folder sandbox browser error element\n9404 development test origin node selector json form\n3623 code pagination button device account production\n4479 phone wait button link button element python pagination allowed retry\n5219 error diff session exchange tab screenshot production selector config network code path token screenshot\n1461 allowed test response browser key fail item exchange\n4086 code email redirect build rotate device response code element team session patch patch retry\n5218 test oauth mfa institution fail key exchange json public key tab wait load\n8640 test test tes\n[fixture: clipped 26000 chars]"
+    }
+   },
+   "seq": 27
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "reasoning.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "Field load "
+   },
+   "seq": 28
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "sessions.changed",
+   "session_id": null,
+   "payload": {}
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "reasoning.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "institution mfa account allowed python version. "
+   },
+   "seq": 29
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "Development verify phone "
+   },
+   "seq": 30
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "script selector terminal request "
+   },
+   "seq": 31
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "dashboard development backoff error token "
+   },
+   "seq": 32
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "public diff screenshot "
+   },
+   "seq": 33
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "dashboard selector "
+   },
+   "seq": 34
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "fail sandbox version. "
+   },
+   "seq": 35
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "tool.generating",
+   "session_id": "07a49c24",
+   "payload": {
+    "name": "skill_view"
+   },
+   "seq": 36
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "tool.start",
+   "session_id": "07a49c24",
+   "payload": {
+    "tool_id": "call_live_b6f0ddf1d3",
+    "name": "skill_view",
+    "context": "",
+    "args": {
+     "name": "balance-production"
+    }
+   },
+   "seq": 37
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "sessions.changed",
+   "session_id": null,
+   "payload": {}
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "tool.complete",
+   "session_id": "07a49c24",
+   "payload": {
+    "tool_id": "call_live_b6f0ddf1d3",
+    "name": "skill_view",
+    "args": {
+     "name": "balance-production"
+    },
+    "duration_s": 2.846684751746571,
+    "summary": "skill_view done",
+    "result": {
+     "content": "5014 pagination env browser institution secret config type form python transaction code token redirect code account click\n3428 script network balance selector terminal sandbox\n7288 load device pass uri uri plaid response folder selector response institution verify link\n9426 form browser item install allowed institution env backoff tab allowed mfa file terminal button account\n9735 form version config account retry transaction env folder click build link network\n1869 version error selector screenshot path backoff terminal mfa production session build selector team\n1155 uri production file oauth error tab network tab sync selector patch sync backoff install cookie device\n4972 login tab mfa load backoff origin error path network\n9281 folder link institution version field development plaid uri plaid verify cursor code terminal error\n3405 secret package diff verify token screenshot team account\n6779 button screenshot link install path rotate tab path patch response session cookie allowed team webhook\n7038 cookie field type key tab wait exchange version\n1992 browser cookie button sandbox secret cookie submit rotate submit\n1519 public field path response request selector item node sync plaid patch\n8441 click allowed session login fail plaid submit sync request pagination item env browser response\n6512 secret uri login submit redirect cookie patch rotate\n1972 selector file key sandbox screenshot transaction pass institution script phone script screenshot webhook backoff session\n7571 phone cursor patch response team verify public file install session test production screenshot selector oauth diff\n3376 version access secret fail file file token response pass tab item webhook form node session\n7615 patch network click request sandbox pass institution file file uri submit terminal account code page pagination\n9801 allowed network click file screenshot institution submit institution wait path key submit\n9555 code submit folder submit rotate type\n3548 folder origin oauth backoff folder browser page version origin transaction wait origin oauth package\n6734 install response email phone rotate access request load file key origin phone\n6074 verify retry production item key item phone pass backoff form response cursor balance pass pagination\n5276 plaid terminal token path response login plaid key\n1032 terminal cursor version form code exchange\n4841 production cursor selector test path screenshot script team element plaid token wait field config\n9556 institution pass development script development login error request uri screenshot rotate team build\n1921 script load browser allowed token form cookie cursor secret node backoff\n7195 tab verify token load json login account field selector rotate folder element install item\n4518 page click file env webhook submit element production form install fail\n5237 account item request field pass script\n2967 build config browser wait script exchange retry sandbox transaction account institution email test\n2959 response login exchange diff wait origin file\n3839 browser file sandbox browser field response cookie institution\n5417 package public install path dashboard build phone script code\n2171 redirect node field build error cookie dashboard email institution submit sandbox\n7407 login field rotate submit path test\n9388 script plaid terminal redirect submit account secret email install package tab key\n4106 mfa link rotate file version public diff email page selector rotate response\n7593 code path dashboard load link type config file retry oauth item error json secret build\n4284 pass config request browser exchange sync node exchange pass item page redirect network institution email\n9900 terminal code version element pass webhook field code tab key production package\n1624 package access device balance form public\n6562 path sync team backoff pagination verify cursor fail json\n9930 item env element sandbox key click origin script\n2961 patch selector token token test patch dashboard test\n5119 config device exchange build network request patch diff production oauth origin mfa retry code pass key\n7025 folder token mfa diff config diff key\n6200 selector rotate pagination config button origin terminal\n3158 python cookie env cursor oauth code selector wait test\n4543 verify institution account redirect diff link link sandbox session patch redirect login file\n3314 build version install plaid screenshot email install item login network origin selector allowed file click screenshot\n8319 file cookie file device element node origin terminal public json retry\n4632 session code login script key oauth token\n5140 transaction dashboard element field production env email cursor webhook\n2981 cookie origin request redirect submit wait json pass element webhook retry\n8461 cookie sandbox secret retry submit item institution terminal browser\n7192 pagination development login path cursor build exchange email response python field file cookie\n3779 dashboard error file institution pass python\n9764 plaid cursor fail redirect secret page secret install config click account\n7782 code key path rotate sandbox pass verify submit email pagination session version submit backoff config\n5586 access tab node env install verify test terminal path patch\n4028 button test institution error click retry code verify sandbox\n6381 sync python link click plaid patch public install terminal allowed oauth python\n7501 balance link pass env request load\n7029 pass production diff type institution request cursor mfa\n6533 backoff diff request json path network balance redirect install wait\n4634 click install production redirect code env cookie login phone development\n9843 verify type selector cursor session config folder device mfa device script version field element device node\n6635 wait uri type origin mfa production\n8600 selector account backoff cursor script button\n9347 screenshot transaction device item plaid cursor code patch public\n8005 wait verify response path backoff redirect patch screenshot public login element terminal config selector selector production\n1832 transaction element sync version origin plaid key cookie\n7111 public error node login uri uri device retry version rotate form\n6562 team institution click browser link error path session screenshot path sync balance pagination plaid\n9249 click email terminal page cookie build pass verify python production account load button\n2494 wait cursor python allowed cookie file response pass package link phone\n1494 login click transaction field tab error env verify terminal token exchange form terminal fail element team\n8639 network login form element rotate transaction verify code code\n9209 pagination development node click wait pass patch file tab cursor element version screenshot\n6191 link test device test submit page development mfa error verify pass oauth verify item\n6229 webhook tab pass fail type allowed diff click key file\n6355 type response mfa secret device error allowed public script\n5102 institution type element package sync balance item transaction test\n3736 diff development rotate fail response sync uri json pagination balance code institution device exchange pass retry\n8997 backoff folder browser request load pass path uri verify request tab backoff phone folder terminal\n4736 key redirect config test type login verify retry build request phone development response\n1684 request allowed tab network version email package\n9666 json install version node session institution test package cursor element python\n7557 origin account config pagination build secret error wait login verify browser request\n1932 browser link email screenshot team item dashboard json link\n6429 phone webhook load script json browser account request test redirect sync test diff webhook account request\n9027 terminal exchange link exchange token error type sandbox sandbox patch node dashboard key field test cookie\n1777 sandbox allowed team browser secret phone json oauth code code secret folder\n7174 selector public plaid redirect login tab development device balance production dashboard\n6315 env code json tab response load config link click code pagination diff\n4674 device institution terminal code file email terminal secret sandbox account plaid\n5493 json backoff rotate wait env load install screenshot code\n5685 pagination screenshot wait cookie type pass\n4976 pagination diff error oauth link config phone response button\n9405 request submit path type screenshot selector link code response element install element cursor\n3929 mfa institution submit cursor exchange balance transaction public path retry uri mfa\n9306 browser retry wait account public login request device production element\n8318 screenshot sync oauth plaid balance build json token mfa allowed version sync cursor uri\n3051 redirect path tab screenshot balance phone sync network pagination node transaction\n8809 mfa device terminal device exchange package cursor file team script verify item path tab\n5226 python public team field public fail account tab click redirect origin build sync mfa load plaid\n5358 network team access uri device version email error node json retry config\n3915 cookie backoff exchange retry key button wait oauth folder code cursor network type error code allowed\n9624 sync balance sync login account backoff\n9070 button submit selector page rotate error phone config token oauth development\n9231 request screenshot retry exchange code transaction\n4789 plaid tab sync build fail exchange type phone\n2736 secret env selector public session item folder cookie script\n9176 node phone verify field json dashboard\n2528 development development error phone plaid sync config secret item origin pass device selector\n2231 submit verify balance request selector plaid development\n4653 rotate build load version code device version pass patch oauth env item test\n1521 session secret uri env file key access page login origin phone access login dashboard selector\n9487 dashboard network secret selector development code account element login screenshot access login\n8186 element link fail selector config access\n4834 node env screenshot form env backoff allowed terminal node file\n2587 sandbox cookie package pagination backoff access link browser public script selector transaction\n6994 redirect development json redirect python transaction type script diff backoff\n8110 verify rotate field cookie redirect link login install link public pass code email python link\n2228 path config response phone token key load pass production device version wait screenshot\n1539 institution test diff path patch key error phone retry request error install click env response\n1846 page plaid patch access submit patch team page config button login origin script\n1430 access diff test mfa retry script terminal phone\n1655 uri tab code link session secret\n2781 load browser request fail error sync development transaction file\n3865 retry origin secret origin session type element diff transaction\n1602 secret package page diff transaction file script redirect button link\n1403 device phone patch redirect uri code version redirect device load token origin transaction pagination\n4597 env transaction config field network oauth selector type allowed selector json load item element cursor node\n9226 email file transaction form screenshot screenshot json phone folder email\n2017 response json cookie fail public click type load browser\n4513 cursor key mfa oauth retry install balance backoff\n4411 mfa redirect institution request exchange python redirect env wait sandbox phone error form\n2891 submit team script pass code build page\n9163 fail json python allowed script item response submit email\n1849 package exchange account rotate build form path public diff\n5017 json public terminal key env uri exchange package terminal code\n9701 package public link mfa button terminal pagination webhook\n6494 pass browser form load email sandbox error code type rotate oauth\n4130 request button secret device form version build button development test response json session\n9652 cookie browser phone institution submit pass diff session wait cursor element production response\n6138 form webhook production install development backoff uri cookie build screenshot team network\n6672 device config node env email cursor\n4511 token cursor session screenshot page link file fail path\n3335 email origin folder phone browser code sandbox code screenshot pagination code screenshot backoff origin link\n3321 submit exchange selector page browser backoff form login tab token build code account json cursor\n8040 pass balance page error submit account transaction path folder\n9347 request element login rotate account patch tab\n5786 response click redirect error pagination code dashboard test phone key session\n3827 tab code account retry error path backoff pass production type account selector selector\n9997 key verify network terminal cursor cursor production public oauth verify wait login diff phone link\n3999 build form sandbox tab config folder team\n9084 sync link plaid plaid secret public cursor click click browser\n6505 script code key oauth error institution selector\n1320 python redirect account exchange team click python login selector retry webhook path\n9729 type sandbox page version dashboard account load code load type version\n8850 package sync submit version sandbox device error exchange field link tab transaction tab team\n6288 network verify node verify test production python tab patch\n8070 webhook phone screenshot sandbox build script\n6532 device install rotate oauth account team tab wait folder diff\n9688 webhook item file script institution screenshot team tab\n1370 wait allowed production exchange rotate transaction node uri install key access install script origin\n1985 selector test verify phone institution institution button element link item pass type request diff screenshot script\n2201 verify page cookie access redirect python wait key origin balance diff key plaid\n5493 path patch env team script phone package cursor institution\n2788 link env rotate code terminal wait terminal browser origin public\n9683 oauth uri element browser type mfa\n2776 node item code package secret screenshot wait production version pagination\n8790 mfa link pagination email email exchange install screenshot plaid error production config browser terminal terminal\n3383 tab selector fail pass file response transaction backoff\n2759 plaid python balance network patch account response install\n2278 mfa rotate install token response browser webhook cursor load link origin patch page public request key\n6275 account email login folder email institution script env\n7897 config origin type button page uri access institution secret click allowed browser config\n5299 field uri submit email package secret code pass retry response test\n1125 allowed key item element click institution screenshot patch code sandbox key file\n3339 script selector request oauth code button build\n6097 item sandbox form device sync team origin env institution json submit\n5971 mfa pagination click device backoff team origin click cursor account path json team script cursor selector\n3815 code code config transaction public mfa token exchange click patch type code\n4362 element wait page fail code button page request exchange\n4260 mfa pass patch link load network patch click node pagination secret form team sandbox transaction\n3684 node pagination link script form node retry wait browser uri secret browser field pass python path\n2611 cookie page allowed install json plaid python retry tab sandbox allowed\n9977 code element screenshot test token env diff path env button network balance device test redirect click\n9341 cookie fail browser folder script mfa development json config version path form\n7232 plaid device button verify tab pass wait network fail env\n3135 pass tab build test node error dashboard json device email type screenshot login\n7920 verify mfa token exchange browser device json fail\n6363 secret plaid type type webhook diff code redirect\n5959 item link public browser response access ta\n[fixture: clipped 26000 chars]"
+    }
+   },
+   "seq": 38
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "tool.generating",
+   "session_id": "07a49c24",
+   "payload": {
+    "name": "patch"
+   },
+   "seq": 39
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "sessions.changed",
+   "session_id": null,
+   "payload": {}
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "tool.start",
+   "session_id": "07a49c24",
+   "payload": {
+    "tool_id": "call_live_52c89a188e",
+    "name": "patch",
+    "context": "/home/hermes/projects/test/src/cursor.ts",
+    "args": {
+     "path": "/home/hermes/projects/test/src/cursor.ts",
+     "old_string": "access package origin pass build sync cursor field",
+     "new_string": "page email diff uri item script institution development file"
+    }
+   },
+   "seq": 40
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "tool.complete",
+   "session_id": "07a49c24",
+   "payload": {
+    "tool_id": "call_live_52c89a188e",
+    "name": "patch",
+    "args": {
+     "path": "/home/hermes/projects/test/src/cursor.ts",
+     "old_string": "access package origin pass build sync cursor field",
+     "new_string": "page email diff uri item script institution development file"
+    },
+    "duration_s": 1.1212799718905757,
+    "summary": "patch done",
+    "result": {
+     "success": true,
+     "diff": "--- a/x\n+++ b/x\n@@ -1,3 +1,3 @@\n-version file secret retry dashboard load account screenshot\n+terminal json development click device network access version item\n"
+    },
+    "inline_diff": "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-origin institution link login retry fail\n+selector verify build account public pass patch\n"
+   },
+   "seq": 41
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "tool.generating",
+   "session_id": "07a49c24",
+   "payload": {
+    "name": "read_file"
+   },
+   "seq": 42
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "tool.start",
+   "session_id": "07a49c24",
+   "payload": {
+    "tool_id": "call_live_3c356d74d3",
+    "name": "read_file",
+    "context": "/home/hermes/projects/session/fail.ts",
+    "args": {
+     "path": "/home/hermes/projects/session/fail.ts"
+    }
+   },
+   "seq": 43
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "sessions.changed",
+   "session_id": null,
+   "payload": {}
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "tool.complete",
+   "session_id": "07a49c24",
+   "payload": {
+    "tool_id": "call_live_3c356d74d3",
+    "name": "read_file",
+    "args": {
+     "path": "/home/hermes/projects/session/fail.ts"
+    },
+    "duration_s": 1.5078424486780853,
+    "summary": "read_file done",
+    "result": {
+     "content": "8844 element verify folder token verify public backoff email selector link device transaction submit exchange\n6643 python account sync browser email tab verify build json tab exchange python\n8032 tab dashboard env cursor diff wait production email uri mfa oauth form\n3949 transaction node node key oauth page test submit error code webhook key\n4503 secret pass cookie dashboard sandbox rotate balance access session package rotate node\n7552 file pass wait verify verify form json phone redirect development redirect login institution cursor mfa\n4496 diff build production uri folder browser cookie redirect retry script pagination request element element node\n2609 rotate key item cookie access env rotate type env redirect script node institution response\n2454 click file token retry load code dashboard script error rotate origin uri page node item\n5698 type version diff item exchange fail cookie oauth field terminal backoff network script page file\n2141 code login form uri cursor install tab patch element install click diff request link response\n4719 plaid balance node institution retry folder retry package\n6632 origin pass code browser public mfa install public origin browser request package json institution backoff form\n7674 response button access network item sync element redirect fail python\n2256 network cookie config oauth screenshot node button uri form path dashboard transaction field diff type\n7033 pass element retry python login sandbox patch public token terminal uri code code\n7044 package link team page node path cursor load redirect button cursor cursor python config webhook\n6804 balance key code load code link production phone\n8018 click access key network wait production account\n1079 plaid key curs"
+    }
+   },
+   "seq": 44
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "Balance button device pass team "
+   },
+   "seq": 45
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "webhook screenshot load config env "
+   },
+   "seq": 46
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "install json session "
+   },
+   "seq": 47
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "public script python node terminal "
+   },
+   "seq": 48
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "sandbox config build selector file verify "
+   },
+   "seq": 49
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "uri pass link code "
+   },
+   "seq": 50
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "element link request dashboard "
+   },
+   "seq": 51
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "session uri field code sync "
+   },
+   "seq": 52
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "uri type phone element "
+   },
+   "seq": 53
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "backoff team plaid email "
+   },
+   "seq": 54
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "request response origin env code.\n\nLogin institution "
+   },
+   "seq": 55
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "code token phone wait uri wait "
+   },
+   "seq": 56
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "pass balance click sandbox "
+   },
+   "seq": 57
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "file origin plaid oauth tab "
+   },
+   "seq": 58
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "cookie redirect form account "
+   },
+   "seq": 59
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "selector fail code link field "
+   },
+   "seq": 60
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "sessions.changed",
+   "session_id": null,
+   "payload": {}
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "webhook screenshot file verify phone oauth "
+   },
+   "seq": 61
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "error rotate "
+   },
+   "seq": 62
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "code json public click "
+   },
+   "seq": 63
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "account webhook "
+   },
+   "seq": 64
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "form retry login uri login sync "
+   },
+   "seq": 65
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "selector webhook access retry item python "
+   },
+   "seq": 66
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "mfa code link.\n\nConfig submit "
+   },
+   "seq": 67
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "file verify form token "
+   },
+   "seq": 68
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "uri pagination selector response "
+   },
+   "seq": 69
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "rotate submit build "
+   },
+   "seq": 70
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "oauth wait uri element "
+   },
+   "seq": 71
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "item pass link "
+   },
+   "seq": 72
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "pass rotate "
+   },
+   "seq": 73
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "response test browser code folder webhook "
+   },
+   "seq": 74
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "sandbox login code version "
+   },
+   "seq": 75
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "install cursor allowed package sync "
+   },
+   "seq": 76
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "device plaid "
+   },
+   "seq": 77
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "code node network file "
+   },
+   "seq": 78
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "terminal field "
+   },
+   "seq": 79
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "patch pagination "
+   },
+   "seq": 80
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "python env form patch "
+   },
+   "seq": 81
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "access development origin "
+   },
+   "seq": 82
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "folder team load login access token "
+   },
+   "seq": 83
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "item code submit public "
+   },
+   "seq": 84
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "terminal button "
+   },
+   "seq": 85
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "config field session "
+   },
+   "seq": 86
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "request cookie "
+   },
+   "seq": 87
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "phone secret code "
+   },
+   "seq": 88
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "error load "
+   },
+   "seq": 89
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "code page "
+   },
+   "seq": 90
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "webhook webhook test.\n\nPatch allowed page "
+   },
+   "seq": 91
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "diff sandbox backoff "
+   },
+   "seq": 92
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "tab network type version version "
+   },
+   "seq": 93
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "script transaction "
+   },
+   "seq": 94
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "browser link "
+   },
+   "seq": 95
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "key element "
+   },
+   "seq": 96
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "institution terminal form screenshot rotate oauth "
+   },
+   "seq": 97
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "code field verify mfa "
+   },
+   "seq": 98
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "install screenshot backoff page "
+   },
+   "seq": 99
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "pagination email balance tab browser pagination "
+   },
+   "seq": 100
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "file cookie "
+   },
+   "seq": 101
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "transaction mfa "
+   },
+   "seq": 102
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "patch folder click "
+   },
+   "seq": 103
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "diff email test element install "
+   },
+   "seq": 104
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "version fail "
+   },
+   "seq": 105
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "code plaid backoff page email "
+   },
+   "seq": 106
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "button webhook "
+   },
+   "seq": 107
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "balance request plaid session sync "
+   },
+   "seq": 108
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "token email "
+   },
+   "seq": 109
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "mfa request node request sandbox file "
+   },
+   "seq": 110
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "public terminal mfa "
+   },
+   "seq": 111
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.delta",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "code env field env. "
+   },
+   "seq": 112
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "method": "event",
+  "params": {
+   "type": "message.complete",
+   "session_id": "07a49c24",
+   "payload": {
+    "text": "Institution response code pagination team institution browser transaction env sync device load item click install access account python node public backoff load network error version exchange webhook token access oauth. Development verify phone script selector terminal request dashboard development backoff error token public diff screenshot dashboard selector fail sandbox version. Balance button device pass team webhook screenshot load config env install json session public script python node terminal sandbox config build selector file verify uri pass link code element link request dashboard session uri field code sync uri type phone element backoff team plaid email request response origin env code.\n\nLogin institution code token phone wait uri wait pass balance click sandbox file origin plaid oauth tab cookie redirect form account selector fail code link field webhook screenshot file verify phone oauth error rotate code json public click account webhook form retry login uri login sync selector webhook access retry item python mfa code link.\n\nConfig submit file verify form token uri pagination selector response rotate submit build oauth wait uri element item pass link pass rotate response test browser code folder webhook sandbox login code version install cursor allowed package sync device plaid code node network file terminal field patch pagination python env form patch access development origin folder team load login access token item code submit public terminal button config field session request cookie phone secret code error load code page webhook webhook test.\n\nPatch allowed page diff sandbox backoff tab network type version version script transaction browser link key element institution terminal form screenshot rotate oauth code field verify mfa install screenshot backoff page pagination email balance tab browser pagination file cookie transaction mfa patch folder click diff email test element install version fail code plaid backoff page email button webhook balance request plaid session sync token email mfa request node request sandbox file public terminal mfa code env field env. ",
+    "status": "complete",
+    "usage": {
+     "calls": 12,
+     "input": 182000,
+     "output": 9400,
+     "total": 191400,
+     "context_used": 64000,
+     "context_max": 200000,
+     "context_percent": 32,
+     "cost_usd": 1.84,
+     "model": "hermes-4"
+    }
+   },
+   "seq": 113
+  }
+ }
+]

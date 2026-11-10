@@ -1,0 +1,14 @@
+name: Leak check
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  leak-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Look for private details in the lines this pull request adds
+        run: python3 .github/scripts/leak_check.py origin/${{ github.base_ref }}

@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>CADisableMinimumFrameDurationOnPhone</key><true/>
+	<key>CFBundleDevelopmentRegion</key><string>en</string>
+	<key>CFBundleDisplayName</key><string>$(HQ_DISPLAY_NAME)</string>
+	<key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+	<!-- [mac] The Mac's app menu reads it (About / Hide / Quit Hermes HQ). -->
+	<key>CFBundleName</key><string>$(HQ_DISPLAY_NAME)</string>
+	<key>CFBundlePackageType</key><string>APPL</string>
+	<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array><dict>
+		<key>CFBundleURLName</key><string>$(HQ_URL_NAME)</string>
+		<key>CFBundleURLSchemes</key><array><string>$(HQ_URL_SCHEME)</string></array>
+	</dict></array>
+	<!-- Which App Store identity this build is (project.yml HQ_IDENTITY; HermesKit/Net/AppIdentity.swift reads these). -->
+	<key>HQIdentity</key><string>$(HQ_IDENTITY)</string>
+	<key>HQKeychainService</key><string>$(HQ_KEYCHAIN_SERVICE)</string>
+	<key>HQSignedOutKey</key><string>$(HQ_SIGNED_OUT_KEY)</string>
+	<key>HQAppGroup</key><string>$(HQ_APP_GROUP)</string>
+	<!-- Pushed alerts (and local ones) show as messages from the bot, with its face (Communication Notifications). -->
+	<key>NSUserActivityTypes</key><array><string>INSendMessageIntent</string></array>
+	<!-- The push plugin's silent "settled" update withdraws an approval answered elsewhere. -->
+	<!-- [talk-background] audio: a voice conversation goes on with the app away (docs/spec/3x-talk-background.md). -->
+	<key>UIBackgroundModes</key><array><string>audio</string><string>remote-notification</string></array>
+	<!-- [talk-background] The conversation's Live Activity (Lock Screen, Dynamic Island). -->
+	<key>NSSupportsLiveActivities</key><true/>
+	<!-- [live-steps] A reply's card gets each step the gateway's add-on pushes (a larger budget of prompt updates). -->
+	<key>NSSupportsLiveActivitiesFrequentUpdates</key><true/>
+	<key>ITSAppUsesNonExemptEncryption</key><false/>
+	<!-- [mac] The Mac App Store category (Mac Catalyst build). -->
+	<key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
+	<key>LSRequiresIPhoneOS</key><true/>
+	<key>NSAppTransportSecurity</key><dict><key>NSAllowsArbitraryLoads</key><true/></dict>
+	<key>NSFaceIDUsageDescription</key><string>$(HQ_DISPLAY_NAME) uses Face ID to unlock the Terminal before it opens a shell on your computer.</string>
+	<key>NSCameraUsageDescription</key><string>$(HQ_DISPLAY_NAME) uses the camera to take a photo you attach to a chat.</string>
+	<key>NSPhotoLibraryUsageDescription</key><string>$(HQ_DISPLAY_NAME) opens your photos so you can attach them to a chat or use one as a bot’s picture, and finds photos for a bot if you switch that on in Settings › Device Access.</string>
+	<key>NSMicrophoneUsageDescription</key><string>$(HQ_DISPLAY_NAME) uses the microphone for voice memos, dictation and voice conversations you start.</string>
+	<key>NSLocalNetworkUsageDescription</key><string>$(HQ_DISPLAY_NAME) connects to the Hermes gateway on your local network or Tailscale.</string>
+	<!-- [device-access] Settings › Device Access › Contacts: a bot looks one person up, with only the details shared. -->
+	<key>NSContactsUsageDescription</key><string>$(HQ_DISPLAY_NAME) looks someone up in your contacts when a bot asks, with only the details you share in Settings › Device Access.</string>
+	<!-- [device-access] Every other kind (hermes-hq-push 0.9.21): only what is switched on in Settings › Device Access. -->
+	<key>NSLocationWhenInUseUsageDescription</key><string>$(HQ_DISPLAY_NAME) tells a bot where you are when it asks, only as precisely as you choose in Settings › Device Access.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key><string>With While Locked on in Settings › Device Access, $(HQ_DISPLAY_NAME) can tell a bot where you are while the app is closed, only as precisely as you choose there.</string>
+	<key>NSRemindersFullAccessUsageDescription</key><string>$(HQ_DISPLAY_NAME) lets a bot see, add and complete your reminders when you switch that on in Settings › Device Access.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key><string>$(HQ_DISPLAY_NAME) lets a bot see your events, and add new ones if you allow it, in Settings › Device Access.</string>
+	<key>NSAlarmKitUsageDescription</key><string>$(HQ_DISPLAY_NAME) sets alarms and timers when a bot asks, if you switch that on in Settings › Device Access.</string>
+	<!-- [app-store-review] HealthLookup.swift requests `toShare: []`: HQ Native only reads Health. The update usage
+	     description is still here because an App Store upload with the HealthKit entitlement requires it (2026-11-01,
+	     4619af35); it says the app never writes to Health. -->
+	<key>NSHealthShareUsageDescription</key><string>$(HQ_DISPLAY_NAME) gives a bot summaries of only the Health data you switch on in Settings › Device Access. It never changes your Health data.</string>
+	<key>NSHealthUpdateUsageDescription</key><string>$(HQ_DISPLAY_NAME) only reads the Health data you choose to share with your bots in Settings › Device Access. It never writes to Health.</string>
+	<key>NSMotionUsageDescription</key><string>$(HQ_DISPLAY_NAME) tells a bot whether you’re walking, driving or still, and your steps, if you switch that on in Settings › Device Access.</string>
+	<key>NSAppleMusicUsageDescription</key><string>$(HQ_DISPLAY_NAME) tells a bot what’s playing and plays music from your library when you allow it in Settings › Device Access.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key><string>$(HQ_DISPLAY_NAME) saves images from your chats to Photos when you ask it to.</string>
+	<!-- [live-words] LiveWords.swift (SpeechAnalyzer): memos and Talk turn speech into text on this phone, never sent anywhere for recognition. -->
+	<key>NSSpeechRecognitionUsageDescription</key><string>$(HQ_DISPLAY_NAME) turns what you say in voice memos and Talk into text on your iPhone, so you can see your words as you speak.</string>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+#if HQ_MAC_WINDOWS
+		<true/>
+#else
+		<false/>
+#endif
+		<key>UISceneConfigurations</key>
+		<dict><key>UIWindowSceneSessionRoleApplication</key><array><dict>
+			<key>UISceneConfigurationName</key><string>Default</string>
+			<key>UISceneDelegateClassName</key><string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+		</dict></array></dict>
+	</dict>
+	<!-- [offline] docs/spec/3x-offline.md §3.1: the system launch screen is the page colour alone, and the app's own launch screen draws the icon. Tester 2026-11-02: an icon here can't follow the one picked in Settings › App Icon, so it showed the Hermes head to everyone. -->
+	<key>UILaunchScreen</key><dict>
+		<key>UIColorName</key><string>LaunchBackground</string>
+	</dict>
+	<key>UIRequiredDeviceCapabilities</key><array><string>arm64</string></array>
+	<key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string></array>
+	<!-- [m9/ipad] iPad: all four, as Split View and Stage Manager need (docs/spec/3x-ipad.md D13). -->
+	<key>UISupportedInterfaceOrientations~ipad</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationPortraitUpsideDown</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
+	<key>UIViewControllerBasedStatusBarAppearance</key><true/>
+</dict>
+</plist>

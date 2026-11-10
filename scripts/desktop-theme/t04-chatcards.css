@@ -1,0 +1,10 @@
+/* Code and cards on the phone's card shape. */
+:is([data-slot='code-card'],[data-slot='file-diff-panel'],.aui-md pre) {border-radius:10px}
+
+/* Chat cards (changed files, questions, artifacts) on HQ's card grey; diffs in iOS green and red. */
+html:root body {--ui-widget-surface-background:var(--hq-card);
+  --ui-diff-add-border:#34c759;--ui-diff-add-background:rgb(52 199 89/.12);--ui-diff-add-foreground:#248a3d;
+  --ui-diff-remove-border:#ff3b30;--ui-diff-remove-background:rgb(255 59 48/.1);--ui-diff-remove-foreground:#d70015}
+html:root.dark body {--ui-diff-add-border:#30d158;--ui-diff-add-background:rgb(48 209 88/.16);--ui-diff-add-foreground:#30db5b;
+  --ui-diff-remove-border:#ff453a;--ui-diff-remove-background:rgb(255 69 58/.16);--ui-diff-remove-foreground:#ff6961}
+.rounded-3xl[class*='bg-(--ui-widget-surface-background)'] {border-radius:var(--hq-card-r)}

@@ -1,0 +1,69 @@
+/* ---- The rest of the app: iOS's colours and shapes on desktop's shared parts. ---- */
+
+/* HQ's tokens (ThemeTokens.swift base, iOS's fills and separators), on <body> so they sit under the palette desktop
+   sets on <html>. */
+body {
+  --hq-cell:#fff;--hq-grouped:#f2f2f7;--hq-raised:#fff;--hq-card:#f2f2f7;--hq-card-r:20px;
+  --hq-page:#fefefe;--hq-sidebar:#f6f8fa;--hq-ink:#1f2328;--hq-tint-text:#0040dd;
+  --hq-sep:rgb(60 60 67/.29);--hq-label-2:rgb(31 35 40/.74);--hq-fill-4:rgb(116 116 128/.08);
+  --hq-fill:rgb(120 120 128/.2);--hq-fill-2:rgb(120 120 128/.16);--hq-fill-3:rgb(118 118 128/.12);
+  --hq-green:#34c759;--hq-thumb-shadow:0 3px 8px rgb(0 0 0/.15),0 3px 1px rgb(0 0 0/.06);
+  --hq-menu-shadow:0 0 0 .5px rgb(0 0 0/.16),0 2px 6px rgb(0 0 0/.08),0 12px 32px rgb(0 0 0/.2);
+  --hq-tint:var(--theme-primary)}
+html:root.dark body {
+  --hq-cell:#1c1c1e;--hq-grouped:#000;--hq-raised:#2c2c2e;--hq-card:#1c1c1e;
+  --hq-page:#0d1015;--hq-sidebar:#010409;--hq-ink:#e6edf3;--hq-tint-text:#0a84ff;
+  --hq-sep:rgb(84 84 88/.6);--hq-label-2:rgb(230 237 243/.74);--hq-fill-4:rgb(118 118 128/.18);
+  --hq-fill:rgb(120 120 128/.36);--hq-fill-2:rgb(120 120 128/.32);--hq-fill-3:rgb(118 118 128/.24);
+  --hq-green:#30d158;--hq-thumb-shadow:0 3px 8px rgb(0 0 0/.3),0 3px 1px rgb(0 0 0/.1);
+  --hq-menu-shadow:0 0 0 .5px rgb(255 255 255/.16),0 0 0 1px rgb(0 0 0/.5),0 12px 32px rgb(0 0 0/.55)}
+
+/* Desktop's surfaces and lines from HQ's tokens: the page and sidebar exactly (desktop pulls the palette's page toward
+   a neutral grey), neutral hairlines instead of accent-tinted ones, grey fills for the open and hovered row. */
+body {
+  --ui-bg-chrome:var(--hq-page);--ui-bg-sidebar:var(--hq-sidebar);
+  --ui-stroke-primary:var(--hq-sep);--ui-stroke-secondary:var(--hq-sep);
+  --ui-stroke-tertiary:color-mix(in srgb,var(--hq-sep) 60%,transparent);
+  --ui-stroke-quaternary:color-mix(in srgb,var(--hq-sep) 40%,transparent);
+  --ui-row-active-background:var(--hq-fill-2);--ui-row-hover-background:var(--hq-fill-4);
+  --ui-control-hover-background:var(--hq-fill-3);--ui-control-active-background:var(--hq-fill-2)}
+
+/* Sentence case everywhere: iOS never spaces out capitals for a heading or a tab. */
+html:root body .uppercase {text-transform:none;letter-spacing:normal}
+
+/* Buttons: capsules, as iOS 26 draws them. A text button is the tint, never underlined; a grey button has tint text. */
+[data-slot='button']:not([data-size='inline'],[data-size='micro'],[data-size='grip'],[data-variant='link'],[data-variant='text'],[data-variant='textStrong']) {border-radius:999px}
+
+[data-slot='button']:is([data-variant='secondary'],[data-variant='outline']) {
+  background:var(--hq-fill-3);color:var(--hq-tint);box-shadow:none}
+[data-slot='button']:is([data-variant='secondary'],[data-variant='outline']):hover {background:var(--hq-fill-2);color:var(--hq-tint)}
+[data-slot='button']:is([data-variant='link'],[data-variant='text'],[data-variant='textStrong']) {color:var(--hq-tint-text);text-decoration:none}
+[data-slot='button']:is([data-variant='link'],[data-variant='text'],[data-variant='textStrong']):hover {color:var(--hq-tint-text);opacity:.7;text-decoration:none}
+
+/* Switches: iOS's green pill with a white thumb that throws a soft shadow. */
+[data-slot='switch'] {width:38px;height:23px;padding:2px;border:0;border-radius:999px;box-shadow:none}
+[data-slot='switch'][data-state='checked'] {background:var(--hq-green)}
+[data-slot='switch'][data-state='unchecked'] {background:var(--hq-fill)}
+[data-slot='switch-thumb'] {width:19px;height:19px;background:#fff;box-shadow:var(--hq-thumb-shadow)}
+
+
+
+
+
+
+/* Check boxes: round, filled with the tint when on. */
+[data-slot='checkbox'] {border-radius:999px}
+
+
+/* Fields and pickers: iOS's grey fill, no outline, round corners; the tint rings the one being typed in. */
+:is([data-slot='input'],[data-slot='textarea'],[data-slot='select-trigger'],.desktop-input-chrome):not([data-slot='composer-rich-input']) {
+  border-radius:10px;border-color:transparent;background:var(--hq-fill-3);box-shadow:none}
+:is([data-slot='input'],[data-slot='textarea'],[data-slot='select-trigger'],.desktop-input-chrome):not([data-slot='composer-rich-input']):hover {border-color:transparent}
+:is([data-slot='input'],[data-slot='textarea'],[data-slot='select-trigger'],.desktop-input-chrome):not([data-slot='composer-rich-input']):is(:focus,:focus-within,[data-state='open']) {
+  border-color:var(--hq-tint);box-shadow:0 0 0 3px color-mix(in srgb,var(--hq-tint) 22%,transparent)}
+
+
+/* Segmented controls (tabs): a grey track with the chosen segment raised in white. */
+[data-slot='tabs-list'] {background:var(--hq-fill-3);border:0;border-radius:9px;padding:2px;gap:0}
+[data-slot='tabs-trigger'] {border-radius:7px;border:0;box-shadow:none}
+[data-slot='tabs-trigger'][data-state='active'] {background:var(--hq-raised);box-shadow:var(--hq-thumb-shadow)}

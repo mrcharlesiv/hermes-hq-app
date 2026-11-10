@@ -1,0 +1,7 @@
+/* The small segmented control (Settings choices): same iOS track and raised segment. */
+.inline-grid.grid-flow-col.rounded-\[5px\]:has(> button[aria-pressed]) {gap:0;padding:2px;border-radius:9px;background:var(--hq-fill-3)}
+
+.inline-grid.grid-flow-col.rounded-\[5px\] > button[aria-pressed='true'] {background:#fff;color:#000;box-shadow:var(--hq-thumb-shadow)}
+html:root.dark .inline-grid.grid-flow-col.rounded-\[5px\] > button[aria-pressed='true'] {background:#636366;color:#fff}
+:is([class~='border-(--ui-stroke-tertiary)'][class~='bg-(--ui-bg-quinary)'],.rounded-xl.border[class~='bg-(--ui-surface-secondary,transparent)'],article.group\/artifact) {
+  border-color:transparent;border-radius:var(--hq-card-r);background:var(--hq-card)}

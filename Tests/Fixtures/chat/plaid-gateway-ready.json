@@ -1,0 +1,14 @@
+{
+ "jsonrpc": "2.0",
+ "method": "event",
+ "params": {
+  "type": "gateway.ready",
+  "session_id": null,
+  "payload": {
+   "heartbeat": true,
+   "change_events": true,
+   "replay_epoch": "a1a690266b7b46179117a8880cce92e4",
+   "desktop_contract": 8
+  }
+ }
+}

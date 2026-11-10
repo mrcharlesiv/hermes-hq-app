@@ -1,0 +1,242 @@
+/* ==== Sidebar: HQ's Sessions and Bots tabs (BotRowViews, SessionRowViews, SessionsHeaderView). ==== */
+
+/* -- The Sessions/Bots switch: an iOS segmented control. A grey capsule track, a raised thumb, equal halves. It fits
+   inside desktop's 28px pane header: anything hanging below it is painted over by the list when the sidebar is opaque. -- */
+[role='tablist']:has(> [data-tree-tab='sessions']) {
+ flex:1 1 auto;width:auto;min-width:0;height:28px;box-sizing:border-box;margin:auto 16px;padding:2px;gap:0;border-radius:999px;background:var(--hq-fill-3);overflow:visible;
+ /* The pane's Minimize chevron, squeezed beside the switch, does what the sidebar toggle above it does. */
+ & + button[aria-label='Minimize'] {display:none}
+ > [data-tree-tab] {
+  flex:1 1 0;min-width:84px;height:24px;margin:0;justify-content:center;font-size:12px;color:var(--foreground);
+  .pane-tab-content {justify-content:center}
+  .truncate {font-weight:inherit;letter-spacing:-.08px}
+  &[data-active='true'] {--tab-bg:var(--hq-raised);box-shadow:0 3px 8px rgb(0 0 0/.12),0 3px 1px rgb(0 0 0/.04),0 0 0 .5px rgb(0 0 0/.04);font-weight:600;:root.dark & {--tab-bg:#5c5c60;box-shadow:inset 0 .5px 0 rgb(255 255 255/.14),0 1px 3px rgb(0 0 0/.3)}}
+ }
+}
+
+/* iOS's secondary label (hqLabel2) for every grey line in the sidebar: previews, times, headings, glyphs. */
+:is([data-slot='sidebar'],:has(> [data-slot='bots-roster'])) {--hq-label-2:rgb(60 60 67/.6);--ui-text-tertiary:var(--hq-label-2)}
+html.dark :is([data-slot='sidebar'],:has(> [data-slot='bots-roster'])) {--hq-label-2:rgb(235 235 245/.6)}
+/* The open chat or bot: a faint wash of HQ blue, as a focused Mac sidebar picks out its row in the accent. Weighted to
+   beat the native-glass grey. */
+:root:root:root :is([data-slot='sidebar'],[data-slot='bots-roster']) {--ui-row-active-background:color-mix(in srgb,var(--hq-tint) 11%,transparent)}
+:root.dark:root:root :is([data-slot='sidebar'],[data-slot='bots-roster']) {--ui-row-active-background:color-mix(in srgb,var(--hq-tint) 22%,transparent)}
+
+/* Long lists and the face strip fade where more is hidden. The trailing fade is the resting state; a scroll-driven
+   animation adds a short leading fade once scrolled and lifts the trailing one at the end (where animation is off,
+   the trailing fade simply stays). */
+@keyframes hq-unfade {
+ 0% {-webkit-mask-image:var(--hq-fade-mask);mask-image:var(--hq-fade-mask)}
+ 1%,97% {-webkit-mask-image:var(--hq-fade-mid);mask-image:var(--hq-fade-mid)}
+ 100% {-webkit-mask-image:var(--hq-fade-end);mask-image:var(--hq-fade-end)}}
+:is([data-slot='sidebar'] [data-slot='sidebar-content'] > .overflow-y-auto,:has(> [data-slot='bots-roster'])) {
+ --hq-fade-mask:linear-gradient(#000 calc(100% - 28px),transparent);--hq-fade-mid:linear-gradient(transparent,#000 14px,#000 calc(100% - 28px),transparent);--hq-fade-end:linear-gradient(transparent,#000 14px);
+ -webkit-mask-image:var(--hq-fade-mask);mask-image:var(--hq-fade-mask);
+ animation-name:hq-unfade;animation-duration:auto;animation-timing-function:linear;animation-fill-mode:both;animation-timeline:scroll(self block)}
+
+/* Desktop's 8px scrollbar (its thumb shows only on hover) keeps its gutter even when unseen, so the rows sat 10 from
+   the left edge and 18 from the right. The gutter moves into the sidebar's own edge padding: the rows sit 10 from
+   both edges, and the thumb rides the edge as on a Mac. */
+[data-slot='sidebar'] [data-slot='sidebar-content'] > .overflow-y-auto {margin-right:-8px}
+
+/* The sidebar toggle sits in the title bar next to the window buttons, so it is drawn like a Mac toolbar glyph (Notes,
+   Mail): no plate, secondary grey, a fill only on hover, centred on the window buttons' line (y 17). Its unread count
+   is an iOS badge tucked onto the glyph's corner. */
+[data-titlebar-cluster='left'] {
+ > button {width:28px;height:28px;translate:0 -2px;border-radius:999px;color:var(--hq-label-2);background:none;box-shadow:none;&:hover {background:var(--hq-fill-3);color:var(--foreground)}}
+ > button .codicon {font-size:15px !important}
+ [data-slot='badge'] {height:15px;min-width:15px;padding:0 4px;justify-content:center;border-radius:999px;background:#ff3b30;color:#fff;font-size:10.5px;line-height:15px;font-weight:600;:root.dark & {background:#ff453a}}
+ .absolute:has(> [data-slot='badge']) {top:-4px;right:-9px}
+}
+/* While the sidebar is open the toggle sits in its top-right corner, 16 in from the edge (the top-left corner is the
+   window buttons'). Anchored to the sidebar, so it follows a resize; closed, it falls back to desktop's spot. */
+:is([data-slot='sidebar'],:has(> [data-slot='bots-roster'])) {anchor-name:--hq-side}
+[data-titlebar-cluster='left']:has(> button[aria-label^='Hide sidebar']) {position-anchor:--hq-side;position-visibility:always;left:calc(anchor(right,calc(var(--titlebar-controls-left) + 44px)) - 44px)}
+
+/* -- Sessions tab header: a large title like Bots', with New session, Capabilities and Messaging as the capsule of
+   tools beside it (HQ's filter/search/compose cluster). Labels stay for screen readers and tooltips. -- */
+[data-slot='sidebar'] [data-slot='sidebar-content'] > [data-sidebar='group']:first-child {container-type:inline-size;flex-direction:row;align-items:center;gap:8px;padding:12px 6px 2px;
+ > [data-sidebar='group-content'] {width:auto;flex:none;margin-left:auto}
+ &::before {
+  content:'Sessions' / '';flex:1 1 auto;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
+  font-size:20px;line-height:26px;font-weight:700;letter-spacing:-.2px;color:var(--foreground)}}
+[data-slot='sidebar'] [data-sidebar='menu'] {flex-direction:row;gap:0;width:auto;height:28px;align-items:center;padding:0 3px}
+[data-slot='sidebar'] [data-sidebar='menu-button'] {
+ position:relative;flex:none;width:26px;height:24px;padding:0;justify-content:center;border:0 !important;border-radius:999px;color:var(--foreground);
+ > i.codicon {width:17px;height:17px;font-size:15px !important;line-height:17px;color:var(--foreground) !important}
+ > :is(span.truncate,[data-slot='kbd-group']) {position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+ > .codicon-robot::before {content:'\ea73'}
+ > .codicon-symbol-misc::before {content:'\eae6'}
+ > .codicon-comment::before {content:'\eac7'}
+}
+/* HQ's glyphs: compose for New session (last, as in HQ's cluster), extensions for Capabilities, a chat pair for Messaging. */
+[data-slot='sidebar'] [data-sidebar='menu'] > :has(.codicon-robot) {order:3}
+[data-slot='sidebar'] [data-sidebar='menu-button'][class~='bg-(--ui-control-active-background)'] > i.codicon {color:var(--hq-tint) !important}
+
+/* The tools beside each large title: plain glyphs in secondary grey like the sidebar toggle and a Mac toolbar (Mail,
+   Notes), no plate; a fill and full colour on hover; the open one in tint. */
+:is([data-slot='sidebar'] [data-sidebar='menu'],:has(> [data-slot='bots-roster']) > .justify-between:first-child > .flex) {gap:2px;border-radius:0;background:none;box-shadow:none}
+[data-slot='sidebar'] [data-sidebar='menu-button'] {> i.codicon {color:var(--hq-label-2) !important}&:hover {background:var(--hq-fill-3)}&:hover > i.codicon {color:var(--foreground) !important}}
+:has(> [data-slot='bots-roster']) > :is(.justify-between:first-child > .flex > button,:nth-child(2) > button[aria-label='Filter roster']) {color:var(--hq-label-2) !important;&:hover {background:var(--hq-fill-3);color:var(--foreground) !important}}
+
+/* -- Search: one capsule, 16 from the edge on both tabs, iOS's body-size placeholder. -- */
+:is([data-slot='sidebar'],:has(> [data-slot='bots-roster'])) .border-b:has(> input[placeholder]) {
+ height:32px;padding:0 6px 0 10px;gap:6px;border-radius:999px;background:var(--hq-fill-3);
+ > input {font-size:13px;letter-spacing:-.08px;text-overflow:ellipsis}
+ > input::placeholder {color:var(--hq-label-2);opacity:.8;text-overflow:ellipsis}
+ > svg {width:15px;height:15px;color:var(--hq-label-2)}
+}
+[data-slot='sidebar'] [data-slot='sidebar-content'] > .shrink-0.px-2:has(input) {margin-right:6px;padding:2px 0 4px 6px}
+
+/* -- Section headings (Pinned, Sessions, Telegram, Discord) and date groups: one style, HQ's subheadline semibold
+   grey, 20 from the edge; no rules beside them, no brand-coloured tiles. -- */
+[data-slot='sidebar'] {
+ .group\/section {min-height:26px;padding:6px 7px 0 0}   /* the Filters glyph ends on the times' edge */
+ [data-sidebar='group'] {padding-bottom:0}
+ [data-sidebar='group-content'] {padding-block:0}
+ .group\/section button[data-size='icon-xs'] {width:28px;height:28px;border-radius:999px;color:var(--hq-label-2);.codicon {font-size:14px !important}}
+ [data-slot='sidebar-group-content'] {gap:0}
+}
+button.group\/section-label > span.tracking-\[0\.16em\] {padding-left:10px;font-size:12px;line-height:16px;font-weight:600;letter-spacing:-.08px}
+button.group\/section-label:has(> span.size-4) {gap:0}
+button.group\/section-label > span.size-4.rounded-\[4px\] {width:0;min-width:0;overflow:hidden;margin:0;background:transparent !important}
+.group\/workspace {min-height:26px;padding:8px 8px 0 28px}
+/* Date groups sit inside Sessions: regular weight on the titles' line, so they read as dividers, not new sections. */
+.group\/workspace .tracking-\[0\.12em\] {font-size:12px;line-height:16px;font-weight:400;letter-spacing:-.08px;opacity:1;color:var(--hq-label-2)}
+.group\/workspace span.h-px.flex-1 {background:transparent}
+
+/* -- Session rows: single-line cells at Mac sidebar scale (34 tall, 15pt title; the phone's 44/17 read too tall here), a hairline under each inset to the text, the
+   blue dot only for unread (orange when it needs you), the title semibold and the time blue when unread. -- */
+/* Marquee off; the inner span goes inline so the title's own ellipsis applies (HQ always truncates with '…'). */
+[data-slot='sidebar'] .hover-marquee .hover-marquee-inner {display:inline;animation:none !important;transform:none !important}
+[data-slot='sidebar'] .row-hover {
+ min-height:28px;padding-right:10px;border-radius:10px;
+ > div:first-child {padding-right:6px}
+ .hover-marquee {font-size:13px !important;line-height:18px;letter-spacing:-.08px;color:var(--foreground);text-overflow:ellipsis}
+ span.size-1.rounded-full {opacity:0}
+ [aria-label$='unread'] {width:8px;height:8px;background:var(--hq-tint)}
+ :is([aria-label='Needs your input'],[aria-label='Waiting for your answer']) {width:8px;height:8px;background:#ff9500;:root.dark & {background:#ff9f0a}}
+ [aria-label^='Draft'] {width:8px;height:8px;border:1.5px dashed var(--hq-label-2);opacity:.5}
+ [data-row-actions] .text-\[0\.625rem\] {font-size:12px;line-height:16px;letter-spacing:-.08px;font-variant-numeric:tabular-nums;color:var(--hq-label-2)}
+ &:has([aria-label$='unread']) {.hover-marquee {font-weight:600} [data-row-actions] .text-\[0\.625rem\] {color:var(--hq-tint-text)}}
+ [aria-label^='Profile:'] {width:16px;height:16px;margin-right:2px;border-radius:50%;font-size:9px;background:var(--hq-fill-3) !important;color:var(--hq-label-2) !important}
+ .codicon-kebab-vertical::before {content:'\ea7c'}
+ &:hover button[aria-label='Session actions'] {color:var(--hq-label-2)}
+ button[aria-label='Session actions'] .codicon {font-size:14px !important}
+}
+/* Load more: a quiet text capsule under the titles, labelled with desktop's own words. */
+[data-slot='sidebar'] [data-sidebar='group-content'] > button[aria-label^='Load'] {
+ display:inline-flex;align-items:center;align-self:flex-start;margin:4px 0 6px 20px;width:auto;height:28px;padding:0 12px;border-radius:999px;background:var(--hq-fill-3);color:var(--hq-tint-text);
+ .codicon {display:none}
+ &::after {content:attr(aria-label);font-size:13px;line-height:18px;letter-spacing:-.08px;white-space:nowrap}
+}
+/* One list, one scroll, like an iOS list: sections size to their rows instead of each being its own capped
+   scroll box (desktop does the same itself on short windows). A virtualised Sessions list (25+ ungrouped) keeps
+   desktop's layout, since its rows only render inside their own scroller. */
+[data-slot='sidebar-content'] > .overflow-y-auto:not(:has([data-index])) > [data-sidebar='group'] {flex:none;min-height:0;overflow:visible;> [data-sidebar='group-content'] {flex:none;max-height:none;overflow:visible}}
+/* Telegram and Discord open a new top-level section: more air above than a date group. */
+[data-slot='sidebar-content'] > .overflow-y-auto > :nth-child(n+3) .group\/section {padding-top:12px}
+
+/* -- Bottom rail: an iOS toolbar in two rows. The profile faces get the full width on top (each keeps desktop's own
+   tint); the tools sit under them with real spacing: All profiles leading, New/Import/Manage trailing. -- */
+[data-slot='sidebar'] [data-slot='sidebar-content'] > .shrink-0:has(> [data-slot='profile-rail']) {margin:0 -10px;padding:8px 12px 8px 14px;box-shadow:0 -.5px 0 var(--hq-sep)}
+[data-slot='profile-rail'] {
+ flex-wrap:wrap;row-gap:4px;column-gap:10px;
+ > .overflow-x-auto {order:-1;flex:1 0 100%;height:32px;padding-right:14px;
+  --hq-fade-mask:linear-gradient(to right,#000 calc(100% - 36px),transparent);--hq-fade-mid:linear-gradient(to right,transparent,#000 24px,#000 calc(100% - 36px),transparent);--hq-fade-end:linear-gradient(to right,transparent,#000 24px);
+  -webkit-mask-image:var(--hq-fade-mask);mask-image:var(--hq-fade-mask);
+  animation-name:hq-unfade;animation-duration:auto;animation-timing-function:linear;animation-fill-mode:both;animation-timeline:scroll(self inline)}
+ > .overflow-x-auto > div {gap:4px}
+ > button:first-child {margin-right:auto}
+ :is([data-slot='profile-rail-gateway'],[data-slot='profile-rail-gateway'] > .relative) {gap:6px}
+ [data-slot='profile-rail-divider'] {margin:0 2px;gap:2px}
+ [data-slot='profile-rail-divider'] > .w-px {width:0;background:transparent}
+ /* Each gateway reads as a group: room before its small label glyph, which sits a step quieter than the buttons. */
+ > .overflow-x-auto > div > [data-slot='profile-rail-divider']:not(:first-child) {margin-left:8px}
+ :is(button[data-size='icon-xs'],button.size-5:not([data-slot='popover-anchor'])) {width:28px;height:28px;border-radius:999px;opacity:1;color:var(--hq-label-2);&:hover {background:var(--hq-fill-3);color:var(--foreground)}}
+ button[aria-pressed='true']:not([data-slot='popover-anchor']) {background:transparent;color:var(--hq-tint)}
+ .codicon {font-size:16px !important}
+ > .overflow-x-auto button[data-size='icon-xs'] {width:28px;height:28px;color:var(--hq-label-2)}
+ > .overflow-x-auto .codicon {font-size:16px !important}
+ [data-slot='connection-glyph'] {width:15px;height:15px;color:var(--hq-label-3)}
+ /* Import's cloud carries a solid badge, the one heavy glyph in the row: an outlined arrow-in-a-circle instead. */
+ .codicon-cloud-download::before {content:'\ebfc'}
+ [data-slot='connection-glyph'] svg {width:13px;height:13px}
+ [data-slot='profile-rail-unreachable'] {width:6px;height:6px;background:#ff9500;:root.dark & {background:#ff9f0a}}
+ button[data-slot='popover-anchor'] {width:24px;height:24px;border-radius:50%;font-size:12px;font-weight:600;opacity:1}
+ button[data-slot='popover-anchor'][aria-pressed='true'] {box-shadow:0 0 0 2px var(--hq-tint)}
+ [data-slot='profile-status-dot'] {display:block;width:5px;height:5px;background:var(--hq-tint);box-shadow:0 0 0 1.5px var(--background)}
+ button > span.absolute:has(> [data-slot='profile-status-dot']) {top:-1px;right:-1px;bottom:auto;line-height:0}
+ /* On a glyph button the dot sits on the glyph's corner, not the button's (6px out from the glyph). */
+ button[data-size='icon-xs'] > span.absolute:has(> [data-slot='profile-status-dot']) {top:5px;right:5px}
+}
+
+/* ==== Bots tab ==== */
+:has(> [data-slot='bots-roster']) {
+ position:relative;
+ /* Large title, 20 bold at Clean's density (matches the Sessions tab), with its tools in one capsule. */
+ > .justify-between:first-child {
+  container-type:inline-size;gap:8px;padding:12px 16px 2px;
+  > span {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:20px;color:var(--foreground);text-transform:none;line-height:26px;font-weight:700;letter-spacing:-.2px}
+  > .flex {anchor-name:--hq-bots-tools;flex:none;gap:0;height:28px;align-items:center;padding:0 3px 0 29px}
+  > .flex > button {width:26px;height:24px;border-radius:999px;color:var(--foreground)}
+  > .flex .codicon {font-size:15px !important}
+ }
+ > :nth-child(2) {
+  gap:0;padding:2px 16px 4px;
+  /* The filter joins the title's tool capsule (HQ's filter/search/compose cluster); the search capsule stays clean.
+     It is anchored to the capsule itself (anchor positioning), into the 26px + 3px slot the capsule reserves on its
+     left, so header changes move it in step. Fallbacks = today's header metrics: 16px top padding + 1px line inset
+     = 13px; 16px edge + 3px inset + three 26px buttons + 3px = 100px from the right. */
+  > button[aria-label='Filter roster'] {position:absolute;top:anchor(--hq-bots-tools top,13px);left:anchor(--hq-bots-tools left,calc(100% - 100px));margin:2px 0 0 3px;width:26px !important;height:24px !important;border-radius:999px;color:var(--foreground);.codicon {font-size:15px !important}}
+ }
+}
+
+[data-slot='bots-roster'] {
+ /* Section headings: subheadline semibold, the count regular, a visible chevron, 20 from the edge. The options
+    button (hover-only) floats left of the chevron so the chevron lines up with the rows' times. */
+ [data-slot='bots-section-heading'] > .group\/section {position:relative;margin-top:2px;padding-right:0;> button[aria-haspopup] {position:absolute;right:30px}}
+ :is([data-slot='bots-section-heading'] button,[data-slot='bots-section'] > button).tracking-wider,> div > .border-t > button {min-height:30px;padding:0 10px 0 14px;font-size:12px;line-height:16px;font-weight:600;letter-spacing:-.08px;color:var(--hq-label-2)}
+ [data-slot='bots-section'] > button.tracking-wider {margin-top:2px}
+ /* Hidden: a quiet footer row on the same 20px inset, no edge-to-edge rule. */
+ > div > .border-t:has(> button[aria-expanded]) {margin-top:2px;border-top-width:0;> button {gap:6px;font-weight:400;> span:last-child {color:inherit}> .codicon {order:1}}}
+ :is(button.tracking-wider,.border-t > button) > .codicon-chevron-right {font-size:12px !important;opacity:1;color:rgb(60 60 67/.36);:root.dark & {color:rgb(235 235 245/.36)}}
+ /* The gateway line: footnote, quiet, the server named once. */
+ button.tracking-wider:not([data-slot='row-button']):has(> [data-slot='connection-glyph']) {margin-top:2px;padding:4px 10px 4px 14px;font-size:12px;line-height:16px;font-weight:400;> [data-slot='connection-glyph'] {display:grid;color:inherit}}
+
+ /* Rows: BotRowMetrics at Clean's density (face 34, gap 10, 5 vertical),
+    name 13 semibold, preview 12, time caption (12) in tabular digits. */
+ button[data-slot='context-menu-trigger'] {
+  gap:10px;min-height:48px;padding:5px 10px;
+  img {width:34px !important;height:34px !important}
+  > .shrink-0:has(> svg),> .shrink-0 > svg,:is(.size-8,.w-\[34px\]) {width:34px;height:34px}
+  .font-medium {font-size:13px;line-height:18px;letter-spacing:-.08px}
+  .items-baseline > .shrink-0 {font-size:12px;line-height:16px;letter-spacing:0;font-variant-numeric:tabular-nums;color:var(--hq-label-2)}
+  .text-xs {margin-top:0;font-size:12px;line-height:15px;letter-spacing:-.08px}
+ }
+ [data-roster-key] {
+  & + &::before {left:52px;right:0;border-top-width:.5px}
+  [role='status'] {width:12px;height:12px}
+  span.size-3\.5:has([role='status']) {right:10px;bottom:auto;top:26px}
+ }
+}
+
+/* Pinned bots: HQ's tiles. Big faces in a row with the name under each; no preview or time (both stay in the
+   row's tooltip and label). */
+[data-slot='bots-section']:has([data-section-id='hermes-hq-pinned']) {
+ > .grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(72px,1fr));gap:2px;padding:2px 0 0}
+ [data-roster-key] {
+  flex-direction:column;align-items:center;gap:4px;min-height:0;padding:4px 2px 6px;border-radius:var(--hq-card-r);background:transparent !important;
+  &::before {display:none}
+  img,> .shrink-0:has(> svg),> .shrink-0 > svg {width:40px !important;height:40px !important;border-radius:50%}
+  /* Dark: a hairline edge that follows each face's shape, so a black face still reads on the dark sidebar. */
+  :root.dark & img {filter:drop-shadow(0 0 .5px rgb(255 255 255/.5))}
+  > .min-w-0 {flex:none;width:100%;text-align:center}
+  .items-baseline {justify-content:center}
+  .items-baseline > .min-w-0 {justify-content:center;max-width:100%}
+  .font-medium {font-size:12px;line-height:16px;font-weight:500;letter-spacing:-.08px}
+  :is(.items-baseline > .shrink-0,.text-xs) {display:none}
+  span.size-3\.5:has([role='status']) {top:4px;right:calc(50% - 30px)}
+  &[class~='bg-(--ui-row-active-background)'] .font-medium {color:var(--hq-tint-text);font-weight:600}
+ }
+}

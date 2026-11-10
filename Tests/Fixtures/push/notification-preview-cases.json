@@ -1,0 +1,516 @@
+{
+ "_about": "Notification text cases every implementation must agree on: src/notification-preview.ts and redactPrivate in src/bridge/fe-platform-policy.ts (vitest), DispatchPlatformPolicy in HermesPlatformExtras.swift (scripts/test-native-platform.sh) and gateway-plugin/hermes-hq-push/alert_copy.py (test_push.py). \"redactions\" run the masking alone; \"previews\" the whole preview (max 180); \"commands\" an approval command summary (max 120).",
+ "redactions": [
+  {
+   "name": "env password, any value",
+   "input": "export DB_PASSWORD=Summer2024!",
+   "output": "export DB_PASSWORD=••••"
+  },
+  {
+   "name": "env password glued to its prefix",
+   "input": "PGPASSWORD=hunter2 psql -h db",
+   "output": "PGPASSWORD=•••• psql -h db"
+  },
+  {
+   "name": "env password, letters only",
+   "input": "POSTGRES_PASSWORD=correcthorse",
+   "output": "POSTGRES_PASSWORD=••••"
+  },
+  {
+   "name": "env secret quoted",
+   "input": "OPENAI_API_KEY=\"sk-live-1234\"",
+   "output": "OPENAI_API_KEY=\"••••\""
+  },
+  {
+   "name": "env variable reference stays",
+   "input": "PGPASSWORD=$DB_PASS psql",
+   "output": "PGPASSWORD=$DB_PASS psql"
+  },
+  {
+   "name": "env path stays for a non-password key",
+   "input": "SSH_AUTH_SOCK=/tmp/agent.sock",
+   "output": "SSH_AUTH_SOCK=/tmp/agent.sock"
+  },
+  {
+   "name": "password key masks a path too",
+   "input": "MY_PASSWORD: /etc/pw",
+   "output": "MY_PASSWORD: ••••"
+  },
+  {
+   "name": "dotted config key",
+   "input": "spring.datasource.password=s3cr3t",
+   "output": "spring.datasource.password=••••"
+  },
+  {
+   "name": "json field",
+   "input": "{\"password\": \"hunter2\", \"user\": \"ivy\"}",
+   "output": "{\"password\": \"••••\", \"user\": \"ivy\"}"
+  },
+  {
+   "name": "quoted password with spaces",
+   "input": "password=\"correct horse battery staple\"",
+   "output": "password=\"••••\""
+  },
+  {
+   "name": "short password word",
+   "input": "Password: secret",
+   "output": "Password: ••••"
+  },
+  {
+   "name": "password in parentheses",
+   "input": "(password: hunter2)",
+   "output": "(password: ••••)"
+  },
+  {
+   "name": "password prose stays",
+   "input": "Password: the one you set earlier.",
+   "output": "Password: the one you set earlier."
+  },
+  {
+   "name": "password heading before a list stays",
+   "input": "Password:\n\n- Use at least 12 characters",
+   "output": "Password:\n\n- Use at least 12 characters"
+  },
+  {
+   "name": "api key assignment, letters only",
+   "input": "api_key: ABCDEFGHIJKLMNOPQRSTUVWX",
+   "output": "api_key: ••••"
+  },
+  {
+   "name": "header-style key",
+   "input": "x-api-key: abc123def456ghi",
+   "output": "x-api-key: ••••"
+  },
+  {
+   "name": "numeric token",
+   "input": "token=12345678901234567890",
+   "output": "token=••••"
+  },
+  {
+   "name": "token counts stay",
+   "input": "max_tokens: 128000",
+   "output": "max_tokens: 128000"
+  },
+  {
+   "name": "token type stays",
+   "input": "token_type: bearer",
+   "output": "token_type: bearer"
+  },
+  {
+   "name": "words that contain a key name stay",
+   "input": "keyboard: us, AUTHOR=Smith, Passage: text, Secretary: Jane",
+   "output": "keyboard: us, AUTHOR=Smith, Passage: text, Secretary: Jane"
+  },
+  {
+   "name": "api key in prose",
+   "input": "The API key is 4f9a8b7c6d5e4f3a2b1c.",
+   "output": "The API key is ••••."
+  },
+  {
+   "name": "password in prose",
+   "input": "the password was hunter2.",
+   "output": "the password was ••••."
+  },
+  {
+   "name": "prose that is not a secret stays",
+   "input": "The token is expired and the password is incorrect.",
+   "output": "The token is expired and the password is incorrect."
+  },
+  {
+   "name": "basic auth header",
+   "input": "Authorization: Basic dXNlcjpwYXNzd29yZA==",
+   "output": "Authorization: Basic ••••"
+  },
+  {
+   "name": "bearer token, letters only",
+   "input": "Bearer abcdefghijklmnopqrstuvwxyz",
+   "output": "Bearer ••••"
+  },
+  {
+   "name": "curl user and password",
+   "input": "curl -u admin:S3cretPass https://x.test",
+   "output": "curl -u admin:•••• https://x.test"
+  },
+  {
+   "name": "password flag",
+   "input": "mysql --password Hunter22 -h db",
+   "output": "mysql --password •••• -h db"
+  },
+  {
+   "name": "password flag with equals",
+   "input": "psql --password=Hunter22",
+   "output": "psql --password=••••"
+  },
+  {
+   "name": "flag names that are not a value stay",
+   "input": "docker login --password-stdin; gh auth --token $GITHUB_TOKEN",
+   "output": "docker login --password-stdin; gh auth --token $GITHUB_TOKEN"
+  },
+  {
+   "name": "telegram bot token",
+   "input": "Bot 7123456789:AAHfK3x9mZq_2LpQ8vRtYw4NcBd6EeFgHiJ is live",
+   "output": "Bot •••• is live"
+  },
+  {
+   "name": "telegram api url",
+   "input": "https://api.telegram.org/bot7123456789:AAHfK3x9mZq_2LpQ8vRtYw4NcBd6EeFgHiJ/getMe",
+   "output": "https://api.telegram.org/bot••••/getMe"
+  },
+  {
+   "name": "discord bot token",
+   "input": "discord MTA4NzY1NDMyMTA5ODc2NTQzMg.GhIjKl.aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789ab ok",
+   "output": "discord •••• ok"
+  },
+  {
+   "name": "npm token",
+   "input": "//registry.npmjs.org/:_authToken=npm_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789",
+   "output": "//registry.npmjs.org/:_authToken=••••"
+  },
+  {
+   "name": "sendgrid key",
+   "input": "SG.aBcDeFgHiJkLmNoPqRsTuV.wXyZ0123456789aBcDeFgHiJkLmNoPqRsTuVwXyZ01234",
+   "output": "••••"
+  },
+  {
+   "name": "url password with an empty user",
+   "input": "redis://:Sup3rSecret@localhost:6379",
+   "output": "redis://:••••@localhost:6379"
+  },
+  {
+   "name": "url password containing @",
+   "input": "https://user:p@ss@host.test/x",
+   "output": "https://user:••••@host.test/x"
+  },
+  {
+   "name": "url token as the user",
+   "input": "git remote set-url origin https://4f9a8b7c6d5e4f3a2b1c0d9e@github.com/x.git",
+   "output": "git remote set-url origin https://••••@github.com/x.git"
+  },
+  {
+   "name": "url user without a password stays",
+   "input": "ssh://git@github.com/x.git and mailto:ivy@example.com",
+   "output": "ssh://git@github.com/x.git and mailto:ivy@example.com"
+  },
+  {
+   "name": "fragment token",
+   "input": "https://example.com/cb#access_token=abc123&state=x",
+   "output": "https://example.com/cb#access_token=••••&state=x"
+  },
+  {
+   "name": "query key",
+   "input": "https://maps.example.com/api?key=Abc123Def456&q=pizza",
+   "output": "https://maps.example.com/api?key=••••&q=pizza"
+  },
+  {
+   "name": "env password with & and ;",
+   "input": "DB_PASSWORD=Xy7&kL9;pQ2zR",
+   "output": "DB_PASSWORD=••••"
+  },
+  {
+   "name": "password with commas and semicolons",
+   "input": "New password: aB3,dE6;gH9&jK",
+   "output": "New password: ••••"
+  },
+  {
+   "name": "password written as words",
+   "input": "password = correct horse battery staple",
+   "output": "password = ••••"
+  },
+  {
+   "name": "password words stop at a clause",
+   "input": "Password: Summer Rain 42, then log in",
+   "output": "Password: ••••, then log in"
+  },
+  {
+   "name": "password then a note",
+   "input": "Password: hunter2 (change it after login)",
+   "output": "Password: •••• (change it after login)"
+  },
+  {
+   "name": "key after a kept value",
+   "input": "max_tokens=5,password=Xy7&kL9;pQ2zR",
+   "output": "max_tokens=5,password=••••"
+  },
+  {
+   "name": "reference before punctuation stays",
+   "input": "PGPASSWORD=$DB_PASS;psql",
+   "output": "PGPASSWORD=$DB_PASS;psql"
+  },
+  {
+   "name": "long quoted password",
+   "input": "password=\"Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1Ab1\"",
+   "output": "password=\"••••\""
+  },
+  {
+   "name": "quoted password across lines",
+   "input": "password=\"correct horse\nbattery staple\"",
+   "output": "password=\"••••\""
+  },
+  {
+   "name": "quoted password never closed",
+   "input": "password: 'hunter2 and more",
+   "output": "password: '••••"
+  },
+  {
+   "name": "quoted --password",
+   "input": "curl --password \"correct horse battery staple\" https://x.test",
+   "output": "curl --password \"••••\" https://x.test"
+  },
+  {
+   "name": "quoted -u",
+   "input": "curl -u 'alice:correct horse battery' https://x.test",
+   "output": "curl -u 'alice:••••' https://x.test"
+  },
+  {
+   "name": "mysql -p glued",
+   "input": "mysql -u root -pS3cretPass -h db",
+   "output": "mysql -u root -p•••• -h db"
+  },
+  {
+   "name": "sshpass -p",
+   "input": "sshpass -p hunter2 ssh me@host",
+   "output": "sshpass -p •••• ssh me@host"
+  },
+  {
+   "name": "docker login -p",
+   "input": "docker login -u me -p dckr_pat_abcdef123 registry.io",
+   "output": "docker login -u me -p •••• registry.io"
+  },
+  {
+   "name": "redis-cli -a",
+   "input": "redis-cli -a S3cretPw ping",
+   "output": "redis-cli -a •••• ping"
+  },
+  {
+   "name": "htpasswd -b",
+   "input": "htpasswd -b /etc/nginx/.htpasswd admin S3cret!",
+   "output": "htpasswd -b /etc/nginx/.htpasswd admin ••••"
+  },
+  {
+   "name": "htpasswd -nbB quoted",
+   "input": "htpasswd -nbB admin 'S3cret pass' && echo ok",
+   "output": "htpasswd -nbB admin '••••' && echo ok"
+  },
+  {
+   "name": "other -p flags stay",
+   "input": "mkdir -p /srv/app && ssh -p 22 host && docker run -p 8080:80 img && mysql -p -h db",
+   "output": "mkdir -p /srv/app && ssh -p 22 host && docker run -p 8080:80 img && mysql -p -h db"
+  }
+ ],
+ "previews": [
+  {
+   "name": "plain",
+   "input": "Done. The tests pass now.",
+   "output": "Done. The tests pass now."
+  },
+  {
+   "name": "heading and bullets",
+   "input": "# Summary\n\n- Fixed the **flaky** test\n- Updated `README.md`\n1. Ran _all_ checks",
+   "output": "Summary: Fixed the flaky test. Updated README.md. Ran all checks"
+  },
+  {
+   "name": "fenced code",
+   "input": "Here is the fix:\n\n```swift\nlet x = 1\nprint(x)\n```\n\nThat should do it.",
+   "output": "Here is the fix: [code] That should do it."
+  },
+  {
+   "name": "unclosed fence",
+   "input": "Start of script:\n```bash\nrm -rf build\nnpm ci",
+   "output": "Start of script: [code]"
+  },
+  {
+   "name": "tilde fence",
+   "input": "Before\n~~~\ncode\n~~~\nAfter",
+   "output": "Before [code] After"
+  },
+  {
+   "name": "image and link",
+   "input": "![chart](https://x.test/c.png) See [the docs](https://docs.test/a) for more.",
+   "output": "[image] See the docs for more."
+  },
+  {
+   "name": "html",
+   "input": "Line one<br>Line <b>two</b> and <img src=\"a.png\"> done",
+   "output": "Line one Line two and [image] done"
+  },
+  {
+   "name": "blockquote and rule",
+   "input": "> quoted text\n\n---\n\nreply",
+   "output": "quoted text reply"
+  },
+  {
+   "name": "table",
+   "input": "| Name | Score |\n|---|---:|\n| Ivy | 10 |",
+   "output": "Name · Score. Ivy · 10"
+  },
+  {
+   "name": "task list",
+   "input": "- [x] shipped\n- [ ] tested",
+   "output": "shipped. tested"
+  },
+  {
+   "name": "inline code keeps underscores",
+   "input": "Edit `__init__.py` and `snake_case_name` then run it",
+   "output": "Edit __init__.py and snake_case_name then run it"
+  },
+  {
+   "name": "emphasis edge cases",
+   "input": "Use 2*3*4 and snake_case and **bold** and *it* and ~~old~~",
+   "output": "Use 2*3*4 and snake_case and bold and it and old"
+  },
+  {
+   "name": "empty",
+   "input": "",
+   "output": ""
+  },
+  {
+   "name": "only code",
+   "input": "```\nonly code\n```",
+   "output": "[code]"
+  },
+  {
+   "name": "openai key",
+   "input": "Your key is sk-proj-4f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c, keep it safe.",
+   "output": "Your key is ••••, keep it safe."
+  },
+  {
+   "name": "key inside inline code",
+   "input": "Set `OPENAI_API_KEY=sk-proj-4f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c` in .env",
+   "output": "Set OPENAI_API_KEY=•••• in .env"
+  },
+  {
+   "name": "bearer",
+   "input": "curl -H 'Authorization: Bearer 8f3a9c2e7b1d4f6a0c5e8b2d9f7a3c1e' https://api.example.com",
+   "output": "curl -H 'Authorization: Bearer ••••' https://api.example.com"
+  },
+  {
+   "name": "password assignment",
+   "input": "Log in with password = correct-horse-battery and user admin",
+   "output": "Log in with password = •••• and user admin"
+  },
+  {
+   "name": "password prose",
+   "input": "Password: the one you set earlier.",
+   "output": "Password: the one you set earlier."
+  },
+  {
+   "name": "url password",
+   "input": "Clone https://ivy:hunter2@git.example.com/repo.git now",
+   "output": "Clone https://ivy:••••@git.example.com/repo.git now"
+  },
+  {
+   "name": "query token",
+   "input": "Open https://example.com/cb?access_token=abc123def456ghi789jkl&state=x",
+   "output": "Open https://example.com/cb?access_token=••••&state=x"
+  },
+  {
+   "name": "jwt",
+   "input": "Token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U expires soon",
+   "output": "Token •••• expires soon"
+  },
+  {
+   "name": "private key",
+   "input": "Key:\n-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----\nDone",
+   "output": "Key: •••• Done"
+  },
+  {
+   "name": "github token",
+   "input": "Use ghp_0123456789abcdefABCDEF0123456789abcd for the API",
+   "output": "Use •••• for the API"
+  },
+  {
+   "name": "aws key",
+   "input": "aws_access_key_id AKIAIOSFODNN7EXAMPLE",
+   "output": "aws_access_key_id ••••"
+  },
+  {
+   "name": "plain words stay",
+   "input": "sk-learn-compatible-estimator-wrapper and hf_transfer_download_manager are fine",
+   "output": "sk-learn-compatible-estimator-wrapper and hf_transfer_download_manager are fine"
+  },
+  {
+   "name": "long text clips at a word",
+   "input": "The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. ",
+   "output": "The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy…"
+  },
+  {
+   "name": "long word clips hard",
+   "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "output": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…"
+  },
+  {
+   "name": "crlf",
+   "input": "one\r\ntwo\r\n\r\nthree",
+   "output": "one two three"
+  },
+  {
+   "name": "bold password label",
+   "input": "**Password:** hunter2",
+   "output": "Password: ••••"
+  },
+  {
+   "name": "env file in a code block stays hidden",
+   "input": "Add this:\n```\nDB_PASSWORD=x\n```\nthen restart.",
+   "output": "Add this: [code] then restart."
+  },
+  {
+   "name": "inline env line",
+   "input": "Run `export GITHUB_TOKEN=ghp_0123456789abcdefABCDEF0123456789abcd` first",
+   "output": "Run export GITHUB_TOKEN=•••• first"
+  },
+  {
+   "name": "password written as words",
+   "input": "Your new password = correct horse battery staple and the user is admin.",
+   "output": "Your new password = •••• and the user is admin."
+  }
+ ],
+ "commands": [
+  {
+   "name": "one line",
+   "input": "npm test -- --run",
+   "output": "npm test -- --run"
+  },
+  {
+   "name": "two lines",
+   "input": "cd /tmp\nrm -rf build",
+   "output": "cd /tmp …"
+  },
+  {
+   "name": "secret",
+   "input": "export OPENAI_API_KEY=sk-proj-4f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c",
+   "output": "export OPENAI_API_KEY=••••"
+  },
+  {
+   "name": "long",
+   "input": "echo a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a ",
+   "output": "echo a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a…"
+  },
+  {
+   "name": "blank",
+   "input": "  \n  ",
+   "output": ""
+  },
+  {
+   "name": "mysql password flag",
+   "input": "mysql -u root -pS3cretPass -e 'select 1'",
+   "output": "mysql -u root -p•••• -e 'select 1'"
+  }
+ ],
+ "errors": [
+  {
+   "name": "limit words",
+   "input": "Usage limit reached until 3:00 PM",
+   "output": "usage limit reached until 3:00 PM"
+  },
+  {
+   "name": "provider keeps case",
+   "input": "Codex usage limit reached",
+   "output": "Codex usage limit reached"
+  },
+  {
+   "name": "sentence period",
+   "input": "The reply timed out.",
+   "output": "the reply timed out"
+  }
+ ]
+}

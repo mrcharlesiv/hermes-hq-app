@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- The Hermes HQ record (HQ_IDENTITY = original), as the web app's App.entitlements (build 240): push (development in
+     Debug, production in Release: HQ_APS_ENVIRONMENT), Communication Notifications (bot faces on alerts) and the App Group
+     the Share extension will use. No keychain-access-groups: the app keeps its default group, its application identifier,
+     where the web app's sign-in and seal keys live. The existing App Store profile carries all three. -->
+<dict>
+	<key>aps-environment</key>
+	<string>$(HQ_APS_ENVIRONMENT)</string>
+	<key>com.apple.developer.usernotifications.communication</key>
+	<true/>
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.charlesmcdowell.dispatch</string>
+	</array>
+	<!-- [device-access] Settings › Device Access › Health: summaries of what is switched on, read only. -->
+	<key>com.apple.developer.healthkit</key>
+	<true/>
+	<key>com.apple.developer.healthkit.access</key>
+	<array/>
+</dict>
+</plist>

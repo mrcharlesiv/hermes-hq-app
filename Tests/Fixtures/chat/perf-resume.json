@@ -1,0 +1,30 @@
+{
+ "jsonrpc": "2.0",
+ "id": 1,
+ "result": {
+  "session_id": "5cc537d1",
+  "resumed": "20260929_120000_aabbcc01",
+  "session_key": "20260929_120000_aabbcc01",
+  "stored_session_id": "20260929_120000_aabbcc01",
+  "messages": [],
+  "messages_omitted": true,
+  "message_count": 1,
+  "status": "idle",
+  "running": false,
+  "inflight": null,
+  "info": {
+   "model": "fixture-model",
+   "provider": "fixture",
+   "cwd": "/fixture",
+   "title": "Bot Chat",
+   "tools": {},
+   "skills": {},
+   "mcp_servers": [],
+   "lazy": true,
+   "running": false,
+   "stored_session_id": "20260929_120000_aabbcc01",
+   "profile_name": "default",
+   "desktop_contract": 8
+  }
+ }
+}

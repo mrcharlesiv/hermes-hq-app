@@ -1,0 +1,13 @@
+{
+  "name": "hermes-hq-plugin-host",
+  "private": true,
+  "type": "module",
+  "description": "Builds App/Resources/PluginHost (see build.mjs)",
+  "scripts": { "build": "node build.mjs" },
+  "devDependencies": {
+    "@tailwindcss/browser": "4.3.4",
+    "esbuild": "0.28.2",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  }
+}

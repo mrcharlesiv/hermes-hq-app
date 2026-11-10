@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- [mac] The Mac app (Mac Catalyst) of the Hermes HQ record: HermesHQ-original.entitlements under macOS's key names,
+     plus the sandbox rules of HermesHQ-native-mac.entitlements. -->
+<dict>
+	<!-- The app's own Keychain group, which is its default one on iOS. The Mac reaches the data protection Keychain only
+	     with it (else every saved sign-in fails with errSecMissingEntitlement). -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	</array>
+	<key>com.apple.developer.aps-environment</key>
+	<string>$(HQ_APS_ENVIRONMENT)</string>
+	<key>com.apple.developer.usernotifications.communication</key>
+	<true/>
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.charlesmcdowell.dispatch</string>
+	</array>
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<key>com.apple.security.network.server</key>
+	<true/>
+	<key>com.apple.security.device.camera</key>
+	<true/>
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
+	<key>com.apple.security.personal-information.photos-library</key>
+	<true/>
+	<!-- [device-access] Settings › Device Access: the sandbox doors for Contacts, Location, and Calendar and Reminders. -->
+	<key>com.apple.security.personal-information.addressbook</key>
+	<true/>
+	<key>com.apple.security.personal-information.location</key>
+	<true/>
+	<key>com.apple.security.personal-information.calendars</key>
+	<true/>
+</dict>
+</plist>

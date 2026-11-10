@@ -1,0 +1,42 @@
+{
+ "jsonrpc": "2.0",
+ "id": 1,
+ "result": {
+  "session_id": "07a49c24",
+  "resumed": "20260101_090000_aa0001aa",
+  "session_key": "20260101_090000_aa0001aa",
+  "stored_session_id": "20260101_090000_aa0001aa",
+  "messages": [],
+  "messages_omitted": true,
+  "message_count": 3979,
+  "status": "idle",
+  "running": false,
+  "inflight": null,
+  "info": {
+   "model": "hermes-4",
+   "provider": "nous",
+   "reasoning_effort": "medium",
+   "cwd": "/home/hermes/app",
+   "title": "Bot Chat",
+   "tools": {},
+   "skills": {},
+   "mcp_servers": [],
+   "lazy": true,
+   "running": false,
+   "stored_session_id": "20260101_090000_aa0001aa",
+   "profile_name": "default",
+   "desktop_contract": 8,
+   "usage": {
+    "calls": 12,
+    "input": 182000,
+    "output": 9400,
+    "total": 191400,
+    "context_used": 64000,
+    "context_max": 200000,
+    "context_percent": 32,
+    "cost_usd": 1.84,
+    "model": "hermes-4"
+   }
+  }
+ }
+}

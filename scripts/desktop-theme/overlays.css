@@ -1,0 +1,176 @@
+/* ===== Overlays: menus, palette, pickers, dialogs, popovers, tooltips, toasts — HQ's iOS sizes (1 pt = 1 px). ===== */
+
+/* Every floating surface is opaque: no CSS frost behind the solid fill. */
+:is([data-slot*=menu-][data-slot$=content],[data-slot=select-content],[data-slot=popover-content]) {-webkit-backdrop-filter:none;backdrop-filter:none;html.dark body:has([data-overlay-surface]) & {background:#3a3a3c}}
+/* Over a dark sheet (#2c2c2e cards) a menu lifts one iOS elevation step (#3a3a3c) so it never merges with the card under it. */
+
+/* --- Menus (context, dropdown, select): macOS menu metrics — 13 px labels, 26 px rows, a 16 px symbol column in label colour. --- */
+:is([data-slot=context-menu-content],[data-slot=dropdown-menu-content]) {min-width:180px}
+:is([data-slot^=context-menu-],[data-slot^=dropdown-menu-])[role^=menuitem],[data-slot=select-item] {
+  min-height:24px;padding-block:0;padding-inline:8px;gap:8px;font-size:12px;line-height:16px;letter-spacing:-.08px}
+:is([data-slot^=context-menu-],[data-slot^=dropdown-menu-])[role^=menuitem] > :is(i.codicon,svg):first-child {
+  width:16px;height:16px;font-size:13px!important;line-height:16px;text-align:center;flex:none;color:currentColor}
+:is([data-slot^=context-menu-],[data-slot^=dropdown-menu-])[role=menuitem] > svg:first-child {padding:1px;stroke-width:1.9}
+/* Codicons are hairline; a touch of stroke brings them to SF Symbols' regular weight beside the label. */
+:is([data-slot^=context-menu-],[data-slot^=dropdown-menu-])[role^=menuitem] > i.codicon:first-child {-webkit-text-stroke:.3px currentColor}
+/* Destructive rows: iOS systemRed, label and symbol alike. */
+[role=menuitem][data-variant=destructive] {&,& * {color:#ff3b30!important} html.dark &,html.dark & * {color:#ff453a!important}}
+/* Group separators: a hairline inset from both edges with air around it. */
+:is([data-slot=context-menu-separator],[data-slot=dropdown-menu-separator],[data-slot=select-separator]) {height:.5px;margin:4px 8px}
+/* Submenu chevron in label colour, a little bolder than a hint. */
+:is([data-slot=context-menu-sub-trigger],[data-slot=dropdown-menu-sub-trigger]) > .codicon-chevron-right {font-size:13px!important;color:var(--foreground);opacity:.8;font-weight:600}
+/* Section labels in a menu: footnote grey, sentence case. */
+:is([data-slot=dropdown-menu-label],[data-slot=context-menu-label],[data-slot=select-label]) {padding:6px 10px 2px;font-size:11px;font-weight:500;line-height:14px;letter-spacing:0;color:var(--hq-label-2)}
+/* Trailing key hints in menu rows: plain secondary text, no keycap boxes. */
+:is([data-slot=dropdown-menu-shortcut],[data-slot=context-menu-shortcut]) {font-size:12px;letter-spacing:.02em;color:var(--hq-label-2)}
+/* Selection mark: HQ's tint checkmark. */
+:is([data-slot*=menu-][data-slot$=content],[data-slot=select-content]) .codicon-check {color:var(--hq-tint-text);font-size:12px!important;font-weight:600}
+/* Small facts inside rows ('1M', 'Low'): a fill capsule, never an outline. */
+[data-slot*=menu-][data-slot$=content] [data-slot=badge] {height:18px;padding:0 7px;border:0;border-radius:999px;background:var(--hq-fill-3);color:var(--hq-label-2);font-size:12px;font-weight:500;letter-spacing:0}
+/* Menus float off their source instead of sitting on it. */
+[data-slot=dropdown-menu-content][data-side=top] {translate:0 -8px}
+/* Menus that open upward (the composer's + menu) sit over the composer with little room: compact 36 px rows, still at body size. */
+[data-slot=dropdown-menu-content][data-side=top]:not(.w-72) {width:max-content;
+  & [role^=menuitem] {min-height:28px;padding-block:4px}
+  & [data-slot=dropdown-menu-label] {padding-top:6px}
+  & [data-slot=dropdown-menu-separator] {margin-block:4px}
+  & > div:not([data-slot]):last-child {padding:4px 14px 6px;font-size:12px;line-height:16px;white-space:nowrap}
+}
+[data-slot=dropdown-menu-content][data-side=bottom] {translate:0 4px}
+
+/* Search at the top of a dropdown (model picker): a capsule search field at body size. */
+/* The magnifier sits in the rows' symbol column and the placeholder on their label column. */
+[data-slot=dropdown-menu-search] {position:relative;padding:4px 0 6px}
+[data-slot=dropdown-menu-search]::before {content:'\ea6d';position:absolute;left:14px;top:4px;width:20px;font:14px/36px codicon;text-align:center;color:var(--hq-label-2);pointer-events:none}
+[data-slot=dropdown-menu-search] input {height:28px;padding:0 12px 0 40px;border-radius:999px;background:var(--hq-fill-3);font-size:12px;line-height:18px;letter-spacing:-.02em}
+[data-slot=dropdown-menu-search] + [data-slot=dropdown-menu-separator] {background:transparent;margin:0}
+
+/* --- Model picker (the composer's w-72 dropdown): HQ's model list rows. --- */
+[data-slot=dropdown-menu-content].w-72 {width:300px;max-height:min(540px,calc(var(--radix-dropdown-menu-content-available-height) - 16px))}
+[data-slot=dropdown-menu-content].w-72 {
+  & [data-slot=dropdown-menu-search] ~ div.overflow-y-auto {max-height:max(160px,min(248px,30dvh,calc(var(--radix-dropdown-menu-content-available-height) - 260px)))}
+  & :is([data-slot=dropdown-menu-sub-trigger],[data-slot=dropdown-menu-item]) {min-height:24px;padding-inline:8px;gap:8px}
+  & [data-slot=dropdown-menu-sub-trigger] > button[data-slot=tooltip-trigger] {width:24px;height:24px;flex:none;color:var(--hq-label-2)}
+  & [data-slot=dropdown-menu-sub-trigger] > button[data-slot=tooltip-trigger] .codicon {font-size:13px!important}
+  & [data-slot=dropdown-menu-sub-trigger] > button[aria-pressed=false] {opacity:0}
+  & [data-slot=dropdown-menu-sub-trigger]:is(:hover,[data-highlighted]) > button[aria-pressed=false] {opacity:.6}
+  & [data-slot=dropdown-menu-search] ~ div.overflow-y-auto {scroll-padding-block:12px;-webkit-mask-image:linear-gradient(transparent,#000 10px,#000 calc(100% - 14px),transparent);mask-image:linear-gradient(transparent,#000 10px,#000 calc(100% - 14px),transparent);padding-block:4px 8px}
+  & [data-slot=dropdown-menu-sub-trigger] > button[aria-pressed=true] {color:var(--hq-tint-text)}
+  & [data-slot=dropdown-menu-sub-trigger] > .codicon-chevron-right {font-size:12px!important;color:var(--hq-label-2);opacity:1}
+  & [data-slot=dropdown-menu-search] {padding-inline:6px;&::before {left:10px} & input {padding-left:36px}}
+  & [data-slot=dropdown-menu-item]:not(.group\/label):not(:has(> svg,> i.codicon,> button,> span > svg)) {padding-inline-start:32px}
+  & [data-slot=dropdown-menu-sub-trigger]:has(.codicon-check):not([data-highlighted],[data-state=open],:hover) {background:transparent}
+}
+/* One alignment grid: search magnifier in the star column, and rows without a symbol start on the label column. */
+/* The resting keyboard highlight on the current model is not a selection; only the tint checkmark is. */
+/* Provider headings: footnote section headers, not bold rows. */
+[data-slot=dropdown-menu-content] [data-slot=dropdown-menu-item].group\/label {min-height:0;padding:8px 10px 2px;font-size:11px;font-weight:500;line-height:14px;letter-spacing:0;color:var(--hq-label-2);background:none}
+[data-slot=dropdown-menu-content] [data-slot=dropdown-menu-item].group\/label [data-slot=tooltip-trigger] {font-size:12px}
+/* Footer actions (Refresh, Add custom model…, Edit models…) are live actions in tint, not greyed hints. */
+[data-slot=dropdown-menu-content] [data-slot=dropdown-menu-item][class~='text-(--ui-text-tertiary)'],
+[data-slot=dropdown-menu-content] [data-slot=dropdown-menu-item][class~='text-(--ui-text-tertiary)'] > * {color:var(--hq-tint-text)}
+
+/* --- Select popovers: UIMenu single selection, checkmark in the leading column. --- */
+[data-slot=select-content] {min-width:max(240px,var(--radix-select-trigger-width));max-height:min(27rem,var(--radix-select-content-available-height))}
+/* It floats a little off its trigger. Horizontal placement stays Radix's own, so collision handling keeps it on-screen and attached. */
+:is([data-slot=select-content],[data-slot=popover-content]:has(> [data-slot=command]))[data-side=bottom] {translate:0 4px}
+[data-slot=select-item] {padding-inline:36px 16px}
+[data-slot=select-item] > span.absolute {left:10px;right:auto;top:50%;width:20px;height:20px;translate:0 -50%}
+[data-slot=select-item] > span.absolute .codicon {display:block;line-height:18px}
+
+/* --- Combobox popovers (popover + cmdk): capsule search, body rows, tint check. --- */
+[data-slot=popover-content]:has(> [data-slot=command]) {width:max(var(--radix-popover-trigger-width),260px);max-width:300px;max-height:var(--radix-popover-content-available-height);padding:6px;& [cmdk-root] {border-radius:0}}
+[data-slot=popover-content] [data-slot=command-input-wrapper] {height:auto;margin:0 0 6px;padding:0 12px;gap:8px;border:0;border-radius:999px;background:var(--hq-fill-3)}
+[data-slot=popover-content] [data-slot=command-input] {height:28px;padding:0;font-size:12px;line-height:16px;letter-spacing:-.08px}
+[data-slot=popover-content] [data-slot=command-item] {min-height:24px;padding-inline:8px;gap:8px;font-size:12px;line-height:16px;letter-spacing:-.08px}
+[data-slot=popover-content] [data-slot=command-item] svg {color:var(--hq-tint-text)}
+[data-slot=popover-content] [data-slot=command-item][data-selected=true] {background:color-mix(in srgb,currentColor 6%,transparent)}
+/* A search field always shows its magnifier (drawn from the app's own codicon font when the markup has none). */
+[data-slot=command-input-wrapper]:not(:has(> svg))::before {content:'\ea6d';font:16px/1 codicon;color:var(--hq-label-2);flex:none}
+
+/* --- Command palette: HQ's Commands sheet — grouped grey page, capsule search, white cards of body rows. --- */
+[role=dialog]:not([data-slot]):has(> [data-slot=command]) {--hq-grouped:#f2f2f7;--hq-cell:#fff;background:var(--hq-grouped);top:56px;border:0;border-radius:var(--hq-card-r);box-shadow:var(--hq-menu-shadow)}
+html.dark [role=dialog]:not([data-slot]):has(> [data-slot=command]) {--hq-grouped:#1c1c1e;--hq-cell:#2c2c2e}
+[role=dialog]:not([data-slot]) > [data-slot=command] {
+  background:var(--hq-grouped);border-radius:var(--hq-card-r);
+  & > [data-slot=command-input-wrapper] {height:auto;margin:10px 10px 2px;padding:0 10px;gap:7px;border:0;border-radius:999px;background:var(--hq-cell)}
+  & [data-slot=command-input] {height:30px;padding:0;font-size:13px;line-height:18px;letter-spacing:-.15px;background:transparent}
+  & > [data-slot=command-input-wrapper] > svg {width:15px;height:15px;color:var(--hq-label-2)}
+  & [data-slot=command-list] {max-height:min(37rem,70vh);padding:0 10px 14px;scroll-padding-block:32px 14px;-webkit-mask-image:linear-gradient(#000 calc(100% - 12px),transparent);mask-image:linear-gradient(#000 calc(100% - 24px),transparent)}
+  & [data-slot=command-group] {padding:0}
+  & [cmdk-group-heading] {position:static;padding:10px 12px 4px;font-size:11px;line-height:14px;font-weight:500;background:transparent}
+  & [cmdk-group-items] {padding:0;overflow:hidden;border-radius:var(--hq-card-r);background:var(--hq-cell)}
+  & [data-slot=command-item] {position:relative;min-height:26px;padding-inline:10px;gap:8px;font-size:12px;line-height:16px;letter-spacing:-.08px;border-radius:0}
+  & [data-slot=command-item][data-selected=true] {background:#e5e5ea;color:var(--foreground)}
+  html.dark & [data-slot=command-item][data-selected=true] {background:var(--hq-fill-3)}
+  & [data-slot=command-item] > svg:first-child {width:16px;height:16px;color:var(--foreground);opacity:.85;stroke-width:1.8}
+  & [data-slot=command-item] > i.codicon:first-child {width:16px;height:16px;font-size:13px!important;line-height:16px;text-align:center;color:var(--foreground);opacity:.85}
+}
+/* insetGrouped cards: full-bleed rows, hairlines inset to the text, no floating highlight pills. */
+/* Key hints: plain secondary text, no keycaps. */
+[data-slot=command-item] [data-slot=kbd-group] {gap:0;opacity:1}
+[data-slot=command-item] [data-slot=kbd-group] > kbd {width:auto;min-width:0;height:auto;padding:0;border:0;background:none;box-shadow:none;font:400 12px/16px -apple-system,system-ui,sans-serif;color:var(--hq-label-2)}
+/* The window dims behind the palette, as behind any HQ sheet. */
+body > .fixed.inset-0[data-state=open]:has(+ [role=dialog]:not([data-slot]) > [data-slot=command]) {background:rgb(0 0 0/.2)}
+html.dark body > .fixed.inset-0[data-state=open]:has(+ [role=dialog]:not([data-slot]) > [data-slot=command]) {background:rgb(0 0 0/.48)}
+
+/* --- Alert-style dialogs (Rename, confirms): UIAlertController — 17 px title, full-width capsule buttons. ---
+   Only short dialogs: a header, at most one field or note, and a footer; forms keep their own layout. */
+[data-slot=dialog-content].max-w-md:has(> .grid > [data-slot=dialog-footer]):not(:has(label,textarea,select,[role=combobox],[role=radiogroup],[role=switch],> .grid > :nth-child(5))) {
+  max-width:360px;border-radius:var(--hq-card-r);
+  & > .grid {gap:16px;padding:22px 16px 16px}
+  & [data-slot=dialog-header] {gap:4px;padding:0 44px 0 14px;text-align:left}
+  & [data-slot=dialog-title] {font-size:13px;line-height:18px;font-weight:600;letter-spacing:-.02em}
+  & [data-slot=dialog-description] {font-size:12px;line-height:16px;letter-spacing:-.01em;color:var(--hq-label-2)}
+  & [data-slot=input] {height:36px;padding:0 16px;border:0;border-radius:999px;font-size:13px;line-height:18px;letter-spacing:-.02em}
+  & [data-slot=dialog-footer] {display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:10px}
+  &:has(> .grid > [data-slot=dialog-footer] > :nth-child(3)) [data-slot=dialog-footer] {display:flex;flex-direction:column-reverse}
+  & [data-slot=dialog-footer] [data-slot=button] {height:38px;padding:0 16px;border:0;border-radius:999px;font-size:13px;line-height:18px;letter-spacing:-.02em;font-weight:400;box-shadow:none}
+  & [data-slot=dialog-footer] [data-slot=button]:is([data-variant=ghost],[data-variant=outline],[data-variant=secondary]) {background:var(--hq-fill-3);color:var(--foreground)}
+  & [data-slot=dialog-footer] [data-slot=button]:is([data-variant=default],[data-variant=destructive]) {font-weight:600}
+  & [data-slot=dialog-footer] [data-slot=button][data-variant=destructive] {background:#ff3b30;color:#fff}
+  html.dark & [data-slot=dialog-footer] [data-slot=button][data-variant=destructive] {background:#ff453a}
+  /* In an alert the buttons lead; its ✕ stays, smaller and quieter. */
+  & [data-slot=dialog-close-button] {top:16px;right:16px;width:26px;height:26px;opacity:.75}
+  & [data-slot=dialog-close-button] svg {width:11px;height:11px}
+}
+/* Any dialog's close ✕: HQ's round grey button with a small bold glyph. */
+
+[data-slot=dialog-close-button] svg {width:13px;height:13px;stroke-width:2.6}
+
+/* --- Tooltips: never inverted — a raised capsule (14 px corners at 28 px tall; a wrapped one becomes a menu-cornered card) with label text and the soft menu shadow. --- */
+[data-slot=tooltip-content] {padding:5px 10px;max-width:min(320px,calc(100vw - 16px));border-radius:14px;background:var(--hq-raised);color:var(--foreground);font-size:12px;font-weight:400;line-height:16px;letter-spacing:0;box-shadow:var(--hq-menu-shadow)}
+html.dark [data-slot=tooltip-content] {background:#3a3a3c}
+[data-slot=tooltip-content] [data-slot=tooltip-arrow] {visibility:hidden}
+[data-slot=tooltip-content][data-side=bottom] {translate:0 9px}
+[data-slot=tooltip-content][data-side=top] {translate:0 -9px}
+[data-slot=tooltip-content] [data-slot=tooltip-label] > .opacity-55 {margin-inline-start:6px;opacity:1;color:var(--hq-label-2)}
+
+/* --- Toasts: HQ's UndoPill — an opaque capsule fitted to its words: the 15 px label, then the detail in grey after a dot,
+   flowing as one paragraph. A long error wraps into a rounded card and keeps its meta line, actions and ✕ in reach.
+   Centred under the titlebar so it never covers the approval cards and composer at the bottom. --- */
+/* Centring is Tailwind's translate; transform:none stops an inline translateX (the lab's toast mock carries one) from doubling it. */
+[role=region].left-1\/2:has(> [data-slot=card-stack]) {width:min(40rem,calc(100% - 2rem))!important;transform:none!important}
+/* The bottom-right confirmations keep hugging their corner. */
+[role=region].right-4 > [data-slot=card-stack] [data-slot=card-stack-surface] {margin-inline:auto 0}
+[role=region] > [data-slot=card-stack] {
+  & [data-slot=card-stack-surface] {width:fit-content;max-width:100%;margin-inline:auto;border:0;border-radius:var(--hq-card-r);background:var(--hq-raised);box-shadow:var(--hq-menu-shadow);-webkit-backdrop-filter:none;backdrop-filter:none}
+  & [data-slot=card-stack-edge] {inset-inline:22%;border:0;border-radius:999px}
+  & [data-slot=card-stack-surface] > [data-slot=alert] {display:flex!important;width:auto;min-height:30px;padding:9px 18px;gap:8px;align-items:flex-start;border-radius:inherit}
+  & [data-slot=alert]:has(> button:last-child) {padding-inline-end:10px}
+  & [data-slot=alert] > .codicon:first-child {margin-top:2px!important;font-size:13px!important;font-weight:600}
+  & [data-slot=alert] > button:last-child {margin:-2px 0}
+  & [data-slot=alert] > div:has(> [data-slot=alert-title]) {flex:0 1 auto;min-width:0;font-size:12px;line-height:16px;letter-spacing:-.01em}
+  & [data-slot=alert-title] {display:inline;max-height:none;overflow:visible;font:inherit;color:var(--foreground)}
+  & [data-slot=alert-description] {display:inline;font:inherit;color:var(--hq-label-2)}
+  & [data-slot=alert-title] + [data-slot=alert-description]::before {content:'·';margin-inline:6px;opacity:.6}
+  & [data-slot=alert-description] > p:first-child {display:inline}
+  & [data-slot=alert-description] > p + p {font-size:12px;line-height:16px}
+  & [data-slot=alert-description] [data-slot=button] {border-radius:999px}
+}
+
+/* The highlighted menu row is the Mac's: accent fill, white label, glyphs and shortcut (red for a destructive row). */
+[role=menu] :is([role^=menuitem][data-highlighted],[role=menuitem][data-state=open]) {
+  background:var(--hq-tint) !important;
+  &, & :is(span,kbd,svg,i,.codicon) {color:#fff !important}
+  &[data-variant=destructive] {background:#ff3b30 !important}}

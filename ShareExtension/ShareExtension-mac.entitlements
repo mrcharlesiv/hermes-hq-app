@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- [mac] The Share extension in the Mac app (Mac Catalyst): ShareExtension.entitlements plus the sandbox every Mac
+     extension must have, with outgoing connections (it sends the shared items to the gateway itself). -->
+<dict>
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.charlesmcdowell.dispatch</string>
+	</array>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)$(HQ_APP_BUNDLE_ID)</string>
+	</array>
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+</dict>
+</plist>

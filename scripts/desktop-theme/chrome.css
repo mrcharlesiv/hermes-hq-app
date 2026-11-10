@@ -1,0 +1,145 @@
+/* ===== Chat chrome: HQ's floating bar, its round composer row, the jump button and a quiet empty chat. =====
+   Sizes from ChatChrome.swift / ComposerView.swift / ChatPlaceholderView.swift, 1 pt = 1 px. */
+body {--hqc-ink3:rgb(31 35 40/.36);--hqc-rim:0 0 0 .5px rgb(0 0 0/.1);--hqc-lift:0 2px 10px rgb(0 0 0/.07);--hqc-off:#e9e9ea;
+  --composer-shell-pad-block-end:14px}
+html:root.dark body {--hqc-ink3:rgb(230 237 243/.36);--hqc-rim:0 0 0 .5px rgb(255 255 255/.18);--hqc-lift:0 2px 12px rgb(0 0 0/.45);--hqc-off:rgb(47 49 55)}
+
+/* --- Title bar: a 48 px strip of floating controls, no rule under it. */
+[data-tree-group][data-window-top] > [data-panel-header]:has([data-tree-tab='workspace']) {height:38px !important}
+/* The tabs sit over the transcript's middle: the strip ends 108 px early (window controls), the + follows them. */
+[role='tablist']:has([data-tree-tab='workspace']) {padding-left:146px;align-items:center;
+  > :first-child {margin-left:auto}
+  > :last-child {margin-right:auto}
+  /* Every chat tab: the open one is HQ's title capsule (raised, 13 px semibold at Mac scale); the others are quiet 15 pt
+     label-2 names beside it, so the strip reads as one title with neighbours. */
+  [role='tab'] {max-width:min(24rem,66%);
+    &:not([data-vertical]) {height:28px;padding-inline:12px;border-radius:14px;margin-block:0}
+    /* Close (shown on hover, over the title's end): a 16 px round target with a 10 px glyph that fills on hover. */
+    &[data-closeable][data-active='true'] {padding-inline:24px}
+    &[data-closeable] span:has(> button[aria-label='Close']) {align-items:center;padding-right:6px}
+    &[data-closeable] button[aria-label='Close'] {width:16px;height:16px;border-radius:99px;color:var(--hq-label-2);
+      &:hover {background:var(--hq-fill-2);color:var(--foreground)} .codicon {font-size:10px !important}}
+    .pane-tab-content > .ml-2 {margin:0}
+    .pane-tab-content > .ml-2:has([aria-label^='Draft']) {margin-left:2px}
+    .truncate {font-size:12px;line-height:16px;font-weight:400;letter-spacing:-.01em;text-transform:none;color:var(--hq-label-2);text-overflow:ellipsis}
+    /* The draft ring stays (it is a state), quieter; the settled grey dot is decoration HQ's plain names lack. */
+    .tab-key-hint-icon [aria-label^='Draft'] {width:6px;height:6px;border:1px solid var(--hqc-ink3)}
+    .tab-key-hint-icon [aria-hidden='true']:not([style]) {display:none}
+    &:not([data-active='true']) {--tab-bg:transparent;box-shadow:none !important;max-width:min(14rem,30%)}
+  }
+  /* Only the first tab takes the centring auto margin; the rest follow it 4 px apart. */
+  .contents ~ .contents > [role='tab'] {margin-left:4px}
+  [role='tab'][data-active='true'] {--tab-bg:var(--hq-raised);box-shadow:var(--hqc-rim),var(--hqc-lift) !important;
+    .truncate {font-size:12px;line-height:16px;font-weight:600;color:var(--foreground)}}
+}
+/* + beside it: a raised circle like HQ's bar buttons. */
+[role='tablist'] button[aria-label='New session tab'] {width:28px;height:28px;margin-left:6px;border-radius:99px;
+  background:var(--hq-raised);box-shadow:var(--hqc-rim),var(--hqc-lift);color:var(--foreground);opacity:1 !important;
+  .codicon {font-size:13px !important;color:var(--foreground) !important;opacity:1 !important}}
+/* Settings and Layout: one raised capsule of full-ink glyphs (PageBarCapsule). */
+[data-titlebar-cluster='right'] {top:5px !important;right:12px !important;height:28px;padding-inline:4px;gap:0;border-radius:99px;
+  background:var(--hq-raised);box-shadow:var(--hqc-rim),var(--hqc-lift);
+  > button[data-size='icon-titlebar'] {width:30px;height:28px;border-radius:99px;color:var(--foreground);opacity:1;
+    .codicon {font-size:13px !important}}}
+/* Pages have their own headers right under it: there the cluster is flat glyphs, not a raised capsule. */
+body:not(:has([data-chat-surface])) [data-titlebar-cluster='right'] {background:none;box-shadow:none}
+/* Under a sheet the bar dims with everything else. */
+:root:has([data-overlay-surface]) :is([role='tab'][data-closeable],[data-titlebar-cluster='right'],[aria-label='New session tab']) {box-shadow:none !important}
+
+/* --- The transcript's top edge dissolves into the bar over 24 px; under the composer row
+   the page colour rises behind the controls, so nothing shows between +, the field and send. No blur. */
+[data-chat-surface] [data-slot='aui_thread-viewport'] {mask-image:linear-gradient(to bottom,transparent 8px,#0003 18px,#000 30px)}
+[data-chat-surface] [data-slot='composer-dock']:not([data-popped-out])::before {content:'';position:absolute;inset:-20px -24px 0;z-index:-1;
+  pointer-events:none;background:linear-gradient(to bottom,transparent,var(--hq-page) 20px)}
+/* The composer clearance always lays out last (the content is a flex column), so cards added after it still clear the row. */
+/* At rest on the first message it starts clear of that fade. */
+[data-chat-surface] [data-slot='aui_thread-content'] {padding-top:20px;
+  > [data-slot='aui_composer-clearance'] {order:1}}
+
+/* --- Timeline ticks: label-3 capsules, the current one in tint. */
+[data-chat-surface] .thread-timeline-tick {[data-slot='timeline-bar'] {height:2px;width:10px;background:var(--hqc-ink3);opacity:1}
+  &[aria-current] [data-slot='timeline-bar'] {background:var(--hq-tint);width:14px}}
+
+/* --- Composer row (ComposerView): + circle, then the field capsule (text, pickers, mic, voice engine), then the tint
+   circle. The row is inset 20 px so + starts on the bot bubbles' edge and send ends on the user bubbles' edge. */
+html:root body [data-slot='composer-root'] {--composer-control-gap:6px;--composer-surface-pad-x:0px;--composer-surface-pad-y:0px;
+  --composer-input-min-height:22px;--composer-fill:transparent;padding-inline:20px}
+html:root body [data-slot='composer-surface'] {overflow:visible;border-radius:17px;box-shadow:none !important}
+[data-slot='composer-surface'] > :first-child:not([data-slot]) {left:40px;right:40px;inset-block:0;border-radius:17px;
+  background:var(--hq-raised) !important;box-shadow:var(--hqc-rim),var(--hqc-lift)}
+[data-slot='composer-surface']:focus-within > :first-child:not([data-slot]) {box-shadow:0 0 0 1px var(--hq-sep),var(--hqc-lift)}
+/* Desktop dims the whole row when the thread is scrolled up; HQ never does. */
+[data-slot='composer-fade'] {overflow:visible;min-height:28px;opacity:1 !important;
+  > div {min-height:28px;align-items:end;
+    > div:first-child {translate:0 0;align-self:end}
+    > div:has([data-slot='composer-rich-input']) {padding:4px 0 4px 14px;align-self:center}
+    > div:last-child {align-self:center;height:34px}}}
+[data-slot='composer-surface'] {
+  /* + : a 34 px raised circle (Mac size), 16 pt glyph in composerGlyph (ink .74). */
+  button[aria-label='Add context'] {width:34px;height:34px;border-radius:99px;
+    background:var(--hq-raised);box-shadow:var(--hqc-rim),var(--hqc-lift);color:var(--hq-label-2);
+    .codicon {font-size:14px !important}}
+  :is([data-tour='model-pill'],[data-testid='reasoning-pill']) {height:28px;padding-inline:6px;gap:3px;border-radius:99px;
+    font-size:12px;color:var(--hq-label-2);background:transparent;
+    &:is(:hover,[data-state='open']) {background:var(--hq-fill-4)}
+    svg {opacity:1;color:var(--hqc-ink3)}}
+  button[aria-label='Voice dictation'] {width:28px;height:28px;border-radius:99px;color:var(--hq-label-2);
+    .codicon {font-size:14px !important}}
+  /* HQ's mic carries no caret; the voice-engine chevron already marks the menu. */
+  [data-slot='fan-menu-anchor'] > i {opacity:0}
+  /* The voice-engine chevron tucks against the mic as one control (it lays out before send), so the row ends on the circle. */
+  button[aria-label='Voice chat engine'] {order:-1;width:14px;height:32px;min-width:0;margin:0 14px 0 -10px;padding:0;border-radius:99px;
+    background:transparent !important;color:var(--hqc-ink3);
+    :is(svg,.codicon) {width:10px;height:10px;font-size:10px !important}}
+  button[data-variant='default'][data-size='icon'] {width:34px;height:34px;margin:0;border-radius:99px;
+    background:var(--hq-tint) !important;color:#fff !important;
+    svg {width:15px;height:15px;stroke-width:2.4}
+    &:disabled {background:var(--hqc-off) !important;color:var(--hqc-ink3) !important;opacity:1}}
+}
+/* The text: 17 pt body; placeholder in label 3. */
+[data-slot='composer-rich-input'] {font-size:13px !important;line-height:18px !important}
+[data-slot='composer-rich-input'][data-empty]::before {color:var(--hqc-ink3) !important}
+
+/* --- Status stack over the composer (todos, queue, the usage-stats and free-models offers). Desktop draws it as a tab
+   fused to its own composer, so over HQ's inset capsule it poked out wider and behind it. Here it is a raised 14 px card
+   on the field's edges, 10 px above it, no blur; the grip rides that gap. */
+[data-slot='composer-status-stack'] {padding-top:10px;
+  > div {margin:0 60px 10px;padding:4px 0;border:0;border-radius:14px;background:var(--hq-raised);
+    box-shadow:var(--hqc-rim),var(--hqc-lift);backdrop-filter:none;-webkit-backdrop-filter:none}
+  .status-row {margin-inline:4px;padding-block:4px;border-radius:8px;
+    .status-row-content > span {font-size:12px;line-height:16px}}
+  /* An offer: the whole sentence wraps instead of truncating, its choices sit under it as grey capsules, and the last
+     one (Details, Dismiss) is a tint text button at the end. */
+  .status-row:has(> .status-row-icon :is(.codicon-graph,.codicon-account)) {row-gap:8px;padding-block:6px;background:none;
+    .status-row-content > span {white-space:normal;overflow:visible;text-overflow:clip}
+    .status-row-actions {grid-column:3 / 5;grid-row:2;gap:6px;flex-wrap:wrap}
+    .status-row-actions > button {margin:0;height:24px;padding:0 10px;border-radius:99px;background:var(--hq-fill-3);
+      color:var(--foreground) !important;font-size:12px;text-decoration:none;&:hover {background:var(--hq-fill-2)}}
+    .status-row-actions > button:last-child {margin-left:auto;padding:0 4px;background:none;color:var(--hq-tint-text) !important}}
+}
+[data-slot='composer-root'][data-status-stack] .status-drawer-toggle {top:-10px;height:10px}
+
+/* --- Jump to bottom: a 36 px flat circle with a hairline, no count (the owner rejected unread numbers), no blur. */
+.thread-jump-button {width:36px;height:32px;padding:0;gap:0;justify-content:center;border-radius:99px !important;
+  -webkit-backdrop-filter:none !important;backdrop-filter:none !important;background:var(--hq-raised) !important;
+  border:0 !important;box-shadow:var(--hqc-rim),var(--hqc-lift);color:var(--hq-label-2);
+  > span {display:none}
+  .codicon {font-size:13px !important}}
+
+/* --- Empty chat (ChatPlaceholderView): a fresh draft shows the name in Title 2 and one line in subheadline label 2;
+   a bot's empty chat adds its 80 pt head above, 10 pt apart. No wordmark poster. */
+[data-slot='aui_intro'] {translate:0 -20px}
+:is([data-slot='aui_intro'],[data-slot='bot_chat_empty']) {
+  .wordmark {display:block !important;width:auto !important;margin:0 auto 6px !important;text-align:center;
+    color:var(--foreground) !important;mix-blend-mode:normal !important;
+    &, * {font:400 18px/24px -apple-system,system-ui,sans-serif !important;letter-spacing:0 !important;text-transform:none !important}
+    span:not([aria-hidden]) {display:block !important}
+    > [aria-hidden='true'] {display:none}}
+  p.m-0 {font-size:12px;line-height:16px;letter-spacing:0;color:var(--hq-label-2);max-width:30rem;margin-inline:auto;text-wrap:balance}
+}
+/* The draft's lettering arrives in capitals ("HERMES AGENT"): read it as a sentence-case name. */
+[data-slot='aui_intro'] .wordmark, [data-slot='aui_intro'] .wordmark * {text-transform:lowercase !important}
+[data-slot='aui_intro'] .wordmark span:not(:has(span))::first-letter {text-transform:uppercase !important}
+[data-slot='bot_chat_empty'] > div > :first-child {margin-bottom:10px !important;
+  > * {width:80px !important;height:80px !important}
+  svg {width:100%;height:100%}}

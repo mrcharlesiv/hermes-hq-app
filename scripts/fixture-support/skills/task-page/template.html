@@ -1,0 +1,155 @@
+<!doctype html>
+<!-- Hermes HQ Task Page (hermes-hq-push:task-page). The add-on fills this in from the task and what its bot wrote with
+     tasks_update(page=…): every task's page has this one look. Bots never edit this file; change the look here. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="hq-task" content="{{TASK_ID}}">
+<title>{{TITLE}}</title>
+<style>
+  /* The app hands the page the person's theme (--card, --foreground, --muted-foreground, --accent, --border); the
+     second value is used anywhere else (a browser, a shared copy). --hq-radius: the look's card corners. Room at the
+     bottom for the app's floating status note. */
+  :root {
+    --ink: var(--foreground, #1c1c1e); --ink2: var(--muted-foreground, rgba(60,60,67,.75));
+    --tint: var(--accent, #0a84ff); --line: var(--border, rgba(60,60,67,.18)); --box: var(--card, #fff);
+    --page: #f2f2f7; --green: #1c8038; --orange: #c75300; --radius: var(--hq-radius, 16px);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: var(--foreground, #f2f2f7); --ink2: var(--muted-foreground, rgba(235,235,245,.7));
+            --line: var(--border, rgba(84,84,88,.6)); --box: var(--card, #1c1c1e); --page: #000;
+            --green: #30d158; --orange: #ff9f0a; }
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  /* -apple-system-body: the person's own text size (Dynamic Type); every size below is in rem/em. */
+  html { font: -apple-system-body; font-family: -apple-system, system-ui, sans-serif; color: var(--ink);
+         -webkit-text-size-adjust: 100%; }
+  body { margin: 0; padding: 8px 16px 88px; max-width: 760px; margin-inline: auto; line-height: 1.35; }
+  html:not([data-app]) body { background: var(--page); }
+  a { color: var(--tint); text-decoration: none; }
+  h1 { font-size: 1.65rem; line-height: 1.15; font-weight: 700; margin: .35rem 0 .3rem; letter-spacing: -.01em;
+       overflow-wrap: anywhere; }
+  h2 { font-size: 1.12rem; font-weight: 600; margin: 1.5rem 0 .5rem; }
+  .card h2 { margin: 0 0 .35rem; font-size: 1rem; }
+  p { margin: 0 0 .5rem; } p:last-child { margin-bottom: 0; }
+  .muted { color: var(--ink2); }
+  .small { font-size: .82rem; }
+
+  /* Top: status, title, the facts line */
+  .status { display: inline-flex; align-items: center; gap: .4em; font-size: .82rem; font-weight: 600;
+            padding: .3em .75em; border-radius: 999px; color: var(--tone);
+            background: color-mix(in srgb, var(--tone) 15%, transparent); }
+  .status::before { content: ""; width: .5em; height: .5em; border-radius: 50%; background: currentColor; }
+  .t-plain { --tone: var(--ink2); } .t-working { --tone: var(--tint); } .t-ready { --tone: var(--green); }
+  .t-needs { --tone: var(--orange); } .t-done { --tone: var(--green); }
+  .facts { display: flex; flex-wrap: wrap; gap: .25em .9em; font-size: .88rem; color: var(--ink2); }
+  .facts span { white-space: nowrap; }
+
+  /* Cards */
+  .card { background: var(--box); border-radius: var(--radius); padding: .9rem 1rem; margin-top: .75rem;
+          box-shadow: 0 0 0 .5px var(--line); }
+  .needs { box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--orange) 55%, transparent);
+           background: color-mix(in srgb, var(--orange) 9%, var(--box)); }
+  .needs h2 { color: var(--orange); }
+  .summary { font-size: 1.05rem; }
+  .bar { height: .45rem; border-radius: 999px; background: color-mix(in srgb, var(--ink2) 22%, transparent);
+         overflow: hidden; margin: .7rem 0 .35rem; }
+  .bar i { display: block; height: 100%; border-radius: inherit; background: var(--tint); }
+  .bar.full i { background: var(--green); }
+  .next { display: flex; gap: .6em; align-items: baseline; margin-top: .7rem; padding-top: .7rem;
+          border-top: .5px solid var(--line); }
+  .label { font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--ink2);
+           flex: none; }
+
+  /* Lists inside cards: rows with hairlines between */
+  .rows { list-style: none; margin: 0; padding: 0 1rem; }
+  .rows > li { display: flex; gap: .7em; align-items: flex-start; padding: .7rem 0; }
+  .rows > li + li { border-top: .5px solid var(--line); }
+  .rows .grow { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .check { flex: none; width: 1.25em; height: 1.25em; margin-top: .05em; border-radius: 50%;
+           border: 1.5px solid color-mix(in srgb, var(--ink2) 70%, transparent); display: grid; place-items: center; }
+  .done .check { background: var(--green); border-color: var(--green); }
+  .done .check::after { content: ""; width: .32em; height: .6em; border: solid #fff; border-width: 0 2px 2px 0;
+                        transform: translateY(-.08em) rotate(45deg); }
+  .done .grow { color: var(--ink2); }
+  .who { flex: none; font-size: .78rem; font-weight: 600; color: var(--ink2); padding: .15em .55em;
+         border-radius: 999px; background: color-mix(in srgb, var(--ink2) 14%, transparent); margin-top: .1em; }
+  .icon { flex: none; width: 1.9em; height: 1.9em; border-radius: .55em; display: grid; place-items: center;
+          color: var(--tint); background: color-mix(in srgb, var(--tint) 13%, transparent); }
+  .icon svg { width: 1.05em; height: 1.05em; }
+  .sub { display: block; font-size: .8rem; color: var(--ink2); overflow-wrap: anywhere; }
+
+  /* Numbers */
+  .numbers { display: grid; grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr)); gap: .6rem; margin-top: .75rem; }
+  .numbers .card { margin: 0; }
+  .numbers b { display: block; font-size: 1.5rem; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums;
+               overflow-wrap: anywhere; }
+  .numbers span { display: block; font-size: .85rem; color: var(--ink2); margin-top: .2rem; }
+
+  /* Prose (the bot's Markdown) */
+  .prose ul, .prose ol { margin: .2rem 0 .5rem; padding-left: 1.3em; } .prose li { margin: .2rem 0; }
+  .prose ul.tick { list-style: none; padding-left: 0; } .prose ul.tick li { display: flex; gap: .55em; }
+  .prose h3 { font-size: 1rem; margin: .8rem 0 .3rem; } .prose h3:first-child { margin-top: 0; }
+  .prose code { font: .88em ui-monospace, SFMono-Regular, Menlo, monospace; padding: .1em .35em; border-radius: .35em;
+                background: color-mix(in srgb, var(--ink2) 14%, transparent); }
+  .prose blockquote { margin: .3rem 0; padding-left: .8em; border-left: 3px solid var(--line); color: var(--ink2); }
+
+  /* Tables scroll sideways inside their card */
+  .scroll { overflow-x: auto; margin: -.9rem -1rem; padding: .3rem 0; }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+  th, td { text-align: left; padding: .55rem 1rem; vertical-align: top; }
+  th { font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--ink2); }
+  td { border-top: .5px solid var(--line); min-width: 6rem; }
+
+  /* Timeline */
+  .timeline > li { flex-direction: column; gap: .15em; }
+  .timeline time { font-size: .78rem; color: var(--ink2); font-variant-numeric: tabular-nums; }
+  .timeline .grow { width: 100%; }
+  details { border-top: .5px solid var(--line); }
+  details > summary { list-style: none; cursor: pointer; color: var(--tint); padding: .7rem 1rem; font-weight: 500; }
+  details > summary::-webkit-details-marker { display: none; }
+  details[open] > summary { display: none; }
+  .note { margin-top: .4rem; padding: .6rem .75rem; border-radius: .7rem;
+          background: color-mix(in srgb, var(--ink2) 9%, transparent); }
+
+  .foot { margin-top: 1.6rem; text-align: center; font-size: .8rem; color: var(--ink2); }
+  .ask { display: none; margin: 1.2rem auto 0; font: inherit; font-weight: 600; color: var(--tint); border: 0;
+         padding: .7rem 1.3rem; border-radius: 999px; background: color-mix(in srgb, var(--tint) 14%, transparent); }
+  .talks .ask { display: block; }
+  .ask:active { opacity: .55; }
+</style>
+</head>
+<body>
+{{BODY}}
+<script>
+  // In the app (it hands the page --card): its theme paints the page, no page colour of our own. "Ask for an Update"
+  // shows only where the page can reach the bot (the app's task page; not a shared copy).
+  if (getComputedStyle(document.documentElement).getPropertyValue("--card").trim()) document.documentElement.dataset.app = "1";
+  if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.hermes) document.body.classList.add("talks");
+  // Times in the reader's own zone and words: "Today 3:30 PM", "Tue 3:30 PM", "Nov 3" (the page is a picture of
+  // the task at one moment, so no "5 minutes ago").
+  (function () {
+    var now = new Date(), day = 864e5;
+    function start(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); }
+    var clock = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+    var weekday = new Intl.DateTimeFormat(undefined, { weekday: "short" });
+    var date = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
+    var dateYear = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" });
+    function words(d, dayOnly) {
+      var gap = Math.round((start(d) - start(now)) / day), when;
+      if (gap === 0) when = "Today"; else if (gap === -1) when = "Yesterday"; else if (gap === 1) when = "Tomorrow";
+      else if (Math.abs(gap) < 7) when = weekday.format(d);
+      else when = (d.getFullYear() === now.getFullYear() ? date : dateYear).format(d);
+      return dayOnly ? when : when + " " + clock.format(d);
+    }
+    document.querySelectorAll("time[datetime]").forEach(function (t) {
+      var value = t.getAttribute("datetime"), dayOnly = /^\d{4}-\d{2}-\d{2}$/.test(value);
+      var d = dayOnly ? new Date(value + "T12:00:00") : new Date(value);
+      if (!isNaN(d)) t.textContent = (t.dataset.lead || "") + words(d, dayOnly);
+    });
+  })();
+</script>
+</body>
+</html>

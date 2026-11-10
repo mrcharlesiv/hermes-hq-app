@@ -1,0 +1,22 @@
+[
+ {
+  "_sent": {
+   "jsonrpc": "2.0",
+   "id": 5,
+   "method": "prompt.submit",
+   "params": {
+    "session_id": "5cc537d1",
+    "text": "Are you there?",
+    "profile": "default"
+   }
+  }
+ },
+ {
+  "jsonrpc": "2.0",
+  "id": 5,
+  "error": {
+   "code": 4009,
+   "message": "session busy"
+  }
+ }
+]

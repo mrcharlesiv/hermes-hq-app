@@ -1,0 +1,13 @@
+{
+ "jsonrpc": "2.0",
+ "method": "event",
+ "params": {
+  "type": "gateway.ready",
+  "payload": {
+   "heartbeat": true,
+   "change_events": true,
+   "replay_epoch": "build47",
+   "desktop_contract": 8
+  }
+ }
+}

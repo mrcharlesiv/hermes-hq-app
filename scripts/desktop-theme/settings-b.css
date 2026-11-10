@@ -1,0 +1,165 @@
+/* ---- Settings, page-specific: Browser, Passwords & Logins, Memory, Voice, Advanced, Notifications ---- */
+
+/* ---- Passwords & Logins ---- */
+[data-overlay-surface] main:has(nav[aria-label='Passwords & Logins']) section {
+  /* Intro paragraphs become footers: 13pt grey, inset to the text. */
+  > div > p.mb-2 {margin:8px 0 0;padding:0 16px;font-size:12px;line-height:16px;letter-spacing:-.08px;color:var(--hq-section)}
+  /* Rows; on Saved credentials "Add…" as the card's last row; then the explanation as a footer. */
+  > div {display:flex;flex-direction:column}
+  > div > * {order:1}
+  > div > :first-child {order:0}
+  > div > div:has(> [data-slot=badge] + * > [data-slot=button]) {
+    order:2;flex-direction:row-reverse;margin:0;padding:0 16px;min-height:32px;background:var(--hq-cell);
+    border-radius:0 0 var(--hq-card-r) var(--hq-card-r);background-image:linear-gradient(var(--hq-sep),var(--hq-sep));background-size:calc(100% - 16px) .5px;background-position:100% 0;background-repeat:no-repeat;
+    > :last-child {margin-left:0}
+    [data-slot=button] {height:auto;gap:12px;padding:0;border:0;background:none;box-shadow:none;font-size:13px;line-height:18px;font-weight:400;letter-spacing:-.08px;color:var(--hq-link)}
+    [data-slot=button] svg {width:22px;height:22px;stroke-width:1.75}
+    [data-slot=badge] {margin-left:auto;padding:0;border:0;background:none;font-size:12px;line-height:16px;font-weight:400;letter-spacing:-.08px;color:var(--hq-label-2)}
+  }
+  > div > p {order:3}
+  > div > .\@container:not(:has(~ .\@container)) {margin-bottom:0!important}
+  > div:has(> div > [data-slot=badge] + * > [data-slot=button]) > .\@container:not(:has(~ .\@container)) {border-bottom-left-radius:0!important;border-bottom-right-radius:0!important}
+
+  /* Kind and status tags read as quiet grey text, not coloured chips. */
+  .\@container .min-w-0 [data-slot=badge] {padding:0;border:0;border-radius:0;background:none;font-size:12px;line-height:16px;font-weight:400;letter-spacing:-.08px;color:var(--hq-label-2)}
+  .\@container .mt-1 .gap-x-2 {column-gap:5px}
+
+  /* Password managers: Unlock is a borderless tint text button, clear of the switch. */
+  .\@container .justify-end:has(> [data-slot=button]) {gap:12px}
+  .\@container .justify-end > [data-slot=button]:is([data-variant=outline],[data-variant=secondary]) {
+    height:auto;padding:0 4px;border:0;background:none;box-shadow:none;font-size:13px;line-height:18px;font-weight:400;letter-spacing:-.08px;color:var(--hq-link);
+    svg {display:none}
+  }
+
+  /* Saved credentials: the kind leads the detail line ("Login · email · host"), as in vault-light.png. */
+  > div > .\@container > .grid > .min-w-0 {
+    display:grid;grid-template-columns:auto minmax(0,1fr);align-items:baseline;
+    > :first-child, > :first-child > span, > :first-child > span > span:has(> [data-slot=badge]) {display:contents}
+    > :first-child .truncate {grid-column:1/-1;grid-row:1;font-size:13px;line-height:18px;letter-spacing:-.08px}
+    [data-slot=badge] {grid-column:1;grid-row:2;margin-top:2px}
+    [data-slot=badge]::after {content:'\00b7';margin-left:1px;margin-right:5px}
+    > .mt-1 {grid-column:2;grid-row:2;min-width:0}
+  }
+  /* Password managers: the status is the subtitle; the explanation follows on its own line. */
+  > div > .\@container:not(:has([aria-label='Remove saved item'])) > .grid > .min-w-0 {
+    [data-slot=badge] {grid-column:1/-1}
+    [data-slot=badge]::after {content:none}
+    > .mt-1 {grid-column:1/-1;grid-row:3;margin-top:0}
+  }
+}
+
+/* Delete: a quiet glyph at rest, red on hover. */
+[data-overlay-surface] main [aria-label='Remove saved item'] {width:28px;height:28px;color:var(--hq-label-3);
+  svg {width:17px;height:17px}
+  &:hover {background:var(--hq-fill-3);color:var(--hq-red-text)}
+}
+
+/* ---- Memory provider options (Honcho): rows of the same card, no indent or coloured rule; title left, value right ---- */
+#setting-field-memory\.provider > section {padding:0;
+  /* The disclosure row: title at the text inset, status as a subtitle under it, "Full config…" then the chevron trailing. */
+  > :first-child {position:relative;min-height:32px;padding:11px 0;gap:16px;box-shadow:0 -.5px 0 var(--hq-sep);
+    > button:first-child {display:grid;grid-template-columns:minmax(0,1fr);row-gap:2px;align-items:center;
+      > span:not([data-slot]) {grid-row:1}
+      > [data-slot=badge] {grid-row:2}
+      > i {position:absolute;right:0;top:50%;margin-top:-6.5px;width:13px;font-size:12px!important;line-height:13px;color:var(--hq-label-3);opacity:1}
+    }
+    [data-slot=badge] {padding:0;border:0;background:none;font-size:12px;line-height:16px;font-weight:400;letter-spacing:-.08px;color:var(--hq-label-2)}
+    > [data-slot=button] {height:auto;margin-right:25px;padding:0;border:0;background:none;box-shadow:none;font-size:13px;line-height:18px;font-weight:400;letter-spacing:-.08px;color:var(--hq-link);
+      svg {display:none}
+    }
+  }
+  > :nth-child(2) {margin:0;padding:0;border-left:0;
+    > * {border-bottom:0;box-shadow:0 -.5px 0 var(--hq-sep)}
+  }
+  .\@container > .grid {grid-template-columns:minmax(0,1fr) minmax(10rem,16rem);align-items:center;column-gap:16px;
+    > :last-child {justify-self:end;justify-content:flex-end;width:100%}
+    > :last-child > .flex-col {width:100%;align-items:flex-end;gap:0}
+  }
+  input[data-slot=input] {font-family:inherit;font-size:13px;letter-spacing:-.08px;text-overflow:ellipsis}
+  input[data-slot=input]:not(:focus) {width:100%;color:var(--hq-label-2);text-align:right}
+  .font-mono {align-self:flex-end;font-family:inherit;font-size:12px;line-height:16px;letter-spacing:-.08px;color:var(--hq-label-2)}
+  .font-mono svg {color:var(--hq-green-text)}
+  /* The API key reads "Set" in place of the placeholder while nothing is typed. */
+  .flex-col:has(> .font-mono) {position:relative}
+  .flex-col:has(> .font-mono) > input:placeholder-shown:not(:focus)::placeholder {color:transparent}
+  .flex-col > input:placeholder-shown:not(:focus) + .font-mono {position:absolute;right:0;top:50%;transform:translateY(-50%);pointer-events:none;font-size:13px;line-height:18px;letter-spacing:-.08px}
+  .flex-col > input:is(:focus,:not(:placeholder-shown)) + .font-mono {display:none}
+  .flex-col > .font-mono svg {width:15px;height:15px}
+}
+
+/* ---- Notifications: the switches, then the explanation as the card's footer, then Send Test Notification as its own
+   one-row card with its note under it ---- */
+[data-overlay-surface] main section > div:has(> #setting-field-notifications\.enable-all) {display:flex;flex-direction:column;
+  > * {order:1}
+  > p:first-child {order:2;margin:8px 0 0;padding:0 16px;font-size:12px;line-height:16px;letter-spacing:-.08px;color:var(--hq-section)}
+  > div:not(.\@container):has(> [data-slot=button]) {order:3;gap:8px;margin-top:24px}
+  > div:not(.\@container) > [data-slot=button] {justify-content:flex-start;width:100%;height:auto;min-height:32px;padding:0 16px;border:0;border-radius:var(--hq-card-r);
+    background:var(--hq-cell);box-shadow:none;font-size:13px;line-height:18px;font-weight:400;letter-spacing:-.08px;color:var(--hq-link);
+    &:hover {background:var(--hq-cell);box-shadow:inset 0 0 0 100vmax var(--hq-fill-4)}
+    svg {display:none}
+  }
+  > div:not(.\@container) > p {padding:0 16px;font-size:12px;line-height:16px;letter-spacing:-.08px;color:var(--hq-section)}
+  html:root body & > .\@container:not(:has(~ .\@container)) {margin-bottom:0}
+}
+
+/* Completion sound: the picker hugs Preview, which is a tint text button. */
+#setting-field-notifications\.completion-sound {
+  [data-slot=select-trigger] {min-width:0;width:auto}
+  [data-slot=button][data-variant=outline] {height:auto;padding:0 0 0 12px;border:0;background:none;box-shadow:none;font-size:13px;line-height:18px;font-weight:400;letter-spacing:-.08px;color:var(--hq-link);
+    &:hover {background:none;opacity:.7}
+    svg {display:none}
+  }
+}
+
+/* ---- Voice: the read-only shortcut note is the card's footer: one 13pt grey paragraph under it, not a card ---- */
+[data-overlay-surface] main:has(> div > nav[aria-label=Voice]) section > div {
+  html:root body & > .\@container:not([id]):not(:has(button,input,[role=switch])) {order:2!important;margin:8px 0 0!important;padding:0 16px!important;border-radius:0!important;background:none!important;box-shadow:none!important;
+    > .grid {display:block;padding:0!important;min-height:0!important}
+    .min-w-0 {line-height:16px;font-size:12px}
+    .min-w-0 > * {display:inline;margin:0;font-size:12px;line-height:16px;font-weight:400;letter-spacing:-.08px;color:var(--hq-section)!important}
+  }
+  & > .\@container:not([id]):not(:has(button,input,[role=switch])) .min-w-0 > :first-child::after {content:': '}
+  html:root body &:has(> .\@container:not([id]) > .grid > .min-w-0:only-child) {display:flex;flex-direction:column}
+  &:has(> .\@container:not([id]) > .grid > .min-w-0:only-child) > * {order:1}
+  &:has(> .\@container:not([id]) > .grid > .min-w-0:only-child) > :first-child {order:0}
+}
+
+/* ---- Advanced ---- */
+/* Keep computer awake: an iOS segmented control (13pt) on the title line, not centred on the paragraph. */
+#setting-field-advanced\.keep-awake {
+  .inline-grid:has(> button[aria-pressed]) {width:auto;grid-auto-columns:max-content}
+  .inline-grid > button[aria-pressed] {padding:0 12px;font-size:12px;line-height:16px;letter-spacing:-.08px;font-weight:500}
+  html:root body [data-overlay-surface] & > .grid > :last-child {align-self:start;margin-top:-5px}
+}
+/* Quick Entry: room for the default shortcut; the status line as a footnote. */
+#setting-field-advanced\.quick-entry-shortcut {
+  input[data-slot=input] {min-width:17rem}
+  .min-w-0 > .mt-1 + .mt-1 {margin-top:2px;font-size:12px;line-height:16px;letter-spacing:-.08px;color:var(--hq-green-text)}
+}
+/* Run onboarding again: a tint text action. */
+[data-overlay-surface] main:has(> div > nav[aria-label=Advanced]) section > div > .\@container:not([id]) [data-slot=button][data-variant=outline] {
+  height:auto;padding:0;border:0;background:none;box-shadow:none;font-size:13px;line-height:18px;font-weight:400;letter-spacing:-.08px;color:var(--hq-link);
+  &:hover {background:none;opacity:.7}
+}
+
+/* Long values in text fields end in an ellipsis, never a hard cut. */
+[data-overlay-surface] main:has(> div > nav:is([aria-label=Advanced],[aria-label=Voice],[aria-label=Browser],[aria-label='Memory & Context'])) :is([id^=setting-field-],.\@container) input[data-slot=input]:not(:focus):not([role=combobox]) {text-overflow:ellipsis}
+
+/* Hairlines between rows that sit straight on the page (Desktop & startup, Passwords, Notifications) are inset 16px
+   on the leading edge only. */
+html:root body [data-overlay-surface] main:has(> div > nav:is([aria-label=Advanced],[aria-label='Passwords & Logins'],[aria-label=Notifications])) section > div > .\@container + .\@container {
+  box-shadow:none!important;background-image:linear-gradient(var(--hq-sep),var(--hq-sep))!important;background-size:calc(100% - 16px) .5px!important;background-position:100% 0!important;background-repeat:no-repeat!important}
+
+/* A field alone in its card (ConfigPages.swift: one Section per field): a single-line row, its description as the
+   grey footer under the card. The card is drawn behind the first grid line only. */
+html:root body [data-overlay-surface] main:has(> div > nav:is([aria-label=Advanced],[aria-label=Browser],[aria-label=Voice],[aria-label='Memory & Context'])) section > div > .grid.gap-1 {
+  &:has(> [id^=setting-field-]:only-child) {padding:0!important;background:none!important;box-shadow:none}
+  > [id^=setting-field-]:only-child > .\@container > .grid {isolation:isolate;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:0;padding:0!important;min-height:0!important;
+    &::before {content:'';grid-row:1;grid-column:1/-1;align-self:stretch;z-index:-1;border-radius:var(--hq-card-r);background:var(--hq-cell)}
+    > .min-w-0:first-child {display:contents;
+      > :first-child {grid-row:1;grid-column:1;min-height:32px;padding:7px 12px 7px 14px;display:flex;align-items:center}
+      > .mt-1 {grid-row:2;grid-column:1/-1;margin:8px 0 0;padding:0 16px;font-size:12px;line-height:16px;letter-spacing:-.08px;color:var(--hq-section);-webkit-line-clamp:none}
+    }
+    > :last-child:not(:first-child) {grid-row:1;grid-column:2;align-self:center;align-items:center;padding-right:16px}
+  }
+}

@@ -1,0 +1,219 @@
+/* Global foundation: tokens, type scale, page backgrounds and the shared controls. Page-specific rules live in the page areas. */
+
+/* ---- Colour tokens (HQ's Desktop Look) ---- */
+body {--dt-scrollbar-thumb:#000;--hq-link:var(--hq-tint-text);--hq-label-2:rgb(60 60 67/.6);--hq-label-3:rgb(60 60 67/.3);--hq-section:var(--hq-label-2);--hq-green-text:#248a3d;--hq-orange-text:#c93400;--hq-red-text:#d70015;--ui-success:#34c759;--ui-bg-secondary:var(--hq-fill-2);--ui-bg-tertiary:var(--hq-fill-3);--ui-bg-quaternary:var(--hq-fill-4);--ui-bg-quinary:rgb(118 118 128/.06);--chrome-action-hover:var(--hq-fill-4);--ui-text-quaternary:var(--hq-label-3)}
+html:root.dark body {--dt-scrollbar-thumb:#fff;--hq-label-2:rgb(235 235 245/.6);--hq-label-3:rgb(235 235 245/.3);--hq-green-text:#30d158;--hq-orange-text:#ff9f0a;--hq-red-text:#ff453a;--ui-success:#30d158;--ui-bg-quinary:rgb(118 118 128/.1)}
+:is(main,[data-overlay-surface]) {--ui-text-secondary:var(--hq-label-2)}
+:is(main,[data-overlay-surface]:not(:has(main))) {--color-muted-foreground:var(--hq-label-2)}
+
+/* ---- Page backgrounds: grouped grey off the chat ---- */
+/* :is() takes the glass scope's specificity for both */
+:is(:root[data-hermes-glass][data-hermes-glass-scope],html) [data-tree-group]:has(main):not(:has([data-slot=aui_thread-content])) {--ui-editor-surface-background:var(--hq-grouped);--ui-chat-surface-background:var(--hq-grouped);--hq-card:var(--hq-cell);background-color:var(--hq-grouped)}
+html:root.dark [data-tree-group]:has(main):not(:has([data-slot=aui_thread-content])) {--hq-grouped:#1c1c1e;--hq-cell:#2c2c2e}
+
+/* ---- Type scale (SF: 17/22 body -.43, 15/20 subheadline -.23, 13/18 footnote -.08, 12/16 caption) ---- */
+:is(main,[data-tree-group] main) {--conversation-text-font-size:13px;--conversation-line-height:18px;--conversation-caption-font-size:12px;--conversation-caption-line-height:16px;--ui-text-tertiary:var(--hq-label-2);font-size:13px;line-height:18px;letter-spacing:-.08px;
+  /* A row's title, and its secondary line (HQ: subheadline in secondary label) */
+  & .text-\[length\:var\(--conversation-text-font-size\)\] {font-weight:400;line-height:20px;letter-spacing:-.23px;color:var(--ui-text-primary)}
+  & .text-\[length\:var\(--conversation-caption-font-size\)\]:is(.text-\(--ui-text-tertiary\),.text-muted-foreground) {color:var(--hq-label-2)}
+  & [id^=setting-field-] .min-w-0>.text-\[length\:var\(--conversation-caption-font-size\)\]:not(#\#) {font-size:12px;line-height:16px;letter-spacing:-.08px}
+  /* A card's title */
+  & .text-sm.font-medium:not([data-slot],button) {font-size:13px;line-height:18px;font-weight:600;letter-spacing:-.08px}
+}
+/* Section headers: 17 semibold, section grey */
+html:root body .grid.gap-2:has(> .flex.flex-wrap>button.rounded-full.border)>.font-medium:first-child,
+html:root body :is(main,[data-tree-group] main) h4.uppercase,
+html:root body :is(main,[data-overlay-surface]:not(:has(main))) .uppercase:is([class*='text-[0.6'],[class*='text-[0.7'],[class*=tracking-]):not([data-slot],button,span) {font-size:13px;line-height:18px;font-weight:600;letter-spacing:-.08px;color:var(--hq-section);padding-inline:0;margin-bottom:6px}
+html:root body [data-overlay-surface]:not(:has(main)) .uppercase:is([class*='text-[0.6'],[class*='text-[0.7']):not([data-slot],button,span) {padding-left:16px}
+/* Footnotes under a card */
+html:root body [data-overlay-surface] main :is(p.text-xs.text-muted-foreground,div.text-right[class*='text-[0.65rem]']):not([id^=setting-field-] *,.flex>*) {color:var(--hq-section);padding-inline:16px}
+/* Desktop's small sizes on HQ's scale */
+:is(main,[data-tree-group]:has(main),[data-overlay-surface]:not(:has(main))) {
+  & .text-xs:not([data-slot=sidebar] *,[data-slot],button,input) {font-size:12px;line-height:16px;letter-spacing:-.08px}
+  & .text-sm:not([data-slot=sidebar] *,[data-slot],button,input) {font-size:12px;line-height:16px}
+  & :is([class*='text-[0.6'],[class*='text-[0.7'],[class*='text-[10px]'],[class*='text-[11px]']):not([data-slot=sidebar] *,[data-slot=row-button] *,[data-slot],button,input,kbd) {font-size:12px;line-height:16px;letter-spacing:0}
+}
+:is(main,[data-overlay-surface]:not(:has(main))) :is(:is(pre,code).font-mono,.font-mono[class*='text-[']) {font-size:12px;line-height:16px;letter-spacing:0}
+:is(main,[data-overlay-surface]:not(:has(main))) h3.font-semibold[class*='text-[0.9'] {font-size:18px;line-height:22px;letter-spacing:-.45px}
+/* Field labels over a capsule field */
+[data-overlay-surface] main :is(label.grid.text-xs:has(> :is(input,textarea,[data-slot])),fieldset.text-xs>legend) {letter-spacing:-.08px}
+
+/* ---- Buttons: capsules, subheadline semibold ---- */
+[data-slot=button]:not([data-slot=composer-bounds] *) {
+  &:is([data-size=default],[data-size=sm]) {min-height:32px;padding:0 16px;font-size:12px;line-height:16px;font-weight:600;letter-spacing:-.08px}
+  &[data-size=sm] {min-height:32px;padding-inline:14px}
+  &[data-size=lg] {min-height:30px;padding:0 20px;font-size:13px;line-height:18px;font-weight:600;letter-spacing:-.08px}
+  &:is([data-size=default],[data-size=sm],[data-size=lg]) svg {width:16px;height:16px}
+}
+[data-slot=button][data-variant=ghost]:not([data-size^=icon]) {color:var(--hq-link);&:hover {background:var(--hq-fill-3);color:var(--hq-link)}}
+[data-slot=button][data-variant=default]:disabled {opacity:1;background:var(--hq-fill-2);color:var(--hq-label-3)}
+/* Text actions and links */
+[data-slot=button]:is([data-variant=link],[data-variant=text],[data-variant=textStrong]),
+[data-slot=button]:is([data-variant=link],[data-variant=text],[data-variant=textStrong]):hover,
+:is([data-overlay-surface],[data-tree-group] main) a[href]:not([data-slot=button]) {color:var(--hq-link)}
+[data-overlay-surface] main [id^=setting-field-] [data-slot=button][data-variant=text] {font-size:12px;line-height:16px;font-weight:400}
+
+/* ---- Switch: iOS's long-pill shape at Mac size, a 46x20 track and 26x16 thumb; off is iOS systemFill ---- */
+[data-slot=switch],[data-slot=switch].w-7 {width:40px;height:20px;border:0}
+html:root.dark [data-slot=switch][data-state=unchecked] {background:rgb(120 120 128/.32)}
+[data-slot=switch] [data-slot=switch-thumb],[data-slot=switch].w-7 [data-slot=switch-thumb] {width:22px;height:16px;border-radius:999px}
+[data-slot=switch] [data-slot=switch-thumb][data-state=checked],[data-slot=switch].w-7 [data-slot=switch-thumb][data-state=checked] {translate:14px 0}
+
+/* ---- Fields: capsules (text areas take the card radius) ---- */
+:is([data-slot=input],input.desktop-input-chrome):not([data-slot=composer-rich-input]) {min-height:28px;padding-inline:12px;border-radius:999px;font-size:12px;line-height:16px;letter-spacing:-.08px}
+[data-slot=textarea]:not([data-slot=composer-rich-input]) {border-radius:var(--hq-card-r)}
+:is([data-slot=input],[data-slot=textarea],input.desktop-input-chrome)::placeholder {color:var(--hq-label-3)}
+:is([data-slot=input],[data-slot=textarea],[data-slot=select-trigger],.desktop-input-chrome):not([data-slot=composer-rich-input]):is(:focus,:focus-within,[data-state=open]) {border-color:transparent;box-shadow:0 0 0 3px color-mix(in srgb,var(--hq-tint) 30%,transparent);caret-color:var(--hq-tint)}
+:is([data-slot=input],[data-slot=textarea]):not([data-slot=composer-rich-input]):focus:not(:focus-visible) {box-shadow:none}
+/* Text fields inside a settings cell: the value sits right, in secondary label */
+[data-overlay-surface] main {
+  & :is([id^=setting-field-],.\@container:not(:has(label))) :is([data-slot=input],input.desktop-input-chrome):not([role=combobox]) {min-height:24px;height:24px;padding:0 10px;border-radius:999px;background:var(--hq-fill-3);text-align:right;color:var(--ui-text-primary)}
+  & :is([id^=setting-field-],.\@container:not(:has(label))) input[role=combobox]:not(:focus) {background:transparent;text-align:right}
+  & [data-slot=popover-anchor]:not(#\#)>input[role=combobox] {padding-right:15px;color:var(--hq-link)}
+  & [data-slot=popover-anchor]>input[role=combobox] + button {right:0;color:var(--hq-link)}
+  & input[type=number]::-webkit-inner-spin-button {-webkit-appearance:none;margin:0}
+}
+/* Search fields on pages: the sidebar's capsule (10/12 inset, 17px glyph) */
+:is([data-overlay-surface],[data-tree-group]:has(main)) div.inline-flex.border-b:not([data-slot=sidebar] *):has(> input[class*=field-sizing]) {min-height:32px;min-width:min(240px,100%);padding:0 12px 0 10px;border:0;border-radius:999px;background:var(--hq-fill-3);opacity:1;
+  &>input {flex:1 1 auto;height:32px;font-size:13px;line-height:18px;letter-spacing:-.08px;&::placeholder {color:var(--hq-label-2);opacity:.8}}
+  &>svg {width:17px;height:17px;color:var(--hq-label-2)}
+}
+
+/* ---- Pickers: one look everywhere, iOS's menu picker: the value and a small up/down chevron in the tint, no fill ---- */
+[data-slot$=select-trigger]:not([data-slot=composer-rich-input]) {min-height:32px;padding-inline:8px;border-radius:999px;background:transparent;font-size:12px;line-height:16px;letter-spacing:-.08px;color:var(--hq-link)}
+[data-overlay-surface] main :is([id^=setting-field-],.\@container) :is([data-slot$=select-trigger],[data-slot=popover-trigger][data-variant=outline]) {width:auto;min-width:0;max-width:100%;margin-left:auto;min-height:28px;padding:0 0 0 8px;justify-content:flex-end;gap:6px;background:transparent;font-size:13px;line-height:18px;letter-spacing:-.08px;
+  &:is(:hover,:focus,:focus-within,[data-state=open]) {background:transparent;box-shadow:none;color:var(--hq-link)}
+}
+:is([id^=setting-field-],[data-slot$=select-trigger],[data-slot=popover-anchor]) .codicon-chevron-down {
+  &:not(#\#) {position:relative;flex:none;width:9px;height:14px;font-size:0!important;opacity:1}
+  &::before,&::after {content:'';position:absolute;left:2px;width:4px;height:4px;border:solid currentColor;transform:rotate(45deg)}
+  &::before {top:2px;border-width:1.6px 0 0 1.6px}
+  &::after {bottom:2px;border-width:0 1.6px 1.6px 0}
+}
+
+/* ---- Sheet close buttons: one 30 px filled circle */
+:is([data-overlay-surface] [data-slot=button]:has(>.codicon-close),[data-slot=dialog-close-button]):not(#\#) {width:30px;height:30px;border-radius:999px;background:var(--hq-fill-3);color:var(--hq-label-2)}
+
+/* ---- Segmented controls and tabs ---- */
+.inline-grid.auto-cols-fr.grid-flow-col:has(> button[aria-pressed]) {border-radius:999px}
+.inline-grid.auto-cols-fr.grid-flow-col>button[aria-pressed] {min-height:28px;padding:0 14px;border-radius:999px;color:var(--ui-text-primary);
+  &[aria-pressed=true] {box-shadow:0 3px 8px rgb(0 0 0/.12),0 3px 1px rgb(0 0 0/.04)}
+}
+:is(div:has(> button.group\/text-tab),[data-slot=tabs-list]) {border-radius:999px}
+:is(button.group\/text-tab,[data-slot=tabs-trigger]) {height:28px;padding-inline:14px;border-radius:999px}
+/* One segment type everywhere: 15/20 regular, the selected one semibold */
+:is(.inline-grid.auto-cols-fr.grid-flow-col>button[aria-pressed],button.group\/text-tab,[data-slot=tabs-trigger]):not(#\#) {font-size:12px;line-height:16px;font-weight:400;letter-spacing:-.08px;
+  &:is([aria-pressed=true],[data-active=true],[data-state=active]) {font-weight:600}}
+button.group\/text-tab>span + span {font-size:12px;color:var(--hq-label-3)}
+
+/* ---- Badges: capsules, tinted by tone ---- */
+:is(main,[data-overlay-surface]) [data-slot=badge] {
+  &:not([aria-hidden=true]) {border-radius:999px;padding-inline:8px;font-size:12px;line-height:16px;letter-spacing:0}
+  &[class*=bg-muted] {background:var(--hq-fill-3);color:var(--hq-label-2)}
+  &[class*='bg-primary/10'] {background:color-mix(in srgb,var(--hq-tint) 12%,transparent)}
+  &[class*=emerald] {background:rgb(52 199 89/.14);color:var(--hq-green-text)}
+  &[class*=amber] {background:rgb(255 149 0/.14);color:var(--hq-orange-text)}
+  &[class*=destructive] {background:rgb(255 59 48/.12);color:var(--hq-red-text)}
+}
+
+/* ---- Chips ("Applies to"): one look on every page. Unselected: grey fill. Selected: pale tint fill, tint text. ---- */
+.grid.gap-2>.flex.flex-wrap {gap:6px;
+  &>button.rounded-full.border {flex:none;min-height:24px;padding:0 10px;border:0;font-size:12px;line-height:18px;letter-spacing:-.08px;background:var(--hq-fill-3);color:var(--ui-text-primary);
+    &:hover {background:var(--hq-fill-2)}
+    &[class*=ui-bg-tertiary]:not(#\#) {background:color-mix(in srgb,var(--hq-link) 15%,transparent);color:var(--hq-link);font-weight:600}
+  }
+}
+
+/* ---- Slider ---- */
+input[data-slot=slider] {border-radius:999px;background:var(--hq-fill);
+  &::-webkit-slider-thumb {-webkit-appearance:none;appearance:none;width:20px;height:20px;border:0;border-radius:50%;background:#fff;box-shadow:var(--hq-thumb-shadow),0 0 0 .5px rgb(0 0 0/.04)}
+}
+
+/* ---- Keyboard shortcuts: quiet footnote glyphs ---- */
+:is(main,[data-overlay-surface]) {
+  & :is(kbd[class*=dt-font-kbd],[data-slot=kbd]) {min-width:0;height:auto;padding:0;border:0;background:transparent;box-shadow:none;font-size:12px;line-height:16px;color:var(--hq-label-3)}
+  & [data-slot=kbd-group] {gap:1px}
+}
+
+/* ---- Focus and scrollbars ---- */
+:is([data-slot=button],[data-slot=switch],[data-slot=checkbox]):focus-visible {outline:2px solid color-mix(in srgb,var(--hq-tint) 60%,transparent);outline-offset:2px;box-shadow:none}
+::-webkit-scrollbar-thumb {border:2px solid transparent;background-clip:padding-box;border-radius:999px}
+
+/* ==== Page blocks that build on the shared controls above. They load here, before the area files, so each area's own
+   rules can still refine them; the tag says which page each one serves. ==== */
+
+/* settings-a: Main model. Provider and model are one card of picker rows, in the shared picker look (tint value, tint chevron). */
+section:has(>.flex-wrap>[data-slot=select-trigger]) {display:flex;flex-direction:column;
+  &>.flex.flex-wrap:not(.mt-3) {gap:0;padding-left:16px;border-radius:var(--hq-card-r);background:var(--hq-cell);overflow:hidden;
+    &>[data-slot=select-trigger] {min-height:32px;padding:0 16px 0 0;border:0;border-radius:0;background:transparent;font-size:13px;line-height:18px;letter-spacing:-.08px}
+    &>* + * {box-shadow:0 -.5px 0 var(--hq-sep)}
+    &>[data-slot=button] {margin-right:16px;box-shadow:none}
+  }
+  &>p {order:1;margin:6px 0 0}
+  &>.mt-3 {order:2;margin-top:20px;display:grid;gap:8px;
+    html:root body &>span.text-xs {padding-left:16px;font-size:13px;line-height:18px;font-weight:600;letter-spacing:-.08px;color:var(--hq-section)}
+    &>.flex {min-height:32px;padding-inline:16px;border-radius:var(--hq-card-r);background:var(--hq-cell);
+      html:root body &.items-center.gap-2>span.shrink-0 {font-size:13px;line-height:18px;letter-spacing:-.08px}
+      &>[data-slot=select-trigger] {width:auto;min-width:0;margin-left:auto;padding:0;gap:6px;border:0;background:transparent;font-size:13px}
+    }
+  }
+}
+/* settings-b: Theme picker cards */
+main .grid>.group.relative>button.text-left {--conversation-text-font-size:13px;--conversation-caption-font-size:13px;--conversation-caption-line-height:18px;
+  html:root body &>.mt-3>.truncate {line-height:18px;font-weight:600;letter-spacing:-.08px}}
+/* settings-c: Tools & Keys */
+[data-overlay-surface] main [id^=credential-key-] {& .grid.items-start {align-items:center} & .grid:has(> input:only-child) {column-gap:0}}
+/* pages-ops: Scheduled jobs and page titles */
+[data-overlay-surface]:not(:has(main)) span.font-medium[class*='text-foreground/85'] {font-size:13px;line-height:18px;font-weight:400;letter-spacing:-.08px;color:var(--ui-text-primary)}
+[data-overlay-surface] header>.min-w-0>h2.text-sm.font-semibold {font-size:18px;line-height:24px;letter-spacing:.1px;
+  &+p {font-size:12px;line-height:16px;letter-spacing:-.08px}}
+:is([data-overlay-surface],[data-tree-group] main) span[class*='text-[0.66rem]'].text-primary:not(.rounded-full) {font-size:12px;line-height:16px;font-weight:400}
+/* pages-cap (and pages-ops for Messaging's list): lists on grey pages are one white card */
+[data-tree-group]:has(main) {
+  & :is(aside>div.overflow-y-auto:has(> .group\/row),ul.space-y-1:has(> li>button.row-hover)) {background:var(--hq-cell);border-radius:var(--hq-card-r);overflow-x:hidden}
+  & :is(.group\/row,ul.space-y-1>li) + :is(.group\/row,li),& main .grid.gap-1>button[aria-pressed] + button {background-image:linear-gradient(var(--hq-sep),var(--hq-sep));background-size:calc(100% - 16px) .5px;background-position:16px 0;background-repeat:no-repeat}
+  & :is(.group\/row,ul.space-y-1>li>button.row-hover) {border-radius:0}
+  & .group\/row>[data-slot=row-button] {padding-left:16px}
+  & .group\/row>[role=switch] {margin-right:16px}
+  & [data-slot=button][class*='text-[0.6875rem]'] {padding:0 6px;font-size:12px;line-height:16px;letter-spacing:-.08px}
+}
+/* pages-cap: Capabilities' toggle rows */
+.group\/row>[data-slot=row-button] {
+  &:has(+ [role=switch]) .text-\[0\.78rem\] {font-weight:600;color:var(--ui-text-primary)}
+  &:has(+ [role=switch])>span.shrink-0.rounded {padding:0;background:transparent;font-size:12px;line-height:16px;color:var(--hq-label-3)}
+  & .text-\[0\.62rem\]>[data-slot=badge] {padding:0;background:transparent;font-size:12px;line-height:16px;font-weight:400;color:var(--hq-label-3);&::before {content:'· '}}
+}
+/* pages-cap: option lists with a checkmark, and the detail grid */
+[data-tree-group] main {
+  & .grid:has(>.grid.gap-1>button[aria-pressed])>.flex>span.font-medium {padding-left:16px;font-size:13px;line-height:18px;font-weight:600;letter-spacing:-.08px;color:var(--hq-section)}
+  & :is(.grid.gap-1:has(> button[aria-pressed]),section>h4 + .mt-3.grid) {gap:0;border-radius:var(--hq-card-r);background:var(--hq-cell);overflow:hidden}
+  & section>h4 + .mt-3.grid {padding-inline:16px}
+  & .grid.gap-1>button[aria-pressed] {position:relative;padding:7px 44px 7px 14px;border:0;border-radius:0;background-color:transparent;
+    &[aria-pressed=true]::after {content:'';position:absolute;right:20px;top:50%;width:6px;height:12px;margin-top:-8px;border:solid var(--hq-tint);border-width:0 2.2px 2.2px 0;transform:rotate(45deg)}
+    & .text-xs.font-medium {font-size:13px;line-height:18px;font-weight:400;letter-spacing:-.08px}
+  }
+  & .grid.rounded-lg>.flex.gap-2[class*='text-[0.68rem]']>span.font-medium {width:7.5rem;font-weight:400}
+}
+
+/* ---- Feel: macOS answers the pointer at once. Hover highlights land instantly on the way in (desktop's buttons,
+   menu rows and tabs faded them in over 100-200 ms); leaving still eases out briefly. ---- */
+:is(button,a[href],[role=button],[role^=menuitem],[role=option],[role=tab],[data-slot$=-item],[data-slot=pane-tab],
+  [data-slot=context-menu-trigger],[data-roster-key],.row-hover):hover {
+  transition-property:color,background-color,border-color,box-shadow,opacity,transform,translate,scale;transition-duration:0s}
+/* Clickable things show the pointer, not the drag hand: pane tabs (Sessions/Bots, the chat title; their sortable sets
+   cursor:grab inline, hence !important), profile faces and the session-row status handle can still be dragged, and
+   show the closed hand only while a drag is under way (aria-pressed / cursor-grabbing). */
+:is(:is([data-slot=pane-tab],[class~='group/tab']):not([aria-pressed=true]),:is([data-slot=pane-tab],[class~='group/tab']):not([aria-pressed=true]) *,[class*='group/pane-header'],
+  [class*='group/pane-header'] > div,button.popover-anchor.cursor-grab,button.popover-anchor.cursor-grab *,span.group\/handle,
+  span.group\/handle *) {cursor:pointer!important}
+/* Press: a quick darken on the way down, the way an AppKit button sinks while held. */
+:is(button,[role=button]):not(:disabled,[aria-disabled=true]):active {filter:brightness(.93)}
+html.dark :is(button,[role=button]):not(:disabled,[aria-disabled=true]):active {filter:brightness(1.18)}
+/* ...and lets go almost as fast: desktop's 100-150 ms colour fade-out leaves a trail down a list; 60 ms does not. */
+:is(.transition-colors,.row-hover,[class*='transition-[background'],[class*='transition-[color'],button.transition-all):not(:hover) {transition-duration:60ms}
+
+/* ---- Bot faces: a black face with no backdrop is white in dark, its eyes dark, as on the phone. The phone marks the
+   copy of such a head it sends desktop with a PNG text chunk straight after the header, so the copy's data URL always
+   holds these characters (HeadRecord.darkFlipMark). !important: the pinned tiles' dark edge and desktop's grey
+   offline faces set their own filter, and an inverted face needs neither. ---- */
+html.dark img[src*='AAAAGHRFWHRoZXJtZXMtaHEAaW52ZXJ0LW9uLWRhcmu4VO/y'] {filter:invert(1)!important}

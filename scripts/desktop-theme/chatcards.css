@@ -1,0 +1,137 @@
+/* ===== In-chat cards (HQ PromptRows / ChatCells / StepSheets / QuestionDock) ===== */
+
+/* every inline card spans the same column as the bubbles (HQ cardSide 16 on both sides) */
+[data-slot='aui_thread-content'] > .max-w-xl:not([data-approval-placement='floating']), [data-slot='aui_artifact-card'] {max-width:none}
+
+/* --- Approval card: page-coloured card, hairline edge, 28px Mac capsules (HQ approval: innerX 12, footnote header, caption2 position) --- */
+[data-slot='tool-approval-stack']:not([data-approval-placement='floating']) {
+  & [data-approval-activity] {margin:0 0 8px;
+    & .group\/disclosure-row :is(.truncate,.whitespace-nowrap) {font-size:12px;line-height:16px;letter-spacing:-.08px;color:var(--hq-label-2)}}
+  & [data-slot='card-stack'] :is([data-slot='card-stack-surface'],[data-slot='card-stack-edge']) {border:0;background:var(--hq-raised);box-shadow:0 0 0 .5px rgb(0 0 0/.1),0 1px 2px rgb(0 0 0/.05),0 4px 14px rgb(0 0 0/.06)}
+  html.dark & [data-slot='card-stack'] :is([data-slot='card-stack-surface'],[data-slot='card-stack-edge']) {box-shadow:0 0 0 .5px rgb(255 255 255/.12),0 4px 14px rgb(0 0 0/.3)}
+}
+[data-slot='tool-approval-card'] {
+  & > div:first-child {padding:10px 12px 0;gap:6px;font-size:12px;line-height:16px;letter-spacing:-.08px;color:var(--hq-label-2);
+    & > .tabular-nums {font-size:11px;letter-spacing:.06px;color:var(--hq-label-3)}}
+  & > pre {margin:0;padding:8px 12px 0;font-size:12px;line-height:16px;letter-spacing:0;color:var(--foreground)}
+}
+[data-slot='tool-approval-actions'] {gap:6px;padding:4px 10px 10px;
+  & [data-slot='button'][data-size] {height:28px;min-height:28px;padding:0 12px;gap:5px;border-radius:999px;font-size:12px;line-height:16px;font-weight:600;letter-spacing:-.08px;box-shadow:none}
+  & [data-approval-deny] {color:var(--hq-label-2);background:transparent}
+  & [data-variant='secondary'] {color:var(--foreground);background:var(--hq-fill-2);
+    & :is(svg,.codicon) {font-size:11px!important;width:11px;height:11px;font-weight:700;color:var(--foreground)}}
+  & [data-approval-run] > span.opacity-60 {display:none}
+}
+html:root.dark body :is([data-slot='tool-approval-actions'] [data-approval-run],:is([data-slot='clarify-inline'],[data-clarify-batch]) .justify-end.gap-1 > [type='submit']) {background:var(--hq-tint-text)}
+
+/* --- "N files changed" card: 44px rows with hairlines, semibold title, tappable Review; 8px under the card above --- */
+[data-slot='aui_changed-files'] {--ui-green:var(--hq-green-text);--ui-red:var(--hq-red-text);margin-block:-4px;padding:12px 16px 0;
+  &:first-child {margin-top:0}
+  & > div:first-child > span:first-child {font-size:12px;line-height:16px;font-weight:600;letter-spacing:-.08px;color:var(--foreground)}
+  & > div:first-child > :last-child:not(:first-child) {font-size:12px;line-height:16px;letter-spacing:-.08px;color:var(--hq-tint-text)}
+  & > div:last-child {margin:4px 0 0;padding:0;max-height:220px!important}
+  & .row-hover {min-height:30px;padding:0;gap:8px;border-radius:0;font-size:12px;line-height:16px;letter-spacing:-.08px;
+    & + .row-hover {box-shadow:inset 0 .5px 0 var(--hq-sep)}
+    & > span.flex-1 {color:var(--foreground)}
+    /* FileTypeIcon (changed-files-card.tsx) */
+    & > :is(svg,.codicon,img):first-child {width:18px;height:18px;font-size:14px;color:var(--hq-label-2)}
+    & > span:not(.flex-1) {font-size:12px;line-height:16px;font-variant-numeric:tabular-nums;letter-spacing:-.08px}
+    & > span[style*='diff-add'] {color:var(--ui-green)!important}
+    & > span[style*='diff-remove'] {color:var(--ui-red)!important}}
+}
+
+/* --- Diffs: full-width 12% bands, label text, mono 13, no gutter bar --- */
+[data-slot='aui_thread-content'] :is([data-slot='diff-lines'],[data-slot='file-diff-panel']) {--ui-diff-add-background:rgb(52 199 89/.12);--ui-diff-remove-background:rgb(255 59 48/.12);padding-block:8px;font-size:12px;line-height:16px;letter-spacing:0;color:var(--foreground);
+  html:root.dark body & {--ui-diff-add-background:rgb(48 209 88/.12);--ui-diff-remove-background:rgb(255 69 58/.12)}
+  & :is(span.border-l-2,.line) {border-left:0;padding:0 12px;min-height:18px;line-height:16px;color:var(--foreground)}
+}
+.rounded-3xl:has(> [data-slot='diff-lines']:only-child) {padding:0;border-radius:var(--hq-card-r);overflow:hidden}
+.rounded-3xl > [data-slot='diff-lines']:only-child {margin:0}
+
+/* --- Expanded tool output: one filled card, sentence-case footnote labels, solid 13pt mono blocks --- */
+[data-slot='tool-block'][data-tool-open] {opacity:1;border:0;border-radius:var(--hq-card-r);background:var(--hq-card)!important;
+  & > div:first-child {min-height:30px;display:flex;align-items:center;padding:7px 14px;position:relative;border-bottom:0;
+    &::after {content:'';position:absolute;left:14px;right:14px;bottom:0;height:.5px;background:var(--hq-sep)}
+    /* keep in sync with the file-diff-panel negative margins below */
+    & + div {gap:12px;padding:12px 14px 14px}}
+  /* FileDiffPanel inside the tool block (tool/fallback.tsx) */
+  & [data-slot='file-diff-panel'] {margin:-12px -14px -14px;max-height:20rem}
+  & p.uppercase[class*='tracking-'] {margin:0 0 6px;font-size:12px;line-height:16px;font-weight:400;text-transform:none;letter-spacing:-.08px;color:var(--hq-label-2)}
+  & p.uppercase + div > p.uppercase:first-child {margin:-4px 0 6px;font-size:12px;line-height:16px;letter-spacing:0;color:var(--hq-label-3)}
+  & .text-xs.leading-relaxed {font-size:12px;line-height:16px}
+  & :is(pre,div)[class*='max-h-20'] {max-height:240px;padding:12px;border-radius:10px;background:var(--hq-raised);font-size:12px;line-height:18px;letter-spacing:0;color:var(--foreground)}
+  & div.font-mono.border[class*='rounded-'] {border:0;border-radius:10px;background:var(--hq-raised);padding:7px 12px;font-size:12px;line-height:18px;letter-spacing:0;
+    & code {color:var(--foreground)}}
+  & .max-w-72.border {border:0;border-radius:12px;max-width:280px}
+}
+
+/* --- Fenced code (code-card): HQ codeFill, 10px corners, mono 13/20, 12/10 padding --- */
+[data-slot='aui_thread-content'] {--hq-code-fill-bubble:rgb(224 224 226);
+  html:root.dark body & {--hq-code-fill-bubble:#1f2023}
+  & [data-slot='aui_assistant-message-content'] .aui-md [data-slot='code-card'] {background:var(--hq-code-fill-bubble);--expandable-fade-from:var(--hq-code-fill-bubble)}
+  & [data-slot='code-card-body'] {font-size:12px;line-height:18px;letter-spacing:0;color:var(--hq-ink);
+    html:root.dark body & {color:color-mix(in srgb,var(--hq-ink) 72%,transparent)}
+    & pre {padding:7px 12px!important;line-height:18px;color:inherit}}
+  & [data-slot='aui_assistant-message-content'] [data-slot='tool-block'][data-delegate-card] {max-width:100%}
+}
+
+/* --- Reply images: album width 280, 12px corners; missing-image note in footnote grey --- */
+[data-slot='aui_assistant-message-content'] {--image-preview-height:373px;
+  /* the last card of a reply sits 8px above the next card, not 8 + the turn gap */
+  & > :is([data-slot='clarify-inline'],[data-clarify-batch]):last-child {margin-bottom:0}
+}
+[data-slot='aui_markdown-image'].text-sm {margin:6px 0;font-size:12px;line-height:16px;letter-spacing:-.08px;color:var(--hq-label-2)}
+
+/* --- Subagent card: one filled card, 44px rows, inset hairlines, quiet trailing glyph --- */
+[data-delegate-card] {gap:0;margin-block:8px;border-radius:var(--hq-card-r);background:var(--hq-card)!important;overflow:hidden;
+  & > .rounded-xl.border {min-height:30px;align-content:center;gap:2px;border:0;border-radius:0;background:transparent;padding:7px 14px;
+    & + .rounded-xl.border {background:linear-gradient(var(--hq-sep),var(--hq-sep)) no-repeat 42px 0/calc(100% - 58px) .5px}
+    & > div.pl-5 {padding-left:26px;font-size:12px;line-height:16px}}
+  & [data-conversation-scaffold] {opacity:1;gap:8px;font-size:12px;line-height:16px;letter-spacing:-.08px;
+    & > button {color:var(--foreground)}
+    & > span:not(:first-child) {font-size:12px;letter-spacing:-.08px;font-variant-numeric:tabular-nums;color:var(--hq-label-2)}
+    & > span.grid:first-child :is(.codicon,svg) {font-size:13px!important;width:16px;height:16px}
+    & > .codicon:last-child {font-size:13px!important;color:var(--hq-label-3)}}
+}
+
+/* --- Artifact card: HQ LinkChipView (icon on the title line, time-style subtitle) --- */
+[data-slot='aui_artifact-card'] {align-items:flex-start;gap:10px;margin-block:8px;padding:9px 14px;
+  & > span:first-child {width:22px;height:22px;margin-top:0;background:transparent;color:var(--hq-label-2);
+    & > * {font-size:18px!important}}
+  & > span.flex-1 > span:first-child {font-size:13px;line-height:18px;font-weight:400;letter-spacing:-.08px}
+  & > span.flex-1 > span:last-child {margin-top:2px;font-size:12px;line-height:16px;letter-spacing:0;color:var(--hq-label-2)}
+  & > span:last-child:not(.flex-1) {opacity:1;font-size:12px;font-weight:400;letter-spacing:-.08px;color:var(--hq-tint-text)}
+}
+
+/* --- Clarify card: semibold step label, headline question, inset list of radio rows, capsule Confirm --- */
+[data-slot='clarify-inline'] {padding:14px 16px 16px;
+  &:not([data-clarify-batch] > *) {margin-block:8px}
+  & .flex.items-start.gap-2 > svg.size-4[aria-hidden]:last-child {display:none}
+  & > .flex.items-start.gap-2 > span.flex-1 {font-size:12px;line-height:16px;font-weight:600;letter-spacing:-.08px;color:var(--hq-label-2)}
+  & :has(> [role='group']) {gap:10px}
+  & span.flex-1.font-medium {font-size:13px;line-height:18px;font-weight:600;letter-spacing:-.08px}
+  & [data-clarify-select-mode] {margin-top:2px;padding:0;background:transparent;font-size:12px;line-height:16px;letter-spacing:-.08px;color:var(--hq-label-2)}
+  & [role='group'] {gap:0;border-radius:12px;background:var(--hq-raised);overflow:hidden;
+    & > :is(button,label) {min-height:30px;padding:9px 14px;gap:12px;align-items:center;border-radius:0;font-size:13px;line-height:18px;letter-spacing:-.08px;
+      &:is(:hover,[data-highlighted]) {background-color:var(--hq-fill-3)}}
+    & > * + * {background-image:linear-gradient(var(--hq-sep),var(--hq-sep));background-position:50px 0;background-size:100% .5px;background-repeat:no-repeat}
+    & [data-slot='kbd'] {position:relative;width:24px;height:24px;min-width:24px;margin:0;padding:0;border-radius:50%;border:1.5px solid color-mix(in srgb,var(--hq-ink) 30%,transparent);background:transparent;font-size:0;box-shadow:none;
+      &.bg-primary {border-color:var(--hq-tint);background:var(--hq-tint);
+        &::after {content:'';position:absolute;left:7px;top:3.5px;width:6px;height:11px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}}}
+    & [data-highlighted] [data-slot='kbd'] {border-color:var(--hq-tint)}
+    & textarea {min-height:22px;padding:0;border:0;background:transparent;box-shadow:none;font-size:13px;line-height:18px}}
+  /* multi-select (clarify-tool: data-clarify-select-mode='multi') gets square boxes */
+  & :has(> .flex > [data-clarify-select-mode='multi']) > [role='group'] [data-slot='kbd'] {border-radius:7px}
+  /* answered card = HQ PromptRows.qa(): question footnote grey, answer subheadline label, 10/14 padding, 2px apart */
+  &[data-clarify-settled] {padding:7px 14px;gap:10px;
+    & > .grid {gap:2px}
+    & span.font-medium {font-size:12px;line-height:16px;font-weight:400;letter-spacing:-.08px;color:var(--hq-label-2)}
+    & [data-clarify-answer] {font-size:12px;line-height:16px;letter-spacing:-.08px;color:var(--foreground)}}
+}
+[data-clarify-batch] {margin-block:8px;gap:10px}
+/* QuestionDock buttons: Confirm = Headline capsule, 22 side insets; Skip = Body in tint */
+:is([data-slot='clarify-inline'],[data-clarify-batch]) .justify-end.gap-1 {gap:8px;margin:0;
+  & > [data-slot='button'] {height:36px;min-height:30px;padding:0 22px;border-radius:999px;font-size:13px;line-height:18px;font-weight:600;letter-spacing:-.08px;box-shadow:none;
+    & > span[aria-hidden] {display:none}}
+  & > [data-variant='text'] {padding:0 12px;font-weight:400;color:var(--hq-tint-text)}
+}

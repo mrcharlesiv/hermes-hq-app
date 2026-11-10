@@ -1,0 +1,140 @@
+/* ---- Chat transcript: HQ's sizes, 1:1 (ChatStyle, ChatPalette ChatMetrics, TextLayout, MarkdownRenderer). ---- */
+
+/* Body 14 on a 21 line, tool rows 12 (Clean's density: desktop's own Mac sizes), in a 52rem column whose edges are the composer's: the bubbles, the
+   + circle and the send circle line up (HQ's 16 pt inset is the composer's own here). Desktop redeclares these on
+   the thread itself, so they're set there; the Chat Text Size setting still scales them (1.1 is its default). */
+html:root body [data-slot='aui_thread-content'] {
+  --hq-chat-scale:calc(var(--chat-text-scale,1.1) / 1.1);
+  --conversation-text-font-size:calc(14px * var(--hq-chat-scale));
+  --conversation-tool-font-size:calc(12px * var(--hq-chat-scale));
+  --conversation-caption-font-size:12px;--conversation-line-height:21px;--dt-line-height:1.5;
+  --message-text-indent:0px;--turn-block-gap:6px;--scaffold-block-gap:0px;--tool-row-gap:0px;
+  --conversation-scaffold-text:var(--hq-label-2);--disclosure-caret-rest:1;
+  max-width:52rem;padding-inline:12px}
+
+/* Bubbles: 6/11 padding (HQ's 7/13 scaled with the type), SF's 15 pt tracking. Both sides cap at HQ's 80% of the column
+   (on a phone that fraction is the cap; 320 pt is a phone-width number). */
+:is([data-slot='aui_user-message-root'] .composer-human-message:not(.ui-prompt-input__container),
+    [data-slot='aui_assistant-message-content'] .aui-md:not(.aui-md .aui-md, details .aui-md)) {
+  padding:6px 11px;font-size:var(--conversation-text-font-size);line-height:1.333;letter-spacing:-.23px;max-width:80%}
+/* Paragraphs inside a bubble: half a line apart, not desktop's 16 px. */
+[data-slot='aui_assistant-message-content'] .aui-md > .space-y-4 > * {margin-block:0}
+[data-slot='aui_assistant-message-content'] .aui-md > .space-y-4 > * + * {margin-block-start:8px}
+/* Your long message clamps at HQ's 10 lines, measured in lines so it always ends on a line boundary; only a message
+   that reaches the clamp fades, over its last line. */
+html:root body [data-slot='aui_user-message-root'] {--human-msg-line-height:1.333}
+html:root body [data-slot='aui_user-message-root'] .composer-human-message .sticky-human-clamp {max-height:10lh;-webkit-mask-image:none;mask-image:none}
+html:root body [data-slot='aui_user-message-root'] .composer-human-message .sticky-human-clamp[data-clamped='true'] {
+  -webkit-mask-image:linear-gradient(#000 calc(100% - 1lh),transparent);mask-image:linear-gradient(#000 calc(100% - 1lh),transparent)}
+/* HQ's tail box (8 x 17), scaled with the type. */
+:is([data-slot='aui_user-message-root'] .composer-human-message:not(.ui-prompt-input__container),
+    [data-slot='aui_assistant-message-content'] .aui-md:not(.aui-md .aui-md, details .aui-md))::after {height:15px}
+
+/* Your message scrolls with the transcript; no pinned prompt over the reply. */
+html:root body [data-slot='aui_user-message-root'] {position:relative;top:auto;z-index:auto;padding-top:0;padding-bottom:0}
+html:root body [data-sticky-prompt-clip] {clip-path:none}
+
+/* A reply's action row never changes layout: it takes no space, and an older reply's row floats under its bubble
+   as an opaque capsule while hovered or focused (only opacity changes). The newest reply's row stays in flow and is
+   always shown. One style for both: left-aligned label-2 glyphs, the time last (HQ's 6 pt between turns). */
+[data-slot='aui_assistant-message-root'] {position:relative;
+  & > :has(> * > [data-slot='aui_msg-actions']) {min-height:0;height:0;overflow:visible;position:relative;z-index:2;align-items:flex-start;
+    & > * {position:absolute;top:2px;left:0;width:auto;justify-content:flex-start}}
+  /* While it shows, the reply and its group let the capsule paint past their clip, above the next turn. */
+  &:is(:hover,:focus-within) {overflow-clip-margin:44px}}
+[data-slot='aui_msg-actions'] {justify-content:flex-start;gap:2px;padding:0 4px;border-radius:999px;background:var(--hq-raised);
+  box-shadow:0 0 0 .5px var(--hq-sep),0 4px 14px rgb(0 0 0/.1);
+  & button {width:24px;height:24px;border-radius:999px;color:var(--hq-label-2)}
+  & button[aria-label^='Branch'] {order:5}
+  & button svg {width:14px;height:14px}
+  & time {order:9;margin:0 6px 0 4px;padding:0;font-size:12px;font-variant-numeric:tabular-nums;color:var(--hq-label-2)}}
+/* Bubble tails hang 8 pt outside the column; desktop's content-visibility on each group would clip them. */
+[data-slot='aui_message-group'] {overflow-clip-margin:12px}
+[data-slot='aui_message-group']:has([data-slot='aui_assistant-message-root']:is(:hover,:focus-within)) {overflow-clip-margin:44px;position:relative;z-index:3}
+/* Air under the title bar above the first turn. */
+[data-slot='aui_thread-content'] > [data-slot='aui_message-group']:nth-child(1 of [data-slot='aui_message-group']) {padding-top:12px}
+/* The newest reply: the row sits in flow, always shown, flat on the page like HQ's. */
+[data-slot='aui_thread-content'] > [data-slot='aui_message-group']:nth-last-child(1 of [data-slot='aui_message-group']) [data-slot='aui_turn-pair']:last-child [data-slot='aui_assistant-message-root']:last-child {
+  & > :has(> * > [data-slot='aui_msg-actions']) {height:auto;z-index:auto; & > * {position:static}}
+  & [data-slot='aui_msg-actions'] {opacity:1;pointer-events:auto;padding:4px 0 0;background:none;box-shadow:none;border-radius:0;gap:2px;margin-left:-5px;
+    & button {width:24px;height:24px}}}
+
+/* Tool and thinking rows: a 24 px row, 14 px glyph, 8 pt gap, 15 pt label-2 title, 14 pt label-3 chevron at the end. */
+[data-slot='aui_thread-content'] [data-slot='tool-block'] {grid-template-columns:minmax(0,1fr);margin-block:0;
+  & .grid.size-3\.5 {width:14px;height:14px;color:var(--hq-label-2);
+    & > svg {width:14px !important;height:14px !important;color:inherit}
+    /* One glyph family at one weight: desktop's filled terminal and globe become the codicon line glyphs its summary
+       rows use (the font desktop already loads). */
+    &:has(> svg path:is([d^='M216,40H40'],[d^='M128,24h0A104'])) {
+      & > svg {opacity:0}
+      &::before {grid-area:1/1;place-self:center;content:'\ea85';font:normal 14px/1 codicon;color:var(--hq-label-2)}}
+    &:has(> svg path[d^='M128,24h0A104'])::before {content:'\eb01'}}
+  & .group\/disclosure-row .text-\[0\.625rem\] {font-size:12px;color:color-mix(in srgb,var(--hq-ink) 36%,transparent)}}
+/* Rows from one message overlap by 6 pt, so a run of them reads as one list (ChatRow gapAbove -6). */
+[data-slot='aui_thread-content'] :is([data-slot='tool-block'],[data-slot='aui_thinking-disclosure']) + :is([data-slot='tool-block'],[data-slot='aui_thinking-disclosure']) {margin-top:-2px}
+:is([data-slot='aui_thread-content'] [data-slot='tool-block'], [data-slot='aui_thinking-disclosure']) {
+  & .group\/disclosure-row {min-height:24px;align-items:center;padding-inline:2px;color:var(--hq-label-2);
+    & > button {max-width:none;flex:1 1 auto;min-width:0;align-items:center;gap:8px;
+      & > span {min-width:0}
+      & > span:last-child:not(:first-child) {margin-left:auto}
+      & > span:first-child > span {gap:8px}
+      &:disabled {padding-right:22px}}
+    & :is(.truncate,.whitespace-nowrap) {font-size:var(--conversation-tool-font-size);line-height:18px;letter-spacing:-.08px;color:var(--hq-label-2)}
+    /* While the row's hover actions show, the title ends before them instead of running under them. */
+    &:is(:hover,:focus-within):has(> button ~ span:not(:empty)) > button {padding-right:84px}
+    /* The row's hover actions sit just inside the chevron, so every chevron lines up at the row's end. */
+    & > button ~ span {position:absolute;right:22px;top:50%;transform:translateY(-50%);padding:0}}
+  & .codicon-chevron-right {font-size:13px !important;color:color-mix(in srgb,var(--hq-ink) 36%,transparent)}}
+/* A summary row gets HQ's glyph too, from the codicon font desktop already loads. */
+[data-slot='aui_thread-content'] :is([data-tool-summary],[data-tool-row]) .group\/disclosure-row > button > span:first-child > span:not(:has(> .grid))::before {
+  content:'\eb6d';font:normal 14px/1 codicon;width:14px;flex:none;text-align:center;color:var(--hq-label-2)}
+[data-slot='aui_thinking-disclosure'] [role='region'] {
+  background:var(--hq-fill-4);border-radius:14px;padding:7px 12px;font-size:12px;line-height:16px;color:var(--hq-label-2)}
+
+/* Markdown in a reply: one 11 pt gap between blocks; list items 7 apart, as Clean. */
+[data-slot='aui_assistant-message-content'] .aui-md {
+  & > div > * + * {margin-top:11px}
+  & > div > * {margin-bottom:0}
+  & :is(ul,ol) {margin:11px 0 0;padding-left:28px}
+  & li {margin:7px 0 0;padding-left:0}
+  & li:first-child {margin-top:0}
+  & li > :is(ul,ol) {margin-top:7px}
+  & li > p {margin:0}
+  & li::marker {color:color-mix(in srgb,var(--hq-ink) 36%,transparent);font-size:14px}
+  & h1 {font-size:21px;line-height:26px;margin:23px 0 7px;font-weight:600;letter-spacing:-0.4px}
+  & h2 {font-size:15px;line-height:20px;margin:21px 0 7px;font-weight:600;letter-spacing:-0.45px}
+  & :is(h3,h4,h5,h6) {font-size:14px;line-height:22px;margin:20px 0 6px;font-weight:600;letter-spacing:-0.44px}
+  & :is(h1,h2,h3,h4,h5,h6):first-child {margin-top:0}
+  & :is(h1,h2,h3,h4,h5,h6) + * {margin-top:0}
+  & a {color:var(--hq-tint-text);text-decoration:none}
+  & :not(pre) > code {
+    font-size:12px;padding:1px 1.5px;border-radius:5px;background:var(--hq-fill-3);color:inherit;letter-spacing:0}
+  & blockquote {
+    margin:11px 0 0;padding:0 0 0 12px;border-left:0;font-style:normal;font-weight:inherit;color:inherit;position:relative;quotes:none}
+  & blockquote::before {
+    content:'';position:absolute;left:0;top:2px;bottom:2px;width:2px;border-radius:1px;background:color-mix(in srgb,var(--hq-ink) 36%,transparent)}
+  & blockquote p::before,& blockquote p::after {content:none}
+  & img {box-shadow:none;border-radius:12px}
+  & :is(pre,table) {letter-spacing:0}
+  /* Tables: a fill-4 card, radius 10, no outline; a fill-4 header band; hairlines only between body rows; 13 pt. */
+  & :is(.aui-md-table,:not(.aui-md-table) > table) {border:0;border-radius:10px;background:var(--hq-fill-4);box-shadow:none}
+  & table {border-collapse:collapse;overflow:hidden}
+  & :is(th,td) {font-size:12px;line-height:19px;padding:6px 10px;border:0;letter-spacing:-0.08px}
+  & th {font-weight:600;color:var(--hq-label-2);background:transparent}
+  & tr:has(> th) {background:var(--hq-fill-4)}
+  & :is(thead tr,tbody tr) {border:0}
+  & tbody tr + tr {border-top:.5px solid var(--hq-sep)}}
+
+[data-slot='aui_user-message-root'] .composer-human-message :not(pre) > code {background:rgb(255 255 255/.18);color:inherit;border-radius:5px;padding:1px 1.5px}
+
+/* Group rooms: the one 12 pt bubble corner, 17 pt text, a 13 pt semibold name and a 20 pt face. */
+html:root body [data-slot='group-chat-message-content'] {border-radius:12px;padding:7px 13px;font-size:14px;line-height:20px;letter-spacing:-.23px}
+html:root body :has(> [data-slot='group-chat-message-content']) > div:first-child > .text-\[0\.7rem\] {font-size:12px;font-weight:600}
+
+/* Desktop's scroll ruler, quieter: HQ has none. */
+[data-slot='thread-timeline'] {opacity:.3;transition:opacity .2s}
+[data-slot='thread-timeline']:is(:hover,:focus-within) {opacity:1}
+
+/* A step row's chevron waits for the pointer (or stays while the row is open), so a run of steps isn't a column of
+   stray arrows at the far edge. */
+[data-slot='aui_thread-content'] .group\/disclosure-row:not(:hover,:focus-within):not(:has([aria-expanded=true])) .codicon-chevron-right {opacity:0}

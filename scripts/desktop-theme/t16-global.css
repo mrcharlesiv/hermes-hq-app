@@ -1,0 +1,14 @@
+/* A field lying on the grey page, outside a card, is white, as iOS draws one; inside a card it keeps the grey fill. */
+
+
+/* Controls at a size a pointer finds easily, iOS's proportions: buttons 30 px, fields 34 px, menu rows 30 px. */
+
+
+[data-slot='button'][data-size='lg'] {padding:9px 20px;font-size:12px}
+
+
+/* A value longer than its field ends in an ellipsis inside the fill rather than running past it. */
+[data-slot='select-trigger'] > span:first-child {min-width:0;overflow:hidden;text-overflow:ellipsis}
+:is([data-slot='dropdown-menu-content'],[data-slot='context-menu-content'],[data-slot='select-content'],[data-slot='dropdown-menu-sub-content'],[data-slot='context-menu-sub-content']) {padding:5px}
+
+[data-slot='tabs-trigger'] {height:26px;padding-inline:12px;font-size:12px}

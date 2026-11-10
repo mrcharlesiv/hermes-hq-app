@@ -1,0 +1,18 @@
+/* Menus: iOS's menu shape, round corners and rounded highlights, on a solid surface (no CSS-faked frost). */
+:is([data-slot='dropdown-menu-content'],[data-slot='dropdown-menu-sub-content'],[data-slot='context-menu-content'],[data-slot='context-menu-sub-content'],[data-slot='select-content'],[data-slot='command']) {
+  border-radius:10px;border-color:transparent;background:var(--hq-raised);box-shadow:var(--hq-menu-shadow)}
+
+
+
+[data-slot='command'] [cmdk-group-heading] {padding:8px 10px 4px;font-size:12px;font-weight:400;letter-spacing:0;text-transform:none;color:var(--hq-label-2);background:var(--hq-raised)}
+
+
+:is([data-slot='dropdown-menu-item'],[data-slot='dropdown-menu-checkbox-item'],[data-slot='dropdown-menu-radio-item'],[data-slot='dropdown-menu-sub-trigger'],[data-slot='context-menu-item'],[data-slot='context-menu-checkbox-item'],[data-slot='context-menu-sub-trigger'],[data-slot='select-item'],[data-slot='command-item']) {border-radius:5px}
+:is([data-slot='dropdown-menu-separator'],[data-slot='context-menu-separator'],[data-slot='select-separator'],[data-slot='command-separator']) {background:var(--hq-sep)}
+[data-slot='popover-content'] {border-radius:10px;border-color:transparent;background:var(--hq-raised);box-shadow:var(--hq-menu-shadow)}
+[data-slot='popover-content'] > [data-slot='command'] {border-radius:10px;background:transparent;box-shadow:none}
+
+/* Toasts: HQ's banner, a solid raised card with round corners and the menu shadow, no outline and no CSS frost. */
+
+[role='region'] > [data-slot='card-stack'] [data-slot='alert'] {padding-block:12px;font-size:12px}
+

@@ -1,0 +1,264 @@
+name: HermesHQNative
+# The App Store identity (docs/parity-240.md, "Moving HQ Native into the same App Store record"): `native` (default) =
+# HQ Native's own record; `original` = the Hermes HQ record the web app shipped in (com.charlesmcdowell.dispatch: push,
+# the web app's Keychain sign-in, hermes:// links, the notification extension). Pick it when generating:
+#   HQ_IDENTITY=original scripts/build.sh      (sets HQ_ORIGINAL=YES for xcodegen; project-original.yml is included)
+include:
+  - path: project-original.yml
+    enable: ${HQ_ORIGINAL}
+  # The App Store build is iPhone-only (owner, 1.0: iPad is untested). HQ_APP_STORE=1 scripts/ship.py archive (or
+  # HQ_APP_STORE=YES for xcodegen) includes project-appstore.yml, which picks the iphone row of HQ_DEVICE_FAMILY below.
+  # Internal TestFlight and simulator builds stay universal.
+  - path: project-appstore.yml
+    enable: ${HQ_APP_STORE}
+options:
+  bundleIdPrefix: com.charlesmcdowell
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+    SWIFT_APPROACHABLE_CONCURRENCY: YES
+    DEVELOPMENT_TEAM: 2Y6UGK7GET
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    MARKETING_VERSION: "1.0.2"
+    CURRENT_PROJECT_VERSION: "5"
+    # Identity tables: HQ_X = $(HQ_X_$(HQ_IDENTITY)). project-original.yml sets HQ_IDENTITY_CHOICE.
+    HQ_IDENTITY: $(HQ_IDENTITY_CHOICE:default=native)
+    HQ_APP_BUNDLE_ID_native: com.charlesmcdowell.hermeshq.native
+    HQ_APP_BUNDLE_ID_original: com.charlesmcdowell.dispatch
+    HQ_APP_BUNDLE_ID: $(HQ_APP_BUNDLE_ID_$(HQ_IDENTITY))
+    HQ_DISPLAY_NAME_native: Hermes HQ   # owner: the name is Hermes HQ on every identity
+    HQ_DISPLAY_NAME_original: Hermes HQ
+    HQ_DISPLAY_NAME: $(HQ_DISPLAY_NAME_$(HQ_IDENTITY))
+    "HQ_DISPLAY_NAME[sdk=macosx*]": Hermes HQ   # [mac] owner: the Mac app is "Hermes HQ" whichever identity it's built as
+    "ENABLE_HARDENED_RUNTIME[sdk=macosx*]": YES   # [mac] notarization (the website's download) needs it
+    HQ_URL_SCHEME_native: hermeshq-native
+    HQ_URL_SCHEME_original: hermes
+    HQ_URL_SCHEME: $(HQ_URL_SCHEME_$(HQ_IDENTITY))
+    HQ_URL_NAME_native: com.charlesmcdowell.hermeshq.native
+    HQ_URL_NAME_original: com.charlesmcdowell.dispatch.session
+    HQ_URL_NAME: $(HQ_URL_NAME_$(HQ_IDENTITY))
+    HQ_KEYCHAIN_SERVICE_native: ai.hermes.hqnative.gateway
+    HQ_KEYCHAIN_SERVICE_original: ai.hermes.ios.gateway
+    HQ_KEYCHAIN_SERVICE: $(HQ_KEYCHAIN_SERVICE_$(HQ_IDENTITY))
+    HQ_SIGNED_OUT_KEY_native: hqnative.vault.signedOut
+    HQ_SIGNED_OUT_KEY_original: dispatch.vault.signedOut
+    HQ_SIGNED_OUT_KEY: $(HQ_SIGNED_OUT_KEY_$(HQ_IDENTITY))
+    HQ_APP_GROUP_native: ""
+    HQ_APP_GROUP_original: group.com.charlesmcdowell.dispatch
+    HQ_APP_GROUP: $(HQ_APP_GROUP_$(HQ_IDENTITY))
+    # Device family table, as the identity table: project-appstore.yml sets HQ_DEVICES_CHOICE = iphone.
+    HQ_DEVICES: $(HQ_DEVICES_CHOICE:default=universal)
+    HQ_DEVICE_FAMILY_universal: "1,2"
+    HQ_DEVICE_FAMILY_iphone: "1"
+    HQ_DEVICE_FAMILY: $(HQ_DEVICE_FAMILY_$(HQ_DEVICES))
+  configs:
+    Debug:
+      HQ_APS_ENVIRONMENT: development
+      # [mac] A Mac app's Keychain group and data folder belong to its bundle ID, so a Debug build of the Hermes HQ
+      # identity (test runs, fixture sign-ins, -HQDebugResetAccounts) used the website download's own sign-in: a test
+      # that signed in to a stand-in gateway replaced the owner's, and a reset deleted it (docs/briefs/
+      # mac-native-proper-report.md). Debug Mac builds keep their own item and sign-out mark; Release is unchanged.
+      "HQ_KEYCHAIN_SERVICE[sdk=macosx*]": $(HQ_KEYCHAIN_SERVICE_$(HQ_IDENTITY)).debug
+      "HQ_SIGNED_OUT_KEY[sdk=macosx*]": $(HQ_SIGNED_OUT_KEY_$(HQ_IDENTITY)).debug
+    Release:
+      HQ_APS_ENVIRONMENT: production
+packages:
+  WallpaperArt:
+    path: Packages/WallpaperArt
+  Markdown:
+    url: https://github.com/swiftlang/swift-markdown
+    from: 0.6.0
+  # [gpt-live] Google's WebRTC as a binary framework (iOS, simulator, Mac Catalyst): the GPT-Live voice session
+  # (docs/spec/3x-gpt-live.md). Pinned: one Chromium milestone per tag.
+  WebRTC:
+    url: https://github.com/stasel/WebRTC.git
+    exactVersion: 154.0.0
+  # [terminal] SwiftTerm v1.99.2, kept in the repo (Vendor/SwiftTerm/Package.swift says why): the Terminal page's
+  # emulator (docs/spec/terminal.md).
+  SwiftTerm:
+    path: Vendor/SwiftTerm
+  # [transcript] SwiftMath, kept in the repo (Vendor/SwiftMath/Package.swift says why): typeset formulas in replies
+  # (App/Chat/Render/MathTypeset.swift).
+  SwiftMath:
+    path: Vendor/SwiftMath
+targets:
+  HermesHQNative:
+    type: application
+    platform: iOS
+    sources:
+      - App
+      - HermesKit
+      - Shared
+      - ShareKit            # [share] the roster the Share extension reads (docs/spec/3x-share.md)
+      - ShareExtension/SharePictures.swift   # [share] only so the unit tests can exercise it
+      - TalkActivityKit     # [talk-background] the Live Activity's state and buttons (the widget extension draws it)
+      - LiveKit             # [live] a reply's or a job's Live Activity (the same widget extension draws it)
+    dependencies:
+      - package: Markdown
+      - package: WallpaperArt   # [backdrop]
+      - package: WebRTC     # [gpt-live]
+      - package: SwiftTerm  # [terminal]
+      - package: SwiftMath  # [transcript] typeset formulas
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(HQ_APP_BUNDLE_ID)
+        CODE_SIGN_ENTITLEMENTS: App/Identity/HermesHQ-$(HQ_IDENTITY).entitlements
+        PRODUCT_NAME: HermesHQNative
+        TARGETED_DEVICE_FAMILY: $(HQ_DEVICE_FAMILY)   # [m9/ipad] iPhone and iPad (docs/spec/3x-ipad.md §4.1); iPhone only in the App Store build
+        INFOPLIST_FILE: App/Info.plist
+        # [mac-layout] The Mac opens Settings in a window of its own (MacSettingsWindow), so it may have more than one
+        # scene; the iPhone and iPad keep one. Info.plist reads HQ_MAC_WINDOWS (preprocessed for that key alone).
+        INFOPLIST_PREPROCESS: YES
+        "INFOPLIST_PREPROCESSOR_DEFINITIONS[sdk=macosx*]": HQ_MAC_WINDOWS=1
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # [app-icons] Every other icon set in the catalog is an alternate icon (Settings › Appearance › App Icon,
+        # AppIconChoice.all). iPhone and iPad only: Mac Catalyst has no alternate icons.
+        "ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS[sdk=iphone*]": YES
+        GENERATE_INFOPLIST_FILE: NO
+        # [mac] The Mac app is this target built with Mac Catalyst (scripts/build-mac.sh): the iPad layout scaled to
+        # the Mac, the same bundle ID (one App Store record for both), and the sandboxed entitlements.
+        SUPPORTS_MACCATALYST: YES
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER: NO
+        "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": App/Identity/HermesHQ-$(HQ_IDENTITY)-mac.entitlements
+        # [mac] The Finder, Dock and Activity Monitor read the file and process name: "Hermes HQ.app". The Swift module
+        # keeps its name on both (the tests' imports and Info.plist's $(PRODUCT_MODULE_NAME).SceneDelegate).
+        "PRODUCT_NAME[sdk=macosx*]": Hermes HQ
+        PRODUCT_MODULE_NAME: HermesHQNative
+  # The notification service extension (sealed alerts, bot faces). Embedded only in the original identity
+  # (project-original.yml): only that topic gets pushes. Built for the unit tests in both (its logic lives in Shared/).
+  # [live] Also carries LiveKit, so a "reply finished" push can try to end the matching Live Activity there and then
+  # (NotificationService.swift) instead of waiting for the app to reopen.
+  HermesHQNotifications:
+    type: app-extension
+    platform: iOS
+    sources:
+      - NotificationService
+      - Shared
+      - LiveKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(HQ_APP_BUNDLE_ID).notifications
+        PRODUCT_NAME: HermesHQNotifications
+        INFOPLIST_FILE: NotificationService/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: NotificationService/NotificationService.entitlements
+        # [mac] Built for the Mac too (the Hermes HQ identity embeds it there): sandboxed, as every Mac extension must be.
+        SUPPORTS_MACCATALYST: YES
+        DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER: NO
+        "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": NotificationService/NotificationService-mac.entitlements
+        SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
+        TARGETED_DEVICE_FAMILY: $(HQ_DEVICE_FAMILY)   # [m9/ipad] must match the app
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+  # [share] "Hermes HQ" in other apps' share sheets (docs/spec/3x-share.md). Embedded only in the original identity
+  # (project-original.yml): only that record has the App Group and the .share App ID. Built for the tests in both.
+  HermesHQShare:
+    type: app-extension
+    platform: iOS
+    sources:
+      - ShareExtension
+      - ShareKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(HQ_APP_BUNDLE_ID).share
+        PRODUCT_NAME: HermesHQShare
+        INFOPLIST_FILE: ShareExtension/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: ShareExtension/ShareExtension.entitlements
+        # [mac] Built for the Mac too: "Hermes HQ" in the Mac's Share menu (sandboxed, as every Mac extension must be).
+        SUPPORTS_MACCATALYST: YES
+        DERIVE_MACCATALYST_PRODUCT_BUNDLE_IDENTIFIER: NO
+        "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": ShareExtension/ShareExtension-mac.entitlements
+        TARGETED_DEVICE_FAMILY: $(HQ_DEVICE_FAMILY)   # [m9/ipad] must match the app
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+  # [talk-background] The voice conversation's Live Activity (docs/spec/3x-talk-background.md): Lock Screen and Dynamic
+  # Island. Embedded only in the original identity (project-original.yml), on iPhone and iPad; never on the Mac.
+  # [live] Also vends a long reply's or a job's Live Activity (docs/spec/3x-presence.md §17, docs/spec/3x-jobs.md §12)
+  # from the same WidgetBundle (TalkActivityWidget.swift) — reusing this already-registered extension on purpose, so
+  # that feature needs no App ID or profile of its own (docs/owner-todo/live-activity.md).
+  # [live-steps] Plus the push seal (Shared/PushSeal.swift, LiveStepsSeal.swift) and its keychain group: a reply's card
+  # opens the steps the add-on pushes sealed with this phone's key.
+  HermesHQTalkActivity:
+    type: app-extension
+    platform: iOS
+    sources:
+      - TalkActivityWidget
+      - TalkActivityKit
+      - LiveKit
+      - path: Shared/PushSeal.swift
+      - path: Shared/LiveStepsSeal.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(HQ_APP_BUNDLE_ID).talk
+        PRODUCT_NAME: HermesHQTalkActivity
+        INFOPLIST_FILE: TalkActivityWidget/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: TalkActivityWidget/HermesHQTalkActivity.entitlements
+        SUPPORTS_MACCATALYST: NO
+        TARGETED_DEVICE_FAMILY: $(HQ_DEVICE_FAMILY)   # must match the app
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+  # [share] Test-only host for the Share UI tests: presents the system share sheet. Never embedded, never archived.
+  HQShareProbe:
+    type: application
+    platform: iOS
+    sources: [TestSupport/ShareProbe]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.charlesmcdowell.hqshareprobe
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES   # a SwiftUI app without it shows nothing
+        INFOPLIST_KEY_CFBundleDisplayName: Share Probe
+        TARGETED_DEVICE_FAMILY: $(HQ_DEVICE_FAMILY)   # [m9/ipad] must match the app
+        SKIP_INSTALL: YES
+  HermesHQNativeTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Tests]
+    dependencies:
+      - target: HermesHQNative
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        BUNDLE_LOADER: $(TEST_HOST)
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/HermesHQNative.app/HermesHQNative
+  # End-to-end UI tests against the performance fixture (scripts/e2e.sh starts it and passes the credentials file
+  # as TEST_RUNNER_HQN_UI_CREDENTIALS). Without it every test skips.
+  HermesHQNativeUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: HermesHQNative
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: HermesHQNative
+        SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
+schemes:
+  HermesHQNative:
+    build:
+      targets:
+        HermesHQNative: all
+        HermesHQNotifications: [test]
+        HermesHQShare: [test]          # [share]
+        HermesHQNativeTests: [test]
+    test:
+      targets: [HermesHQNativeTests]
+  HermesHQNativeUI:
+    build:
+      targets:
+        HermesHQNative: all
+        HermesHQShare: [test]          # [share]
+        HQShareProbe: [test]           # [share]
+        HermesHQNativeUITests: [test]
+    test:
+      targets: [HermesHQNativeUITests]

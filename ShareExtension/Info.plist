@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key><string>en</string>
+	<!-- What other apps' share sheets call this target: "Hermes HQ" in the shipped identity (docs/spec/3x-share.md §7.1). -->
+	<key>CFBundleDisplayName</key><string>$(HQ_DISPLAY_NAME)</string>
+	<key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+	<key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key><string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+	<!-- The App Store requires an extension's versions to equal its app's: both come from the same build settings. -->
+	<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+	<!-- The same transport rule as the app (App/Info.plist): ATS open as a whole, the tailnet rule deciding
+	     (ShareKit/ShareReach.swift). The gateway address comes from the app's own sign-in, which already passed its check. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key><true/>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>$(HQ_DISPLAY_NAME) connects to the Hermes gateway on your local network or Tailscale.</string>
+	<!-- Which Keychain item and App Group this build uses (ShareKit/ShareIdentity.swift), as the app's Info.plist. -->
+	<key>HQKeychainService</key><string>$(HQ_KEYCHAIN_SERVICE)</string>
+	<key>HQAppGroup</key><string>$(HQ_APP_GROUP)</string>
+	<key>NSExtension</key>
+	<dict>
+		<key>NSExtensionPointIdentifier</key><string>com.apple.share-services</string>
+		<key>NSExtensionPrincipalClass</key><string>ShareViewController</string>
+		<key>NSExtensionAttributes</key>
+		<dict>
+			<!-- Text, one link, up to 10 photos, 10 videos and 10 files (each within the attachment limit, 100 MB, checked
+			     in the sheet). Anything else doesn't offer this target. -->
+			<key>NSExtensionActivationRule</key>
+			<dict>
+				<key>NSExtensionActivationSupportsText</key><true/>
+				<key>NSExtensionActivationSupportsWebURLWithMaxCount</key><integer>1</integer>
+				<key>NSExtensionActivationSupportsImageWithMaxCount</key><integer>10</integer>
+				<key>NSExtensionActivationSupportsMovieWithMaxCount</key><integer>10</integer>
+				<key>NSExtensionActivationSupportsFileWithMaxCount</key><integer>10</integer>
+			</dict>
+		</dict>
+	</dict>
+</dict>
+</plist>

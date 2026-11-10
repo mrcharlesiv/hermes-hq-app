@@ -1,0 +1,6 @@
+/* Dialogs and the big pages that open over the chat (Settings, Jobs, Profiles…): a light dim, no blur, and a
+   card with the phone's sheet corners. */
+:is([data-slot='dialog-overlay'],[data-slot='sheet-overlay'],[data-overlay-surface]) {background-color:rgb(0 0 0/.2);backdrop-filter:none}
+html:root.dark :is([data-slot='dialog-overlay'],[data-slot='sheet-overlay'],[data-overlay-surface]) {background-color:rgb(0 0 0/.48)}
+[data-slot='dialog-content'] {border-radius:22px;border-color:transparent;background:var(--hq-raised);box-shadow:0 20px 60px rgb(0 0 0/.22)}
+[data-overlay-surface] [data-glass-raised] {border-radius:22px;border-color:transparent;background-color:var(--hq-grouped);box-shadow:0 20px 60px rgb(0 0 0/.22)}

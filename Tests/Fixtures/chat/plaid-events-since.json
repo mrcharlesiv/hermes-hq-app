@@ -1,0 +1,473 @@
+{
+ "jsonrpc": "2.0",
+ "id": 3,
+ "result": {
+  "events": [
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "file origin plaid oauth tab "
+    },
+    "seq": 58
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "cookie redirect form account "
+    },
+    "seq": 59
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "selector fail code link field "
+    },
+    "seq": 60
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "webhook screenshot file verify phone oauth "
+    },
+    "seq": 61
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "error rotate "
+    },
+    "seq": 62
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "code json public click "
+    },
+    "seq": 63
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "account webhook "
+    },
+    "seq": 64
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "form retry login uri login sync "
+    },
+    "seq": 65
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "selector webhook access retry item python "
+    },
+    "seq": 66
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "mfa code link.\n\nConfig submit "
+    },
+    "seq": 67
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "file verify form token "
+    },
+    "seq": 68
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "uri pagination selector response "
+    },
+    "seq": 69
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "rotate submit build "
+    },
+    "seq": 70
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "oauth wait uri element "
+    },
+    "seq": 71
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "item pass link "
+    },
+    "seq": 72
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "pass rotate "
+    },
+    "seq": 73
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "response test browser code folder webhook "
+    },
+    "seq": 74
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "sandbox login code version "
+    },
+    "seq": 75
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "install cursor allowed package sync "
+    },
+    "seq": 76
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "device plaid "
+    },
+    "seq": 77
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "code node network file "
+    },
+    "seq": 78
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "terminal field "
+    },
+    "seq": 79
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "patch pagination "
+    },
+    "seq": 80
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "python env form patch "
+    },
+    "seq": 81
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "access development origin "
+    },
+    "seq": 82
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "folder team load login access token "
+    },
+    "seq": 83
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "item code submit public "
+    },
+    "seq": 84
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "terminal button "
+    },
+    "seq": 85
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "config field session "
+    },
+    "seq": 86
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "request cookie "
+    },
+    "seq": 87
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "phone secret code "
+    },
+    "seq": 88
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "error load "
+    },
+    "seq": 89
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "code page "
+    },
+    "seq": 90
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "webhook webhook test.\n\nPatch allowed page "
+    },
+    "seq": 91
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "diff sandbox backoff "
+    },
+    "seq": 92
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "tab network type version version "
+    },
+    "seq": 93
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "script transaction "
+    },
+    "seq": 94
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "browser link "
+    },
+    "seq": 95
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "key element "
+    },
+    "seq": 96
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "institution terminal form screenshot rotate oauth "
+    },
+    "seq": 97
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "code field verify mfa "
+    },
+    "seq": 98
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "install screenshot backoff page "
+    },
+    "seq": 99
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "pagination email balance tab browser pagination "
+    },
+    "seq": 100
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "file cookie "
+    },
+    "seq": 101
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "transaction mfa "
+    },
+    "seq": 102
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "patch folder click "
+    },
+    "seq": 103
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "diff email test element install "
+    },
+    "seq": 104
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "version fail "
+    },
+    "seq": 105
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "code plaid backoff page email "
+    },
+    "seq": 106
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "button webhook "
+    },
+    "seq": 107
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "balance request plaid session sync "
+    },
+    "seq": 108
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "token email "
+    },
+    "seq": 109
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "mfa request node request sandbox file "
+    },
+    "seq": 110
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "public terminal mfa "
+    },
+    "seq": 111
+   },
+   {
+    "type": "message.delta",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "code env field env. "
+    },
+    "seq": 112
+   },
+   {
+    "type": "message.complete",
+    "session_id": "07a49c24",
+    "payload": {
+     "text": "Institution response code pagination team institution browser transaction env sync device load item click install access account python node public backoff load network error version exchange webhook token access oauth. Development verify phone script selector terminal request dashboard development backoff error token public diff screenshot dashboard selector fail sandbox version. Balance button device pass team webhook screenshot load config env install json session public script python node terminal sandbox config build selector file verify uri pass link code element link request dashboard session uri field code sync uri type phone element backoff team plaid email request response origin env code.\n\nLogin institution code token phone wait uri wait pass balance click sandbox file origin plaid oauth tab cookie redirect form account selector fail code link field webhook screenshot file verify phone oauth error rotate code json public click account webhook form retry login uri login sync selector webhook access retry item python mfa code link.\n\nConfig submit file verify form token uri pagination selector response rotate submit build oauth wait uri element item pass link pass rotate response test browser code folder webhook sandbox login code version install cursor allowed package sync device plaid code node network file terminal field patch pagination python env form patch access development origin folder team load login access token item code submit public terminal button config field session request cookie phone secret code error load code page webhook webhook test.\n\nPatch allowed page diff sandbox backoff tab network type version version script transaction browser link key element institution terminal form screenshot rotate oauth code field verify mfa install screenshot backoff page pagination email balance tab browser pagination file cookie transaction mfa patch folder click diff email test element install version fail code plaid backoff page email button webhook balance request plaid session sync token email mfa request node request sandbox file public terminal mfa code env field env. ",
+     "status": "complete",
+     "usage": {
+      "calls": 12,
+      "input": 182000,
+      "output": 9400,
+      "total": 191400,
+      "context_used": 64000,
+      "context_max": 200000,
+      "context_percent": 32,
+      "cost_usd": 1.84,
+      "model": "hermes-4"
+     }
+    },
+    "seq": 113
+   }
+  ],
+  "latest_seq": 113,
+  "truncated": false,
+  "count": 56,
+  "epoch": "a1a690266b7b46179117a8880cce92e4",
+  "open_requests": []
+ }
+}

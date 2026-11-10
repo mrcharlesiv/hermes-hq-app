@@ -1,0 +1,61 @@
+/* The Sessions list: section headings as the Bots tab's (quiet, sentence case, no dithered tint square); date groups
+   a step quieter; titles at HQ's list size. */
+button.group\/section-label > span.tracking-\[0\.16em\] {padding-left:4px;font-size:12px;line-height:16px;font-weight:600;letter-spacing:0;color:var(--hq-label-2)}
+.dither.size-2 {display:none}
+
+
+
+/* ---- The Bots list: HQ's Bots tab. A large title, quiet sentence-case section headings with the count after a dot
+   and the chevron at the end, rows of round faces with the name over a two-line preview, hairlines inset to the
+   text, and the one signal that matters (unread, working, needs you) as a dot at the row's end. ---- */
+
+
+[data-slot='sidebar-wrapper'] .border-b:has(> input[placeholder^='Search']) {
+  display:flex;width:100%;height:28px;padding:0 8px;border:0;border-radius:8px;background:var(--hq-fill-3);opacity:1}
+[data-slot='sidebar-wrapper'] .border-b:has(> input[placeholder^='Search']) > input {font-size:13px;field-sizing:fixed}
+
+
+[data-slot='bots-roster'] .grid:has(> [data-roster-key]) {gap:0}
+[data-slot='bots-section'] {margin-left:0;padding-left:0;border-left:0}
+
+[data-slot='bots-roster'] button.tracking-wider {
+  gap:5px;margin-top:6px;padding:5px 8px 5px 10px;font-size:12px;font-weight:600;letter-spacing:0;text-transform:none;
+  color:var(--hq-label-2)}
+[data-slot='bots-roster'] button.tracking-wider > .codicon:not(.codicon-chevron-right) {display:none}
+[data-slot='bots-roster'] button.tracking-wider > .codicon-chevron-right {order:3;font-size:11px !important;opacity:.6}
+[data-slot='bots-roster'] button.tracking-wider > .tabular-nums {order:1;color:inherit}
+[data-slot='bots-roster'] button.tracking-wider > .tabular-nums::before {content:'· '}
+[data-slot='bots-roster'] button.tracking-wider > .flex-1 {order:2}
+
+[data-slot='bots-roster'] button[data-slot='context-menu-trigger'] {position:relative;gap:10px;min-height:48px;padding:5px 8px;border-radius:10px}
+[data-slot='bots-roster'] button[data-slot='context-menu-trigger'] img {width:34px !important;height:34px !important;border-radius:50% !important}   /* sized inline */
+   /* drawn faces */
+[data-slot='bots-roster'] button[data-slot='context-menu-trigger'] :is(.w-\[34px\]) {width:34px}
+[data-slot='bots-roster'] button[data-slot='context-menu-trigger'] .size-8 {width:34px;height:34px;border-radius:50%}
+[data-slot='bots-roster'] button[data-slot='context-menu-trigger'] .font-medium {font-size:13px;line-height:18px;font-weight:600;letter-spacing:-.01em}
+
+[data-slot='bots-roster'] button[data-slot='context-menu-trigger'] .codicon-pinned {display:none}
+
+[data-slot='bots-roster'] button[data-slot='context-menu-trigger'] .text-xs > .truncate {white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+[data-slot='bots-roster'] [data-roster-key] span.size-3\.5 {display:none}
+[data-slot='bots-roster'] [data-roster-key] span.size-3\.5:has([role='status']) {display:grid;position:absolute;right:12px;bottom:17px}
+[data-slot='bots-roster'] [data-roster-key]:has([role='status']) .text-xs {padding-right:18px}
+
+[data-slot='bots-roster'] [data-roster-key] [role='status'][class~='bg-(--ui-success)'] {background:var(--hq-tint)}
+
+[data-slot='bots-roster'] [data-roster-key] + [data-roster-key]::before {
+  content:'';position:absolute;top:0;left:54px;right:10px;border-top:.5px solid var(--hq-sep);pointer-events:none}
+/* A group's move buttons wait for the pointer. */
+[data-slot='bots-roster'] .grid:has(> button[data-slot='context-menu-trigger']) > .flex-col {opacity:0;transition:opacity .15s}
+[data-slot='bots-roster'] .grid:has(> button[data-slot='context-menu-trigger']):hover > .flex-col {opacity:1}
+[data-slot='bots-roster'] :is([data-roster-key][class~='bg-(--ui-row-active-background)'],[data-roster-key]:hover)::before,
+[data-slot='bots-roster'] :is([data-roster-key][class~='bg-(--ui-row-active-background)'],[data-roster-key]:hover) + [data-roster-key]::before {border-color:transparent}
+
+/* Tabs (Sessions and Bots, the chats along the top): the open one a grey capsule, as a segmented control, instead
+   of an underline; no rules between them. A closeable tab carries the context menu's data-slot, hence data-tree-tab. */
+:is([data-slot='pane-tab'],[role='tab'][data-tree-tab]) {font-size:12px;border-left-color:transparent}
+:is([data-slot='pane-tab'],[role='tab'][data-tree-tab]):not([data-vertical]) {height:22px;margin:auto 1px;border-radius:999px}
+
+:is([data-slot='pane-tab'],[role='tab'][data-tree-tab])[data-vertical][data-active='true'] {border-radius:999px}
+/* A side pane's vertical tab strip starts under the window's top-right buttons (they reach 38 px), not beside them. */
+[data-slot='pane-tab'][data-vertical]:first-child {margin-top:12px}

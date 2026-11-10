@@ -1,0 +1,2 @@
+/* [plugin-pages] The fake page plugin's own stylesheet (served beside its bundle, as dist/style.css). */
+.fn-plugin-loaded { outline: none; }

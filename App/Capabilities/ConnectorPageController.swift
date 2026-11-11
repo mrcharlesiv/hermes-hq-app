@@ -25,6 +25,14 @@ struct ConnectorRow: View {
         return line
     }
 
+    /// [connector-rows] Owner 2026-11-10 (design pick 26): the row drops the word "Connected" (its green dot says
+    /// it) and starts at the tool count, "12 tools · Plugin". Every other state keeps its words; VoiceOver, which
+    /// has no dot, still hears the whole line.
+    static func shownWords(_ server: McpServer) -> String {
+        let line = words(server)
+        return line.hasPrefix("Connected · ") ? String(line.dropFirst("Connected · ".count)) : line
+    }
+
     var body: some View {
         // [mac] Stress test 2026-10-28 #22, #92, and [connectors-ux] on every device: a row carries a switch or a chevron,
         // not both (the whole row opens the page). A plugin's connector has no switch here at all: it was a dimmed one
@@ -37,7 +45,9 @@ struct ConnectorRow: View {
                     CatalogLogo(server: server, entry: entry, size: 34)   // [directory]
                     VStack(alignment: .leading, spacing: 2) {
                         Text(title ?? server.name).font(Font.hq(.body).weight(SkillRowMetrics.titleWeight)).foregroundStyle(Color.hqLabel)   // [mac] regular on the Mac, as Skills' names (Mac polish #95)
-                        ConnectorStatusLine(words: Self.words(server), tone: ConnectorTone.of(server))
+                        ConnectorStatusLine(words: Self.shownWords(server), tone: ConnectorTone.of(server))
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel(Self.words(server))
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     if !switchable {

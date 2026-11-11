@@ -512,7 +512,7 @@ struct KanbanTaskView: View {
             Section {
                 header(task).taskBareRow(top: panel ? 4 : 0, bottom: 2, side: panel ? InspectorLook.margin : 0)
                 nowBlock(task).taskBareRow(top: 6, bottom: 6, side: panel ? InspectorLook.margin : 0)
-                factTiles(task).taskBareRow(top: 6, bottom: panel ? 8 : 2, side: panel ? InspectorLook.margin : 0)
+                if !chips { factTiles(task).taskBareRow(top: 6, bottom: panel ? 8 : 2, side: panel ? InspectorLook.margin : 0) }
             }
             .listSectionSeparator(.hidden, edges: .all)
 
@@ -618,8 +618,17 @@ struct KanbanTaskView: View {
 
     /// The status pill, the title, and who made it when.
     private func header(_ task: KanbanTask) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            statusButton(task)
+        VStack(alignment: .leading, spacing: chips ? 2 : 8) {
+            if chips {
+                PagesFlowLayout(spacing: 8, lineSpacing: 0) {
+                    statusButton(task)
+                    assignTile(task)
+                    priorityTile(task)
+                }
+                .buttonStyle(.borderless)   // each its own tap, not the row's
+            } else {
+                statusButton(task)
+            }
             Text(task.title.isEmpty ? task.id : task.title)
                 .font(panel ? Font.hq(.title3).weight(.semibold) : Font.hqSystem(.title2, design: .default, weight: .bold))
                 .foregroundStyle(Color.hqLabel)
@@ -816,7 +825,34 @@ struct KanbanTaskView: View {
         .buttonStyle(.borderless)   // each tile its own tap, not the row's
     }
 
-    private func tile(_ label: String, busy: Bool = false, @ViewBuilder value: () -> some View) -> some View {
+    /// [task-chips] Owner 2026-11-10 (design pick 18): in the sheet (the iOS look, standard text sizes) who has the task
+    /// and its priority are two small buttons on the status's line above the title, where they were two large tiles
+    /// under the working card; the comments reach the first screen. The inspector, the Desktop Look and the
+    /// accessibility sizes keep their forms.
+    private var chips: Bool { !panel && !Theme.isDesktop && !typeSize.isAccessibilitySize }
+
+    @ViewBuilder private func tile(_ label: String, busy: Bool = false, @ViewBuilder value: () -> some View) -> some View {
+        if chips {
+            HStack(spacing: 6) {
+                value()
+                if busy { ProgressView().controlSize(.mini) }
+                else { Image(systemName: "chevron.down").font(Font.hq(.caption).weight(.bold)).foregroundStyle(Color.hqLabel2) }
+            }
+            .font(Font.hq(.subheadline).weight(.semibold))
+            .foregroundStyle(Color.hqLabel)
+            .lineLimit(1)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .frame(minHeight: 32)
+            .background(Capsule().fill(Color.hqFill3))
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        } else {
+            bigTile(label, busy: busy, value: value)
+        }
+    }
+
+    private func bigTile(_ label: String, busy: Bool = false, @ViewBuilder value: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 4) {
                 Text(label).font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
@@ -855,7 +891,7 @@ struct KanbanTaskView: View {
             } else {
             tile("Assigned To", busy: model.busy.contains("assign")) {
                 if let who = task.assignee {
-                    HeadImage(raw: model.head(who), profile: who, size: 24)
+                    HeadImage(raw: model.head(who), profile: who, size: chips ? 18 : 24)
                     Text(model.botName(who))
                 } else {
                     Image(systemName: "person.crop.circle.badge.questionmark").foregroundStyle(Color.hqLabel3)

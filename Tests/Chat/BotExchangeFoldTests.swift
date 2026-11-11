@@ -164,6 +164,47 @@ struct BotExchangeFoldTests {
     /// A message to another bot that failed (Inbox, 2026-10-29 2:09 PM: Hermes's chat "not ready", nothing sent) draws no
     /// line: the call is a failed step of the turn, as any failed tool call is (owner: "what was the purpose of the
     /// notification there? Bad UX").
+    /// Owner, 2026-11-11 (Hermes's chat): Otto wrote overnight and Hermes answered it, "Thanks, Otto. Your diagnosis was
+    /// right…", a long reply that drew as a bubble under "From Otto". It is written to Otto: it folds with Otto's message.
+    @Test func aReplyWrittenToTheOtherBotFolds() throws {
+        func m(_ id: String, _ role: ChatMessage.Role, _ text: String, _ s: Double) -> ChatMessage {
+            ChatMessage(id: id, role: role, parts: [.text(text)], timestamp: now.addingTimeInterval(s), rowId: nil)
+        }
+        let long = String(repeating: " The cleanup step now also treats the other installs as Hermes' own.", count: 12)
+        let before = [m("u1", .user, "Is the account signed in?", -30_000), m("a1", .assistant, "The account is signed in and tested.", -29_990)]
+        let otto = m("d1", .user, "Message from 🤖 Home (@home): Cron scripts inherit the gateway's own path after the update.", -100)
+        let chat = before + [otto, m("a2", .assistant, "Thanks, Home. Your diagnosis was right, and the fix is now in Hermes' code." + long, -60)]
+        let rows = ChatRowBuilder.build(input(chat))
+        #expect(bubbles(rows) == ["u1|b0", "a1|b0"])
+        let line = try #require(lines(rows).last)
+        #expect(line.row.title == "With Home")
+        #expect(line.row.group?.tail == "2 messages")
+        let opened = members(ChatRowBuilder.build(input(chat, expanded: [line.id])))
+        #expect(opened.map(\.row.title) == ["From Home", "Hermes"])
+        #expect(opened.last?.row.full.hasPrefix("Thanks, Home.") == true)
+
+        // News the other bot brought is for you: it keeps its bubble, also when it names the bot.
+        let news = before + [otto, m("a2", .assistant, "Home found the cause: cron scripts inherit the gateway's own path.", -60)]
+        #expect(bubbles(ChatRowBuilder.build(input(news))) == ["u1|b0", "a1|b0", "a2|b0"])
+        // Still being written: a bubble until it ends.
+        var live = chat
+        live[3].isStreaming = true
+        #expect(bubbles(ChatRowBuilder.build(input(live, running: true))).last == "a2|b0")
+        // A region rebuild of the reply as it ends draws what a full build does.
+        let ended = input(chat)
+        let range = UpdateGroups.widen(3...3, input: ended)
+        #expect(range.lowerBound <= 2)
+    }
+
+    @Test func speakingToABotByName() {
+        let yes = ["Thanks, Otto. Your diagnosis was right.", "Otto, the fix is in.", "@otto confirmed, keep the unset.", "**Got it, Otto** — restarting.",
+                   "Understood Otto: no restart.", "Thanks otto", "Good catch, Otto, that was it."]
+        let no = ["Otto found the cause.", "Thanks to Otto, it works.", "The fix is in. Thanks, Otto.", "Otto's diagnosis was right.",
+                  "Good news, Otto found it.", "Thanks, Ottoline."]
+        for text in yes { #expect(BotDMs.speaksTo(["Otto", "otto"], in: text), "\(text)") }
+        for text in no { #expect(!BotDMs.speaksTo(["Otto", "otto"], in: text), "\(text)") }
+    }
+
     @Test func aMessageThatWasntSentDrawsNoLine() {
         let call = ToolCall(id: "c", name: "message_agent", title: "message_agent",
                             argsText: #"{"target":"hermes","message":"Need your browser runtime oversight."}"#,

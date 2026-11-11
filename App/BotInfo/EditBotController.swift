@@ -351,60 +351,87 @@ struct EditBotView: View {
     // MARK: [photoheads] The picture picker (§5)
 
     /// The 72 pt face, the two tabs, and the tab's own control. System controls throughout.
+    /// [edit-picture] Owner 2026-11-10 (design pick 22): in the iOS look the face stands on the left with the tabs and
+    /// the tab's control beside it, and the note runs under them, so the card is half as tall and the name and
+    /// description show on the first screen. The Desktop Look and the accessibility text sizes keep the stacked card.
     private func picturePicker(_ bot: Bot) -> some View {
-        VStack(spacing: Theme.isDesktop ? 14 : 10) {
-            face(bot)
-            if Theme.isDesktop {   // [desktoplook2] the desktop's outlined strip
-                DesktopSegmentStrip(options: [("Head", PictureTab.head), ("Upload", PictureTab.upload)], selection: $model.pictureTab)
-                    .accessibilityElement(children: .contain)
-                    .accessibilityIdentifier("edit-bot.picture-tabs")
-            } else if typeSize.isAccessibilitySize {
-                // The segmented control keeps ~13 pt labels at every size: a menu row grows with the text.
-                // Not "Picture" again under the card's own Picture header. The row's label is drawn only: the picker
-                // says "Type" itself (it read "Picture, Type, Head").
-                LabeledContent {
-                    Picker("Type", selection: $model.pictureTab) {
-                        Text("Head").tag(PictureTab.head)
-                        Text("Upload").tag(PictureTab.upload)
-                    }
-                    .pickerStyle(.menu)
-                    .labelsHidden()
-                    .accessibilityIdentifier("edit-bot.picture-tabs")
-                } label: {
-                    Text("Type").accessibilityHidden(true)
+        Group {
+            if Theme.isDesktop || typeSize.isAccessibilitySize {
+                VStack(spacing: Theme.isDesktop ? 14 : 10) {
+                    face(bot)
+                    pictureTabs
+                    tabControl(note: true)
                 }
             } else {
-                // [ui-sizing] `HQSegmentedPicker`: its titles follow UI Scale (iOS's own segments at 100 %).
-                HQSegmentedPicker("Picture", options: [("Head", PictureTab.head), ("Upload", PictureTab.upload)],
-                                  selection: $model.pictureTab)
-                    .labelsHidden()
-                    .accessibilityIdentifier("edit-bot.picture-tabs")
-            }
-            switch model.pictureTab {
-            case .head:
-                VStack(spacing: 8) {
-                    editHeadButton
-                    headNote.multilineTextAlignment(.center)
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .center, spacing: 14) {
+                        face(bot)
+                        VStack(spacing: 8) {
+                            pictureTabs
+                            tabControl(note: false)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    if model.pictureTab == .head { headNote }
                 }
-            case .upload:
-                Menu {
-                    Button { choosePhoto(.library) } label: { Label("Photo Library", systemImage: "photo.on.rectangle") }
-                        .accessibilityIdentifier("edit-bot.choose-library")
-                    Button { choosePhoto(.file) } label: { Label("Choose File", systemImage: "folder") }
-                        .accessibilityIdentifier("edit-bot.choose-file")
-                } label: {
-                    Label("Choose an Image…", systemImage: "photo.badge.plus")
-                        .frame(maxWidth: .infinity, minHeight: Self.borderedLabelMinHeight)
-                }
-                .menuOrder(.fixed)
-                .hqBorderedButtonStyle()
-                .accessibilityIdentifier("edit-bot.choose-image")
             }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, Theme.isDesktop ? 12 : 4)   // [compact] iOS look: the List row pads it already
         // The line above Remove Picture runs the row's whole width (not from the centred button's label).
         .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
+    }
+
+    @ViewBuilder private var pictureTabs: some View {
+        if Theme.isDesktop {   // [desktoplook2] the desktop's outlined strip
+            DesktopSegmentStrip(options: [("Head", PictureTab.head), ("Upload", PictureTab.upload)], selection: $model.pictureTab)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("edit-bot.picture-tabs")
+        } else if typeSize.isAccessibilitySize {
+            // The segmented control keeps ~13 pt labels at every size: a menu row grows with the text.
+            // Not "Picture" again under the card's own Picture header. The row's label is drawn only: the picker
+            // says "Type" itself (it read "Picture, Type, Head").
+            LabeledContent {
+                Picker("Type", selection: $model.pictureTab) {
+                    Text("Head").tag(PictureTab.head)
+                    Text("Upload").tag(PictureTab.upload)
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .accessibilityIdentifier("edit-bot.picture-tabs")
+            } label: {
+                Text("Type").accessibilityHidden(true)
+            }
+        } else {
+            // [ui-sizing] `HQSegmentedPicker`: its titles follow UI Scale (iOS's own segments at 100 %).
+            HQSegmentedPicker("Picture", options: [("Head", PictureTab.head), ("Upload", PictureTab.upload)],
+                              selection: $model.pictureTab)
+                .labelsHidden()
+                .accessibilityIdentifier("edit-bot.picture-tabs")
+        }
+    }
+
+    @ViewBuilder private func tabControl(note: Bool) -> some View {
+        switch model.pictureTab {
+        case .head:
+            VStack(spacing: 8) {
+                editHeadButton
+                if note { headNote.multilineTextAlignment(.center) }
+            }
+        case .upload:
+            Menu {
+                Button { choosePhoto(.library) } label: { Label("Photo Library", systemImage: "photo.on.rectangle") }
+                    .accessibilityIdentifier("edit-bot.choose-library")
+                Button { choosePhoto(.file) } label: { Label("Choose File", systemImage: "folder") }
+                    .accessibilityIdentifier("edit-bot.choose-file")
+            } label: {
+                Label("Choose an Image…", systemImage: "photo.badge.plus")
+                    .frame(maxWidth: .infinity, minHeight: Self.borderedLabelMinHeight)
+            }
+            .menuOrder(.fixed)
+            .hqBorderedButtonStyle()
+            .accessibilityIdentifier("edit-bot.choose-image")
+        }
     }
 
     /// A staged photo as an app-icon tile; a staged removal as the head; otherwise the bot's face as every list draws it.

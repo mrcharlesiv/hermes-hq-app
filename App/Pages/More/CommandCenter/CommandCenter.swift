@@ -367,16 +367,24 @@ struct CommandCenterSystem: View {
                     Text("For the whole gateway, all bots together. Each bot’s apps are set up in Messaging.")
                 } }
             }
-            Section {
-                if !model.readOnly { restartRow }
-                NavRow(title: "Recent Logs") { model.openLogs() }
-                    .accessibilityIdentifier("command-center.logs")
-            } footer: { HQSectionFooter {
-                if !model.readOnly, !model.online, !model.anyActionBusy { Text(MorePages.offlineFooter) }
-            } }
-            updateSection(status)
+            // [status-tidy] Owner 2026-11-10 (design pick 15): on the iPhone and iPad these rows are part of the one
+            // Maintenance list below (`CommandCenterMaintenance`), each with its mark. The Mac keeps its form, and a
+            // read-only gateway (which has no Maintenance list) keeps them here.
+            if !Self.oneList(model) {
+                Section {
+                    if !model.readOnly { restartRow }
+                    NavRow(title: "Recent Logs") { model.openLogs() }
+                        .accessibilityIdentifier("command-center.logs")
+                } footer: { HQSectionFooter {
+                    if !model.readOnly, !model.online, !model.anyActionBusy { Text(MorePages.offlineFooter) }
+                } }
+                updateSection(status)
+            }
         }
     }
+
+    /// [status-tidy] Restart, Update, the maintenance actions and Recent Logs as one list.
+    static func oneList(_ model: CommandCenterModel) -> Bool { !DeviceWord.isMac && !model.readOnly }
 
     /// [mac-ui-issues] The name, the status and the chevron share one line (the chevron sat 6 px above "Error"), and an
     /// error runs under them at the row's whole width (it wrapped at half the row, beside the status).
@@ -395,7 +403,7 @@ struct CommandCenterSystem: View {
         .padding(.vertical, platform.error == nil ? 0 : 6)
     }
 
-    @ViewBuilder private var restartRow: some View {
+    @ViewBuilder var restartRow: some View {
         if model.restart.phase == .idle, DeviceWord.isMac {
             // [mac] Stress test 2026-10-28 #51: a push button at the row's trailing edge; it asks first, so "…".
             // [mac] Stress test 2026-10-28 #10 (then Command Center): the button sat alone at the right of an empty row above
@@ -415,10 +423,16 @@ struct CommandCenterSystem: View {
                     .accessibilityIdentifier("command-center.restart")
             }
         } else if model.restart.phase == .idle {
-            Button("Restart Gateway") { model.askRestart() }
+            Button { model.askRestart() } label: {
+                HStack(spacing: 12) {
+                    MaintenanceMark(symbol: "arrow.clockwise")
+                    Text("Restart Gateway").foregroundStyle(Color.hqLabel)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
                 .disabled(!model.canStartAction)
                 .accessibilityIdentifier("command-center.restart")
-                .hqMacPushButton(leading: true)   // [mac] Stress test 2026-10-28 #51: at the form's leading edge, not floating at the trailing end
         } else {
             VStack(alignment: .leading, spacing: 8) {
                 if model.restart.isBusy {
@@ -435,11 +449,28 @@ struct CommandCenterSystem: View {
     }
 
     @ViewBuilder private func updateSection(_ status: GatewayStatusReport) -> some View {
+        Section {
+            updateRows
+        } header: { HQSectionLabel {
+            Text("Hermes")
+        } } footer: { HQSectionFooter {
+            if let message = updateFootnote { Text(message) }
+        } }
+        .onChange(of: model.updateRun?.end) { _, end in if end != nil { model.updateEnded() } }
+    }
+
+    /// Under the update's rows: why this gateway can't apply the update itself.
+    var updateFootnote: String? {
+        guard let check = model.update, !check.canUpdateNow || model.readOnly, check.behind != 0, model.updateRun == nil else { return nil }
+        return check.message
+    }
+
+    @ViewBuilder var updateRows: some View {
         let check = model.update
         // [update-flow] An update shows whenever one is out: the sheet says when this gateway can't apply it itself
         // (and what to run instead), rather than the row hiding the button.
         let canUpdate = !model.readOnly && check?.updateAvailable == true
-        Section {
+        Group {
             let recheck = (check == nil || check?.couldNotCheck == true) && model.updateChecked
             if let run = model.updateRun {
                 // [update-flow] "Updating Studio…" and the step under way; a tap brings the same sheet back.
@@ -474,14 +505,7 @@ struct CommandCenterSystem: View {
                     .disabled(!model.online)
                     .accessibilityIdentifier("command-center.update.retry")
             }
-        } header: { HQSectionLabel {
-            Text("Hermes")
-        } } footer: { HQSectionFooter {
-            if let check, !check.canUpdateNow || model.readOnly, check.behind != 0, let message = check.message, model.updateRun == nil {
-                Text(message)
-            }
-        } }
-        .onChange(of: model.updateRun?.end) { _, end in if end != nil { model.updateEnded() } }
+        }
     }
 
     /// [update-flow] "0.23.0 Available · 3 Updates" when the check names the release.
@@ -493,12 +517,15 @@ struct CommandCenterSystem: View {
     }
 
     private func updateLabel(_ check: HermesUpdateCheck?, tint: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text("Update Hermes")
-                .foregroundStyle(tint ? Color.hqTint : Color.hqLabel)
-                .fixedSize(horizontal: false, vertical: true)
-            Text(check.map(Self.updateWords) ?? (model.updateChecked ? "Couldn’t Check" : "Checking…"))
-                .font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
+        HStack(spacing: 12) {
+            if !DeviceWord.isMac { MaintenanceMark(symbol: "arrow.up.circle", tint: tint) }
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Update Hermes")
+                    .foregroundStyle(tint ? Color.hqTint : Color.hqLabel)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(check.map(Self.updateWords) ?? (model.updateChecked ? "Couldn’t Check" : "Checking…"))
+                    .font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 6)
@@ -513,29 +540,55 @@ struct CommandCenterMaintenance: View {
     @Bindable var model: CommandCenterModel
 
     var body: some View {
+        // [status-tidy] On the iPhone and iPad: Restart Gateway and Update Hermes lead this list and Recent Logs ends
+        // it, every row with a mark, the names in the label's colour (they stood in three boxes in three styles: a
+        // grey title, a blue link, a blue title over small print).
+        let oneList = CommandCenterSystem.oneList(model) && model.status != nil
+        let system = CommandCenterSystem(model: model)
         Section {
+            if oneList {
+                system.restartRow
+                system.updateRows
+            }
             ForEach(MaintenanceAction.allCases) { action in
                 Button { model.run(action) } label: {
                     HStack(spacing: 12) {
+                        if !DeviceWord.isMac { MaintenanceMark(symbol: action.symbol) }
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(action.title).foregroundStyle(Color.hqTint)
+                            Text(action.title).foregroundStyle(DeviceWord.isMac ? Color.hqTint : Color.hqLabel)
                             Text(action.detail).font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         if model.maintenance.isBusy, model.maintenanceAction == action { ProgressView().controlSize(.small) }
                     }
-                    .padding(.vertical, 12)
+                    .padding(.vertical, DeviceWord.isMac ? 12 : 6)
                     .contentShape(Rectangle())
                 }
                 .disabled(!model.canStartMaintenance)
                 .accessibilityIdentifier("command-center.maintenance.\(action.rawValue)")
             }
+            if oneList {
+                Button { model.openLogs() } label: {
+                    HStack(spacing: 12) {
+                        MaintenanceMark(symbol: "doc.text")
+                        Text("Recent Logs").foregroundStyle(Color.hqLabel)
+                        Spacer(minLength: 0)
+                        SettingsChevron()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .accessibilityIdentifier("command-center.logs")
+            }
         } header: { HQSectionLabel {
             Text("Maintenance")   // [status-page] the page's own word for its second part (was "Diagnostics" on its tab)
         } } footer: { HQSectionFooter {
-            if !model.online { Text(MorePages.offlineFooter) } else { Text("These run on \(HostWord.phrase). Nothing is sent anywhere else.") }
+            VStack(alignment: .leading, spacing: 6) {
+                if oneList, let message = system.updateFootnote { Text(message) }
+                if !model.online { Text(MorePages.offlineFooter) } else { Text("These run on \(HostWord.phrase). Nothing is sent anywhere else.") }
+            }
         } }
+        .onChange(of: model.updateRun?.end) { _, end in if oneList, end != nil { model.updateEnded() } }
         if let action = model.maintenanceAction, let words = ActionWords.maintenance(model.maintenance.phase) {
             Section {
                 NavRow(title: "\(action.outputTitle) Output", value: words.isError && !words.isBusy && model.maintenance.lines.isEmpty ? "Failed" : (words.text.count <= 24 ? words.text : nil)) {
@@ -544,5 +597,27 @@ struct CommandCenterMaintenance: View {
                 .accessibilityIdentifier("command-center.maintenance.output")
             }
         }
+    }
+}
+
+
+/// [status-tidy] A maintenance row's mark: the symbol on a quiet 28 pt tile, as More's rows have theirs.
+struct MaintenanceMark: View {
+    var symbol: String
+    var tint = false
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(Font.hq(.subheadline).weight(.medium))
+            .foregroundStyle(tint ? Color.hqTint : Color.hqLabel2)
+            .frame(width: HQFont.scaled(28), height: HQFont.scaled(28))
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color.hqFill3))
+            .accessibilityHidden(true)
+    }
+}
+
+extension MaintenanceAction {
+    var symbol: String {
+        switch self { case .doctor: "stethoscope"; case .securityAudit: "lock.shield"; case .backup: "externaldrive" }
     }
 }

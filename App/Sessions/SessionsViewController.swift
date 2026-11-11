@@ -169,8 +169,8 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
                 page: "sessions",
                 filterMenu: { [weak self] in self?.filterMenu() ?? [] },
                 search: search,
-                // [sessions-m9] A picked chip's bot gets the new chat, with no chooser (§7.3).
-                compose: .action({ [weak self] in self?.organizer?.compose(profile: self?.pickedBot) }),
+                // [sessions-m9] The New Chat sheet, a picked chip's bot lit (§7.3).
+                compose: .action({ [weak self] in self?.organizer?.compose(profile: self?.pickedBot, asksProject: true) }),
                 filterLabel: "Filter and Sort"))
             capsule.install()
             barCapsule = capsule
@@ -1459,7 +1459,9 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
                 // Chat with it (no filter was set).
                 let chipOnly = SessionFilterWords.filterCount(state) == 0 ? state.botFilter : nil
                 let botName = chipOnly.map { owners[$0]?.name ?? Self.readableProfileName($0) }
-                let compose: (() -> Void)? = organizer == nil ? nil : { [weak self] in self?.organizer?.compose(profile: self?.pickedBot) }
+                let compose: (() -> Void)? = organizer == nil ? nil : { [weak self] in
+                    self?.organizer?.compose(profile: self?.pickedBot, asksProject: true)
+                }
                 showEmptyState(UIHostingConfiguration {
                     SessionsNoMatchView(bot: botName, compose: compose) { [weak self] in self?.perform(.clear, nil) }
                 })
@@ -1475,7 +1477,9 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
                     var button = UIButton.Configuration.hqPush()
                     button.title = "New Chat"
                     empty.button = button
-                    empty.buttonProperties.primaryAction = UIAction { [weak self] _ in self?.organizer?.compose(profile: self?.pickedBot) }
+                    empty.buttonProperties.primaryAction = UIAction { [weak self] _ in
+                        self?.organizer?.compose(profile: self?.pickedBot, asksProject: true)
+                    }
                 }
                 showEmptyState(empty)
             }

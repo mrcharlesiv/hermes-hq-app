@@ -896,8 +896,8 @@ The menu belongs to the **whole message** (all of a reply's bubbles), lifting th
 `readableText` (`message-actions.ts:11-21`), per line outside code fences (fence lines themselves dropped, fenced lines
 kept verbatim): list marker (and `[ ]`/`[x]`) → `"• "`; drop heading `#`s and quote `>`; images → alt text; links →
 `words (url)` (or just `url` when equal); remove `**`/`__`/`*`/`_`/`~~` emphasis and backticks around inline code.
-Vector (`S/stress-b.test.ts:51-55`): ``"- **Brandy:** you told her\n## Next\nSee [the doc](https://x.test) and `npm i`\n```\nconst a = **b**\n```"`` →
-`"• Brandy: you told her\nNext\nSee the doc (https://x.test) and npm i\nconst a = **b**"`.
+Vector (`S/stress-b.test.ts:51-55`): ``"- **Dana:** you told her\n## Next\nSee [the doc](https://x.test) and `npm i`\n```\nconst a = **b**\n```"`` →
+`"• Dana: you told her\nNext\nSee the doc (https://x.test) and npm i\nconst a = **b**"`.
 
 ### 9.3 "Retry"
 

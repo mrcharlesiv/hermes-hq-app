@@ -121,26 +121,49 @@ struct PluginCatalogRow: View {
         Button(action: open) {
             HStack(spacing: 12) {
                 ConnectorSymbolTile(name: entry.name, symbol: entry.category.symbol, size: 34)
+                // [plugin-rows] Owner 2026-11-10 (design pick 6): the maker and the stars share the name's line (the
+                // maker after the name, the stars or "Installed" at the trailing edge), so the row is the name and
+                // its two lines of summary with no third line of small print, and it has no arrow: the whole row is
+                // the button, as on Jobs and Bots. At the accessibility text sizes the byline keeps its own line.
+                let edged = !typeSize.isAccessibilitySize
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text(entry.title).font(Font.hq(.body).weight(SkillRowMetrics.titleWeight)).foregroundStyle(Color.hqLabel)   // [mac] regular on the Mac, as Skills' names (Mac polish #95)
-                        if let tier = entry.tierWord { PluginTierBadge(words: tier) }
+                            .lineLimit(edged ? 1 : nil).layoutPriority(2)
+                        if let tier = entry.tierWord { PluginTierBadge(words: tier).layoutPriority(1) }
+                        if edged {
+                            if !entry.maintainer.isEmpty {
+                                Text(entry.maintainer).font(Font.hq(.caption)).foregroundStyle(Color(uiColor: HQPalette.cardNote))
+                                    .lineLimit(1).truncationMode(.tail)
+                            }
+                            Spacer(minLength: 4)
+                            Group {
+                                if installed {
+                                    Label("Installed", systemImage: "checkmark.circle.fill").foregroundStyle(.green).labelStyle(.titleAndIcon)
+                                } else if let stars = entry.stars {
+                                    Text("\(Image(systemName: "star.fill")) \(stars.starWords)").foregroundStyle(Color(uiColor: HQPalette.cardNote))
+                                }
+                            }
+                            .font(Font.hq(.caption)).lineLimit(1).fixedSize().layoutPriority(3)
+                        }
                     }
                     let summary = entry.summary
                     if !summary.isEmpty {
                         Text(PluginCatalogEntry.styled(summary)).font(Font.hq(.subheadline)).foregroundStyle(Color.hqLabel2)
                             .lineLimit(typeSize.isAccessibilitySize ? nil : Density.compact ? 1 : 2)   // [ui-sizing] Compact: one line
                     }
-                    if installed {
-                        Label("Installed", systemImage: "checkmark.circle.fill").font(Font.hq(.caption)).foregroundStyle(.green)
-                            .labelStyle(.titleAndIcon)
-                    } else if let line = byline {
-                        // Mac polish #68: label 2 in the iOS look (label 3 read about 2.2:1); the Desktop Look's 3.
-                        line.font(Font.hq(.caption)).foregroundStyle(Color(uiColor: HQPalette.cardNote)).lineLimit(1)
+                    if !edged {
+                        if installed {
+                            Label("Installed", systemImage: "checkmark.circle.fill").font(Font.hq(.caption)).foregroundStyle(.green)
+                                .labelStyle(.titleAndIcon)
+                        } else if let line = byline {
+                            // Mac polish #68: label 2 in the iOS look (label 3 read about 2.2:1); the Desktop Look's 3.
+                            line.font(Font.hq(.caption)).foregroundStyle(Color(uiColor: HQPalette.cardNote)).lineLimit(1)
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                if chevron { SettingsChevron() }
+                if chevron && !edged { SettingsChevron() }
             }
             .padding(.vertical, 3)
             .contentShape(Rectangle())

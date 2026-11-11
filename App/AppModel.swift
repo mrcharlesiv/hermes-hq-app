@@ -31,6 +31,8 @@ final class AppModel: AppServices {
     /// [questions] The account's open approvals, questions and password prompts (spec 1x §3.2); nil under the
     /// `HQNNoServerRequests` kill switch (M1 behaviour).
     private(set) var serverRequests: ServerRequestCenter?
+    /// [preview-tab] Bots' Browser tabs (App/Browser/PreviewTab.swift).
+    private(set) var previewTabs: PreviewTabCenter?
     /// [questions] The account's kept password sheets (typed text survives a tuck and leaving the chat, spec 1x §4.5).
     private(set) var promptSheets: PromptSheetStore?
     /// [browser] The account's browser plugin (Watch Browser, App/Browser/AppModel+Browser.swift).
@@ -164,6 +166,7 @@ final class AppModel: AppServices {
         wire(chat)
         chat.keepQueue()                        // verify round 3: a queue left in this chat comes back
         chat.adoptEarlierDraft()                // the row's "Draft:" words are the ones the field opens with
+        chat.readAhead()                        // [smooth-open]
         return chat
     }
 
@@ -184,6 +187,7 @@ final class AppModel: AppServices {
         sessionStore?.markOpened(session)
         wire(chat)
         chat.keepQueue()                        // verify round 3
+        chat.readAhead()                        // [smooth-open]
         return chat
     }
 
@@ -391,6 +395,12 @@ final class AppModel: AppServices {
             serverRequests = center
             promptSheets = sheets
         }
+        // [preview-tab] The Browser tab a bot opens with `desktop_preview`; it also answers the bot's reads of it.
+        let previewTabs = PreviewTabCenter(client: client, accountId: account.id)
+        self.previewTabs = previewTabs
+        serverRequests?.previewReader = { [weak previewTabs] session, params in
+            await previewTabs?.read(session: session, params: params)
+        }
         // [attachments] drafts restored and their uploads resumed, chat on screen or not (docs/spec/1x-attachments.md §6.3)
         let attachments = AttachmentCenter.center(for: account, client: client)
 
@@ -438,6 +448,8 @@ final class AppModel: AppServices {
         #if DEBUG
         sessions.onProbeStats = { DebugHooks.recordText($0.text, as: "probe.txt") }
         if DebugHooks.resetSessionsView {          // UI tests: Filter and Sort from its defaults, no lost send or draft kept
+            UserDefaults.standard.removeObject(forKey: NewChatLast.botKey)       // the New Chat sheet remembers nothing
+            UserDefaults.standard.removeObject(forKey: NewChatLast.projectsKey)
             sessions.setView { $0 = SessionsViewPrefs() }
             sessions.showBackgroundRuns = false
             sessions.showOutsideChats = false
@@ -560,6 +572,8 @@ final class AppModel: AppServices {
         turnWorking = TurnWorking()
         needsInputSessions = []          // [sessions-m9]
         HistoryFlights.shared.removeAll()
+        previewTabs?.shutdown()      // [preview-tab]
+        previewTabs = nil
         serverRequests?.shutdown()   // [questions] drafts and kept sheets go too (rule 9)
         serverRequests = nil
         promptSheets?.removeAll()

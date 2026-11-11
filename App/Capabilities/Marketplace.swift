@@ -1036,7 +1036,20 @@ struct MarketplaceView: View {
                 .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 4, trailing: 0))
         }
         if model.bots.count > 1 {
-            Section { MarketplaceInstallTo(model: model) }
+            if DeviceWord.isMac || typeSize.isAccessibilitySize {
+                Section { MarketplaceInstallTo(model: model) }
+            } else {
+                // [market-slim] One quiet line at the trailing edge above the list, not a full-width box of its own.
+                Section {
+                    MarketplaceInstallTo(model: model, compact: true)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .hqDesktopBareRow()
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
+                }
+                .listSectionSpacing(.compact)
+            }
         }
     }
 
@@ -1411,6 +1424,8 @@ extension CapabilitiesModel {
 /// The bot an install goes to, as Hermes Desktop's "Install to".
 struct MarketplaceInstallTo: View {
     @Bindable var model: CapabilitiesModel
+    /// [market-slim] "Install to Hermes ⌃" as one line of small words (the iPhone's Marketplace).
+    var compact = false
 
     var body: some View {
         Menu {
@@ -1423,7 +1438,17 @@ struct MarketplaceInstallTo: View {
                 ForEach(model.bots) { bot in Text(bot.name).tag(bot.id) }
             }
         } label: {
-            SettingsMenuRowFace(label: Text("Install To").foregroundStyle(Color.hqLabel), value: model.botName)
+            if compact {
+                HStack(spacing: 4) {
+                    Text("\(Text("Install to ").foregroundStyle(Color.hqLabel2))\(Text(model.botName).fontWeight(.semibold).foregroundStyle(Color.hqLabel))")
+                    Image(systemName: "chevron.up.chevron.down").imageScale(.small).foregroundStyle(Color.hqLabel2)
+                }
+                .font(Font.hq(.footnote))
+                .frame(minHeight: 32)
+                .contentShape(Rectangle())
+            } else {
+                SettingsMenuRowFace(label: Text("Install To").foregroundStyle(Color.hqLabel), value: model.botName)
+            }
         }
         .accessibilityIdentifier("marketplace.install-to")
     }
@@ -1671,7 +1696,7 @@ struct MarketplaceCarousel: View {
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
-            .frame(height: typeSize.isAccessibilitySize ? 470 : 330)
+            .frame(height: typeSize.isAccessibilitySize ? 470 : slim ? 136 : 330)
             if entries.count > 1 {
                 HStack(spacing: 6) {
                     ForEach(entries.indices, id: \.self) { index in
@@ -1695,7 +1720,58 @@ struct MarketplaceCarousel: View {
         .accessibilityIdentifier("marketplace.featured")
     }
 
-    private func card(_ entry: PluginCatalogEntry) -> some View {
+    /// [market-slim] Owner 2026-11-10 (design pick 17): on the iPhone and iPad the featured plugin is a slim card, its
+    /// picture a square on the left, so the list under the filters starts on the first screen (the banner card and
+    /// its buttons took half of it). The Mac's row of cards and the accessibility text sizes keep the banner card.
+    private var slim: Bool { !row && !DeviceWord.isMac && !typeSize.isAccessibilitySize }
+
+    @ViewBuilder private func card(_ entry: PluginCatalogEntry) -> some View {
+        if slim { slimCard(entry) } else { bannerCard(entry) }
+    }
+
+    private func slimCard(_ entry: PluginCatalogEntry) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            MarketplaceBanner(url: entry.image, name: entry.title, symbol: entry.category.symbol)
+                .frame(width: 96, height: 96)
+                .clipShape(RoundedRectangle(cornerRadius: HQShape.radius(12, .card), style: .continuous))
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    if let tier = entry.tierWord { PluginTierBadge(words: tier) }
+                    Text(entry.maintainer).font(Font.hq(.caption)).foregroundStyle(Color.hqLabel2).lineLimit(1)
+                }
+                Text(entry.title).font(Font.hq(.headline)).foregroundStyle(Color.hqLabel).lineLimit(1)
+                Text(PluginCatalogEntry.styled(entry.summary)).font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                HStack(spacing: 8) {
+                    if installed(entry) {
+                        Label("Installed", systemImage: "checkmark.circle.fill").font(Font.hq(.footnote).weight(.semibold))
+                            .foregroundStyle(.green)
+                    } else {
+                        Button { open(entry, true) } label: {
+                            Text("Install").font(Font.hq(.footnote).weight(.semibold)).frame(minWidth: 56, minHeight: 22)
+                        }
+                        .hqGlassProminentButtonStyle()
+                        .accessibilityIdentifier("marketplace.featured.install-\(entry.name)")
+                    }
+                    Button { open(entry, false) } label: {
+                        Text("Details").font(Font.hq(.footnote).weight(.semibold)).frame(minWidth: 56, minHeight: 22)
+                    }
+                    .hqBorderedButtonStyle()
+                    .accessibilityIdentifier("marketplace.featured.details-\(entry.name)")
+                }
+                .padding(.top, 3)
+            }
+        }
+        .padding(10)
+        .background(Color(uiColor: HQPalette.card), in: RoundedRectangle(cornerRadius: HQShape.radius(14, .card), style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: HQShape.radius(14, .card), style: .continuous))
+        .onTapGesture { open(entry, false) }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(entry.title), \(entry.tierWord ?? "Community") plugin by \(entry.maintainer)")
+    }
+
+    private func bannerCard(_ entry: PluginCatalogEntry) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             MarketplaceBanner(url: entry.image, name: entry.title, symbol: entry.category.symbol, wholeUpTo: DeviceWord.isMac ? 150 : nil)
                 .frame(height: DeviceWord.isMac ? nil : 150)

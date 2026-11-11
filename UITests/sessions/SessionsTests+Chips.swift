@@ -126,24 +126,28 @@ extension SessionsTests {
         shot(app, "C4-rail-back-at-top")
     }
 
-    /// C5, C6: a relaunch opens on All; Compose with a chip picked starts that bot's chat with no chooser, with All it
-    /// shows Choose a Bot.
+    /// C5, C6: a relaunch opens on All; Compose with a chip picked opens the New Chat sheet with that bot lit (tester
+    /// a tester 2026-11-10), with All it opens the same sheet.
     @MainActor func test43_RelaunchOnAllAndComposeUsesTheChip() throws {
         let app = launch()
         XCTAssertTrue(row(app, "s-garden").waitForExistence(timeout: 15))
         chip(app, "research").tap()
         XCTAssertTrue(waitUntil(6) { self.order(app) == ["s-trip", "s-recipes"] })
         app.buttons["sessions.compose"].tap()
+        let pill = app.buttons["new-chat-bot-research"]
+        XCTAssertTrue(pill.waitForExistence(timeout: 5), "New Chat")
+        XCTAssertTrue(pill.isSelected, "Research is lit")
+        shot(app, "C6-compose-with-chip-sheet")
+        app.buttons["new-chat-project-none"].tap()
         XCTAssertTrue(waitUntil(8) { self.rpc("session.create").contains { $0["profile"] as? String == "research" } },
-                      "a new Research chat, straight away")
-        XCTAssertFalse(app.buttons["choose-bot-research"].exists, "no Choose a Bot")
+                      "a new Research chat")
         XCTAssertTrue(app.tables["chat.table"].waitForExistence(timeout: 8), "the new chat opens")
         shot(app, "C6-compose-with-chip")
         backToList(app)
         XCTAssertTrue(chip(app, "research").isSelected)
         chip(app, nil).tap()
         app.buttons["sessions.compose"].tap()
-        XCTAssertTrue(app.buttons["choose-bot-research"].waitForExistence(timeout: 5), "under All: Choose a Bot")
+        XCTAssertTrue(app.buttons["new-chat-bot-research"].waitForExistence(timeout: 5), "under All: the same sheet")
         shot(app, "C6-compose-under-all")
         app.terminate()
 

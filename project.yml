@@ -24,7 +24,7 @@ settings:
     DEVELOPMENT_TEAM: 2Y6UGK7GET
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: YES
-    MARKETING_VERSION: "1.0.2"
+    MARKETING_VERSION: "1.0.3"
     CURRENT_PROJECT_VERSION: "5"
     # Identity tables: HQ_X = $(HQ_X_$(HQ_IDENTITY)). project-original.yml sets HQ_IDENTITY_CHOICE.
     HQ_IDENTITY: $(HQ_IDENTITY_CHOICE:default=native)
@@ -86,6 +86,11 @@ packages:
   # (App/Chat/Render/MathTypeset.swift).
   SwiftMath:
     path: Vendor/SwiftMath
+  # [more accurate words] FluidAudio runs NVIDIA's Parakeet speech model on Core ML (docs/spec/3x-live-words.md §2.2).
+  # Pinned: its API moves between releases.
+  FluidAudio:
+    url: https://github.com/FluidInference/FluidAudio.git
+    exactVersion: 0.18.3
 targets:
   HermesHQNative:
     type: application
@@ -102,6 +107,7 @@ targets:
       - package: Markdown
       - package: WallpaperArt   # [backdrop]
       - package: WebRTC     # [gpt-live]
+      - package: FluidAudio # [more accurate words]
       - package: SwiftTerm  # [terminal]
       - package: SwiftMath  # [transcript] typeset formulas
     settings:

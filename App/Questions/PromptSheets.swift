@@ -42,7 +42,8 @@ nonisolated struct PromptSheetCopy: Sendable, Equatable {
             let command = nonEmpty("command")
             return PromptSheetCopy(
                 title: "Administrator Password",
-                text: "Review the command before entering your sudo password. Your password is sent to \(bot) to run it and kept for this session.",
+                // [sudo-tidy] One line under the field: the command itself now leads the sheet.
+                text: "Your password is sent to \(bot) to run this, and kept for this session.",
                 command: command,
                 commandMissing: command == nil ? "\(botStart) didn’t say which command. Choose Don’t Send if you can’t check it in the conversation." : nil,
                 fields: [.secure(placeholder: "sudo password")], primary: "Send", decline: "Don’t Send", chip: "Password requested")
@@ -99,6 +100,8 @@ final class PromptSheetController: UIViewController, UITextFieldDelegate, UIAdap
     private let closeItem: UIBarButtonItem
     private var fields: [UITextField] = []
     private var primaryItem: UIBarButtonItem!
+    /// [sudo-tidy] The bot's name at the start of a sentence ("Ivy wants to run").
+    private let botLead: String
     private let scroll = UIScrollView()
     private let stack = UIStackView()
     private var sending = false
@@ -118,6 +121,8 @@ final class PromptSheetController: UIViewController, UITextFieldDelegate, UIAdap
     init(prompt: ValuePrompt, botName: String? = nil) {
         self.prompt = prompt
         self.copy = PromptSheetCopy.make(prompt, botName: botName)
+        let named = botName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        botLead = named.isEmpty ? "The bot" : named
         // Every close tucks (MEM:password-request-chip, build 85): the ✕ too.
         let close = UIBarButtonItem.hqClose(action: nil)   // [mac] #55: Done on the Mac
         close.accessibilityIdentifier = "sheet.close"
@@ -135,8 +140,15 @@ final class PromptSheetController: UIViewController, UITextFieldDelegate, UIAdap
         navigationItem.titleView = title
         primaryItem = UIBarButtonItem(title: copy.primary, style: .prominent, target: self, action: #selector(primaryTapped))
         primaryItem.accessibilityIdentifier = "prompt.primary"
-        navigationItem.rightBarButtonItem = primaryItem
+        // [sudo-tidy] The sudo sheet's Send is in the sheet, beside Don't Send; the others keep theirs in the bar.
+        if !paired { navigationItem.rightBarButtonItem = primaryItem }
     }
+
+    /// [sudo-tidy] Owner 2026-11-10 (design pick 13), the Administrator Password sheet: the command leads under
+    /// "<Bot> wants to run", then the password, one line saying where it goes, and Don't Send and Send as a pair under
+    /// that (Send was in the bar's corner and Don't Send floated mid-sheet).
+    private var paired: Bool { prompt.kind == .sudo }
+    private weak var pairedPrimary: UIButton?
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
@@ -178,9 +190,11 @@ final class PromptSheetController: UIViewController, UITextFieldDelegate, UIAdap
             line.accessibilityIdentifier = "prompt.key"
             words.content.addArrangedSubview(line)
         }
-        stack.addArrangedSubview(words)
+        // [sudo-tidy] With the command to lead, the words follow the field as one quiet line.
+        let wordsLast = paired && copy.command != nil
+        if !wordsLast { stack.addArrangedSubview(words) }
         if let command = copy.command {
-            let heading = label("Command", style: .footnote, color: HQPalette.label2)
+            let heading = label(paired ? "\(botLead) wants to run" : "Command", style: .footnote, color: HQPalette.label2)
             stack.addArrangedSubview(heading)
             stack.setCustomSpacing(6, after: heading)
             let block = PromptCommandBlock(command: command)
@@ -209,6 +223,15 @@ final class PromptSheetController: UIViewController, UITextFieldDelegate, UIAdap
         }
         stack.setCustomSpacing(16, after: stack.arrangedSubviews.last ?? words)
         stack.addArrangedSubview(group)
+        if wordsLast {
+            let note = label(copy.text, style: .footnote, color: HQPalette.label2)
+            note.accessibilityIdentifier = "prompt.text"
+            let row = UIStackView(arrangedSubviews: [note])
+            row.isLayoutMarginsRelativeArrangement = true
+            row.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16)
+            stack.setCustomSpacing(8, after: group)
+            stack.addArrangedSubview(row)
+        }
         // [glass-design] The red decline as the sheets' solid action (the plain red word read 3.5:1 on the glass); the
         // Desktop Look keeps its plain red word. [mac] The Mac's push button at its own size, centred: stretched across
         // the sheet and 44 pt tall it read as a bar, not a button (stress test 2026-10-31).
@@ -219,9 +242,23 @@ final class PromptSheetController: UIViewController, UITextFieldDelegate, UIAdap
         self.declineButton = declineButton
         if !DeviceWord.isMac { declineButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true }
         let declineRow = UIStackView(arrangedSubviews: [declineButton])
-        declineRow.axis = .vertical
-        declineRow.alignment = GlassSheetKit.designed || DeviceWord.isMac ? .center : .fill
-        stack.setCustomSpacing(GlassSheetKit.designed ? 16 : 8, after: group)
+        if paired {
+            var send = UIButton.Configuration.hqSheetProminent()
+            send.title = copy.primary
+            let sendButton = UIButton(configuration: send, primaryAction: UIAction { [weak self] _ in self?.primaryTapped() })
+            sendButton.accessibilityIdentifier = "prompt.primary"
+            if !DeviceWord.isMac { sendButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true }
+            pairedPrimary = sendButton
+            declineRow.addArrangedSubview(sendButton)
+            declineRow.axis = .horizontal
+            declineRow.spacing = 10
+            declineRow.distribution = DeviceWord.isMac ? .fill : .fillEqually
+            if DeviceWord.isMac { declineRow.insertArrangedSubview(UIView(), at: 0) }
+        } else {
+            declineRow.axis = .vertical
+            declineRow.alignment = GlassSheetKit.designed || DeviceWord.isMac ? .center : .fill
+        }
+        stack.setCustomSpacing(GlassSheetKit.designed ? 16 : 8, after: stack.arrangedSubviews.last ?? group)
         stack.addArrangedSubview(declineRow)
         updatePrimary()
     }
@@ -311,6 +348,7 @@ final class PromptSheetController: UIViewController, UITextFieldDelegate, UIAdap
 
     private func updatePrimary() {
         primaryItem.setProminentEnabled(value != nil && !sending)
+        pairedPrimary?.isEnabled = value != nil && !sending
         declineButton?.isEnabled = !sending   // its taps are ignored until the send ends, so it doesn't look live
     }
 

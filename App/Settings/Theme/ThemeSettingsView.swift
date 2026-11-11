@@ -346,6 +346,20 @@ struct ChatBubblesSettingsView: View {
             ? "How round the corners of messages in chats are, and how they’re filled: Solid, Liquid Glass in your theme’s colours, or Tinted with the colours of your Chat Background. 12 pt is the standard. With Reduce Transparency on, messages stay solid. The Desktop Look has its own Corners, in Theme. \(DeviceWord.onlyHere)"
             : "How round the corners of messages in chats are, and whether they’re Tinted with the colours of your Chat Background. 12 pt is the standard. With Reduce Transparency on, messages stay solid. The Desktop Look has its own Corners, in Theme. \(DeviceWord.onlyHere)"
     }
+    /// [bubbles-note] Owner 2026-11-10 (design pick 23): where the three styles are offered, the note follows the
+    /// choice: one line about the style picked, then the rest in three short sentences (it explained all three at
+    /// once, in seven lines).
+    static func styleLine(_ style: BubbleStyle) -> String {
+        switch style {
+        case .glass: "Glass: Liquid Glass in your theme’s colours."
+        case .tinted: "Tinted: the colours of your Chat Background."
+        default: "Solid: filled with your theme’s colours."
+        }
+    }
+    static var shortNote: String {
+        "12 pt corners are the standard. With Reduce Transparency on, messages stay solid. The Desktop Look has its own Corners, in Theme. \(DeviceWord.onlyHere)"
+    }
+
     /// [tinted-bubbles] Tinted picked with no Chat Background: it has no colours to take.
     static let tintedNeedsBackground = "Tinted takes its colours from your Chat Background. Choose one in Settings › Backgrounds; until then, messages are solid."
 
@@ -359,7 +373,12 @@ struct ChatBubblesSettingsView: View {
                 bubbleStylePicker(state)
             } footer: { HQSectionFooter {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(Self.note)
+                    if GlassBubbles.offered {
+                        Text(Self.styleLine(bubbleStyle(state))).foregroundStyle(Color.hqLabel).accessibilityIdentifier("theme.bubbleStyleLine")
+                        Text(Self.shortNote)
+                    } else {
+                        Text(Self.note)
+                    }
                     if bubbleStyle(state) == .tinted && Backdrop.chats.drawn == nil {
                         Text(Self.tintedNeedsBackground).accessibilityIdentifier("theme.tintedNeedsBackground")
                     }

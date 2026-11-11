@@ -195,6 +195,38 @@ nonisolated extension ModelPanelModel {
                                     caption: caption, spoken: price + " per 1M")
     }
 
+    // MARK: [model-facts] The Models sheet's row fact (owner 2026-11-10, design pick 3)
+
+    /// What a model's row says at its trailing edge in the Models sheet: its context window and its price per million
+    /// tokens, "1M · $5 / $25", "400K · Included", "128K · Free", or whichever of the two is known; nil when neither
+    /// is. Owner 2026-11-10: the rows carried a name and a star only, and the price was a sheet away (⋯ › Model
+    /// Prices). `spoken` is the same for VoiceOver.
+    static func rowFact(_ model: ModelChoice, options: ModelOptions?, listed: ModelsDevPrices?) -> (text: String, spoken: String)? {
+        let tags = ModelNames.modelDisplayParts(model.id.isEmpty ? model.name : model.id).tag.split(separator: " ").map(String.init)
+        let window = tags.last { $0.range(of: #"^\d+(\.\d+)?[KM]$"#, options: .regularExpression) != nil }
+            ?? listed?.contextWindow(provider: model.provider, model: model.id).flatMap { $0 > 0 ? SessionInfoRows.count($0) : nil }
+        let price = ModelPricesModel.menuSubtitle(options, model: model.id, provider: model.provider, fallback: listed)
+        let short = price.map(shortPrice)
+        let parts = [window, short].compactMap { $0 }.filter { !$0.isEmpty }
+        guard !parts.isEmpty else { return nil }
+        let spoken = [window.map { "\($0) context" }, price.map { $0.contains(" in") || $0.contains(" out") ? "\($0) per 1M" : $0 }]
+            .compactMap { $0 }.joined(separator: ", ")
+        return (parts.joined(separator: " · "), spoken)
+    }
+
+    /// "$5.00 in · $25.00 out" reads "$5 / $25" (whole dollars lose their ".00"); "Included" and "Free" stay.
+    static func shortPrice(_ price: String) -> String {
+        let parts = price.components(separatedBy: " · ")
+        let ins = parts.first { $0.hasSuffix(" in") }.map { String($0.dropLast(3)) }
+        let outs = parts.first { $0.hasSuffix(" out") }.map { String($0.dropLast(4)) }
+        guard ins != nil || outs != nil else { return price }
+        func trim(_ text: String) -> String { text.hasSuffix(".00") ? String(text.dropLast(3)) : text }
+        return [ins, outs].compactMap { $0 }.map(trim).joined(separator: " / ")
+    }
+
+    /// Under the list while any row shows a price: what the two figures are.
+    static let rowFactLegend = "Prices are in / out per 1M tokens."
+
     /// "Weekly · 62% left" reads "62% left" over "Weekly"; "Rate limited · back in 2 h" reads "Rate limited" over
     /// "Back in 2 h"; anything else whole over "Plan".
     static func planFact(_ limit: String) -> ModelPanelState.Fact {

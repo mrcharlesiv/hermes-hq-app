@@ -663,7 +663,7 @@ extension AppDelegate {
             if command.action == KeyCommands.newChat, let organizer = root.sessionsViewController.organizer {
                 let bots = organizer.services.bots
                 let name = NewChatKeyBot.profile(among: bots.map(\.id)).map { id in bots.first { $0.id == id }?.name ?? (id == "default" ? "Hermes" : id) }
-                if NewChatKeyBot.mode == .botChat {   // [cmd-n] Jack: the bot's own chat, not a new one
+                if NewChatKeyBot.mode == .botChat {   // [cmd-n] a tester: the bot's own chat, not a new one
                     command.title = name.map { "Open \($0)’s Chat" } ?? "Open a Bot’s Chat…"
                     break
                 }
@@ -953,7 +953,7 @@ extension AppDelegate {
         whenUncovered { root in
             guard let organizer = root.sessionsViewController.organizer else { return }
             if NewChatKeyBot.mode == .botChat {
-                // [cmd-n] Jack 2026-11-02: the bot's own chat (Ask Every Time: Choose a Bot first), caret in the field.
+                // [cmd-n] a tester 2026-11-02: the bot's own chat (Ask Every Time: Choose a Bot first), caret in the field.
                 AppLog.note("keys", "new chat: bot chat")
                 if let id = NewChatKeyBot.profile(among: organizer.services.bots.map(\.id)) {
                     KeyCommands.openBotChat(id, root: root)

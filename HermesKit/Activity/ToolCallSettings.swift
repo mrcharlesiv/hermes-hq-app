@@ -47,6 +47,7 @@ nonisolated enum ToolCallSettings {
     static let styleKey = "hq.chat.toolCallStyle"
     static let afterReplyKey = "hq.chat.toolCallsAfterReply"
     static let fewerTimestampsKey = "hq.chat.fewerTimestamps"
+    static let fileChangesKey = "hq.chat.showFileChanges"
     static let didChange = Notification.Name("hq.chat.toolCallSettingsDidChange")
 
     static var style: ToolCallStyle {
@@ -76,6 +77,18 @@ nonisolated enum ToolCallSettings {
         set {
             if newValue { UserDefaults.standard.removeObject(forKey: fewerTimestampsKey) }
             else { UserDefaults.standard.set(false, forKey: fewerTimestampsKey) }
+            NotificationCenter.default.post(name: didChange, object: nil)
+        }
+    }
+
+    /// Show File Changes: the "N files changed" card under a reply that edited files (and the folded one in a run of
+    /// idle updates). Off hides only the card; the chat’s ⋯ › Changes still lists them (owner 2026-11-10).
+    static var showFileChanges: Bool {
+        // On by default: only "off" is stored.
+        get { UserDefaults.standard.object(forKey: fileChangesKey) as? Bool ?? true }
+        set {
+            if newValue { UserDefaults.standard.removeObject(forKey: fileChangesKey) }
+            else { UserDefaults.standard.set(false, forKey: fileChangesKey) }
             NotificationCenter.default.post(name: didChange, object: nil)
         }
     }

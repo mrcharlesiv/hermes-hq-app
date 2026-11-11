@@ -212,7 +212,7 @@ final class KeyboardShortcutTests: IPadTestCase {
         XCTAssertEqual(IPad.count("session.create", account), 0)
         IPad.command(app, "n")
         XCTAssertTrue(IPad.waitUntil(timeout: 10) { IPad.count("session.create", account) == 1 }, "one session.create")
-        XCTAssertFalse(app.descendants(matching: .any)["choose-bot-research"].exists, "Command-N does not ask which bot")
+        XCTAssertFalse(app.descendants(matching: .any)["new-chat-bot-research"].exists, "Command-N does not ask which bot")
         func created(_ index: Int) throws -> [String: Any]? {
             let state = try account.control("/__fixture/state")
             let creates = (state["rpc"] as? [[String: Any]])?.filter { $0["method"] as? String == "session.create" } ?? []
@@ -225,10 +225,11 @@ final class KeyboardShortcutTests: IPadTestCase {
 
         // ⇧⌘N: the bot chooser (three bots), then one session.create with the chosen bot.
         app.typeKey("n", modifierFlags: [.command, .shift])
-        let choice = app.descendants(matching: .any)["choose-bot-research"]
+        let choice = app.descendants(matching: .any)["new-chat-bot-research"]
         XCTAssertTrue(choice.waitForExistence(timeout: 8), "Shift-Command-N asks which bot")
         IPad.shot(app, "keys-new-chat-choose", in: self)
         choice.tap()
+        app.descendants(matching: .any)["new-chat-project-none"].tap()
         XCTAssertTrue(IPad.waitUntil(timeout: 10) { IPad.count("session.create", account) == 2 }, "one more session.create")
         XCTAssertEqual(try created(1)?["profile"] as? String, "research")
     }
@@ -247,12 +248,12 @@ final class KeyboardShortcutTests: IPadTestCase {
         XCTAssertTrue(IPad.waitUntil(timeout: 6) { (IPad.field(app).value(forKey: "hasKeyboardFocus") as? Bool) == true },
                       "the caret is in its message field")
         if IPad.isPad { XCTAssertTrue(IPad.waitUntil(timeout: 6) { app.cells["bot-row-research"].isSelected }, "research's own chat, marked in Bots") }
-        XCTAssertFalse(app.descendants(matching: .any)["choose-bot-research"].exists, "no chooser")
+        XCTAssertFalse(app.descendants(matching: .any)["new-chat-bot-research"].exists, "no chooser")
         IPad.shot(app, "keys-bot-chat-mode", in: self)
         Thread.sleep(forTimeInterval: 1.0)
         XCTAssertEqual(IPad.count("session.create", account), 0, "the bot's own chat: no new session")
         app.typeKey("n", modifierFlags: [.command, .shift])
-        XCTAssertTrue(app.descendants(matching: .any)["choose-bot-research"].waitForExistence(timeout: 8), "Shift-Command-N still asks")
+        XCTAssertTrue(app.descendants(matching: .any)["new-chat-bot-research"].waitForExistence(timeout: 8), "Shift-Command-N still asks")
     }
 
     /// Stress round 1: Command-N from a tab other than Sessions, with no walk first. In the phone layout the new chat

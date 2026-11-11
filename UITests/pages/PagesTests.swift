@@ -769,7 +769,8 @@ final class PagesTests: XCTestCase {
         let list = app.collectionViews["artifacts.list"]
         let row = list.cells["artifact-row-export.csv"]
         XCTAssertTrue(scrollTo(row, in: list))
-        row.buttons["Actions for export.csv"].tap()
+        // [artifact-rows] Owner 2026-11-10: the list's rows have no ⋯; touch and hold opens the same menu.
+        row.press(forDuration: 1.0)
         app.buttons["Copy Path"].firstMatch.tap()
         let hud = app.descendants(matching: .any)["pages.hud"]
         XCTAssertTrue(waitUntil(3) { hud.exists && hud.label == "Copied" }, "Copied shows")
@@ -1486,6 +1487,109 @@ final class PagesTests: XCTestCase {
     /// [pins] Bot Info › Artifacts: Deploys' page as a picture, its newest files as rows, and All Artifacts opening its
     /// artifacts alone (none of Research's) inside the sheet. [tabs] Each tab holds its own groups.
     /// HQN_PINS_LOOK: the pins tests in Desktop Look light or dark, or at the largest text (screens named pins-<look>-…).
+    /// [tile-versions] Versions of a tile (owner 2026-11-11: "when you make one it's v1, if you edit it it's now v2 …
+    /// roll back to prior versions … see what prior versions looked like"): the tile as found is Version 1, a Change…
+    /// makes Version 2, Versions lists both with their pictures, and Roll Back puts Version 1's page back.
+    @MainActor func testArt17_TileVersions() throws {
+        let (arguments, shot) = pinsLook()
+        app = launchSignedIn(arguments + ["-HQDebugResetPins", "YES"])
+        try account.control("/__fixture/append", ["session_id": "s-report", "role": "assistant", "text": "MEDIA:/home/hermes/site/tile.html"])
+        try account.control("/__fixture/tile-job", ["status": "ok"])
+        openArtifacts()
+        let list = app.collectionViews["artifacts.list"]
+        let row = list.cells["artifact-row-tile.html"]
+        XCTAssertTrue(waitUntil(15) { row.exists || self.scrollTo(row, in: list) }, "tile.html is listed")
+        row.swipeRight()
+        app.buttons["Pin"].firstMatch.tap()
+        list.swipeDown(); list.swipeDown()
+        app.buttons["pins.view"].firstMatch.tap()
+        app.buttons["pins.open-page"].firstMatch.tap()
+        let tile = app.collectionViews["pinned.list"].cells["pin-card-tile.html"]
+        XCTAssertTrue(tile.waitForExistence(timeout: 5), "the tile on Tiles")
+
+        func writes() -> [String] {
+            requests().filter { $0.method == "POST" && $0.path == "/api/fs/write-text" }.compactMap { $0.body?["path"] as? String }
+        }
+        func closeSheet() {
+            app.buttons["sheet.close"].firstMatch.tap()
+            Thread.sleep(forTimeInterval: 1)
+        }
+
+        // Versions, from the tile's menu: the tile as it is becomes Version 1.
+        tile.press(forDuration: 1)
+        let versions = app.buttons["tile.versions"].firstMatch
+        XCTAssertTrue(versions.waitForExistence(timeout: 5), "Versions in the tile's menu")
+        versions.tap()
+        let first = app.buttons["tile.version.1"].firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 10), "Version 1 is listed")
+        XCTAssertTrue(first.label.contains("current"), first.label)
+        XCTAssertFalse(app.buttons["tile.version.rollback.1"].exists, "the version that shows has no Roll Back")
+        XCTAssertTrue(waitUntil(5) { writes().contains { $0.hasSuffix("tile.versions/v1.html") } }, "its copy is kept beside the tile: \(writes())")
+        Thread.sleep(forTimeInterval: 3)
+        shot("tile-versions-one")
+        closeSheet()
+
+        // A Change…: the bot edits the page's look, and that's Version 2.
+        tile.press(forDuration: 1)
+        app.buttons["Change…"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["Bar Chart"].firstMatch.waitForExistence(timeout: 5))
+        app.buttons["Bar Chart"].firstMatch.tap()
+        app.buttons["tile.change.send"].firstMatch.tap()
+        XCTAssertTrue(waitUntil(5) { tile.label.contains("is changing it") }, "the tile says it's being changed: \(tile.label)")
+        try account.control("/__fixture/tile-edit", ["from": "Revenue $12K", "to": "Sales $12K, in bars"])
+        try account.control("/__fixture/tile-edit", ["from": "background:#f4f4f4", "to": "background:#dbeafe"])
+        try account.control("/__fixture/turn-end", ["match": "Change my Hermes HQ Dashboard tile",
+                                                    "text": "Done: it's a bar chart now.\n\nMEDIA:/home/hermes/site/tile.html"])
+        XCTAssertTrue(waitUntil(15) { writes().contains { $0.hasSuffix("tile.versions/v2.html") } }, "the changed page is kept as Version 2: \(writes())")
+        Thread.sleep(forTimeInterval: 4)   // the "Changed" words go
+
+        // The menu says which version shows; the sheet lists both, newest first, with what was asked.
+        tile.press(forDuration: 1)
+        XCTAssertTrue(versions.waitForExistence(timeout: 5))
+        XCTAssertTrue(waitUntil(3) { versions.label.contains("Version 2") }, "the menu says Version 2: \(versions.label)")
+        shot("tile-versions-menu")
+        versions.tap()
+        let second = app.buttons["tile.version.2"].firstMatch
+        XCTAssertTrue(second.waitForExistence(timeout: 10), "Version 2 is listed")
+        XCTAssertTrue(second.label.contains("current") && second.label.contains("Make it a bar chart"), second.label)
+        XCTAssertFalse(first.label.contains("current"), first.label)
+        let back = app.buttons["tile.version.rollback.1"].firstMatch
+        XCTAssertTrue(back.exists, "Roll Back on the earlier version")
+        Thread.sleep(forTimeInterval: 4)   // both pictures
+        shot("tile-versions-two")
+
+        // A version opens full size, with its own Roll Back.
+        first.tap()
+        let fullBack = app.buttons["tile.version.rollback"].firstMatch
+        XCTAssertTrue(fullBack.waitForExistence(timeout: 10), "the opened version offers Roll Back")
+        Thread.sleep(forTimeInterval: 2)
+        shot("tile-versions-opened")
+        fullBack.tap()
+
+        // Rolled back: Version 1's page is on the tile again, both versions stay, and the job's bot is told.
+        XCTAssertTrue(waitUntil(15) { writes().last?.hasSuffix("tile.versions/versions.json") == true && writes().contains { $0.hasSuffix("site/tile.html") } },
+                      "Version 1's page is written back over the tile: \(writes())")
+        XCTAssertTrue(waitUntil(10) { first.label.contains("current") }, "Version 1 shows now: \(first.label)")
+        XCTAssertTrue(app.buttons["tile.version.rollback.2"].firstMatch.exists, "Version 2 stays, to go forward again")
+        XCTAssertEqual(app.buttons["tile.version.rollback.2"].firstMatch.label, "Restore to Version 2")
+        Thread.sleep(forTimeInterval: 2)
+        shot("tile-versions-rolled-back")
+        let state = (try? account.control("/__fixture/state")) ?? [:]
+        let asks = ((state["rpc"] as? [[String: Any]]) ?? []).filter { ($0["method"] as? String) == "prompt.submit" }
+            .compactMap { ($0["params"] as? [String: Any])?["text"] as? String }
+        XCTAssertTrue(waitUntil(10) {
+            let state = (try? self.account.control("/__fixture/state")) ?? [:]
+            return ((state["rpc"] as? [[String: Any]]) ?? []).contains {
+                (($0["params"] as? [String: Any])?["text"] as? String)?.hasPrefix("I rolled my Hermes HQ tile") == true
+            }
+        }, "the bot that keeps the tile up to date is told to keep Version 1: \(asks)")
+        try account.control("/__fixture/turn-end", ["match": "I rolled my Hermes HQ tile", "text": "The job keeps this look."])
+        closeSheet()
+        XCTAssertTrue(waitUntil(15) { !tile.label.contains("Updating") }, "the tile is done updating: \(tile.label)")
+        Thread.sleep(forTimeInterval: 3)
+        shot("tile-versions-tile-back")
+    }
+
     @MainActor private func pinsLook() -> ([String], (String) -> Void) {
         let look = ProcessInfo.processInfo.environment["HQN_PINS_LOOK"] ?? ""
         let arguments: [String] = switch look {

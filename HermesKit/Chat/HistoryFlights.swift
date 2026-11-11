@@ -31,7 +31,9 @@ final class HistoryFlights {
     static func openRead(client: any GatewayClient, storedId: String, profile: String) -> Task<Answer, any Error> {
         let request = HistoryRequest(storedSessionId: storedId, profile: profile.isEmpty ? nil : profile, limit: 24)
         let features = client.latestReady.flatMap { PerformanceFeatures(ready: $0) }
-        return Task { try await HistoryAPI.fetchAndFold(client: client, request: request, features: features, cut: true) }
+        // Detached: it goes out now, not once the main thread is done pushing the chat's screen (the owner's phone,
+        // 2026-11-10: the open's own read left a median 125 ms after the tap).
+        return Task.detached { try await HistoryAPI.fetchAndFold(client: client, request: request, features: features, cut: true) }
     }
 
     /// A usable flight for this chat, if one is out (or just landed).

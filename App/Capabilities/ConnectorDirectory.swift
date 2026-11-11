@@ -191,14 +191,14 @@ struct ConnectorsSections: View {
             Section {
                 if !model.readOnly {
                     Button { (model.presenter as? CapabilitiesViewController)?.addConnector() } label: {
-                        wayRow("Add Your Own", detail: "Any other connector, by its web address or command", symbol: "plus")
+                        wayRow("Add Your Own", detail: "By web address or command", symbol: "plus")
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("connectors.add")
                 }
                 if ConnectAppsFeature.isOn {
                     Button { router.push(ConnectAppsScreens.makeRoot(services: model.services)) } label: {
-                        wayRow("Connect Apps", detail: "Gmail, Slack and hundreds more, through Composio (free to sign up)", symbol: "powerplug")
+                        wayRow("Connect Apps", detail: "Gmail, Slack and hundreds more, via Composio", symbol: "powerplug")
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("connectors.connect-apps")
@@ -207,6 +207,8 @@ struct ConnectorsSections: View {
         }
     }
 
+    /// [connector-rows] Owner 2026-11-10 (design pick 26): the two details are short enough for a line or two (they
+    /// ran to three and four); the page each opens says the rest.
     /// [connectors-ux] The symbol on the quiet tile a connector without a logo has (UX study #173 kept colour tiles for
     /// More's own index), in the logos' 34 pt column: one icon treatment down the page, not tiles above and bare
     /// outline glyphs here.

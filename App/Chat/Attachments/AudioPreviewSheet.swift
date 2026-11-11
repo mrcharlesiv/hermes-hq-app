@@ -208,7 +208,7 @@ final class AudioPreviewController: UIHostingController<HQScaledRoot<AudioPrevie
     /// (A custom detent's value leaves the bottom safe area out, so the home indicator's strip comes on top of this.)
     var fittingHeight: CGFloat {
         let bar = navigationController?.navigationBar.frame.height ?? 0
-        let content = model.contentHeight > 0 ? model.contentHeight : 216
+        let content = model.contentHeight > 0 ? model.contentHeight : 120
         return ceil(content + max(44, bar) + 12)
     }
 
@@ -271,32 +271,34 @@ struct AudioPreviewView: View {
             .accessibilityIdentifier("audio.preview")
     }
 
+    /// [memo-slim] Owner 2026-11-10 (design pick 12): a slim player. Play, the scrubber and the time lead; the size and
+    /// format are one quiet line under them (where "Loading…" and a failure also speak, so the sheet keeps its height);
+    /// and the large microphone and the centred "Voice memo" under it are gone: the bar already says Voice Memo. A file
+    /// that is not a memo keeps its name, on one line above the player.
     private var content: some View {
-        VStack(spacing: 0) {
-            Image(systemName: model.item.isMemo ? "mic.fill" : "waveform")
-                .font(Font.hqSystem(size: min(headerGlyph, 56), weight: .medium))
-                .foregroundStyle(Color.hqTint)
-                .frame(height: max(44, min(headerGlyph, 56) + 10))
-                .accessibilityHidden(true)
-            Text(model.item.title)
-                .font(Font.hq(.headline))
-                .foregroundStyle(Color.hqLabel)
-                .lineLimit(2)
-                .truncationMode(.middle)
-                .multilineTextAlignment(.center)
-                .padding(.top, 10)
-                .accessibilityIdentifier("audio.preview.title")
-            Text(AudioPreviewText.detail(bytes: model.item.bytes, name: model.item.name))
-                .font(Font.hq(.footnote))
-                .foregroundStyle(Color.hqLabel2)
-                .padding(.top, 3)
-                .accessibilityIdentifier("audio.preview.detail")
+        VStack(alignment: .leading, spacing: 0) {
+            if !model.item.isMemo {
+                Text(model.item.title)
+                    .font(Font.hq(.headline))
+                    .foregroundStyle(Color.hqLabel)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .padding(.bottom, 10)
+                    .accessibilityIdentifier("audio.preview.title")
+            }
             player
-                .padding(.top, 22)
-            status
-                .padding(.top, 10)
+            ZStack(alignment: .leading) {
+                Text(AudioPreviewText.detail(bytes: model.item.bytes, name: model.item.name))
+                    .font(Font.hq(.footnote))
+                    .foregroundStyle(Color.hqLabel2)
+                    .opacity(model.phase == .ready ? 1 : 0)
+                    .accessibilityHidden(model.phase != .ready)
+                    .accessibilityIdentifier("audio.preview.detail")
+                status
+            }
+            .padding(.top, 10)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// Play, the scrubber and the time on one row. At accessibility text sizes the time would take the scrubber's
@@ -361,14 +363,9 @@ struct AudioPreviewView: View {
             Text(AudioPreviewText.failed)
                 .font(Font.hq(.footnote))
                 .foregroundStyle(Color.hqLabel2)
-                .multilineTextAlignment(.center)
                 .accessibilityIdentifier("audio.preview.status")
         case .ready:
-            // The row keeps its height, so the sheet does not jump when the player is ready.
-            Text(model.playing ? "Playing" : "Ready")
-                .font(Font.hq(.footnote))
-                .hidden()
-                .accessibilityHidden(true)
+            EmptyView()   // [memo-slim] the size and format show in this line's place
         }
     }
 }

@@ -86,6 +86,58 @@ So every listening's words go through `LiveWordsTidy` after the engine, as shown
 `HermesKit/Voice/LiveWordsTidy.swift` holds the pass, `Phonetic`, `WordFixes`, `LiveWordsVocabulary` and
 `TidiedLiveWords`.
 
+### 2.2 More Accurate Words (`ParakeetWords`)
+
+> "So whatever model we have doing the voice to text transcriptions, like in streaming them, it's very bad. It sucks.
+> How do we make it better?" … "Wrong words." (owner, 2026-11-10; "Yes" to building the larger model on the phone)
+
+The 2026-11-10 study took 80 of the owner's memos since 2026-11-03 (23 minutes, about 2,900 words): the recording and
+what Apple's engine had heard (after the tidy pass). Each recording went through three other models on this Mac. With
+no hand-checked words, a model's mistakes were counted where it stood alone against two models of different families
+that agreed:
+
+| Model | Mistakes per 100 words |
+|---|---|
+| Apple `SpeechTranscriber` (as heard live, tidied) | 3.9 |
+| Whisper large-v3-turbo (the gateway's `stt.local.model`), with and without its name prompt | 2.5 |
+| Parakeet TDT 0.6B v3 (25 languages) | 1.9 |
+| Parakeet TDT 0.6B v2 (English) | 1.2 |
+
+In 67 places both other models agreed against Apple's ("the app bought" for "the app bot", "buck it" for "bucket",
+"us" for "QS", "threat" for "thread"). Whisper left phrases out and once said a sentence twice. Parakeet's weak spot is
+names ("Clawed" for Claude, "noose" for Nous), which the tidy pass (§2.1) is for.
+
+Inside the app the model hears 15 s at a time, not a whole recording, so it does a little worse than in the study:
+the same 80 memos played through the Mac app as takes (`-HQDebugWordsBench`, §7) came to about 1.8 mistakes per 100
+words against Apple's 3.4 on the same count, about half. Memos under 14 s matched the study (7 words apart in 758).
+FluidAudio's own way of hearing a long recording (overlapping windows) came to 1.5, within this count's noise of the
+pause cuts below, which have a fixed cost at a take's end, so the cuts stay.
+
+So an English speaker's words come from Parakeet TDT 0.6B v2, run on Core ML by FluidAudio (a Swift package, pinned in
+`project.yml`):
+
+- **The model** is four Core ML files, about 470 MB, downloaded once from Hugging Face into
+  `Application Support/FluidAudio/Models` (kept out of backups). `LiveWords.prepare()` starts it: on Wi-Fi only (a
+  cellular, hotspot or Low Data network waits, and is asked again when a chat next opens). The first load after the
+  download compiles the model, which takes up to a minute; later loads take a second or two.
+- **Until it is ready, and wherever it can't run, Apple's engine listens** as before (§2), and past that the gateway.
+  It can't run for a person whose first language isn't English, or in a simulator.
+- **A take is heard again as it grows.** The model hears a recording, not a stream. Every half second of new sound, the
+  sound not settled yet goes through it and what it says replaces the pending words.
+  - Past 14 s (the model's window is 15 s) the take is cut at its quietest 0.2 s, between 6 s in and 2 s from its end:
+    a pause, so no word is cut in two. The part before the cut is heard once more by itself and settles.
+  - Ending the take hears the unsettled part (14 s at most) once more, whole, within `LiveWords.settleLimit`.
+  - A model error gives the take no words at all, so the gateway hears the recording: half a memo never goes.
+- The words go through the tidy pass like Apple's.
+- **The switch** is Settings › Voice › Live Words › **More Accurate Words** (`hq.voice.betterWords`, on unless turned
+  off; shown while Words as You Speak is on). Off deletes the download. The section's footer adds where the model
+  stands while it isn't ready: waiting for Wi-Fi, downloading with its percent, getting ready, or why it isn't used.
+- Voice Diagnostics' Words as You Speak row reads "on this device, larger model (Parakeet, English)" once it listens,
+  and before that Apple's line followed by the larger model's state.
+
+`HermesKit/Voice/ParakeetWords.swift` holds the switch, the download, `ParakeetLiveWords` (the listener) and
+`ParakeetCut` (where a long take is cut).
+
 ## 3. Where the words go
 
 ### 3.1 Voice memos (`MemoController`)
@@ -289,6 +341,14 @@ With a picture in the tray (or words in the field) the mic is Dictate, which fir
   - Final words 0.1–0.25 s after the input ended, every word right ("3 o'clock", "Priya").
   - `DictationTranscriber` updated a little more often but heard "Hey Hermes" as "Play Hermes". `SpeechTranscriber`
     stays first.
+- More Accurate Words' model, run inside the Debug Mac app (2026-11-10): `scripts/fixtures/words-bench.py <folder>`
+  serves a folder of 16 kHz mono WAVs to the sandboxed app, and `-HQDebugWordsBench <speed> -HQDebugWordsBenchURL
+  http://127.0.0.1:8791` plays each through a `ParakeetLiveWords` listening, `speed` times faster than life, and posts
+  what it heard back (`out.json` in the folder). On the study's 80 memos: the model loaded in 1 s once downloaded, the
+  first words came a median 1.3 s into a memo, and a take's end settled in a median 0.12 s (0.19 s at most). **Not yet run on an iPhone**: its speed there is unmeasured.
+- `Tests/Voice/ParakeetWordsTests.swift` covers the cut (the quietest moment, never too early or late), a take's words
+  shown then settled, a long take settling in parts with every second heard once, a failed model giving no words, a
+  cancelled take, a tap, Live Words handing out the larger model's listener, and the footer following the download.
 - **Proven on the owner's iPhone** (log study, 2026-11-02): `AVAudioEngine` and `AVAudioRecorder` share the microphone
   during a memo. Memo to bot went from about 6 s (median; 5–45 s while the gateway transcribed) to about 0.15 s, and no
   `/api/audio/transcribe` calls were made since build 573.
@@ -321,3 +381,8 @@ With a picture in the tray (or words in the field) the mic is Dictate, which fir
     Settings › Word Fixes shows and removes them. Everyday rewording isn't learned.
 12. **Fillers go in every listening** (memos, Dictate, Talk): nobody wants "uh" sent to a bot.
 13. **A queued memo behaves like a queued message** (§3.1.2): it goes when the reply ends, wherever the person is.
+14. **The larger model is on by default, on Wi-Fi only, with a switch that deletes it.** The owner asked for better
+    words; 470 MB is too much for a cellular plan to pay for unasked, and Apple's engine covers the wait.
+15. **English only for now.** Parakeet v2 was the best on the owner's memos; the 25-language v3 was worse on English
+    (1.9 against 1.2), so other languages keep Apple's engine until someone who speaks one can judge v3.
+16. **Our own half-second loop, not FluidAudio's sliding-window manager**, which says nothing until 13 s of sound.

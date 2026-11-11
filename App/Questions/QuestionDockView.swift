@@ -13,6 +13,12 @@ import UIKit
 // sits 8 pt from the screen edge with corners that follow the screen while the keyboard is down, 4 pt above the keys
 // while it is up.
 
+// [question-tidy] Owner 2026-11-10 (design pick 2): one card, not three. The choices are plain rows on the card (the
+// solid inner card on glass, the panel in the Desktop Look) under hairlines, with no box of their own; "Recommended" is
+// a small tag at the row's trailing edge, so every choice is one height; "1 of 2" follows small progress bars; and a
+// tap on a pick-one choice moves on to the next question, so the first page has no Next until it has an answer (the
+// last page keeps Send, and a page reached with Back or one being typed in keeps Next).
+
 @MainActor protocol QuestionDockDelegate: AnyObject {
     func dockSend(_ dock: QuestionDockView)
     func dockSkip(_ dock: QuestionDockView)
@@ -33,6 +39,12 @@ final class QuestionDockView: UIView {
     /// [glass-phone] The solid card the text section sits on inside the glass (hidden in the Desktop Look).
     private let textCard = UIView()
     private let stepLabel = UILabel()
+    /// [question-tidy] One small bar per question before "1 of 2", tinted up to the shown page.
+    private let stepBars = StepBarsView()
+    private let foot = UIView()
+    /// [question-tidy] The foot (Back, Next) is away: the card ends under the text section.
+    private var bareBottom: NSLayoutConstraint!
+    private var autoAdvance: DispatchWorkItem?
     private let skipButton = UIButton(type: .system)
     private let pagesScroll = PagesScrollView()
     private let pagesHost = UIView()
@@ -132,6 +144,10 @@ final class QuestionDockView: UIView {
         head.translatesAutoresizingMaskIntoConstraints = false
         stepLabel.translatesAutoresizingMaskIntoConstraints = false
         skipButton.translatesAutoresizingMaskIntoConstraints = false
+        stepBars.translatesAutoresizingMaskIntoConstraints = false
+        stepBars.count = prompt.questions.count
+        stepBars.isHidden = !stepBars.shows
+        head.addSubview(stepBars)
         head.addSubview(stepLabel)
         head.addSubview(skipButton)
         card.contentView.addSubview(head)
@@ -153,6 +169,7 @@ final class QuestionDockView: UIView {
             page.onStage = { [weak self] stage in self?.stageChanged(question.qid, stage) }
             page.onReturn = { [weak self] in self?.returnPressed() }
             page.onFocus = { [weak self] in self?.keepFieldInView() }
+            page.onPicked = { [weak self] in self?.pickedOne(on: index) }
             pagesHost.addSubview(page)
             pages.append(page)
             pageConstraints += [
@@ -167,7 +184,6 @@ final class QuestionDockView: UIView {
         backButton.addAction(UIAction { [weak self] _ in self?.go(by: -1) }, for: .primaryActionTriggered)
         primaryButton.accessibilityIdentifier = "question.primary"
         primaryButton.addAction(UIAction { [weak self] _ in self?.primaryTapped() }, for: .primaryActionTriggered)
-        let foot = UIView()
         foot.translatesAutoresizingMaskIntoConstraints = false
         backButton.translatesAutoresizingMaskIntoConstraints = false
         primaryButton.translatesAutoresizingMaskIntoConstraints = false
@@ -176,6 +192,7 @@ final class QuestionDockView: UIView {
         card.contentView.addSubview(foot)
 
         bottomPadding = foot.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -12)
+        bareBottom = pagesScroll.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -(Self.textCardInset + 8))
         let fill = pagesScroll.heightAnchor.constraint(equalTo: pagesHost.heightAnchor)
         fill.priority = .defaultHigh - 1
         NSLayoutConstraint.activate(pageConstraints + [
@@ -191,7 +208,10 @@ final class QuestionDockView: UIView {
             head.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 16),
             head.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -16),
             head.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
-            stepLabel.leadingAnchor.constraint(equalTo: head.leadingAnchor),
+            stepBars.leadingAnchor.constraint(equalTo: head.leadingAnchor),
+            stepBars.centerYAnchor.constraint(equalTo: head.centerYAnchor),
+            stepLabel.leadingAnchor.constraint(equalTo: stepBars.shows ? stepBars.trailingAnchor : head.leadingAnchor,
+                                               constant: stepBars.shows ? 8 : 0),
             stepLabel.centerYAnchor.constraint(equalTo: head.centerYAnchor),
             stepLabel.trailingAnchor.constraint(lessThanOrEqualTo: skipButton.leadingAnchor, constant: -8),
             skipButton.trailingAnchor.constraint(equalTo: head.trailingAnchor),
@@ -392,6 +412,7 @@ final class QuestionDockView: UIView {
     #endif
 
     private func go(by delta: Int) {
+        autoAdvance?.cancel()
         guard sending == .none else { return }
         let target = draft.page + delta
         guard target >= 0, target < pages.count else { return }
@@ -440,7 +461,11 @@ final class QuestionDockView: UIView {
 
     private func updateChrome() {
         let count = prompt.questions.count
-        stepLabel.text = count > 1 ? "Question \(draft.page + 1) of \(count)" : "Question"
+        // The bars say "question"; the words are the place. VoiceOver and the tests still hear "Question 2 of 3".
+        stepLabel.text = count > 1 ? (stepBars.shows ? "\(draft.page + 1) of \(count)" : "Question \(draft.page + 1) of \(count)") : "Question"
+        stepLabel.accessibilityLabel = count > 1 ? "Question \(draft.page + 1) of \(count)" : "Question"
+        stepBars.current = draft.page
+        updateFoot()
         backButton.isHidden = draft.page == 0
         backButton.isEnabled = sending == .none
         skipButton.isEnabled = sending == .none
@@ -471,6 +496,67 @@ final class QuestionDockView: UIView {
         for (i, page) in pages.enumerated() { page.returnKey = i == count - 1 ? .send : .next }
     }
 
+    // MARK: [question-tidy] Tap to move on
+
+    /// A pick-one page that a tap answers and leaves: it has choices, takes one, and is not the last (the last page's
+    /// tap never sends; Send does).
+    private func advancesOnPick(_ index: Int) -> Bool {
+        guard prompt.questions.indices.contains(index), index < prompt.questions.count - 1 else { return false }
+        let question = prompt.questions[index]
+        return !question.multiSelect && !(question.choices ?? []).isEmpty
+    }
+
+    /// The first page has no foot while a tap is all it needs: no Back to show, and Next would only skip the question.
+    /// Once it has an answer (a pick, or words in "Something else…") or its field is open, Next is back, so a page
+    /// returned to with Back can be left again without picking twice.
+    var footHidden: Bool {
+        guard draft.page == 0, advancesOnPick(0) else { return false }
+        let question = prompt.questions[0]
+        let stage = draft.stages[question.qid] ?? ClarifyStage()
+        return !stage.other && ClarifyStaging.stagedAnswer(question, stage) == nil
+    }
+
+    private func updateFoot() {
+        let hidden = footHidden
+        guard foot.isHidden != hidden || bareBottom.isActive != hidden else { return }
+        foot.isHidden = hidden
+        // One of the two holds the card's bottom: the foot's, or the text section's own.
+        if hidden { bottomPadding.isActive = false; bareBottom.isActive = true }
+        else { bareBottom.isActive = false; bottomPadding.isActive = true }
+        updateTextCardCorners()
+        resizeToPage()
+    }
+
+    /// [question-corners] Owner 2026-11-10 (a phone screenshot of build 932): with no foot under it, the solid card's
+    /// bottom reaches down into the glass card's screen-shaped bottom corners, and its own 18 pt corners were cut off
+    /// by them at the bottom left and right. While the foot is away and the keyboard is down, its bottom corners
+    /// follow the glass card's (concentric with them), as the glass card's follow the screen's.
+    private func updateTextCardCorners() {
+        let radius = UICornerRadius.fixed(Self.textCardRadius)
+        if foot.isHidden, keyboardDown == true {
+            textCard.cornerConfiguration = .corners(topLeftRadius: radius, topRightRadius: radius,
+                                                    bottomLeftRadius: .containerConcentric(minimum: Self.textCardRadius),
+                                                    bottomRightRadius: .containerConcentric(minimum: Self.textCardRadius))
+        } else {
+            textCard.cornerConfiguration = .uniformCorners(radius: radius)
+        }
+    }
+
+    /// A choice on a pick-one page was tapped: the mark shows for a moment, then the next question.
+    private func pickedOne(on index: Int) {
+        autoAdvance?.cancel()
+        guard advancesOnPick(index), index == draft.page, sending == .none else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.draft.page == index, self.sending == .none, self.window != nil else { return }
+            self.go(by: 1)
+        }
+        autoAdvance = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.advanceDelay, execute: work)
+    }
+
+    /// Long enough to see the mark fill, short enough to feel like one tap.
+    static let advanceDelay: TimeInterval = 0.22
+
     // MARK: Layout: sheet-style bottom while the keyboard is down
 
     override func layoutSubviews() {
@@ -486,6 +572,8 @@ final class QuestionDockView: UIView {
             keyboardDown = down
             let safe = window?.safeAreaInsets.bottom ?? 0
             bottomPadding.constant = -(down ? max(12, safe - 8) : 12)
+            // Without the foot, the glass under the text section clears the home indicator the same way.
+            bareBottom.constant = -(Self.textCardInset + (down ? max(8, safe - 12) : 8))
             if down {
                 card.cornerConfiguration = .corners(topLeftRadius: .fixed(26), topRightRadius: .fixed(26),
                                                     bottomLeftRadius: .containerConcentric(minimum: 26),
@@ -493,6 +581,7 @@ final class QuestionDockView: UIView {
             } else {
                 card.cornerConfiguration = .uniformCorners(radius: .fixed(26))
             }
+            updateTextCardCorners()
             setNeedsLayout()
         }
         let path = bounds.insetBy(dx: 10, dy: 10)
@@ -578,7 +667,10 @@ private final class PagesScrollView: UIScrollView {
 
 final class QuestionPageView: UIView, UITextViewDelegate {
     /// The question to its choices or field (owner 2026-10-30: at 8 pt the grey list crowded the question).
-    static let answersGap: CGFloat = 14
+    /// [question-tidy] 10: the choices are rows on the card now, the first under its own hairline.
+    static let answersGap: CGFloat = 10
+    /// [question-tidy] A pick-one choice was tapped (the dock moves on).
+    var onPicked: (() -> Void)?
     let question: ClarifyQuestion
     private(set) var stage: ClarifyStage
     let last: Bool
@@ -648,10 +740,9 @@ final class QuestionPageView: UIView, UITextViewDelegate {
             field = f
             return
         }
-        list.backgroundColor = DockFill.answers   // [glass-phone] opaque: the transcript never reads through the choices
-        list.layer.cornerRadius = 12
-        list.layer.cornerCurve = .continuous
-        list.clipsToBounds = true
+        // [question-tidy] No fill or corners of its own: the rows lie on the card (solid on glass, the panel in the
+        // Desktop Look), so the transcript still never reads through the choices.
+        list.backgroundColor = .clear
         // The list is as tall as its rows: the page scrolls as one inside the dock (owner 2026-11-01: a list capped at
         // half the screen scrolled on its own under a long question, and "Something else…" sat cut off at its bottom).
         listStack.axis = .vertical
@@ -668,7 +759,7 @@ final class QuestionPageView: UIView, UITextViewDelegate {
             row.accessibilityIdentifier = "question.choice.\(index)"
             row.addAction(UIAction { [weak self] _ in self?.choiceTapped(choice) }, for: .touchUpInside)
             rows.append(row)
-            if index > 0 { listStack.addArrangedSubview(Separator()) }
+            listStack.addArrangedSubview(Separator())   // the first row's too: it rules the choices off from the question
             listStack.addArrangedSubview(row)
         }
         listStack.addArrangedSubview(Separator())
@@ -698,6 +789,7 @@ final class QuestionPageView: UIView, UITextViewDelegate {
         if wasOther && !stage.other { hideOtherField() }
         refreshMarks()
         onStage?(stage)
+        if !question.multiSelect { onPicked?() }
     }
 
     private func openOther() {
@@ -784,13 +876,15 @@ final class QuestionPageView: UIView, UITextViewDelegate {
     }
 }
 
-/// One choice (or "Something else…"): ≥ 48 pt, 12/14 padding, a 24 pt mark (circle single / rounded square multi).
+/// One choice (or "Something else…"): ≥ 44 pt, 10 pt above and below, a 24 pt mark (circle single / rounded square
+/// multi) at the card's text margin. [question-tidy] "Recommended" is a small tinted tag at the trailing edge, on the
+/// first line, so a recommended choice is no taller than the others.
 final class ChoiceRow: UIControl {
     let choice: String?
     let multi: Bool
     private let mark = MarkView()
     private let label = UILabel()
-    private let detail = UILabel()
+    private let recommendedTag = RecommendedTag()
     private let textStack = UIStackView()
     private var embedded: UIView?
     var picked = false { didSet { mark.on = picked; updateTraits() } }
@@ -820,24 +914,32 @@ final class ChoiceRow: UIControl {
             label.textColor = ChatPalette.label2
         }
         textStack.addArrangedSubview(label)
-        if let choice, ClarifyText.isRecommended(choice) {
-            detail.font = HQFont.preferred(.footnote)
-            detail.adjustsFontForContentSizeCategory = true
-            detail.textColor = ChatPalette.label2
-            detail.text = "Recommended"
-            textStack.addArrangedSubview(detail)
+        let recommended = choice.map(ClarifyText.isRecommended) ?? false
+        layer.cornerRadius = 10          // the pressed fill is a soft block, not a bar across the card
+        layer.cornerCurve = .continuous
+        var trailing = textStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2)
+        if recommended {
+            recommendedTag.translatesAutoresizingMaskIntoConstraints = false
+            recommendedTag.isUserInteractionEnabled = false
+            addSubview(recommendedTag)
+            // At most: the words keep their own width and the tag stays at the edge (an equal width stretched the tag).
+            trailing = textStack.trailingAnchor.constraint(lessThanOrEqualTo: recommendedTag.leadingAnchor, constant: -8)
+            NSLayoutConstraint.activate([
+                recommendedTag.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
+                recommendedTag.centerYAnchor.constraint(equalTo: mark.centerYAnchor),
+            ])
         }
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(greaterThanOrEqualToConstant: 48),
-            mark.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+            mark.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
             mark.widthAnchor.constraint(equalToConstant: 24),
             mark.heightAnchor.constraint(equalToConstant: 24),
-            mark.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: 12),
+            mark.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: 10),
             mark.centerYAnchor.constraint(equalTo: textStack.topAnchor, constant: max(12, label.font.lineHeight / 2)).withPriority(.defaultHigh),
             textStack.leadingAnchor.constraint(equalTo: mark.trailingAnchor, constant: 12),
-            textStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
-            textStack.topAnchor.constraint(equalTo: topAnchor, constant: 12),
-            textStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
+            trailing,
+            textStack.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            textStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
         ])
         isAccessibilityElement = true
         accessibilityLabel = choice.map(ClarifyText.bareChoice) ?? "Something else"
@@ -872,10 +974,84 @@ final class ChoiceRow: UIControl {
             addSubview(view)
             NSLayoutConstraint.activate([
                 view.leadingAnchor.constraint(equalTo: mark.trailingAnchor, constant: 8),
-                view.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+                view.trailingAnchor.constraint(equalTo: trailingAnchor),
                 view.topAnchor.constraint(equalTo: topAnchor, constant: 4),
                 view.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
             ])
+        }
+    }
+}
+
+/// [question-tidy] "Recommended": Caption 1 semibold in the tint's text colour on a quiet tinted capsule. The row's
+/// VoiceOver value says it, so the tag itself is not an element.
+final class RecommendedTag: UIView {
+    private let label = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        label.font = UIFontMetrics(forTextStyle: .caption1).scaledFont(for: HQFont.system(ofSize: 12, weight: .semibold))
+        label.adjustsFontForContentSizeCategory = true
+        label.text = "Recommended"
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            label.topAnchor.constraint(equalTo: topAnchor, constant: 3),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -3),
+        ])
+        layer.cornerRadius = 7
+        layer.cornerCurve = .continuous
+        isAccessibilityElement = false
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+        setContentHuggingPriority(.required, for: .horizontal)
+        label.setContentCompressionResistancePriority(.required, for: .horizontal)
+        label.setContentHuggingPriority(.required, for: .horizontal)
+        update()
+        registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (view: RecommendedTag, _) in view.update() }
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    private func update() {
+        label.textColor = ChatPalette.tintText
+        backgroundColor = ChatPalette.tint.withAlphaComponent(0.16)
+    }
+}
+
+/// [question-tidy] The questions as small bars before "1 of 2" (two to six of them; more would crowd Skip All, and
+/// the words alone say it then). The bars up to the shown page are tinted.
+final class StepBarsView: UIView {
+    var count = 0 { didSet { invalidateIntrinsicContentSize(); setNeedsLayout() } }
+    var current = 0 { didSet { if current != oldValue { setNeedsLayout() } } }
+    var shows: Bool { (2...6).contains(count) }
+    private var bars: [UIView] = []
+    private static let bar = CGSize(width: 16, height: 4)
+    private static let gap: CGFloat = 4
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isAccessibilityElement = false
+        isUserInteractionEnabled = false
+        registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (view: StepBarsView, _) in view.setNeedsLayout() }
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override var intrinsicContentSize: CGSize {
+        guard shows else { return .zero }
+        return CGSize(width: CGFloat(count) * Self.bar.width + CGFloat(count - 1) * Self.gap, height: Self.bar.height)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let wanted = shows ? count : 0
+        while bars.count < wanted { let bar = UIView(); bar.layer.cornerRadius = Self.bar.height / 2; addSubview(bar); bars.append(bar) }
+        while bars.count > wanted { bars.removeLast().removeFromSuperview() }
+        for (i, bar) in bars.enumerated() {
+            bar.frame = CGRect(x: CGFloat(i) * (Self.bar.width + Self.gap), y: (bounds.height - Self.bar.height) / 2,
+                               width: Self.bar.width, height: Self.bar.height)
+            bar.backgroundColor = i <= current ? ChatPalette.tint : ChatPalette.label3.withAlphaComponent(0.5)
         }
     }
 }
@@ -930,7 +1106,7 @@ final class Separator: UIView {
         hair = heightAnchor.constraint(equalToConstant: 1.0 / 3)
         NSLayoutConstraint.activate([
             hair,
-            line.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 50),
+            line.leadingAnchor.constraint(equalTo: leadingAnchor),   // [question-tidy] the card's width: the rows have no box
             line.trailingAnchor.constraint(equalTo: trailingAnchor),
             line.topAnchor.constraint(equalTo: topAnchor),
             line.bottomAnchor.constraint(equalTo: bottomAnchor),

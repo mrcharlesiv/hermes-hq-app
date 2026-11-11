@@ -24,6 +24,14 @@ version you're on. Screenshots help. Never paste passwords, tokens or your gatew
    in `App/`. `docs/ARCHITECTURE.md` explains the layout, and `docs/spec/` describes how the app talks to the gateway.
 5. **Write for people.** The app's wording is short, plain and specific. Match it in anything a user will see.
 
+## Privacy
+
+This repository is public, so nothing personal goes into it: no real names, email addresses, phone numbers, chat
+text, hosts or keys, in code, tests, comments, screenshots or commit messages. Use made-up stand-ins (`example.com`,
+`/Users/me`, `tail1234`, 555-01xx numbers). A check runs on every pull request; run it yourself with
+`python3 .github/scripts/leak_check.py`. If you spot personal information already here, report it privately (see
+Security below) instead of quoting it in an issue.
+
 ## Security
 
 If you find a security problem, don't open a public issue. Use GitHub's

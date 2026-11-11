@@ -39,6 +39,13 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
         /// (it says why). A page opened from Tiles has no chat to send in.
         var send: ((String, UIViewController, @escaping () -> Void) -> Bool)? = nil
         var botName: String? = nil
+        /// [tile-versions] The page is an earlier version of a tile, opened from Versions: no Updates button; `verb`
+        /// ("Roll Back", nil for the version that shows) puts it back on the tile.
+        struct Version {
+            var verb: String?
+            var rollBack: (UIViewController) -> Void
+        }
+        var version: Version? = nil
     }
 
     static let maxIntentLength = 500
@@ -164,10 +171,23 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
         }
         // [tiles] Its Updates on a clock button; the file and when it was updated under its name.
         if let tile {
-            let updates = UIBarButtonItem(image: UIImage(systemName: "clock.arrow.circlepath"), menu: tile.menu(self))
-            updates.accessibilityLabel = "Updates"
-            updates.accessibilityIdentifier = "tile.updates.button"
-            items.append(updates)
+            if let version = tile.version {
+                // [tile-versions] An earlier version: Roll Back where the tile has its Updates.
+                if let verb = version.verb {
+                    let back = UIBarButtonItem(title: verb, primaryAction: UIAction { [weak self] _ in
+                        guard let self else { return }
+                        version.rollBack(self)
+                    })
+                    back.style = .prominent
+                    back.accessibilityIdentifier = "tile.version.rollback"
+                    items.insert(back, at: 0)
+                }
+            } else {
+                let updates = UIBarButtonItem(image: UIImage(systemName: "clock.arrow.circlepath"), menu: tile.menu(self))
+                updates.accessibilityLabel = "Updates"
+                updates.accessibilityIdentifier = "tile.updates.button"
+                items.append(updates)
+            }
             navigationItem.subtitle = tile.fileName
             Task { [weak self] in
                 guard let status = await tile.status(), let self else { return }

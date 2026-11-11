@@ -443,16 +443,29 @@ struct GatewayPageView: View {
                             Text("Address").foregroundStyle(Color.hqLabel)
                         }
                     } else {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Address").font(Font.hq(.subheadline)).foregroundStyle(Color.hqLabel2)
-                            // Breaks only between the address's parts; VoiceOver and Copy get the plain address.
-                            Text(SettingsRootModel.wrappable(model.address))
-                                .font(Font.hq(.body))
-                                .foregroundStyle(Color.hqLabel)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .accessibilityLabel(model.address)
+                        // [gateway-rows] Owner 2026-11-10 (design pick 25): an address that fits is a value on the
+                        // right of its row, as Name, Account and Saved Sign-In are; a longer one keeps the label over
+                        // it, breaking only between its parts.
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 12) {
+                                Text("Address").foregroundStyle(Color.hqLabel).fixedSize()
+                                Spacer(minLength: 12)
+                                Text(model.address).foregroundStyle(Color.hqLabel2).lineLimit(1).fixedSize()
+                            }
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Address").font(Font.hq(.subheadline)).foregroundStyle(Color.hqLabel2)
+                                // Breaks only between the address's parts; VoiceOver and Copy get the plain address.
+                                Text(SettingsRootModel.wrappable(model.address))
+                                    .font(Font.hq(.body))
+                                    .foregroundStyle(Color.hqLabel)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .accessibilityLabel(model.address)
+                            }
+                            .padding(.vertical, 6)
                         }
-                        .padding(.vertical, 6)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("Address")
+                        .accessibilityValue(model.address)
                     }
                 }
                 .contextMenu {

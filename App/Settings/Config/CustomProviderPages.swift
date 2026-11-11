@@ -59,6 +59,7 @@ final class CustomProvidersModel {
         if provider(id) == nil, let store = prefsStore ?? ProviderPrefsStore.current ?? account.map({ ProviderPrefsStore.of(accountId: $0) }) {
             store.update { $0.forget(provider: ProviderPrefs.endpointSlug(id)) }
         }
+        if provider(id) == nil, let account { ModelPrefs(accountId: account).removeKnownProvider(ProviderPrefs.endpointSlug(id)) }
         AppLog.note("settings", "custom provider deleted")
     }
 

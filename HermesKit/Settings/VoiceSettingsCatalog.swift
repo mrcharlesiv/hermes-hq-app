@@ -276,6 +276,22 @@ nonisolated enum VoiceSettingsCatalog {
         }
         return "\(how) \(DeviceWord.onlyHere)"
     }
+    // [more accurate words] (docs/spec/3x-live-words.md §2.2)
+    static let betterWordsTitle = "More Accurate Words"
+    static let betterWordsHint = "A larger speech model on this \(DeviceWord.name) gets more of your words right. English only."
+    /// Under the Live Words switches, after `liveWordsNote`: where the larger model stands (nil: nothing to say).
+    static func betterWordsNote(on: Bool, readiness: ParakeetWords.Readiness) -> String? {
+        guard on else { return nil }
+        switch readiness {
+        case .unknown, .checking, .ready: return nil
+        case .waitingForWiFi: return "The larger speech model (\(ParakeetWords.downloadSize)) downloads on Wi-Fi."
+        case .downloading(let percent): return "Downloading the larger speech model (\(ParakeetWords.downloadSize)): \(percent)%."
+        case .loading: return "Getting the larger speech model ready."
+        case .unavailable(let why):
+            return why == "English only" ? "The larger speech model hears English only, so this \(DeviceWord.name) uses its built-in one."
+                : "The larger speech model isn’t available now, so this \(DeviceWord.name) uses its built-in one."
+        }
+    }
     // [live words] Word Fixes (spec 3x-live-words §5): fixes learned from memos fixed in review, and added here.
     static let wordFixesTitle = "Word Fixes"
     static let addWordFixTitle = "Add Word Fix"

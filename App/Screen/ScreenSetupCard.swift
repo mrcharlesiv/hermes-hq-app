@@ -16,6 +16,7 @@ final class ScreenSetupCard: UIView {
     private let how = UILabel()
     private let shares = UILabel()
     private let update = UILabel()
+    private let pointsBox = UIStackView()
     private let message = UILabel()
     private let error = UILabel()
     private let windowsNote = UILabel()
@@ -73,7 +74,34 @@ final class ScreenSetupCard: UIView {
         buttons.spacing = 10
         buttons.isLayoutMarginsRelativeArrangement = true
         buttons.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0)
-        for view in [padded(windowsNote), padded(heading), padded(how), padded(shares), buttons, padded(update), padded(message), padded(error)] {
+        // [screen-points] Three short points in place of the two paragraphs (`how`, `shares`): a mark, the first words
+        // in semibold, the rest; the sharing warning's mark in orange.
+        pointsBox.axis = .vertical
+        pointsBox.spacing = 12
+        pointsBox.isLayoutMarginsRelativeArrangement = true
+        pointsBox.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 4, leading: 0, bottom: 12, trailing: 0)
+        for (index, point) in ScreenSetupCopy.points.enumerated() {
+            let mark = UIImageView(image: UIImage(systemName: point.symbol))
+            mark.tintColor = point.warning ? .systemOrange : HQPalette.tint
+            mark.preferredSymbolConfiguration = UIImage.SymbolConfiguration(textStyle: .subheadline)
+            mark.contentMode = .center
+            mark.isAccessibilityElement = false
+            mark.setContentHuggingPriority(.required, for: .horizontal)
+            mark.setContentCompressionResistancePriority(.required, for: .horizontal)
+            mark.widthAnchor.constraint(equalToConstant: 22).isActive = true
+            let words = UILabel()
+            style(words, .subheadline, HQPalette.label2, "screen.setup.point.\(index)")
+            let font = HQFont.preferred(.subheadline)
+            let bold = UIFont(descriptor: font.fontDescriptor.withSymbolicTraits(.traitBold) ?? font.fontDescriptor, size: font.pointSize)
+            let text = NSMutableAttributedString(string: point.lead, attributes: [.font: bold, .foregroundColor: HQPalette.label])
+            text.append(NSAttributedString(string: point.rest, attributes: [.font: font, .foregroundColor: HQPalette.label2]))
+            words.attributedText = text
+            let row = UIStackView(arrangedSubviews: [mark, words])
+            row.spacing = 10
+            row.alignment = .firstBaseline
+            pointsBox.addArrangedSubview(row)
+        }
+        for view in [padded(windowsNote), padded(heading), pointsBox, buttons, padded(update), padded(message), padded(error)] {
             stack.addArrangedSubview(view)
         }
         accessibilityIdentifier = controlOnly ? "screen.setup.card.control" : "screen.setup.card"
@@ -104,8 +132,7 @@ final class ScreenSetupCard: UIView {
         heading.text = ScreenSetupCopy.heading(controlOnly: controlOnly)
         show(windowsNote, windows)
         show(heading, !windows)
-        show(how, !windows)
-        show(shares, !windows)
+        pointsBox.isHidden = windows
         primary.superview?.isHidden = windows
         show(update, !windows && needsUpdate)
         show(message, !windows && !(message.text ?? "").isEmpty)

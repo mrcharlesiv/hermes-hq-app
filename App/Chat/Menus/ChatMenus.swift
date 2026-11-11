@@ -253,6 +253,11 @@ final class ChatMenus: NSObject, ModelSwitchUI {
     /// the panel closes (if it was in the field). The Desktop Look's bar has no bubble: the card rises in place.
     func presentModelPanel() {
         guard modelPanel == nil, let screen, let switcher, context != nil else { return }
+        // [ghost-stars] The catalog is read as the panel opens (when the one in memory isn't fresh), so Switch Model's
+        // Favorites are the bot's own by the time the menu is opened, not the last read's.
+        if let context, !context.offline, context.cache.fresh(context.key) == nil {
+            Task { _ = try? await context.load() }
+        }
         let composer = screen.composer
         let hadFocus = composer.textView.isFirstResponder
         composer.holdsRows = true

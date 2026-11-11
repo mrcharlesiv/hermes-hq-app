@@ -1414,6 +1414,53 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         TileMaker.change(pin, path: path, bot: bot, what: words, accountId: store.account.id, chat: chat, from: self)
     }
 
+    /// [tile-versions] Versions (owner 2026-11-11: "v1 … v2 … roll back to prior versions … see what prior versions
+    /// looked like"): the tile's versions with their pictures, and Roll Back. The menu says which one shows.
+    /// `before`: run first, handed the opening (the opened tile closes, then the sheet opens).
+    func versionsAction(_ pin: ArtifactPin, before: ((@escaping () -> Void) -> Void)? = nil) -> UIAction {
+        let shown = pins.pins.first { $0.id == pin.id }?.version
+        let action = UIAction(title: "Versions", subtitle: shown.map { "Version \($0)" }, image: UIImage(systemName: "square.stack.3d.up")) {
+            [weak self] _ in
+            let show: () -> Void = { [weak self] in self?.showVersions(pin) }
+            if let before { before(show) } else { show() }
+        }
+        action.accessibilityIdentifier = "tile.versions"
+        if pin.gatewayPath == nil { action.attributes = .disabled }
+        return action
+    }
+
+    private func showVersions(_ kept: ArtifactPin) {
+        let pin = pins.pins.first { $0.id == kept.id } ?? kept
+        guard pin.gatewayPath != nil else { return }
+        PagesHaptics.selection()
+        let bots = services?.bots ?? []
+        let sheet = TileVersionsSheet.make(pin: pin, name: pins.name(pin),
+                                           botName: bots.first { $0.id == pin.profile }?.name,
+                                           context: pinPictures.context(pin), writable: services?.readOnlyGateway == false) { [weak self] version in
+            self?.rolledBack(pin.id, to: version)
+        }
+        present(sheet, animated: true)
+    }
+
+    /// [tile-versions] A version was put back on the tile: it's drawn again and marked, and when a job keeps the tile up
+    /// to date its bot is asked (hidden, as a tile's button) to make that job keep this version.
+    private func rolledBack(_ id: String, to version: TileVersion) {
+        markChanged(id)
+        redrawTile(id)
+        guard let services, !services.readOnlyGateway, let pin = pins.pins.first(where: { $0.id == id }), let path = pin.gatewayPath,
+              let bot = services.bots.first(where: { $0.id == pin.profile }) else { return }
+        let accountId = store.account.id
+        Task { [weak self] in
+            let (job, _) = await TileUpdates.shared.lookup(pin, accountId: accountId, client: services.gateway)
+            guard let self, job != nil, TileMaker.working(on: id, accountId: accountId) == nil else { return }
+            let chat: any ChatSessionModel = pin.sessionId.isEmpty
+                ? services.newChat(for: bot, folder: nil)
+                : services.chat(for: SessionSummary(id: pin.sessionId, profile: pin.profile, title: pin.sessionTitle, preview: nil,
+                                                    lastActive: nil, source: nil, unread: false, isRunning: false))
+            TileMaker.rolledBack(pin, path: path, bot: bot, version: version.number, accountId: accountId, chat: chat, from: self)
+        }
+    }
+
     /// [tiles] The tile's picture as it shows now (the one already drawn for its tile, card or row), for Change Tile.
     private func currentPicture(_ kept: ArtifactPin) -> UIImage? {
         let pin = pins.shown(kept)
@@ -1458,6 +1505,18 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
     /// [pins] The empty Pinned page's words: what a pin is for, then the two ways to pin, each line led by the symbol
     /// of where it happens (a chat, Artifacts) in the tint.
     private func pinsHowTo(font: UIFont, colour: UIColor) -> NSAttributedString {
+        // [empty-tidy] Owner 2026-11-10 (design pick 9): on the iPhone and iPad the two ways to pin are one quiet line
+        // under the sentence (they were two lines, each with its symbol, between the sentence and the buttons). The
+        // how-to stays: the first cut's one sentence alone left the page unexplained (owner 2026-11-01).
+        if !DeviceWord.isMac {
+            let text = NSMutableAttributedString(string: "Pin the pages, pictures and files your bots make, and keep them one \(DeviceWord.tap) away.",
+                                                 attributes: [.font: font, .foregroundColor: colour])
+            let small = font.withSize(max(11, font.pointSize - 2))
+            text.append(NSAttributedString(string: "\n", attributes: [.font: font.withSize(font.pointSize * 0.4)]))
+            text.append(NSAttributedString(string: "\nIn a chat, \(DeviceWord.hold) one and choose Pin as Tile. In Artifacts, swipe one to the right.",
+                                           attributes: [.font: small, .foregroundColor: colour]))
+            return text
+        }
         let text = NSMutableAttributedString(string: "Pin the pages, pictures and files your bots make, and keep them one \(DeviceWord.tap) away.\n",
                                              attributes: [.font: font, .foregroundColor: colour])
         let steps: [(symbol: String, words: String)] = [
@@ -1483,7 +1542,8 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         let pinned = !missing && pins.isPinned(record)
         let card = isGrid && !missing
         cell.contentConfiguration = UIHostingConfiguration {
-            ArtifactRowView(record: record, subtitle: subtitle, busy: busy, missing: missing, pinned: pinned, card: card) { [weak self, weak cell] in
+            ArtifactRowView(record: record, subtitle: subtitle, busy: busy, missing: missing, pinned: pinned, card: card,
+                            edge: ArtifactListWords.parts(sessionTitle: record.sessionTitle, timestamp: record.timestamp)) { [weak self, weak cell] in
                 self?.menu(for: record, missing: missing, anchor: cell) ?? UIMenu(children: [])
             }
         }.margins(.all, 0)
@@ -2217,7 +2277,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         var groups = [UIMenu(options: .displayInline, children: first + [copy])]
         // [tiles] How often it's updated (a page a job rewrites), and its name.
         var tile: [UIMenuElement] = []
-        if pin.isPage { tile.append(tileUpdatesMenu(pin)); tile.append(changeTileAction(pin)) }
+        if pin.isPage { tile.append(tileUpdatesMenu(pin)); tile.append(changeTileAction(pin)); tile.append(versionsAction(pin)) }
         tile.append(TileUpdates.renameAction(pin, pins: pins, from: self))
         groups.append(UIMenu(options: .displayInline, children: tile))
         // [dashboard] Move to Page (on the Dashboard).
@@ -2358,7 +2418,12 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
                     guard let host else { start(); return }
                     host.dismiss(animated: true, completion: start)
                 }
-                return UIMenu(children: [updates, UIMenu(options: .displayInline, children: [change])])
+                // [tile-versions] Versions from the opened tile: it closes, and the sheet opens over the Tiles page.
+                let versions = self.versionsAction(pin) { [weak host] start in
+                    guard let host else { start(); return }
+                    host.dismiss(animated: true, completion: start)
+                }
+                return UIMenu(children: [updates, UIMenu(options: .displayInline, children: [change, versions])])
             })
             // [live-tiles] Its buttons go to the tile's bot, as on the Tiles page (a page opened from Tiles has no chat).
             tile.botName = PagesNames.botName(pin.profile, bots: services?.bots ?? [])
@@ -2607,6 +2672,10 @@ struct ArtifactTileView: View {
 }
 
 /// A file or link row: a 44 pt type tile, the name (middle-truncated), "<chat> · 6:20 PM", ⋯.
+/// [artifact-rows] Owner 2026-11-10 (design pick 10): on the iPhone and iPad's list the time stands at the trailing edge
+/// of the name's line, the second line is the chat alone, and the row has no ⋯: touch and hold opens the same menu and
+/// the swipes pin and remove, as on Bots, Sessions and Jobs. The Mac (a pointer, no swipes), its grid's cards, the
+/// accessibility text sizes and rows without `edge` (a pinned tile's row) keep the row as it was.
 struct ArtifactRowView: View {
     var record: ArtifactRecord
     var subtitle: String
@@ -2616,8 +2685,12 @@ struct ArtifactRowView: View {
     var pinned: Bool = false
     /// [mac-tools] A card of the Mac's grid: its own edges, so less room at the sides.
     var card: Bool = false
+    /// [artifact-rows] The chat and the time apart, for the edged row.
+    var edge: (chat: String, when: String)? = nil
     var menu: () -> UIMenu
     @Environment(\.dynamicTypeSize) private var typeSize
+
+    private var edged: Bool { edge != nil && !card && !DeviceWord.isMac && !typeSize.isAccessibilitySize }
 
     static func glyph(_ record: ArtifactRecord) -> String {
         if record.kind == .link { return "link" }
@@ -2649,15 +2722,24 @@ struct ArtifactRowView: View {
             // ⋯ made a one-line name's row 64 pt.
             .frame(width: Density.ios(36, 30), height: Density.ios(36, 30))
             VStack(alignment: .leading, spacing: 2) {
-                Text(record.label.isEmpty ? record.value : record.label)
-                    .font(Font.hq(.body))
-                    .foregroundStyle(missing ? Color.hqLabel2 : Color.hqLabel)
-                    .lineLimit(large ? 3 : (record.repeatBadge == nil || card ? 1 : 2))   // [morepages] the name wraps before the badge squeezes it
-                    .truncationMode(.middle)
-                Text(subtitle)
-                    .font(Font.hq(.footnote))
-                    .foregroundStyle(Color.hqLabel2)
-                    .lineLimit(large ? 3 : 1)
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(record.label.isEmpty ? record.value : record.label)
+                        .font(Font.hq(.body))
+                        .foregroundStyle(missing ? Color.hqLabel2 : Color.hqLabel)
+                        .lineLimit(large ? 3 : (record.repeatBadge == nil || card || edged ? 1 : 2))   // [morepages] the name wraps before the badge squeezes it
+                        .truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if edged, let when = edge?.when, !when.isEmpty {
+                        Text(when).font(Font.hq(.footnote)).monospacedDigit().foregroundStyle(Color.hqLabel2).lineLimit(1).fixedSize()
+                    }
+                }
+                let second = edged ? (edge?.chat ?? "") : subtitle
+                if !second.isEmpty {
+                    Text(second)
+                        .font(Font.hq(.footnote))
+                        .foregroundStyle(Color.hqLabel2)
+                        .lineLimit(large ? 3 : 1)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             // [morepages] "×3": this chat named the file or link three times (3x-morepages §2).
@@ -2675,12 +2757,14 @@ struct ArtifactRowView: View {
                 Image(systemName: "pin.fill").hqSymbolFont(12, cap: 18).foregroundStyle(Color.hqOrange)
                     .accessibilityLabel("Pinned").accessibilityIdentifier("artifact-pinned")
             }
-            UIMenuButton(menu: menu, label: "Actions for \(record.label)")
-                .frame(width: 44, height: 44)
-                .padding(.vertical, -6)   // [ui-sizing] its 44 pt touch reaches into the padding, not the row's height
+            if !edged {
+                UIMenuButton(menu: menu, label: "Actions for \(record.label)")
+                    .frame(width: 44, height: 44)
+                    .padding(.vertical, -6)   // [ui-sizing] its 44 pt touch reaches into the padding, not the row's height
+            }
         }
         .padding(.leading, card ? 10 : 20)
-        .padding(.trailing, card ? 0 : 6)
+        .padding(.trailing, card ? 0 : edged ? 20 : 6)
         .padding(.vertical, large ? 12 : card ? 10 : Density.compact ? 6 : 10)
         .frame(minHeight: large || card ? 64 : Density.ios(56, 46))
         .contentShape(Rectangle())

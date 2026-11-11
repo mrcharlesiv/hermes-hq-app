@@ -111,6 +111,15 @@ private struct CloudAgentDetail: View {
                 CloudAgentHeader(agent: agent, busy: busy, failure: model.actionFailure[agent.id])
                     .padding(.bottom, 26)
 
+                // [cloud-desktop] The agent's own Hermes Desktop (Hermes 0.23's Webapp), inside the app.
+                if up, !agent.isFailed, CloudDesktopWeb.address(agent.dashboardURL) != nil {
+                    CloudActionRow(symbol: "macwindow", tint: Color.hqTint, title: CloudDesktopWeb.menuTitle, detail: CloudDesktopWeb.rowDetail,
+                                   id: "cloud-agent.desktop") { model.onRoute?(.desktop(agent.id)) }
+                        .cloudCard()
+                        .disabled(busy != nil)
+                        .padding(.bottom, 22)
+                }
+
                 CloudLabel(text: CloudCopy.cost)
                 CloudCostCard(agent: agent, spend: model.spend[agent.id], up: up)
 

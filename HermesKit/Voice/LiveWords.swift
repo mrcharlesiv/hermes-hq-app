@@ -74,6 +74,7 @@ nonisolated protocol LiveWordsListening: AnyObject, Sendable {
         #if DEBUG
         if debugScript != nil { return isOn }
         #endif
+        if ParakeetWords.isOn, ParakeetWords.readiness == .ready { return isOn }
         if case .ready = readiness { return isOn }
         return false
     }
@@ -81,10 +82,12 @@ nonisolated protocol LiveWordsListening: AnyObject, Sendable {
     /// Checks whether this device can hear words in the person's language, and starts the model's download when that's
     /// all it lacks (Apple's shared model: other apps may have it already). Cheap once checked.
     static func prepare() {
-        guard isOn, readiness == .unknown else { return }
+        guard isOn else { return }
         #if DEBUG
         if debugScript != nil { return }
         #endif
+        ParakeetWords.prepare()   // [more accurate words] the larger model, when it is wanted and can be had
+        guard readiness == .unknown else { return }
         set(.checking)
         Task {
             let found = await LiveWordsEngine.find()
@@ -106,6 +109,8 @@ nonisolated protocol LiveWordsListening: AnyObject, Sendable {
         #if DEBUG
         if let debugScript { return TidiedLiveWords(ScriptedLiveWords(script: debugScript, onText: shown), tidy: tidy) }
         #endif
+        // [more accurate words] The larger model first; Apple's engine while it downloads or where it can't run.
+        if let better = ParakeetWords.listen(onText: shown) { return TidiedLiveWords(better, tidy: tidy) }
         guard case .ready(let engine) = readiness else {
             prepare()
             return nil
@@ -116,6 +121,12 @@ nonisolated protocol LiveWordsListening: AnyObject, Sendable {
     /// One fact for Voice Diagnostics.
     static var diagnosticsLine: String {
         guard isOn else { return "off" }
+        let better = ParakeetWords.diagnosticsLine
+        if ParakeetWords.readiness == .ready, let better { return "on this device, \(better)" }
+        return [appleLine, better].compactMap { $0 }.joined(separator: "; ")
+    }
+
+    private static var appleLine: String {
         switch readiness {
         case .unknown: return "not checked yet"
         case .checking: return "checking"

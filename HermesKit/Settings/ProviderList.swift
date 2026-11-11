@@ -136,6 +136,16 @@ nonisolated enum ProviderList {
         return out
     }
 
+    /// [provider-rows] The row's trailing edge (owner 2026-11-10, design pick 4): "12 models", "1 model",
+    /// "2 of 3 models", or "No models" with `none` set (the row draws that in orange: nothing to pick from it).
+    static func shownEdge(_ provider: ManagedProvider, catalog: [ModelProviderOption], prefs: ProviderPrefs) -> (text: String, none: Bool) {
+        let all = allModels(provider, catalog: catalog, prefs: prefs)
+        guard !all.isEmpty else { return ("No models", true) }
+        let shown = all.filter { !prefs.isHidden(provider: provider.id, model: $0) }.count
+        if shown == all.count { return (shown == 1 ? "1 model" : "\(shown) models", false) }
+        return ("\(shown) of \(all.count) models", false)
+    }
+
     /// "12 models shown", "1 model shown", "No models listed".
     static func shownLine(_ provider: ManagedProvider, catalog: [ModelProviderOption], prefs: ProviderPrefs) -> String {
         let all = allModels(provider, catalog: catalog, prefs: prefs)

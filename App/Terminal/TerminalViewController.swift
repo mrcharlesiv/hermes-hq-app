@@ -449,8 +449,8 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
             let answer = AlertAnswer(continuation, unanswered: false)
             let alert = UIAlertController(
                 title: "Open a Terminal on \(computerName)?",
-                message: "What you type runs on that computer with the same access Hermes has there, including its files. "
-                    + "Turn this on only for a computer you trust. Face ID is asked each time the Terminal opens.",
+                // [terminal-points] Three short lines, the risk first (an alert has no room for their marks).
+                message: TerminalConsentWords.points(unlock: "Face ID").map { $0.lead + $0.rest }.joined(separator: "\n\n"),
                 preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: "Not Now", style: .cancel) { _ in answer.answer(false) })
             let on = UIAlertAction(title: "Turn On", style: .default) { _ in answer.answer(true) }
@@ -808,11 +808,13 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
             config = .empty()
             #endif
         case .consent:
-            let unlock = TerminalSettings.requiresUnlock ? " \(TerminalUnlock.means.prefix(1).uppercased() + TerminalUnlock.means.dropFirst()) is asked each time the Terminal opens." : ""
-            config = card("terminal", "Open a Terminal on \(computerName)?",
-                          "What you type runs on that computer with the same access Hermes has there, including its files. "
-                            + "Turn this on only for a computer you trust." + unlock,
+            // [terminal-points] Owner 2026-11-10 (design pick 24): three short points, the risk first in orange, in the
+            // shape of Screen Control's setup card, in place of one paragraph.
+            let means = TerminalSettings.requiresUnlock ? TerminalUnlock.means.prefix(1).uppercased() + TerminalUnlock.means.dropFirst() : nil
+            let points = TerminalConsentWords.points(unlock: means)
+            config = card("terminal", "Open a Terminal on \(computerName)?", points.map { $0.lead + $0.rest }.joined(separator: " "),
                           button: "Turn On", secondary: ("Not Now", { [weak self] in self?.notNow() })) { [weak self] in self?.turnOn() }
+            config?.secondaryAttributedText = TerminalConsentWords.attributed(points)
         case .off:
             config = card("terminal", "Terminal Is Off",
                           "Turn it on to type commands on \(computerName). They run with the same access Hermes has there.",
@@ -1454,5 +1456,46 @@ final class TerminalTextController: UIViewController {
         super.viewDidAppear(animated)
         // The newest lines are at the end, as in the terminal.
         textView.scrollRangeToVisible(NSRange(location: (text as NSString).length, length: 0))
+    }
+}
+
+
+/// [terminal-points] The consent card's three points: what it does (the risk, in orange), when to turn it on, and the
+/// unlock asked each time (left out when no unlock is set).
+enum TerminalConsentWords {
+    struct Point { var symbol: String; var lead: String; var rest: String; var warning = false }
+
+    static func points(unlock: String?) -> [Point] {
+        var out = [
+            Point(symbol: "exclamationmark.triangle.fill", lead: "What you type runs on that computer,",
+                  rest: " with the same access Hermes has there, including its files.", warning: true),
+            Point(symbol: "checkmark.shield", lead: "Turn it on only for a computer you trust.", rest: ""),
+        ]
+        if let unlock { out.append(Point(symbol: "lock", lead: "\(unlock) is asked", rest: " each time the Terminal opens.")) }
+        return out
+    }
+
+    /// The points as left-aligned paragraphs, each led by its mark and its first words in semibold.
+    @MainActor static func attributed(_ points: [Point]) -> NSAttributedString {
+        let font = HQFont.preferred(.subheadline)
+        let bold = UIFont(descriptor: font.fontDescriptor.withSymbolicTraits(.traitBold) ?? font.fontDescriptor, size: font.pointSize)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .left
+        paragraph.paragraphSpacing = 10
+        paragraph.headIndent = font.pointSize * 1.6
+        paragraph.tabStops = [NSTextTab(textAlignment: .left, location: paragraph.headIndent)]
+        let out = NSMutableAttributedString()
+        for (index, point) in points.enumerated() {
+            let ink: UIColor = point.warning ? .systemOrange : UIColor(white: 0.75, alpha: 1)
+            if let image = UIImage(systemName: point.symbol, withConfiguration: UIImage.SymbolConfiguration(font: font, scale: .small))?
+                .withTintColor(ink, renderingMode: .alwaysOriginal) {
+                out.append(NSAttributedString(attachment: NSTextAttachment(image: image)))
+            }
+            out.append(NSAttributedString(string: "\t" + point.lead, attributes: [.font: bold, .foregroundColor: UIColor.white]))
+            out.append(NSAttributedString(string: point.rest + (index < points.count - 1 ? "\n" : ""),
+                                          attributes: [.font: font, .foregroundColor: UIColor(white: 0.78, alpha: 1)]))
+        }
+        out.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: out.length))
+        return out
     }
 }

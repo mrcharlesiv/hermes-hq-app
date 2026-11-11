@@ -206,6 +206,7 @@ import UIKit
         cloud.accessibilityIdentifier = "gateway-menu-cloud"
         // In use and hosted by Nous: its own agent page, one tap from the title.
         var manageCloud: UIAction?
+        var openDesktop: UIAction?
         if let current = gateways.accounts.first(where: \.isCurrent), CloudGatewayFlow.isCloud(current.account.baseURL) {
             // The agent's own page on Hermes Cloud (Start, Stop, Restart, Update, its size): Manage Gateways… below
             // already opens the Gateways page, so the two items no longer lead to the same place.
@@ -216,6 +217,13 @@ import UIKit
             }
             action.accessibilityIdentifier = "gateway-menu-cloud-manage"
             manageCloud = action
+            // [cloud-desktop] The agent's own Hermes Desktop (Hermes 0.23's Webapp), inside the app.
+            let desktop = UIAction(title: CloudDesktopWeb.menuTitle, image: UIImage(systemName: "macwindow")) { [weak self] _ in
+                guard let self else { return }
+                CloudDesktopWeb.present(gateway: url, name: current.title, from: self.host)
+            }
+            desktop.accessibilityIdentifier = "gateway-menu-cloud-desktop"
+            openDesktop = desktop
         }
         let manage = UIAction(title: "Manage Gateways…", image: UIImage(systemName: "gearshape")) { [weak self] _ in
             guard let self, let host = self.host else { return }
@@ -223,7 +231,7 @@ import UIKit
         }
         return UIMenu(title: "Gateways", children: [
             UIMenu(options: .displayInline, children: gatewayItems),
-            UIMenu(options: .displayInline, children: [manageCloud, add, cloud, manage].compactMap { $0 }),
+            UIMenu(options: .displayInline, children: [openDesktop, manageCloud, add, cloud, manage].compactMap { $0 }),
         ])
     }
 

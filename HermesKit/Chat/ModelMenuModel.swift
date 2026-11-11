@@ -218,8 +218,11 @@ final class ModelMenuContext {
         // [custom-providers] The catalog's own row, not the one saved with the pick: a provider renamed since (Settings ›
         // Providers, or the desktop app) shows its new name here too, as the favourites do.
         let recents = prefs.recents.compactMap { row in catalog.first { $0.id == row.id && $0.provider == row.provider } }
-        let favorites = Self.favorites(keys: prefs.favorites, catalog: options?.choices ?? cache.sibling(key)?.choices,
-                                       knownProviders: prefs.knownProviders(profile: key.profile))
+        // [ghost-stars] The bot's newest catalog, this chat's or another's: this chat's own may be the older one (read
+        // before a provider or a model went away).
+        let favorites = Self.favorites(keys: prefs.favorites, catalog: cache.sibling(key)?.choices ?? options?.choices,
+                                       knownProviders: prefs.knownProviders(profile: key.profile),
+                                       missing: prefs.missingStars(profile: key.profile))
         let effort = chat.modelState.reasoningEffort
         let fast = fastControl()
         return ModelMenuInput(current: model, recents: recents, favorites: favorites,
@@ -230,15 +233,25 @@ final class ModelMenuContext {
                               approvalMode: chat.modelState.approvalMode, yolo: chat.modelState.yolo)
     }
 
-    /// [stale-stars] The starred models the menus list: the catalog's rows for them (this chat's, else one cached for
-    /// another chat of the bot's); with neither, each star read from its key, but none from a provider the bot's last
-    /// catalog didn't list (tester 2026-11-09: a removed provider's stars showed in every new chat until its
-    /// catalog loaded).
-    nonisolated static func favorites(keys: [String], catalog: [ModelChoice]?, knownProviders: Set<String>?) -> [ModelChoice] {
-        if let catalog { return ModelSheetModel.favoriteRows(catalog, keys: keys) }
-        let rows = ModelSheetModel.favoritesFromKeys(keys)
+    /// [stale-stars] The starred models the menus list: the rows of the bot's newest catalog for them; with none in
+    /// memory, each star read from its key, but none the bot's last catalog didn't list (`missing`) and none from a
+    /// provider it didn't list (tester 2026-11-09: a removed provider's stars showed in every new chat until
+    /// its catalog loaded). [ghost-stars] The known providers hold over a catalog too: one removed in Settings since
+    /// that catalog was read is still in it (tester 2026-11-10: "the ghost favorites are still there").
+    nonisolated static func favorites(keys: [String], catalog: [ModelChoice]?, knownProviders: Set<String>?,
+                                      missing: Set<String> = []) -> [ModelChoice] {
+        let rows = catalog.map { ModelSheetModel.favoriteRows($0, keys: keys) }
+            ?? ModelSheetModel.favoritesFromKeys(keys).filter { !missing.contains($0.key) }
         guard let knownProviders else { return rows }
         return rows.filter { knownProviders.contains($0.provider) }
+    }
+
+    /// [ghost-stars] What a catalog read leaves for the next chat's menu, drawn before its own read answers: the
+    /// providers it listed and the stars it didn't.
+    func noteCatalog(_ shown: ModelOptions?, raw: ModelOptions) {
+        prefs.setKnownProviders(Set(raw.providers.filter { !$0.models.isEmpty }.map(\.slug)), profile: key.profile)
+        let listed = Set((shown ?? raw).choices.map(\.key))
+        prefs.setMissingStars(Set(prefs.favorites.filter { !listed.contains($0) }), profile: key.profile)
     }
 
     // MARK: Loading (spec 1x §3.1)
@@ -277,7 +290,7 @@ final class ModelMenuContext {
                 }
                 let loaded = ModelOptions(json: result)
                 cache.store(loaded, for: key)
-                prefs.setKnownProviders(Set(loaded.providers.filter { !$0.models.isEmpty }.map(\.slug)), profile: key.profile)
+                noteCatalog(cache.cached(key), raw: loaded)
                 cache.setLoadFailed(false, for: key)
                 return models()
             } catch {

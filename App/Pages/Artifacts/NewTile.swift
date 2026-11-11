@@ -306,6 +306,33 @@ final class TileMaker {
         """
     }
 
+    /// [tile-versions] After a roll back, for a tile a job keeps up to date: the page is already back as it was, and the
+    /// job (or its refresh script) may still write the newer look, so the tile's bot brings it in line.
+    nonisolated static func rolledBackPrompt(path: String, name: String, version: Int) -> String {
+        """
+        I rolled my Hermes HQ tile “\(name)” (\(path)) back to its version \(version). The file is already restored and \
+        looks the way I want: don't change its look, layout, <title> or <meta> tags.
+
+        If a scheduled job or a refresh script rewrites this tile, make sure its next run keeps this version's look and \
+        fills in the data this version shows (change the script or the job's prompt if it would bring the newer look \
+        back). Then refresh the tile's data once so it's current. Reply in a line or two.
+        """
+    }
+
+    /// [tile-versions] The hidden turn after a roll back (`rolledBackPrompt`): the tile says "Updating…" meanwhile.
+    @discardableResult
+    static func rolledBack(_ pin: ArtifactPin, path: String, bot: Bot, version: Int, accountId: String, chat: any ChatSessionModel,
+                           from page: UIViewController?) -> TileMaker {
+        let maker = TileMaker(chat: chat, bot: bot, accountId: accountId, page: page)
+        maker.changing = (pin.id, pin.name)
+        maker.acting = true
+        maker.path = path
+        maker.rawPrompt = rolledBackPrompt(path: path, name: pin.name, version: version)
+        active.append(maker)
+        maker.begin("its updates follow Version \(version)")
+        return maker
+    }
+
     /// [live-tiles] A live tile's button (`window.hermes.send` / `data-hermes-send`): the prompt goes to the tile's bot
     /// with no bubble, the Tiles page shows "Updating <tile>…" while it works, and the tile is read again when it ends.
     @discardableResult
@@ -327,6 +354,8 @@ final class TileMaker {
         maker.changing = (pin.id, pin.name)
         maker.path = path
         active.append(maker)
+        // [tile-versions] The tile as it is before the bot edits it, kept if it isn't a version yet.
+        TileVersions.shared.keepSoon(pinId: pin.id, accountId: accountId, kind: .outside, what: nil)
         maker.begin(what)
         return maker
     }
@@ -363,6 +392,8 @@ final class TileMaker {
     private let dashboardPage: String
     /// [tiles] The changed tile's file (Change…).
     private var path = ""
+    /// [tile-versions] The whole prompt of a hidden turn that isn't a button's (the roll back's).
+    private var rawPrompt: String?
 
     private func begin(_ what: String) {
         self.what = what
@@ -370,7 +401,7 @@ final class TileMaker {
         chat.start()
         if acting, let changing {
             // [live-tiles] Hidden, as the desktop sends a widget's prompt: the tile updating is the answer.
-            let prompt = Self.actionPrompt(path: path, name: changing.name, prompt: what)
+            let prompt = rawPrompt ?? Self.actionPrompt(path: path, name: changing.name, prompt: what)
             if let activity = chat as? ChatActivityProviding { activity.sendHidden(prompt, display: nil) } else { chat.send(prompt) }
             AppLog.note("pages", "live tile button asked of \(AppLog.tag(bot.id)) (\(what.count) chars)")
             NotificationCenter.default.post(name: Self.changed, object: nil)
@@ -463,6 +494,8 @@ final class TileMaker {
             // chat, and a problem offers to ask again (owner 2026-11-10: "greatly improved").
             let done = problem == nil && handedOverPath() != nil
             NotificationCenter.default.post(name: Self.tileChanged, object: nil, userInfo: ["id": changing.id, "done": done])
+            // [tile-versions] Whatever the reply said: when the page's look changed, that's the next version.
+            TileVersions.shared.keepSoon(pinId: changing.id, accountId: accountId, kind: .changed, what: what)
             if let problem {
                 AppLog.note("pages", "tile change by \(AppLog.tag(bot.id)) failed")
                 Haptics.play(.error)
@@ -504,6 +537,9 @@ final class TileMaker {
             return
         }
         pins.setPage(dashboardPage, id: ArtifactPin.key(profile: record.profile, value: record.value))
+        // [tile-versions] A new tile's page is its Version 1.
+        TileVersions.shared.keepSoon(pinId: ArtifactPin.key(profile: record.profile, value: record.value), accountId: context.accountId,
+                                     kind: .made, what: what)
         Haptics.play(.success)
         AppLog.note("pages", "new tile from \(AppLog.tag(bot.id)) pinned")
         if let page, page.viewIfLoaded?.window != nil { PagesHUD.show("Your New Tile Is Pinned", symbol: "pin.fill", from: page) }

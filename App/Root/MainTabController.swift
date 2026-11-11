@@ -459,6 +459,9 @@ final class MainTabController: UITabBarController, UITabBarControllerDelegate {
     func connectionDidChange() {
         botsViewController.setNeedsReload(animated: true)
         pages?.connectionChanged()
+        #if targetEnvironment(macCatalyst)
+        NotificationCenter.default.post(name: MacSidebar.connectionChanged, object: nil)   // [sidebar-tidy] the foot's gateway dot
+        #endif
     }
 
     /// Tab badges count unread bots and unread listed sessions (never messages: `message_count` includes tool rows;

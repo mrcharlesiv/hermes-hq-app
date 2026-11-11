@@ -194,8 +194,13 @@ final class BotStore {
     @ObservationIgnored private var confirmedNoChat: Set<String> = []
     @ObservationIgnored private var previews = RosterPreviewCache()
     // [botsaid] Bot Chat tails being read, waiting, and answers not yet drawn (BotStore+BotSaid.swift).
-    @ObservationIgnored var botSaidReads: Set<String> = []
-    @ObservationIgnored var botSaidQueue: [(profile: String, session: String, at: Double)] = []
+    /// [botsaid] Reads out (one per bot): the roster state each was asked for, and when it went out.
+    @ObservationIgnored var botSaidOut: [String: (mark: String, asked: ContinuousClock.Instant)] = [:]
+    @ObservationIgnored var botSaidQueue: [(profile: String, session: String, at: Double, mark: String)] = []
+    /// [botsaid] When this device last saw each bot say something in its Bot Chat (`noteBotSaid`).
+    @ObservationIgnored var botSaidSeenAt: [String: ContinuousClock.Instant] = [:]
+    /// [botsaid] Each Bot Chat's `BotSaidRules.mark` from the last full roster, as the gateway gave it.
+    @ObservationIgnored var botSaidMarks: [String: String] = [:]
     @ObservationIgnored var botSaidDirty = 0
 
     // Lifecycle and cadence.
@@ -890,6 +895,15 @@ final class BotStore {
         }
     }
 
+    /// Marks the bots whose chat moved past what this device has seen (the chat on screen is acknowledged instead).
+    func reconcileUnread(_ rows: [RosterProfile]) {
+        let focus = self.focus, active = appActive
+        device.unread.reconcile(rows) { profile in
+            guard active, let focus, focus.profile == profile.name else { return false }
+            return profile.canonicalIds.contains(focus.sessionId)
+        }
+    }
+
     private func applyFull(_ snapshot: RosterSnapshot, issuedAt: Date = .distantPast) {
         // [perf] Every poll used to notify the whole app (warmer, presence, notification directory, lists…) even when
         // the answer was identical. Only a byte-identical answer in a steady full/ready state skips the forced notify;
@@ -898,7 +912,8 @@ final class BotStore {
         let previousDevice = device, previousMinted = mintedChats
         let forced = forceNextNotify
         forceNextNotify = false
-        profiles = snapshot.profiles
+        noteRosterMarks(snapshot.profiles)                    // [botsaid] before the activity times are moved up
+        profiles = withChatActivity(snapshot.profiles)
         rawRows = snapshot.profiles.map(\.raw)
         phase = .full
         lastUpdated = Date()
@@ -908,11 +923,7 @@ final class BotStore {
         let fenced = fencedProfiles()
         device.meta = BotMetaMerge.merge(local: device.meta, roster: profiles.filter { !fenced.contains($0.name) })
         device.sections = adoptSections(device.sections, meta: device.meta)
-        let focus = self.focus, active = appActive
-        device.unread.reconcile(profiles) { profile in
-            guard active, let focus, focus.profile == profile.name else { return false }
-            return profile.canonicalIds.contains(focus.sessionId)
-        }
+        reconcileUnread(profiles)
         for profile in profiles where !(profile.canonicalSession?.id.isEmpty ?? true) { mintedChats[profile.name] = nil }
         confirmedNoChat = Set(profiles.filter { $0.canonicalSession?.id.isEmpty ?? true }.map(\.name))
         let same = previousPhase == .full && previousLoad == .ready && previousRows == rawRows && previousMinted == mintedChats && !forced

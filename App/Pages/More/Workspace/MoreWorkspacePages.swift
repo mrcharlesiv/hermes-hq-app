@@ -1246,6 +1246,27 @@ final class MoreWorkspaceRootCell: UITableViewCell {
     private let sourceLabel = UILabel()
     private let icon = UIImageView()
     private let row = UIStackView()
+    /// [folder-card] Owner 2026-11-10 (design pick 27): the name and the path share a line when both fit whole, so the
+    /// card is two lines (name and path, then where the folder comes from) where it was three or four. A path too
+    /// long for that keeps its own lines under the name, wrapping after a '/', never cut.
+    private let head = UIStackView()
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let large = traitCollection.preferredContentSizeCategory.isAccessibilityCategory
+        let room = head.bounds.width
+        let name = nameLabel.intrinsicContentSize.width
+        let path = (pathLabel.text ?? "").replacingOccurrences(of: "\u{200B}", with: "")
+        let pathWidth = pathLabel.isHidden ? 0 : ceil((path as NSString).size(withAttributes: [.font: pathLabel.font as Any]).width)
+        let beside = !large && room > 0 && name + 8 + pathWidth <= room
+        let axis: NSLayoutConstraint.Axis = beside ? .horizontal : .vertical
+        if head.axis != axis {
+            head.axis = axis
+            head.alignment = beside ? .firstBaseline : .fill
+            head.spacing = beside ? 8 : 2
+            setNeedsLayout()
+        }
+    }
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
@@ -1266,7 +1287,13 @@ final class MoreWorkspaceRootCell: UITableViewCell {
         sourceLabel.numberOfLines = 0
         for label in [nameLabel, pathLabel, sourceLabel] { label.adjustsFontForContentSizeCategory = true; label.lineBreakStrategy = [] }
         pathLabel.adjustsFontForContentSizeCategory = false   // its monospaced font is set again in applyTextSize
-        let words = UIStackView(arrangedSubviews: [nameLabel, pathLabel, sourceLabel])
+        head.axis = .vertical
+        head.spacing = 2
+        head.addArrangedSubview(nameLabel)
+        head.addArrangedSubview(pathLabel)
+        nameLabel.setContentHuggingPriority(.required, for: .horizontal)
+        nameLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        let words = UIStackView(arrangedSubviews: [head, sourceLabel])
         words.axis = .vertical
         words.spacing = 2
         row.addArrangedSubview(icon)
@@ -1279,8 +1306,8 @@ final class MoreWorkspaceRootCell: UITableViewCell {
         NSLayoutConstraint.activate([
             row.leadingAnchor.constraint(equalTo: margins.leadingAnchor),
             row.trailingAnchor.constraint(equalTo: margins.trailingAnchor),
-            row.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 13),
-            row.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -13),
+            row.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 10),
+            row.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -10),
         ])
         isAccessibilityElement = false
     }

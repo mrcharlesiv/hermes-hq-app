@@ -15,13 +15,15 @@ PATTERNS = {
     'private key': re.compile(r'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----\n[A-Za-z0-9+/]{60,}'),
     'email address': re.compile(r'\b[A-Za-z0-9._%+-]+@(?!example\.|[a-z0-9.-]*\.(?:test|invalid|example)\b|users\.noreply\.github\.com)'
                                 r'(?:gmail|icloud|me|mac|outlook|hotmail|yahoo|proton(?:mail)?)\.(?:com|me)\b', re.I),
-    'home folder': re.compile(r'/Users/(?!(?:me|you|x|a|demo|fixture|owner|someone|example|ivy|sam|bots|runner|Shared)\b)[a-z][a-z0-9._-]{2,}/'),
+    'home folder': re.compile(r'/Users/(?!(?:me|you|x|a|demo|fixture|owner|someone|example|ivy|sam|bot|bots|mex|runner|Shared)\b)[a-z][a-z0-9._-]{2,}/'),
     'tailnet name': re.compile(r'\.tail(?!1234\b)[0-9a-f]{4,}\.ts\.net', re.I),
-    'phone number': re.compile(r'(?<!\d)\(?\d{3}\)?[ .-](?!555[ .-]01\d\d)\d{3}[ .-]\d{4}(?!\d)'),
+    'phone number': re.compile(r'(?<!\d)(?!\(?555\)?[ .-]01\d[ .-]\d{4})\(?\d{3}\)?[ .-](?!555[ .-]01\d\d)\d{3}[ .-]\d{4}(?!\d)'),
 }
 OK = 'leak-check: ok'
 SKIP = re.compile(r'^(Vendor/|App/Resources/Licenses/|App/Resources/PluginHost/tailwind|.*\.(png|jpg|heic|gif|pdf|zip|m4a|ttf|rfb|bgrx|svg)$)')
-FAKE = re.compile(r'0123456789|abcdef|FAKE|EXAMPLE|sk-learn')
+FAKE = re.compile(r'0123456789|abcdef|FAKE|EXAMPLE|sk-learn|sk-fixture-|sk-proj-4f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c')
+# Made-up people the tests already use; anyone else's address needs a stand-in domain.
+STAND_INS = re.compile(r'\bjordan(?:\.lee)?(?:\+drive)?@(?:gmail|icloud)\.com', re.I)
 
 
 def added_lines(base):
@@ -48,7 +50,7 @@ def main():
         if SKIP.match(path) or OK in row: continue
         for what, pattern in PATTERNS.items():
             if what == 'API key or token' and FAKE.search(row): continue
-            if pattern.search(row): found.append(f'{path}:{n}: {what}: {row.strip()[:140]}')
+            if pattern.search(STAND_INS.sub('', row)): found.append(f'{path}:{n}: {what}: {row.strip()[:140]}')
     if found:
         print(f'{len(found)} line(s) look private. Use a made-up stand-in (example.com, /Users/me, tail1234, 555-01xx),',
               f'or add "{OK}" to a line that is a deliberate example:', *found, sep='\n  ')

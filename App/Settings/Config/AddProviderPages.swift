@@ -95,25 +95,47 @@ struct AddProviderChooser: View {
             Haptics.play(.selection)
             action()
         } label: {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).foregroundStyle(Color.hqLabel).fixedSize(horizontal: false, vertical: true)
-                    if let detail {
-                        Text(detail).font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2).fixedSize(horizontal: false, vertical: true)
+            // [add-provider-rows] Owner 2026-11-10 (design pick 16): one line a row, the name on the left and what it is
+            // on the right, so Popular, On Your Network and Other show together. A detail too long for the line (and
+            // every row at the larger text sizes) keeps the two-line row.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    Text(title).foregroundStyle(Color.hqLabel).lineLimit(1).fixedSize()
+                    Spacer(minLength: 12)
+                    if added {
+                        addedMark
+                    } else if let detail {
+                        Text(detail).font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2).lineLimit(1).fixedSize()
                     }
+                    SettingsChevron()
                 }
-                Spacer(minLength: 8)
-                if added {
-                    // Already there: the pick still opens it (to change the key or add a second one).
-                    Text("Added").font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title).foregroundStyle(Color.hqLabel).fixedSize(horizontal: false, vertical: true)
+                        if let detail {
+                            Text(detail).font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    Spacer(minLength: 8)
+                    if added { addedMark }
+                    SettingsChevron()
                 }
-                SettingsChevron()
             }
             .hqRowPadding(4)
             .contentShape(Rectangle())
         }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier(id)
+    }
+
+    /// Already there: the pick still opens it (to change the key or add a second one).
+    private var addedMark: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "checkmark").imageScale(.small).foregroundStyle(Color.hqTintText)
+            Text("Added").foregroundStyle(Color.hqLabel2)
+        }
+        .font(Font.hq(.footnote))
+        .fixedSize()
     }
 
     private func sentence(_ text: String) -> String { DeviceWord.isMac ? ConfigUnits.sentence(text) : text + "." }

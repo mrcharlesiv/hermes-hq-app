@@ -308,8 +308,12 @@ extension SettingsEndToEndTests {
         let compose = app.buttons["sessions.compose"]
         XCTAssertTrue(compose.waitForExistence(timeout: 10), "Sessions compose")
         compose.tap()
-        let choice = app.buttons["choose-bot-\(bot)"]
-        if choice.waitForExistence(timeout: 4) { choice.tap() }
+        // The New Chat sheet: the bot's pill, then No Project.
+        let choice = app.buttons["new-chat-bot-\(bot)"]
+        if choice.waitForExistence(timeout: 4) {
+            choice.tap()
+            app.buttons["new-chat-project-none"].tap()
+        }
         XCTAssertTrue(app.textViews["composer.text"].waitForExistence(timeout: 12), "the new chat opens")
         app.navigationBars.buttons.firstMatch.tap()
     }

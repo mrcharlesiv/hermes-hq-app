@@ -124,6 +124,8 @@ struct VoiceConversationPage: View {
     @State private var engine = TalkController.chosenEngine
     @State private var liveWords = LiveWords.isOn   // [live words]
     @State private var liveWordsReadiness = LiveWords.readiness
+    @State private var betterWords = ParakeetWords.isOn   // [more accurate words]
+    @State private var betterWordsReadiness = ParakeetWords.readiness
     @State private var wordFixes = WordFixes.all.count
 
     /// [gpt-live] This device's choice, else the gateway's `voice.voice_chat_mode`.
@@ -189,6 +191,16 @@ struct VoiceConversationPage: View {
                         LiveWords.prepare()
                     }))
                     .accessibilityIdentifier("voice.settings.live-words")
+                if liveWords {
+                    SwitchRow(title: VoiceSettingsCatalog.betterWordsTitle, subtitle: VoiceSettingsCatalog.betterWordsHint, isOn: Binding(
+                        get: { betterWords },
+                        set: { on in
+                            Haptics.play(.selection)
+                            betterWords = on
+                            ParakeetWords.setOn(on)
+                        }))
+                        .accessibilityIdentifier("voice.settings.better-words")
+                }
                 ValueRow(title: VoiceSettingsCatalog.wordFixesTitle, value: VoiceSettingsCatalog.wordFixesValue(wordFixes)) {
                     router.push(VoiceSettingsCatalog.wordFixesTitle, WordFixesPage(router: router))
                 }
@@ -196,10 +208,16 @@ struct VoiceConversationPage: View {
             } header: { HQSectionLabel {
                 Text("Live Words")
             } } footer: { HQSectionFooter {
-                Text(VoiceSettingsCatalog.liveWordsNote(on: liveWords, readiness: liveWordsReadiness))
+                // With the larger model listening, Apple's engine (and whether it can run here) no longer matters.
+                Text([VoiceSettingsCatalog.liveWordsNote(on: liveWords, readiness: betterWords && betterWordsReadiness == .ready ? .unknown : liveWordsReadiness),
+                      VoiceSettingsCatalog.betterWordsNote(on: liveWords && betterWords, readiness: betterWordsReadiness)]
+                    .compactMap { $0 }.joined(separator: " "))
                     .accessibilityIdentifier("voice.settings.live-words-note")
             } }
-            .onReceive(NotificationCenter.default.publisher(for: LiveWords.readinessChanged)) { _ in liveWordsReadiness = LiveWords.readiness }
+            .onReceive(NotificationCenter.default.publisher(for: LiveWords.readinessChanged)) { _ in
+                liveWordsReadiness = LiveWords.readiness
+                betterWordsReadiness = ParakeetWords.readiness
+            }
             .onReceive(NotificationCenter.default.publisher(for: WordFixes.changed)) { _ in wordFixes = WordFixes.all.count }
             Section {
                 SwitchRow(title: "Send Memo on Release", subtitle: VoiceSettingsCatalog.sendOnReleaseHint, isOn: Binding(

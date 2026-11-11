@@ -36,8 +36,8 @@ struct ArtifactCollectorTests {
         #expect(a.count == 1)
         #expect(a.first?.kind == .link && a.first?.value == "https://example.com/docs/getting-started")
         #expect(a.first?.label == "Getting Started")
-        #expect(values([assistant("Preview URL: `https://voice.qwickapps.com`")]) == ["https://voice.qwickapps.com"])
-        #expect(values([assistant("Deployed at `https://voice.qwickapps.com`, take a look.")]) == ["https://voice.qwickapps.com"])
+        #expect(values([assistant("Preview URL: `https://voice.example.com`")]) == ["https://voice.example.com"])
+        #expect(values([assistant("Deployed at `https://voice.example.com`, take a look.")]) == ["https://voice.example.com"])
     }
 
     @Test func doesNotIndexPassiveLinksAndPathsObservedInToolOutput() {
@@ -97,7 +97,7 @@ struct ArtifactCollectorTests {
 
     /// Owner 2026-11-02: a command that printed an email's HTML listed its signature's logos as artifacts.
     @Test func terminalOutputNamesNoWebPicturesOrPages() {
-        let html = #"<a href="http://www.hybridmediaservices.com/"><img src="https://cdn.zapier.com/storage/photos/dafbfb5948ef.png"></a>"#
+        let html = #"<a href="http://www.example.org/"><img src="https://cdn.zapier.com/storage/photos/dafbfb5948ef.png"></a>"#
             + #" <img src="//cdn.example.com/social/in.png"> ![x](https://example.com/logo.jpg) see https://example.com/about"#
         let found = values([tool("terminal", json(["output": .string(html + "\nSaved /tmp/out/chart.pdf\nGet https://example.com/dl/tool-1.0.zip"), "exit_code": 0]))])
         // Owner 2026-11-02 (round 2): not even a download's address; the file it saved on the machine is the artifact.
@@ -348,13 +348,13 @@ struct ArtifactCollectorTests {
 /// `S/artifact-collect.test.ts`: candidates the gateway can serve.
 struct ArtifactCandidateTests {
     @Test func protocolRelativeURLsAndJoinedValues() {
-        #expect(ArtifactCollector.artifactCandidates("//gym-mikolo.com/cdn/shop/files/03_a.png", session: session(cwd: "", cwdPresent: false))
-                == ["https://gym-mikolo.com/cdn/shop/files/03_a.png"])
+        #expect(ArtifactCollector.artifactCandidates("//shop.example.com/cdn/shop/files/03_a.png", session: session(cwd: "", cwdPresent: false))
+                == ["https://shop.example.com/cdn/shop/files/03_a.png"])
         #expect(ArtifactCollector.hostedArtifactURL("//cdn.example.co.uk:8443/x.jpg") == "https://cdn.example.co.uk:8443/x.jpg")
         #expect(ArtifactCollector.hostedArtifactURL("//Users/me/a.png") == "//Users/me/a.png")
-        let joined = ["//gym-mikolo.com/a.png", "//gym-mikolo.com/b.png", "//gym-mikolo.com/c.png"].joined(separator: "\\n")
+        let joined = ["//shop.example.com/a.png", "//shop.example.com/b.png", "//shop.example.com/c.png"].joined(separator: "\\n")
         #expect(ArtifactCollector.artifactCandidates(joined, session: session(cwd: "/work", cwdPresent: true))
-                == ["https://gym-mikolo.com/a.png", "https://gym-mikolo.com/b.png", "https://gym-mikolo.com/c.png"])
+                == ["https://shop.example.com/a.png", "https://shop.example.com/b.png", "https://shop.example.com/c.png"])
         #expect(ArtifactCollector.splitArtifactValue("/tmp/a.png\n/tmp/b.png\r\n") == ["/tmp/a.png", "/tmp/b.png"])
         #expect(ArtifactCollector.splitArtifactValue("/tmp/a.png\\t/tmp/b.png") == ["/tmp/a.png", "/tmp/b.png"])
     }

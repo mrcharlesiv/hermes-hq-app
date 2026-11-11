@@ -119,6 +119,24 @@ private func swiftSources(_ folders: [String]) -> [(file: String, lines: [String
         #expect(find("haptics").first?.target == .root("row:haptics"))
     }
 
+    /// Tester 2026-11-10: New Chat Asks for a Project is found and synced; the New Chat sheet's memory.
+    @Test func newChatAsksForAProject() {
+        let found = SettingsSearch.results("new chat project", in: SettingsSearch.appRows)
+        #expect(found.contains { $0.target == .root("row:new-chat-asks-project") })
+        #expect(SyncedSettingKeys.settings.contains(NewChatProjectChoice.key))
+        // "Last used": only the row the bot started in last; nothing stored, no tag.
+        #expect(!NewChatLast.marks(stored: nil, row: nil))
+        #expect(NewChatLast.marks(stored: NewChatLast.none, row: nil), "No Project was last")
+        #expect(!NewChatLast.marks(stored: NewChatLast.none, row: "/site"))
+        #expect(NewChatLast.marks(stored: "/site", row: "/site"))
+        #expect(!NewChatLast.marks(stored: "/site", row: nil) && !NewChatLast.marks(stored: "/site", row: "/other"))
+        // The lit bot: the picked pill's, else the one used last while still offered, else Hermes, else the first.
+        #expect(NewChatLast.opensOn(picked: "research", last: "deploys", among: ["default", "research", "deploys"]) == "research")
+        #expect(NewChatLast.opensOn(picked: nil, last: "deploys", among: ["default", "research", "deploys"]) == "deploys")
+        #expect(NewChatLast.opensOn(picked: nil, last: "gone", among: ["default", "research"]) == "default")
+        #expect(NewChatLast.opensOn(picked: nil, last: nil, among: ["research", "deploys"]) == "research")
+    }
+
     /// [kanban-tab-one] One Kanban Tab control, on Appearance › Tabs (owner 2026-11-03: one home per page): search finds
     /// it by its name, by "kanban" and by "artifacts tab", and opens the Tabs page at it. "Tabs" still finds Tabs first.
     @Test func kanbanTabIsFoundOnTheTabsPage() {

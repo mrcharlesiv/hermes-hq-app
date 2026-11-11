@@ -28,6 +28,8 @@ nonisolated struct UpdateMemberLayout: @unchecked Sendable {
     var fullFrame: CGRect
     /// Opened work line: its steps, each opening its sheet.
     var steps: [UpdateMemberStep]
+    /// [files] The steps are a files member's files and its Review Changes row.
+    var files = false
     var opens: Bool
     var expanded: Bool
     /// VoiceOver: "From Hermes, 8:45 PM, <preview>".
@@ -133,7 +135,24 @@ nonisolated enum UpdateMemberLayouts {
         var previewFrame = CGRect.zero
         var steps: [UpdateMemberStep] = []
         let listsSteps = m.expanded && (m.steps.count > 1 || m.thought != nil)
-        if listsSteps {
+        if m.expanded, !m.files.isEmpty {
+            // [files] "5 files changed" opened: a row per file (it opens the file), then Review Changes (the chat's
+            // Changes page), drawn as a work line's steps are.
+            y += 2
+            let glyphSide = stepGlyphSide(style)
+            var listed = m.files.map { UpdateMemberStep(title: $0.name, detail: fileCounts($0), glyph: .file, failed: false, frame: .zero) }
+            listed.append(UpdateMemberStep(title: "Review Changes", detail: nil, glyph: .explore, failed: false, frame: .zero))
+            for step in listed {
+                let wordsW = max(0, bodyW - glyphSide - 8 - caretRoom)
+                let needed = stepWords(step, style: style).boundingRect(with: CGSize(width: wordsW, height: .greatestFiniteMagnitude),
+                                                                        options: [.usesLineFragmentOrigin], context: nil).height
+                let wordsH = min(ceil(needed) + 1, ceil(style.tool.lineHeight * 2) + 2)
+                var placed = step
+                placed.frame = CGRect(x: textX, y: y, width: bodyW, height: max(lineH, wordsH) + 12)
+                steps.append(placed)
+                y += placed.frame.height
+            }
+        } else if listsSteps {
             // A work line opened as the One Line row opens: its thought, then a row per step, each opening its sheet.
             if let thought = m.thought {
                 let tk = TextKitLayout(TextLayout.resultText(thought, links: .none, style: style), width: bodyW)
@@ -178,11 +197,20 @@ nonisolated enum UpdateMemberLayouts {
                                         mark: m.mark, markFrame: markFrame, title: m.title, titleFrame: titleFrame,
                                         titleLines: titleLines, time: time, timeFrame: timeFrame, caretFrame: caretFrame,
                                         preview: m.preview, previewFrame: previewFrame, full: full, fullFrame: fullFrame,
-                                        steps: steps, opens: opens, expanded: m.expanded, spoken: spoken)
+                                        steps: steps, files: !m.files.isEmpty, opens: opens, expanded: m.expanded, spoken: spoken)
         return RowLayout(height: max(0, gap) + cardH + (m.last ? after : 0), content: .member(layout))
     }
 
     static func stepGlyphSide(_ style: ChatStyle) -> CGFloat { (style.toolGlyph - 2).rounded() }
+
+    /// [files] A file's edits and lines after its name ("2 edits · +3 −1"); nil when its diffs counted nothing.
+    static func fileCounts(_ file: ChangedFile) -> String? {
+        var parts: [String] = []
+        if file.edits > 1 { parts.append("\(file.edits) edits") }
+        let lines = [file.added > 0 ? "+\(file.added)" : nil, file.removed > 0 ? "−\(file.removed)" : nil].compactMap { $0 }
+        if !lines.isEmpty { parts.append(lines.joined(separator: " ")) }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
 
     /// A clock time without its AM/PM ("11:23 PM" → "11:23"), for a row too narrow for the whole of it.
     static func shortClock(_ time: String) -> String {
@@ -397,7 +425,7 @@ final class UpdateMemberCell: ChatBaseCell, UIContextMenuInteractionDelegate {
         button.isEnabled = m.opens || !m.steps.isEmpty
         button.accessibilityLabel = m.spoken
         button.accessibilityTraits = m.opens ? .button : .staticText
-        button.accessibilityValue = m.opens && m.steps.isEmpty ? (m.expanded ? "Expanded" : "Collapsed") : nil
+        button.accessibilityValue = m.opens && (m.steps.isEmpty || m.files) ? (m.expanded ? "Expanded" : "Collapsed") : nil
         button.accessibilityCustomActions = m.full.flatMap { linkActions($0.text) }
     }
 
@@ -424,7 +452,6 @@ final class UpdateMemberCell: ChatBaseCell, UIContextMenuInteractionDelegate {
             control.addTarget(self, action: #selector(openStep(_:)), for: .touchUpInside)
             control.isAccessibilityElement = true
             control.accessibilityTraits = .button
-            control.accessibilityHint = "Shows the step’s details"
             piece.addSubview(control)
             stepViews.append((control, mark, title, meta, chevron))
         }
@@ -463,6 +490,7 @@ final class UpdateMemberCell: ChatBaseCell, UIContextMenuInteractionDelegate {
             let end = metaW > 0 ? entry.meta.frame.minX - 6 : slotX
             entry.title.frame = CGRect(x: titleX, y: 6, width: max(0, end - titleX), height: h - 12)
             entry.control.accessibilityLabel = [step.title, step.detail, step.failed ? "Failed" : nil].compactMap { $0 }.joined(separator: ", ")
+            entry.control.accessibilityHint = m.files ? nil : "Shows the step’s details"
         }
     }
 

@@ -28,7 +28,16 @@ struct KanbanRowModel: Hashable {
     var head: JSONValue?
     var bits: [Bit]
 
-    struct Bit: Hashable { var text: String; var alert: Bool }
+    /// [kanban-edge] Owner 2026-11-10 (design pick 5): the age stands at the trailing edge of the title's line, where
+    /// Bots and Sessions have their times, and the comments are a bubble with a count at the trailing edge of the
+    /// meta line. Left as one more bit, "· 2 comments" wrapped to a third line on its own. `edge` marks the two bits
+    /// that move; at the accessibility text sizes they stay in the flow, so the title keeps the row's width.
+    struct Bit: Hashable {
+        enum Edge: Hashable { case age, comments(Int) }
+        var text: String
+        var alert: Bool
+        var edge: Edge? = nil
+    }
 
     /// The meta bits (`board-page.tsx` `rowMeta`): who, why blocked, no-one-assigned, running for, age, comments.
     static func bits(_ task: KanbanTask, fallback: String, botName: (String?) -> String, now: Date = Date()) -> [Bit] {
@@ -42,8 +51,10 @@ struct KanbanRowModel: Hashable {
             bits.append(Bit(text: "Running \(KanbanModel.shortAge(task.currentRunStartedAt ?? task.startedAt, now: now))".pgTrim, alert: false))
         }
         let age = KanbanModel.shortAge(task.status == "done" ? (task.completedAt ?? task.createdAt) : task.createdAt, now: now)
-        if !age.isEmpty && task.status != "running" { bits.append(Bit(text: age, alert: false)) }
-        if let count = task.commentCount, count > 0 { bits.append(Bit(text: "\(count) \(count == 1 ? "comment" : "comments")", alert: false)) }
+        if !age.isEmpty && task.status != "running" { bits.append(Bit(text: age, alert: false, edge: .age)) }
+        if let count = task.commentCount, count > 0 {
+            bits.append(Bit(text: "\(count) \(count == 1 ? "comment" : "comments")", alert: false, edge: .comments(count)))
+        }
         return bits
     }
 }
@@ -56,12 +67,26 @@ struct KanbanRowView: View {
         HStack(alignment: .top, spacing: 14) {
             face.padding(.top, 1)
             VStack(alignment: .leading, spacing: 3) {
-                Text(row.title.isEmpty ? row.id : row.title)
-                    .font(Font.hq(.body))
-                    .foregroundStyle(Color.hqLabel)
-                    .lineLimit(typeSize.isAccessibilitySize ? 6 : 3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                meta
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(row.title.isEmpty ? row.id : row.title)
+                        .font(Font.hq(.body))
+                        .foregroundStyle(Color.hqLabel)
+                        .lineLimit(typeSize.isAccessibilitySize ? 6 : 3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if let age = edgeAge { edgeText(age) }
+                }
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    meta.frame(maxWidth: .infinity, alignment: .leading)
+                    if let count = edgeComments {
+                        HStack(spacing: 3) {
+                            Image(systemName: "bubble.left").imageScale(.small)
+                            Text("\(count)").monospacedDigit()
+                        }
+                        .font(Font.hq(.footnote))
+                        .foregroundStyle(Color.hqLabel2)
+                        .fixedSize()
+                    }
+                }
             }
         }
         .padding(.vertical, Theme.isDesktop ? 13 : 10)   // [compact] iOS look: 3 pt less a side (owner 2026-10-17)
@@ -82,17 +107,32 @@ struct KanbanRowView: View {
         }
     }
 
+    /// [kanban-edge] The bits at the edges (none at the accessibility sizes: there every bit is in the flow).
+    private var edged: Bool { !typeSize.isAccessibilitySize }
+    private var edgeAge: String? { edged ? row.bits.first { $0.edge == .age }?.text : nil }
+    private var edgeComments: Int? {
+        guard edged else { return nil }
+        for bit in row.bits { if case .comments(let count) = bit.edge { return count } }
+        return nil
+    }
+    private var flowBits: [KanbanRowModel.Bit] { edged ? row.bits.filter { $0.edge == nil } : row.bits }
+
+    private func edgeText(_ text: String) -> some View {
+        Text(text).font(Font.hq(.footnote)).monospacedDigit().foregroundStyle(Color.hqLabel2).lineLimit(1).fixedSize()
+    }
+
     /// Bits joined by " · ". The dot stays with the bit before it (a no-break space), so a bit that wraps starts its
     /// line with its own words, never with a dot (verify round 1: "· 2 comments" at XXL).
     private var meta: some View {
         PagesFlowLayout(spacing: 4, lineSpacing: 2) {
-            ForEach(Array(row.bits.enumerated()), id: \.offset) { index, bit in
+            let bits = flowBits
+            ForEach(Array(bits.enumerated()), id: \.offset) { index, bit in
                 HStack(alignment: .lastTextBaseline, spacing: 0) {
                     Text(bit.text)
                         .fixedSize(horizontal: false, vertical: true)
                         .fontWeight(bit.alert ? .semibold : .regular)
                         .foregroundStyle(bit.alert ? Color.hqRed : Color.hqLabel2)
-                    if index < row.bits.count - 1 { Text("\u{00A0}·").foregroundStyle(Color.hqLabel2).layoutPriority(1) }
+                    if index < bits.count - 1 { Text("\u{00A0}·").foregroundStyle(Color.hqLabel2).layoutPriority(1) }
                 }
                 .font(Font.hq(.footnote))
             }

@@ -23,10 +23,35 @@ nonisolated enum ChangedFiles {
 
     static func isEditTool(_ name: String) -> Bool { editTools.contains(name) }
 
+    private static let ansi = try! NSRegularExpression(pattern: "\u{1B}\\[[0-?]*[ -/]*[@-~]")
+
+    /// The diff as Hermes sends it, made plain: its `inline_diff` is the CLI's coloured print (every line wrapped in
+    /// ANSI colour codes, so none of them starts with "+" or "-"), led by a "┊ review diff" line (localised) and with
+    /// "a/x → b/x" in place of the "---"/"+++" headers (agent/display.py `_render_inline_unified_diff`). The codes and
+    /// the "┊" line go; an arrow header becomes a "+++ " line so `path` can still read it. A plain diff is unchanged.
+    static func plain(_ diff: String) -> String {
+        let stripped = diff.contains("\u{1B}")
+            ? ansi.stringByReplacingMatches(in: diff, range: NSRange(diff.startIndex..., in: diff), withTemplate: "")
+            : diff
+        guard stripped.contains("┊") || stripped.contains("→") else { return stripped }
+        var out: [String] = []
+        stripped.enumerateLines { line, _ in
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("┊") { return }
+            if let first = t.first, !"+-@ ".contains(first), let arrow = t.range(of: " → "),
+               !t[arrow.upperBound...].contains(" ") {
+                out.append("+++ " + t[arrow.upperBound...])
+                return
+            }
+            out.append(line)
+        }
+        return out.joined(separator: "\n")
+    }
+
     /// Lines added and removed in a unified diff: lines starting "+" (not "+++") and "-" (not "---").
     static func lineStats(_ diff: String) -> (added: Int, removed: Int) {
         var added = 0, removed = 0
-        diff.enumerateLines { line, _ in
+        plain(diff).enumerateLines { line, _ in
             if line.hasPrefix("+") { if !line.hasPrefix("+++") { added += 1 } }
             else if line.hasPrefix("-") { if !line.hasPrefix("---") { removed += 1 } }
         }
@@ -44,7 +69,7 @@ nonisolated enum ChangedFiles {
             if let value = args[key]?.string?.trimmingCharacters(in: .whitespaces), !value.isEmpty { return value }
         }
         var found: String?
-        diff.enumerateLines { line, stop in
+        plain(diff).enumerateLines { line, stop in
             guard line.hasPrefix("+++ ") else { return }
             var name = String(line.dropFirst(4)).trimmingCharacters(in: .whitespaces)
             if name.hasPrefix("b/") { name = String(name.dropFirst(2)) }
@@ -112,7 +137,7 @@ nonisolated enum ChangedFiles {
         var more = false
         var pendingContext: String?
         var lastWasChange = false
-        let normalised = diff.replacingOccurrences(of: "\r\n", with: "\n")
+        let normalised = plain(diff.replacingOccurrences(of: "\r\n", with: "\n"))
         for raw in normalised.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = String(raw)
             if line.hasPrefix("+++") || line.hasPrefix("---") || line.hasPrefix("diff ") || line.hasPrefix("index ")

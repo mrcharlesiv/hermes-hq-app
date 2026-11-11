@@ -490,6 +490,45 @@ class FakeChatSession: ChatSessionModel, ChatSessionDetails {
         ]
     }
 
+    /// `-HQDemoWorkFold`: a long turn of replies that did their work and said nothing, each changing files, between
+    /// helpers' deliveries (owner's screenshot of Otto's chat, 2026-11-10): one line, not a card and a line for each.
+    static func workFoldThread(now: Date = Date()) -> [ChatMessage] {
+        func at(_ minutesAgo: Double) -> Date { now.addingTimeInterval(-minutesAgo * 60) }
+        var n = 0
+        func edit(_ path: String) -> ChatPart {
+            n += 1
+            return .tool(ToolCall(id: "wf-e\(n)", name: "patch", title: "Edit \(path)", argsText: #"{"path":"\#(path)"}"#, summary: nil,
+                                  state: .done, durationSeconds: 1.4))
+        }
+        func run(_ command: String) -> ChatPart {
+            n += 1
+            return .tool(ToolCall(id: "wf-t\(n)", name: "terminal", title: "terminal", argsText: #"{"command":"\#(command)"}"#,
+                                  summary: "ok", state: .done, durationSeconds: 2.2))
+        }
+        func work(_ id: String, _ m: Double, _ parts: [ChatPart]) -> ChatMessage {
+            ChatMessage(id: id, role: .assistant, parts: parts, timestamp: at(m), rowId: nil)
+        }
+        func helper(_ id: String, _ goal: String, _ m: Double) -> ChatMessage {
+            var msg = ChatMessage(id: id, role: .system, parts: [.text("Subagent Task Completed: " + goal)], timestamp: at(m), rowId: nil)
+            msg.report = "Checked. No inconsistencies in this batch."
+            return msg
+        }
+        return [
+            ChatMessage(id: "wf-u1", role: .user, parts: [.text("Run the callback review and tell me what you find")], timestamp: at(30), rowId: nil),
+            work("wf-a0", 29.5, [.text("On it. I'm splitting the review across helpers and will report when they're all in.")]),
+            work("wf-a1", 29, [run("python3 split_batches.py"), edit("TASK.json")]),
+            helper("wf-n1", "Review callbacks, batch 1", 26), helper("wf-n2", "Review callbacks, batch 2", 25.8),
+            helper("wf-n3", "Review callbacks, batch 3", 25.5), helper("wf-n4", "Review callbacks, batch 4", 25),
+            work("wf-a2", 24, [run("python3 merge.py"), edit("check_consistency.py")]),
+            helper("wf-n5", "Check consistency, set A", 21), helper("wf-n6", "Check consistency, set B", 20.5),
+            work("wf-a3", 19, [edit("parent-adjudications.json"), edit("analyze.py")]),
+            work("wf-a4", 17, [run("python3 link_callbacks.py"), edit("analyze.py"), edit("analyze.py")]),
+            helper("wf-n7", "Adjudicate the disputed rows", 12), helper("wf-n8", "Validate the totals", 11),
+            work("wf-a5", 9, [run("python3 analyze.py --validate"),
+                              .text("The review is done: 212 callbacks checked, 9 disputed and settled, totals validate.")]),
+        ]
+    }
+
     /// `-HQDemoBusy`: a short, busy bot thread (thoughts, several step runs per reply, replies split by steps, gaps
     /// of 30+ minutes) for the thread-cleanup mockup.
     static func busyThread(now: Date = Date()) -> [ChatMessage] {
@@ -932,6 +971,7 @@ class FakeChatSession: ChatSessionModel, ChatSessionDetails {
         if ChatDemo.flag("-HQDemoBusy") { return busyThread() }
         if ChatDemo.flag("-HQDemoUpdates") { return updatesThread() }
         if ChatDemo.flag("-HQDemoIdle") { return idleThread() }
+        if ChatDemo.flag("-HQDemoWorkFold") { return workFoldThread() }
         if ChatDemo.flag("-HQDemoBotTalk") { return botTalkThread() }
         if ChatDemo.flag("-HQDemoBotExchange") { return botExchangeThread(now: Date().addingTimeInterval(-35 * 60)) + botExchangeFollowUp() }
         if ChatDemo.flag("-HQDemoRestated") { return restatedThread() }
@@ -1011,5 +1051,15 @@ struct SeededRNG {
         return z ^ (z >> 31)
     }
     mutating func next(_ bound: Int) -> Int { Int(nextUInt64() % UInt64(max(1, bound))) }
+}
+
+// [files] The demo threads' edits carry a diff, as a gateway's do (the files card reads them: `-HQDemoWorkFold`).
+extension FakeChatSession: ChatToolDetails {
+    func toolDetail(messageId: String, toolId: String) -> ToolDetail? {
+        guard toolId.hasPrefix("wf-e"), let n = Int(toolId.dropFirst(4)) else { return nil }
+        var detail = ToolDetail()
+        detail.inlineDiff = "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n" + (0...(n % 4)).map { "+new \($0)\n" }.joined()
+        return detail
+    }
 }
 #endif

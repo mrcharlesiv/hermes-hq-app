@@ -1,6 +1,8 @@
 name: Leak check
 on:
   pull_request:
+  push:
+    branches: [main]
 permissions:
   contents: read
 jobs:
@@ -11,4 +13,8 @@ jobs:
         with:
           fetch-depth: 0
       - name: Look for private details in the lines this pull request adds
+        if: github.event_name == 'pull_request'
         run: python3 .github/scripts/leak_check.py origin/${{ github.base_ref }}
+      - name: Look for private details in every file
+        if: github.event_name == 'push'
+        run: python3 .github/scripts/leak_check.py

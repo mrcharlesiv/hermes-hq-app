@@ -84,6 +84,10 @@ import UIKit
                 nav.pushViewController(page(CloudVariablesPage(model: model, id: id), title: CloudCopy.variables), animated: demo == nil)
             case .delete(let id):
                 nav.pushViewController(page(CloudDeletePage(model: model, id: id), title: CloudCopy.deleteTitle), animated: demo == nil)
+            case .desktop(let id):
+                // [cloud-desktop] The agent's own Hermes Desktop, pushed in the sheet (Back returns to its page).
+                guard let agent = model.agent(id), let url = CloudDesktopWeb.address(agent.dashboardURL) else { return }
+                nav.pushViewController(CloudDesktopWebController(url: url, agentName: agent.name), animated: demo == nil)
             }
         }
         model.onRenamed = { [weak nav] id, name in
@@ -304,7 +308,7 @@ enum CloudCopy {
 
 @MainActor @Observable final class CloudGatewayModel {
     enum Phase: Equatable { case start, signingIn, loading, home, working, success, failed }
-    enum Route: Equatable { case compose, root, back, agent(String), resize(String), variables(String), delete(String) }
+    enum Route: Equatable { case compose, root, back, agent(String), resize(String), variables(String), delete(String), desktop(String) }
 
     struct Step: Identifiable, Equatable {
         enum State: Equatable { case waiting, active, done }

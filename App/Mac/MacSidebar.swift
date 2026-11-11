@@ -94,14 +94,32 @@ final class MacSidebar: UIView {
         }
         return was != isCollapsed
     }
-    /// 40 pt rows at 100 % (31 on the screen, Mail's), names 17 pt (13 on the screen). [mac] Stress test #64.
-    static var rowHeight: CGFloat { ((isCollapsed ? 48 : 40) * chrome).rounded() }
+    /// 36 pt rows at 100 % (28 on the screen, Finder's and Notes'), names 17 pt (13 on the screen). [mac] Stress test #64.
+    /// [sidebar-tidy] Owner 2026-11-10 liked the tidied sidebar (shorter rows): 40 → 36, and Theme › Density › Compact
+    /// reaches the places and Tools too (32, the bots' compact rows): it had stopped at the bots, so in Compact the
+    /// bots' rows were 32 and every row under them 40.
+    static var openRowHeight: CGFloat { ((Density.compact ? 32 : tidy ? 36 : 40) * chrome).rounded() }
+    /// [sidebar-size] Owner 2026-11-10 ("just get it all sized properly"): one of the sidebar's sizes, `was` before
+    /// and `now`. The pages beside it and the Settings window's own sidebar draw their text at 15 pt on the screen;
+    /// here the places' names were 13, the group headings 10.4 and Search 12. Now the places' and New Bot's names are
+    /// 15 (as the bots'), the headings 11 (macOS's own sidebar headings), Search 13, and no word is under 11.
+    static func sized(_ was: CGFloat, _ now: CGFloat) -> CGFloat { tidy ? now : was }
+    /// The places' names: 19.5 here is 15 pt on the screen (Compact a step under, as the bots').
+    static var placeSize: CGFloat { sized(17, Density.compact ? 18 : 19.5) }
+    /// For before-and-after pictures: `-HQDebugSidebarTidy NO` draws the rows as they were (Debug builds only).
+    static var tidy: Bool {
+        #if DEBUG
+        if UserDefaults.standard.object(forKey: "HQDebugSidebarTidy") != nil { return UserDefaults.standard.bool(forKey: "HQDebugSidebarTidy") }
+        #endif
+        return true
+    }
+    static var rowHeight: CGFloat { isCollapsed ? (48 * chrome).rounded() : openRowHeight }
     /// [rail-names] A place at the named rail's foot: its icon with its name under it.
     static var namedRowHeight: CGFloat { (62 * chrome).rounded() }
     /// The tab icons: 16 pt beside their names (Mail's). [mac] Owner 2026-10-29 on 452: "when the sidebar is minimized,
     /// the icons are too small": folded, the icon is all the row has, so it is drawn at the size of the bars' own
     /// buttons (22 pt) in a taller row.
-    static func iconSize(folded: Bool) -> CGFloat { (folded ? 22 : 16) * chrome }
+    static func iconSize(folded: Bool) -> CGFloat { (folded ? 22 : sized(16, 18)) * chrome }   // [sidebar-size] beside 15 pt names
     /// [mac] Mac polish #53: the open sidebar's icon column and where its names start after it, which the bots' rows
     /// share (`MacRailHead`): the bots' names started about 4 pt further in than the places' below them.
     static let iconLeading: CGFloat = 10
@@ -203,6 +221,13 @@ final class MacSidebar: UIView {
     /// with More dissolved on the Mac (its setup pages are in the Settings window), only the menu bar opened it. Beside
     /// the + open; above the toggle folded.
     private let settingsButton = UIButton(type: .system)
+    /// [sidebar-tidy] Owner 2026-11-10 (the tidied mockup): the foot says where the app is connected, a state dot and
+    /// the gateway's name between the sidebar button and the gear (open only; the rail has no room for words).
+    private let gatewayDot = UIView()
+    private let gatewayName = UILabel()
+    private let gatewayTip = UIToolTipInteraction()
+    static let connectionChanged = Notification.Name("HQMacSidebarConnectionChanged")
+    private var connectionToken: NSObjectProtocol?
     private var settingsSize: [NSLayoutConstraint] = []
     private var settingsBesideAdd: [NSLayoutConstraint] = []
     private var settingsAboveToggle: [NSLayoutConstraint] = []
@@ -305,6 +330,27 @@ final class MacSidebar: UIView {
         settingsButton.toolTip = "Settings (⌘,)"
         settingsButton.addAction(UIAction { _ in MacSettingsWindow.open() }, for: .touchUpInside)
         addSubview(settingsButton)
+        gatewayDot.translatesAutoresizingMaskIntoConstraints = false
+        gatewayDot.isUserInteractionEnabled = false
+        gatewayDot.layer.cornerRadius = 3.5
+        gatewayName.translatesAutoresizingMaskIntoConstraints = false
+        gatewayName.lineBreakMode = .byTruncatingMiddle
+        gatewayName.accessibilityIdentifier = "mac-sidebar.gateway"
+        gatewayName.isUserInteractionEnabled = true   // its tooltip
+        gatewayName.addInteraction(gatewayTip)
+        addSubview(gatewayDot)
+        addSubview(gatewayName)
+        NSLayoutConstraint.activate([
+            gatewayDot.widthAnchor.constraint(equalToConstant: 7), gatewayDot.heightAnchor.constraint(equalToConstant: 7),
+            gatewayDot.leadingAnchor.constraint(equalTo: toggle.trailingAnchor, constant: 8),
+            gatewayDot.centerYAnchor.constraint(equalTo: toggle.centerYAnchor),
+            gatewayName.leadingAnchor.constraint(equalTo: gatewayDot.trailingAnchor, constant: 6),
+            gatewayName.centerYAnchor.constraint(equalTo: toggle.centerYAnchor),
+            gatewayName.trailingAnchor.constraint(lessThanOrEqualTo: settingsButton.leadingAnchor, constant: -6),
+        ])
+        connectionToken = NotificationCenter.default.addObserver(forName: Self.connectionChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.showGateway() }
+        }
         railGrip.accessibilityIdentifier = "mac-sidebar.rail-edge"
         railGrip.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(railDragged(_:))))
         railGrip.addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(railHovered(_:))))
@@ -403,6 +449,7 @@ final class MacSidebar: UIView {
 
     isolated deinit {
         if let themeToken { NotificationCenter.default.removeObserver(themeToken) }
+        if let connectionToken { NotificationCenter.default.removeObserver(connectionToken) }
         if let neighbourToken { NotificationCenter.default.removeObserver(neighbourToken) }
         chatsToken.forEach { NotificationCenter.default.removeObserver($0) }
         sceneTokens.forEach { NotificationCenter.default.removeObserver($0) }
@@ -434,6 +481,7 @@ final class MacSidebar: UIView {
             // with More skipped (it has no row here; Mac polish #18, `TabShortcut`).
             let row = Row(item: item, shortcut: KeyCommands.shortcut(forTab: index, among: places.map { $0.tabBarItem.tag }), folded: Self.isCollapsed, named: named)
             row.controller = controller
+            row.isTool = tabs.pages?.isTool(controller) ?? false   // [sidebar-tidy] quieter than the bots and places
             row.addAction(UIAction { [weak self, weak row, weak controller] _ in
                 guard let self, let tabs = self.tabs, let controller else { return }
                 tabs.pick(controller)
@@ -470,6 +518,9 @@ final class MacSidebar: UIView {
         // Owner 2026-11-04: "I want the nav options in the left sidebar to be at the bottom with the bots on top." The bots
         // scroll under Search and New; the places and Tools stay at the foot, above the sidebar button, in both widths.
         // Without the bots in the sidebar the places stay at the top, under Search and New.
+        // [sidebar-tidy] 2026-11-10: tried with the places following the bots in the one list (no empty panel under New
+        // Bot). Owner: "Won't that kind of feel chaotic?" It did: the places moved with every bot added, group folded
+        // or chat listed, and scrolled out of sight under a long roster. They stay pinned at the foot.
         let nav = showsBots ? foot : stack
         if showsBots {
             let gap = UIView()
@@ -483,6 +534,7 @@ final class MacSidebar: UIView {
         addTools(toolRows, folded: folded, into: nav)
         if showsBots { botsChanged() }
         placeRailGateway()
+        showGateway()
         footBottom.constant = -6   // a gap above the button, rows at the foot or not
         botsRoom.constant = showsBots ? Self.botsMinHeight : 0   // Mac polish #5
         placeToggle()
@@ -791,7 +843,30 @@ final class MacSidebar: UIView {
         showsBots && (tabs?.botsViewController.gatewaySwitcher?.isActive ?? false)
     }
 
+    /// [sidebar-tidy] The foot's gateway line: the current gateway's name and a dot for the connection (green
+    /// connected, orange while it connects, red offline or signed out).
+    private func showGateway() {
+        let shown = Self.tidy && !Self.isCollapsed
+        gatewayDot.isHidden = !shown
+        gatewayName.isHidden = !shown
+        guard shown, let tabs else { return }
+        let rows = tabs.botsViewController.gatewaySwitcher?.gateways.accounts ?? []
+        let title = rows.first(where: \.isCurrent)?.title ?? tabs.services.account?.baseURL.host() ?? ""
+        let state = tabs.services.connection
+        gatewayName.text = title
+        gatewayName.font = Self.font(14)
+        gatewayName.textColor = HQPalette.label.withAlphaComponent(0.74)
+        switch state {
+        case .ready: gatewayDot.backgroundColor = .systemGreen
+        case .connecting, .reconnecting: gatewayDot.backgroundColor = .systemOrange
+        case .offline, .signedOut: gatewayDot.backgroundColor = .systemRed
+        }
+        gatewayTip.defaultToolTip = "\(AccountView.status(state)): \(title)"
+        gatewayName.accessibilityLabel = "Gateway \(title), \(AccountView.status(state))"
+    }
+
     private func gatewaysChanged() {
+        showGateway()
         guard let railGateway, let gateways = gatewayWatch?.gateways else { return }
         let rows = gateways.accounts
         let switching = gateways.switchingTo.flatMap { id in rows.first { $0.id == id }?.title }
@@ -1616,6 +1691,10 @@ private final class Row: UIControl {
     /// [mac-sidebar] The place this row shows (one of `MainTabController.placedTabs`).
     weak var controller: UIViewController?
     var isMarked = false { didSet { if isMarked != oldValue { recolor() } } }
+    /// [sidebar-tidy] One of Tools' pages: its name a step quieter than a bot's or a place's (owner 2026-11-10 liked
+    /// "tools dimmer than bots so the bots lead"), still far above the label-2 grey that read at about 2:1 here.
+    var isTool = false { didSet { if isTool != oldValue { recolor() } } }
+    static let toolInk: CGFloat = 0.74
 
     init(item: UITabBarItem, shortcut: Int?, folded: Bool, named: Bool = false) {
         self.item = item
@@ -1637,9 +1716,9 @@ private final class Row: UIControl {
         // `calendar.badge.clock` symbol, so a test on the tab's own image left it at the default size, a size jump
         // from the running icon's still (stress test 2026-10-31). Drawn glyphs ignore the configuration.
         icon.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: drawn.pointSize, weight: .regular)
-        label.font = MacSidebar.font(17)   // the rows are made again when UI Scale changes (`rebuild`)
+        label.font = MacSidebar.font(MacSidebar.placeSize)   // the rows are made again when UI Scale changes (`rebuild`)
         label.text = item.title
-        count.font = MacSidebar.font(15)
+        count.font = MacSidebar.font(MacSidebar.sized(15, 16))
         count.textAlignment = .right
         let dotSize = (7 * MacSidebar.chrome).rounded()
         dot.layer.cornerRadius = dotSize / 2
@@ -1714,8 +1793,8 @@ private final class Row: UIControl {
 
     func recolor() {
         icon.tintColor = isMarked ? tintColor : HQPalette.label2
-        label.textColor = HQPalette.label
-        label.font = MacSidebar.font(named ? 13.5 : 17, weight: isMarked ? .semibold : .regular)
+        label.textColor = isTool && !isMarked && !folded && MacSidebar.tidy ? HQPalette.label.withAlphaComponent(Self.toolInk) : HQPalette.label
+        label.font = MacSidebar.font(named ? 13.5 : MacSidebar.placeSize, weight: isMarked ? .semibold : .regular)
         label.minimumScaleFactor = MacSidebar.shrink(label.font, least: named ? 0.8 : 0.85)
         count.textColor = HQPalette.label2
         dot.backgroundColor = tintColor

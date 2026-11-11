@@ -309,16 +309,21 @@ final class SessionsTests: XCTestCase {
         XCTAssertTrue(row(app, "s-garden").waitForExistence(timeout: 4))
     }
 
-    /// Compose: Choose a Bot (more than one bot), then a new chat in that bot (session.create) opens.
+    /// Compose: the New Chat sheet (the bots as pills, the projects as rows); a bot, then No Project, and a new chat
+    /// in that bot (session.create) opens.
     @MainActor func test12_ComposeChoosesABotThenOpensANewChat() throws {
         let app = launch()
         XCTAssertTrue(row(app, "s-garden").waitForExistence(timeout: 15))
         app.buttons["sessions.compose"].tap()
-        let research = app.buttons["choose-bot-research"]
-        XCTAssertTrue(research.waitForExistence(timeout: 4), "Choose a Bot")
-        XCTAssertTrue(app.buttons["choose-bot-default"].exists && app.buttons["choose-bot-deploys"].exists)
+        let research = app.buttons["new-chat-bot-research"]
+        XCTAssertTrue(research.waitForExistence(timeout: 4), "New Chat")
+        XCTAssertTrue(app.buttons["new-chat-bot-default"].exists && app.buttons["new-chat-bot-deploys"].exists)
+        XCTAssertTrue(app.buttons["new-chat-bot-default"].isSelected, "Hermes is lit until a bot has been used")
+        XCTAssertTrue(app.staticTexts["Tap one to start the chat"].exists, "the heading says what a row does")
         shot(app, "compose-choose-bot")
         research.tap()
+        XCTAssertTrue(waitUntil(3) { research.isSelected }, "a pill only lights its bot")
+        app.buttons["new-chat-project-none"].tap()
         XCTAssertTrue(waitUntil(6) { self.rpc("session.create").contains { $0["profile"] as? String == "research" } }, "session.create in Research")
         XCTAssertTrue(app.tables["chat.table"].waitForExistence(timeout: 8), "the new chat opens")
         shot(app, "compose-new-chat")

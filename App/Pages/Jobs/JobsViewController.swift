@@ -322,9 +322,10 @@ final class JobsViewController: UIViewController, UICollectionViewDelegate, UISe
             // still working on what the last run handed it.
             let running = store.showsRunning(job) || JobWords.isRunning(job)
             nextRows[job.key] = JobRowModel(key: job.key, title: store.title(job),
-                                            subtitle: JobWords.rowSubtitle(job, now: now, running: running),
+                                            subtitle: JobWords.rowSchedule(job, now: now, running: running),
                                             failed: failed, running: running, paused: section == .paused,
                                             overdue: JobWords.nextRunOverdue(job, now: now) != nil,
+                                            edge: JobWords.rowEdge(job, now: now, running: running),
                                             owner: job.owner, head: bots[job.owner]?.head)
         }
         sections = JobWords.Section.allCases.compactMap { section in grouped[section].map { (section, $0) } }

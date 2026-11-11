@@ -49,6 +49,8 @@ final class SettingsRootModel {
     var query = ""
     var inAppTips = InAppTips.isOn
     var fewerTimestamps = ToolCallSettings.fewerTimestamps
+    var showFileChanges = ToolCallSettings.showFileChanges
+    var newChatAsksProject = NewChatProjectChoice.isOn
     // [settings] On this iPhone: Haptics (docs/spec/3x-settings.md §1) and Intro Splash (§7).
     var haptics = Haptics.isOn
     /// [thinking-drive] How the model panel's thinking bar looks and feels as it climbs.
@@ -70,7 +72,7 @@ final class SettingsRootModel {
     /// [send-while-busy] What Send does with typed words while a reply runs.
     var sendWhileBusy = SendWhileBusy.chosen
     var newChatKeyBot = NewChatKeyBot.chosen   // [cmd-n]
-    var newChatKeyMode = NewChatKeyBot.mode     // [cmd-n] Jack: New Session or Bot Chat
+    var newChatKeyMode = NewChatKeyBot.mode     // [cmd-n] a tester: New Session or Bot Chat
     var newChatKeyProject = NewChatKeyBot.project ?? ""   // [cmd-n] "" is No Project
     /// §4 Largest Attachment, in MB (1…32).
     var attachmentLimit = AttachmentLimit.megabytes
@@ -798,6 +800,22 @@ struct SettingsRootView: View {
             }
             .accessibilityIdentifier("settings.fewer-timestamps")
             .revealRow("row:fewer-timestamps", model.revealed)
+            Toggle(isOn: Binding(get: { model.showFileChanges }, set: { on in
+                model.showFileChanges = on
+                ToolCallSettings.showFileChanges = on
+            })) {
+                SettingsRowLabel(title: "Show File Changes", systemImage: "doc.badge.ellipsis")
+            }
+            .accessibilityIdentifier("settings.show-file-changes")
+            .revealRow("row:show-file-changes", model.revealed)
+            Toggle(isOn: Binding(get: { model.newChatAsksProject }, set: { on in
+                model.newChatAsksProject = on
+                NewChatProjectChoice.isOn = on
+            })) {
+                SettingsRowLabel(title: "New Chat Asks for a Project", systemImage: "folder")
+            }
+            .accessibilityIdentifier("settings.new-chat-asks-project")
+            .revealRow("row:new-chat-asks-project", model.revealed)
             // [settings] §4
             if DeviceWord.isMac {
                 // [mac] Stress test 2026-10-28 #81, round 2: with a gateway it lives in Chat Behavior › Attachments,
@@ -943,6 +961,8 @@ struct SettingsRootView: View {
         } } footer: { HQSectionFooter {
             // UX study #69: the switches' names say what they do; the footer keeps only what a name can't say.
             Text("Fewer Timestamps shows a day line only when the date changes, and a time only under the bot’s replies."
+                 + " Show File Changes puts a “files changed” card under a reply that edited files; with it off, ⋯ › Changes still lists them."
+                 + " New Chat Asks for a Project: off, New Chat with a bot picked on Sessions starts in no project at once, with no sheet."
                  + " Send While Replying is what Send does while a reply runs: Steer adds your message to that reply, Queue sends it when the reply finishes."
                  + (DeviceWord.isMac ? " ⌘Return does the other one." : " Touch and hold Send for the other one.")
                  + (DeviceWord.isMac ? (model.newChatKeyMode == .botChat
@@ -1412,7 +1432,7 @@ struct GatewayCardView: View {
             }
             // The dot's middle sits at the middle of the capitals (3 pt above the baseline at the default size).
             let dot = min(dotSize, 14)
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
+            let state = HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Circle().fill(model.dotColor).frame(width: dot, height: dot)
                     .alignmentGuide(.firstTextBaseline) { $0.height / 2 + dotLift }
                 // Owner 2026-11-04: "Connected · 1 Bot · Hermes 0.22.6" broke wherever the width ran out, its tail
@@ -1422,11 +1442,29 @@ struct GatewayCardView: View {
                     .font(Font.hq(.subheadline).weight(.medium))
                     .foregroundStyle(Color.hqLabel2)
             }
-            if !model.factPieces.isEmpty {
-                // Mac polish #68: label 2 in the iOS look (label 3 read about 2.1:1 on the card); the Desktop Look's 3.
-                DotSeparatedText(pieces: model.factPieces)
-                    .font(Font.hq(.footnote))
-                    .foregroundStyle(Color(uiColor: HQPalette.cardNote))
+            // [gateway-card] Owner 2026-11-10 (design pick 19): when the state and the facts fit one line they share
+            // it ("● Connected · 8 Bots · Hermes 0.21.5"), so the card is two lines. When they don't, the 2026-11-04
+            // form stands: the state on its own line and the facts under it, never a broken line.
+            if model.factPieces.isEmpty {
+                state
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .firstTextBaseline, spacing: 0) {
+                        state
+                        Text(" · " + model.factPieces.joined(separator: " · "))
+                            .font(Font.hq(.footnote))
+                            .foregroundStyle(Color(uiColor: HQPalette.cardNote))
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                    VStack(alignment: .leading, spacing: 3) {
+                        state
+                        // Mac polish #68: label 2 in the iOS look (label 3 read about 2.1:1 on the card); the Desktop Look's 3.
+                        DotSeparatedText(pieces: model.factPieces)
+                            .font(Font.hq(.footnote))
+                            .foregroundStyle(Color(uiColor: HQPalette.cardNote))
+                    }
+                }
             }
         }
     }

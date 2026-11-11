@@ -39,6 +39,7 @@ extension AppModel {
 
     /// The chat screen's browser pieces: the card on the shelf and ⋯ › Watch Browser.
     func installBrowser(on screen: ChatViewController, menus: ChatMenus) {
+        previewTabs?.register(screen)   // [preview-tab] a bot's Browser tab opens over its chat
         guard let browser else { return }
         let model = screen.session
         let fallback = browserScope(for: model)

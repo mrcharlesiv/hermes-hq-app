@@ -22,7 +22,9 @@ extension LiveChatSession {
 
     // MARK: Pages
 
-    func applyFirstPage(_ page: HistoryPage, _ folded: HydratedPage) {
+    /// `keepCached` (the open's own reads): the saved copy's messages older than the page stay above it.
+    func applyFirstPage(_ page: HistoryPage, _ folded: HydratedPage, keepCached: Bool = false) {
+        let older = keepCached ? cachedOlderMessages(before: page) : []
         heldPaint = nil
         noteStoredRows(page.rows)
         let ids = page.rows.compactMap(HistoryPage.rowId)
@@ -35,7 +37,9 @@ extension LiveChatSession {
         headRows = page.possiblyTruncated ? LiveChatSession.leadingPartial(page.rows) : []
         newestSignature = page.rows.last.map(HistoryAPI.signature)
         noteCatchUp("first page \(page.rows.count) rows")
-        replaceTranscript(with: folded, replaceAll: true)
+        replaceTranscript(with: folded, replaceAll: true, older: older)
+        cachedOlderIds = Set(older.map(\.id))
+        if !older.isEmpty { AppLog.trace("history", "first page \(logIds): \(older.count) saved messages older than the page stay until the rows above it are read") }
         restoreLostSends()                              // [sessions-m9] a send that may never have arrived keeps its bubble (3x-sessions §9.4)
         restoreSideResults()                            // /btw and /bg results that landed this launch
         AppLog.trace("history", "first page applied \(logIds): \(messages.count) rows shown, hasOlder=\(hasOlder)")
@@ -45,13 +49,54 @@ extension LiveChatSession {
         saveCache()
     }
 
-    /// Fresh rows over what is shown, keeping row identity (03 §4.5 wholesale replace / §7.5 graft).
+    /// [smooth-open] The saved copy's messages still on top that are older than `page`, when the page meets what is
+    /// shown: a shown message reaches into the page's rows, so nothing lies between them and the page (the saved copy
+    /// has no holes and stored rows are only ever added). A page that doesn't meet the screen (rows written since the
+    /// copy was saved, a rewritten chat) replaces all of it, as before.
+    func cachedOlderMessages(before page: HistoryPage) -> [ChatMessage] {
+        let count = cachedOlderCount
+        guard count > 0, page.possiblyTruncated, let first = page.rows.lazy.compactMap(HistoryPage.rowId).min() else { return [] }
+        guard messages.contains(where: { !$0.isLocal && (newestRow($0) ?? Int.min) >= first }) else { return [] }
+        return Array(messages.prefix(count).prefix(while: { !$0.isLocal && (newestRow($0) ?? Int.max) < first }))
+    }
+
+    /// The highest backend row a shown message covers (nil: it has none).
+    func newestRow(_ m: ChatMessage) -> Int? {
+        let meta = metaById[m.id]
+        return [m.rowId, meta?.firstRowId, meta?.lastRowId].compactMap { $0 }.max()
+    }
+
+    /// [smooth-open] The gateway holds nothing older than what was read: the unconfirmed saved messages on top go.
+    func dropCachedOlder() {
+        let count = cachedOlderCount
+        cachedOlderIds = []
+        guard count > 0 else { return }
+        AppLog.trace("history", "older rows \(logIds): \(count) saved messages on top are not on the gateway, dropped")
+        for m in messages[..<count] {
+            metaById[m.id] = nil
+            changes.remove(m.id)
+        }
+        messages.removeFirst(count)
+        rebuildIndex()
+        changes.markState()
+        scheduleFlush()
+    }
+
+    /// After the open: the rows above the first page, up to 120 in all, and always when saved messages wait on them.
+    func readOlderAfterOpen() {
+        guard hasOlder, observing, olderTask == nil, nextOffset < LiveChatSession.fullPageRows || cachedOlderCount > 0 else { return }
+        let fill = nextOffset < LiveChatSession.fullPageRows
+        olderTask = Task { [weak self] in await self?.loadOlderPage(fill: fill) }
+    }
+
+    /// Fresh rows over what is shown, keeping row identity (03 §4.5 wholesale replace / §7.5 graft). `older`: saved
+    /// messages that stay above the page ([smooth-open]).
     ///
     /// While a turn runs, the live bubble is the turn's single owner (04 §7.4: keep the structured live bubble): the
     /// page is cut after the turn's user row, so the stored partial (assistant/tool rows persisted mid-turn) never shows
     /// next to it; the turn-end read then matches the sealed bubble to the stored reply.
     @discardableResult
-    func replaceTranscript(with folded: HydratedPage, replaceAll: Bool) -> Bool {
+    func replaceTranscript(with folded: HydratedPage, replaceAll: Bool, older: [ChatMessage] = []) -> Bool {
         let span = MainTrail.begin("chat.merge")          // [diagnostics] build 292
         defer { MainTrail.end(span) }
         flushDeltas()
@@ -89,6 +134,12 @@ extension LiveChatSession {
             result.insert(carried.message, at: at)
             if let mm = carried.meta { meta[carried.message.id] = mm }
         }
+        if !older.isEmpty {
+            let held = Set(result.map(\.id))
+            result.insert(contentsOf: older.filter { !held.contains($0.id) }, at: 0)
+        }
+        // [smooth-open] What the page holds is read, not saved: only messages above it still wait for their read.
+        if !cachedOlderIds.isEmpty { cachedOlderIds.subtract(fresh.map { graft.aliases[$0.id] ?? $0.id }) }
         // Live tool details survive (the page has none for a running turn).
         let resultIds = Set(result.map(\.id))
         for (id, mm) in metaById where meta[id] == nil && resultIds.contains(id) { meta[id] = mm }
@@ -143,7 +194,8 @@ extension LiveChatSession {
     /// Releases the oldest stored rows beyond `keep` messages (03 §5.4; M1 does it when the screen goes away). The tail
     /// offset is rewound by the released backend rows so paging fetches them again; rows without a row id stay.
     func releaseOlderHistory(keepingNewest keep: Int) {
-        guard keep > 0, messages.count > keep else { return }
+        // [smooth-open] Saved messages still waiting on their read are in no page's count: nothing is released past them.
+        guard keep > 0, messages.count > keep, cachedOlderCount == 0 else { return }
         let limit = messages.count - keep
         var cut = 0
         var rows = 0
@@ -234,14 +286,21 @@ extension LiveChatSession {
             let ids = page.rows.map(HistoryPage.rowId)
             let got = ids.compactMap { $0 }
             AppLog.trace("history", "older page \(lids): \(page.rows.count) rows (\(got.first.map(String.init) ?? "-")…\(got.last.map(String.init) ?? "-")), more=\(page.possiblyTruncated), \(AppLog.ms(since: olderStart)) ms")
-            if page.rows.isEmpty { AppLog.trace("history", "older page \(lids): empty, start reached"); hasOlder = false; return }
+            if page.rows.isEmpty {
+                AppLog.trace("history", "older page \(lids): empty, start reached")
+                hasOlder = false
+                dropCachedOlder()
+                return
+            }
             if let at = ids.firstIndex(of: join) {
                 if at == 0 {
                     // Nothing older in this page: either the start, or our offset is stale. (A too-large page is re-read
                     // with a smaller limit, so compare with what was actually asked.)
                     if !page.possiblyTruncated || page.rows.count < (page.requestedLimit ?? rows + 1) {
                         AppLog.trace("history", "older page \(lids): join row \(join) is the oldest, start reached")
-                        hasOlder = false; return
+                        hasOlder = false
+                        dropCachedOlder()
+                        return
                     }
                     AppLog.trace("history", "older page \(lids): join row \(join) first in a full page, offset stale; reading further back")
                     offset += page.rows.count
@@ -260,7 +319,7 @@ extension LiveChatSession {
             // No join (rows rewritten): keep only what is strictly older than what is shown.
             let older = page.rows.filter { (HistoryPage.rowId($0) ?? Int.max) < join }
             AppLog.trace("history", "older page \(lids): join row \(join) not in page (rows rewritten/thinned), \(older.count) strictly older kept")
-            if older.isEmpty { hasOlder = false; return }
+            if older.isEmpty { hasOlder = false; dropCachedOlder(); return }
             await prependOlder(rows: older, page: page)
             return
         }
@@ -290,13 +349,24 @@ extension LiveChatSession {
         let joint = kept + head
         let folded = await LiveChatSession.foldOffMain(joint, accountId: account.id)
         guard !Task.isCancelled else { return }
+        // [smooth-open] The saved messages on top give way to the gateway's own for the rows just read (the same ids, so
+        // nothing on screen moves); one older than every row read waits for the next page, when there is one.
+        let saved = cachedOlderCount
+        let keptFirst = kept.lazy.compactMap(HistoryPage.rowId).min()
+        let more = page.possiblyTruncated || dropped > 0
+        let stillSaved = !more ? [] : Array(messages.prefix(saved).prefix(while: { m in
+            guard let keptFirst, let newest = newestRow(m) else { return false }
+            return newest < keptFirst
+        }))
         let headCount = head.isEmpty ? 0 : shownHeadCount(head)
-        let existing = Set(messages[headCount...].map(\.id)).union(aliases.keys)
+        let top = saved + headCount                      // the messages these rows replace
+        let existing = Set(messages[top...].map(\.id)).union(aliases.keys).union(stillSaved.map(\.id))
         // [presence] a titled request among the older rows shows its title, as the newest page's does
         let fresh = LiveChatSession.sentTitles.applied(to: folded.messages.filter { !existing.contains($0.id) })
         guard !fresh.isEmpty else {
             AppLog.trace("history", "older rows \(logIds): \(rows.count) rows folded to \(folded.messages.count), all already shown; hasOlder=false")
             hasOlder = false
+            dropCachedOlder()
             return
         }
         // Offsets: the page covers [offset, offset+count) from the newest end; its oldest kept row sits at
@@ -305,12 +375,13 @@ extension LiveChatSession {
         nextOffset = pageOffset + page.rows.count - dropped
         oldestRowId = kept.lazy.compactMap(HistoryPage.rowId).first ?? oldestRowId
         kept.compactMap(HistoryPage.rowId).forEach { loadedRowIds.insert($0) }
-        hasOlder = page.possiblyTruncated || dropped > 0
+        hasOlder = more
         headRows = hasOlder ? LiveChatSession.leadingPartial(joint) : []
         let old = messages
-        AppLog.trace("history", "older rows \(logIds): \(rows.count) rows (\(dropped) dropped to keep turns whole) + \(head.count) head rows refolded → \(fresh.count) new messages, \(folded.messages.count - fresh.count) already shown, \(headCount) top messages replaced; next offset \(nextOffset), hasOlder=\(hasOlder)")
-        for m in old[..<headCount] { metaById[m.id] = nil }
-        messages = TranscriptMerge.diff(old: old, new: fresh + old[headCount...], into: &changes)
+        AppLog.trace("history", "older rows \(logIds): \(rows.count) rows (\(dropped) dropped to keep turns whole) + \(head.count) head rows refolded → \(fresh.count) new messages, \(folded.messages.count - fresh.count) already shown, \(headCount) top messages replaced\(saved > 0 ? ", \(saved - stillSaved.count) saved messages confirmed" : ""); next offset \(nextOffset), hasOlder=\(hasOlder)")
+        for m in old[stillSaved.count..<top] { metaById[m.id] = nil }
+        cachedOlderIds = Set(stillSaved.map(\.id))
+        messages = TranscriptMerge.diff(old: old, new: stillSaved + fresh + old[top...], into: &changes)
         let freshIds = Set(fresh.map(\.id))
         for (id, mm) in folded.meta where freshIds.contains(id) { metaById[id] = mm }
         rebuildIndex()
@@ -321,7 +392,7 @@ extension LiveChatSession {
     func shownHeadCount(_ head: [JSONValue]) -> Int {
         let headRowIds = Set(head.compactMap(HistoryPage.rowId))
         var count = 0
-        for m in messages {
+        for m in messages.dropFirst(cachedOlderCount) {     // [smooth-open] below the saved messages still on top
             guard !m.isLocal, m.role != .user else { break }
             if let row = m.rowId ?? metaById[m.id]?.firstRowId {
                 guard headRowIds.contains(row) else { break }
@@ -544,6 +615,7 @@ extension LiveChatSession {
         AppLog.trace("history", "tail read applied \(lids): \(before) → \(messages.count) rows, \(keptOlder ? "older rows kept" : "page replaced the screen, paging restarts at offset \(page.nextOffset)")")
         if !keptOlder {
             // The page replaced what was shown: paging continues from its oldest row.
+            cachedOlderIds = []
             nextOffset = page.nextOffset
             oldestRowId = pageRowIds.first
             loadedRowIds = Set(pageRowIds)
@@ -616,12 +688,10 @@ extension LiveChatSession {
         }
         firstPageOwed = false
         AppLog.trace("history", "first page retry \(firstPageTries) \(logIds): got \(page.rows.count) rows")
-        applyFirstPage(page, folded)
+        applyFirstPage(page, folded, keepCached: true)
         changes.markState()
         scheduleFlush()
-        if hasOlder && nextOffset < 120 && observing && olderTask == nil {
-            olderTask = Task { [weak self] in await self?.loadOlderPage(fill: true) }
-        }
+        readOlderAfterOpen()
         onOpenSettled?(true)
         checkExternalWork("first page")                 // [external-turn]
     }

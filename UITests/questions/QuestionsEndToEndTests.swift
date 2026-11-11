@@ -110,8 +110,9 @@ final class QuestionsEndToEndTests: XCTestCase {
 
         // Owner 2026-10-30: each page fits its own content (a short question had a band of empty card under it). The
         // dock's bottom stays put, its top moves to the new page's height, and the transcript rides along with it.
-        app.buttons["question.choice.0"].firstMatch.tap()          // "main (Recommended)"
-        app.buttons["question.primary"].tap()                        // Next
+        // [question-tidy] Owner 2026-11-10: the first pick-one page has no Next; the tap on a choice moves on.
+        XCTAssertFalse(app.buttons["question.primary"].isHittable, "no Next while a tap is all page 1 needs")
+        app.buttons["question.choice.0"].firstMatch.tap()          // "main (Recommended)" → page 2 by itself
         XCTAssertTrue(app.staticTexts["Question 2 of 3"].waitForExistence(timeout: 5))
         let page2 = settledFrame(dock)
         XCTAssertEqual(page2.maxY, dockFrame.maxY, accuracy: 0.5, "Next keeps the dock's bottom")
@@ -120,7 +121,9 @@ final class QuestionsEndToEndTests: XCTestCase {
         if let rowToDock, let row { XCTAssertEqual(row.frame.maxY - page2.minY, rowToDock, accuracy: 1, "the transcript moves with the dock") }
         app.buttons["question.back"].tap()
         XCTAssertTrue(app.staticTexts["Question 1 of 3"].waitForExistence(timeout: 5))
-        XCTAssertEqual(settledFrame(dock), dockFrame, "Back returns to page 1's frame")
+        let back1 = settledFrame(dock)
+        XCTAssertEqual(back1.maxY, dockFrame.maxY, accuracy: 0.5, "Back keeps the dock's bottom")
+        XCTAssertGreaterThan(back1.height, dockFrame.height, "answered, page 1 has Next under it now")
         app.buttons["question.primary"].tap()
 
         // Page 2 (multi): a pick and "Something else…", which opens a field with the keyboard up.

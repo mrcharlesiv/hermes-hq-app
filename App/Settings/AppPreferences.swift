@@ -57,6 +57,59 @@ enum FileBrowserPref {
     }
 }
 
+/// Tester 2026-11-10: with a bot's pill picked, Sessions' New Chat started in no project at once; a chat in a
+/// project (or a new project) sat behind the Filter menu. Compose now always opens the one New Chat sheet (the bot,
+/// then the project). Off: with a pill picked, a chat in no project straight away, as before.
+enum NewChatProjectChoice {
+    static let key = "hqn.newChatAsksProject"
+
+    static var isOn: Bool {
+        // On by default: only "off" is stored. `bool(forKey:)`, so a launch argument's "NO" reads as off too.
+        get { UserDefaults.standard.object(forKey: key) == nil ? true : UserDefaults.standard.bool(forKey: key) }
+        set {
+            if newValue { UserDefaults.standard.removeObject(forKey: key) } else { UserDefaults.standard.set(false, forKey: key) }
+            AppLog.note("settings", "New Chat asks for a project: \(newValue)")
+        }
+    }
+}
+
+/// What the New Chat sheet last started: the bot (lit under All next time) and, per bot, the project (its row carries
+/// "Last used"). On this device only.
+enum NewChatLast {
+    static let botKey = "hqn.newChat.lastBot"
+    static let projectsKey = "hqn.newChat.lastProjects"
+    /// The stored word for No Project (a project's key is a folder path, never empty).
+    nonisolated static let none = ""
+
+    static var bot: String? { UserDefaults.standard.string(forKey: botKey) }
+
+    /// The project `bot` last started in: a key, `none`, or nil when it has started nothing from the sheet.
+    static func project(for bot: String) -> String? {
+        (UserDefaults.standard.dictionary(forKey: projectsKey) as? [String: String])?[bot]
+    }
+
+    static func note(bot: String, project: String?) {
+        UserDefaults.standard.set(bot, forKey: botKey)
+        var all = (UserDefaults.standard.dictionary(forKey: projectsKey) as? [String: String]) ?? [:]
+        all[bot] = project ?? none
+        UserDefaults.standard.set(all, forKey: projectsKey)
+    }
+
+    /// Whether the row for `row` (nil: No Project) carries "Last used", given what is stored for the bot.
+    nonisolated static func marks(stored: String?, row: String?) -> Bool {
+        guard let stored else { return false }
+        return stored == none ? row == nil : row == stored
+    }
+
+    /// The bot lit when the sheet opens: the picked pill's, else the one used last while it is still offered, else
+    /// Hermes, else the first.
+    nonisolated static func opensOn(picked: String?, last: String?, among ids: [String]) -> String {
+        if let picked, ids.contains(picked) { return picked }
+        if let last, ids.contains(last) { return last }
+        return ids.contains("default") ? "default" : (ids.first ?? "default")
+    }
+}
+
 /// [cmd-n] Tester 2026-11-02 (Mac): ⌘N asked for a bot (and a project) every time. It now starts a chat with one bot at
 /// once, Hermes (the default profile) unless Settings › Chat › New Chat (⌘N) names another; ⇧⌘N (New Chat With…) keeps
 /// the chooser. `ask` puts the chooser back on ⌘N.

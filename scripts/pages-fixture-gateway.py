@@ -19,6 +19,7 @@ Test hooks (no auth):
   POST /__fixture/tile-job   a job of deploys that rewrites site/tile.html hourly, last run 5 minutes ago ([tiles])
                              ({"status": "error", "error": …, "model": …}: its last run failed, the model it names)
   POST /__fixture/live-bump  site/live.html's sales go from 12 to 13 ([live-tiles]: the tile's own refresh reads it)
+  POST /__fixture/tile-edit  {"from","to"}: the tile's bot edited the page's look ([tile-versions])
   POST /__fixture/tile-ran   that job ran just now and rewrote the page (the headline becomes Revenue $14K)
   POST /__fixture/broadcast  {"type":"cron.changed"} to every open socket
   POST /__fixture/turn-end   {"match","text"} or {"match","error"}: the last streaming prompt holding `match` ends ([tiles])
@@ -985,6 +986,12 @@ def live_page(sales):
             f'<body><h1 id="sales">Sales {sales}</h1>'
             '<button data-hermes-send="Add one more sale">Add one</button></body></html>')
 
+def real_file(asked):
+    # A file by its name; one in a tile's versions folder ("…/tile.versions/v1.html") keeps that folder ([tile-versions]).
+    pure = pathlib.PurePosixPath(asked)
+    if pure.parent.name.endswith('.versions'): return FILES / pure.parent.name / pure.name
+    return FILES / pure.name
+
 def serve_file(gateway_handler, query, data_url):
     asked = (query.get('path') or [''])[0]
     sid = (query.get('session_id') or [''])[0]
@@ -996,7 +1003,7 @@ def serve_file(gateway_handler, query, data_url):
     if asked == f'{HOME}/profiles/deploys/cron/output/j-script/2026-10-09_08-00-00.md':
         content = RUN_DOCUMENT.encode()
         return 200, ('text/markdown', content)
-    real = FILES / pathlib.PurePosixPath(asked).name
+    real = real_file(asked)
     if not asked or not real.is_file(): return 404, {'detail': 'File not found'}
     data = real.read_bytes()
     kind = mimetypes.guess_type(real.name)[0] or 'application/octet-stream'
@@ -1221,6 +1228,21 @@ def handler(gateway):
                                            'model': 'hermes-4', 'provider': 'nous'} for n, t, _ in BOTS]}
             if path in ('/api/fs/download', '/api/fs/read-data-url') and method == 'GET':
                 return serve_file(self, query, path.endswith('read-data-url'))
+            # [tile-versions] The text routes a tile's versions are kept with.
+            if path == '/api/fs/read-text' and method == 'GET':
+                real = real_file(one('path') or '')
+                if not real.is_file(): return 404, {'detail': 'File not found'}
+                data = real.read_bytes()
+                return 200, {'path': one('path'), 'text': data.decode('utf-8', 'replace'), 'binary': False, 'truncated': False,
+                             'byteSize': len(data)}
+            if path == '/api/fs/write-text' and method == 'POST':
+                real = real_file(body.get('path') or '')
+                if not real.parent.is_dir(): return 400, {'detail': 'Parent directory does not exist'}
+                real.write_text(body.get('content') or '')
+                return 200, {'ok': True, 'path': body.get('path'), 'byteSize': real.stat().st_size}
+            if path == '/api/files/mkdir' and method == 'POST':
+                real_file((body.get('path') or '') + '/x').parent.mkdir(parents=True, exist_ok=True)
+                return 200, {'ok': True, 'path': body.get('path')}
             return None
 
         def handle_api(self, method):
@@ -1284,6 +1306,13 @@ def handler(gateway):
                     page = (FILES / 'tile.html').read_text().replace('Revenue $12K', 'Revenue $14K')
                     (FILES / 'tile.html').write_text(page)
                 broadcast()
+                return self.reply(200, {'ok': True})
+            if path == '/__fixture/tile-edit':
+                # [tile-versions] The tile's bot edited the page's look: {"from","to"} in its text.
+                edit = self.body_json()
+                with lock:
+                    page = (FILES / 'tile.html').read_text().replace(edit.get('from', ''), edit.get('to', ''))
+                    (FILES / 'tile.html').write_text(page)
                 return self.reply(200, {'ok': True})
             if path == '/__fixture/live-bump':
                 # [live-tiles] The live tile's page changes on disk (no broadcast: its own refresh reads it).

@@ -45,11 +45,20 @@ final class ChatBlocksViewController: UIViewController {
     private let blocks: [Block]
     private let heading: String?
     private let footer: [UIAction]
+    /// [error-words] A sentence under the heading, and the actions under that, above the blocks (Error Details: what
+    /// happened and what to do come first, the raw text last). `primary`: the title of the action drawn filled.
+    private let note: String?
+    private let actionsFirst: Bool
+    private let primary: String?
+    private let stack = UIStackView()
 
-    init(heading: String?, blocks: [Block], footer: [UIAction] = []) {
+    init(heading: String?, blocks: [Block], footer: [UIAction] = [], note: String? = nil, actionsFirst: Bool = false, primary: String? = nil) {
         self.heading = heading
         self.blocks = blocks
         self.footer = footer
+        self.note = note
+        self.actionsFirst = actionsFirst
+        self.primary = primary
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -63,7 +72,6 @@ final class ChatBlocksViewController: UIViewController {
         scroll.alwaysBounceVertical = true
         scroll.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(scroll)
-        let stack = UIStackView()
         stack.axis = .vertical
         stack.spacing = 8
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -92,8 +100,25 @@ final class ChatBlocksViewController: UIViewController {
             title.textColor = ChatPalette.label
             title.numberOfLines = 0
             title.text = heading
+            title.accessibilityTraits = .header
+            title.accessibilityIdentifier = "sheet.heading"
             stack.addArrangedSubview(title)
-            stack.setCustomSpacing(16, after: title)
+            stack.setCustomSpacing(note == nil ? 16 : 4, after: title)
+        }
+        if let note, !note.isEmpty {
+            let words = UILabel()
+            words.font = HQFont.preferred(.subheadline)
+            words.adjustsFontForContentSizeCategory = true
+            words.textColor = ChatPalette.label2
+            words.numberOfLines = 0
+            words.text = note
+            words.accessibilityIdentifier = "sheet.note"
+            stack.addArrangedSubview(words)
+            stack.setCustomSpacing(14, after: words)
+        }
+        if actionsFirst, let row = actionRow() {
+            stack.addArrangedSubview(row)
+            stack.setCustomSpacing(18, after: row)
         }
         for block in blocks {
             let label = UILabel()
@@ -107,25 +132,44 @@ final class ChatBlocksViewController: UIViewController {
             stack.addArrangedSubview(card)
             stack.setCustomSpacing(18, after: card)
         }
-        if !footer.isEmpty {
-            let row = UIStackView()
-            row.axis = .horizontal
-            row.spacing = 12
-            row.alignment = .center
-            for action in footer {
-                // [glass-design] A solid capsule like the cards, not glass on the glass (GlassSheetKit).
-                var config = UIButton.Configuration.hqSheetAction()
-                config.title = action.title
-                config.image = action.image
-                config.imagePadding = 6
-                if !GlassSheetKit.designed { config.buttonSize = .medium }
-                let button = UIButton(configuration: config, primaryAction: action)
-                button.accessibilityIdentifier = "sheet.\(action.title.lowercased())"
-                row.addArrangedSubview(button)
+        if !actionsFirst, let row = actionRow() { stack.addArrangedSubview(row) }
+    }
+
+    private func actionRow() -> UIView? {
+        guard !footer.isEmpty else { return nil }
+        let row = UIStackView()
+        row.axis = .horizontal
+        row.spacing = 12
+        row.alignment = .center
+        for action in footer {
+            // [glass-design] A solid capsule like the cards, not glass on the glass (GlassSheetKit).
+            var config = UIButton.Configuration.hqSheetAction()
+            if action.title == primary {
+                config = .filled()
+                config.cornerStyle = .capsule
+                config.baseBackgroundColor = ChatPalette.tint
+                config.baseForegroundColor = .white
             }
-            row.addArrangedSubview(UIView())
-            stack.addArrangedSubview(row)
+            config.title = action.title
+            config.image = action.image
+            config.imagePadding = 6
+            if !GlassSheetKit.designed { config.buttonSize = .medium }
+            let button = UIButton(configuration: config, primaryAction: action)
+            button.accessibilityIdentifier = "sheet.\(action.title.lowercased().replacingOccurrences(of: " ", with: "-"))"
+            row.addArrangedSubview(button)
         }
+        row.addArrangedSubview(UIView())
+        return row
+    }
+
+    /// [error-words] The height the content needs at `width` (the sheet's own detent reads it).
+    func fittedHeight(width: CGFloat) -> CGFloat {
+        loadViewIfNeeded()
+        let margins = view.layoutMargins.left + view.layoutMargins.right
+        let inner = max(120, width - (GlassSheetKit.designed ? max(margins, 32) : 32))
+        let size = stack.systemLayoutSizeFitting(CGSize(width: inner, height: UIView.layoutFittingCompressedSize.height),
+                                                 withHorizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel)
+        return ceil(size.height) + 8 + 24
     }
 }
 
@@ -210,7 +254,10 @@ enum ChatStepSheet {
 
 enum ChatErrorDetailsSheet {
     /// "Error Details" (spec 06 §5.6.1, M1): the raw error text and Copy.
-    static func make(details: String) -> UIViewController {
+    /// [error-words] Owner 2026-11-10 (design pick 7): what happened in plain words first (`ErrorPlainWords`), then
+    /// Try Again (where the caller can retry) beside Copy, then the raw text under "Technical details"; and the sheet
+    /// is as tall as that, not half the screen with its lower half empty.
+    static func make(details: String, retry: (() -> Void)? = nil) -> UIViewController {
         var copy: UIAction!
         copy = UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { action in
             UIPasteboard.general.string = details
@@ -222,8 +269,26 @@ enum ChatErrorDetailsSheet {
                 button.configuration = config
             }
         }
-        let body = ChatBlocksViewController(heading: nil, blocks: [.init(label: "Error", text: details)], footer: [copy])
-        return ChatSheet.wrap(body, title: "Error Details", detents: [.medium()])
+        let words = ErrorPlainWords.explain(details)
+        var actions: [UIAction] = [copy]
+        var navigation: UINavigationController?
+        if let retry {
+            actions.insert(UIAction(title: "Try Again", image: UIImage(systemName: "arrow.clockwise")) { _ in
+                navigation?.dismiss(animated: true) { retry() }
+            }, at: 0)
+        }
+        let body = ChatBlocksViewController(heading: words.title, blocks: [.init(label: "Technical details", text: details)], footer: actions,
+                                            note: words.text, actionsFirst: true, primary: retry == nil ? nil : "Try Again")
+        let fitted = UISheetPresentationController.Detent.custom(identifier: .init("error.fitted")) { [weak body] context in
+            guard let body else { return nil }
+            let width = body.viewIfLoaded?.bounds.width ?? 0
+            // The bar above the content, and the room under it for the home indicator.
+            let wanted = body.fittedHeight(width: width > 0 ? width : 390) + 64 + 20
+            return min(context.maximumDetentValue, max(220, wanted))
+        }
+        let wrapped = ChatSheet.wrap(body, title: "Error Details", detents: [fitted, .large()])
+        navigation = wrapped
+        return wrapped
     }
 }
 
@@ -351,18 +416,20 @@ private final class ChatInfoList: UITableViewController {
         return footer
     }
 
+    /// [chatinfo-tidy] Owner 2026-11-10 (design pick 8): the face and the name on one line (a 40 pt face, the name in
+    /// Headline beside it), so the rows start at the top of the sheet. The chat's title pill, right above the sheet,
+    /// already shows the same face and name at full size.
+    static let phoneFace: CGFloat = 40
+
     private func phoneHeader() -> UIView {
-        let header = UIView(frame: CGRect(x: 0, y: 0, width: view.bounds.width, height: 132))
-        let face = HeadView(side: 64)
+        let header = UIView(frame: CGRect(x: 0, y: 0, width: view.bounds.width, height: 64))
+        let face = HeadView(side: Self.phoneFace)
         face.configure(raw: head, profile: profile)
         face.translatesAutoresizingMaskIntoConstraints = false
         let title = UILabel()
         title.text = name
-        title.font = HQFont.preferred(.title2)
+        title.font = HQFont.preferred(.headline)
         title.adjustsFontForContentSizeCategory = true
-        title.textAlignment = .center
-        // Three lines, then an ellipsis: a very long title must not push the rows off the first screen (the whole
-        // title is still read out, and Rename shows it in full).
         title.numberOfLines = 3
         title.lineBreakMode = .byTruncatingTail
         title.accessibilityIdentifier = "info.title"
@@ -370,13 +437,13 @@ private final class ChatInfoList: UITableViewController {
         header.addSubview(face)
         header.addSubview(title)
         NSLayoutConstraint.activate([
-            face.topAnchor.constraint(equalTo: header.topAnchor, constant: 8),
-            face.centerXAnchor.constraint(equalTo: header.centerXAnchor),
-            face.widthAnchor.constraint(equalToConstant: 64),
-            face.heightAnchor.constraint(equalToConstant: 64),
-            title.topAnchor.constraint(equalTo: face.bottomAnchor, constant: 10),
-            title.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 16),
-            title.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -16),
+            face.leadingAnchor.constraint(equalTo: header.layoutMarginsGuide.leadingAnchor, constant: 4),
+            face.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            face.widthAnchor.constraint(equalToConstant: Self.phoneFace),
+            face.heightAnchor.constraint(equalToConstant: Self.phoneFace),
+            title.leadingAnchor.constraint(equalTo: face.trailingAnchor, constant: 12),
+            title.trailingAnchor.constraint(equalTo: header.layoutMarginsGuide.trailingAnchor, constant: -4),
+            title.centerYAnchor.constraint(equalTo: header.centerYAnchor),
         ])
         headerTitle = title
         return header
@@ -483,8 +550,10 @@ private final class ChatInfoList: UITableViewController {
         // Three lines (six at the accessibility sizes, where a short name already takes three), then an ellipsis.
         let lines = traitCollection.preferredContentSizeCategory.isAccessibilityCategory ? 6 : 3
         if title.numberOfLines != lines { title.numberOfLines = lines }
-        let titleHeight = title.sizeThatFits(CGSize(width: max(0, width - 32), height: .greatestFiniteMagnitude)).height
-        let height = max(132, ceil(8 + 64 + 10 + titleHeight + 16))
+        // [chatinfo-tidy] The name beside the face: the header is as tall as the taller of the two, 12 pt above and below.
+        let beside = max(0, width - header.layoutMargins.left - header.layoutMargins.right - 8 - Self.phoneFace - 12)
+        let titleHeight = title.sizeThatFits(CGSize(width: beside, height: .greatestFiniteMagnitude)).height
+        let height = ceil(max(Self.phoneFace, titleHeight) + 24)
         guard abs(header.frame.height - height) > 0.5 || abs(header.frame.width - width) > 0.5 else { return }
         header.frame = CGRect(x: 0, y: 0, width: width, height: height)
         tableView.tableHeaderView = header

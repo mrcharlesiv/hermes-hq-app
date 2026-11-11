@@ -246,16 +246,41 @@ struct StarMapNodeSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityAddTraits(.isHeader)
                     .accessibilityIdentifier("starmap.node.title")
-                VStack(spacing: 0) {
-                    fact("Kind", StarMapRules.kindWord(node))
-                    fact("Category", StarMapRules.categoryTitle(node.category))
-                    if node.kind == .skill { fact("Use", StarMapRules.usedLine(node.useCount)) }
-                    fact("State", StarMapRules.stateWord(node.state))
-                    if let by = StarMapRules.createdByWord(node.createdBy) { fact("Created By", by) }
-                    if node.pinned { fact("Pinned", "Yes") }
+                // [starmap-tags] Owner 2026-11-10 (design pick 21): the kind, category, state and pin are small tags
+                // under the title and the use and maker one quiet line, so what the skill or memory says leads the
+                // sheet (they were six rows in a box above it). At the accessibility text sizes the rows stay.
+                if typeSize.isAccessibilitySize {
+                    VStack(spacing: 0) {
+                        fact("Kind", StarMapRules.kindWord(node))
+                        fact("Category", StarMapRules.categoryTitle(node.category))
+                        if node.kind == .skill { fact("Use", StarMapRules.usedLine(node.useCount)) }
+                        fact("State", StarMapRules.stateWord(node.state))
+                        if let by = StarMapRules.createdByWord(node.createdBy) { fact("Created By", by) }
+                        if node.pinned { fact("Pinned", "Yes") }
+                    }
+                    .hqGlassCard()   // [glass-audit] the facts on a solid card while the sheet sits on glass
+                    if !(glass && GlassSheetKit.designed) { Divider() }
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        PagesFlowLayout(spacing: 6, lineSpacing: 6) {
+                            ForEach(tags, id: \.self) { tag in
+                                Text(tag)
+                                    .font(Font.hq(.footnote).weight(.medium))
+                                    .foregroundStyle(Color.hqLabel)
+                                    .padding(.horizontal, 10).padding(.vertical, 4)
+                                    .background(Capsule().fill(glass ? Color(uiColor: HQPalette.sheetCard) : Color.hqFill3))
+                            }
+                        }
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(tags.joined(separator: ", "))
+                        .accessibilityIdentifier("starmap.node.tags")
+                        if !quietLine.isEmpty {
+                            Text(quietLine).font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
+                                .accessibilityIdentifier("starmap.node.line")
+                        }
+                    }
+                    .padding(.top, -6)
                 }
-                .hqGlassCard()   // [glass-audit] the facts on a solid card while the sheet sits on glass
-                if !(glass && GlassSheetKit.designed) { Divider() }
                 words.hqGlassCard()
             }
             .padding(.horizontal, 20)
@@ -268,6 +293,19 @@ struct StarMapNodeSheet: View {
         .hqGlassSheetPage()   // [glass-audit] the system's glass, designed for: cards, and opaque in the Desktop Look
         .accessibilityIdentifier("starmap.node")
         .task(id: attempt) { await read() }
+    }
+
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    private var tags: [String] {
+        [StarMapRules.kindWord(node), StarMapRules.categoryTitle(node.category), StarMapRules.stateWord(node.state), node.pinned ? "Pinned" : ""]
+            .filter { !$0.isEmpty }
+    }
+
+    /// "Used 14 times · Created by Hermes"
+    private var quietLine: String {
+        [node.kind == .skill ? StarMapRules.usedLine(node.useCount) : nil,
+         StarMapRules.createdByWord(node.createdBy).map { "Created by \($0)" }].compactMap { $0 }.joined(separator: " · ")
     }
 
     private func fact(_ name: String, _ value: String) -> some View {

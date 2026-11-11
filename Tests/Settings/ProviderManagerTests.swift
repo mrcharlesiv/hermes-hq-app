@@ -80,6 +80,12 @@ nonisolated private func account(_ id: String, _ name: String, connected: Bool, 
         #expect(ProviderList.shownLine(rows[0], catalog: catalog, prefs: prefs) == "2 of 3 models shown")
         #expect(ProviderList.shownLine(rows[2], catalog: catalog, prefs: prefs) == "2 models shown")
         #expect(ProviderList.shownLine(rows[1], catalog: catalog, prefs: prefs) == "1 model shown")
+        // [provider-rows] Owner 2026-11-10: the same counts at the row's trailing edge, without "shown".
+        #expect(ProviderList.shownEdge(rows[0], catalog: catalog, prefs: prefs).text == "2 of 3 models")
+        #expect(ProviderList.shownEdge(rows[2], catalog: catalog, prefs: prefs).text == "2 models")
+        #expect(ProviderList.shownEdge(rows[1], catalog: catalog, prefs: prefs) == ("1 model", false))
+        #expect(ProviderList.shownEdge(rows[0], catalog: [], prefs: ProviderPrefs()).none == ProviderList.allModels(rows[0], catalog: [], prefs: ProviderPrefs()).isEmpty,
+                "orange only when there is nothing to pick")
         var renamedEndpoint = prefs
         renamedEndpoint.setProviderName("Ignored", provider: "custom:home-server")
         #expect(rows[0].name(renamedEndpoint) == "Home Server", "your own endpoint's name is the gateway's")

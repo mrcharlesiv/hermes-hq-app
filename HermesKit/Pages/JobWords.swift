@@ -668,6 +668,93 @@ nonisolated enum JobWords {
         return next.isEmpty ? schedule : "\(schedule)\u{00A0}· \(next)"
     }
 
+    // MARK: [jobs-edge] The row's trailing edge (owner 2026-11-10, design pick 1)
+
+    /// What a job row says at its trailing edge, where a bot row has its time: when it runs next ("in 12 min",
+    /// "6:00 PM", "Tomorrow", "Mon", "Nov 16"), "Now" while it is due, how late an overdue one is ("2h late"), how long
+    /// a running one has been out ("4m so far"), or the day a completed one last ran. Owner 2026-11-10: the next run
+    /// was the tail of the subtitle's sentence, so every row had to be read to its end and a failed row wrapped to
+    /// three lines.
+    struct RowEdge: Sendable, Hashable {
+        enum Tone: Sendable { case plain, late, running }
+        var text: String
+        var tone: Tone = .plain
+        /// The same fact as VoiceOver hears it after the schedule ("next tomorrow", "2 hours late").
+        var spoken: String
+    }
+
+    /// "4m", "2h", "3d": a short span for the row's edge.
+    static func shortSpan(_ seconds: TimeInterval) -> String {
+        let minutes = max(1, Int((seconds / 60).rounded()))
+        if minutes < 60 { return "\(minutes)m" }
+        let hours = Int((seconds / 3600).rounded())
+        return hours < 48 ? "\(hours)h" : "\(Int((seconds / 86400).rounded()))d"
+    }
+
+    private static func spokenSpan(_ seconds: TimeInterval) -> String {
+        let minutes = max(1, Int((seconds / 60).rounded()))
+        if minutes < 60 { return minutes == 1 ? "1 minute" : "\(minutes) minutes" }
+        let hours = Int((seconds / 3600).rounded())
+        if hours < 48 { return hours == 1 ? "1 hour" : "\(hours) hours" }
+        return "\(Int((seconds / 86400).rounded())) days"
+    }
+
+    /// A day for the edge: "Today", "Yesterday", "Tomorrow", "Mon" within a week either side, else "Nov 16"
+    /// (", 2027" in another year).
+    private static func edgeDay(_ date: Date, _ now: Date, calendar: Calendar) -> String {
+        let d = daysFrom(date, now, calendar: calendar)
+        if d == 0 { return "Today" }
+        if d == 1 { return "Tomorrow" }
+        if d == -1 { return "Yesterday" }
+        if abs(d) < 7 { return shortDays[weekdayIndex(date, calendar: calendar)] }
+        return monthDay(date, calendar: calendar, year: !sameYear(date, now, calendar: calendar))
+    }
+
+    static func rowEdge(_ job: CronJob, now: Date = Date(), calendar: Calendar = .current, running: Bool = false) -> RowEdge? {
+        let state = jobState(job)
+        if running || state == "running" {
+            guard let claimed = PagesDate.parse(job.latestRunClaimedAt, calendar: calendar) else { return nil }
+            let out = now.timeIntervalSince(claimed)
+            // A claim older than a day is not this run's (a Run Now still out keeps the last claim until the list reloads).
+            guard out >= 0, out < 86400 else { return nil }
+            return RowEdge(text: "\(shortSpan(out)) so far", tone: .running, spoken: "running for \(spokenSpan(out))")
+        }
+        if state == "completed" {
+            guard let last = PagesDate.parse(job.lastRunAt, calendar: calendar) else { return nil }
+            let day = edgeDay(last, now, calendar: calendar)
+            return RowEdge(text: day, spoken: "last ran \(day)")
+        }
+        guard !["paused", "disabled"].contains(state), let next = PagesDate.parse(job.nextRunAt, calendar: calendar) else { return nil }
+        let late = now.timeIntervalSince(next)
+        if late > overdueGrace { return RowEdge(text: "\(shortSpan(late)) late", tone: .late, spoken: "\(spokenSpan(late)) late") }
+        if late >= 0 { return RowEdge(text: "Now", spoken: "due now") }
+        if skipsRuns(job, next: next, now: now, calendar: calendar) { return nil }   // the subtitle says "Skipped until …"
+        let ahead = -late
+        if ahead < 3600 {
+            let minutes = max(1, Int((ahead / 60).rounded()))
+            return RowEdge(text: "in \(minutes) min", spoken: "next in \(minutes) min")
+        }
+        let day = edgeDay(next, now, calendar: calendar)
+        let text = day == "Today" ? clock(next, calendar: calendar) : day
+        return RowEdge(text: text, spoken: "next \(day == "Today" ? "today at " + text : text)")
+    }
+
+    private static func skipsRuns(_ job: CronJob, next: Date, now: Date, calendar: Calendar) -> Bool {
+        let kind = job.schedule?.kind
+        guard kind == "cron" || (kind == nil && !(job.schedule?.expr ?? "").isEmpty), let expr = job.schedule?.expr, !expr.isEmpty else { return false }
+        return skippedRuns(expr, now: now, next: next, offset: writtenOffset(job.nextRunAt), calendar: calendar)
+    }
+
+    /// The row's second line with the edge drawn: the schedule in words alone. Only "Skipped until …" still follows
+    /// it, since the edge has no room to say a run is being skipped.
+    static func rowSchedule(_ job: CronJob, now: Date = Date(), calendar: Calendar = .current, running: Bool = false) -> String {
+        let schedule = scheduleWords(job, now: now, calendar: calendar)
+        if running || jobState(job) == "running" { return schedule }
+        let next = jobNextWords(state: jobState(job), schedule: job.schedule, nextRunAt: job.nextRunAt,
+                                scheduleWords: schedule, now: now, calendar: calendar)
+        return next.hasPrefix("Skipped") ? "\(schedule)\u{00A0}· \(next)" : schedule
+    }
+
     /// The row's coloured lead before its subtitle: "Running · ", "Last run failed · ", "Overdue · ", "Paused · " or
     /// nothing.
     enum RowLead: String, Sendable {

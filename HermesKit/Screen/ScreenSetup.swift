@@ -103,6 +103,15 @@ nonisolated enum ScreenSetupCopy {
     static func heading(controlOnly: Bool) -> String { controlOnly ? "Enable Screen Control" : "Set Up Viewing and Control" }
     static let how = "Hermes will install the helper, enable viewing and control, and check both permissions in one setup. Follow its progress in your bot’s chat."
     static let shares = "This shares your Mac’s entire screen and enables pointer and keyboard control for people with Screen access on your gateway. Approve Screen Recording to view, and Accessibility to click and type, on the Mac when prompted."
+    /// [screen-points] Owner 2026-11-10 (design pick 14): `how` and `shares` as three short points, each led by its
+    /// first words: what happens, what the Mac asks, and (the warning) what is shared and with whom.
+    struct Point: Sendable, Equatable { var symbol: String; var lead: String; var rest: String; var warning = false }
+    static let points = [
+        Point(symbol: "arrow.down.circle", lead: "Hermes installs a small helper", rest: " on your Mac and reports its progress in your bot’s chat."),
+        Point(symbol: "checkmark.circle", lead: "Your Mac asks you to approve", rest: " Screen Recording to view, and Accessibility to click and type."),
+        Point(symbol: "exclamationmark.triangle.fill", lead: "Your whole screen is shared,",
+              rest: " with pointer and keyboard control, with people who have Screen access on your gateway.", warning: true),
+    ]
     static let update = "Hermes will also check whether your gateway needs an update."
     static let requested = "Setup was requested in your bot’s chat. Hermes will report any permissions or requirements that still need attention."
     static let windows = "Live screen sharing isn’t available on Windows yet. Your bot’s latest screenshots will appear here."

@@ -327,7 +327,7 @@ import UIKit
         #expect(NewChatKeyBot.project(chosen: "/srv/q4", among: ["/srv/q4", "/srv/site"]) == "/srv/q4")
         #expect(NewChatKeyBot.project(chosen: "/srv/gone", among: ["/srv/q4"]) == nil, "a project no bot has: none")
         #expect(NewChatKeyBot.project(chosen: nil, among: ["/srv/q4"]) == nil)
-        #expect(NewChatKeyBot.Mode.allCases.map(\.title) == ["New Chat", "Bot Chat"], "Jack: ⌘N may open the bot's own chat")
+        #expect(NewChatKeyBot.Mode.allCases.map(\.title) == ["New Chat", "Bot Chat"], "a tester: ⌘N may open the bot's own chat")
     }
 
     @Test func everyShortcutHasATitleAndAnAction() {

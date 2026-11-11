@@ -22,6 +22,7 @@ import UIKit
 ///   2026-10-28 screenshots); `-HQDemoOpenGroups` opens every grouped line, `-HQDemoOpenMember <n>` then opens the
 ///   first group's n-th member (1 = the top one); `-HQDemoBotExchange` Hermes and Home's back-and-forth (2026-10-29)
 /// - `-HQDemoIdle` [idle] a bot left alone for ten days: scheduled runs and background updates, one a day (2026-11-10)
+/// - `-HQDemoWorkFold` [files] a long turn of wordless replies that each changed files, between helpers' deliveries (2026-11-10)
 /// - `-HQDemoRestated` Hermes's chat with a request it restated after compressing the chat (2026-10-30)
 /// - `-HQDemoShot <name>` the window as tmp/<name>.png 8 s after the chat opens
 /// - `-HQDemoPage <path>` (`-HQDemoOpenPage` opens it) Otto's reply with a `::preview` page card for the HTML file at <path> on this Mac (2026-10-31)

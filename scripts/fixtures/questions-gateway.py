@@ -13,7 +13,7 @@ Prompt keywords that make a turn ask: approve, approve-once, approve-rule, ask, 
 secret, unlock, login, code, setup, terminal, tour, two-approvals. "job applications" is the Tasks offer (hermes-hq-push
 0.9.34's Ask First): a line of reply, one multi-select clarify ("Want help with …?"), then tasks_add for what was picked.
 Controls (no auth, loopback): GET|POST /__fixture/ask, POST /__fixture/answer {id,result}, POST /__fixture/cancel
-{id,reason}, POST /__fixture/kick, POST /__fixture/config {approvals_timeout, declines_not_shown, capabilities,
+{id,reason}, POST /__fixture/kick, POST /__fixture/event {profile,type,payload}, POST /__fixture/config {approvals_timeout, declines_not_shown, capabilities,
 clarify_timeout, pane_timeout, reported_timeout (what /api/config says, for an Expired card)}, POST /__fixture/reset, GET /__fixture/requests.
 """
 import base64, hashlib, importlib.util, json, os, pathlib, re, socket, struct, threading, time, uuid
@@ -784,6 +784,12 @@ def handler(gateway):
                     return self.reply(200, {'ok': True, 'id': req.id})
                 ask_in_running(profile, body.get('kind', 'ask'))
                 return self.reply(200, {'ok': True})
+            if path == '/__fixture/event':
+                # [preview-tab] One event in a bot's live chat (e.g. preview.open {url, label}, preview.close {url}).
+                body = self.body(); profile = body.get('profile', LAST_PROFILE[0])
+                if profile not in voice.SIDS or not isinstance(body.get('type'), str): return self.reply(400, {'detail': 'profile and type'})
+                emit(profile, body['type'], body.get('payload') or {})
+                return self.reply(200, {'ok': True, 'profile': profile})
             if path == '/__fixture/answer':
                 body = self.body(); rid = body.get('id')
                 with LOCK:

@@ -17,7 +17,8 @@ struct PluginsSections: View {
                 // does), rather than the centred empty state with only Install from Git (stress test 2026-10-28 #90).
                 if model.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Section {
-                        Text(model.readOnly ? "\(model.botName) has no plugins." : "\(model.botName) has no plugins yet. Pick one below to add it.")
+                        // [plugin-rows] Owner 2026-11-10: one line; the heading above names the bot.
+                        Text(model.readOnly ? "\(model.botName) has no plugins." : "None yet. Pick one below to add it.")
                             .font(Font.hq(.subheadline)).foregroundStyle(Color.hqLabel2)
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.vertical, 4)

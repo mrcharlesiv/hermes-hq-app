@@ -30,6 +30,10 @@ extension CloudGatewayFlow {
                     navigation.popToViewController(gateway, animated: true)
                 }
             case .compose: present(from: router.presenter, services: services)
+            case .desktop(let id):
+                // [cloud-desktop] The agent's own Hermes Desktop, pushed over its page (Settings' stack on the Mac too).
+                guard let agent = model.agent(id), let url = CloudDesktopWeb.address(agent.dashboardURL) else { return }
+                router.push(CloudDesktopWebController(url: url, agentName: agent.name))
             }
         }
         model.onRenamed = { [weak router] id, name in

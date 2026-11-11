@@ -393,6 +393,15 @@ final class LiveChatSession: ChatSessionModel {
     /// Raw rows of the partial turn at the top of what is loaded (rows before the oldest loaded user/system row), so the
     /// next older page is folded together with them and a turn that crosses a page boundary reads as one reply.
     var headRows: [JSONValue] = []
+    /// [smooth-open] The saved copy's messages at the top of the transcript that no read has confirmed yet. The open's
+    /// first page (24 rows) often reaches less far back than the saved copy that was painted: those older messages stay
+    /// on screen instead of leaving and coming back with the next read (owner 2026-11-10: opening a bot "takes a second
+    /// to load, and it's not as smooth as it should be"). Paging counts none of them: the read of the rows above the
+    /// page puts the gateway's own in their place (`prependOlder`).
+    var cachedOlderIds = Set<String>()
+    var cachedOlderCount: Int {
+        cachedOlderIds.isEmpty ? 0 : messages.prefix(while: { cachedOlderIds.contains($0.id) }).count
+    }
     var newestSignature: String?
     var lastSyncAt: Date?
     var lastSyncIds: [String] = []
@@ -506,6 +515,15 @@ final class LiveChatSession: ChatSessionModel {
         paintFromCache()
     }
 
+    /// [smooth-open] The chat is about to be shown: its first page is asked for now, and the open takes the read over
+    /// (`HistoryFlights`) instead of asking once its screen has been pushed.
+    func readAhead() {
+        guard !started, !startsNew, let stored = storedSessionId, !stored.isEmpty else { return }
+        let client = self.client, profile = self.profile
+        HistoryFlights.shared.start(HistoryFlights.Key(account: account.id, profile: profile, storedId: stored),
+                                    { HistoryFlights.openRead(client: client, storedId: stored, profile: profile) }) { _ in }
+    }
+
     isolated deinit {
         AppLog.trace("chat", "chat released \(logIds): rows=\(messages.count), queued=\(queuedMessages.count), busy=\(turn.busy)")
         for task in [openTask, eventTask, connectionTask, interruptTask, watchdogTask, refreshTask, changedPassTask, turnEndTask,
@@ -540,6 +558,7 @@ final class LiveChatSession: ChatSessionModel {
         metaById = meta
         applyKnownMediaSizes()                                                                                 // [attachments]
         rebuildIndex()
+        cachedOlderIds = Set(window.map(\.id))            // [smooth-open] all of it is the saved copy until a read lands
         // Earlier messages are known only when the window left saved ones out (or the copy is a shortened one); else
         // the first page says. "Show earlier messages" flashed over a four-message chat until the gateway answered,
         // and could page nothing in before then anyway (`loadOlder` waits for the open) (Mac polish #24).
@@ -759,7 +778,7 @@ final class LiveChatSession: ChatSessionModel {
             do {
                 let (page, folded, _) = try await restTask.value
                 AppLog.trace("history", "open \(AppLog.tag(stored)): first page \(page.rows.count) rows, page id \(AppLog.tag(page.sessionId)), truncated=\(page.possiblyTruncated), \(AppLog.ms(since: openStart)) ms")
-                applyFirstPage(page, folded)
+                applyFirstPage(page, folded, keepCached: true)
                 firstPage = page
             } catch {
                 AppLog.note("history", "open \(AppLog.tag(stored)): first page failed after \(AppLog.ms(since: openStart)) ms: \(AppLog.scrub(String(describing: error)))")
@@ -800,7 +819,9 @@ final class LiveChatSession: ChatSessionModel {
             // turn's stored rows fold under it (not above a second copy of the prompt, verification round 2).
             let (extended, grew) = await extendBack(page, stored: stored, until: { $0.contains(where: LiveChatSession.isTurnStart) })
             AppLog.trace("history", "open mid-turn \(AppLog.tag(stored)): read back to the turn's prompt, \(page.rows.count) → \(extended.rows.count) rows, grew=\(grew)")
-            if grew, !Task.isCancelled { applyFirstPage(extended, await LiveChatSession.foldOffMain(extended.rows, accountId: account.id)) }
+            if grew, !Task.isCancelled {
+                applyFirstPage(extended, await LiveChatSession.foldOffMain(extended.rows, accountId: account.id), keepCached: true)
+            }
         }
         graftInflight(snapshot)
         tailSettled(snapshot)            // [offline] §6.3: an open that settles on an unsaved reply rechecks it
@@ -824,9 +845,7 @@ final class LiveChatSession: ChatSessionModel {
         scheduleFlush()
         saveCache()
         AppLog.trace("chat", "open settled \(logIds): \(messages.count) rows, hasOlder=\(hasOlder), busy=\(turn.busy), parked frames released, queued=\(queuedMessages.count), \(AppLog.ms(since: openStart)) ms")
-        if hasOlder && nextOffset < 120 && !restFailed && observing {
-            olderTask = Task { [weak self] in await self?.loadOlderPage(fill: true) }
-        }
+        if !restFailed { readOlderAfterOpen() }
         if !turn.busy { scheduleQueueDrain(after: .zero) }
         changes.markState()          // the open finished: the screen's skeleton (or its error) follows `openPhase`
         scheduleFlush()

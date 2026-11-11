@@ -96,6 +96,7 @@ enum DebugHooks {
 
     static func applyBeforeLaunch() {
         VoiceDebugHooks.applyBeforeLaunch()   // VOICE: -HQDebugMemo…, -HQDebugSendOnRelease, -HQDebugResetVoice
+        WordsBenchHook.applyBeforeLaunch()    // [more accurate words] -HQDebugWordsBench <speed>
         CapabilitiesDebugHooks.applyBeforeLaunch() // [capabilities] -HQDebugResetConnectApps, HQN_CAP_AUTH (App/Debug/CapabilitiesDebugHooks.swift)
         TalkDebugHooks.applyBeforeLaunch()    // [talk] -HQDebugTalk…, -HQDebugReadRepliesAloud (App/Debug/TalkDebugHooks.swift)
         IntentsDebugHooks.applyBeforeLaunch() // [intents] -HQDebugResetIntents, -HQDebugIntentsOut (App/Intents/IntentsDebugHooks.swift)
@@ -251,6 +252,10 @@ enum DebugHooks {
         if let state = defaults.string(forKey: "HQDebugCloudShot") {
             // Screenshots of Hermes Cloud… in one state, with made-up agents (App/Gateways/CloudGatewayFlow.swift).
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { CloudGatewayFlow.present(from: root, services: root.services, demo: state) }
+        }
+        if let address = defaults.string(forKey: "HQDebugCloudDesktop"), let url = URL(string: address) {
+            // [cloud-desktop] A Hermes Cloud agent's Hermes Desktop, opened at once (App/Gateways/CloudDesktopWeb.swift).
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { CloudDesktopWeb.present(gateway: url, name: "Hermes", from: root) }
         }
         if defaults.bool(forKey: "HQDebugGatewaysPage") {
             // Screenshots of Settings › Gateways (with `-HQDebugCloudHost YES`, its Manage on Hermes Cloud… entries).

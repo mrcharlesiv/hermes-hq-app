@@ -187,6 +187,10 @@ import Foundation
 
     private var answerer: ServerRequestAnswering? { client as? ServerRequestAnswering }
 
+    /// [preview-tab] Answers `preview.read` for a session (its runtime id) with the open Browser tab's page as JSON, or
+    /// nil when no tab of that chat is open in this app. Set by the app (App/Browser/PreviewTab.swift).
+    var previewReader: ((_ session: String, _ params: JSONValue) async -> String?)?
+
     // MARK: Chats
 
     func register(_ link: PromptChatLink) {
@@ -356,6 +360,20 @@ import Foundation
         let epoch = p["epoch"]?.int ?? 0
         let replayed = p["replayed"]?.bool == true
         guard !alreadyAnswered(id, deliveredOn: epoch) else { return }
+        if method == "preview.read", let previewReader {
+            // [preview-tab] The bot reads the Browser tab it opened in this chat (`desktop_preview` action=read): the
+            // page's text as Hermes Desktop answers it (`{value: JSON}`). No tab here: declined as before.
+            Task { [weak self] in
+                let value = await previewReader(session, params)
+                guard let self, !self.shutDown else { return }
+                if let value {
+                    self.sendResult(id, .object(["value": .string(value)]))
+                } else if self.answerer?.declinesNotShown == true {
+                    self.sendError(id, code: Self.notShownCode, message: Self.notShownMessage)
+                }
+            }
+            return
+        }
         if Self.windowOwned.contains(method) {
             // Q3: the phone shows no pane. A decline is one client's vote; with no decline support, stay silent.
             guard answerer?.declinesNotShown == true else { return }

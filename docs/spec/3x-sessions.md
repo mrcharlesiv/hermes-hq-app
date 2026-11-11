@@ -671,6 +671,14 @@ when there is one.
   and backgrounding.
 - If the picked bot leaves the roster or is hidden, the pick clears.
 - Compose with a chip picked: `SessionsOrganizer.compose()` skips Choose a Bot and calls `newChat(profile: botFilter)`.
+- 2026-11-10 (tester; owner: "one go-to"): Compose (the bar's button, the empty page's New Chat, ⇧⌘N) always
+  opens the one New Chat sheet (`SessionsOrganizer.presentNewChat`, `NewChatSheetView`). "Bot": the bots as pills, one
+  lit (the picked chip's, else the bot the sheet started with last, else Hermes); a tap only changes the bot. "Project ·
+  Tap one to start the chat": No Project, each project in a fixed order, New Project… last; a tap on a row starts the
+  chat there with the lit bot. The project that bot started in last carries "Last used" (`NewChatLast`, on the device).
+  The sheet is as tall as its rows. Settings › Chat › New Chat Asks for a Project off (`NewChatProjectChoice`, synced):
+  with a chip picked the chat starts in no project at once. ⌘N and a Home card's New Chat row never open the sheet.
+  Choose a Bot (the plain list) stays for a project's New Chat with no bot picked and Filter › Project › New Project….
 - **DECISION (Telegram and scheduled rows):** the owner's note lists "Telegram/One-off sections ignore the chip
   filter" as a known gap of the web. Native applies the chip to every row the list draws.
 

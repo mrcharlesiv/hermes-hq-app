@@ -1076,7 +1076,7 @@ nonisolated enum TodoReadable {
         return listedOnes == sentences ? trimmed : listedOnes.joined(separator: "\n\n")
     }
 
-    /// Sentences, cut only at ". " before a short "Name:" (so "J. Alexander's" and "Dr. Lee" stay whole), or before
+    /// Sentences, cut only at ". " before a short "Name:" (so "J. Smith's" and "Dr. Lee" stay whole), or before
     /// any sentence once the text is a run of them.
     static func split(_ text: String) -> [String] {
         var out: [String] = []

@@ -24,6 +24,15 @@ nonisolated enum ArtifactListWords {
     private static let runStamp = RX(#" · (?:[A-Z][a-z]{2,8},? )?[A-Z][a-z]{2} \d{1,2}(?:, \d{4})?,? \d{1,2}:\d{2}(?:\s?[AP]M)?$"#)
 
     /// "Hermes Projects · 6:02 AM": where it came from and when (a run title's own stamp removed).
+    /// [artifact-rows] Owner 2026-11-10 (design pick 10): the row's two halves, for the row that puts the time at its
+    /// trailing edge: the chat it came from ("" when untitled) and when ("6:20 PM" within the week, else a date).
+    static func parts(sessionTitle: String, timestamp: Double, now: Date = Date(), calendar: Calendar = .current) -> (chat: String, when: String) {
+        let date = Date(timeIntervalSince1970: timestamp / 1000)
+        let when = daysAgo(date, now, calendar: calendar) < 7 ? JobWords.clock(date, calendar: calendar)
+            : ListTime.string(date, now: now, calendar: calendar)
+        return (runStamp.replace(sessionTitle.pgTrim, with: "", all: false), when)
+    }
+
     static func subtitle(sessionTitle: String, timestamp: Double, now: Date = Date(), calendar: Calendar = .current) -> String {
         let date = Date(timeIntervalSince1970: timestamp / 1000)
         let when = daysAgo(date, now, calendar: calendar) < 7 ? JobWords.clock(date, calendar: calendar)

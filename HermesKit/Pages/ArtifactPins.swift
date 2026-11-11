@@ -34,6 +34,9 @@ nonisolated struct ArtifactPin: Codable, Sendable, Hashable, Identifiable {
     var pageTitle: String?
     /// [tiles] The job its page says keeps it up to date (`<meta name="hq-tile-job">`).
     var jobId: String?
+    /// [tile-versions] The version of its page that shows now, as last read from the bot's computer (`TileVersions`);
+    /// nil until the app has kept one.
+    var version: Int?
 
     var tileSize: PinTileSize { size ?? .small }
 
@@ -432,6 +435,13 @@ final class ArtifactPins {
               pins[index].pageTitle != head.title || pins[index].jobId != head.jobId else { return }
         pins[index].pageTitle = head.title
         pins[index].jobId = head.jobId
+        changed()
+    }
+
+    /// [tile-versions] The version that shows now (after one was kept, or a roll back).
+    func noteVersion(id: String, _ number: Int) {
+        guard number > 0, let index = pins.firstIndex(where: { $0.id == id }), pins[index].version != number else { return }
+        pins[index].version = number
         changed()
     }
 

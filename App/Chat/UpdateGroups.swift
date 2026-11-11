@@ -19,6 +19,13 @@ import Foundation
 // and last days ("Oct 26 – Nov 6"), the lines inside it go, and its card's rows say their days. A message that draws
 // nothing (a silent reply to a scheduled run) draws no day line either: its time alone stood as a line of its own.
 //
+// [files] A reply that did its work and said nothing draws a work line and, when it changed files, their card. The card
+// was a real row, so a long turn of such replies between helpers' deliveries stacked a card and a line for each (owner,
+// 2026-11-10, Otto's chat: "way too busy … all of that should be summed up into one"). The card of a reply whose other
+// rows all fold joins the run, and every card of one run is one member, "5 files changed", which opens on its files
+// (each opens the file) and Review Changes. A reply with words keeps its card under them, and so does a wordless reply
+// that stands by itself (its line and its card, nothing else in the run).
+//
 // The line belongs to the run's first small row's message (`<message id>|grp`, or the row's own id for a run of one).
 // Region rebuilds widen to every message a run touches (`widen`), so the line always counts what follows it. A run
 // longer than `reach` messages each way is cut there in a region rebuild (a full build isn't): its line may count short
@@ -35,6 +42,8 @@ import Foundation
 // answer about the flowers folded away: "never got an actual response from Hermes … I call that a big fail").
 // The bot's first reply after your message stays too when it's long (`answerLength`): that's the answer, and the
 // talk it starts is follow-up (owner, 2026-10-31, the answer about voice to text folded behind Otto's and Inbox's).
+// A reply written to the other bot ("Thanks, Otto. …", right after Otto's message) folds whatever follows it and
+// however long it is: it was never an answer to you (`Rows.writesToBot`; owner, 2026-11-11).
 
 nonisolated struct UpdatesGroup: Hashable {
     enum Mark: Hashable {
@@ -79,10 +88,12 @@ nonisolated struct UpdateMemberRow {
     var thought: String? = nil
     /// The update as its own row (Copy, Read Aloud and Share read its words); nil for a work line or a note.
     var result: BackgroundResultRow? = nil
+    /// [files] "5 files changed": the files, listed once it is open (one opens the file), then Review Changes.
+    var files: [ChangedFile] = []
 
-    /// A tap shows more: its steps (one step: the step's sheet), or its whole words when they say more than the preview
-    /// (the layout also opens one whose preview is cut short).
-    var opens: Bool { !steps.isEmpty || thought != nil || (!full.isEmpty && full != preview) }
+    /// A tap shows more: its steps (one step: the step's sheet), its files, or its whole words when they say more than
+    /// the preview (the layout also opens one whose preview is cut short).
+    var opens: Bool { !steps.isEmpty || thought != nil || !files.isEmpty || (!full.isEmpty && full != preview) }
 }
 
 nonisolated enum UpdateGroups {
@@ -122,7 +133,16 @@ nonisolated enum UpdateGroups {
         }
 
         /// The row folds into a run: a small row, or one of the bot's replies inside a talk with another bot.
-        func small(_ m: Member) -> Bool { UpdateGroups.isSmall(at(m.message)[m.row]) || interim(m) }
+        func small(_ m: Member) -> Bool { UpdateGroups.isSmall(at(m.message)[m.row]) || interim(m) || foldsFiles(m) }
+
+        /// [files] The files card of a reply whose other rows all fold (its work line, or nothing at all): it folds too.
+        func foldsFiles(_ m: Member) -> Bool {
+            let own = at(m.message)
+            guard own[m.row].changedFiles != nil else { return false }
+            return own.indices.allSatisfy { r in
+                r == m.row || UpdateGroups.isSmall(own[r]) || interim(Member(message: m.message, row: r))
+            }
+        }
 
         private var interims: [Member: Bool] = [:]
 
@@ -139,6 +159,7 @@ nonisolated enum UpdateGroups {
 
         private func findInterim(_ m: Member) -> Bool {
             guard input.room == nil, UpdateGroups.isBotsReply(at(m.message)[m.row]) else { return false }
+            if writesToBot(m.message) { return true }
             if answersYou(m) { return false }
             let messages = input.messages
             var talked = false, answered = false
@@ -155,6 +176,39 @@ nonisolated enum UpdateGroups {
                 for row in own[..<(i == m.message ? m.row : own.count)].reversed() {
                     if UpdateGroups.endsTalk(row) { return false }
                     if UpdateGroups.isBotTalk(row) { return true }
+                }
+            }
+            return false
+        }
+
+        private var toBot: [Int: Bool] = [:]
+
+        /// [exchange] The reply is written to the bot whose message it answers, not to you: that bot's message is the
+        /// last thing before it (a work line or a note between them aside) and its first words speak to that bot by
+        /// name ("Thanks, Otto. Your diagnosis was right…"). Hermes hands such a reply back to the bot that wrote; as a
+        /// bubble it read as an answer to you (owner, 2026-11-11: "a message to a bot made it in to the chat instead of
+        /// the little pill"). A reply that only answers a bot's message keeps its bubble: it may be the news that bot
+        /// brought you ("The flowers are at the door"). A reply still being written stays a bubble until it ends.
+        func writesToBot(_ message: Int) -> Bool {
+            if let known = toBot[message] { return known }
+            let found = findWritesToBot(message)
+            toBot[message] = found
+            return found
+        }
+
+        private func findWritesToBot(_ message: Int) -> Bool {
+            guard !input.messages[message].isStreaming,
+                  let first = at(message).first(where: UpdateGroups.isBotsReply), case .bubble(let b) = first.kind else { return false }
+            for i in stride(from: message - 1, through: max(0, message - 8), by: -1) {
+                for row in at(i).reversed() {
+                    guard case .backgroundResult(let from) = row.kind, UpdateGroups.isBotTalk(row) else {
+                        if UpdateGroups.isSmall(row), !UpdateGroups.endsTalk(row) { continue }
+                        return false
+                    }
+                    guard !from.sentTo else { return false }
+                    let title = BackgroundResults.split(from.title).head
+                    let names = [from.face?.name, from.face?.profile, title.hasPrefix("From ") ? String(title.dropFirst(5)) : nil]
+                    return BotDMs.speaksTo(names.compactMap { $0 }, in: b.text)
                 }
             }
             return false
@@ -282,6 +336,9 @@ nonisolated enum UpdateGroups {
         var plan = Plan()
         var run: [Member] = []
         func close() {
+            // [files] One wordless reply by itself keeps its card under its line: the card folds only into a run that
+            // holds more than its own reply.
+            if Set(run.map(\.message)).count == 1 { run.removeAll { rows.at($0.message)[$0.row].changedFiles != nil } }
             guard !run.isEmpty else { return }
             for m in run { plan.byMember[m] = plan.groups.count }
             plan.groups.append(Group(members: run))
@@ -370,12 +427,13 @@ nonisolated enum UpdateGroups {
         switch row.kind {
         case .backgroundResult(let b): return b.sentTo ? 4 : b.delivery ? 5 : b.cron ? 2 : 3
         case .toolRun: return 1
+        case .activity(.changedFiles): return 2   // [files] ahead of the work line that made them
         default: return 0
         }
     }
 
     private static func items(_ group: Group, rows: Rows) -> [Item] {
-        group.members.compactMap { member in
+        let all: [Item] = group.members.compactMap { member in
             let row = rows.at(member.message)[member.row]
             switch row.kind {
             case .backgroundResult(let b):
@@ -386,6 +444,9 @@ nonisolated enum UpdateGroups {
                 return Item(id: row.id, original: row, message: member.message, title: line.title, mark: .glyph(line.glyph), rank: 1)
             case .notice(let text):
                 return Item(id: row.id, original: row, message: member.message, title: text, mark: .glyph(.note), rank: 0)
+            case .activity(.changedFiles(let c)):
+                return Item(id: row.id, original: row, message: member.message, title: ChangedFiles.title(c.files.count),
+                            mark: .glyph(.file), rank: rank(row))
             case .bubble:
                 // [exchange] The bot's own reply to you, under its name and face.
                 let input = rows.input
@@ -395,6 +456,36 @@ nonisolated enum UpdateGroups {
                 return nil
             }
         }
+        return summed(all, input: rows.input)
+    }
+
+    /// [files] Every files card of the run as one member, where the last of them was: a file changed by two replies is
+    /// one row with both replies' edits and lines. It keeps the last card's id (its expansion key) and message.
+    private static func summed(_ all: [Item], input: ChatRowBuilder.Input) -> [Item] {
+        let cards = all.indices.filter { all[$0].original.changedFiles != nil }
+        guard cards.count > 1, let last = cards.last else { return all }
+        var order: [String] = []
+        var byPath: [String: ChangedFile] = [:]
+        for i in cards {
+            for file in all[i].original.changedFiles?.files ?? [] {
+                if var known = byPath[file.path] {
+                    known.added += file.added
+                    known.removed += file.removed
+                    known.edits += file.edits
+                    byPath[file.path] = known
+                } else {
+                    order.append(file.path)
+                    byPath[file.path] = file
+                }
+            }
+        }
+        let files = order.compactMap { byPath[$0] }
+        var out = all
+        let row = ActivityRows.changedFilesRow(id: all[last].id, messageId: all[last].original.messageId, files: files, input: input)
+        out[last] = Item(id: row.id, original: row, message: all[last].message, title: ChangedFiles.title(files.count),
+                         mark: .glyph(.file), rank: rank(row))
+        for i in cards.dropLast().reversed() { out.remove(at: i) }
+        return out
     }
 
     /// [exchange] "With Home", "With Home and App", "With 3 bots" (as "From Home" and "To Home" read; short enough to
@@ -513,6 +604,10 @@ nonisolated enum UpdateGroups {
             }
         case .notice:
             row.notice = true
+        case .activity(.changedFiles(let c)):
+            // [files] Its names are the preview; opened, a row per file.
+            row.files = c.files
+            row.preview = c.files.map(\.name).joined(separator: ", ")
         case .bubble(let b):
             // [exchange] The bot's reply: its words open formatted, as an update's do; Copy and Read Aloud read them.
             let words = SpacedText.repair(b.text)
@@ -531,6 +626,7 @@ nonisolated enum UpdateGroups {
         h.combine(row.day)
         for call in row.steps { h.combine(call.id); h.combine(call.state); RowHash.add(call.title, to: &h) }
         RowHash.add(row.thought ?? "", to: &h)
+        h.combine(row.files)
         var variant = Hasher()
         variant.combine(expanded)
         variant.combine(first)

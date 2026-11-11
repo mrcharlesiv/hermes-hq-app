@@ -3640,6 +3640,12 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
 
     func chatCellOpenStep(rowId: String, index: Int) {
         guard let row = rows.first(where: { $0.id == rowId }) else { return }
+        // [files] A folded "N files changed" member: one of its files, or its last row, Review Changes.
+        if case .updateMember(let member) = row.kind, !member.files.isEmpty {
+            if index < member.files.count { activityCellOpenFile(path: member.files[index].path) }
+            else { activityCellReviewChanges(highlighting: nil) }
+            return
+        }
         let tools: [ToolCall]
         switch row.kind {
         case .toolRun(let run): tools = run.tools
@@ -3728,7 +3734,13 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     }
 
     func chatCellErrorDetails(rowId: String, details: String) {
-        present(ChatErrorDetailsSheet.make(details: details), animated: true)
+        // [error-words] Try Again in the sheet is the error card's own Retry, offered where that is (not while a turn runs).
+        let canRetry = !session.isRunning && rows.contains { row in
+            guard row.id == rowId, case .error = row.kind else { return false }
+            return true
+        }
+        present(ChatErrorDetailsSheet.make(details: details, retry: canRetry ? { [weak self] in self?.chatCellRetry(rowId: rowId) } : nil),
+                animated: true)
     }
 
     func chatCellOpenTable(_ table: MarkdownTable) {   // [transcript] L309

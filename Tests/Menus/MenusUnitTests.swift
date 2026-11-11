@@ -229,6 +229,41 @@ struct MenusStoreTests {
         #expect(ModelMenuContext.favorites(keys: keys, catalog: catalog, knownProviders: nil) == catalog)
     }
 
+    /// [ghost-stars] Tester 2026-11-10: "the ghost favorites are still there". A kept provider's dropped model
+    /// stayed (only providers were remembered), and a catalog read before a provider was removed still listed its stars.
+    @Test func ghostStarsStayOut() {
+        let keys = ["commandcode::deepseek-v4.1-flash", "clinepass::deepseek-v4-pro", "clinepass::glm-5.3"]
+        // Clinepass is still there, but the last catalog didn't list its DeepSeek V4 Pro.
+        #expect(ModelMenuContext.favorites(keys: keys, catalog: nil, knownProviders: ["clinepass"], missing: ["clinepass::deepseek-v4-pro"])
+                    .map(\.key) == ["clinepass::glm-5.3"])
+        #expect(ModelMenuContext.favorites(keys: keys, catalog: nil, knownProviders: nil, missing: [keys[0]]).map(\.key) == Array(keys[1...]))
+        // An older catalog still lists Commandcode, removed in Settings since.
+        let catalog = ModelSheetModel.favoritesFromKeys(keys)
+        #expect(ModelMenuContext.favorites(keys: keys, catalog: catalog, knownProviders: ["clinepass"]).map(\.provider)
+                == ["clinepass", "clinepass"])
+    }
+
+    @Test func missingStarsAndRemovedProviders() {
+        let defaults = freshDefaults()
+        let prefs = ModelPrefs(accountId: "http://a|x", defaults: defaults)
+        #expect(prefs.missingStars(profile: "").isEmpty)
+        prefs.setMissingStars(["a::m", "b::n"], profile: "")
+        prefs.setMissingStars(["c::o"], profile: "coder")
+        #expect(prefs.missingStars(profile: "") == ["a::m", "b::n"])
+        prefs.setMissingStars([], profile: "")
+        #expect(prefs.missingStars(profile: "").isEmpty && prefs.missingStars(profile: "coder") == ["c::o"])
+        prefs.clearFavoritesAndRecents()
+        #expect(prefs.missingStars(profile: "coder").isEmpty)
+
+        prefs.removeKnownProvider("nous")   // nothing read yet: nothing to do
+        #expect(prefs.knownProviders(profile: "") == nil)
+        prefs.setKnownProviders(["nous", "clinepass"], profile: "")
+        prefs.setKnownProviders(["clinepass"], profile: "coder")
+        prefs.removeKnownProvider("clinepass")
+        #expect(prefs.knownProviders(profile: "") == ["nous"])
+        #expect(prefs.knownProviders(profile: "coder") == [])
+    }
+
     @Test func knownProvidersPerProfileAndClear() {
         let defaults = freshDefaults()
         let prefs = ModelPrefs(accountId: "http://a|x", defaults: defaults)
@@ -508,8 +543,8 @@ struct MenusTranscriptTests {
     }
 
     @Test func readableVector() {
-        let md = "- **Brandy:** you told her\n## Next\nSee [the doc](https://x.test) and `npm i`\n```\nconst a = **b**\n```"
-        #expect(ChatTranscript.readableText(md) == "• Brandy: you told her\nNext\nSee the doc (https://x.test) and npm i\nconst a = **b**")
+        let md = "- **Dana:** you told her\n## Next\nSee [the doc](https://x.test) and `npm i`\n```\nconst a = **b**\n```"
+        #expect(ChatTranscript.readableText(md) == "• Dana: you told her\nNext\nSee the doc (https://x.test) and npm i\nconst a = **b**")
         #expect(ChatTranscript.readableText("[https://a.b](https://a.b) *em* _un_ ~~gone~~") == "https://a.b em un gone")
     }
 
@@ -595,9 +630,9 @@ struct MenusReviewRoundTwoTests {
         let stored = "MEDIA:\"/Users/me/.hermes/uploads/voice-memo.m4a\"\n\nVoice memo transcript: Remind me to review the pump quote."
         let memo = ChatMessage(id: "u", role: .user, parts: [.text(stored)], timestamp: nil, rowId: 1)
         #expect(ChatMenus.copyText(memo) == "Remind me to review the pump quote.")
-        let typed = ChatMessage(id: "u2", role: .user, parts: [.text("MEDIA:\"/tmp/voice-memo-2.m4a\"\nVoice memo transcript: Call Ivy\n\nand Brandy")],
+        let typed = ChatMessage(id: "u2", role: .user, parts: [.text("MEDIA:\"/tmp/voice-memo-2.m4a\"\nVoice memo transcript: Call Ivy\n\nand Dana")],
                                 timestamp: nil, rowId: 2)
-        #expect(ChatMenus.copyText(typed) == "Call Ivy\n\nand Brandy")
+        #expect(ChatMenus.copyText(typed) == "Call Ivy\n\nand Dana")
         let silent = ChatMessage(id: "u3", role: .user, parts: [.text("MEDIA:\"/tmp/voice-memo.wav\"\nVoice memo transcript: (unavailable)")],
                                  timestamp: nil, rowId: 3)
         #expect(ChatMenus.copyText(silent) == "Voice Memo: (no transcript)")

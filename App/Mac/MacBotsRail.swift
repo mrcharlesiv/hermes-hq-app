@@ -25,8 +25,22 @@ enum MacBotsRail {
     /// [mac-layout] The open sidebar's bot row (owner 2026-11-03 "I like the bots in the sidebar"): a face and its name
     /// on one line, Slack's channel rows, at the places' own row height.
     /// [density] Theme › Density › Compact (the iOS look) makes them smaller, as it does the iPhone's Bots rows.
-    static var rowFace: CGFloat { ((Density.compact ? 22 : 28) * MacSidebar.chrome).rounded() }
-    static var sidebarRowHeight: CGFloat { ((Density.compact ? 32 : 40) * MacSidebar.chrome).rounded() }
+    /// [sidebar-size] Owner 2026-11-10: the bots and the chats under them were "so tiny and hard to read … make them
+    /// the proper size". The bots are what the sidebar is for, so their rows take macOS's large sidebar size (15 pt
+    /// names, 26 pt faces, 34 pt rows on the screen: 19.5 / 34 / 44 here at 77 %), and their chats the standard one
+    /// (13 pt titles in 28 pt rows, what the places below use). Before: 13 pt names, and chat titles at 11.5 pt with
+    /// 9.6 pt times, under the Mac's own body size. Compact keeps a step under each.
+    static var rowFace: CGFloat { ((MacSidebar.tidy ? (Density.compact ? 28 : 34) : (Density.compact ? 22 : 28)) * MacSidebar.chrome).rounded() }
+    static var sidebarRowHeight: CGFloat {
+        MacSidebar.tidy ? ((Density.compact ? 38 : 44) * MacSidebar.chrome).rounded() : ((Density.compact ? 32 : 40) * MacSidebar.chrome).rounded()
+    }
+    static var nameSize: CGFloat { MacSidebar.tidy ? (Density.compact ? 18 : 19.5) : (Density.compact ? 15.5 : 17) }
+    /// Where a bot's name and its chats' titles start: clear of the bigger face (which stays centred on the places'
+    /// icon column), not the places' own label column, which the face now reaches.
+    static var nameLeading: CGFloat {
+        guard MacSidebar.tidy else { return MacSidebar.labelLeading }
+        return max(MacSidebar.labelLeading, (MacSidebar.iconLeading + MacSidebar.iconColumn / 2 + (rowFace + 4) / 2 + 8).rounded())
+    }
 
     /// [mac-layout] The groups with their list headings, for the open sidebar's section titles (the rail draws a line).
     /// An empty title: a group drawn with no heading (Group By › None's). `block`: the group's list block (a user section's
@@ -175,12 +189,28 @@ final class MacRailHead: UIControl {
                 face.centerXAnchor.constraint(equalTo: leadingAnchor, constant: MacSidebar.iconLeading + MacSidebar.iconColumn / 2),
                 face.centerYAnchor.constraint(equalTo: centerYAnchor),
                 face.widthAnchor.constraint(equalToConstant: size + 4), face.heightAnchor.constraint(equalToConstant: size + 4),
-                name.leadingAnchor.constraint(equalTo: leadingAnchor, constant: MacSidebar.labelLeading),
-                name.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
-                status.leadingAnchor.constraint(equalTo: name.leadingAnchor),
-                status.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
-                status.topAnchor.constraint(equalTo: name.bottomAnchor, constant: 1),
+                name.leadingAnchor.constraint(equalTo: leadingAnchor, constant: MacBotsRail.nameLeading),
             ])
+            // [sidebar-tidy] Owner 2026-11-10 ("I liked your changes you had before", the tidied mockup): "Working…"
+            // on the name's own line, at the row's end, so every bot row keeps one height and the list doesn't jump
+            // when a bot starts. Only ever that one word, which fits whole: the running step (the words that were cut
+            // short there on 2026-11-09) is the row's tooltip.
+            if MacSidebar.tidy {
+                status.setContentCompressionResistancePriority(.required, for: .horizontal)
+                status.setContentHuggingPriority(.required, for: .horizontal)
+                NSLayoutConstraint.activate([
+                    status.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+                    status.centerYAnchor.constraint(equalTo: centerYAnchor),
+                    name.trailingAnchor.constraint(lessThanOrEqualTo: status.leadingAnchor, constant: -8),
+                ])
+            } else {
+                NSLayoutConstraint.activate([
+                    name.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
+                    status.leadingAnchor.constraint(equalTo: name.leadingAnchor),
+                    status.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
+                    status.topAnchor.constraint(equalTo: name.bottomAnchor, constant: 1),
+                ])
+            }
             nameCentre = name.centerYAnchor.constraint(equalTo: centerYAnchor)
             rowHeight = heightAnchor.constraint(equalToConstant: MacBotsRail.sidebarRowHeight)
             nameCentre?.isActive = true
@@ -268,7 +298,10 @@ final class MacRailHead: UIControl {
             }
             let working = status.text != nil
             toolTip = working ? status.text : nil   // the whole step, where the line is still too long for the row
-            if working == status.isHidden {
+            if MacSidebar.tidy {
+                if working { status.text = "Working…" }   // [sidebar-tidy] the step itself is the tooltip above
+                status.isHidden = !working
+            } else if working == status.isHidden {
                 status.isHidden = !working
                 nameCentre?.constant = working ? -Self.workingLine / 2 : 0
                 rowHeight?.constant = MacBotsRail.sidebarRowHeight + (working ? Self.workingLine - 4 : 0)
@@ -306,8 +339,8 @@ final class MacRailHead: UIControl {
             // The places' own mark (`MacSelection`): one kind of selection down the whole sidebar.
             backgroundColor = MacSelection.fill(selected: isMarked, pressed: isHighlighted, in: .sidebar) ?? (hovered ? Self.rowHover : .clear)
             layer.cornerRadius = MacSelection.radius
-            name.font = MacSidebar.font(Density.compact ? 15.5 : 17, weight: isMarked || unread ? .semibold : .regular)
-            status.font = MacSidebar.font(13)
+            name.font = MacSidebar.font(MacBotsRail.nameSize, weight: isMarked || unread ? .semibold : .regular)
+            status.font = MacSidebar.font(MacSidebar.tidy ? 14.5 : 13)
             // Mac polish #52: the accent word on the open row's accent mark read at about 3:1; there it takes the label's.
             status.textColor = isMarked ? HQPalette.label : HQPalette.tint
             return
@@ -344,7 +377,7 @@ final class MacRailAdd: UIButton {
         isPointerInteractionEnabled = true
         showsMenuAsPrimaryAction = true
         self.menu = UIMenu(children: [UIDeferredMenuElement.uncached { done in done(menu()) }])
-        heightAnchor.constraint(equalToConstant: titled ? MacBotsRail.sidebarRowHeight : MacBotsRail.rowHeight).isActive = true
+        heightAnchor.constraint(equalToConstant: titled ? MacSidebar.openRowHeight : MacBotsRail.rowHeight).isActive = true   // [sidebar-size] New Bot keeps the places' height
         if titled { contentHorizontalAlignment = .leading }
         recolor()
     }
@@ -357,7 +390,7 @@ final class MacRailAdd: UIButton {
         config.baseForegroundColor = HQPalette.label2
         if titled {
             var words = AttributedString("New Bot")
-            words.font = MacSidebar.font(17)
+            words.font = MacSidebar.font(MacSidebar.placeSize)
             config.attributedTitle = words
             config.imagePadding = 12
             config.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 14, bottom: 0, trailing: 8)
@@ -418,7 +451,7 @@ final class MacRailGateway: UIButton {
         tile.layer.cornerCurve = .continuous
         glyph.image = UIImage(systemName: "network", withConfiguration: UIImage.SymbolConfiguration(pointSize: 13 * chrome, weight: .semibold))
         glyph.contentMode = .center
-        name.font = MacSidebar.font(17, weight: .semibold)
+        name.font = MacSidebar.font(MacSidebar.placeSize, weight: .semibold)
         name.lineBreakMode = .byTruncatingTail
         name.adjustsFontSizeToFitWidth = true
         name.minimumScaleFactor = MacSidebar.shrink(name.font, least: 0.85)
@@ -566,7 +599,7 @@ final class MacSidebarHeading: UIControl {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
     func recolor() {
-        label.font = MacSidebar.font(13.5, weight: .semibold)
+        label.font = MacSidebar.font(MacSidebar.sized(13.5, 14.5), weight: .semibold)
         label.textColor = HQPalette.label2
         chevron.image = UIImage(systemName: isFolded ? "chevron.right" : "chevron.down",
                                 withConfiguration: UIImage.SymbolConfiguration(pointSize: 10 * MacSidebar.chrome, weight: .semibold))
@@ -645,10 +678,10 @@ final class MacSidebarTools: UIView {
         find.baseForegroundColor = HQPalette.label2
         if !folded {
             var words = AttributedString("Search")
-            words.font = MacSidebar.font(15.5)
+            words.font = MacSidebar.font(MacSidebar.sized(15.5, 17))
             find.attributedTitle = words
             var key = AttributedString("⌘K")
-            key.font = MacSidebar.font(13)
+            key.font = MacSidebar.font(MacSidebar.sized(13, 14.5))
             find.attributedSubtitle = nil
             find.imagePadding = 6
             find.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 10, bottom: 0, trailing: 10)
@@ -658,7 +691,7 @@ final class MacSidebarTools: UIView {
             search.contentHorizontalAlignment = .leading
             search.configuration = find
             shortcut.text = "⌘K"
-            shortcut.font = MacSidebar.font(13)
+            shortcut.font = MacSidebar.font(MacSidebar.sized(13, 14.5))
             shortcut.textColor = HQPalette.label3
             if shortcut.superview == nil {
                 shortcut.translatesAutoresizingMaskIntoConstraints = false
@@ -711,7 +744,9 @@ final class MacSidebarChat: UIControl {
     private var hovered = false
     var isMarked = false { didSet { if isMarked != oldValue { recolor() } } }
 
-    static var rowHeight: CGFloat { ((Density.compact ? 28 : 32) * MacSidebar.chrome).rounded() }   // with the 2 pt the stack no longer puts between chat rows
+    static var rowHeight: CGFloat { ((MacSidebar.tidy ? (Density.compact ? 32 : 36) : (Density.compact ? 28 : 32)) * MacSidebar.chrome).rounded() }   // with the 2 pt the stack no longer puts between chat rows; [sidebar-size]
+    static var titleSize: CGFloat { MacSidebar.tidy ? (Density.compact ? 15.5 : 17) : (Density.compact ? 14 : 15) }
+    static var timeSize: CGFloat { MacSidebar.tidy ? 14 : 12.5 }
     static var lineX: CGFloat { MacSidebar.iconLeading + MacSidebar.iconColumn / 2 }
 
     init(bot: String, look: Look) {
@@ -732,7 +767,7 @@ final class MacSidebarChat: UIControl {
         NSLayoutConstraint.activate([
             content.topAnchor.constraint(equalTo: topAnchor), content.bottomAnchor.constraint(equalTo: bottomAnchor),
             content.leadingAnchor.constraint(equalTo: leadingAnchor), content.trailingAnchor.constraint(equalTo: trailingAnchor),
-            backing.leadingAnchor.constraint(equalTo: leadingAnchor, constant: MacSidebar.labelLeading - 6),
+            backing.leadingAnchor.constraint(equalTo: leadingAnchor, constant: MacBotsRail.nameLeading - 6),
             backing.trailingAnchor.constraint(equalTo: trailingAnchor),
             backing.topAnchor.constraint(equalTo: topAnchor, constant: 1),
             backing.heightAnchor.constraint(equalToConstant: Self.rowHeight - 2),
@@ -802,10 +837,10 @@ private struct MacSidebarChatContent: View {
             switch look.kind {
             case .chat(let session):
                 if session.pinned {
-                    Image(systemName: "pin.fill").font(Font(MacSidebar.font(10.5) as CTFont)).foregroundStyle(Color.hqLabel3)
+                    Image(systemName: "pin.fill").font(Font(MacSidebar.font(MacSidebar.tidy ? 12 : 10.5) as CTFont)).foregroundStyle(Color.hqLabel3)
                 }
                 Text(session.title)
-                    .font(Font(MacSidebar.font(Density.compact ? 14 : 15, weight: session.unread ? .semibold : .regular) as CTFont))
+                    .font(Font(MacSidebar.font(MacSidebarChat.titleSize, weight: session.unread ? .semibold : .regular) as CTFont))
                     .foregroundStyle(Color.hqLabel)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -817,24 +852,24 @@ private struct MacSidebarChatContent: View {
                         .frame(width: 7 * MacSidebar.chrome, height: 7 * MacSidebar.chrome)
                 }
                 Text(ListTime.string(session.lastActive))
-                    .font(Font(MacSidebar.font(12.5) as CTFont))
+                    .font(Font(MacSidebar.font(MacSidebarChat.timeSize) as CTFont))
                     .monospacedDigit()
                     .foregroundStyle(Color.hqLabel2)
                     .lineLimit(1)
                     .fixedSize()
             case .more(let count):
-                Text("\(count) more").font(Font(MacSidebar.font(14, weight: .medium) as CTFont))
+                Text("\(count) more").font(Font(MacSidebar.font(MacSidebar.tidy ? 15.5 : 14, weight: .medium) as CTFont))
                 Image(systemName: "chevron.right").font(Font(MacSidebar.font(11, weight: .semibold) as CTFont))
                 Spacer(minLength: 0)
             }
         }
         .foregroundStyle(Color.hqTintText)
-        .padding(.leading, MacSidebar.labelLeading)
+        .padding(.leading, MacBotsRail.nameLeading)
         .padding(.trailing, 10)
         .frame(maxWidth: .infinity, minHeight: MacSidebarChat.rowHeight, maxHeight: MacSidebarChat.rowHeight)
         .overlay(alignment: .bottom) {
             if look.style == .dividers, !look.last, case .chat = look.kind {
-                Rectangle().fill(Color.hqStroke).frame(height: 0.5).padding(.leading, MacSidebar.labelLeading)
+                Rectangle().fill(Color.hqStroke).frame(height: 0.5).padding(.leading, MacBotsRail.nameLeading)
             }
         }
         .padding(.bottom, look.last ? BotChatsMetrics.tail : 0)
@@ -871,7 +906,7 @@ final class MacSidebarEmptyHint: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
     func recolor() {
-        label.font = MacSidebar.font(12.5)
+        label.font = MacSidebar.font(MacSidebar.sized(12.5, 15))
         label.textColor = HQPalette.label3
     }
 }

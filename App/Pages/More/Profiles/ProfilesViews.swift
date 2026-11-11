@@ -112,25 +112,38 @@ struct ProfileRowView: View {
             Button {
                 model.open(row)
             } label: {
-                HStack(spacing: 12) {
-                    HeadImage(raw: model.bot(row)?.head, profile: row.name, size: 40)
-                        .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(title)
-                            .font(Font.hq(.body))
-                            .foregroundStyle(Color.hqLabel)
-                            .lineLimit(3)
-                        Text(subtitle)
-                            .font(Font.hq(.footnote))
-                            .foregroundStyle(Color.hqLabel2)
-                            // [mac] Stress test 2026-10-28 #21: one line, cut at the end, in a narrow column.
-                            .lineLimit(DeviceWord.isMac ? 1 : nil)
-                            .truncationMode(.tail)
+                // [profile-rows] Owner 2026-11-10 (design pick 28): one line a row, the model and skills at the trailing
+                // edge, a 30 pt face, 8 pt above and below. A name and words too long to share the line (and every
+                // row at the larger text sizes) keep the two-line row.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) {
+                        HeadImage(raw: model.bot(row)?.head, profile: row.name, size: HQFont.scaled(30))
+                            .accessibilityHidden(true)
+                        Text(title).font(Font.hq(.body)).foregroundStyle(Color.hqLabel).lineLimit(1).fixedSize()
+                        Spacer(minLength: 12)
+                        Text(subtitle).font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2).lineLimit(1).fixedSize()
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .multilineTextAlignment(.leading)
+                    .padding(.vertical, 8)
+                    HStack(spacing: 12) {
+                        HeadImage(raw: model.bot(row)?.head, profile: row.name, size: 40)
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(title)
+                                .font(Font.hq(.body))
+                                .foregroundStyle(Color.hqLabel)
+                                .lineLimit(3)
+                            Text(subtitle)
+                                .font(Font.hq(.footnote))
+                                .foregroundStyle(Color.hqLabel2)
+                                // [mac] Stress test 2026-10-28 #21: one line, cut at the end, in a narrow column.
+                                .lineLimit(DeviceWord.isMac ? 1 : nil)
+                                .truncationMode(.tail)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .multilineTextAlignment(.leading)
+                    }
+                    .padding(.vertical, 12)
                 }
-                .padding(.vertical, 12)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)

@@ -144,6 +144,8 @@ final class ProvidersModel {
     private func forgetIfGone(_ id: String) {
         guard row(id) == nil else { return }
         update { $0.forget(provider: id) }
+        // [ghost-stars] Its starred models leave the Switch Model menus now, not after each chat's next catalog read.
+        if let account { ModelPrefs(accountId: account).removeKnownProvider(id) }
     }
 
     private func remove(_ row: ManagedProvider, keys: [String], signOut: Bool, done: () -> Void) async {
@@ -299,23 +301,40 @@ private struct ProviderListRow: View {
 
     var body: some View {
         Button(action: open) {
+            // [provider-rows] Owner 2026-11-10 (design pick 4): two lines a row. How many models show stands at the
+            // trailing edge of the name's line (it was a third line), and a dot leads the second line: green, or
+            // orange with an orange "No models" when the provider has nothing to pick from.
+            let edge = ProviderList.shownEdge(row, catalog: catalog, prefs: prefs)
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(row.name(prefs)).foregroundStyle(Color.hqLabel).fixedSize(horizontal: false, vertical: true)
-                    Text(row.sourceLine).font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2).lineLimit(1)
-                    Text(removing ? "Removing…" : ProviderList.shownLine(row, catalog: catalog, prefs: prefs))
-                        .font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2).lineLimit(1)
-                }
-                Spacer(minLength: 8)
-                if row.endpoint?.isCurrent == true {
-                    Text("Default").font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Text(row.name(prefs)).foregroundStyle(Color.hqLabel).fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(removing ? "Removing…" : edge.text)
+                            .font(Font.hq(.footnote)).monospacedDigit()
+                            .foregroundStyle(edge.none && !removing ? Color.hqOrange : Color.hqLabel2)
+                            .lineLimit(1).fixedSize()
+                    }
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Circle().fill(edge.none ? Color.hqOrange : Color(uiColor: .systemGreen))
+                            .frame(width: 7, height: 7)
+                            .alignmentGuide(.firstTextBaseline) { d in d[.bottom] - 1 }
+                            .accessibilityHidden(true)
+                        Text(row.endpoint?.isCurrent == true ? "\(row.sourceLine) · Default" : row.sourceLine)
+                            .font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2).lineLimit(1)
+                    }
                 }
                 SettingsChevron()
             }
             .hqRowPadding(4)   // [mac] Stress test 2026-10-28 round 9: the list's one room on the Mac
             .contentShape(Rectangle())
         }
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
+        // The words as before the edge: "Anthropic, Built into Hermes · Key saved, 4 models shown".
+        .accessibilityLabel([row.name(prefs), row.sourceLine, row.endpoint?.isCurrent == true ? "Default" : nil,
+                             removing ? "Removing…" : ProviderList.shownLine(row, catalog: catalog, prefs: prefs)]
+            .compactMap { $0 }.joined(separator: ", "))
+        .accessibilityAddTraits(.isButton)
         .accessibilityIdentifier("provider.\(row.id)")
         // Red, not the destructive role, which animates the row out before the confirm (GatewayPageView's rows). A row
         // that can't be removed still offers Remove, which says why.
@@ -490,7 +509,9 @@ struct ProviderPageView: View {
                     .hqRowPadding(4)
                     .accessibilityIdentifier("provider-models.search")
             }
-            if all.count > 1 {
+            // [provider-models] Owner 2026-11-10 (design pick 20): on the iPhone and iPad, Show All and Hide All sit on
+            // the Models heading's line (as the list's first row they read as a model); the Mac keeps the row.
+            if all.count > 1, DeviceWord.isMac {
                 HStack(spacing: 20) {
                     Button("Show All") { setAll(all, hide: false, row) }
                         .disabled(!anyHidden || model.readOnly)
@@ -519,7 +540,23 @@ struct ProviderPageView: View {
                 .accessibilityIdentifier("provider-models.add")
             }
         } header: { HQSectionLabel {
-            Text("Models")
+            if all.count > 1, !DeviceWord.isMac {
+                HStack(alignment: .firstTextBaseline, spacing: 16) {
+                    Text("Models")
+                    Spacer(minLength: 8)
+                    Button("Show All") { setAll(all, hide: false, row) }
+                        .disabled(!anyHidden || model.readOnly)
+                        .accessibilityIdentifier("provider-models.show-all")
+                    Button("Hide All") { setAll(all, hide: true, row) }
+                        .disabled(!anyShown || model.readOnly)
+                        .accessibilityIdentifier("provider-models.hide-all")
+                }
+                .buttonStyle(.borderless)
+                .font(Font.hq(.subheadline))
+                .textCase(nil)
+            } else {
+                Text("Models")
+            }
         } } footer: { HQSectionFooter {
             if !words.isEmpty, shown.isEmpty {
                 Text("No model matches “\(query)”.")
@@ -540,12 +577,22 @@ struct ProviderPageView: View {
             Button {
                 ProviderPages.renameModel(id, provider: row, model: model, router: router)
             } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(name(id, row)).foregroundStyle(hidden ? Color.hqLabel2 : Color.hqLabel)
-                        .fixedSize(horizontal: false, vertical: true)
-                    let note = [name(id, row) != id ? id : nil, added ? "Added by you" : nil].compactMap { $0 }.joined(separator: " · ")
-                    if !note.isEmpty {
-                        Text(note).font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2).lineLimit(2)
+                let note = [name(id, row) != id ? id : nil, added ? "Added by you" : nil].compactMap { $0 }.joined(separator: " · ")
+                // [provider-models] One line a model: its own id beside its name, in small type, when both fit; else
+                // the id under the name as before.
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(name(id, row)).foregroundStyle(hidden ? Color.hqLabel2 : Color.hqLabel).lineLimit(1).fixedSize()
+                        if !note.isEmpty {
+                            Text(note).font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2).lineLimit(1).fixedSize()
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(name(id, row)).foregroundStyle(hidden ? Color.hqLabel2 : Color.hqLabel)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if !note.isEmpty {
+                            Text(note).font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2).lineLimit(2)
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

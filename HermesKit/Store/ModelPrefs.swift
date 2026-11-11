@@ -29,6 +29,8 @@ final class ModelPrefs {
     static let foldedKey = "hq.models.folded-providers"
     /// Ours: per profile, the provider slugs the last catalog read listed (the menus' stand-in before a chat's catalog loads).
     static let knownProvidersKey = "hq.models.known-providers"
+    /// Ours: per profile, the starred keys the last catalog read didn't list (their model or provider is gone there).
+    static let missingStarsKey = "hq.models.missing-stars"
     static let recentsLimit = 3
 
     let accountId: String
@@ -105,11 +107,46 @@ final class ModelPrefs {
         defaults.set(all, forKey: storageKey(Self.knownProvidersKey))
     }
 
+    /// [ghost-stars] A provider removed in Settings › Providers: no profile lists it from now, before any catalog is
+    /// read again (the catalogs in memory still do until then).
+    func removeKnownProvider(_ slug: String) {
+        guard var all = defaults.dictionary(forKey: storageKey(Self.knownProvidersKey)) else { return }
+        var changed = false
+        for (profile, value) in all {
+            guard let slugs = value as? [String], slugs.contains(slug) else { continue }
+            all[profile] = slugs.filter { $0 != slug }
+            changed = true
+        }
+        if changed { defaults.set(all, forKey: storageKey(Self.knownProvidersKey)) }
+    }
+
+    // MARK: Missing stars (tester 2026-11-10)
+
+    /// [ghost-stars] The starred keys `profile`'s last catalog didn't list: a model its provider dropped, or a provider
+    /// that is gone. The known providers alone left a kept provider's dropped models in every new chat's menu until
+    /// the chat's own catalog answered.
+    func missingStars(profile: String) -> Set<String> {
+        Set((defaults.dictionary(forKey: storageKey(Self.missingStarsKey))?[profile] as? [String]) ?? [])
+    }
+
+    func setMissingStars(_ keys: Set<String>, profile: String) {
+        var all = defaults.dictionary(forKey: storageKey(Self.missingStarsKey)) ?? [:]
+        let next = keys.sorted()
+        if (all[profile] as? [String] ?? []) == next { return }
+        all[profile] = next.isEmpty ? nil : next
+        if all.isEmpty {
+            defaults.removeObject(forKey: storageKey(Self.missingStarsKey))
+        } else {
+            defaults.set(all, forKey: storageKey(Self.missingStarsKey))
+        }
+    }
+
     /// [stale-stars] Settings › Clear Favorite & Recent Models (tester 2026-11-09: a removed provider's stars
     /// can't be unstarred, since no list shows its models any more).
     func clearFavoritesAndRecents() {
         defaults.removeObject(forKey: storageKey(Self.favoritesKey))
         defaults.removeObject(forKey: storageKey(Self.recentsKey))
+        defaults.removeObject(forKey: storageKey(Self.missingStarsKey))
     }
 
     // MARK: Recents (S:ui-chat/title-menu.ts:59-76)
@@ -188,7 +225,7 @@ final class ModelPrefs {
 
     /// Forgets every account's stores (a clean first run, DEBUG reset).
     static func forgetAll(defaults: UserDefaults = .standard) {
-        let webKeys = [favoritesKey, recentsKey, presetsKey, foldedKey, knownProvidersKey]
+        let webKeys = [favoritesKey, recentsKey, presetsKey, foldedKey, knownProvidersKey, missingStarsKey]
         for key in defaults.dictionaryRepresentation().keys where webKeys.contains(where: { key.hasPrefix($0 + "|") }) {
             defaults.removeObject(forKey: key)
         }
@@ -196,6 +233,6 @@ final class ModelPrefs {
 
     /// Forgets this account's stores (Sign Out).
     static func forget(accountId: String, defaults: UserDefaults = .standard) {
-        for web in [favoritesKey, recentsKey, presetsKey, foldedKey, knownProvidersKey] { defaults.removeObject(forKey: "\(web)|\(accountId)") }
+        for web in [favoritesKey, recentsKey, presetsKey, foldedKey, knownProvidersKey, missingStarsKey] { defaults.removeObject(forKey: "\(web)|\(accountId)") }
     }
 }

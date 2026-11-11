@@ -68,6 +68,28 @@ nonisolated enum BotDMs {
         return .delivered
     }
 
+    /// [exchange] The words open by speaking to one of these bots by name: "Thanks, Otto.", "Otto, your diagnosis…",
+    /// "@otto: confirmed", "Got it, Home —". Only the first sentence counts, and the name must be set off as an address
+    /// (a comma, a colon, a dash, a greeting before it): "Otto found the cause" and "Thanks to Otto, it works" are about
+    /// the bot, not to it.
+    static func speaksTo(_ names: [String], in text: String) -> Bool {
+        var opening = String(text.drop(while: { $0.isWhitespace || "*_#>`".contains($0) }).prefix(160))
+        if let line = opening.firstIndex(where: \.isNewline) { opening = String(opening[..<line]) }
+        if let stop = opening.range(of: #"[.!?](\s|$)"#, options: .regularExpression) { opening = String(opening[..<stop.lowerBound]) }
+        opening = opening.replacingOccurrences(of: #"[*_`]"#, with: "", options: .regularExpression)
+        for name in Set(names.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "@ ")).lowercased() }) where name.count > 1 {
+            let bot = #"@?"# + NSRegularExpression.escapedPattern(for: name) + #"(?![\w-])"#
+            let patterns = [
+                #"^"# + bot + #"\s*([,:—–]|-\s|$)"#,
+                #"^@"# + NSRegularExpression.escapedPattern(for: name) + #"(?![\w-])"#,
+                #",\s*"# + bot + #"\s*([,:—–]|-\s|$)"#,
+                #"^(hi|hey|hello|thanks|thank you|understood|got it|noted|ok|okay|confirmed|acknowledged|agreed|received|copy that|roger)[,\s]+"# + bot + #"\s*([,:—–]|-\s|$)"#,
+            ]
+            if patterns.contains(where: { opening.range(of: $0, options: [.regularExpression, .caseInsensitive]) != nil }) { return true }
+        }
+        return false
+    }
+
     /// The bot a target names, as the incoming deliveries find it (handle, then name, then `hermes` → default).
     static func sender(_ target: String, roster: [DeliveryMessages.Seat]) -> ChatSender {
         let bare = target.split(separator: "/").last.map(String.init) ?? target

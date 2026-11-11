@@ -11,6 +11,8 @@ nonisolated struct ActivityRowsInput: @unchecked Sendable {
     var style: ToolCallStyle = .rows
     /// After Reply › Hide (never in In Header).
     var hideSteps = false
+    /// Show File Changes (Settings › Chat): off, no "N files changed" card.
+    var showFileChanges = true
     /// Replies whose hidden steps were brought back (Show Steps), by message id.
     var revealed: Set<String> = []
     /// Replies whose steps are fading out right now: still drawn until the fold removes them.
@@ -121,6 +123,12 @@ nonisolated struct DiffPreviewRow {
 }
 
 nonisolated extension ChatRow {
+    /// [files] The "N files changed" card's files; nil for every other row.
+    var changedFiles: ChangedFilesRow? {
+        if case .activity(.changedFiles(let c)) = kind { return c }
+        return nil
+    }
+
     /// A bot bubble or a tool bubble: which side it sits on (nil for every other row).
     var bubbleSide: Bool? {
         switch kind {
@@ -308,16 +316,20 @@ nonisolated enum ActivityRows {
     /// with no extra wiring.
     static func changedFilesRow(_ m: ChatMessage, edits: [(call: ToolCall, args: [String: JSONValue], diff: String?)],
                                 input: ChatRowBuilder.Input) -> ChatRow? {
-        guard !m.isStreaming, !input.activity.folding.contains(m.id), !edits.isEmpty else { return nil }
+        guard input.activity.showFileChanges, !m.isStreaming, !input.activity.folding.contains(m.id), !edits.isEmpty else { return nil }
         let files = ChangedFiles.derive(calls: edits)
         guard !files.isEmpty else { return nil }
-        let id = "\(m.id)|files"
+        return changedFilesRow(id: "\(m.id)|files", messageId: m.id, files: files, input: input)
+    }
+
+    /// The card for these files ([files] also the one card that stands for several replies' cards: UpdateGroups.swift).
+    static func changedFilesRow(id: String, messageId: String, files: [ChangedFile], input: ChatRowBuilder.Input) -> ChatRow {
         let showAll = input.expanded.contains(id)
         var h = Hasher()
-        for f in files { h.combine(f.path); h.combine(f.name); h.combine(f.added); h.combine(f.removed) }
+        for f in files { h.combine(f.path); h.combine(f.name); h.combine(f.added); h.combine(f.removed); h.combine(f.edits) }
         h.combine(showAll)
-        return ChatRow(id: id, messageId: m.id, scope: input.scope, fingerprint: h.finalize(),
-                       kind: .activity(.changedFiles(ChangedFilesRow(messageId: m.id, files: files, showAll: showAll))),
+        return ChatRow(id: id, messageId: messageId, scope: input.scope, fingerprint: h.finalize(),
+                       kind: .activity(.changedFiles(ChangedFilesRow(messageId: messageId, files: files, showAll: showAll))),
                        gapAbove: 8, variant: showAll ? 1 : 0)
     }
 

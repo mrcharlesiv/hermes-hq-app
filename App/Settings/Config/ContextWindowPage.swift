@@ -36,8 +36,12 @@ struct ContextWindowView: View {
                 Section {
                     choice("Automatic", detail: own.map { "\(ContextWindow.label($0)), the model’s own" } ?? "The model’s own size",
                            selected: current == nil, id: "automatic") { set(nil) }
-                    ForEach(sizes, id: \.self) { size in
-                        choice(ContextWindow.label(size), detail: nil, selected: current == size, id: String(size)) { set(size) }
+                    if gridded {
+                        sizeGrid
+                    } else {
+                        ForEach(sizes, id: \.self) { size in
+                            choice(ContextWindow.label(size), detail: nil, selected: current == size, id: String(size)) { set(size) }
+                        }
                     }
                     customRow
                 } header: { HQSectionLabel {
@@ -73,6 +77,42 @@ struct ContextWindowView: View {
         .onAppear { customText = custom.map(ContextWindow.label) ?? "" }
         .onChange(of: store.epoch) { _, _ in customText = custom.map(ContextWindow.label) ?? "" }
         .accessibilityIdentifier("context-window.list")
+    }
+
+    /// [context-grid] Owner 2026-11-10 (design pick 11): on the iPhone and iPad the sizes are a grid of buttons in one
+    /// row of the list (three across), so Automatic, the sizes, Custom and the explanation fit on one screen; five
+    /// full-width rows pushed the explanation under the fold. The Mac keeps its radio list, and the accessibility text
+    /// sizes keep the rows (a size's words need the row's width there).
+    @Environment(\.dynamicTypeSize) private var typeSize
+    private var gridded: Bool { !DeviceWord.isMac && !typeSize.isAccessibilitySize && !sizes.isEmpty }
+
+    private var sizeGrid: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
+            ForEach(sizes, id: \.self) { size in
+                let selected = current == size
+                Button {
+                    typing = false
+                    set(size)
+                } label: {
+                    Text(ContextWindow.label(size))
+                        .font(Font.hq(.callout).weight(.semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(selected ? Color.hqTintText : Color.hqLabel)
+                        .frame(maxWidth: .infinity, minHeight: 40)
+                        .background(RoundedRectangle(cornerRadius: HQShape.radius(12, .card), style: .continuous)
+                            .fill(selected ? Color.hqTint.opacity(0.16) : Color.hqFill3))
+                        .overlay(RoundedRectangle(cornerRadius: HQShape.radius(12, .card), style: .continuous)
+                            .strokeBorder(selected ? Color.hqTint : Color.clear, lineWidth: 1.5))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(store.readOnly)
+                .accessibilityLabel(ContextWindow.label(size))
+                .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+                .accessibilityIdentifier("context-window.\(size)")
+            }
+        }
+        .padding(.vertical, 4)
     }
 
     /// One size: on the Mac a radio leads it, elsewhere a ✓ ends it (as every Settings choice list).

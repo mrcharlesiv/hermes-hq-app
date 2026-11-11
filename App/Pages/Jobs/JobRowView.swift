@@ -1,7 +1,10 @@
 // A job row (docs/spec/1x-pages.md §3.4): the human title (Callout, 2 lines; 4 at accessibility sizes), then one
 // Footnote line — red "Last run failed · " when the last run failed, "Running · " while a run is out, orange
-// "Overdue · " when a run is late, "Paused · " for a paused job — the schedule in words and when it runs next (a failed
-// row may take two lines so its next run shows).
+// "Overdue · " when a run is late, "Paused · " for a paused job — and the schedule in words.
+// [jobs-edge] Owner 2026-11-10 (design pick 1): when it runs next stands at the trailing edge of the title's line, where
+// a bot row has its time (`JobWords.rowEdge`), orange with how late an overdue run is and tinted with how long a running
+// one has been out. Every row is two lines; the failed row no longer wraps to a third for its next run. At the
+// accessibility sizes the edge follows the schedule on the second line instead, so the title keeps the row's width.
 // 20 pt in, 12 pt top and bottom (D-P10). [jobsminimal] No ⋯ or divider (owner, 2026-10-27, as Bots and Sessions): a
 // long press holds the row's menu (Run Now, Pause/Resume, Edit, Delete Job), a swipe reaches Pause/Resume, Run and
 // Delete. Paused rows are not dimmed (55 % opacity fell below 4.5:1).
@@ -18,6 +21,8 @@ struct JobRowModel: Hashable {
     var running: Bool
     var paused: Bool
     var overdue = false
+    /// [jobs-edge] When it runs next (or how late, or how long it has run), at the row's trailing edge.
+    var edge: JobWords.RowEdge?
     /// [jobfaces] The bot that owns the job, and its head as the bot list has it (nil before the bots load).
     var owner = ""
     var head: JSONValue?
@@ -37,14 +42,24 @@ struct JobRowView: View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             face
             VStack(alignment: .leading, spacing: 3) {
-                Text(row.title)
-                    .font(Font.hq(.callout))
-                    .foregroundStyle(Color.hqLabel)
-                    .lineLimit(large ? 4 : 2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(row.title)
+                        .font(Font.hq(.callout))
+                        .foregroundStyle(Color.hqLabel)
+                        .lineLimit(large ? 4 : 2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if !large, let edge = row.edge {
+                        Text(edge.text)
+                            .font(Font.hq(.footnote))
+                            .monospacedDigit()
+                            .foregroundStyle(edgeColor(edge))
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                }
                 subtitle
                     .font(Font.hq(.footnote))
-                    .lineLimit(large ? nil : (row.lead == .failed ? 2 : 1))
+                    .lineLimit(large ? nil : 1)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
@@ -70,19 +85,31 @@ struct JobRowView: View {
     }
 
     private var subtitle: Text {
-        let words = row.lead.rawValue
+        let leadWords = row.lead.rawValue
         let lead: Text
         switch row.lead {
-        case .running: lead = Text(words).foregroundStyle(Color.hqTintText)
-        case .failed: lead = Text(words).foregroundStyle(Color.hqRed)
-        case .overdue: lead = Text(words).foregroundStyle(Color.hqOrange)
-        case .paused: lead = Text(words).foregroundStyle(Color.hqLabel2).fontWeight(.semibold)
+        case .running: lead = Text(leadWords).foregroundStyle(Color.hqTintText)
+        case .failed: lead = Text(leadWords).foregroundStyle(Color.hqRed)
+        case .overdue: lead = Text(leadWords).foregroundStyle(Color.hqOrange)
+        case .paused: lead = Text(leadWords).foregroundStyle(Color.hqLabel2).fontWeight(.semibold)
         case .none: lead = Text("")
         }
-        return Text("\(lead)\(Text(row.subtitle).foregroundStyle(Color.hqLabel2))")
+        let words = Text("\(lead)\(Text(row.subtitle).foregroundStyle(Color.hqLabel2))")
+        guard large, let edge = row.edge else { return words }
+        return Text("\(words)\(Text("\u{00A0}· ").foregroundStyle(Color.hqLabel2))\(Text(edge.text).foregroundStyle(edgeColor(edge)))")
     }
 
-    private var accessibilitySubtitle: String { row.lead.rawValue + row.subtitle }
+    private func edgeColor(_ edge: JobWords.RowEdge) -> Color {
+        switch edge.tone {
+        case .plain: Color.hqLabel2
+        case .late: Color.hqOrange
+        case .running: Color.hqTintText
+        }
+    }
+
+    private var accessibilitySubtitle: String {
+        row.lead.rawValue + row.subtitle + (row.edge.map { ", " + $0.spoken } ?? "")
+    }
 }
 
 /// A 44 pt ⋯ that shows a UIKit menu (built when tapped, so it reflects the job's current state).

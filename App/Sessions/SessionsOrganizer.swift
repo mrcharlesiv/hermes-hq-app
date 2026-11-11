@@ -233,25 +233,60 @@ extension AppModel: SessionsServices {}
 
     // MARK: - Compose (`S/stress-c-compose.ts`, `S/phone-new-chat.ts`)
 
-    /// The bar's Compose: with one bot, a new chat with it; with more, Choose a Bot first (each bot's face), Hermes
-    /// first, then the Bots list's order.
-    /// [sessions-m9] `profile`: the picked chip's bot; the new chat is that bot's, with no chooser (§7.3).
-    /// Filter › Project narrowed to one project: the new chat starts in it.
-    func compose(profile: String? = nil) {
+    /// The bar's Compose (and the empty page's New Chat, ⇧⌘N): the one New Chat sheet. The bot is a lit pill (the
+    /// picked chip's, else the bot the sheet started with last); a tap on a project's row starts the chat there
+    /// (No Project first, New Project… last). Tester 2026-11-10; owner: "There should be one go-to".
+    /// Filter › Project narrowed to one project: the new chat starts in it, with no sheet.
+    /// `asksProject`: a caller that is the go-to. Without it a `profile` starts its chat in no project at once (⌘N, a
+    /// Home card's New Chat row); so does a picked chip with Settings › Chat › New Chat Asks for a Project off.
+    func compose(profile: String? = nil, asksProject: Bool = false) {
         if let only = store?.effectiveProjects, only.count == 1, let key = only.first, key != SessionProjects.homeKey {
             newChat(inProject: key, profile: profile)
             return
         }
-        if let profile { newChat(profile: profile); return }
-        // Under All the chooser also offers a project (No Project first): a chat can start in one without hunting
-        // for a chat that already lives there.
+        if let profile, !(asksProject && NewChatProjectChoice.isOn) { newChat(profile: profile); return }
         store?.loadProjects()
         let projects = (store?.projectEntries() ?? []).filter { $0.key != SessionProjects.homeKey }
-        chooseBot(projects: projects) { [weak self] profile, project in
-            // New Project…: the New Project alert for the bot picked, then the chat starts in the project made.
-            if project == ChooseBotView.newProjectTag { self?.newProject(profile: profile, startsChat: true); return }
-            if let project { self?.newChat(inProject: project, profile: profile) } else { self?.newChat(profile: profile) }
+        presentNewChat(projects: projects, picked: profile)
+    }
+
+    /// The New Chat sheet. The sheet itself is dismissed, and the pick delivered once, as `chooseBot` does.
+    private func presentNewChat(projects: [SessionProjectEntry], picked: String?) {
+        // Hidden bots are left out, as the chips leave them out (Hermes and the picked chip's bot are always offered).
+        let bots = services.bots.filter { !$0.hidden || $0.id == "default" || $0.id == picked }
+        let ordered = bots.filter { $0.id == "default" } + bots.filter { $0.id != "default" }
+        guard let host, !ordered.isEmpty else { newChat(profile: picked ?? "default"); return }
+        final class Box { weak var sheet: UINavigationController?; var delivered = false }
+        let box = Box()
+        let start: (String, String?) -> Void = { [weak self] bot, project in
+            guard !box.delivered else { return }
+            box.delivered = true
+            // New Project…: the New Project alert for the lit bot, then the chat starts in the project made.
+            if project == NewChatSheetView.newProjectTag {
+                NewChatLast.note(bot: bot, project: NewChatLast.project(for: bot).flatMap { $0 == NewChatLast.none ? nil : $0 })
+                self?.newProject(profile: bot, startsChat: true)
+                return
+            }
+            NewChatLast.note(bot: bot, project: project)
+            if let project { self?.newChat(inProject: project, profile: bot) } else { self?.newChat(profile: bot) }
         }
+        let opensOn = NewChatLast.opensOn(picked: picked, last: NewChatLast.bot, among: ordered.map(\.id))
+        let view = NewChatSheetView(bots: ordered, projects: projects, bot: opensOn) { bot, project in
+            guard let sheet = box.sheet, sheet.presentingViewController != nil else { start(bot, project); return }
+            sheet.dismiss(animated: true) { start(bot, project) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { start(bot, project) }
+        }
+        let page = UIHostingController(rootView: HQScaledRoot(view))
+        page.view.backgroundColor = HQPalette.sheetPage   // [glass] the glass shows around the rows
+        // The sheet is as tall as its rows (New Project…, the last one, is on show without a scroll) up to the full
+        // height: the title bar, the two headings and the pills, then No Project, each project and New Project….
+        let rows = CGFloat(projects.count + 2)
+        let fit = UISheetPresentationController.Detent.custom(identifier: .init("new-chat.fit")) { context in
+            min(232 + rows * HQFont.scaled(44), context.maximumDetentValue)
+        }
+        let sheet = ChatSheet.wrap(page, title: "New Chat", detents: [fit, .large()])
+        box.sheet = sheet
+        host.present(sheet, animated: true)
     }
 
     /// [cmd-n] ⌘N: a new chat with the bot Settings › Chat › New Chat (⌘N) names (Hermes unless changed), no chooser;
@@ -322,32 +357,27 @@ extension AppModel: SessionsServices {}
     /// One bot: it is the answer. More: Choose a Bot first (Hermes first, then the Bots list's order); hidden bots left
     /// out, as the chips leave them out (Hermes is always offered).
     func chooseBot(_ picked: @escaping (String) -> Void) {
-        chooseBot(projects: []) { profile, _ in picked(profile) }
-    }
-
-    /// `projects`: Compose's New Chat sheet, a Project choice above the bots (shown even with one bot).
-    private func chooseBot(projects: [SessionProjectEntry], _ picked: @escaping (_ profile: String, _ project: String?) -> Void) {
         let bots = services.bots.filter { !$0.hidden || $0.id == "default" }
-        guard bots.count > 1 || !projects.isEmpty, let host else { picked(bots.first?.id ?? "default", nil); return }
+        guard bots.count > 1, let host else { picked(bots.first?.id ?? "default"); return }
         let ordered = bots.filter { $0.id == "default" } + bots.filter { $0.id != "default" }
         // The sheet itself is dismissed, not `host.presentedViewController` (which can be nil or another controller: a
         // search the page keeps in its presentation context, a sheet still arriving), and the pick is delivered once,
         // even when UIKit drops the dismissal's completion (a tap during the sheet's own animation).
         final class Box { weak var sheet: UINavigationController?; var delivered = false }
         let box = Box()
-        let deliver: (String, String?) -> Void = { id, project in
+        let deliver: (String) -> Void = { id in
             guard !box.delivered else { return }
             box.delivered = true
-            picked(id, project)
+            picked(id)
         }
         // [ui-sizing] The scaled root, as every hosted page: its bot names stayed 17 pt beside 75 pt faces at 150 %.
-        let picker = UIHostingController(rootView: HQScaledRoot(ChooseBotView(bots: ordered, projects: projects) { bot, project in
-            guard let sheet = box.sheet, sheet.presentingViewController != nil else { deliver(bot.id, project); return }
-            sheet.dismiss(animated: true) { deliver(bot.id, project) }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { deliver(bot.id, project) }
+        let picker = UIHostingController(rootView: HQScaledRoot(ChooseBotView(bots: ordered) { bot in
+            guard let sheet = box.sheet, sheet.presentingViewController != nil else { deliver(bot.id); return }
+            sheet.dismiss(animated: true) { deliver(bot.id) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { deliver(bot.id) }
         }))
         picker.view.backgroundColor = HQPalette.sheetPage   // [glass] the glass shows around the rows
-        let chooser = ChatSheet.wrap(picker, title: projects.isEmpty ? "Choose a Bot" : "New Chat")
+        let chooser = ChatSheet.wrap(picker, title: "Choose a Bot")
         box.sheet = chooser
         host.present(chooser, animated: true)
     }
@@ -734,58 +764,126 @@ private final class SlowHUDBox {
     var stopped = false
 }
 
-/// Choose a Bot (the web's scope sheet for Compose): each bot's face and name.
+/// Choose a Bot: each bot's face and name (a project's New Chat with no bot picked, New Project… from the filter).
 struct ChooseBotView: View {
-    /// The Project picker's New Project… row (never a project's key, which is a folder path).
+    var bots: [Bot]
+    var pick: (Bot) -> Void
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(bots) { bot in
+                    Button { pick(bot) } label: {
+                        // [ui-sizing 2026-11-09] A name-only row: a 32 pt face in a 44 pt row (× UI Scale), not the Bots
+                        // list's 50 pt face in a 58 pt row; four bots filled the half sheet on a 375 pt phone.
+                        HStack(spacing: 12) {
+                            HeadImage(raw: bot.head, profile: bot.id, size: HQFont.scaled(32), working: false)
+                            Text(bot.name).foregroundStyle(Color.hqLabel)
+                            Spacer(minLength: 0)
+                        }
+                        .frame(minHeight: HQFont.scaled(44))
+                        .contentShape(Rectangle())
+                    }
+                    .accessibilityIdentifier("choose-bot-\(bot.id)")
+                }
+            }
+            .hqSheetRows()
+        }
+        .hqGroupedPage()   // [desktoplook] the page follows the skin
+        .listStyle(.insetGrouped)
+    }
+}
+
+/// Compose's New Chat sheet (owner 2026-11-10, "one go-to"): the bots as pills, one lit; under them No Project, each
+/// project and New Project… as rows. A tap on a pill changes the bot; a tap on a row starts the chat.
+struct NewChatSheetView: View {
+    /// The New Project… row (never a project's key, which is a folder path).
     static let newProjectTag = "\u{1F}new-project"
     var bots: [Bot]
-    /// Compose's New Chat sheet: the projects to start in (none: the plain Choose a Bot list).
-    var projects: [SessionProjectEntry] = []
-    var pick: (Bot, _ project: String?) -> Void
-    @State private var project: String?
+    var projects: [SessionProjectEntry]
+    @State var bot: String
+    /// `project`: nil (No Project), a project's key, or `newProjectTag`.
+    var start: (_ bot: String, _ project: String?) -> Void
 
-    private var botsSection: some View {
-        ForEach(bots) { bot in
-            Button { pick(bot, project) } label: {
-                // [ui-sizing 2026-11-09] A name-only row: a 32 pt face in a 44 pt row (× UI Scale), not the Bots list's
-                // 50 pt face in a 58 pt row; four bots filled the half sheet on a 375 pt phone.
-                HStack(spacing: 12) {
-                    HeadImage(raw: bot.head, profile: bot.id, size: HQFont.scaled(32), working: false)
-                    Text(bot.name).foregroundStyle(Color.hqLabel)
-                    Spacer(minLength: 0)
+    private var faceSize: CGFloat { Theme.isDesktop ? HQFont.scaled(20) : HQFont.scaled(24) }
+
+    private func row(_ title: String, key: String?, identifier: String) -> some View {
+        Button { start(bot, key) } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "folder")
+                    .foregroundStyle(key == nil ? Color.hqLabel3 : Color.hqLabel2)
+                    .frame(width: HQFont.scaled(24))
+                Text(title).foregroundStyle(Color.hqLabel).lineLimit(1)
+                Spacer(minLength: 8)
+                if NewChatLast.marks(stored: NewChatLast.project(for: bot), row: key) {
+                    Text("Last used")
+                        .font(Font.hq(.caption2).weight(.semibold))
+                        .foregroundStyle(Color.hqTintText)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Color.hqTint.opacity(0.16), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                 }
-                .frame(minHeight: HQFont.scaled(44))
-                .contentShape(Rectangle())
+                Image(systemName: "chevron.right").font(Font.hq(.footnote).weight(.semibold)).foregroundStyle(Color.hqLabel3)
             }
-            .accessibilityIdentifier("choose-bot-\(bot.id)")
+            .frame(height: HQFont.scaled(44))
+            .contentShape(Rectangle())
         }
+        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+        .accessibilityIdentifier(identifier)
     }
 
     var body: some View {
         List {
-            // item 11: a Section whose header closure resolves to an EmptyView (rather than being left out) still
-            // reserves a full header's height, which read as ~80 pt of blank space above the first row. Two
-            // separate Sections, only one of them ever with a header, start the list right under the title.
-            if projects.isEmpty {
-                Section { botsSection }.hqSheetRows()
-            } else {
-                Section {
-                    Picker(selection: $project) {
-                        Text("No Project").tag(String?.none)
-                        ForEach(projects) { entry in Text(entry.label).tag(Optional(entry.key)) }
-                        // Polish 2026-10-24 (owner call): a chat can start in a project that doesn't exist yet.
-                        Label("New Project…", systemImage: "folder.badge.plus").tag(Optional(Self.newProjectTag))
-                    } label: {
-                        Label("Project", systemImage: "folder").foregroundStyle(Color.hqLabel)
+            Section {
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 8) {
+                            ForEach(bots) { item in
+                                SessionPill(caption: item.name, name: item.name, picked: bot == item.id,
+                                            identifier: "new-chat-bot-\(item.id)", hasFace: true) {
+                                    bot = item.id
+                                } face: {
+                                    HeadImage(raw: item.head, profile: item.id, size: faceSize, working: false)
+                                }
+                                .id(item.id)
+                            }
+                        }
+                        .padding(.horizontal, 2)
                     }
-                    .pickerStyle(.menu)
-                    .accessibilityIdentifier("choose-project")
+                    .scrollIndicators(.hidden)
+                    .onAppear { proxy.scrollTo(bot, anchor: .center) }
                 }
-                .hqSheetRows()
-                Section { botsSection } header: { HQSectionLabel { Text("Bot") } }.hqSheetRows()
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+            } header: { HQSectionLabel { Text("Bot") } }
+            Section {
+                row("No Project", key: nil, identifier: "new-chat-project-none")
+                ForEach(projects) { entry in row(entry.label, key: entry.key, identifier: "new-chat-project-\(entry.label)") }
+                Button { start(bot, Self.newProjectTag) } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "folder.badge.plus").frame(width: HQFont.scaled(24))
+                        Text("New Project…")
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(Color.hqTintText)
+                    .frame(height: HQFont.scaled(44))
+                    .contentShape(Rectangle())
+                }
+                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                .accessibilityIdentifier("new-chat-project-new")
+            } header: {
+                HQSectionLabel {
+                    HStack {
+                        Text("Project")
+                        Spacer(minLength: 8)
+                        Text("Tap one to start the chat").fontWeight(.regular)
+                    }
+                }
             }
+            .hqSheetRows()
         }
         .hqGroupedPage()   // [desktoplook] the page follows the skin
         .listStyle(.insetGrouped)
+        .environment(\.defaultMinListRowHeight, HQFont.scaled(44))
+        .listSectionSpacing(.compact)
     }
 }

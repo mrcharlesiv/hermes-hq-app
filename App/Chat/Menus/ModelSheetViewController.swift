@@ -30,6 +30,24 @@ final class ModelSheetViewController: UIViewController, UITableViewDataSource, U
     private var shownOffline = false
     /// The width the status header was last sized at.
     private var headerWidth: CGFloat = 0
+    /// [model-facts] Each row's context and price (`ModelPanelModel.rowFact`), worked out as its row first shows (the
+    /// list prices are a large table) and kept until the catalog is read again. A model with neither keeps an empty entry.
+    private var facts: [String: (text: String, spoken: String)?] = [:]
+    private lazy var listedPrices = ModelsDevCache.shared.stored()
+    private var anyPriceShown = false
+    private let footNote = UILabel()
+    private var footerWidth: CGFloat = 0
+
+    private func fact(for model: ModelChoice) -> (text: String, spoken: String)? {
+        if let known = facts[model.key] { return known }
+        let found = ModelPanelModel.rowFact(model, options: context.options, listed: listedPrices)
+        facts[model.key] = found
+        if let found, found.text.contains("$"), !anyPriceShown {
+            anyPriceShown = true
+            DispatchQueue.main.async { [weak self] in self?.updateFootNote() }
+        }
+        return found
+    }
     private lazy var refreshItem: UIBarButtonItem = {
         let item = UIBarButtonItem(image: UIImage(systemName: "arrow.clockwise"), primaryAction: UIAction { [weak self] _ in
             self?.load(refresh: true)
@@ -97,6 +115,16 @@ final class ModelSheetViewController: UIViewController, UITableViewDataSource, U
             rebuild()
         }
         load(refresh: false)
+        // [model-facts] The list prices (models.dev, a day's copy on the phone) are read here too: until now only the
+        // model panel and Model Prices asked for them, so a first open of this sheet had none to show.
+        if listedPrices == nil {
+            Task { [weak self] in
+                guard let fresh = await ModelsDevCache.shared.load(), let self else { return }
+                self.listedPrices = fresh
+                self.facts = [:]
+                if self.state == .loaded { self.tableView.reloadData() }
+            }
+        }
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -140,6 +168,7 @@ final class ModelSheetViewController: UIViewController, UITableViewDataSource, U
                 let rows = try await self.context.load(refresh: refresh)
                 guard !Task.isCancelled else { return }
                 self.models = rows
+                self.facts = [:]   // [model-facts] prices may have come with this read
                 self.state = .loaded
             } catch is CancellationError {
                 return
@@ -166,7 +195,13 @@ final class ModelSheetViewController: UIViewController, UITableViewDataSource, U
         lines.axis = .vertical
         lines.spacing = 2
         if let words { lines.addArrangedSubview(Self.headerLabel(words, id: "models.status")) }
-        lines.addArrangedSubview(Self.headerLabel(scope, id: "models.scope"))
+        // [model-facts] Owner 2026-11-10: the scope line sits at the list's foot, so the models start right under the
+        // search field. With no list to stand under (loading, a failure, a search) it keeps its old place here.
+        if !showsFoot { lines.addArrangedSubview(Self.headerLabel(scope, id: "models.scope")) }
+        guard !lines.arrangedSubviews.isEmpty else {
+            tableView.tableHeaderView = nil
+            return
+        }
         lines.translatesAutoresizingMaskIntoConstraints = false
         let header = UIView(frame: CGRect(x: 0, y: 0, width: tableView.bounds.width, height: 28))
         header.addSubview(lines)
@@ -206,7 +241,35 @@ final class ModelSheetViewController: UIViewController, UITableViewDataSource, U
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        if abs(tableView.bounds.width - headerWidth) > 0.5 { sizeHeader() }
+        if tableView.tableHeaderView != nil, abs(tableView.bounds.width - headerWidth) > 0.5 { sizeHeader() }
+        if tableView.tableFooterView != nil, abs(tableView.bounds.width - footerWidth) > 0.5 { sizeFooter() }
+        if abs(rowWidth - laidOutRowWidth) > 0.5 {
+            let first = laidOutRowWidth == 0
+            laidOutRowWidth = rowWidth
+            if !first, state == .loaded { tableView.reloadData() }   // a new width: which rows stack their fact may change
+        }
+    }
+
+    /// A row's width as the table lays it out (the inset list's margins off each side): a row whose name and fact
+    /// don't fit side by side puts the fact under the name.
+    private var rowWidth: CGFloat { tableView.bounds.width - tableView.layoutMargins.left - tableView.layoutMargins.right }
+    private var laidOutRowWidth: CGFloat = 0
+
+    /// The list's foot is up: models are listed and nothing is being searched for.
+    private var showsFoot: Bool { state == .loaded && !sections.isEmpty && query.isEmpty }
+
+    private func updateFootNote() {
+        footNote.text = anyPriceShown ? scope + "\n" + ModelPanelModel.rowFactLegend : scope
+        if tableView.tableFooterView != nil { sizeFooter() }
+    }
+
+    private func sizeFooter() {
+        guard let footer = tableView.tableFooterView else { return }
+        footerWidth = tableView.bounds.width
+        let fitted = footer.systemLayoutSizeFitting(CGSize(width: footerWidth, height: UIView.layoutFittingCompressedSize.height),
+                                                    withHorizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel)
+        footer.frame = CGRect(x: 0, y: 0, width: footerWidth, height: ceil(fitted.height))
+        tableView.tableFooterView = footer
     }
 
     // MARK: Sections
@@ -261,7 +324,10 @@ final class ModelSheetViewController: UIViewController, UITableViewDataSource, U
             }
         }
         // [provider-add] Under the last provider's models (not while searching): Add Provider….
-        tableView.tableFooterView = state == .loaded && !sections.isEmpty && query.isEmpty ? addProviderFooter : nil
+        let hadFoot = tableView.tableFooterView != nil
+        tableView.tableFooterView = showsFoot ? addProviderFooter : nil
+        if showsFoot { updateFootNote() }
+        if hadFoot != showsFoot { updateOfflineHeader() }   // the scope line moves between the head and the foot
         tableView.reloadData()
         positionOnce()
     }
@@ -286,9 +352,29 @@ final class ModelSheetViewController: UIViewController, UITableViewDataSource, U
         let button = UIButton(configuration: config, primaryAction: addProviderAction)
         button.contentHorizontalAlignment = .leading
         button.accessibilityIdentifier = "models.add-provider"
-        button.frame = CGRect(x: 0, y: 0, width: tableView.bounds.width, height: 56)
-        button.autoresizingMask = [.flexibleWidth]
-        return button
+        // [model-facts] Under Add Provider…, the scope line (and what the prices are, once a row shows one).
+        footNote.accessibilityIdentifier = "models.scope"
+        footNote.font = HQFont.preferred(.footnote)
+        footNote.adjustsFontForContentSizeCategory = true
+        footNote.textColor = HQPalette.label2
+        footNote.numberOfLines = 0
+        footNote.text = scope
+        let footer = UIView(frame: CGRect(x: 0, y: 0, width: tableView.bounds.width, height: 96))
+        for v in [button, footNote] as [UIView] {
+            v.translatesAutoresizingMaskIntoConstraints = false
+            footer.addSubview(v)
+        }
+        NSLayoutConstraint.activate([
+            button.topAnchor.constraint(equalTo: footer.topAnchor),
+            button.leadingAnchor.constraint(equalTo: footer.leadingAnchor),
+            button.trailingAnchor.constraint(equalTo: footer.trailingAnchor),
+            button.heightAnchor.constraint(greaterThanOrEqualToConstant: 48),
+            footNote.topAnchor.constraint(equalTo: button.bottomAnchor, constant: 2),
+            footNote.leadingAnchor.constraint(equalTo: footer.leadingAnchor, constant: 20),
+            footNote.trailingAnchor.constraint(equalTo: footer.trailingAnchor, constant: -20),
+            footNote.bottomAnchor.constraint(equalTo: footer.bottomAnchor, constant: -16),
+        ])
+        return footer
     }()
 
     private func openAddProvider() {
@@ -420,6 +506,7 @@ final class ModelSheetViewController: UIViewController, UITableViewDataSource, U
         let current = context.current()
         let cell = tableView.dequeueReusableCell(withIdentifier: ModelRowCell.reuse, for: indexPath) as! ModelRowCell
         cell.configure(model, subtitle: section.provider.isEmpty ? (model.providerName ?? model.provider) : nil,
+                       fact: fact(for: model), rowWidth: rowWidth,
                        selected: model.id == current.id && model.provider == current.provider,
                        favorite: context.prefs.isFavorite(model), offline: context.offline)
         cell.onStar = { [weak self, weak cell] in
@@ -539,14 +626,19 @@ final class ModelProviderHeader: UITableViewHeaderFooterView, UIContextMenuInter
     }
 }
 
-/// A model row: its name (Body) with the provider under it in Favorites, a checkmark on the current model, and a 44 pt
-/// star button 6 pt from the trailing edge.
+/// A model row: its name (Body) with the provider under it in Favorites, and a 44 pt star button 6 pt from the
+/// trailing edge.
+/// [model-facts] Owner 2026-11-10 (design pick 3): the current model's checkmark has a column of its own at the leading
+/// edge and its name is semibold (beside the star the two marks read as a pair); the row's context and price stand
+/// before the star in Footnote label-2 ("1M · $5 / $25"); and a one-line row is 40 pt, not 46. At the accessibility
+/// text sizes the fact joins the line under the name, so the name keeps the row's width.
 final class ModelRowCell: UITableViewCell {
     static let reuse = "models.row"
     var onStar: (() -> Void)?
 
     private let title = UILabel()
     private let subtitle = UILabel()
+    private let fact = UILabel()
     private let check = UIImageView(image: UIImage(systemName: "checkmark", withConfiguration: UIImage.SymbolConfiguration(textStyle: .body, scale: .medium)))
     private let star = UIButton(type: .system)
 
@@ -566,32 +658,58 @@ final class ModelRowCell: UITableViewCell {
         check.setContentHuggingPriority(.required, for: .horizontal)
         check.setContentCompressionResistancePriority(.required, for: .horizontal)
         check.isAccessibilityElement = false
+        fact.font = HQFont.preferred(.footnote)
+        fact.adjustsFontForContentSizeCategory = true
+        fact.textColor = ChatPalette.label2
+        fact.isAccessibilityElement = false
+        fact.setContentHuggingPriority(.required, for: .horizontal)
+        fact.setContentCompressionResistancePriority(.required, for: .horizontal)
         star.addAction(UIAction { [weak self] _ in self?.onStar?() }, for: .primaryActionTriggered)
-        for v in [labels, check, star] as [UIView] {
+        for v in [labels, check, fact, star] as [UIView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             contentView.addSubview(v)
         }
-        // 12 pt top and bottom on every row: titles wrap at the larger text sizes (owner: wrapping rows get 12-14 pt).
+        // 9 pt top and bottom: a one-line row is 40 pt, and titles still wrap at the larger text sizes.
         NSLayoutConstraint.activate([
-            labels.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 12),
-            labels.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -12),
-            labels.leadingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.leadingAnchor),
-            labels.trailingAnchor.constraint(lessThanOrEqualTo: check.leadingAnchor, constant: -8),
+            labels.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 9),
+            labels.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -9),
+            check.leadingAnchor.constraint(equalTo: contentView.layoutMarginsGuide.leadingAnchor, constant: -4),
             check.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-            check.trailingAnchor.constraint(equalTo: star.leadingAnchor, constant: -2),
+            check.widthAnchor.constraint(equalToConstant: Self.checkColumn),
+            labels.leadingAnchor.constraint(equalTo: check.trailingAnchor, constant: 6),
+            labels.trailingAnchor.constraint(lessThanOrEqualTo: fact.leadingAnchor, constant: -10),
+            fact.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            fact.trailingAnchor.constraint(equalTo: star.leadingAnchor, constant: -2),
             star.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -6),
             star.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
             star.widthAnchor.constraint(greaterThanOrEqualToConstant: 44),
+            // The star keeps its 44 pt reach in a 40 pt row: it may stand 2 pt past the row above and below.
             star.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
-            star.heightAnchor.constraint(lessThanOrEqualTo: contentView.heightAnchor),
-            contentView.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+            contentView.heightAnchor.constraint(greaterThanOrEqualToConstant: 40),
         ])
+        check.contentMode = .center
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    func configure(_ model: ModelChoice, subtitle text: String?, selected: Bool, favorite: Bool, offline: Bool) {
+    /// The checkmark's column: every name starts at the same place, checked or not.
+    static let checkColumn: CGFloat = 20
+
+    /// What a row's fixed parts take of its width: the margins, the checkmark's column, the gaps and the star.
+    static let rowChrome: CGFloat = 108
+
+    func configure(_ model: ModelChoice, subtitle provider: String?, fact found: (text: String, spoken: String)? = nil,
+                   rowWidth: CGFloat = 0, selected: Bool, favorite: Bool, offline: Bool) {
+        title.font = selected ? HQFont.preferred(.headline) : HQFont.preferred(.body)
         title.text = model.name
+        fact.text = found?.text
+        // The fact stands beside the name only when both fit on one line; otherwise (a long name, the larger text
+        // sizes) it joins the line under the name, so a name never wraps to make room for its price.
+        let beside = found != nil && !traitCollection.preferredContentSizeCategory.isAccessibilityCategory
+            && (rowWidth <= 0 || title.intrinsicContentSize.width + fact.intrinsicContentSize.width + Self.rowChrome <= rowWidth)
+        let text = beside ? provider : [provider, found?.text].compactMap { $0 }.joined(separator: " · ").nilIfEmpty
+        if !beside { fact.text = nil }
+        fact.isHidden = !beside
         title.textColor = offline ? ChatPalette.label2 : ChatPalette.label
         // The row draws its own card each time (tester 2026-10-26: some rows showed the page through them
         // after the list reloaded; never reproduced). Left to the table, a reused row can come back without one.
@@ -611,7 +729,7 @@ final class ModelRowCell: UITableViewCell {
         isAccessibilityElement = false
         title.accessibilityTraits = selected ? [.button, .selected] : .button
         accessibilityIdentifier = "models.row.\(model.provider)::\(model.id)"
-        title.accessibilityLabel = model.name + (text.map { ", \($0)" } ?? "")
+        title.accessibilityLabel = model.name + (provider.map { ", \($0)" } ?? "") + (found.map { ", \($0.spoken)" } ?? "")
         title.accessibilityValue = selected ? "Current" : nil
     }
 }

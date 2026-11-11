@@ -607,6 +607,12 @@ gates `W:build/phone-question-dock-gates.ts`, normalisation `V:desktop/src/store
   cut into a grey band).
 
 **Inside, top to bottom:**
+- **[question-tidy] Owner 2026-11-10 (design pick 2), over the rules below where they differ:** the choices are plain
+  rows on the card under full-width hairlines (no inset list, no fill of their own), ≥ 44 pt with 10 pt above and below
+  and the mark at the text margin, 10 pt under the question; "Recommended" is a small tinted tag at the row's trailing
+  edge on its first line; two to six questions show one 16 × 4 pt bar each before "2 of 3" (VoiceOver still hears
+  "Question 2 of 3"); a tap on a pick-one choice that is not on the last page moves on after 0.22 s; and the first
+  page has no foot (no Next) while it is pick-one, unanswered and "Something else…" is closed.
 - **Head** (44 pt): "Question 2 of 3", or "Question" for one, in Footnote semibold label-2. Trailing: **Skip** in tint,
   Body.
 - **Pages:** every page is laid out in one container, and the container's height is the **shown** page's. Only the

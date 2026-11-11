@@ -1583,8 +1583,9 @@ final class PagesTests: XCTestCase {
                 (($0["params"] as? [String: Any])?["text"] as? String)?.hasPrefix("I rolled my Hermes HQ tile") == true
             }
         }, "the bot that keeps the tile up to date is told to keep Version 1: \(asks)")
-        try account.control("/__fixture/turn-end", ["match": "I rolled my Hermes HQ tile", "text": "The job keeps this look."])
         closeSheet()
+        XCTAssertTrue(waitUntil(10) { tile.label.contains("Updating") }, "the tile says it's updating while the bot checks its job: \(tile.label)")
+        try account.control("/__fixture/turn-end", ["match": "I rolled my Hermes HQ tile", "text": "The job keeps this look."])
         XCTAssertTrue(waitUntil(15) { !tile.label.contains("Updating") }, "the tile is done updating: \(tile.label)")
         Thread.sleep(forTimeInterval: 3)
         shot("tile-versions-tile-back")

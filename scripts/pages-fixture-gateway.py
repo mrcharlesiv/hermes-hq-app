@@ -36,6 +36,7 @@ the add-on's /status with every flag on (tasks: true), POST /tasks/prep-job/{pro
 mockup's list and a chat ('s-tasks') where Hermes adds two with tasks_add; --tasks-chat puts that exchange at the end of
 Hermes's own Bot Chat too; --no-tasks answers 404 for the routes (an add-on older than 0.9.32).
 """
+import shutil
 import argparse, base64, copy, datetime, hashlib, importlib.util, json, mimetypes, os, pathlib, socket, struct, sys, threading, time, zlib
 from urllib.parse import urlparse, parse_qs, unquote
 
@@ -939,6 +940,7 @@ def pdf_one_page(text):
 
 def make_files(port):
     FILES.mkdir(parents=True, exist_ok=True)
+    for kept in FILES.glob('*.versions'): shutil.rmtree(kept, ignore_errors=True)   # [tile-versions] a run starts with none kept
     (FILES / 'summary.md').write_text('---\ntitle: Morning reading\ntags:\n- agents\n- memory\n---\n\n# Morning reading\n\n'
                                       '**Agents that plan in the open.** Showing each step as it happens makes long tasks easier to trust.\n\n'
                                       '- Small models, long memory\n- Evaluating tool use\n\n```python\nprint("three papers")\n```\n\n'
@@ -1049,8 +1051,9 @@ def rpc(method, params):
         return resumed(sid)
     if method == 'session.create': return resumed(bot_chat_id(profile if profile in BOT_NAMES else 'default'))
     if method == 'prompt.submit' and ('live tile' in json.dumps(params) or 'Change my Hermes HQ Dashboard tile' in json.dumps(params)
+                                      or 'I rolled my Hermes HQ tile' in json.dumps(params)   # [tile-versions] after a roll back
                                       or '(Task id ' in json.dumps(params)):   # [tasks] Ask Hermes to Help
-        if 'Change my Hermes HQ Dashboard tile' in json.dumps(params):
+        if 'Change my Hermes HQ Dashboard tile' in json.dumps(params) or 'I rolled my Hermes HQ tile' in json.dumps(params):
             with lock: STREAMING.add(params.get('session_id') or '')
         return {'status': 'streaming', 'user_row_id': 1}
     if method == 'prompt.submit' and SESSIONS.get(find_session(params.get('session_id')) or '', {}).get('title', '').startswith('Task: '):

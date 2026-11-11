@@ -405,6 +405,13 @@ final class TileMaker {
             if let activity = chat as? ChatActivityProviding { activity.sendHidden(prompt, display: nil) } else { chat.send(prompt) }
             AppLog.note("pages", "live tile button asked of \(AppLog.tag(bot.id)) (\(what.count) chars)")
             NotificationCenter.default.post(name: Self.changed, object: nil)
+            // [tile-versions] A hidden ask that never started (the send was refused, the gateway is away) has no turn to
+            // end: the tile would say "Updating…" until the app next opened. It gives up, and the tile is drawn again.
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.startGrace) { [weak self] in
+                guard let self, self.watching, !self.sawRunning, !self.chat.isRunning else { return }
+                AppLog.note("pages", "live tile ask of \(AppLog.tag(self.bot.id)) never started; letting the tile go")
+                self.finish(lastTry: true)
+            }
             return
         }
         let prompt = changing == nil ? Self.prompt(what) : Self.changePrompt(path: path, what: what)
@@ -425,9 +432,17 @@ final class TileMaker {
     private func check() {
         guard watching else { return }
         if chat.isRunning { sawRunning = true; return }
-        guard sawRunning else { return }
+        guard sawRunning else {
+            // [tile-versions] A hidden ask refused before it ran: done, with its problem.
+            if acting, turnError() != nil { finish(lastTry: true) }
+            return
+        }
         finish()
     }
+
+    /// How long a hidden ask (a tile's button, the turn after a roll back) may take to start before the tile stops
+    /// saying "Updating…".
+    static let startGrace: TimeInterval = 40
 
     /// The page the bot's reply to this ask names, if that reply is in the chat yet.
     private func handedOverPath() -> String? {

@@ -143,7 +143,7 @@ nonisolated enum TileVersionError: Error, Sendable {
 
     var words: String {
         switch self {
-        case .unreadable: "This tile’s page couldn’t be read."
+        case .unreadable: "This tile’s page couldn’t be read, or is too large to keep versions of."
         case .missing: "That version’s copy is gone from the bot’s computer."
         case .refused(let reason): reason
         }
@@ -154,7 +154,7 @@ nonisolated enum TileVersionError: Error, Sendable {
     }
 }
 
-/// The reads and writes on the bot's computer (`/api/fs/read-text`, `/api/fs/write-text`, `/api/files/mkdir`).
+/// The reads and writes on the bot's computer (`/api/fs/download`, `/api/fs/write-text`, `/api/files/mkdir`).
 nonisolated struct TileVersionStore: Sendable {
     let client: any GatewayClient
     /// The tile's bot.
@@ -166,12 +166,16 @@ nonisolated struct TileVersionStore: Sendable {
         profile.isEmpty ? [] : [URLQueryItem(name: "profile", value: profile)]
     }
 
+    /// The most of a page kept as a version (the gateway takes a text write up to 8 MB).
+    static let largest = 6 * 1024 * 1024
+
+    /// A file's text, whole: the download route, not `/api/fs/read-text`, which stops at 512 KB (a tile with its data
+    /// inline can be 1 MB). nil when there is no such file.
     private func readText(_ path: String) async throws -> String? {
         do {
-            let json = try await PagesREST.json(client, "GET", "/api/fs/read-text", query: [URLQueryItem(name: "path", value: path)] + query,
-                                                timeout: 30)
-            if json["binary"]?.bool == true || json["truncated"]?.bool == true { throw TileVersionError.unreadable }
-            guard let text = json["text"]?.string else { throw TileVersionError.unreadable }
+            let data = try await PagesREST.send(client, "GET", "/api/fs/download", query: [URLQueryItem(name: "path", value: path)] + query,
+                                                timeout: 60)
+            guard data.count <= Self.largest, let text = String(data: data, encoding: .utf8) else { throw TileVersionError.unreadable }
             return text
         } catch let error as HTTPError where error.status == 404 {
             return nil

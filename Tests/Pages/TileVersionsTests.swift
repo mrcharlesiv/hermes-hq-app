@@ -6,34 +6,45 @@ import Synchronization
 import Testing
 @testable import HermesHQNative
 
-/// The bot's computer, as the three routes the versions use see it.
-private nonisolated final class FakeDisk: Sendable {
+/// The bot's computer, as the three routes the versions use see it (a download answers with the file's own bytes).
+private nonisolated final class FakeDisk: GatewayClient, Sendable {
     let files = Mutex<[String: String]>([:])
     let folders = Mutex<Set<String>>([])
+    let account = GatewayAccount(id: "http://127.0.0.1:9735|pages", baseURL: URL(string: "http://127.0.0.1:9735")!, kind: .password,
+                                 username: "pages", label: "pages fixture")
 
-    func client() -> PagesFakeClient {
-        PagesFakeClient { [self] request in
-            switch (request.method, request.path) {
-            case ("GET", "/api/fs/read-text"):
-                let path = request.query["path"] ?? ""
-                guard let text = files.withLock({ $0[path] }) else { throw httpError(404, "File not found") }
-                return ["path": .string(path), "text": .string(text), "binary": false, "truncated": false]
-            case ("POST", "/api/fs/write-text"):
-                let path = request.body?["path"]?.string ?? ""
-                let parent = (path as NSString).deletingLastPathComponent
-                guard parent == "/home/otto/dashboards" || folders.withLock({ $0.contains(parent) }) else {
-                    throw httpError(400, "Parent directory does not exist")
-                }
-                files.withLock { $0[path] = request.body?["content"]?.string ?? "" }
-                return ["ok": true, "path": .string(path)]
-            case ("POST", "/api/files/mkdir"):
-                _ = folders.withLock { $0.insert(request.body?["path"]?.string ?? "") }
-                return ["ok": true]
-            default:
-                throw httpError(404, "Not Found")
+    func client() -> FakeDisk { self }
+
+    func rest(_ method: String, _ path: String, query: [URLQueryItem], body: Data?) async throws -> Data {
+        let json = body.flatMap { try? JSONValue.parse($0) }
+        switch (method, path) {
+        case ("GET", "/api/fs/download"):
+            let asked = query.first { $0.name == "path" }?.value ?? ""
+            guard let text = files.withLock({ $0[asked] }) else { throw httpError(404, "File not found") }
+            return Data(text.utf8)
+        case ("POST", "/api/fs/write-text"):
+            let asked = json?["path"]?.string ?? ""
+            let parent = (asked as NSString).deletingLastPathComponent
+            guard parent == "/home/otto/dashboards" || folders.withLock({ $0.contains(parent) }) else {
+                throw httpError(400, "Parent directory does not exist")
             }
+            files.withLock { $0[asked] = json?["content"]?.string ?? "" }
+            return try JSONValue.object(["ok": true, "path": .string(asked)]).encoded()
+        case ("POST", "/api/files/mkdir"):
+            _ = folders.withLock { $0.insert(json?["path"]?.string ?? "") }
+            return try JSONValue.object(["ok": true]).encoded()
+        default:
+            throw httpError(404, "Not Found")
         }
     }
+
+    func call(_ method: String, _ params: JSONValue, timeout: Duration) async throws -> JSONValue { .object([:]) }
+    func events() -> AsyncStream<GatewayEvent> { AsyncStream { _ in } }
+    func connectionStates() -> AsyncStream<ConnectionState> { AsyncStream { $0.yield(.ready) } }
+    var latestReady: JSONValue? { nil }
+    func appDidBecomeActive() {}
+    func appDidEnterBackground() {}
+    func shutdown() {}
 }
 
 @MainActor
@@ -155,6 +166,17 @@ struct TileVersionsTests {
         disk.files.withLock { $0[tile] = page("table") }
         list = try await store.note(kind: .changed, what: "Make it a table")
         #expect(list.current == 4)
+    }
+
+    @Test func aLargeTileIsKeptWhole() async throws {
+        // A real tile with its data inline is 1 MB: past what a text read gives (512 KB), so the page is downloaded.
+        let big = page("line", data: "{\"rows\": \"" + String(repeating: "x", count: 1_100_000) + "\"}")
+        let disk = FakeDisk()
+        disk.files.withLock { $0[tile] = big }
+        let store = TileVersionStore(client: disk.client(), profile: "otto", tile: tile)
+        let list = try await store.note(kind: .made, what: nil)
+        #expect(list.current == 1)
+        #expect(disk.files.withLock { $0["/home/otto/dashboards/revenue.versions/v1.html"] } == big)
     }
 
     @Test func aMissingCopyIsSaid() async throws {

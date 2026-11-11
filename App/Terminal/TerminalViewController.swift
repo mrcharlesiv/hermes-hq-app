@@ -327,15 +327,12 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
     private func open() async {
         state = .asking
         if !TerminalSettings.allowed(account.id) {
-            #if targetEnvironment(macCatalyst)
             // [mac] Audit 2026-11-02 #6: on the Mac the iPhone's alert stood over an empty page with a bare cursor in its
             // corner, its Turn On a grey pill. The page asks itself: the card's accent Turn On (Return), Not Now (Esc).
+            // [terminal-points] Owner 2026-11-10 (design pick 24 as approved): the iPhone and iPad ask with the same
+            // card, so its three points have their marks and the risk its orange (a system alert has neither).
             state = .consent
             return
-            #else
-            guard await askToTurnOn() else { state = .off; return }
-            TerminalSettings.setAllowed(true, account: account.id)
-            #endif
         }
         switch await TerminalUnlock.unlock() {
         case .unlocked: break
@@ -442,23 +439,6 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
         cover.isHidden = !(covered || relocked)
         updateKeyboardButton()
         installMenu()
-    }
-
-    private func askToTurnOn() async -> Bool {
-        await withCheckedContinuation { continuation in
-            let answer = AlertAnswer(continuation, unanswered: false)
-            let alert = UIAlertController(
-                title: "Open a Terminal on \(computerName)?",
-                // [terminal-points] Three short lines, the risk first (an alert has no room for their marks).
-                message: TerminalConsentWords.points(unlock: "Face ID").map { $0.lead + $0.rest }.joined(separator: "\n\n"),
-                preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "Not Now", style: .cancel) { _ in answer.answer(false) })
-            let on = UIAlertAction(title: "Turn On", style: .default) { _ in answer.answer(true) }
-            alert.addAction(on)
-            alert.preferredAction = on
-            guard let host = FailureAlert.topmost(self) else { return answer.answer(false) }
-            host.present(alert, animated: true)
-        }
     }
 
     /// [mac] The consent card's answers (its buttons, Return and Esc).

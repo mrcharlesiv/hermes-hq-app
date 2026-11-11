@@ -128,7 +128,8 @@ final class GatewayPageModel {
             // Push comes from one gateway (MEM gateway-switcher): the footer says so (UX study #268).
             ? "Each gateway keeps its own chats, drafts and sign-in on this \(DeviceWord.name). Switching doesn’t sign you out. "
                 + "Alerts come only from the gateway in use."
-            : "Add another gateway to switch between them here. Each keeps its own chats, drafts and sign-in."
+            // [gateway-rows] A sentence (design pick 25 as approved): Add Gateway… is the row right above it.
+            : "Each gateway keeps its own chats, drafts and sign-in."
     }
 
     /// The address and account are the rows just above, so the footer says only what they don't. UX study #24: it ties
@@ -136,8 +137,8 @@ final class GatewayPageModel {
     /// [mac] Stress test 2026-10-28 #60: the host is named once, as HostWord does, and not set against "your Mac" (which
     /// is often the same computer, so the sentence read as two).
     var connectionFooter: String {
-        "The Address is the one you signed in with: where Hermes HQ finds \(HostWord.phrase). "
-            + "You stay signed in through \(DeviceWord.system) Keychain (never your password), and it renews itself."
+        // [gateway-rows] Two short sentences (design pick 25 as approved).
+        "The address is where Hermes HQ finds \(HostWord.phrase). You stay signed in through the \(DeviceWord.system) Keychain."
     }
 
     /// The gateway in use, for the Connection card's Name row (Rename without a swipe or Edit).

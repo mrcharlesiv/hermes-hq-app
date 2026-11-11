@@ -61,6 +61,11 @@ import UIKit
     private(set) var starting = false
     private(set) var elapsed = 0.0
     private(set) var total = 0.0
+    /// [memo-slim] The sound's shape, loudest part 1 (empty until the file is read, or when it can't be): the bars the
+    /// scrubber draws in place of a plain line.
+    private(set) var shape: [Double] = []
+    /// [memo-slim] The file once it is found, for Share.
+    private(set) var file: URL?
     /// While the scrubber is dragged the player's clock does not move it.
     var dragging = false
     /// The content's own height as SwiftUI laid it out (the sheet is exactly this tall under its bar).
@@ -104,8 +109,12 @@ import UIKit
                 guard let self, self.open, !Task.isCancelled else { return }
                 guard seconds.isFinite, seconds > 0 else { throw HTTPError(status: 415, body: "empty") }
                 self.total = seconds
+                self.file = url
                 self.phase = .ready
                 self.read()
+                let bars = await Task.detached(priority: .utility) { AudioShape.bars(of: url) }.value
+                guard self.open, !Task.isCancelled else { return }
+                self.shape = bars
             } catch {
                 guard let self, self.open, !Task.isCancelled else { return }
                 self.phase = .failed
@@ -182,6 +191,29 @@ import UIKit
     }
 }
 
+/// [memo-slim] A sound file's shape for the player's scrubber: the peak of a short stretch at each of `count` places
+/// along it, scaled so the loudest is 1 and none is under 0.08 (silence still shows a tick). Reads only those
+/// stretches, so an hour-long file costs no more than a short memo. Empty when the file can't be read.
+nonisolated enum AudioShape {
+    static func bars(of url: URL, count: Int = 44) -> [Double] {
+        guard let file = try? AVAudioFile(forReading: url), file.length > 0 else { return [] }
+        let format = file.processingFormat
+        let stretch: AVAudioFrameCount = 4096
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: stretch) else { return [] }
+        var peaks: [Double] = []
+        for index in 0..<count {
+            file.framePosition = AVAudioFramePosition(Double(file.length) * Double(index) / Double(count))
+            buffer.frameLength = 0
+            guard (try? file.read(into: buffer, frameCount: stretch)) != nil, let samples = buffer.floatChannelData else { return [] }
+            var peak: Float = 0
+            for frame in 0..<Int(buffer.frameLength) { peak = max(peak, abs(samples[0][frame])) }
+            peaks.append(Double(peak))
+        }
+        guard let top = peaks.max(), top > 0 else { return [] }
+        return peaks.map { max(0.08, $0 / top) }
+    }
+}
+
 final class AudioPreviewController: UIHostingController<HQScaledRoot<AudioPreviewView>> {
     private let model: AudioPreviewModel
 
@@ -196,6 +228,14 @@ final class AudioPreviewController: UIHostingController<HQScaledRoot<AudioPrevie
         })
         close.accessibilityIdentifier = "audio.preview.close"
         navigationItem.hqPlaceClose(close)   // [mac] Stress test 2026-10-28 #55: trailing on the Mac
+        // [memo-slim] Share in the bar's other corner (the iPhone and iPad; the Mac's corner has Done).
+        if !DeviceWord.isMac {
+            let share = UIBarButtonItem(image: UIImage(systemName: "square.and.arrow.up"), primaryAction: UIAction { [weak self] _ in self?.share() })
+            share.accessibilityLabel = "Share"
+            share.accessibilityIdentifier = "audio.preview.share"
+            navigationItem.rightBarButtonItem = share
+            shareItem = share
+        }
         model.onContentHeight = { [weak self] in
             guard let sheet = self?.navigationController?.sheetPresentationController else { return }
             sheet.animateChanges { sheet.invalidateDetents() }
@@ -203,6 +243,15 @@ final class AudioPreviewController: UIHostingController<HQScaledRoot<AudioPrevie
     }
 
     @MainActor required dynamic init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    private var shareItem: UIBarButtonItem?
+
+    private func share() {
+        guard let file = model.file else { return }
+        let sheet = UIActivityViewController(activityItems: [file], applicationActivities: nil)
+        sheet.popoverPresentationController?.barButtonItem = shareItem
+        present(sheet, animated: true)
+    }
 
     /// The one detent: the bar, the content as tall as it lays out at this width and text size, and a little air.
     /// (A custom detent's value leaves the bottom safe area out, so the home indicator's strip comes on top of this.)
@@ -334,6 +383,15 @@ struct AudioPreviewView: View {
                         model.dragging = false
                     }
                 }
+                // [memo-slim] With the sound's shape read, the scrubber is drawn as its bars (the played part in the
+                // tint) and the slider itself stays on top, unseen, for the drag and for VoiceOver.
+                .opacity(model.shape.isEmpty || typeSize.isAccessibilitySize ? 1 : 0.02)
+                .background {
+                    if !model.shape.isEmpty, !typeSize.isAccessibilitySize {
+                        AudioShapeBars(shape: model.shape, played: model.dragging ? dragValue : model.fraction)
+                            .accessibilityHidden(true)
+                    }
+                }
                 .disabled(model.phase != .ready || model.total <= 0)
                 .accessibilityLabel("Position")
                 .accessibilityValue(AudioPreviewText.spokenPosition(elapsed: shownElapsed, total: model.total))
@@ -395,5 +453,29 @@ private struct SolidPlayStyle: ButtonStyle {
             .background(Circle().fill(Color.hqTint))
             .opacity(configuration.isPressed ? 0.7 : enabled ? 1 : 0.5)
             .contentShape(Circle())
+    }
+}
+
+
+/// [memo-slim] The sound's shape as thin bars across the scrubber's width, those before `played` in the tint.
+struct AudioShapeBars: View {
+    var shape: [Double]
+    var played: Double
+
+    var body: some View {
+        GeometryReader { geometry in
+            let count = max(1, shape.count)
+            let gap: CGFloat = 2
+            let width = max(1, (geometry.size.width - gap * CGFloat(count - 1)) / CGFloat(count))
+            HStack(alignment: .center, spacing: gap) {
+                ForEach(Array(shape.enumerated()), id: \.offset) { index, level in
+                    Capsule()
+                        .fill(Double(index) + 0.5 <= played * Double(count) ? Color.hqTint : Color.hqLabel3)
+                        .frame(width: width, height: max(3, CGFloat(level) * geometry.size.height))
+                }
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .center)
+        }
+        .frame(height: 30)
     }
 }

@@ -857,7 +857,7 @@ final class PagesTests: XCTestCase {
 
         // Owner 2026-11-01 on that page: "Idk how to use this page". Open Artifacts goes where things are pinned, and
         // a pin made there is on the page coming back.
-        app.buttons["Open Artifacts"].firstMatch.tap()
+        app.buttons["Or pin one from a chat or Artifacts"].firstMatch.tap()   // [empty-tidy] its new words
         let artifacts = app.collectionViews["artifacts.list"]
         XCTAssertTrue(artifacts.waitForExistence(timeout: 5), "Open Artifacts pushes Artifacts")
         let row = artifacts.cells["artifact-row-export.csv"]

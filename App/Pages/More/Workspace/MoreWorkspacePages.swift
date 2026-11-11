@@ -707,7 +707,25 @@ final class MoreWorkspaceController: UITableViewController {
         return directory.map(space.display)
     }
 
+    /// [folder-card] Owner 2026-11-10 (design pick 27 as approved): on the iPhone and iPad, where the folder comes
+    /// from is the note under its card, not a line inside it.
+    private var rootSourceBelow: Bool { !DeviceWord.isMac && !traitCollection.preferredContentSizeCategory.isAccessibilityCategory }
+
+    private var rootSource: String {
+        if let root = space.root { return MoreWorkspaceRoot.sourceLine(root.source, chatTitle: space.chatTitle) }
+        if case .loading = content { return "" }
+        return "Choose a folder to browse."
+    }
+
+    override func tableView(_ tableView: UITableView, willDisplayFooterView view: UIView, forSection section: Int) {
+        guard section < contentSection, headerRows.indices.contains(section), case .root = headerRows[section] else { return }
+        (view as? UITableViewHeaderFooterView)?.textLabel?.accessibilityIdentifier = "workspace.root.source"
+    }
+
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        if section < contentSection, headerRows.indices.contains(section), case .root = headerRows[section] {
+            return rootSourceBelow && !rootSource.isEmpty ? rootSource : nil
+        }
         guard section == contentSection else { return nil }
         if isChooser { return "Files and Changes will show the folder you choose." }
         if isTable { return nil }   // [mac-tools] the count is beside the trail
@@ -910,11 +928,11 @@ final class MoreWorkspaceController: UITableViewController {
         let cell = tableView.dequeueReusableCell(withIdentifier: "root", for: indexPath) as! MoreWorkspaceRootCell
         if let root = space.root {
             cell.set(name: MoreWorkspaceRoot.name(root.path), path: space.display(root.path),
-                     source: MoreWorkspaceRoot.sourceLine(root.source, chatTitle: space.chatTitle))
+                     source: rootSourceBelow ? "" : rootSource)
         } else if case .loading = content {
             cell.set(name: "Finding the Folder…", path: "", source: "")
         } else {
-            cell.set(name: "No Folder", path: "", source: "Choose a folder to browse.")
+            cell.set(name: "No Folder", path: "", source: rootSourceBelow ? "" : rootSource)
         }
         // The bare ⋯ every row uses (the circled one is for bar buttons).
         cell.accessoryView = menuButton("ellipsis", menu: rootMenu(), label: "Folder Options", identifier: "workspace.root.menu")
@@ -1254,7 +1272,9 @@ final class MoreWorkspaceRootCell: UITableViewCell {
     override func layoutSubviews() {
         super.layoutSubviews()
         let large = traitCollection.preferredContentSizeCategory.isAccessibilityCategory
-        let room = head.bounds.width
+        // The words' room is the row's less the icon (the pair's own width can't say: stacked, it is only as wide as
+        // the longer of the two).
+        let room = contentView.layoutMarginsGuide.layoutFrame.width - icon.intrinsicContentSize.width - row.spacing
         let name = nameLabel.intrinsicContentSize.width
         let path = (pathLabel.text ?? "").replacingOccurrences(of: "\u{200B}", with: "")
         let pathWidth = pathLabel.isHidden ? 0 : ceil((path as NSString).size(withAttributes: [.font: pathLabel.font as Any]).width)
@@ -1264,6 +1284,9 @@ final class MoreWorkspaceRootCell: UITableViewCell {
             head.axis = axis
             head.alignment = beside ? .firstBaseline : .fill
             head.spacing = beside ? 8 : 2
+            // Beside the path the name keeps its own width; over it, it runs the words' width like the path.
+            nameLabel.setContentHuggingPriority(beside ? .required : .defaultLow, for: .horizontal)
+            nameLabel.setContentCompressionResistancePriority(beside ? .required : .defaultHigh, for: .horizontal)
             setNeedsLayout()
         }
     }
@@ -1291,10 +1314,12 @@ final class MoreWorkspaceRootCell: UITableViewCell {
         head.spacing = 2
         head.addArrangedSubview(nameLabel)
         head.addArrangedSubview(pathLabel)
-        nameLabel.setContentHuggingPriority(.required, for: .horizontal)
-        nameLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        nameLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)   // stacked to start with (see layoutSubviews)
+        // The path takes the rest of the line (with nothing under the pair, the folder icon was stretched instead).
+        pathLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         let words = UIStackView(arrangedSubviews: [head, sourceLabel])
         words.axis = .vertical
+        words.setContentHuggingPriority(.defaultLow, for: .horizontal)
         words.spacing = 2
         row.addArrangedSubview(icon)
         row.addArrangedSubview(words)

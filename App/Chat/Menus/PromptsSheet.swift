@@ -193,7 +193,8 @@ struct PromptsView: View {
     }
 
     private var emptyWords: String {
-        "Keep the prompts you use often here. A \(DeviceWord.tap) puts one in the message box. You can also \(DeviceWord.hold) your own message and choose Save as Prompt."
+        // [empty-tidy] Owner 2026-11-10 (design pick 9): what the page is for, in a line; New Prompt is the button under it.
+        "Keep the prompts you use often here. A \(DeviceWord.tap) puts one in the message box."
     }
 
     /// [mac] Stress test 2026-10-28 round 8: on the Mac the state is laid out by hand. The system's state, a row in this

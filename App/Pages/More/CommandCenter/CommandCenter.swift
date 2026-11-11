@@ -434,15 +434,19 @@ struct CommandCenterSystem: View {
                 .disabled(!model.canStartAction)
                 .accessibilityIdentifier("command-center.restart")
         } else {
-            VStack(alignment: .leading, spacing: 8) {
-                if model.restart.isBusy {
-                    Text("Restart Gateway").foregroundStyle(Color.hqLabel2)
-                } else {
-                    Button("Restart Gateway") { model.askRestart() }
-                        .disabled(!model.canStartAction)
-                        .accessibilityIdentifier("command-center.restart")
+            HStack(alignment: .top, spacing: 12) {
+                // [status-tidy] The busy row keeps its mark, as the rows around it.
+                if !DeviceWord.isMac { MaintenanceMark(symbol: "arrow.clockwise") }
+                VStack(alignment: .leading, spacing: 8) {
+                    if model.restart.isBusy {
+                        Text("Restart Gateway").foregroundStyle(Color.hqLabel2)
+                    } else {
+                        Button("Restart Gateway") { model.askRestart() }
+                            .disabled(!model.canStartAction)
+                            .accessibilityIdentifier("command-center.restart")
+                    }
+                    GatewayRestartProgress(run: model.restart)
                 }
-                GatewayRestartProgress(run: model.restart)
             }
             .padding(.vertical, 6)
         }
@@ -474,7 +478,10 @@ struct CommandCenterSystem: View {
             let recheck = (check == nil || check?.couldNotCheck == true) && model.updateChecked
             if let run = model.updateRun {
                 // [update-flow] "Updating Studio…" and the step under way; a tap brings the same sheet back.
-                HermesUpdateRow(run: run)
+                HStack(spacing: 12) {
+                    if !DeviceWord.isMac { MaintenanceMark(symbol: "arrow.up.circle", tint: true) }   // [status-tidy]
+                    HermesUpdateRow(run: run)
+                }
             } else if canUpdate {
                 Button { model.askUpdate() } label: { updateLabel(check, tint: true) }
                     .disabled(!model.canStartAction)

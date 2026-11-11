@@ -1511,10 +1511,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         if !DeviceWord.isMac {
             let text = NSMutableAttributedString(string: "Pin the pages, pictures and files your bots make, and keep them one \(DeviceWord.tap) away.",
                                                  attributes: [.font: font, .foregroundColor: colour])
-            let small = font.withSize(max(11, font.pointSize - 2))
-            text.append(NSAttributedString(string: "\n", attributes: [.font: font.withSize(font.pointSize * 0.4)]))
-            text.append(NSAttributedString(string: "\nIn a chat, \(DeviceWord.hold) one and choose Pin as Tile. In Artifacts, swipe one to the right.",
-                                           attributes: [.font: small, .foregroundColor: colour]))
+            // The sentence alone (design pick 9 as approved): the second way in is the quiet button under New Tile.
             return text
         }
         let text = NSMutableAttributedString(string: "Pin the pages, pictures and files your bots make, and keep them one \(DeviceWord.tap) away.\n",
@@ -1889,6 +1886,15 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
                 if services != nil {
                     var second = UIButton.Configuration.hqMacPush(or: .plain())   // [mac] Mac polish #107: a push button, not a bare link
                     second.title = "Open Artifacts"
+                    if !DeviceWord.isMac {
+                        // [empty-tidy] One quiet line under New Tile says the other way and opens it.
+                        second.title = "Or pin one from a chat or Artifacts"
+                        second.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+                            var out = incoming
+                            out.font = HQFont.preferred(.footnote)
+                            return out
+                        }
+                    }
                     config.secondaryButton = second
                     config.secondaryButtonProperties.primaryAction = UIAction { [weak self] _ in self?.openArtifactsPage() }
                 }

@@ -1384,6 +1384,8 @@ struct GatewayCardView: View {
                     .foregroundStyle(Color.hqLabel3)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }, action: { rowWidth = $0 })   // [gateway-card]
         .padding(.vertical, Theme.isDesktop ? 12 : padV)
         .frame(minHeight: Theme.isDesktop ? 76 : 64)
         .contentShape(Rectangle())
@@ -1396,6 +1398,14 @@ struct GatewayCardView: View {
 
     private var icon: some View {
         WornAppIcon(side: 48)
+    }
+
+    /// [gateway-card] The row's width, for choosing the status line's form.
+    @State private var rowWidth: CGFloat = 0
+
+    private static func width(_ text: String, _ font: UIFont, medium: Bool = false) -> CGFloat {
+        let face = medium ? HQFont.system(ofSize: font.pointSize, weight: .medium) : font
+        return ceil((text as NSString).size(withAttributes: [.font: face]).width) + 2
     }
 
     /// How far the dot's middle sits above the status line's baseline.
@@ -1448,15 +1458,32 @@ struct GatewayCardView: View {
             if model.factPieces.isEmpty {
                 state
             } else {
-                ViewThatFits(in: .horizontal) {
+                // Chosen by measuring (a `ViewThatFits` here always took the two-line form: the row's first layout pass
+                // offers the column no width): the line at its own sizes, else a size down, else two lines.
+                let facts = " · " + model.factPieces.joined(separator: " · ")
+                let room = rowWidth - 48 - 14 - (DeviceWord.isMac ? 8 : 34)
+                let full = dot + 6 + Self.width(model.stateWords, HQFont.preferred(.subheadline), medium: true) + Self.width(facts, HQFont.preferred(.footnote))
+                let small = 7 + 5 + Self.width(model.stateWords + facts, HQFont.preferred(.caption1), medium: true)
+                if rowWidth > 0, !typeSize.isAccessibilitySize, full <= room {
                     HStack(alignment: .firstTextBaseline, spacing: 0) {
                         state
-                        Text(" · " + model.factPieces.joined(separator: " · "))
+                        Text(facts)
                             .font(Font.hq(.footnote))
                             .foregroundStyle(Color(uiColor: HQPalette.cardNote))
                             .lineLimit(1)
                             .fixedSize()
                     }
+                } else if rowWidth > 0, !typeSize.isAccessibilitySize, small <= room {
+                    // A narrower phone (the mini): the whole line a size down before it is given up for two lines.
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        Circle().fill(model.dotColor).frame(width: 7, height: 7)
+                            .alignmentGuide(.firstTextBaseline) { $0.height / 2 + dotLift - 0.5 }
+                        Text("\(Text(model.stateWords).fontWeight(.medium).foregroundStyle(Color.hqLabel2))\(Text(facts).foregroundStyle(Color(uiColor: HQPalette.cardNote)))")
+                            .font(Font.hq(.caption))
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                } else {
                     VStack(alignment: .leading, spacing: 3) {
                         state
                         // Mac polish #68: label 2 in the iOS look (label 3 read about 2.1:1 on the card); the Desktop Look's 3.

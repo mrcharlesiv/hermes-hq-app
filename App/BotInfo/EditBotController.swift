@@ -308,6 +308,9 @@ struct EditBotView: View {
                 }
             } header: { HQSectionLabel {
                 Text("Picture")
+            } } footer: { HQSectionFooter {
+                // [edit-picture] The note stands under the card, not inside it (design pick 22 as approved).
+                if pictureNoteBelow { headNote }
             } }
             Section {
                 // Empty means no custom title, so the field is never filled with the name (that would save one).
@@ -337,6 +340,12 @@ struct EditBotView: View {
         Button(action: editHead) { Text("Edit Head").frame(minHeight: Self.borderedLabelMinHeight) }
             .hqBorderedButtonStyle()
             .accessibilityIdentifier("edit-bot.edit-head")
+    }
+
+    /// [edit-picture] The side-by-side card (the iOS look, standard text sizes, a gateway that stores pictures) with
+    /// the Head tab showing: its note is the section's footer.
+    private var pictureNoteBelow: Bool {
+        model.supportsPictures && !Theme.isDesktop && !typeSize.isAccessibilitySize && model.pictureTab == .head
     }
 
     private var headNote: some View {
@@ -372,7 +381,6 @@ struct EditBotView: View {
                         }
                         .frame(maxWidth: .infinity)
                     }
-                    if model.pictureTab == .head { headNote }
                 }
             }
         }

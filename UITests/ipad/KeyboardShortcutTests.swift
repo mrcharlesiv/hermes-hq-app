@@ -229,7 +229,7 @@ final class KeyboardShortcutTests: IPadTestCase {
         XCTAssertTrue(choice.waitForExistence(timeout: 8), "Shift-Command-N asks which bot")
         IPad.shot(app, "keys-new-chat-choose", in: self)
         choice.tap()
-        app.descendants(matching: .any)["new-chat-project-none"].tap()
+        app.descendants(matching: .any)["new-chat-start"].tap()
         XCTAssertTrue(IPad.waitUntil(timeout: 10) { IPad.count("session.create", account) == 2 }, "one more session.create")
         XCTAssertEqual(try created(1)?["profile"] as? String, "research")
     }

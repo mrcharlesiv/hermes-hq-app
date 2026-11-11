@@ -16,7 +16,7 @@ extension SessionsTests {
         XCTAssertTrue(pill.waitForExistence(timeout: 5), "New Chat")
         fingerTap(app, pill)
         XCTAssertTrue(waitUntil(3) { pill.isSelected }, "the pill lights")
-        fingerTap(app, app.buttons["new-chat-project-none"])
+        fingerTap(app, app.buttons["new-chat-start"])
         XCTAssertTrue(waitUntil(8) { self.rpc("session.create").contains { $0["profile"] as? String == bot } }, "session.create in \(bot)")
         XCTAssertTrue(app.tables["chat.table"].waitForExistence(timeout: 10), "the new chat opens")
         XCTAssertFalse(app.buttons["new-chat-bot-\(bot)"].exists, "the sheet is gone")
@@ -39,10 +39,13 @@ extension SessionsTests {
         app.buttons["sessions.compose"].tap()
         let website = app.buttons["new-chat-project-Website"]
         XCTAssertTrue(website.waitForExistence(timeout: 5), "the projects, as rows")
-        XCTAssertTrue(app.buttons["new-chat-project-none"].exists && app.buttons["new-chat-project-new"].exists, "No Project and New Project…")
+        XCTAssertTrue(app.buttons["new-chat-start"].exists && app.buttons["new-chat-project-new"].exists, "Start Chat and New Project…")
+        XCTAssertTrue(app.buttons["new-chat-start"].label.contains("Start Chat with Hermes"), "the button names the lit bot")
+        XCTAssertFalse(app.buttons["new-chat-project-all"].exists, "a few projects: all on the sheet, no All Projects")
         XCTAssertFalse(website.label.contains("Last used"), "nothing used yet")
         shot(app, "compose-project-choice")
         app.buttons["new-chat-bot-research"].tap()
+        XCTAssertTrue(waitUntil(3) { app.buttons["new-chat-start"].label.contains("Start Chat with Research") }, "the button follows the pill")
         website.tap()
         XCTAssertTrue(waitUntil(8) {
             self.rpc("projects.create").contains { $0["profile"] as? String == "research" && $0["name"] as? String == "Website" }
@@ -57,6 +60,36 @@ extension SessionsTests {
         XCTAssertTrue(app.buttons["new-chat-bot-research"].isSelected, "the bot used last is lit")
         XCTAssertTrue(waitUntil(3) { app.buttons["new-chat-project-Website"].label.contains("Last used") }, "its project says Last used")
         shot(app, "compose-last-used")
+    }
+
+    /// Many projects (owner 2026-11-11, "without overwhelm"): the sheet lists five and All Projects; that page has every
+    /// project A to Z and a search field, and a tap there starts the chat.
+    @MainActor func testC3f_ManyProjectsFoldIntoAllProjects() throws {
+        fixture("/__fixture/mode", ["projects": "many"])
+        let app = launch()
+        XCTAssertTrue(row(app, "s-garden").waitForExistence(timeout: 15))
+        XCTAssertTrue(waitUntil(10) { self.rpc("projects.tree").contains { $0["profile"] as? String == "default" } }, "projects read with the list")
+        app.buttons["sessions.compose"].tap()
+        let all = app.buttons["new-chat-project-all"]
+        XCTAssertTrue(all.waitForExistence(timeout: 5), "All Projects")
+        let listed = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'new-chat-project-'")).count
+        XCTAssertEqual(listed, 7, "five projects, All Projects and New Project…")
+        XCTAssertTrue(app.buttons["new-chat-project-new"].isHittable, "New Project… is on show without a scroll")
+        shot(app, "compose-many-projects")
+        all.tap()
+        let zebra = app.buttons["new-chat-all-Zebra"]
+        let field = app.textFields["new-chat-all-search"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "the search field")
+        XCTAssertTrue(app.buttons["new-chat-all-Budget"].exists, "every project is listed")
+        shot(app, "compose-all-projects")
+        field.tap()
+        field.typeText("zeb")
+        XCTAssertTrue(waitUntil(4) { zebra.exists && !app.buttons["new-chat-all-Budget"].exists }, "the search narrows the list")
+        zebra.tap()
+        XCTAssertTrue(waitUntil(8) {
+            self.rpc("session.create").contains { ($0["cwd"] as? String)?.hasSuffix("/many/zebra") == true && $0["profile"] as? String == "default" }
+        }, "session.create in Zebra's folder (\(rpc("session.create")))")
+        XCTAssertTrue(app.tables["chat.table"].waitForExistence(timeout: 10), "the new chat opens")
     }
 
     /// New Project… is the sheet's last row: the New Project alert for the lit bot.

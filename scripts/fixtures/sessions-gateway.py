@@ -34,7 +34,7 @@ Filter & Sort, chips, Session Info and the reconnect probe (docs/spec/3x-session
                           {"projectsHold":true} (the same for projects.tree; other calls on the socket go on),
                           {"prompts":"hold"|"reply"|"reject"} (a prompt starts a turn that never ends | is answered |
                           is refused, the default), {"bots":40} (the roster grows to that many bots; 1 leaves Hermes alone),
-                          {"projects":"empty"|"odd"|"null"} (projects.tree answers), {"usage":{…}} (every session.usage),
+                          {"projects":"empty"|"odd"|"null"|"many"} (projects.tree answers), {"usage":{…}} (every session.usage),
                           {"down":8} (as a stopped gateway for that many seconds: sockets close, every request is
                           cut off unanswered; the test hooks still answer)
                           {"working":["s-trip"]} (the add-on's sessions/working names those chats: a turn another
@@ -471,6 +471,9 @@ def tree(profile):
         projects += [{'id': 'p_nopath', 'label': 'No Folder', 'path': None, 'repos': []},
                      {'id': 'p_twin_a', 'label': 'Twin', 'path': f'{HOME}/twin-a', 'repos': []},
                      {'id': 'p_twin_b', 'label': 'Twin', 'path': f'{HOME}/twin-b', 'repos': []}, None, 'nope', {'label': 'No Id'}]
+    if odd == 'many':     # nine more: the New Chat sheet lists five and All Projects
+        projects += [{'id': f'p_many_{n.lower()}', 'label': n, 'path': f'{HOME}/many/{n.lower()}', 'repos': []}
+                     for n in ['Budget', 'Fitness', 'Garden', 'Kitchen', 'Newsletter', 'Photos', 'Recipes', 'Travel', 'Zebra']]
     return {'projects': projects, 'active_id': None, 'scoped_session_ids': []}
 
 def check_params(method, params):

@@ -679,6 +679,12 @@ when there is one.
   The sheet is as tall as its rows. Settings › Chat › New Chat Asks for a Project off (`NewChatProjectChoice`, synced):
   with a chip picked the chat starts in no project at once. ⌘N and a Home card's New Chat row never open the sheet.
   Choose a Bot (the plain list) stays for a project's New Chat with no bot picked and Filter › Project › New Project….
+- 2026-11-11 (owner: "without overwhelm"): the sheet has one prominent button, Start Chat (no project, the lit bot;
+  "No Project" is no longer a row), pinned at the foot of the sheet (owner picked it over the top of the sheet and
+  the title bar), under "In a project (optional)". Six projects or fewer are all listed, in the
+  list's order; with more, five (`NewChatLast.shown`: the ones the sheet started for the lit bot, then the ones its
+  newest chats are in, then the list's order) and All Projects <count> ›, which pushes `NewChatAllProjectsView` (A to Z,
+  a search field, the sheet at full height). Rows have no chevron. New Project… is a section of its own.
 - **DECISION (Telegram and scheduled rows):** the owner's note lists "Telegram/One-off sections ignore the chip
   filter" as a known gap of the web. Native applies the chip to every row the list draws.
 

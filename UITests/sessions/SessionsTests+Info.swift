@@ -224,7 +224,7 @@ extension SessionsTests {
         XCTAssertTrue(row(app, "s-garden").waitForExistence(timeout: 15))
         chip(app, "research").tap()
         app.buttons["sessions.compose"].tap()
-        let start = app.buttons["new-chat-project-none"]   // the New Chat sheet, Research lit
+        let start = app.buttons["new-chat-start"]   // the New Chat sheet, Research lit
         XCTAssertTrue(start.waitForExistence(timeout: 5))
         start.tap()
         XCTAssertTrue(app.tables["chat.table"].waitForExistence(timeout: 8), "the new chat")

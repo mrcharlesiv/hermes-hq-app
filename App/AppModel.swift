@@ -450,6 +450,7 @@ final class AppModel: AppServices {
         if DebugHooks.resetSessionsView {          // UI tests: Filter and Sort from its defaults, no lost send or draft kept
             UserDefaults.standard.removeObject(forKey: NewChatLast.botKey)       // the New Chat sheet remembers nothing
             UserDefaults.standard.removeObject(forKey: NewChatLast.projectsKey)
+            UserDefaults.standard.removeObject(forKey: NewChatLast.recentsKey)
             sessions.setView { $0 = SessionsViewPrefs() }
             sessions.showBackgroundRuns = false
             sessions.showOutsideChats = false

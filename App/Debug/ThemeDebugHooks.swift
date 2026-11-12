@@ -21,6 +21,8 @@
 // - `-HQDebugAppBackground <path | id>` the same for Theme › App Background (`none` for either: as never chosen)
 // - `-HQDebugChatBackgroundDim <percent>`, `-HQDebugChatBackgroundBlur YES|NO`  its Dim and Blur (and `…AppBackground…`)
 // - `-HQDebugChatBackgroundSame YES|NO` Chat Background's Use App Background
+// - `-HQDebugAppBackgroundCards YES|NO` [backdrop-cards] App Background's Soft Cards
+// - `-HQDebugFlipCardsAt <seconds>`  [backdrop-cards] Soft Cards flips that long after launch (live relayout)
 // - `-HQDebugChatBackgroundPick <path>` Your Own Photo takes that file instead of opening a system picker (UI tests)
 // - `-HQDebugThemeBackground YES`   with -HQDebugOpenTheme, Backgrounds opens instead ([theme-pages] its own page)
 // - `-HQDebugNoThemeFile YES`       the installer behaves as if the bundled theme file were missing (stress item 11)
@@ -103,6 +105,8 @@ enum ThemeDebugHooks {
             }
             if defaults.object(forKey: "HQDebug\(name)Dim") != nil { defaults.set(defaults.integer(forKey: "HQDebug\(name)Dim"), forKey: keys.dim) }
             if defaults.object(forKey: "HQDebug\(name)Blur") != nil { defaults.set(defaults.bool(forKey: "HQDebug\(name)Blur"), forKey: keys.blur) }
+            // [backdrop-cards] `-HQDebugAppBackgroundCards YES|NO`: Soft Cards.
+            if defaults.object(forKey: "HQDebug\(name)Cards") != nil { defaults.set(defaults.bool(forKey: "HQDebug\(name)Cards"), forKey: keys.cards) }
         }
         if defaults.object(forKey: "HQDebugChatBackgroundSame") != nil {
             defaults.set(defaults.bool(forKey: "HQDebugChatBackgroundSame"), forKey: Backdrop.keys(.chats).sameAsApp)
@@ -134,6 +138,9 @@ enum ThemeDebugHooks {
             }
             return
         }
+        // [backdrop-cards] `-HQDebugFlipCardsAt <seconds>`: Soft Cards flips then, as its switch does (pages update live).
+        let flipAt = UserDefaults.standard.double(forKey: "HQDebugFlipCardsAt")
+        if flipAt > 0 { DispatchQueue.main.asyncAfter(deadline: .now() + flipAt) { Backdrop.app.setCards(!Backdrop.app.cards) } }
         let notifications = UserDefaults.standard.bool(forKey: "HQDebugOpenNotifications")
         guard notifications || UserDefaults.standard.bool(forKey: "HQDebugOpenTheme") else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + (notifications ? 4.0 : 1.0)) {

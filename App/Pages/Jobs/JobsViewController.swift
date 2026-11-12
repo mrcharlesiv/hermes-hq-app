@@ -20,10 +20,10 @@ final class JobsViewController: UIViewController, UICollectionViewDelegate, UISe
     /// [m9/ipad] The placeholder beside the list drops "Choose an item" while the list is empty; it hears when that flips.
     /// UIKit's `contentUnavailableConfiguration` can't be overridden (it lives in an extension), so writes go through here.
     private var emptyConfiguration: (any UIContentConfiguration)? {
-        get { contentUnavailableConfiguration }
+        get { BackdropState.unwrap(contentUnavailableConfiguration) }
         set {
             let flipped = (contentUnavailableConfiguration == nil) != (newValue == nil)
-            contentUnavailableConfiguration = newValue
+            contentUnavailableConfiguration = BackdropState.wrap(newValue)   // [backdrop-cards] a soft card on Soft Cards
             // [mac] Stress test 2026-10-28 round 8: placed as it's set. A state set after the last layout (each reload
             // writes a fresh one) kept the system's centring until something laid the page out again, so its title
             // stood 17 to 22 pt above the detail placeholder's.
@@ -182,7 +182,7 @@ final class JobsViewController: UIViewController, UICollectionViewDelegate, UISe
     // MARK: Layout
 
     private func makeLayout() -> UICollectionViewLayout {
-        UICollectionViewCompositionalLayout { [weak self] index, environment in
+        let cards = UICollectionViewCompositionalLayout { [weak self] index, environment in
             var config = UICollectionLayoutListConfiguration(appearance: .plain)
             config.backgroundColor = .clear
             // item 15: Bots and Sessions dropped the line between rows (owner, 2026-10-27); Jobs matches, in both looks.
@@ -195,8 +195,16 @@ final class JobsViewController: UIViewController, UICollectionViewDelegate, UISe
             config.trailingSwipeActionsConfigurationProvider = { [weak self] path in self?.trailingSwipe(path) }
             let layout = NSCollectionLayoutSection.list(using: config, layoutEnvironment: environment)
             layout.boundarySupplementaryItems.forEach { $0.pinToVisibleBounds = false }
+            // [backdrop-cards] The jobs' groups and the blueprints; the count line and the notes stay on the picture.
+            let carded: Bool = switch section { case .group?, .blueprints?: true; default: false }
+            let onCards = carded && BackdropCards.on(self)
+            // The first card stands clear of the bar's buttons, as Bots' first card does (its header sat right under).
+            if onCards && index == 0 { layout.contentInsets.top += BackdropCards.gap }
+            BackdropCards.card(layout, on: onCards)
             return layout
         }
+        BackdropCards.register(in: cards)   // [backdrop-cards]
+        return cards
     }
 
     private func configureDataSource() {

@@ -29,13 +29,17 @@ final class MoreViewController: UIViewController, UICollectionViewDelegate {
         view.backgroundColor = HQPalette.groupedPage
         var config = UICollectionLayoutListConfiguration(appearance: .insetGrouped)
         config.headerMode = .supplementary
-        config.backgroundColor = HQPalette.groupedPage   // [desktoplook] the list paints its own page: it follows the skin
+        // [backdrop-cards] Clear: the page under it is the grouped colour (it follows the skin). The list's own colour
+        // was put back on every layout pass, over the clear `PageBackdrop` sets, so App Background never showed on More.
+        config.backgroundColor = .clear
         // [compact] iOS's own list, with the section gaps closer (as the SwiftUI pages' compact section spacing).
         let layout = UICollectionViewCompositionalLayout { [weak self] index, environment in
             let section = NSCollectionLayoutSection.list(using: config, layoutEnvironment: environment)
             if !Theme.isDesktop {
-                section.contentInsets.top = min(section.contentInsets.top, MoreMetrics.sectionGap / 2)
-                section.contentInsets.bottom = min(section.contentInsets.bottom, MoreMetrics.sectionGap / 2)
+                // [backdrop-cards] On Soft Cards the SwiftUI pages' wider gap, so each plate keeps its own room.
+                let gap = BackdropCards.on(self) ? BackdropPlates.sectionSpacing : MoreMetrics.sectionGap
+                section.contentInsets.top = min(section.contentInsets.top, gap / 2)
+                section.contentInsets.bottom = min(section.contentInsets.bottom, gap / 2)
             }
             // Owner 2026-11-09: the website and GitHub buttons under the last group.
             if let self, index == self.current.count - 1 {
@@ -53,6 +57,7 @@ final class MoreViewController: UIViewController, UICollectionViewDelegate {
         view.addSubview(collectionView)
         ListBarAppearance.pinTitle(in: self, grouped: true, softEdgeAround: collectionView)   // owner 2026-11-01: every tab's top
         PageBackdrop.install(in: self, clearing: [collectionView])   // [backdrop] Theme › App Background
+        BackdropPlates.attach(to: collectionView) { [weak self] in PageBackdrop.showsPicture(on: self) }   // [backdrop-cards]
         #if targetEnvironment(macCatalyst)
         typealias RowCell = MacCardCell   // [mac] Stress test 2026-10-28 round 8: keeps the Desktop Look's card corners
         #else

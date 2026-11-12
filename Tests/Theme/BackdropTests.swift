@@ -108,6 +108,23 @@ import UIKit
         #expect(files(folder).isEmpty && suite.string(forKey: "hqn.chatBackground.photo") == nil, "a picture of the app's deletes the photo")
     }
 
+    /// [backdrop-cards] Soft Cards: off until turned on, kept on the app's background only, gone with Reset.
+    @Test func softCardsAreOffUntilTurnedOn() {
+        let (suite, folder) = fresh()
+        let app = Backdrop(place: .app, defaults: suite, folder: folder)
+        #expect(!app.cards, "off for everyone who never turned it on")
+        app.setCards(true)
+        #expect(Backdrop(place: .app, defaults: suite, folder: folder).cards)
+        let chats = Backdrop(place: .chats, defaults: suite, folder: folder)
+        chats.setCards(true)
+        #expect(!chats.cards && suite.object(forKey: "hqn.chatBackground.cards") == nil, "chats have no Soft Cards")
+        app.setCards(false)
+        #expect(suite.object(forKey: "hqn.appBackground.cards") == nil, "off is not stored")
+        app.setCards(true)
+        app.reset()
+        #expect(!app.cards && suite.object(forKey: "hqn.appBackground.cards") == nil, "Reset turns it off")
+    }
+
     @Test func dimAndBlurAreStoredOnlyWhenNotStandard() {
         let (suite, folder) = fresh()
         let backdrop = Backdrop(place: .app, defaults: suite, folder: folder)

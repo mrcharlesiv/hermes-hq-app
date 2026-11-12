@@ -32,6 +32,8 @@ enum BackdropWords {
     static var rowsNote: String { "A picture behind the app’s pages, and one behind chats, or the same for both. The Desktop Look keeps its plain pages. \(DeviceWord.onlyHere)" }
     static var appNote: String { "Behind Sessions, Bots, Jobs, More, Settings and the pages they open. Dim covers it with the page colour, so the rows on it stay easy to read. \(DeviceWord.onlyHere)" }
     static var chatNote: String { "Behind every chat. Dim covers it with the page colour, so the grey lines between messages stay easy to read. \(DeviceWord.onlyHere)" }
+    /// [backdrop-cards]
+    static let cardsNote = "Soft Cards puts each list’s rows and titles on a soft card, so they stay easy to read on a busy picture."
     static let sameNote = "Chats show the app’s picture, with their own Dim and Blur."
     /// Added under the preview while the Desktop Look is on, which keeps its plain pages.
     static let desktopNote = "The Desktop Look is on, so it shows once you turn that off."
@@ -206,6 +208,16 @@ struct BackgroundPage: View {
                     }
                     .tint(Color.hqTint)
                     .accessibilityIdentifier("theme.backgroundBlur")
+                    // [backdrop-cards] Off until turned on (owner 2026-11-12).
+                    if place == .app {
+                        Toggle(isOn: Binding(get: { backdrop.cards }, set: { backdrop.setCards($0) })) {
+                            Text("Soft Cards").foregroundStyle(Color.hqLabel)
+                        }
+                        .tint(Color.hqTint)
+                        .accessibilityIdentifier("theme.backgroundCards")
+                    }
+                } footer: {
+                    if place == .app { HQSectionFooter { Text(BackdropWords.cardsNote) } }
                 }
             }
         }.hqMacSettingsRowInsets() }

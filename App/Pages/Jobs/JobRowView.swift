@@ -341,6 +341,7 @@ struct PageCountView: View {
             .font(Font.hq(.footnote))
             .monospacedDigit()
             .foregroundStyle(Color.hqLabel2)
+            .hqPictureBacking(capsule: true)   // [backdrop-cards]
             .frame(maxWidth: .infinity)
             // [ui-sizing 2026-11-09] A quiet line close under the list, not a ~62 pt footer row (owner: no footer rows).
             .padding(.top, 8)
@@ -466,6 +467,7 @@ struct JobsEmptyNoteView: View {
             Text("No Jobs").font(Font.hq(.title3).weight(.semibold)).foregroundStyle(Color.hqLabel)
             Text(text).font(Font.hq(.subheadline)).foregroundStyle(Color.hqLabel2).multilineTextAlignment(.center)
         }
+        .hqPictureBacking()   // [backdrop-cards]
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 32)
         .padding(.top, 36)

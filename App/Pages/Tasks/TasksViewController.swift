@@ -325,7 +325,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     // MARK: Layout
 
     private func makeLayout() -> UICollectionViewLayout {
-        UICollectionViewCompositionalLayout { [weak self] index, environment in
+        let cards = UICollectionViewCompositionalLayout { [weak self] index, environment in
             var config = UICollectionLayoutListConfiguration(appearance: .plain)
             config.backgroundColor = .clear
             config.showsSeparators = false
@@ -337,8 +337,16 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
             config.trailingSwipeActionsConfigurationProvider = { [weak self] path in self?.trailingSwipe(path) }
             let layout = NSCollectionLayoutSection.list(using: config, layoutEnvironment: environment)
             layout.boundarySupplementaryItems.forEach { $0.pinToVisibleBounds = false }
+            // [backdrop-cards] The tasks' groups and ideas; the picker, the count line and New Section stay as they are.
+            let carded: Bool = switch self?.dataSource?.sectionIdentifier(for: index) { case .group?, .user?, .ideas?: true; default: false }
+            let onCards = carded && BackdropCards.on(self)
+            // The first card stands clear of the bar's buttons, as Bots' first card does (its header sat right under).
+            if onCards && index == 0 { layout.contentInsets.top += BackdropCards.gap }
+            BackdropCards.card(layout, on: onCards)
             return layout
         }
+        BackdropCards.register(in: cards)   // [backdrop-cards]
+        return cards
     }
 
     private static func rowBackground(_ cell: UICollectionViewListCell, _ state: UICellConfigurationState) {
@@ -717,6 +725,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     /// (`contentUnavailableConfiguration`) lies over the whole page in front of every subview and took the taps meant
     /// for the pills. Without them (the Mac, one bot) it stays UIKit's, placed by `hqPlaceMacEmptyTitle`.
     private func showEmpty(_ state: (any UIContentConfiguration)?) {
+        let state = BackdropState.wrap(state)   // [backdrop-cards] a soft card behind it on Soft Cards
         guard pills.shows else {
             if collectionView.backgroundView != nil { collectionView.backgroundView = nil }
             contentUnavailableConfiguration = state

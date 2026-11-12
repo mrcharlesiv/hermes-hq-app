@@ -417,7 +417,8 @@ struct PageSlowNote: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 20)
+        .hqPictureBacking()   // [backdrop-cards]
+        .padding(.horizontal, Backdrop.app.cards && Backdrop.app.shows ? BackdropCards.side : 20)   // [backdrop-cards] as wide as a card
         .padding(.vertical, 12)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(identifier)

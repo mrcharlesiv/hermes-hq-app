@@ -515,7 +515,8 @@ private struct GroupedPageModifier: ViewModifier {
                     if backdrop { PageBackdropLayer().ignoresSafeArea() } else if !system { Color.hqGroupedPage.ignoresSafeArea() }
                 }
                 .hqMacCardCorners()   // [mac-ui-issues] a Mac group box's corners, not iOS's card ends
-                .listSectionSpacing(.compact)
+                // [backdrop-cards] On Soft Cards a little more room between sections, so each plate keeps its own.
+                .listSectionSpacing(backdrop && Backdrop.app.cards ? .custom(BackdropPlates.sectionSpacing) : .compact)
         }
     }
 }

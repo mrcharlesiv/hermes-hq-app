@@ -57,15 +57,16 @@ final class Backdrop {
     nonisolated static let dimRange = 0...80
 
     nonisolated struct Keys: Sendable {
-        let photo: String, preset: String, dim: String, blur: String, sameAsApp: String
+        let photo: String, preset: String, dim: String, blur: String, sameAsApp: String, cards: String
         init(_ prefix: String) {
             photo = prefix + ".photo"
             preset = prefix + ".preset"
             dim = prefix + ".dim"
             blur = prefix + ".blur"
             sameAsApp = prefix + ".sameAsApp"
+            cards = prefix + ".cards"
         }
-        var all: [String] { [photo, preset, dim, blur, sameAsApp] }
+        var all: [String] { [photo, preset, dim, blur, sameAsApp, cards] }
     }
 
     nonisolated static func keys(_ place: Place) -> Keys { Keys(place == .app ? "hqn.appBackground" : "hqn.chatBackground") }
@@ -85,6 +86,9 @@ final class Backdrop {
     private(set) var blur: Bool
     /// Chats only: they draw the app's picture instead of their own.
     private(set) var sameAsApp: Bool
+    /// [backdrop-cards] App only, off until turned on (owner 2026-11-12: "a toggle so people can cut it in only if they
+    /// want it"): the lists' sections and the grouped pages' titles and notes stand on soft cards over the picture.
+    private(set) var cards: Bool
     /// Bumped on every change (the Theme page's previews read it).
     private(set) var revision = 0
 
@@ -106,6 +110,7 @@ final class Backdrop {
         self.source = source
         dim = Self.clampedDim(defaults.object(forKey: keys.dim), place: place)
         blur = (defaults.object(forKey: keys.blur) as? NSNumber)?.boolValue ?? false
+        cards = place == .app && ((defaults.object(forKey: keys.cards) as? NSNumber)?.boolValue ?? false)
         let stored = (defaults.object(forKey: keys.sameAsApp) as? NSNumber)?.boolValue
         sameAsApp = place == .chats && (stored ?? (source == nil))
     }
@@ -238,6 +243,7 @@ final class Backdrop {
         keys.all.forEach(defaults.removeObject(forKey:))
         dim = Self.defaultDim(place)
         blur = false
+        cards = false
         sameAsApp = place == .chats
         removeFiles(keeping: nil)
         changed()
@@ -265,6 +271,14 @@ final class Backdrop {
         guard percent != dim else { return }
         dim = percent
         if percent == Self.defaultDim(place) { defaults.removeObject(forKey: keys.dim) } else { defaults.set(percent, forKey: keys.dim) }
+        changed()
+    }
+
+    /// [backdrop-cards] Soft Cards (the app's background only).
+    func setCards(_ on: Bool) {
+        guard place == .app, on != cards else { return }
+        cards = on
+        if on { defaults.set(true, forKey: keys.cards) } else { defaults.removeObject(forKey: keys.cards) }
         changed()
     }
 
@@ -753,6 +767,10 @@ nonisolated(unsafe) private var pageBackdropKey: UInt8 = 0
         }
         for view in [controller.view!] + views { clear(view) }
         view.onShowChange = { [weak self] _ in self?.apply() }
+        // [backdrop-cards] Soft Cards turned on or off while the page is up.
+        switchWatch = NotificationCenter.default.addObserver(forName: Backdrop.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.apply() }
+        }
     }
 
     /// Also clear while the picture shows (a band added after the list: Sessions' bot strip).
@@ -761,9 +779,25 @@ nonisolated(unsafe) private var pageBackdropKey: UInt8 = 0
         apply()
     }
 
+    /// [backdrop-cards] Whether the page's picture shows just now (its lists then stand their sections on cards).
+    static func showsPicture(on controller: UIViewController?) -> Bool {
+        guard let controller, let backdrop = objc_getAssociatedObject(controller, &pageBackdropKey) as? PageBackdrop else { return false }
+        return backdrop.view.showsPicture
+    }
+
+    private var carded: Bool?
+    private var switchWatch: NSObjectProtocol?
+
     private func apply() {
         let shows = view.showsPicture
         for page in cleared { page.view.value?.backgroundColor = shows ? .clear : page.colour }
+        // [backdrop-cards] The lists lay their sections out again, on cards or off them.
+        let cards = shows && Backdrop.app.cards
+        if carded != nil, carded != cards {
+            for page in cleared { (page.view.value as? UICollectionView)?.collectionViewLayout.invalidateLayout() }
+        }
+        carded = cards
+        for page in cleared { BackdropPlates.refresh(page.view.value as? UIScrollView) }
         // The page's own view says (the band's may hear of the picture a moment later: it draws the same).
         if let controller, band != nil {
             ListBarAppearance.setPictureBand(shows, on: controller.navigationItem)
@@ -779,8 +813,12 @@ nonisolated(unsafe) private var pageBackdropKey: UInt8 = 0
         backdrop.hidesInSheets = true
         table.backgroundView = backdrop
         let colour = table.backgroundColor
-        backdrop.onShowChange = { [weak table] shows in table?.backgroundColor = shows ? .clear : colour }
+        backdrop.onShowChange = { [weak table] shows in
+            table?.backgroundColor = shows ? .clear : colour
+            BackdropPlates.refresh(table)   // [backdrop-cards]
+        }
         backdrop.onShowChange?(backdrop.showsPicture)
+        BackdropPlates.attach(to: table) { [weak backdrop] in backdrop?.showsPicture == true }   // [backdrop-cards]
         return backdrop
     }
 }
@@ -789,18 +827,59 @@ nonisolated(unsafe) private var pageBackdropKey: UInt8 = 0
 /// where none is drawn (a sheet, or while the picture is made).
 struct PageBackdropLayer: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
-        let holder = UIView()
+        let holder = Holder()
         holder.backgroundColor = HQPalette.groupedPage
         let backdrop = BackdropView(place: .app, frame: holder.bounds)
         backdrop.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         backdrop.hidesInSheets = true
-        backdrop.onShowChange = { [weak holder] shows in holder?.backgroundColor = shows ? .clear : HQPalette.groupedPage }
+        backdrop.onShowChange = { [weak holder] shows in
+            holder?.backgroundColor = shows ? .clear : HQPalette.groupedPage
+            BackdropPlates.refresh(holder?.list)   // [backdrop-cards]
+        }
         holder.addSubview(backdrop)
+        holder.backdrop = backdrop
         backdrop.onShowChange?(backdrop.showsPicture)
         return holder
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {}
+    func updateUIView(_ uiView: UIView, context: Context) { (uiView as? Holder)?.find() }
+
+    /// [backdrop-cards] Finds the list it stands behind (as `GlassListProbe` does) and puts its sections on plates.
+    final class Holder: UIView {
+        weak var backdrop: BackdropView?
+        weak var list: UICollectionView?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            find()
+        }
+
+        func find() {
+            guard window != nil, list == nil else { return }
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.window != nil, self.list == nil else { return }
+                    var ancestor = self.superview
+                    for _ in 0..<6 {
+                        guard let current = ancestor else { return }
+                        if let list = Self.firstList(in: current, depth: 6) {
+                            self.list = list
+                            BackdropPlates.attach(to: list) { [weak self] in self?.backdrop?.showsPicture == true }
+                            return
+                        }
+                        ancestor = current.superview
+                    }
+                }
+            }
+        }
+
+        private static func firstList(in view: UIView, depth: Int) -> UICollectionView? {
+            if let list = view as? UICollectionView { return list }
+            guard depth > 0 else { return nil }
+            for child in view.subviews { if let found = firstList(in: child, depth: depth - 1) { return found } }
+            return nil
+        }
+    }
 }
 
 // MARK: - Choosing a photo

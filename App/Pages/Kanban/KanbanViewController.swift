@@ -106,6 +106,8 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
         collectionView.accessibilityIdentifier = "kanban.list"
         view.addSubview(collectionView)
         if !pushedOnMac || board { ListBarAppearance.pinTitle(in: self, softEdgeAround: collectionView) }   // owner 2026-11-01: every tab's top
+        // [backdrop-cards] Owner 2026-11-12: the board too ("Yes I think so"), as Jobs and the other pages.
+        PageBackdrop.install(in: self, clearing: [collectionView])
         if board { installBoard() }
         notices = PageNoticeHost(in: view)
         let refresh = UIRefreshControl()
@@ -277,6 +279,8 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
                 let s = NSCollectionLayoutSection(group: group)
                 // [mac] Stress test 2026-10-28 #53: the board button 16 pt under the bar on the Mac (it touched the bar).
                 s.contentInsets = NSDirectionalEdgeInsets(top: section == .top ? MacInset.top(otherwise: 0) : 8, leading: 0, bottom: 0, trailing: 0)
+                // [backdrop-cards] The board's button and its status chips are one card on Soft Cards.
+                if section == .top { BackdropCards.card(s, on: BackdropCards.on(self), join: self.dataSource?.sectionIdentifier(for: index + 1) == .chips ? .below : []) }
                 return s
             case .chips:
                 let chipHeight = KanbanChipView.height(for: environment.traitCollection)   // [a11y] grows with the text
@@ -289,13 +293,16 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
                     let s = NSCollectionLayoutSection(group: line)
                     s.interGroupSpacing = 8
                     s.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 20, bottom: 14, trailing: 20)
-                    return s
+                    BackdropCards.card(s, on: BackdropCards.on(self), keepWidth: true, join: .above)   // [backdrop-cards]
+                    BackdropCards.card(s, on: BackdropCards.on(self), keepWidth: true, join: .above)   // [backdrop-cards]
+                return s
                 }
                 let group = NSCollectionLayoutGroup.horizontal(layoutSize: .init(widthDimension: .estimated(90), heightDimension: .absolute(chipHeight)), subitems: [item])
                 let s = NSCollectionLayoutSection(group: group)
                 s.orthogonalScrollingBehavior = .continuous
                 s.interGroupSpacing = 8
                 s.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 20, bottom: 14, trailing: 20)
+                BackdropCards.card(s, on: BackdropCards.on(self), keepWidth: true, join: .above)   // [backdrop-cards]
                 return s
             case .group:
                 var config = UICollectionLayoutListConfiguration(appearance: .insetGrouped)
@@ -313,17 +320,19 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
                 let s = NSCollectionLayoutSection.list(using: config, layoutEnvironment: environment)
                 s.contentInsets.leading = 20
                 s.contentInsets.trailing = 20
+                BackdropCards.plate(s, on: BackdropCards.on(self))   // [backdrop-cards] the group's line and card on a plate
                 // UX study #175: in light the card is the page's white with a hairline edge, not a grey fill; the
                 // decoration draws it behind the rows (dark keeps the grey card). Reverse: drop this and the clear rows.
                 if !Theme.isDesktop {
                     let card = NSCollectionLayoutDecorationItem.background(elementKind: KanbanCardBackground.kind)
                     card.contentInsets = s.contentInsets
-                    s.decorationItems = [card]
+                    s.decorationItems.append(card)   // [backdrop-cards] after the plate, if there is one
                 }
                 return s
             }
         }
         layout.register(KanbanCardBackground.self, forDecorationViewOfKind: KanbanCardBackground.kind)
+        BackdropCards.register(in: layout)   // [backdrop-cards]
         return layout
     }
 

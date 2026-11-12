@@ -98,7 +98,7 @@ enum DesktopLookTourHooks {
         if let tabs = top as? UITabBarController, let selected = tabs.selectedViewController { top = selected }
         if let nav = top as? UINavigationController, let visible = nav.topViewController { top = visible }
         func first(_ view: UIView) -> UIScrollView? {
-            if let scroll = view as? UIScrollView, !(scroll is UITextView), scroll.bounds.height > 200 { return scroll }
+            if let scroll = view as? UIScrollView, !(scroll is UITextView), scroll.isScrollEnabled, scroll.bounds.height > 200 { return scroll }
             for child in view.subviews { if let found = first(child) { return found } }
             return nil
         }

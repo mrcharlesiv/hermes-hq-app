@@ -271,6 +271,7 @@ struct KanbanEmptyView: View {
                     .accessibilityIdentifier("kanban.empty.new")
             }
         }
+        .hqPictureBacking()   // [backdrop-cards]
         .frame(maxWidth: .infinity)
         .padding(.top, top)
         .padding(.bottom, 40)
@@ -321,6 +322,7 @@ struct KanbanStatusView: View {
                 ProgressView()
                 Text("Loading…").foregroundStyle(Color.hqLabel2)
             }
+            .hqPictureBacking(capsule: true)   // [backdrop-cards]
             .frame(maxWidth: .infinity)
             .padding(.vertical, 40)
         }

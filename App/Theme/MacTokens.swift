@@ -240,11 +240,13 @@ extension UIViewController {
     /// [mac] Round 7: places the page's empty state's title as the detail placeholder's (`MacEmptyTitle.placed`). Call
     /// from `viewDidLayoutSubviews`; nothing off the Mac or without a state.
     func hqPlaceMacEmptyTitle() {
+        // [backdrop-cards] A state wrapped for Soft Cards is placed inside its wrapper, and stays wrapped.
+        let wrapped = contentUnavailableConfiguration is BackdropStateConfiguration
         guard DeviceWord.isMac, view.bounds.width > 0,
-              let config = contentUnavailableConfiguration as? UIContentUnavailableConfiguration else { return }
+              let config = BackdropState.unwrap(contentUnavailableConfiguration) as? UIContentUnavailableConfiguration else { return }
         let placed = MacEmptyTitle.placed(config, in: view)
         guard placed.directionalLayoutMargins != config.directionalLayoutMargins else { return }
-        contentUnavailableConfiguration = placed
+        contentUnavailableConfiguration = wrapped ? BackdropStateConfiguration(inner: placed) : placed
     }
 }
 

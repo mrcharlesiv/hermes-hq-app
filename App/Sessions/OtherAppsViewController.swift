@@ -72,7 +72,7 @@ final class OtherAppsViewController: UIViewController, UICollectionViewDelegate 
     // MARK: Layout (the Sessions list's)
 
     private func makeLayout() -> UICollectionViewLayout {
-        UICollectionViewCompositionalLayout { [weak self] _, environment in
+        let cards = UICollectionViewCompositionalLayout { [weak self] _, environment in
             var config = UICollectionLayoutListConfiguration(appearance: .plain)
             config.backgroundColor = .clear
             config.headerMode = .supplementary
@@ -100,8 +100,11 @@ final class OtherAppsViewController: UIViewController, UICollectionViewDelegate 
             }
             let section = NSCollectionLayoutSection.list(using: config, layoutEnvironment: environment)
             section.boundarySupplementaryItems.forEach { $0.pinToVisibleBounds = false }
+            BackdropCards.card(section, on: BackdropCards.on(self))   // [backdrop-cards]
             return section
         }
+        BackdropCards.register(in: cards)   // [backdrop-cards]
+        return cards
     }
 
     private func ringed(_ indexPath: IndexPath) -> Bool {
@@ -201,7 +204,7 @@ final class OtherAppsViewController: UIViewController, UICollectionViewDelegate 
             var empty = UIContentUnavailableConfiguration.empty().hqScaled()
             empty.image = UIImage(systemName: "tray")
             empty.text = "No Chats From Other Apps"
-            contentUnavailableConfiguration = empty
+            contentUnavailableConfiguration = BackdropState.wrap(empty)   // [backdrop-cards]
         } else {
             contentUnavailableConfiguration = nil
         }

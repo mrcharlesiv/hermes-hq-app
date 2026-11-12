@@ -28,17 +28,17 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
     /// [m9/ipad] The placeholder beside the list drops "Choose an item" while the list is empty; it hears when that flips.
     /// UIKit's `contentUnavailableConfiguration` can't be overridden (it lives in an extension), so writes go through here.
     private var emptyConfiguration: (any UIContentConfiguration)? {
-        get { contentUnavailableConfiguration }
+        get { BackdropState.unwrap(contentUnavailableConfiguration) }
         set {
             let flipped = (contentUnavailableConfiguration == nil) != (newValue == nil)
             #if targetEnvironment(macCatalyst)
             // [mac] Mac polish #4: the right pane shows this state itself (the list is folded into the sidebar), so a
             // change from one state to another (Couldn’t Load Bots to No Bots Yet, a new reason) reaches it too.
-            let changed = flipped || Self.words(of: contentUnavailableConfiguration) != Self.words(of: newValue)
+            let changed = flipped || Self.words(of: BackdropState.unwrap(contentUnavailableConfiguration)) != Self.words(of: newValue)
             #else
             let changed = flipped
             #endif
-            contentUnavailableConfiguration = newValue
+            contentUnavailableConfiguration = BackdropState.wrap(newValue)   // [backdrop-cards] a soft card on Soft Cards
             guard changed else { return }
             NotificationCenter.default.post(name: DetailPlaceholderViewController.listStateChanged, object: self)
         }
@@ -326,12 +326,23 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
     // MARK: - Layout
 
     private func makeLayout() -> UICollectionViewLayout {
-        UICollectionViewCompositionalLayout { [weak self] index, environment in
+        let layout = UICollectionViewCompositionalLayout { [weak self] index, environment in
             guard let self, let section = self.dataSource?.sectionIdentifier(for: index) else { return nil }
             let large = environment.traitCollection.preferredContentSizeCategory.isAccessibilityCategory
+            // [backdrop-cards] On Soft Cards the pinned faces and the rows right under them are one card.
+            let snapshot = self.dataSource.snapshot()
+            // The pinned bots (faces, or rows at accessibility sizes) and the bots' rows after them.
+            func isPinned(_ at: Int) -> Bool {
+                guard at >= 0, at < snapshot.numberOfSections, case .list(.tiles) = snapshot.sectionIdentifiers[at] else { return false }
+                return true
+            }
+            func isRows(_ at: Int) -> Bool {
+                guard at >= 0, at < snapshot.numberOfSections, case .list = snapshot.sectionIdentifiers[at] else { return false }
+                return !isPinned(at)
+            }
             if case .list(.tiles) = section, !large {
-                return self.tileSection(environment, count: self.dataSource.snapshot().numberOfItems(inSection: section),
-                                        first: index == 0)
+                return self.tileSection(environment, count: snapshot.numberOfItems(inSection: section),
+                                        first: index == 0, joinBelow: isRows(index + 1))
             }
             // [mac-audit] Owner 2026-11-02 #9: bots in no section after a section's rows (or its folded header) stand
             // apart, as the rail draws a rule before them; with no header they read as the last section's ("Notes"
@@ -341,8 +352,17 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
                case .list(let above)? = self.dataSource?.sectionIdentifier(for: index - 1) {
                 switch above { case .pinned, .user: apart = true; default: break }
             }
-            return self.listSection(environment, first: index == 0, apart: apart)
+            let list = self.listSection(environment, first: index == 0, apart: apart)
+            // [backdrop-cards] The bots' and group chats' sections; the filter token and the notices stay as they are.
+            if case .list = section {
+                var join: BackdropCards.Join = isPinned(index - 1) ? .above : []
+                if isPinned(index), isRows(index + 1) { join.insert(.below) }
+                BackdropCards.card(list, on: BackdropCards.on(self), join: join)
+            }
+            return list
         }
+        BackdropCards.register(in: layout)   // [backdrop-cards]
+        return layout
     }
 
     /// Three columns, gaps 12 pt down and 4 pt across, 4 pt above and 8 pt below; one or two tiles sit centred.
@@ -353,7 +373,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
     /// at the bar, so 16 pt is enough there (owner 2026-11-04: use the room the hard bar freed).
     private static var openingGap: CGFloat { TopEdgeStyle.current == .hard ? 16 : 40 }
 
-    private func tileSection(_ environment: NSCollectionLayoutEnvironment, count: Int, first: Bool) -> NSCollectionLayoutSection {
+    private func tileSection(_ environment: NSCollectionLayoutEnvironment, count: Int, first: Bool, joinBelow: Bool = false) -> NSCollectionLayoutSection {
         let width = environment.container.effectiveContentSize.width
         let side: CGFloat = 8, gap: CGFloat = 4
         let tile = floor((width - 2 * side - 2 * gap) / 3)
@@ -373,6 +393,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
         // [top-bar-gap] The iPhone and iPad's Desktop Look: the look's room under its bar's edge, not 4 pt.
         let top = first ? (roomy ? Self.openingGap : 4 + DesktopRows.underBar) : 4
         section.contentInsets = NSDirectionalEdgeInsets(top: top, leading: inset, bottom: 8, trailing: inset)
+        BackdropCards.card(section, on: BackdropCards.on(self), keepWidth: true, join: joinBelow ? .below : [])   // [backdrop-cards] the faces' names too
         return section
     }
 

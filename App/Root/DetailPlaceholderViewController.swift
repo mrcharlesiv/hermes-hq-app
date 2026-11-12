@@ -47,7 +47,7 @@ final class DetailPlaceholderViewController: UIViewController {
     /// Mac polish #4: the Bots list is folded into the sidebar on the Mac, so its own state ("Couldn’t Load Bots" with
     /// Try Again, No Bots Yet, every bot hidden) stood on a list nobody sees, beside a blank pane: the pane shows it.
     private func followOnMac(_ list: UIViewController?) {
-        contentUnavailableConfiguration = (list as? BotsViewController).flatMap { Self.foldedListState($0.contentUnavailableConfiguration) }
+        contentUnavailableConfiguration = (list as? BotsViewController).flatMap { Self.foldedListState(BackdropState.unwrap($0.contentUnavailableConfiguration)) }
         let words = Self.macWords(for: list)
         heading.text = words?.title
         detail.text = words?.detail

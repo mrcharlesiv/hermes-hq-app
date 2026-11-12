@@ -434,7 +434,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
     // MARK: Layout
 
     private func makeLayout() -> UICollectionViewLayout {
-        UICollectionViewCompositionalLayout { [weak self] index, environment in
+        let cards = UICollectionViewCompositionalLayout { [weak self] index, environment in
             guard let self, let section = self.dataSource?.sectionIdentifier(for: index) else { return nil }
             switch section {
             case .pinned:
@@ -498,10 +498,17 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
                 if case .count = section { config.showsSeparators = false }
                 config.headerTopPadding = 0
                 let s = NSCollectionLayoutSection.list(using: config, layoutEnvironment: environment)
-                if case .day = section { s.boundarySupplementaryItems.forEach { $0.pinToVisibleBounds = true } }
+                if case .day = section {
+                    // [backdrop-cards] On a picture each day is a card, its date at the card's top (not pinned over others).
+                    let cards = BackdropCards.on(self)
+                    s.boundarySupplementaryItems.forEach { $0.pinToVisibleBounds = !cards }
+                    BackdropCards.card(s, on: cards)
+                }
                 return s
             }
         }
+        BackdropCards.register(in: cards)   // [backdrop-cards]
+        return cards
     }
 
     // MARK: The Mac's grid
@@ -868,7 +875,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         }
         let stateCell = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, _ in
             guard let self else { return }
-            cell.contentConfiguration = self.stateConfiguration()
+            cell.contentConfiguration = BackdropState.wrap(self.stateConfiguration())   // [backdrop-cards]
             cell.backgroundConfiguration = .clear()
         }
         let countCell = UICollectionView.CellRegistration<UICollectionViewListCell, String> { cell, _, text in

@@ -369,10 +369,13 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
                 list.contentInsets.leading = ProjectCard.inset
                 list.contentInsets.trailing = ProjectCard.inset
                 list.supplementaryContentInsetsReference = .none
+            } else if self?.isProjectSection(section) != true {
+                BackdropCards.card(list, on: BackdropCards.on(self))   // [backdrop-cards] (a project's rows are cards already)
             }
             return list
         }
         layout.register(ProjectCardUnderRow.self, forDecorationViewOfKind: SessionsListLayout.cardUnderRow)
+        BackdropCards.register(in: layout)   // [backdrop-cards]
         layout.cardRow = { [weak self] path in
             guard let self, let id = self.dataSource?.itemIdentifier(for: path) else { return false }
             return self.cardKeys[id] != nil
@@ -1833,6 +1836,11 @@ extension SessionsViewController {
     /// [sessions-fresh] Group By Recent: Pinned and Projects say See All, Recent's rows are one line.
     var freshLayout: Bool { store.map { SessionListPipeline.isFresh($0.view) } ?? false }
 
+    /// [backdrop-cards] A project's section: its rows are cards of their own.
+    func isProjectSection(_ section: Int) -> Bool {
+        !searching && section < groups.count && SessionListPipeline.isProject(groups[section].id)
+    }
+
     func drawsHeader(_ section: Int) -> Bool {
         !searching && section < groups.count && !groups[section].title.isEmpty
     }
@@ -2037,6 +2045,7 @@ extension SessionsViewController {
     /// finger) meant for the chips and the strip (stress round 1). As the list's background it sits behind the fixed
     /// header, centred in the safe area the header leaves, and the list can still be pulled to refresh.
     private func showEmptyState(_ emptyState: (any UIContentConfiguration)?) {
+        let emptyState = BackdropState.wrap(emptyState)   // [backdrop-cards] a soft card behind it on Soft Cards
         let wasEmpty = paneListIsEmpty
         // UX study #89: the iPad placeholder beside the list drops "Choose an item" while the list is empty.
         defer { if paneListIsEmpty != wasEmpty { NotificationCenter.default.post(name: DetailPlaceholderViewController.listStateChanged, object: self) } }

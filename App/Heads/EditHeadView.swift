@@ -606,7 +606,8 @@ struct EditHeadView: View {
     private func choice(_ title: String, _ options: [String], _ names: [String: String], id: String,
                         get: @escaping () -> String, set: @escaping (String) -> Void) -> some View {
         let segments = WholeLabelSegments(titles: options.map { names[$0] ?? $0 },
-                                          selected: Binding(get: { options.firstIndex(of: get()) ?? 0 }, set: { set(options[$0]) }))
+                                          selected: Binding(get: { options.firstIndex(of: get()) ?? 0 }, set: { set(options[$0]) }),
+                                          ticks: false)   // `model.set` ticks every change
             .fixedSize()
             .accessibilityIdentifier("edit-head.\(id)")
         return ViewThatFits(in: .horizontal) {

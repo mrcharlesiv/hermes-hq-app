@@ -270,11 +270,22 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     /// [groups] A room's chrome: reply chip, paused capsule, Stop in the composer, mentions, the hold menu (App/Groups/GroupRoomChrome.swift).
     private(set) var roomChrome: GroupRoomChrome?
     private var promptDock: UIView?
+    /// [ipad-polish] When this screen last started a move between the panes (`landedInOtherPane`).
+    private var paneMoveTime: CFTimeInterval = 0
+    /// [ipad-polish] The pane this screen left tells it "you went away" only when that pane next lays out, which can be
+    /// after the screen has already shown in the other pane and `movingBetweenPanes` is cleared. Taken as a real
+    /// close, that late word stopped the chat listening: a reply streaming while an iPad's window crossed between
+    /// two panes and one (a rotation on a small iPad, Split View, Stage Manager) froze where it was until the chat
+    /// was opened again. A screen that is in a stack and in the window just after a move has not gone anywhere.
+    private var landedInOtherPane: Bool {
+        CACurrentMediaTime() - paneMoveTime < 2 && parent != nil && viewIfLoaded?.window != nil
+    }
     /// [m9/ipad] Set while this screen moves between the list stack and the right pane (a window crossing 768 pt):
     /// it stays attached to its session; nothing about the chat ends. Cleared once it shows in the other pane.
     var movingBetweenPanes = false {
         didSet {
             guard movingBetweenPanes else { return }
+            paneMoveTime = CACurrentMediaTime()
             // The appearance callbacks of the move arrive later; if none does (the stack is off screen), clear anyway.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
                 guard let self, self.movingBetweenPanes else { return }
@@ -550,6 +561,8 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         let span = MainTrail.begin("chat.load")           // [diagnostics] build 292
         defer { MainTrail.end(span) }
         ChatPerf.mark("chat.viewDidLoad")
+        applyChatColour()   // [bot-colour] before the first row is drawn
+        watchChatColour()
         view.backgroundColor = ChatPalette.page
         backdrop.frame = view.bounds
         backdrop.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -654,7 +667,8 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         topEdgeElement.addInteraction(topEdge)
         placeholder.isHidden = true
         placeholder.onRetry = { [weak self] in self?.retryOpen() }
-        placeholder.onTalk = { [weak self] in self?.beginTalk() }               // [talk] the intro's capsules (§5.6)
+        // [talk] the intro's capsules (§5.6); Talk with the composer's light tap
+        placeholder.onTalk = { [weak self] in Haptics.play(.light); self?.beginTalk() }
         placeholder.onInfo = { [weak self] in self?.voice.talkShowBotInfo() }   // [talk]
         placeholder.onName = { [weak self] in
             guard let self else { return }
@@ -867,6 +881,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
             let layout = (note.userInfo?["layout"] as? Bool) ?? true
             MainActor.assumeIsolated {
                 guard let self else { return }
+                self.applyChatColour()   // [bot-colour] Chat Bubbles › Colour moved to or from Bot's Face
                 self.applyChatLook()
                 if layout {
                     self.style = ChatStyleCache.shared.style(for: self.traitCollection.preferredContentSizeCategory)
@@ -1007,6 +1022,10 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
             mode = nil
         } else if awaitingRows {
             mode = .loading
+        } else if model.builtFrom > 0 || model.hiddenOlder > 0 {
+            // [right-open] Messages exist whose rows aren't in the table yet (built or revealed a moment later): never
+            // the empty chat's "No messages yet" over a chat that has messages.
+            mode = nil
         } else {
             switch openPhase {
             case .opening: mode = .loading
@@ -1239,6 +1258,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         ChatPerf.mark("chat.viewWillAppear")
+        applyChatColour()   // [bot-colour] the face may have changed while this chat was covered
         if attached { activity.setAttached(true) }     // [activity] uncovered by a pop: this chat's polls run again
         if isMovingToParent { fadeBottomBarWithTabBar(appearing: true) }
     }
@@ -1331,7 +1351,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
-        if movingBetweenPanes { return }   // [m9/ipad] the same screen is going to the other pane: nothing ends
+        if movingBetweenPanes || landedInOtherPane { return }   // [m9/ipad] the same screen is going to the other pane: nothing ends
         voice.screenLeft()   // VOICE: a take left behind becomes a draft chip here
         // [tasks] A chat inside a sheet (a task's own chat) leaves with the sheet: its navigation is the one going down.
         if isMovingFromParent || isBeingDismissed || navigationController == nil || navigationController?.isBeingDismissed == true {
@@ -1345,7 +1365,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     override func didMove(toParent parent: UIViewController?) {
         super.didMove(toParent: parent)
         if movingBetweenPanes { return }   // [m9/ipad] moved between the list stack and the right pane: stays attached
-        if parent == nil { detach() } else if isViewLoaded { attach() }
+        if parent == nil { if !landedInOtherPane { detach() } } else if isViewLoaded { attach() }
     }
 
     /// [m9/ipad] Set by Next / Previous Chat just before the list opens the next chat (`push` reads and clears it).
@@ -3519,7 +3539,10 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         composerNotices.addArrangedSubview(sendFailureCard)
         composerNotices.addArrangedSubview(ownerWaitCard)
         ownerWaitCard.onClose = { [weak self] in (self?.session as? ChatComposerNotices)?.dismissOwnerWait() }
-        ownerWaitCard.onPrimary = { [weak self] in (self?.session as? ChatComposerNotices)?.cancelOwnerWait() }
+        ownerWaitCard.onPrimary = { [weak self] in
+            Haptics.play(.rigid)   // Cancel Message stops the waiting turn, as Stop
+            (self?.session as? ChatComposerNotices)?.cancelOwnerWait()
+        }
         view.addSubview(composerNotices)
         problemCard.onClose = { [weak self] in (self?.session as? ChatComposerNotices)?.dismissSessionProblem() }
         problemCard.onPrimary = { [weak self] in
@@ -3702,8 +3725,12 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
             self.rebuildMessage(messageId)
             switch found {
             case true?: Haptics.play(.success)
-            case false?: self.showNotice("\(HostWord.sentence) doesn’t have this message yet.")
-            case nil: self.showNotice("Couldn’t check right now. Try again in a moment.")
+            case false?:
+                Haptics.play(.warning)
+                self.showNotice("\(HostWord.sentence) doesn’t have this message yet.")
+            case nil:
+                Haptics.play(.error)
+                self.showNotice("Couldn’t check right now. Try again in a moment.")
             }
         }
     }

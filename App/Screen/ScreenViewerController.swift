@@ -214,7 +214,10 @@ final class ScreenViewerController: UIViewController {
         }
 
         bar.onTake = { [weak self] in self?.session.takeOver() }
-        bar.onGive = { [weak self] in self?.session.handBack() }
+        bar.onGive = { [weak self] in
+            Haptics.play(.selection)   // as the Browser's Give Back
+            self?.session.handBack()
+        }
         bar.onForce = { [weak self] in self?.session.forceHandBack() }
         bar.onFit = { [weak self] in
             guard let self else { return }
@@ -235,6 +238,7 @@ final class ScreenViewerController: UIViewController {
         bar.onKey = { [weak self] key in self?.press(key.keysym, []) }
         bar.onModifier = { [weak self] which in
             guard let self else { return }
+            Haptics.play(.selection)   // a key held for the next one, or let go
             if armed.contains(which) { armed.remove(which) } else { armed.insert(which) }
             renderBar()
         }
@@ -535,6 +539,7 @@ final class ScreenViewerController: UIViewController {
     private func panelSecondary() {
         guard case .missing = session.phase, let command = session.status?.installCommand, !command.isEmpty else { return }
         UIPasteboard.general.string = command
+        Haptics.play(.success)
         showPill("Copied", id: "screen.pill.copied", seconds: 2)
     }
 
@@ -563,6 +568,7 @@ final class ScreenViewerController: UIViewController {
             pasting = false
             guard !gone else { return }
             guard let text, !text.isEmpty else {
+                Haptics.play(.warning)   // as the Browser's Paste
                 showPill(ControlWords.nothingToPaste, id: "screen.pill.clipboard", seconds: 3)
                 clearArmed()
                 return
@@ -583,6 +589,7 @@ final class ScreenViewerController: UIViewController {
         guard session.canSendInput else { return }
         pendingPaste = nil
         session.paste(pending.text)
+        Haptics.play(.selection)   // the text went
         clearArmed()
     }
 

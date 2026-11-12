@@ -1629,7 +1629,8 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
     func clearFilters() {
         if kind != .all {   // [groups]
             kind = .all
-            if activity == .all { reload(animated: true) }
+            // Only Show was set: `setActivity` has nothing to change, so the tick is played here.
+            if activity == .all { Haptics.play(.selection); reload(animated: true) }
         }
         setActivity(.all)
     }

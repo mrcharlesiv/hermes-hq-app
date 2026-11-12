@@ -206,7 +206,10 @@ final class DictationBars: UIView {
     private weak var chat: (any ChatVoiceTurns)?
     private lazy var row: DictationRow = {
         let row = DictationRow()
-        row.onCancel = { DictationController.shared.cancel() }
+        row.onCancel = {
+            Haptics.play(.rigid)   // the recording thrown away, as a memo's cancel
+            DictationController.shared.cancel()
+        }
         row.onDone = { DictationController.shared.done() }
         return row
     }()

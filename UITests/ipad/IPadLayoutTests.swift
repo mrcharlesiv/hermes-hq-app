@@ -58,8 +58,8 @@ final class IPadLayoutTests: IPadTestCase {
         XCTAssertTrue(table.exists && app.cells["bot-row-default"].isSelected, "and the chat stays as it was")
 
         // The other bot replaces it.
-        app.cells["bot-row-ivy"].tap()
-        XCTAssertTrue(IPad.waitUntil(timeout: 8) { app.cells["bot-row-ivy"].isSelected && !app.cells["bot-row-default"].isSelected },
+        IPad.otherBot(app).tap()
+        XCTAssertTrue(IPad.waitUntil(timeout: 8) { IPad.otherBot(app).isSelected && !app.cells["bot-row-default"].isSelected },
                       "the mark follows the chat on show")
     }
 
@@ -124,6 +124,7 @@ final class IPadLayoutTests: IPadTestCase {
         let list = app.collectionViews["bots.list"]
         func fieldOnKeys(_ what: String) { IPad.fieldOnKeys(app, what) }
         fieldOnKeys("before any crossing")
+        print("IPAD-NOTE before any crossing: reply \(reply.label.count) characters, stop button \(app.buttons["composer.stop"].exists), calls \(IPad.rpcs(account).suffix(8))")
 
         for round in 1...3 {
             let early = reply.label.count
@@ -133,8 +134,10 @@ final class IPadLayoutTests: IPadTestCase {
             XCTAssertTrue(IPad.table(app).exists, "round \(round): the same chat is on show")
             XCTAssertLessThanOrEqual(IPad.table(app).frame.width, 421)
             XCTAssertEqual(IPad.field(app).value as? String, "draft across", "round \(round): the draft crossed")
-            XCTAssertTrue(IPad.waitUntil(timeout: 6) { reply.label.count > early + 10 }, "round \(round): the reply keeps streaming")
+            let streamed = IPad.waitUntil(timeout: 6) { reply.label.count > early + 10 }
             if round == 1 { IPad.shot(app, "ipad-collapsed-streaming", in: self) }
+            print("IPAD-NOTE round \(round), phone layout: reply \(early) → \(reply.label.count) characters, stop button \(app.buttons["composer.stop"].exists), last calls \(IPad.rpcs(account).suffix(8))")
+            XCTAssertTrue(streamed, "round \(round): the reply keeps streaming")
             fieldOnKeys("round \(round), phone layout")
             let mid = reply.label.count
             IPad.toggleNarrow(app)      // back to the real window
@@ -239,6 +242,95 @@ final class IPadLayoutTests: IPadTestCase {
         XCTAssertEqual(app.state, .runningForeground)
     }
 
+    /// [ipad-polish] The button at the leading end of the right pane's bar puts the list away and the chat takes the
+    /// window; the same button, ⌃⌘S and a tab's own key bring it back; closing the chat brings it back too.
+    @MainActor func test12_HidingTheListGivesTheChatTheWindow() throws {
+        try padOnly()
+        let account = try IPad.account(.perf)
+        let app = IPad.launch(account)
+        let list = app.collectionViews["bots.list"]
+        let toggle = app.buttons["pane.listToggle"].firstMatch
+        XCTAssertFalse(toggle.exists, "nothing open: no button to hide the list with")
+        let table = IPad.openBot(app)
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5), "a chat on the right: the button shows")
+        let window = app.windows.firstMatch.frame.width
+        let beside = table.frame.width
+        let before = IPad.rpcs(account)
+        toggle.tap()
+        XCTAssertTrue(IPad.waitUntil(timeout: 5) { !IPad.shows(list) && table.frame.width > window - 2 }, "the list is away and the chat is the window's width")
+        XCTAssertFalse(app.buttons["tab-bots"].isHittable, "the tab bar went with the list")
+        IPad.shot(app, "ipad-list-hidden", in: self)
+        // The phone layout while it is away: the chat over its list, with Back; wide again, still away.
+        IPad.toggleNarrow(app)
+        XCTAssertTrue(IPad.waitUntil(timeout: 6) { table.exists && table.frame.width <= 421 && !toggle.exists }, "narrow: the chat over its list, the button gone")
+        IPad.toggleNarrow(app)
+        XCTAssertTrue(IPad.waitUntil(timeout: 6) { table.frame.width > window - 2 && toggle.exists }, "wide again: the chat still has the window")
+        toggle.tap()
+        XCTAssertTrue(IPad.waitUntil(timeout: 5) { IPad.shows(list) && abs(table.frame.width - beside) < 2 }, "the same button brings the list back")
+        XCTAssertEqual(IPad.rpcs(account), before, "hiding and showing the list asks the gateway nothing")
+        // By key, and a tab's own key brings it back.
+        IPad.command(app, "s", [.control, .command])
+        XCTAssertTrue(IPad.waitUntil(timeout: 5) { !IPad.shows(list) }, "Control-Command-S puts it away")
+        IPad.command(app, "2")
+        XCTAssertTrue(IPad.waitUntil(timeout: 6) { app.collectionViews["sessions.list"].exists && IPad.shows(app.collectionViews["sessions.list"]) },
+                      "Command-2 shows Sessions, so its list is back")
+        IPad.command(app, "1")
+        IPad.command(app, "s", [.control, .command])
+        XCTAssertTrue(IPad.waitUntil(timeout: 5) { !IPad.shows(list) }, "away again")
+        // Closing the chat leaves nothing to look at but the list.
+        IPad.command(app, "w")
+        XCTAssertTrue(IPad.waitUntil(timeout: 6) { IPad.shows(list) && IPad.placeholder(app).exists }, "closing the chat brings the list back")
+        IPad.otherBot(app).tap()
+        XCTAssertTrue(IPad.waitUntil(timeout: 8) { IPad.table(app).exists && IPad.shows(list) }, "the next chat opens beside the list")
+    }
+
+    /// (Models, Chat Info and Prompts hang the same way; each opens through a menu first, which this test does not drive.)
+    /// [ipad-polish] In two panes ☰'s Commands, the model's Models and the title's Chat Info hang off their buttons as
+    /// pop-overs inside the right pane (no ✕: a tap outside closes them); in the phone layout they are sheets as before.
+    @MainActor func test13_PopUpsHangOffTheirButtonsInTwoPanes() throws {
+        try padOnly()
+        let account = try IPad.account(.perf)
+        let app = IPad.launch(account)
+        let list = app.collectionViews["bots.list"]
+        IPad.openBot(app)
+        func closeByTappingOutside(_ bar: XCUIElement, _ what: String) {
+            let outside = app.otherElements["PopoverDismissRegion"].firstMatch
+            if outside.exists { outside.tap() } else { list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).tap() }
+            XCTAssertTrue(IPad.waitUntil(timeout: 5) { !bar.exists }, "\(what): a tap outside closes it")
+        }
+        let cases: [(button: XCUIElement, title: String)] = [
+            (app.buttons["composer.commands"].firstMatch, "Commands"),
+        ]
+        for item in cases {
+            guard item.button.waitForExistence(timeout: 5), item.button.isHittable else {
+                print("IPAD-NOTE \(item.title): its button is not on show in this chat; skipped")
+                continue
+            }
+            item.button.tap()
+            let bar = app.navigationBars[item.title]
+            XCTAssertTrue(bar.waitForExistence(timeout: 8), "\(item.title) opens")
+            Thread.sleep(forTimeInterval: 0.6)
+            // ☰ sits at the pane's leading edge, so its pop-over may reach over the list's edge; it is never the old
+            // card centred on the window.
+            XCTAssertGreaterThan(bar.frame.midX, list.frame.maxX, "\(item.title) hangs in the right pane, not across the middle of the window")
+            XCTAssertLessThan(bar.frame.width, 460, "\(item.title) is a pop-over's width")
+            XCTAssertFalse(bar.buttons["sheet.cancel"].exists || bar.buttons["sheet.close"].exists, "\(item.title): no ✕ on a pop-over")
+            XCTAssertTrue(IPad.shows(list) && list.isHittable == false || IPad.shows(list), "\(item.title): the list still shows beside it")
+            IPad.shot(app, "ipad-popover-\(item.title.lowercased().replacingOccurrences(of: " ", with: "-"))", in: self)
+            closeByTappingOutside(bar, item.title)
+        }
+        // The phone layout keeps the sheet, with its way to close it.
+        IPad.toggleNarrow(app)
+        let commands = app.buttons["composer.commands"].firstMatch
+        XCTAssertTrue(commands.waitForExistence(timeout: 6))
+        commands.tap()
+        let bar = app.navigationBars["Commands"]
+        XCTAssertTrue(bar.waitForExistence(timeout: 8), "narrow: Commands opens")
+        XCTAssertTrue(app.buttons["sheet.cancel"].firstMatch.waitForExistence(timeout: 4), "narrow: it is the sheet, with its Cancel")
+        XCTAssertTrue(IPad.stopOrClose(app, "commands sheet") { !bar.exists })
+        IPad.toggleNarrow(app)
+    }
+
     /// A Sessions row's Share sheet and its Delete action sheet open anchored on iPad; deleting the chat that is on
     /// show in the right pane gives the pane back to the placeholder (§6).
     @MainActor func test8_ShareAndDeleteFromTheListBesideTheOpenChat() throws {
@@ -303,10 +395,11 @@ final class IPadLayoutTests: IPadTestCase {
             XCUIDevice.shared.orientation = .landscapeLeft
             XCTAssertTrue(IPad.waitUntil(timeout: 10) { app.windows.firstMatch.frame.width > 1000 && IPad.shows(list) && IPad.table(app).exists },
                           "round \(round): landscape is two panes with the chat on the right")
-            XCTAssertGreaterThan(IPad.table(app).frame.minX, list.frame.maxX - 1)
+            // [ipad-polish] Read while the turn still settles, the two frames were once 0.4 pt apart the other way.
+            XCTAssertTrue(IPad.waitUntil(timeout: 4) { IPad.table(app).frame.minX > list.frame.maxX - 1 }, "round \(round): the chat is right of the list")
             XCTAssertEqual(IPad.field(app).value as? String, "mini draft")
+            if round == 1 { Thread.sleep(forTimeInterval: 1.0); IPad.shot(app, "mini-landscape-chat-keyboard", in: self) }
             IPad.fieldOnKeys(app, "mini landscape, round \(round)")
-            if round == 1 { IPad.shot(app, "mini-landscape-chat-keyboard", in: self) }
             XCUIDevice.shared.orientation = .portrait
             XCTAssertTrue(IPad.waitUntil(timeout: 10) { app.windows.firstMatch.frame.width < 768 && !IPad.shows(list) && IPad.table(app).exists },
                           "round \(round): portrait is the phone layout with the chat over its list")
@@ -357,8 +450,8 @@ final class IPadLayoutTests: IPadTestCase {
                 XCTAssertTrue(table.exists)
                 continue
             }
-            app.cells["bot-row-ivy"].tap()
-            XCTAssertTrue(IPad.waitUntil(timeout: 10) { app.cells["bot-row-ivy"].isSelected }, "\(size): a second chat opens")
+            IPad.otherBot(app).tap()
+            XCTAssertTrue(IPad.waitUntil(timeout: 10) { IPad.otherBot(app).isSelected }, "\(size): a second chat opens")
             XCTAssertTrue(title.waitForExistence(timeout: 8), "\(size): with its title")
             IPad.toggleNarrow(app)
             XCTAssertTrue(IPad.waitUntil(timeout: 8) { !IPad.shows(app.collectionViews["bots.list"]) }, "\(size): narrow, the chat covers the list")

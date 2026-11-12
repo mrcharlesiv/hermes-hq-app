@@ -57,7 +57,7 @@ nonisolated enum ConnectorTitle {
     static let known: [String: String] = [
         "github": "GitHub", "gitlab": "GitLab", "linkedin": "LinkedIn", "youtube": "YouTube", "hubspot": "HubSpot",
         "clickup": "ClickUp", "openai": "OpenAI", "postgresql": "PostgreSQL", "mongodb": "MongoDB", "icloud": "iCloud",
-        "paypal": "PayPal", "bigquery": "BigQuery", "wordpress": "WordPress", "airtable": "Airtable", "composio": "Connect Apps",
+        "paypal": "PayPal", "bigquery": "BigQuery", "wordpress": "WordPress", "airtable": "Airtable", "composio": "Composio",
     ]
 
     static func title(for name: String) -> String {

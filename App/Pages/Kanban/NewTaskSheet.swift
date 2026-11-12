@@ -228,7 +228,7 @@ struct NewTaskView: View {
             } }
             Section {
                 HQSegmentedPicker("Start In", options: [("Triage", "triage"), ("Ready", "ready")],
-                                  selection: Binding(get: { model.start }, set: { PagesHaptics.selection(); model.start = $0 }))   // [desktoplook3]
+                                  selection: Binding(get: { model.start }, set: { PagesHaptics.selection(); model.start = $0 }), ticks: false)   // [desktoplook3]
                 .accessibilityIdentifier("kanban.new.start")
             } header: { HQSectionLabel { Text("Start In") } } footer: { HQSectionFooter { Text(KanbanModel.statusHelp[model.start] ?? "") }}
             Section {

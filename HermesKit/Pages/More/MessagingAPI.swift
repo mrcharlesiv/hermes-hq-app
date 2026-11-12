@@ -504,6 +504,8 @@ final class TelegramSetup {
     @ObservationIgnored var interval: Duration = .seconds(2)
     @ObservationIgnored var now: @Sendable () -> Date = { Date() }
     @ObservationIgnored var onApplied: ((TelegramSetupApplied) -> Void)?
+    /// Finish was refused and the sheet is back to ready with the reason (the app's error tap).
+    @ObservationIgnored var onFinishRefused: (() -> Void)?
     @ObservationIgnored private let calls: Calls
     @ObservationIgnored private var pairingId: String?
     @ObservationIgnored private var task: Task<Void, Never>?
@@ -606,6 +608,7 @@ final class TelegramSetup {
                 if Self.isTerminal(error) { self.expire(); return }
                 self.phase = .ready(botUsername: bot, ownerUserId: owner)
                 self.notice = PagesREST.reason(error)
+                self.onFinishRefused?()
             }
         }
     }

@@ -466,6 +466,7 @@ struct ConfigFieldEditor: View {
                     }
                 }
                 .onDelete { offsets in
+                    Haptics.play(.selection)   // as a word fix's removal
                     items.remove(atOffsets: offsets)
                     commit()
                 }

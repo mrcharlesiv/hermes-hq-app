@@ -106,6 +106,8 @@ final class TerminalEndToEndTests: XCTestCase {
             attach("look-\(name)-keyboard")
             hideKeyboard()
             RunLoop.current.run(until: Date().addingTimeInterval(1))
+            // Owner 2026-11-11: the tab bar showed through the glass keyboard; it's away while typing, back after.
+            XCTAssertTrue(moreTab().isHittable, "the tab bar is back once the keyboard goes")
             attach("look-\(name)")
             app.navigationBars.buttons["terminal.more"].tap()
             RunLoop.current.run(until: Date().addingTimeInterval(1))
@@ -353,14 +355,16 @@ final class TerminalEndToEndTests: XCTestCase {
         }
         XCTAssertTrue(row.isHittable, "More lists Terminal")
         row.tap()
-        let question = app.alerts.matching(NSPredicate(format: "label BEGINSWITH %@", "Open a Terminal on")).firstMatch
+        // The first-time question: a card on the page (it was an alert).
+        let question = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", "Open a Terminal on")).firstMatch
+        let turnOn = app.buttons["Turn On"].firstMatch
         switch expectQuestion {
         case true?:
             XCTAssertTrue(question.waitForExistence(timeout: 10), "the first open asks")
             attach("0-question")
-            question.buttons["Turn On"].tap()
+            turnOn.tap()
         case nil:
-            if question.waitForExistence(timeout: 3) { question.buttons["Turn On"].tap() }
+            if question.waitForExistence(timeout: 3) { turnOn.tap() }
         case false?:
             XCTAssertFalse(question.waitForExistence(timeout: 2), "asked only once")
         }

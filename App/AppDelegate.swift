@@ -558,6 +558,23 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate, LaunchHost {
             }
         }
         onboarding = flow
+        #if DEBUG
+        // `-HQDebugGuideStep mac2`: a first run opens on that guide screen (screenshots).
+        if let name = UserDefaults.standard.string(forKey: "HQDebugGuideStep"), let step = OnboardingStep(rawValue: name) {
+            flow.animated = false; flow.go(step); flow.animated = true
+            #if targetEnvironment(macCatalyst)
+            // With `-HQDebugMacShots <name>`: the Mac photographs that screen (tmp/mac-shots/<name>-<step>.png) and quits.
+            if let shots = UserDefaults.standard.string(forKey: "HQDebugMacShots"), let window {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("mac-shots")
+                    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                    MacShots.shoot(window, to: folder.appendingPathComponent("\(shots)-\(name).png"))
+                    exit(0)
+                }
+            }
+            #endif
+        }
+        #endif
         setRoot(flow.navigationController, animated: !(window?.rootViewController is LaunchViewController))
     }
 

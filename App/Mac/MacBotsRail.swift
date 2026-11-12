@@ -158,6 +158,12 @@ final class MacRailHead: UIControl {
         face = Self.configuration(item, size: inRow ? MacBotsRail.rowFace : MacBotsRail.face).makeContentView()
         super.init(frame: .zero)
         accessibilityIdentifier = "mac-rail.head.\(item.key)"
+        // [bot-colour] The row's chosen mark follows its bot's colour: a pick in Bot Info, or Chat Bubbles' Bot's Face.
+        if inRow {
+            for name in [BotMessageColour.didChange, Theme.didChange] {
+                NotificationCenter.default.addObserver(self, selector: #selector(botColourChanged), name: name, object: nil)
+            }
+        }
         isAccessibilityElement = true
         layer.cornerCurve = .continuous
         face.translatesAutoresizingMaskIntoConstraints = false
@@ -332,10 +338,17 @@ final class MacRailHead: UIControl {
     private static let tileFill = UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 1, alpha: 0.14) : UIColor(white: 0, alpha: 0.09) }
     private static let hoverFill = UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 1, alpha: 0.06) : UIColor(white: 0, alpha: 0.04) }
 
+    @objc private func botColourChanged() { recolor() }
+
     func recolor() {
         accessibilityTraits = isMarked ? [.button, .selected] : .button
         name.textColor = HQPalette.label
         if inRow {
+            // [bot-colour] A bot's row is chosen in the colour its chat paints your messages with (owner 2026-11-11:
+            // the chosen row follows the colour): the trait `MacSelection.accent` resolves with.
+            var colour: MessageColour?
+            if case .bot(let bot) = item { colour = BotChatColour.colour(profile: bot.id, head: bot.head) }
+            _ = ChatColourTrait.set(colour, on: &traitOverrides)
             // The places' own mark (`MacSelection`): one kind of selection down the whole sidebar.
             backgroundColor = MacSelection.fill(selected: isMarked, pressed: isHighlighted, in: .sidebar) ?? (hovered ? Self.rowHover : .clear)
             layer.cornerRadius = MacSelection.radius

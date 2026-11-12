@@ -131,6 +131,12 @@ final class Theme {
         reload()
     }
 
+    /// [message-colour] Chat Bubbles › Colour (the iOS look).
+    func setMessageColour(_ colour: MessageColour) {
+        store.setMessageColour(colour)
+        reload()
+    }
+
     /// [top-edge] Theme › Themes › Top Edge.
     func setTopEdge(_ edge: TopEdge) {
         store.setTopEdge(edge)

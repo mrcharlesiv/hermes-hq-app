@@ -217,6 +217,38 @@ import Testing
         #expect(all.count == 3 && all[0].projectsAll)
     }
 
+    /// [sessions-collapse] Group By Recent: Pinned closes (no See All under a closed header), and "Projects" closes
+    /// every project to one closed header counting the projects and their unread chats; a filter opens them again.
+    @Test func recentPinnedAndProjectsClose() {
+        let three: [String: [SessionProject]] = ["default": ["a", "b", "c"].map {
+            SessionProject(id: $0, label: $0.uppercased(), root: "/p/\($0)", paths: ["/p/\($0)"])
+        }]
+        let entries = SessionProjects.menuEntries(three, order: ["default"])
+        var rows = ["a", "b", "c"].enumerated().map { Self.chat($1, ago: Double($0 + 1) * 60, status: $1 == "b" ? .unread : .idle, cwd: "/p/\($1)") }
+        rows += (0..<5).map { Self.chat("pin\($0)", ago: Double($0 + 10) * 60, pinned: true) }
+        rows.append(Self.chat("home", ago: 3_600))
+        func run(_ closed: Set<String>, _ edit: (inout SessionListInput) -> Void = { _ in }) -> [SessionGroup] {
+            Self.run(rows) { $0.projectsByProfile = three; $0.projects = entries; $0.collapsedGroups = closed; edit(&$0) }
+        }
+        let open = run([])
+        #expect(open.map(\.id) == ["pinned", "project-/p/a", "project-/p/b", SessionListPipeline.recentId])
+        #expect(open[0].more == 2)
+        let closed = run(["pinned", SessionListPipeline.projectsId])
+        #expect(closed.map(\.id) == ["pinned", SessionListPipeline.projectsId, SessionListPipeline.recentId])
+        #expect(closed[0].collapsed && closed[0].sessions.isEmpty && closed[0].more == 0 && closed[0].total == 5)
+        let projects = closed[1]
+        #expect(projects.collapsed && projects.title == "Projects" && projects.total == 3 && projects.unread == 1)
+        #expect(SessionListPipeline.folds(projects))
+        #expect(!closed[2].collapsed)
+        // Group By Project: every project (Home's too) under the one closed header.
+        let byProject = run([SessionListPipeline.projectsId]) { $0.prefs.groupBy = .project }
+        #expect(byProject.map(\.id).contains(SessionListPipeline.projectsId))
+        #expect(!byProject.contains { SessionListPipeline.isProject($0.id) })
+        // A status filter shows every match.
+        let filtered = run(["pinned", SessionListPipeline.projectsId]) { $0.prefs.statusFilter = [.unread] }
+        #expect(!filtered.contains { $0.id == SessionListPipeline.projectsId || $0.collapsed })
+    }
+
     /// Show › Project Chats in Recent off (tester, 2026-11-08): a project's chats stay on its card, Recent
     /// keeps Home's; with no Home chats Recent goes.
     @Test func projectChatsInRecentOffLeavesThemOnTheirCard() {
@@ -340,15 +372,15 @@ import Testing
         #expect(both[0].collapsed && both[0].sessions.isEmpty && !both[0].expanded)
     }
 
-    /// [sessionsminimal] A status group folds; Recent doesn't ([sessions-fresh], as the date groups before it); neither
-    /// is capped.
-    @Test func statusGroupsFoldRecentDoesntAndNeitherIsCapped() {
+    /// [sessionsminimal] A status group folds; [sessions-collapse] so does Recent (owner 2026-11-11: every section, in
+    /// every view); neither is capped.
+    @Test func statusGroupsAndRecentFoldAndNeitherIsCapped() {
         let rows = (0..<9).map { Self.chat("d\($0)", ago: Double($0 + 1) * 60, status: $0 < 7 ? .working : .idle) }
         var groups = Self.run(rows)
         #expect(groups.map(\.id) == [SessionListPipeline.recentId] && groups[0].sessions.count == 9 && groups[0].more == 0)
-        #expect(!SessionListPipeline.folds(groups[0]))
+        #expect(SessionListPipeline.folds(groups[0]))
         groups = Self.run(rows) { $0.collapsedGroups = [SessionListPipeline.recentId] }
-        #expect(!groups[0].collapsed && groups[0].sessions.count == 9)
+        #expect(groups[0].collapsed && groups[0].sessions.isEmpty && groups[0].total == 9)
         groups = Self.run(rows) { $0.prefs.groupBy = .status; $0.collapsedGroups = ["status-done"] }
         #expect(groups.map(\.id) == ["status-working", "status-done"])
         #expect(groups[0].sessions.count == 7 && !groups[0].collapsed && groups[1].collapsed && groups[1].total == 2)

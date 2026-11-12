@@ -17,7 +17,7 @@ nonisolated enum SyncedSettingKeys {
         // Appearance and Theme
         "hqn.appearance", "hqn.theme.skin", "hqn.theme.chosen", "hqn.theme.desktopLook", "hqn.theme.skinBeforeLook",
         "hqn.theme.highContrast", "hqn.theme.bubbleCorners", "hqn.theme.bubbleStyle", "hqn.theme.glassBubbles", "hqn.theme.topEdge",
-        "hqn.theme.desktopCorners", "hqn.theme.desktopComposer",
+        "hqn.theme.desktopCorners", "hqn.theme.desktopComposer", "hqn.theme.messageColour",
         "hqn.head.style",
         // Chat
         "hqn.inAppTips", "hqn.introSplash", "hqn.fileBrowser", "hqn.attachmentLimitMb", "hqn.reactions", "hqn.reactions.touched",
@@ -40,7 +40,7 @@ nonisolated enum SyncedSettingKeys {
     /// the same gateway even when the two were signed in with different addresses.
     static let accountPrefixes: [String] = [
         "hq.favorite-commands|", "hermes.desktop.favorite-models|", "hermes.desktop.model-presets|", "dispatch.chat.recentModels|",
-        "pages.kanbanTab.override.", "hqn.defaultProjectFolder.", "pages.filesRoot.",
+        "pages.kanbanTab.override.", "hqn.defaultProjectFolder.", "pages.filesRoot.", "hqn.botMessageColour.",
     ]
 
     static let accountToken = "{account}"

@@ -144,6 +144,7 @@ nonisolated enum AttachmentDrop {
         hideOverlay()
         let dropped = providers(session)
         AppLog.note("attach", "drop: \(dropped.count) of \(session.items.count)")
+        if !dropped.isEmpty { Haptics.play(.soft) }   // the drop lands, as a drag's end elsewhere
         onDrop(dropped)
     }
 

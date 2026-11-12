@@ -15,6 +15,8 @@ enum HQPalette {
     static let label2 = ThemedColor.make(\.label2)
     static let label3 = ThemedColor.make(\.label3)
     static let tint = ThemedColor.make(\.tint)
+    /// [message-colour] The Mac's chosen row: the tint, or the message colour picked on Chat Bubbles.
+    static let chosenRow = ThemedColor.make(\.chosenRow)
     /// Tint as small text (times on unread rows).
     static let tintText = ThemedColor.make(\.tintText)
     static let separator = ThemedColor.make(\.separator)

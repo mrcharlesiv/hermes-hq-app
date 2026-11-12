@@ -134,6 +134,33 @@ extension View {
 }
 
 extension View {
+    /// [mac-ten] Owner 2026-11-11 ("weird UI issues on the Mac app"): a page that is a list of cards but not a form (a
+    /// job's page) at the readable width, centred in the pane, as the pages beside More's rows are. It was the iPhone's
+    /// page stretched across the pane: "Repeats" at one edge and its value 1,000 pt away, Run Now and Pause as two
+    /// slabs half the window wide. Only the column: the rows, gaps and switches stay the page's own. Elsewhere nothing.
+    @ViewBuilder func hqMacReadableColumn() -> some View {
+        #if targetEnvironment(macCatalyst)
+        modifier(MacReadableColumn())
+        #else
+        self
+        #endif
+    }
+}
+
+#if targetEnvironment(macCatalyst)
+private struct MacReadableColumn: ViewModifier {
+    @State private var width: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        let _ = Theme.touch()
+        content
+            .contentMargins(.horizontal, MacForm.side(in: width), for: .scrollContent)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+    }
+}
+#endif
+
+extension View {
     /// [mac-ui-issues] Every row of a Settings list takes the Mac's room above and under it (`MacForm.settingsRowInset`).
     /// On the list's content (a Group round its sections): set on the List itself it reaches no row. Nothing on the
     /// iPhone and iPad.

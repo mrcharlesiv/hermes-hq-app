@@ -152,6 +152,7 @@ import UIKit
     func toggle(messageId: String) {
         guard let chat else { return }
         if center.state.messageId == messageId {
+            Haptics.play(.light)   // stopped, as the read strip's own Stop
             center.stop()
             return
         }
@@ -170,6 +171,7 @@ import UIKit
     func toggle(messageId: String, text: String) {
         guard let chat else { return }
         if center.state.messageId == messageId {
+            Haptics.play(.light)   // stopped, as the read strip's own Stop
             center.stop()
             return
         }

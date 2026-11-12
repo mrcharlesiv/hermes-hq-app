@@ -530,6 +530,35 @@ struct TasksTests {
         #expect(sent?.body?["capture"]?.string == "ask" && model.draft.prepPerDay == 3 && s.settings.prepPerDay == 3)
     }
 
+    /// The writes the list plays a tap for say whether they landed: a refused move, Group By or step ticks the
+    /// error (the notice says why), one that went through doesn't.
+    @Test func movesLayoutsAndStepsSayWhetherTheyLanded() async throws {
+        let one = Self.wire(Self.make("t_1", "Water the plants")), two = Self.wire(Self.make("t_2", "Book the vet"))
+        let client = PagesFakeClient { _ in
+            .object(["rev": 3, "tasks": .array([one, two]), "sections": .array([.object(["id": "s_home", "name": "Home"])])])
+        }
+        let s = store(client, directory: nil)
+        await s.refresh()
+        #expect(s.sectionsSupported)
+        client.respond { request in
+            if request.method == "PATCH" { return Self.wire(Self.make(request.path.hasSuffix("t_1") ? "t_1" : "t_2", rev: 2)) }
+            return .object(["rev": 4, "tasks": .array([one, two])])
+        }
+        #expect(await s.move(["t_1", "t_2"], to: "s_home"))
+        #expect(await s.setLayout(group: s.settings.group), "nothing to change is not a failure")
+
+        let refused = httpError(422, "Not now")
+        client.respond { request in
+            if request.method == "PATCH", request.path.hasSuffix("t_2") { throw refused }
+            if request.method == "PATCH" { return Self.wire(Self.make("t_1", rev: 3)) }
+            if request.method == "PUT" || request.method == "POST" { throw refused }
+            return .object(["rev": 4, "tasks": .array([one, two])])
+        }
+        #expect(await !s.move(["t_1", "t_2"], to: nil), "one of the two was refused")
+        #expect(await !s.setStep("t_2", step: "x", done: true))
+        #expect(await !s.setStep("t_gone", step: "x", done: true), "no such task")
+    }
+
     /// Undo right after Dismiss: the restore goes out only once the dismiss has landed.
     @Test func undoWaitsForTheDismiss() async throws {
         let ideas: JSONValue = .object(["on": true, "bot": "scout", "ideas": .array([.object(["id": "i_1", "title": "Renew it", "bot": "scout"])])])

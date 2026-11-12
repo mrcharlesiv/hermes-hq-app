@@ -54,9 +54,8 @@ struct TalkActivityWidget: Widget {
             } compactLeading: {
                 TalkPhaseIcon(state: state, accent: context.attributes.accent)
             } compactTrailing: {
-                // Room for "0:00:00", as the reply card's island: 44 pt cut a talk past an hour to "1:00:…".
+                // As the reply card's island: as wide as its digits, smaller when the island offers less, never cut.
                 TalkClock(startedAt: context.attributes.startedAt, state: state)
-                    .frame(width: 64, alignment: .trailing)
             } minimal: {
                 TalkPhaseIcon(state: state, accent: context.attributes.accent)
             }
@@ -126,15 +125,15 @@ struct TalkClock: View {
 
     var body: some View {
         if state.phase != TalkPhaseStyle.ended {
-            // A bounded range: a timer's text is as wide as its longest value, and one running to distantFuture was
-            // wider than the Lock Screen.
-            Text(timerInterval: startedAt...startedAt.addingTimeInterval(24 * 3600), countsDown: false)
-                .monospacedDigit()
-                .multilineTextAlignment(alignment)
+            // As wide as its digits (LiveTimer, ReplyActivityWidget.swift): a timer left to itself takes all the room
+            // it is offered — wider than the Lock Screen once, and the whole top of the screen in the island.
+            LiveTimer(startedAt: startedAt, alignment: alignment == .leading ? .leading : .trailing)
         } else if let endedAt = state.endedAt, endedAt > startedAt {
-            Text(timerInterval: startedAt...endedAt, pauseTime: endedAt, countsDown: false)
+            // Stopped, so plain digits: a paused timer too takes all the room it is offered.
+            Text(LiveTimerSpan.clock(endedAt.timeIntervalSince(startedAt)))
                 .monospacedDigit()
-                .multilineTextAlignment(alignment)
+                .lineLimit(1)
+                .minimumScaleFactor(LiveLook.squeeze)
         }
     }
 }

@@ -312,7 +312,7 @@ extension SettingsEndToEndTests {
         let choice = app.buttons["new-chat-bot-\(bot)"]
         if choice.waitForExistence(timeout: 4) {
             choice.tap()
-            app.buttons["new-chat-project-none"].tap()
+            app.buttons["new-chat-start"].tap()
         }
         XCTAssertTrue(app.textViews["composer.text"].waitForExistence(timeout: 12), "the new chat opens")
         app.navigationBars.buttons.firstMatch.tap()

@@ -1271,6 +1271,208 @@ private let allStates: [ThemeState] = SkinCatalog.all.flatMap { skin in
     }
 }
 
+/// [message-colour] Chat Bubbles › Colour: the theme's own unless picked, stored only then, the iOS look's only, and
+/// always with text that reads on it.
+@Suite struct MessageColourTests {
+    @Test func themeUntilPickedAndStoredOnlyWhenPicked() {
+        let suite = defaults()
+        let store = ThemeStore(defaults: suite)
+        #expect(store.load().messageColour == .theme && store.load() == .default)
+        store.setMessageColour(.preset(.green))
+        #expect(suite.string(forKey: "hqn.theme.messageColour") == "green")
+        #expect(ThemeStore(defaults: suite).load().messageColour == .preset(.green))
+        store.setMessageColour(.custom(0x12AB9F))
+        #expect(suite.string(forKey: "hqn.theme.messageColour") == "#12AB9F")
+        #expect(store.load().messageColour == .custom(0x12AB9F))
+        store.setMessageColour(.theme)
+        #expect(suite.object(forKey: "hqn.theme.messageColour") == nil && store.load() == .default)
+        for junk: Any in ["mauve", "#12AB", "#GGGGGG", 7, true] {
+            suite.set(junk, forKey: "hqn.theme.messageColour")
+            #expect(store.load().messageColour == .theme, "\(junk) is the theme's own")
+        }
+        suite.set("pink", forKey: "hqn.theme.messageColour")
+        store.reset()
+        #expect(suite.object(forKey: "hqn.theme.messageColour") == nil, "reset forgets it")
+        #expect(SyncedSettingKeys.settings.contains(ThemeStore.Key.messageColour), "it follows the owner to the other device")
+    }
+
+    @Test func blueIsTheAppsOwnBlueAndThemeChangesNothing() {
+        let standard = ThemeResolver.resolve(.default)
+        var state = ThemeState.default
+        state.messageColour = .preset(.blue)
+        let blue = ThemeResolver.resolve(state)
+        for dark in [false, true] {
+            #expect(close(blue.tokens(dark: dark).meBubble, standard.tokens(dark: dark).meBubble, 1.5 / 255))
+            #expect(blue.tokens(dark: dark).meText == .white)
+        }
+        // Nothing but your message changes.
+        state.messageColour = .preset(.red)
+        var red = ThemeResolver.resolve(state).light
+        #expect(!close(red.meBubble, standard.light.meBubble))
+        red.meBubble = standard.light.meBubble; red.meText = standard.light.meText; red.meTime = standard.light.meTime
+        red.rowAccent = nil
+        #expect(red == standard.light)
+    }
+
+    @Test func everyColourReadsOnEverySkinInBothModes() {
+        let colours = MessageColour.Preset.allCases.map(MessageColour.preset)
+            + [0xFFFFFF, 0x000000, 0xFFE100, 0x7FFFD4, 0x101040, 0x808080].map(MessageColour.custom)
+        for skin in SkinCatalog.all {
+            for colour in colours {
+                var state = ThemeState(skinID: skin.id)
+                state.messageColour = colour
+                let set = ThemeResolver.resolve(state)
+                for tokens in [set.light, set.dark] {
+                    let ground = tokens.meBubble.over(tokens.page)
+                    #expect(tokens.meText.over(ground).contrast(with: ground) >= 4.5, "\(skin.id) \(colour) text")
+                    #expect(tokens.meTime.over(ground).contrast(with: ground) >= 3, "\(skin.id) \(colour) time")
+                }
+            }
+        }
+    }
+
+    @Test func graphiteIsAQuietPillApartFromTheReply() {
+        var state = ThemeState.default
+        state.messageColour = .preset(.graphite)
+        let set = ThemeResolver.resolve(state)
+        for tokens in [set.light, set.dark] {
+            #expect(tokens.meText == tokens.label)
+            #expect(!close(tokens.meBubble, tokens.botBubble, 6.0 / 255), "not the reply's own grey")
+            #expect(tokens.meBubble.contrast(with: tokens.page) < 2, "a soft step from the page")
+        }
+    }
+
+    /// Owner 2026-11-11: the Mac's chosen row follows the colour.
+    @Test func theChosenRowFollowsThePick() {
+        let standard = ThemeResolver.resolve(.default)
+        #expect(standard.light.rowAccent == nil && standard.dark.chosenRow == standard.dark.tint)
+        var state = ThemeState.default
+        state.messageColour = .preset(.blue)
+        let blue = ThemeResolver.resolve(state)
+        #expect(blue.light.chosenRow == standard.light.tint && blue.dark.chosenRow == standard.dark.tint, "Blue is the row as it was")
+        state.messageColour = .preset(.green)
+        let green = ThemeResolver.resolve(state)
+        #expect(green.light.chosenRow == RGBA(hex: 0x1D883C) && !close(green.dark.chosenRow, standard.dark.tint, 20.0 / 255))
+        state.messageColour = .preset(.graphite)
+        let grey = ThemeResolver.resolve(state).dark.chosenRow
+        #expect(abs(grey.r - grey.b) < 0.06 && grey.contrast(with: standard.dark.page) < 5, "a soft grey")
+        state.messageColour = .custom(0xFFE100)
+        #expect(ThemeResolver.resolve(state).light.chosenRow == RGBA(hex: 0xFFE100))
+        state.desktopLook = true
+        #expect(ThemeResolver.resolve(state).light.rowAccent == nil, "the Desktop Look keeps its own")
+    }
+
+    @Test func searchFindsIt() {
+        let row = SettingsSearch.appRows.first { $0.id == "app:message-colour" }
+        #expect(row?.label == "Message Colour" && row?.target == .root("chat-bubbles"))
+        #expect(row?.keywords.contains("color") == true)
+    }
+
+    @Test func theDesktopLookKeepsItsOwnBox() {
+        var plain = ThemeState.default
+        plain.desktopLook = true
+        var picked = plain
+        picked.messageColour = .preset(.pink)
+        #expect(picked.appliedMessageColour == .theme)
+        #expect(ThemeResolver.resolve(picked).light.meBubble == ThemeResolver.resolve(plain).light.meBubble)
+        #expect(ThemeResolver.resolve(picked).dark.meText == ThemeResolver.resolve(plain).dark.meText)
+    }
+}
+
+/// [bot-colour] A bot's own message colour: its pick, its face, or what Chat Bubbles says; painted through a trait on
+/// its chat.
+@Suite struct BotMessageColourTests {
+    @Test func aBotsPickIsStoredPerAccountAndBotAndTravels() {
+        let suite = defaults()
+        #expect(BotMessageColour.choice(account: "acct1", profile: "sam", defaults: suite) == .app)
+        BotMessageColour.set(.face, account: "acct1", profile: "sam", defaults: suite)
+        #expect(suite.string(forKey: "hqn.botMessageColour.acct1.sam") == "face")
+        #expect(BotMessageColour.choice(account: "acct1", profile: "sam", defaults: suite) == .face)
+        #expect(BotMessageColour.choice(account: "acct1", profile: "otto", defaults: suite) == .app, "another bot keeps its own")
+        #expect(BotMessageColour.choice(account: "acct2", profile: "sam", defaults: suite) == .app, "another gateway too")
+        BotMessageColour.set(.colour(.preset(.teal)), account: "acct1", profile: "", defaults: suite)
+        #expect(suite.string(forKey: "hqn.botMessageColour.acct1.default") == "teal", "the first bot is default")
+        BotMessageColour.set(.colour(.custom(0xAB12CD)), account: "acct1", profile: "sam", defaults: suite)
+        #expect(BotMessageColour.choice(account: "acct1", profile: "sam", defaults: suite) == .colour(.custom(0xAB12CD)))
+        BotMessageColour.set(.app, account: "acct1", profile: "sam", defaults: suite)
+        #expect(suite.object(forKey: "hqn.botMessageColour.acct1.sam") == nil, "the default is stored as nothing")
+        for junk: Any in ["theme", "botFace", "mauve", 4] {
+            suite.set(junk, forKey: "hqn.botMessageColour.acct1.sam")
+            #expect(BotMessageColour.choice(account: "acct1", profile: "sam", defaults: suite) == .app)
+        }
+        #expect(BotMessageColour.choice(account: nil, profile: "sam", defaults: suite) == .app)
+        #expect(SyncedSettingKeys.synced("hqn.botMessageColour.acct1.sam", accountId: "acct1", library: false) == "hqn.botMessageColour.{account}.sam")
+    }
+
+    @Test func aPickWinsThenTheFaceWhereChatBubblesSaysSo() {
+        let face = MessageColour.custom(0x2DBE60)
+        #expect(BotMessageColour.effective(app: .theme, bot: .app, face: face) == nil)
+        #expect(BotMessageColour.effective(app: .preset(.pink), bot: .app, face: face) == nil, "the app's colour is already the theme's")
+        #expect(BotMessageColour.effective(app: .botFace, bot: .app, face: face) == face)
+        #expect(BotMessageColour.effective(app: .botFace, bot: .app, face: nil) == nil)
+        #expect(BotMessageColour.effective(app: .theme, bot: .face, face: face) == face)
+        #expect(BotMessageColour.effective(app: .botFace, bot: .colour(.preset(.red)), face: face) == .preset(.red))
+    }
+
+    @Test func botsFaceIsStoredAndPaintsNothingByItself() {
+        let suite = defaults()
+        let store = ThemeStore(defaults: suite)
+        store.setMessageColour(.botFace)
+        #expect(suite.string(forKey: "hqn.theme.messageColour") == "botFace" && store.load().messageColour == .botFace)
+        var state = ThemeState.default
+        state.messageColour = .botFace
+        #expect(ThemeResolver.resolve(state).light == ThemeResolver.resolve(.default).light, "a page with no one bot keeps the theme's")
+    }
+
+    @Test func aFaceGivesItsAccentInkBlackAndPaperTheGreyPill() {
+        var head = Head()
+        head.color = .grass
+        #expect(head.messageColour == .custom(0x2DBE60))
+        head.color = .ink
+        #expect(head.messageColour == .custom(0x0A0A0A))
+        var black = ThemeState.default
+        black.messageColour = head.messageColour
+        let light = ThemeResolver.resolve(black).light
+        #expect(light.meBubble == RGBA(hex: 0x0A0A0A) && light.meText == .white, "a black face's chat is black, with white text")
+        let dark = ThemeResolver.resolve(black).dark
+        #expect(dark.meBubble == RGBA(hex: 0x5C5C5C) && dark.meText == .white, "in dark, a plain mid grey with white text")
+        head.color = .paper
+        #expect(head.messageColour == .preset(.graphite))
+        for name in Head.ColorName.allCases {
+            head.color = name
+            var state = ThemeState.default
+            state.messageColour = head.messageColour
+            for tokens in [ThemeResolver.resolve(state).light, ThemeResolver.resolve(state).dark] {
+                let ground = tokens.meBubble.over(tokens.page)
+                #expect(tokens.meText.over(ground).contrast(with: ground) >= 4.5, "\(name) reads")
+            }
+        }
+    }
+
+    @MainActor @Test func aChatsTraitPaintsYourMessagesAndNothingElse() {
+        let plain = UITraitCollection(userInterfaceStyle: .dark)
+        let green = plain.modifyingTraits { $0[ChatColourTrait.self] = ChatColourTrait.code(.preset(.green)) }
+        for colour in MessageColour.Preset.allCases.map(MessageColour.preset) + [.custom(0), .custom(0xFFFFFF), .custom(0x12AB9F)] {
+            #expect(ChatColourTrait.colour(ChatColourTrait.code(colour)) == colour)
+        }
+        #expect(ChatColourTrait.code(nil) == 0 && ChatColourTrait.code(.theme) == 0 && ChatColourTrait.colour(0) == nil && ChatColourTrait.colour(77) == nil)
+        func rgba(_ colour: UIColor, _ traits: UITraitCollection) -> RGBA {
+            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            colour.resolvedColor(with: traits).getRed(&r, green: &g, blue: &b, alpha: &a)
+            return RGBA(unit: Double(r), Double(g), Double(b), Double(a))
+        }
+        var picked = ThemeTable.current.state
+        picked.messageColour = .preset(.green)
+        let expected = ThemeResolver.resolve(picked).dark
+        guard !ThemeTable.current.state.desktopLook else { return }
+        #expect(close(rgba(ChatPalette.meBubble, green), expected.meBubble, 1.5 / 255))
+        #expect(close(rgba(HQPalette.chosenRow, green), expected.chosenRow, 1.5 / 255))
+        #expect(!close(rgba(ChatPalette.meBubble, green), rgba(ChatPalette.meBubble, plain), 8.0 / 255) || ThemeTable.current.state.messageColour == .preset(.green))
+        #expect(close(rgba(ChatPalette.botBubble, green), rgba(ChatPalette.botBubble, plain)), "the reply's bubble is left alone")
+        #expect(close(rgba(HQPalette.tint, green), rgba(HQPalette.tint, plain)))
+    }
+}
+
 /// [density] Theme › Density: Standard or Compact, the iOS look's only, stored only when Compact.
 @Suite struct DensityTests {
     @Test func standardUntilPickedAndStoredOnlyWhenCompact() {

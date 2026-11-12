@@ -38,7 +38,10 @@ struct StarMapPage: View {
                 ToolbarItem(placement: .topBarTrailing) { filterMenu }
                     // [mac] Stress test 2026-10-28 #56: in the Desktop Look the bar's items are plain glyphs; this one was
                     // the only one drawn on a filled grey circle (the bar's shared glass behind a SwiftUI item).
-                    .sharedBackgroundVisibility(DeviceWord.isMac && Theme.isDesktop ? .hidden : .automatic)
+                    // [mac-ten] Owner 2026-11-11 ("weird UI issues"): in the iOS look too. Every other page's bar
+                    // buttons are bare glyphs on the Mac (Tasks' Filter, Jobs' +, the chat's ⋯); this one alone sat on
+                    // a glass circle.
+                    .sharedBackgroundVisibility(DeviceWord.isMac ? .hidden : .automatic)
             }
         }
         .sheet(item: $model.selected) { node in
@@ -208,7 +211,7 @@ private struct StarMapMemoryRow: View {
                 Text(card.body).font(Font.hq(.subheadline)).foregroundStyle(Color.hqLabel2).lineLimit(open ? nil : 4)
             }
             if StarMapRules.folds(card.body) {
-                Button(open ? "Show Less" : "Show More") { open.toggle() }
+                Button(open ? "Show Less" : "Show More") { Haptics.play(.selection); open.toggle() }
                     .font(Font.hq(.subheadline))
                     .buttonStyle(.borderless)
                     .accessibilityIdentifier("starmap.memory.more.\(card.id)")

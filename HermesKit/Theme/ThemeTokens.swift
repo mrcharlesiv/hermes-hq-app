@@ -59,6 +59,12 @@ nonisolated struct ThemeTokens: Sendable, Hashable {
     var syntax: SyntaxColours? = nil
     /// A skin's own iOS look (`SkinOwnLook`), nil for the general rules and in the Desktop Look.
     var ownLook: SkinOwnLook? = nil
+    /// [message-colour] The colour of the Mac's chosen row while a message colour is picked (owner 2026-11-11: the
+    /// chosen row follows it); nil: the tint, as ever.
+    var rowAccent: RGBA? = nil
+
+    /// [message-colour] What the Mac's chosen row is tinted with (`MacSelection.accent`).
+    var chosenRow: RGBA { rowAccent ?? tint }
 
     /// A table card: Fill 4, with its header row Fill 4 again over it, unless a skin shades the header alone.
     var tableBody: RGBA { ownLook == nil ? fill4 : RGBA(unit: 0, 0, 0, 0) }
@@ -107,6 +113,7 @@ nonisolated enum ThemeResolver {
             // dark when Light is asked for.
             let dark = skin.id == SkinCatalog.defaultID && !state.desktopLook ? wantsDark : seeds.rendersDark
             var t = state.desktopLook ? desktop(seeds, dark: dark, contrast: contrast) : ios(skin, seeds, dark: dark)
+            paintMessage(&t, state.appliedMessageColour, dark: dark)
             if let own = skin.syntax?.pick(dark) { t.syntax = syntax(own, on: t.codeFillOnBubble.over(t.botBubble.over(t.page.over(.white))), dark: dark) }
             return t
         }
@@ -243,6 +250,68 @@ nonisolated enum ThemeResolver {
         t.sidebar = t.grouped
         t.tabIdle = t.label3
         return t
+    }
+
+    /// [message-colour] Your messages in the colour picked on Chat Bubbles, over what the skin gave them. A named
+    /// colour has its own light and dark shade; any other goes through the rule a skin's accent does (`ios`: brightened
+    /// then deepened in dark). Either is deepened until white reads on it at 4.5:1, with black text only where it is
+    /// too light for white. Graphite is the page's own grey with the page's text: a quiet pill, a step from the
+    /// reply's bubble.
+    static func paintMessage(_ t: inout ThemeTokens, _ colour: MessageColour, dark: Bool) {
+        let start: RGBA
+        switch colour {
+        case .theme, .botFace:
+            return
+        case .custom(let hex):
+            let seed = RGBA(hex: hex)
+            if dark, seed.labL < 10 {
+                // [bot-colour] Black (an ink face's chat) in dark: a plain mid grey with white text, not the brightened
+                // rule's lighter grey (owner 2026-11-11, from the Grok Bot chat: "In dark mode for a black chat bubble,
+                // I want it like this").
+                start = RGBA(hex: 0x5C5C5C)
+            } else {
+                start = dark ? seed.raisingL(to: 57).mix(75, .black) : seed
+            }
+            t.rowAccent = dark ? seed.raisingL(to: 57) : seed
+        case .preset(let preset):
+            guard let seed = preset.seed(dark: dark) else {
+                // On a skin whose text is soft, the text goes toward plain black or white until it reads (as the
+                // Desktop Look's box does).
+                let ground = t.label.over(t.page).mix(dark ? 22 : 17, t.page)
+                let strongest: RGBA = RGBA.white.contrast(with: ground) >= RGBA.black.contrast(with: ground) ? .white : .black
+                var ink = t.label
+                for keep in stride(from: 90.0, through: 0, by: -10) where ink.over(ground).contrast(with: ground) < 4.5 {
+                    ink = t.label.mixOklab(keep, strongest)
+                }
+                t.meBubble = ground
+                t.meText = ink
+                t.meTime = ThemeMath.readable(t.label2, text: ink, on: ground, ratio: 3)
+                // The chosen row is drawn see-through: a share of the text's colour comes out as the same soft grey.
+                t.rowAccent = t.label.over(t.page).mix(38, t.page)
+                return
+            }
+            start = seed
+            // As a skin's accent in dark: the light shade brightened (the row is drawn see-through over the sidebar).
+            // Blue is the app's own tint, so its row is exactly the row as it was.
+            if preset == .blue {
+                t.rowAccent = base(dark: dark).tint
+            } else if let light = preset.seed(dark: false) {
+                t.rowAccent = dark ? light.raisingL(to: 57) : light
+            }
+        }
+        var bubble = start
+        if RGBA.white.contrast(with: bubble) >= 3 {
+            var keep = 100.0
+            while keep > 60, RGBA.white.contrast(with: bubble) < 4.5 {
+                keep -= 2
+                bubble = start.mix(keep, .black)
+            }
+        }
+        let white = RGBA.white.contrast(with: bubble), black = RGBA.black.contrast(with: bubble)
+        let ink: RGBA = white >= 4.5 || white >= black ? .white : .black
+        t.meBubble = bubble
+        t.meText = ink
+        t.meTime = ink.alpha(dark ? 0.88 : 0.85)
     }
 
     /// A skin's own iOS look (`SkinOwnLook`) over what the general rule made: its surfaces, its greys, its code card.

@@ -472,16 +472,12 @@ final class PagedTextBlock: UIView {
     }
 }
 
-/// The coloured diff (§12 item 3): added lines on green 12 %, removed on red 12 %, monospace footnote, no wrapping,
-/// scrolling sideways, radius 14 on the elevated cell colour.
+/// The coloured diff (§12 item 3): added lines on green 12 %, removed on red 12 %, monospace footnote, radius 14 on
+/// the elevated cell colour. Owner 2026-11-11 ("I don't want to scroll left and right to read it"): a long line wraps
+/// inside the panel, and its later rows hang a step in from where the line's own code starts, so the indentation
+/// still reads down the page.
 final class DiffPanel: UIView {
-    private let scroll = UIScrollView()
     private let column = UIStackView()
-    /// The room under the last line: 8 pt, or the scroll bar's lane while the lines run past the panel (owner
-    /// 2026-10-29: the bar sat on the last line on the Mac).
-    private var bottomRoom: NSLayoutConstraint!
-    /// The widest line's width (its font is fixed when the panel is made).
-    private var natural: CGFloat = 0
 
     init(lines: [StepRules.DiffLine]) {
         super.init(frame: .zero)
@@ -491,20 +487,15 @@ final class DiffPanel: UIView {
         hqGlassEdge()   // [glass-design] its thin edge on the glass
         clipsToBounds = true
         accessibilityIdentifier = "step.diff"
-        scroll.showsHorizontalScrollIndicator = true
-        scroll.alwaysBounceHorizontal = false
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(scroll)
         column.axis = .vertical
         column.translatesAutoresizingMaskIntoConstraints = false
-        scroll.addSubview(column)
+        addSubview(column)
         let font = UIFontMetrics(forTextStyle: .footnote).scaledFont(for: HQFont.mono(ofSize: 13, weight: .regular))
+        let step = ("  " as NSString).size(withAttributes: [.font: font]).width
         for line in lines {
             let label = PaddedLabel()
-            label.font = font
-            label.text = line.text.isEmpty ? " " : line.text
-            label.textColor = ChatPalette.label
-            label.numberOfLines = 1
+            label.numberOfLines = 0
+            label.attributedText = Self.wrapping(line.text.isEmpty ? " " : line.text, font: font, step: step)
             switch line.kind {
             case .added:
                 label.backgroundColor = UIColor.systemGreen.withAlphaComponent(0.12)
@@ -516,29 +507,25 @@ final class DiffPanel: UIView {
                 label.backgroundColor = .clear
             }
             column.addArrangedSubview(label)
-            natural = max(natural, label.intrinsicContentSize.width)
         }
-        bottomRoom = column.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -8)
         NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: topAnchor),
-            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
-            scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
-            column.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 8),
-            bottomRoom,
-            column.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
-            column.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor),
-            column.widthAnchor.constraint(greaterThanOrEqualTo: scroll.frameLayoutGuide.widthAnchor),
-            scroll.frameLayoutGuide.heightAnchor.constraint(equalTo: scroll.contentLayoutGuide.heightAnchor),
+            column.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            column.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+            column.leadingAnchor.constraint(equalTo: leadingAnchor),
+            column.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        let room = bounds.width > 0 && natural > bounds.width + 0.5 ? max(8, ScrollBarLane.height) : 8
-        if bottomRoom.constant != -room { bottomRoom.constant = -room }
+    /// One line of code that may wrap: the rows after the first start a step past the line's own indentation (never
+    /// more than 120 pt in, so a deeply nested line keeps room for its words).
+    static func wrapping(_ text: String, font: UIFont, step: CGFloat) -> NSAttributedString {
+        let lead = String(text.prefix { $0 == " " || $0 == "\t" })
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byWordWrapping
+        style.headIndent = min(120, (lead as NSString).size(withAttributes: [.font: font]).width + step)
+        return NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: ChatPalette.label, .paragraphStyle: style])
     }
 }
 

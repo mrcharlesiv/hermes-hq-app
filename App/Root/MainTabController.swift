@@ -262,6 +262,7 @@ final class MainTabController: UITabBarController, UITabBarControllerDelegate {
     /// one on show goes back to its root.
     func pick(_ target: UIViewController, animated: Bool = true) {
         if selectedViewController === target {
+            Haptics.play(.selection)   // [tab-haptic] a second tap ticks too, as the system bar's
             // [tabretap] At the root already: back to the top of the page.
             if !TabRetap.scrollToTop(target, animated: animated) {
                 _ = (target as? UINavigationController)?.popToRootViewController(animated: animated)
@@ -363,9 +364,16 @@ final class MainTabController: UITabBarController, UITabBarControllerDelegate {
     /// [tabretap] The system bar's second tap of the tab on show: at its root page, the page scrolls to the top (a
     /// pushed page still goes back to the root first, which the system does).
     func tabBarController(_ tabBarController: UITabBarController, shouldSelect viewController: UIViewController) -> Bool {
+        // [tab-haptic] Owner 2026-11-11: "I want taptic feedback when you tap on a menu button in the nav bar in the
+        // bottom of the screen." A tick on every tap of the system bar, a second tap of the tab on show too. The app's
+        // own bars (the Desktop Look's, the Mac's sidebar) ask here with the system bar hidden and play their own.
+        if Self.systemBarTicks(barHidden: isTabBarHidden, ownBar: DesktopTabBar.wanted != nil) { Haptics.play(.selection) }
         if viewController === selectedViewController { TabRetap.scrollToTop(viewController) }
         return true
     }
+
+    /// Whether a tap reaching `shouldSelect` came from the system bar (the only bar that plays no tick of its own).
+    nonisolated static func systemBarTicks(barHidden: Bool, ownBar: Bool) -> Bool { !barHidden && !ownBar }
 
     /// The Sessions list refreshes on its on-screen cadence only while its tab shows (spec 03 §7.7).
     func tabBarController(_ tabBarController: UITabBarController, didSelect viewController: UIViewController) {
@@ -487,6 +495,7 @@ final class MainTabController: UITabBarController, UITabBarControllerDelegate {
     func updateIssueBadge() {
         ServerIssues.shared.use(account: services.account?.id ?? "")
         AddOnReminder.shared.use(account: services.account?.id ?? "")
+        PluginUpdateReminder.shared.use(account: services.account?.id ?? "")   // [plugin-updates]
         if reminderObserver == nil {
             reminderObserver = NotificationCenter.default.addObserver(forName: AddOnReminder.didChange, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.showIssueCount() }
@@ -505,28 +514,32 @@ final class MainTabController: UITabBarController, UITabBarControllerDelegate {
 
     private func showIssueCount() {
         let issues = ServerIssues.shared, reminder = AddOnReminder.shared
+        // [plugin-updates] Plugins with an update count beside the add-on's: one each.
+        let plugins = PluginUpdateReminder.shared
+        let reminders = (reminder.badged ? 1 : 0) + plugins.count
+        let spoken = [reminder.spoken, plugins.spoken].compactMap { $0 }.joined(separator: ", ").nilIfEmpty
         // [addon-reminder] The add-on reminder counts on the tab that holds Settings: Settings' own tab when Settings ›
         // Tabs made it one, otherwise More (beside the connectors that need the owner).
         let settingsTab = placedTab(tagged: TabChoice.page("settings").tag)
-        settingsTab?.tabBarItem.badgeValue = reminder.badged ? "1" : nil   // [addon-progress] none for "not out yet"
-        settingsTab?.tabBarItem.accessibilityValue = reminder.spoken
+        settingsTab?.tabBarItem.badgeValue = reminders > 0 ? String(reminders) : nil   // [addon-progress] none for "not out yet"
+        settingsTab?.tabBarItem.accessibilityValue = spoken
         guard let more = placedTabs.first(where: { ($0 as? UINavigationController)?.viewControllers.first is MoreViewController }) else {
             badgeOverlay?.refresh(); return
         }
         #if targetEnvironment(macCatalyst)
         // [mac-ui-issues] The Mac's More list has no Settings row: the sidebar's gear carries the reminder's dot.
-        split?.macSidebar.showSettingsDot(reminder.badged, spoken: reminder.spoken)
+        split?.macSidebar.showSettingsDot(reminders > 0, spoken: spoken)
         let remind = false
         #else
-        let remind = reminder.badged && settingsTab == nil
+        let remind = reminders > 0 && settingsTab == nil
         #endif
-        var count = issues.count + (remind ? 1 : 0)
+        var count = issues.count + (remind ? reminders : 0)
         #if DEBUG
         if UserDefaults.standard.object(forKey: "HQDebugMoreBadge") != nil { count = UserDefaults.standard.integer(forKey: "HQDebugMoreBadge") }
         #endif
         more.tabBarItem.badgeValue = count > 0 ? String(count) : nil
         badgeOverlay?.refresh()
-        more.tabBarItem.accessibilityValue = [remind ? reminder.spoken : nil, issues.summary].compactMap { $0 }.joined(separator: ", ").nilIfEmpty
+        more.tabBarItem.accessibilityValue = [remind ? spoken : nil, issues.summary].compactMap { $0 }.joined(separator: ", ").nilIfEmpty
     }
 
     /// [notifications] Back inside a chat says how many other chats have an unread reply ("‹ 3", Messages' count); with

@@ -1806,3 +1806,34 @@ already tailnet-only, but the Mac and Linux one command always opened Funnel and
   `OnboardingCopy.Tailnet` and `quick(_:tailnetOnly:)`; the web-parity tests still pin the default words.
 * Proof: `GuideFeedbackTests.tailnetOnlyHandsOverThePrivateCommandAndMessage`, `TailscaleCopyTests.tailnetOnlyCopy`,
   UI tests O26 and O26b (the switch at the largest size), and the connect tests for `--private`.
+
+## 19. One question first (11 November, native only)
+
+The owner asked for a first run "so simple that anybody can easily figure out how to get Hermes HQ up and running".
+Photographed on a phone, the screen after Get Started ("Let Hermes set it up.") had two detours above its one action
+(a Hermes Cloud row and the Tailscale switch), its ways on below the fold, and nothing for someone with no Hermes but
+a footnote. The chooser behind Set It Up Myself had five long rows, two of them not computers. What changed:
+
+* **Get Started asks one question**: "Where is your Hermes?" (`OnboardingStep.start`, `StartView`). A row per answer:
+  **On my computer** → "Let Hermes set it up."; **On Hermes Cloud** → Hermes Cloud; **I don’t have Hermes yet** →
+  "Get Hermes first." (`.getHermes`, `GetHermesView`): start one on Hermes Cloud (the row says what it costs; no
+  price in the App Store build), or open the install guide; **I’ve Installed Hermes** is the way on afterwards. [mac] On
+  the Mac the first row is **On this Mac** (the form at 127.0.0.1:9119), then **On another computer**. No row says
+  Tailscale, address, terminal or command (`SimpleStartCopyTests`).
+* **"Let Hermes set it up."** is the message, what happens next, and nothing else. The Hermes Cloud row and the
+  install footnote went to the question before it; the Tailscale switch is last on the page (and under the command on
+  Mac/Linux step 1), since few need it. A line says where Windows starts ("Hermes on Windows? Tap Set It Up Myself.").
+* **The way on is pinned** under every guide screen (`GuidePage`'s `footer`), as on the welcome: Next, I Have the
+  Address, Sign In are in the same place on each screen and never below the fold. At the accessibility text sizes
+  two pinned buttons would take half the screen, so there they end the page as before.
+* **The computers' list** ("Which computer runs Hermes?") is Mac, Linux, Windows. "Someone gave me an address" is the
+  welcome's second button; Hermes Cloud and "no Hermes yet" are rows of the first question. One place for each.
+* **"Need help connecting?"** opens the question when the form came first (a returning start, Add Gateway, I Already
+  Have an Address) and the setup message once the person has been to it (`OnboardingFlow.sawMessage`).
+* **Paste** in the empty address field (the system's `PasteButton`: no permission prompt). A whole pasted reply from
+  Hermes gives up the address in it (`SignInAddress.pasted`).
+
+The web's build 240 has none of this. The parity tests still pin every other screen to the web's words; "where" is
+checked one way only (what it says is the web's; what it no longer says moved, as above). `-HQDebugGuideStep <step>`
+opens a first run on a guide screen for screenshots. Proof: `SimpleStartCopyTests`, `OnboardingFlowTests`
+(`helpLinkGoesToTheQuestionOrBackToTheMessage`), UI tests O01, O03, O09, O27.

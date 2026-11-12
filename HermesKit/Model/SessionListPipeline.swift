@@ -137,7 +137,7 @@ nonisolated enum SessionListPipeline {
 
     static func groups(_ input: SessionListInput) -> [SessionGroup] {
         let input = withArchivedOutside(input)
-        var out = folded(listed(input), input)
+        var out = foldedProjects(folded(listed(input), input), input)
         let folders = out.filter { $0.source != nil }
         out.removeAll { $0.source != nil }
         guard !folders.isEmpty else { return out }
@@ -345,9 +345,10 @@ nonisolated enum SessionListPipeline {
             }
             guard !filtered else { return group }
             // [sessions-layout] A project is folded until opened; any other group until closed. [sessions-fresh] Group By
-            // Recent's Pinned never closes: it draws its newest few until See All.
+            // Recent's Pinned draws its newest few until See All. [sessions-collapse] It closes too (owner 2026-11-11:
+            // "collapse all of the categories on the sessions page for every view").
             let freshPinned = isFresh(input.prefs) && group.id == "pinned"
-            let closed = isProject(group.id) ? !input.openGroups.contains(group.id) : !freshPinned && input.collapsedGroups.contains(group.id)
+            let closed = isProject(group.id) ? !input.openGroups.contains(group.id) : input.collapsedGroups.contains(group.id)
             let first = group.id == newId ? newFirstRows : freshPinned ? freshPinnedRows : projectFirstRows
             if folds(group), closed {
                 group.collapsed = true
@@ -364,6 +365,27 @@ nonisolated enum SessionListPipeline {
             return group
         }
     }
+
+    /// [sessions-collapse] "Projects" closed (its caption tapped): the projects in a row draw as one closed "Projects"
+    /// header, counting the projects (and their unread chats), until it is tapped open again. Not while a status or
+    /// project filter narrows the list (a closed group would hide what the filter was set to find).
+    static func foldedProjects(_ groups: [SessionGroup], _ input: SessionListInput) -> [SessionGroup] {
+        let filtered = !input.prefs.statusFilter.isEmpty || !input.prefs.projectFilter.intersection(input.projects.map(\.key)).isEmpty
+        guard !filtered, input.collapsedGroups.contains(projectsId),
+              let first = groups.firstIndex(where: { isProject($0.id) }) else { return groups }
+        let end = groups[first...].firstIndex { !isProject($0.id) } ?? groups.endIndex
+        let projects = groups[first..<end]
+        var closed = SessionGroup(id: projectsId, title: projectsTitle, sessions: [], collapsed: true,
+                                  total: projects.first?.projectsTotal ?? projects.count,
+                                  unread: projects.reduce(0) { $0 + $1.unread })
+        closed.working = projects.contains(where: \.working)
+        var out = groups
+        out.replaceSubrange(first..<end, with: [closed])
+        return out
+    }
+
+    /// [sessions-collapse] The projects' caption, and the closed "Projects" header's title.
+    static let projectsTitle = "Projects"
 
     /// A project group's id: "project-" + its key ("project-home").
     static let projectPrefix = "project-"
@@ -382,10 +404,12 @@ nonisolated enum SessionListPipeline {
 
     /// A header that folds: Pinned, a status and a project, not a date (nothing to put away in "Yesterday"; ivy asked for
     /// projects and Pinned) nor the Other Apps page's platforms. [sessionsminimal] A date folded before stays open.
+    /// [sessions-collapse] Group By Recent's Recent and the closed "Projects" header fold too: every titled section on
+    /// the page, in every view.
     static func folds(_ group: SessionGroup) -> Bool {
         guard group.source == nil, !group.title.isEmpty, group.id != otherAppsId else { return false }
-        return group.id == newId || group.id == "pinned" || group.id.hasPrefix("status-") || group.id.hasPrefix(projectPrefix)
-            || group.id.hasPrefix(botPrefix)
+        return group.id == newId || group.id == "pinned" || group.id == recentId || group.id == projectsId
+            || group.id.hasPrefix("status-") || group.id.hasPrefix(projectPrefix) || group.id.hasPrefix(botPrefix)
     }
 
     /// A project's group (Group By Project), Home's too.

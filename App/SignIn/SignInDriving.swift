@@ -175,6 +175,20 @@ nonisolated enum SignInAddress {
         return (isLocalHost(host) ? "http://" : "https://") + value
     }
 
+    /// The address in pasted text. People copy Hermes's whole reply ("Here it is: https://my-mac.tail1234.ts.net. Paste
+    /// it into…"), so the first link in it is the address; a line with no link is taken as typed.
+    static func pasted(_ raw: String) -> String {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.contains(where: \.isWhitespace) else { return text }
+        for pattern in ["[A-Za-z][A-Za-z0-9+.-]*://[^\\s<>\"“”]+", "[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*\\.ts\\.net(:[0-9]+)?"] {
+            guard let range = text.range(of: pattern, options: .regularExpression) else { continue }
+            var found = String(text[range])
+            while let last = found.last, ".,;:!?)]}'’*_`".contains(last) { found.removeLast() }
+            if !found.isEmpty { return found }
+        }
+        return text
+    }
+
     /// Whether the probe should be asked at all: text that looks like `host.tld` (`connection-ways.ts:57`).
     static func looksLikeAddress(_ raw: String) -> Bool {
         raw.trimmingCharacters(in: .whitespacesAndNewlines)

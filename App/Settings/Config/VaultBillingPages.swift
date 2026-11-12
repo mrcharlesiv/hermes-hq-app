@@ -254,7 +254,7 @@ struct VaultPageView: View {
                                           disabled: !source.installed)
                                 if source.enabled, source.installed {
                                     Button(source.unlocked ? "Lock" : "Unlock…") {
-                                        if source.unlocked { Task { _ = await model.lock(source) } } else { unlocking = source }
+                                        if source.unlocked { Task { if await model.lock(source) { Haptics.play(.success) } } } else { unlocking = source }
                                     }
                                     .buttonStyle(.borderless)
                                 }
@@ -398,6 +398,7 @@ struct VaultAddView: View {
                 Haptics.play(.success)
                 done()
             } else {
+                Haptics.play(.error)
                 error = model.failure
             }
         }
@@ -698,6 +699,7 @@ struct DefaultProjectFolderField: View {
         do {
             guard let api = router.gatewaySettings?.settingsAPI else { throw CancellationError() }
             guard try await api.folderExists(path) else {
+                Haptics.play(.error)
                 problem = "Couldn’t open the folder."
                 return
             }
@@ -706,6 +708,7 @@ struct DefaultProjectFolderField: View {
             Haptics.play(.success)
         } catch {
             AppLog.note("settings", "default folder check failed: \(type(of: error))")
+            Haptics.play(.error)
             problem = "Couldn’t update the default folder."
         }
     }
@@ -783,6 +786,7 @@ struct DefaultProjectFolderPage: View {
         do {
             guard let api = router.gatewaySettings?.settingsAPI else { throw CancellationError() }
             guard try await api.folderExists(path) else {
+                Haptics.play(.error)
                 problem = "Couldn’t open the folder."
                 return
             }
@@ -793,6 +797,7 @@ struct DefaultProjectFolderPage: View {
             router.navigation?.popViewController(animated: true)
         } catch {
             AppLog.note("settings", "default folder check failed: \(type(of: error))")
+            Haptics.play(.error)
             problem = "Couldn’t update the default folder"
         }
     }

@@ -13,4 +13,10 @@ enum ShareHaptics {
         guard isOn else { return }
         UINotificationFeedbackGenerator().notificationOccurred(ok ? .success : .error)
     }
+
+    /// A pick in the sheet's own list (a bot), as the app's custom pickers tick.
+    static func selection() {
+        guard isOn else { return }
+        UISelectionFeedbackGenerator().selectionChanged()
+    }
 }

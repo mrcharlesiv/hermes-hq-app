@@ -227,3 +227,25 @@ private extension MarketplaceItem {
         }
     }
 }
+
+// [connect-find] Owner 2026-11-11: Connectors is one of the Marketplace's kinds, and Composio's row says a key is all
+// it takes.
+@MainActor struct ConnectFindTests {
+    @Test func connectorsIsAKindOfItsOwn() {
+        #expect(MarketplaceKind.allCases.map(\.title) == ["All", "Plugins", "Skills", "Connectors"])
+        #expect(MarketplaceKind.shown.contains(.connectors) == !DeviceWord.isMac)
+    }
+
+    @Test func composioRowNamesTheKey() {
+        #expect(ComposioSection.title(keySaved: false) == "Use Your Composio API Key")
+        #expect(ComposioSection.detail(keySaved: false, searching: false) == "Gmail, Slack and hundreds more")
+        #expect(ComposioSection.title(keySaved: true) == "Your Composio Apps")
+        #expect(ComposioSection.detail(keySaved: false, searching: true).hasPrefix("Not here?"))
+        #expect(ConnectAppsSetupView.blurb.hasPrefix("All it takes is your Composio API key."))
+    }
+
+    @Test func appsHeaderCounts() {
+        #expect(MarketplaceConnectors.appsHeader(1) == "1 App from Hermes")
+        #expect(MarketplaceConnectors.appsHeader(64) == "64 Apps from Hermes")
+    }
+}

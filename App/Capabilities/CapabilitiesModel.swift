@@ -101,6 +101,7 @@ final class CapabilitiesModel {
     @ObservationIgnored var skillsRefreshFailed = false
     @ObservationIgnored private var statusTimer: Task<Void, Never>?
     @ObservationIgnored private var waitTimer: Timer?
+    @ObservationIgnored private nonisolated(unsafe) var updateObserver: NSObjectProtocol?
 
     init(services: any AppServices, profile: String?, tab: CapabilitiesTab) {
         self.services = services
@@ -111,7 +112,16 @@ final class CapabilitiesModel {
         managed?.readOnly = store?.readOnlyGateway ?? false
         managed?.connectorsShowing = tab == .connectors
         seedFromWarmUp()                               // [offline] §6.10: rows in the first frame
+        // [plugin-updates] An update that ran in the sheet (from Settings, or a plugin's page): the list reads again.
+        updateObserver = NotificationCenter.default.addObserver(forName: PluginUpdateFlow.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.plugins != nil || self.tab == .plugins else { return }
+                Task { await self.reloadPlugins() }
+            }
+        }
     }
+
+    deinit { if let updateObserver { NotificationCenter.default.removeObserver(updateObserver) } }
 
     /// [offline] §6.10: what the launch warm-up (or this page: [load-cache] up to a week ago, kept on disk) read for this
     /// bot fills the first frame; `load()` refreshes behind it as before.

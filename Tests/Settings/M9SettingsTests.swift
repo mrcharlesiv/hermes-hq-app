@@ -135,6 +135,14 @@ private func swiftSources(_ folders: [String]) -> [(file: String, lines: [String
         #expect(NewChatLast.opensOn(picked: nil, last: "deploys", among: ["default", "research", "deploys"]) == "deploys")
         #expect(NewChatLast.opensOn(picked: nil, last: "gone", among: ["default", "research"]) == "default")
         #expect(NewChatLast.opensOn(picked: nil, last: nil, among: ["research", "deploys"]) == "research")
+        // The sheet lists every project while there are six or fewer; with more, the bot's recent ones first, five in
+        // all, and All Projects holds the rest.
+        let few = ["a", "b", "c", "d", "e", "f"]
+        #expect(NewChatLast.shown(all: few, recent: ["e"]).keys == few && !NewChatLast.shown(all: few, recent: ["e"]).more)
+        let many = ["a", "b", "c", "d", "e", "f", "g"]
+        #expect(NewChatLast.shown(all: many, recent: ["g", "home", "c", "g"]).keys == ["g", "c", "a", "b", "d"], "recent first, once, known only")
+        #expect(NewChatLast.shown(all: many, recent: []).more)
+        #expect(NewChatLast.shown(all: [], recent: ["x"]).keys.isEmpty)
     }
 
     /// [kanban-tab-one] One Kanban Tab control, on Appearance › Tabs (owner 2026-11-03: one home per page): search finds

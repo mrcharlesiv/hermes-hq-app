@@ -55,7 +55,12 @@ import UIKit
                 return page
             }
             // [addon-reminder] A red 1 while the add-on needs an update the person hasn't made.
-            row.badge = { AddOnReminder.shared.spoken.map { (1, $0) } }
+            // [plugin-updates] And one for each plugin with an update.
+            row.badge = {
+                let addOn = AddOnReminder.shared.spoken, plugins = PluginUpdateReminder.shared
+                let count = (addOn == nil ? 0 : 1) + plugins.count
+                return count > 0 ? (count, [addOn, plugins.spoken].compactMap { $0 }.joined(separator: ", ")) : nil
+            }
             return [row]
         })
         PagesTabs.registerMoreSection(MoreSection(id: "bots", header: "Bots") {
@@ -77,18 +82,17 @@ import UIKit
                 guard let model else { return nil }
                 return MarketplaceController.page(services: model)
             }
-            return [row, market]
-        })
-        // [directory] More › Integrations › Connectors: the desktop's Connectors page on its own (Hermes' app catalog, the
-        // Nous apps, MCP servers). Connect Apps (your own Composio key) moved inside it, under More Ways to Connect.
-        // [cap-pages] The same page as Capabilities › Connectors (one page, two ways in; it can be a tab).
-        PagesTabs.registerMoreSection(MoreSection(id: "integrations", header: "Integrations") {
-            guard let model = M2Wiring.model, model.account != nil else { return [] }
-            return [MoreRow(id: "connectors", title: "Connectors", symbol: "powerplug.fill", image: nil,
-                            tile: UIColor(red: 1, green: 0x9F / 255, blue: 0x0A / 255, alpha: 1)) { [weak model] in
+            // [directory] More › Connectors: the desktop's Connectors page on its own (Hermes' app catalog, the Nous
+            // apps, MCP servers, and Composio with your own key).
+            // [cap-pages] The same page as Capabilities › Connectors (one page, two ways in; it can be a tab).
+            // [connect-find] Owner 2026-11-11 ("the whole thing is hidden"): beside Marketplace, where what a bot can
+            // be given is, not at the foot of More under Integrations (two screens down).
+            let connectors = MoreRow(id: "connectors", title: "Connectors", symbol: "powerplug.fill", image: nil,
+                                     tile: UIColor(red: 1, green: 0x9F / 255, blue: 0x0A / 255, alpha: 1)) { [weak model] in
                 guard let model else { return nil }
                 return CapabilitiesPages.page(.connectors, services: model)
-            }]
+            }
+            return [row, market, connectors]
         })
 
         // [morepages] More › Bot Profiles, Messaging, Files, Review, Status & Maintenance, Usage, Spawn Tree, Star Map,

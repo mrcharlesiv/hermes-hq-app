@@ -590,11 +590,13 @@ struct FallbackModelsView: View {
                         }
                     }
                     .onDelete { offsets in
+                        Haptics.play(.selection)   // as a word fix's removal
                         var next = list
                         next.remove(atOffsets: offsets)
                         store.set("fallback_providers", FallbackModel.value(next))
                     }
                     .onMove { from, to in
+                        Haptics.play(.selection)   // as Tab Order's drag
                         var next = list
                         next.move(fromOffsets: from, toOffset: to)
                         store.set("fallback_providers", FallbackModel.value(next))
@@ -953,7 +955,7 @@ struct MixtureOfAgentsView: View {
                             .disabled(presetHeld)
                             .opacity(presetHeld && !DeviceWord.isMac ? 0.45 : 1)   // [mac] Stress test 2026-10-28 round 7: the Mac row dims itself
                             if name != model.defaultPreset {
-                                Button("Use This Preset") { model.setDefault(name) }
+                                Button("Use This Preset") { Haptics.play(.selection); model.setDefault(name) }
                             }
                         } footer: { HQSectionFooter {
                             Text(presetHeld ? "Turn on Mixture of Agents to choose a preset."
@@ -988,6 +990,7 @@ struct MixtureOfAgentsView: View {
                             }
                         }
                         .onDelete { offsets in
+                            Haptics.play(.selection)
                             model.edit(name) { preset in
                                 var list = preset["reference_models"]?.array ?? []
                                 list.remove(atOffsets: offsets)
@@ -1086,6 +1089,7 @@ struct MixtureOfAgentsView: View {
     }
 
     private func removeModel(_ name: String, at index: Int) {
+        Haptics.play(.selection)
         var left = 0
         model.edit(name) { preset in
             var list = preset["reference_models"]?.array ?? []

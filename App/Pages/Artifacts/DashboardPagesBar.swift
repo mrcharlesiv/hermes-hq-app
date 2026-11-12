@@ -13,6 +13,8 @@ final class DashboardPagesBar: UIView {
     private let scroll = UIScrollView()
     private let stack = UIStackView()
     private var chips: [String: UIButton] = [:]
+    /// The page whose name a held tile is over (nil: none).
+    private var highlighted: String?
     /// [tiles-glass-pills] The pills in one glass container, as `hqPickGlassRow`: glass can't sample glass, so without
     /// it the ＋ lensed the shown page's tint into a smear along its edge. Spacing 0: the pills never melt together.
     private let glassRow: UIVisualEffectView = {
@@ -80,6 +82,9 @@ final class DashboardPagesBar: UIView {
 
     /// The name a dragged tile is over, lit up (nil: none).
     func highlight(_ id: String?) {
+        // A tick as a page's name lights under a held tile (once per name, not per move of the finger).
+        if id != highlighted, id != nil { Haptics.play(.selection) }
+        highlighted = id
         for (key, chip) in chips {
             let on = key == id
             HQMotion.animate(0.15) { chip.transform = on ? CGAffineTransform(scaleX: 1.12, y: 1.12) : .identity }

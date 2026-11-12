@@ -71,14 +71,17 @@ final class DetailPlaceholderViewController: UIViewController {
     /// a place that isn't a list to choose from (the Tools: Files, Changes, Terminal, Status & Maintenance, Spawn Tree,
     /// Star Map), where "Choose an item from the list" named a list that isn't there. The pages whose rows open beside
     /// them (Settings, Profiles, Messaging, Webhooks …) keep "Choose an item": a blank pane there read as broken.
+    /// [mac-ten] Owner 2026-11-11 ("weird UI issues"): one word for the same state. The pane said "No Chat Open" beside
+    /// Sessions, "No Job Selected" beside Jobs, "No Artifact Selected", "No Task Selected" beside Kanban and "No Task
+    /// Open" beside Tasks. A click in the list opens the thing here, so every one says "Open".
     static func macWords(for list: UIViewController?) -> (title: String, detail: String)? {
         switch list {
         case is BotsViewController: ("No Chat Open", "Choose a bot to open its chat.")
         case is SessionsViewController: ("No Chat Open", "Choose a chat from the list.")
-        case is JobsViewController: ("No Job Selected", "Choose a job from the list.")
+        case is JobsViewController: ("No Job Open", "Choose a job from the list.")
         case let tiles as ArtifactsViewController where tiles.pinnedOnly: ("No Tile Open", "Choose a tile to open it.")
-        case is ArtifactsViewController: ("No Artifact Selected", "Choose an artifact from the list.")
-        case is KanbanViewController: ("No Task Selected", "Choose a task to see its details.")
+        case is ArtifactsViewController: ("No Artifact Open", "Choose an artifact from the list.")
+        case is KanbanViewController: ("No Task Open", "Choose a task to see its details.")
         case is TasksViewController: ("No Task Open", "Choose a task to see its steps.")   // [tasks]
         case is MoreViewController: ("Nothing Open", "Choose a page from the list.")
         // [mac-ui-issues] Owner 2026-11-09 ("really refine the app"): the Tools whose rows open beside them said
@@ -91,7 +94,7 @@ final class DetailPlaceholderViewController: UIViewController {
             ("Nothing Open", "Recent Logs and the messaging apps open here.")
         case is MarketplaceController: ("Nothing Open", "Choose something in Marketplace to see its details.")
         case let page? where (page.navigationController?.viewControllers ?? [page]).contains(where: isTool): nil
-        default: ("Nothing Selected", "Choose an item from the list.")
+        default: ("Nothing Open", "Choose an item from the list.")
         }
     }
 

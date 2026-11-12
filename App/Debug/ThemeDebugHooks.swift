@@ -12,6 +12,8 @@
 // - `-HQDebugDesktopComposer glass|box`   [desktop-composer] the Desktop Look's Text Box
 // - `-HQDebugGlassBubbles YES|NO`   [glass-bubbles] Chat Bubbles › Glass
 // - `-HQDebugBubbleStyle solid|glass|tinted`   [tinted-bubbles] Chat Bubbles › Style
+// - `-HQDebugMessageColour <name | #RRGGBB | theme>`   [message-colour] Chat Bubbles › Colour
+// - `-HQDebugBotMessageColour <bot>=<face | name | #RRGGBB>[,…]`   [bot-colour] Bot Info › Settings › Colour, by bot
 // - `-HQDebugResetTheme YES`        forget all the `hqn.theme.*` keys first (`-HQDebugResetAccounts YES` does too),
 //                                   and both backgrounds
 // - `-HQDebugChatBackground <path | id>` [backdrop] Theme › Chat Background set to that photo (read as a pick reads it)
@@ -63,6 +65,14 @@ enum ThemeDebugHooks {
         if let composer = defaults.string(forKey: "HQDebugDesktopComposer").flatMap(DesktopComposer.init(rawValue:)) { store.setDesktopComposer(composer) }
         if defaults.object(forKey: "HQDebugGlassBubbles") != nil { store.setGlassBubbles(defaults.bool(forKey: "HQDebugGlassBubbles")) }
         if let style = defaults.string(forKey: "HQDebugBubbleStyle").flatMap(BubbleStyle.init(rawValue:)) { store.setBubbleStyle(style) }
+        if let colour = defaults.string(forKey: "HQDebugMessageColour") { store.setMessageColour(MessageColour(stored: colour)) }
+        // [bot-colour] -HQDebugBotMessageColour sam=face,default=green
+        if let picks = defaults.string(forKey: "HQDebugBotMessageColour") {
+            for pick in picks.split(separator: ",") {
+                let parts = pick.split(separator: "=", maxSplits: 1).map(String.init)
+                if parts.count == 2 { BotMessageColour.debugChoices[parts[0]] = BotMessageColour.Choice(stored: parts[1]) }
+            }
+        }
         applyChatBackground(defaults, reset: hostsUnitTests || defaults.bool(forKey: "HQDebugResetTheme") || defaults.bool(forKey: "HQDebugResetAccounts"))
     }
 

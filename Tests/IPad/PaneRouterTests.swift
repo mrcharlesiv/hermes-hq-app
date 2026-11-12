@@ -341,7 +341,8 @@ import UIKit
         }
         let view = KeyCommands.viewItems().compactMap { $0 as? UIMenu }.flatMap(\.children).compactMap { $0 as? UIKeyCommand }
         // One menu item per command (nothing is listed twice in the menu or the hold-⌘ overlay).
-        #expect(view.map(\.title) == ["Bots", "Sessions", "Jobs", "Artifacts", "More", "Next Chat", "Previous Chat", "Back", "Refresh", "Stop or Close"])
+        // [ipad-polish] Hide List leads the View menu (⌃⌘S, Mail's sidebar key).
+        #expect(view.map(\.title) == ["Hide List", "Bots", "Sessions", "Jobs", "Artifacts", "More", "Next Chat", "Previous Chat", "Back", "Refresh", "Stop or Close"])
         for command in view { #expect(AppDelegate.instancesRespond(to: command.action)) }
         // Escape itself is "Stop or Close": the plain key, no modifier, and it does not repeat while held.
         let stop = try! #require(view.last)

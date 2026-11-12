@@ -49,7 +49,7 @@ nonisolated struct ComposioRecord: Codable, Equatable, Sendable {
         let value = try await client.call("profiles.configure", ["name": "default", "ui_meta": [ComposioRecord.key: record?.json ?? .null]],
                                           timeout: .seconds(30))
         guard value["applied"]?["ui_meta"]?.bool == true else {
-            throw BotWriteError(title: "", reason: "This gateway couldn’t save the Connect Apps setting.")
+            throw BotWriteError(title: "", reason: "This gateway couldn’t save the Composio setting.")
         }
     }
 

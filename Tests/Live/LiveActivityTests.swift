@@ -645,3 +645,55 @@ nonisolated private func sideChat(_ profile: String, _ session: String, title: S
         #expect(relay.withdrawn == ["activity-3"])
     }
 }
+
+/// [island-fit] The Dynamic Island's timer asks for the room its digits take: its range ends at the next digit, and it
+/// can't get there before it is drawn again (owner, 2026-11-11: a fixed 64 pt box was cut to "16:0…").
+@Suite struct LiveTimerSpanTests {
+    private func limit(ranFor seconds: TimeInterval) -> TimeInterval {
+        LiveTimerSpan.end(startedAt: t0, now: t0.addingTimeInterval(seconds)).timeIntervalSince(t0)
+    }
+
+    @Test func theRangeEndsAtTheNextDigit() {
+        #expect(limit(ranFor: 0) == 3_599)            // "59:59" at most
+        #expect(limit(ranFor: 970) == 3_599)          // the owner's 16:10
+        #expect(limit(ranFor: 3_725) == 35_999)       // "9:59:59"
+        #expect(limit(ranFor: 43_200) == 359_999)     // "99:59:59"
+        #expect(limit(ranFor: 400_000) == 3_599_999)
+        #expect(limit(ranFor: -5) == 3_599)           // a clock set back
+    }
+
+    @Test func aTimerNeverReachesTheEndOfItsRangeBeforeItIsDrawnAgain() {
+        // Every card is drawn again inside `reach` (an update, or going stale): wherever it is, it still counts then.
+        #expect(LiveTimerSpan.reach > LiveActivityTiming.staleAfter)
+        for ran in stride(from: 0.0, through: 400_000, by: 37) {
+            #expect(limit(ranFor: ran) > ran + LiveTimerSpan.reach, "ran \(ran)")
+        }
+        #expect(limit(ranFor: 3_599 - LiveTimerSpan.reach) == 35_999)   // close to the hour: already has room for it
+    }
+
+    /// Build 948 stretched the island across the clock: a live timer takes all the room it is offered, so plain digits
+    /// size its place.
+    @Test func itsPlaceIsAsWideAsTheWidestItCanSay() {
+        func widest(_ ran: TimeInterval) -> String { LiveTimerSpan.widest(startedAt: t0, now: t0.addingTimeInterval(ran)) }
+        #expect(widest(61) == "00:00")
+        #expect(widest(970) == "00:00")
+        #expect(widest(3_725) == "0:00:00")
+        #expect(widest(43_200) == "00:00:00")
+        #expect(widest(400_000) == "000:00:00")
+    }
+
+    @Test func aStoppedClockReadsAsATimerDoes() {
+        #expect(LiveTimerSpan.clock(42.9) == "0:42")
+        #expect(LiveTimerSpan.clock(970) == "16:10")
+        #expect(LiveTimerSpan.clock(3_725) == "1:02:05")
+        #expect(LiveTimerSpan.clock(-4) == "0:00")
+    }
+
+    @Test func aFinishedOnesTimeInTheIslandIsShort() {
+        #expect(LiveActivityContent.tookShort(44.6) == "45s")
+        #expect(LiveActivityContent.tookShort(970) == "16m")
+        #expect(LiveActivityContent.tookShort(3600) == "1h")
+        #expect(LiveActivityContent.tookShort(45_296) == "12h 34m")
+        #expect(LiveActivityContent.tookShort(-3) == "0s")
+    }
+}

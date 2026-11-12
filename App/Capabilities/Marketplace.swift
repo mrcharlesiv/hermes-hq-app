@@ -12,8 +12,14 @@ import UIKit
 
 enum MarketplaceKind: String, CaseIterable, Identifiable {
     case all, plugins, skills
+    /// [connect-find] Owner 2026-11-11 ("the ability to add connectors and stuff from the marketplace should be easier
+    /// to find"): the apps a bot can be connected to, beside Plugins and Skills, not a row under the last shelf.
+    case connectors
     var id: String { rawValue }
-    var title: String { switch self { case .all: "All"; case .plugins: "Plugins"; case .skills: "Skills" } }
+    var title: String { switch self { case .all: "All"; case .plugins: "Plugins"; case .skills: "Skills"; case .connectors: "Connectors" } }
+
+    /// The kinds the switch offers. The Mac's store front keeps its three (Connectors is one of its sidebar's Tools).
+    @MainActor static var shown: [MarketplaceKind] { DeviceWord.isMac ? [.all, .plugins, .skills] : allCases }
 }
 
 enum MarketplaceSort: String, CaseIterable, Identifiable {
@@ -379,14 +385,19 @@ struct MarketplaceView: View {
             gridPage
         } else {
             List {
-                if state.trimmed.isEmpty, !state.filtered {
-                    featured
-                }
-                controls
-                if state.browsing {
-                    shelves
+                if state.kind == .connectors {
+                    controls
+                    MarketplaceConnectors(model: model, router: router, query: state.trimmed)   // [connect-find]
                 } else {
-                    results
+                    if state.trimmed.isEmpty, !state.filtered {
+                        featured
+                    }
+                    controls
+                    if state.browsing {
+                        shelves
+                    } else {
+                        results
+                    }
                 }
             }
             .hqGroupedPage()
@@ -626,7 +637,7 @@ struct MarketplaceView: View {
     }
 
     private var kindPicker: some View {
-        HQSegmentedPicker("Show", options: MarketplaceKind.allCases.map { ($0.title, $0) }, selection: Binding(get: { state.kind }, set: { kind in
+        HQSegmentedPicker("Show", options: MarketplaceKind.shown.map { ($0.title, $0) }, selection: Binding(get: { state.kind }, set: { kind in
             state.choose(kind)
         }))
         .accessibilityIdentifier("marketplace.kind")
@@ -1021,7 +1032,7 @@ struct MarketplaceView: View {
         Section {
             // [desktop-segments] Owner 2026-11-05: the raw segmented Picker drew iOS 26's glass pill over the Desktop
             // Look's outlined strip images (a warped band); HQSegmentedPicker shows the look's own strip there.
-            HQSegmentedPicker("Show", options: MarketplaceKind.allCases.map { ($0.title, $0) }, selection: Binding(get: { state.kind }, set: { kind in
+            HQSegmentedPicker("Show", options: MarketplaceKind.shown.map { ($0.title, $0) }, selection: Binding(get: { state.kind }, set: { kind in
                 state.choose(kind)
             }))
             .accessibilityIdentifier("marketplace.kind")
@@ -1029,11 +1040,13 @@ struct MarketplaceView: View {
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
             .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 6, trailing: 0))
-            chips
-                .hqDesktopBareRow()
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 4, trailing: 0))
+            if state.kind != .connectors {   // [connect-find] no Official / Certified / Community for apps
+                chips
+                    .hqDesktopBareRow()
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 4, trailing: 0))
+            }
         }
         if model.bots.count > 1 {
             if DeviceWord.isMac || typeSize.isAccessibilitySize {
@@ -1219,7 +1232,7 @@ struct MarketplaceView: View {
         switch kind {
         case .plugins: count == 1 ? "Plugin" : "Plugins"
         case .skills: count == 1 ? "Skill" : "Skills"
-        case .all: count == 1 ? "Result" : "Results"
+        case .all, .connectors: count == 1 ? "Result" : "Results"
         }
     }
 
@@ -1461,7 +1474,10 @@ struct MarketplaceChip: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) { MarketplaceChipFace(title: title, count: count, on: on) }
+        Button {
+            Haptics.play(.selection)   // a filter chip, as Sessions' bot chips
+            action()
+        } label: { MarketplaceChipFace(title: title, count: count, on: on) }
             .buttonStyle(.plain)
             .accessibilityLabel(count.map { "\(title), \($0)" } ?? title)
             .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
@@ -1945,7 +1961,7 @@ struct MarketplaceAnywhere: View {
     }
 }
 
-/// Connectors, and the developer's way in, under the shelves.
+/// The developer's way in, under the shelves.
 struct MarketplaceMore: View {
     let model: CapabilitiesModel
     let router: SettingsRouter
@@ -1954,14 +1970,8 @@ struct MarketplaceMore: View {
     static let websiteURL = URL(string: "https://hermes-agent.nousresearch.com/marketplace")!
 
     var body: some View {
-        Section {
-            NavRow(title: "Connectors", systemImage: CapabilitiesTab.connectors.symbol) {
-                router.push(CapabilitiesViewController(services: model.services, profile: model.profile, tab: .connectors))
-            }
-            .accessibilityIdentifier("marketplace.connectors")
-        } header: { HQSectionLabel { Text("Connectors") } } footer: { HQSectionFooter {
-            Text("Connect Hermes to the apps you already use, with one sign-in each.")
-        } }
+        // [connect-find] Connectors is one of the page's kinds now (All · Plugins · Skills · Connectors): its row under
+        // the last shelf here was a second way in on the same page, and the one nobody reached.
         Section {
             link("Make a Hermes Plugin", Self.developerURL, id: "marketplace.developer")
             link("Open the Marketplace Website", Self.websiteURL, id: "marketplace.website")
@@ -1983,5 +1993,54 @@ struct MarketplaceMore: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(id)
+    }
+}
+
+// MARK: - Connectors
+
+/// [connect-find] Marketplace › Connectors: Composio (your own API key), then every app in Hermes' own catalog the bot
+/// in Install To doesn't have yet, each opening the page that installs it, and a way to what the bot has connected.
+/// The page's search narrows the apps.
+struct MarketplaceConnectors: View {
+    @Bindable var model: CapabilitiesModel
+    let router: SettingsRouter
+    var query: String
+
+    static func appsHeader(_ count: Int) -> String { count == 1 ? "1 App from Hermes" : "\(count) Apps from Hermes" }
+    static let mineTitle = "Your Connectors"
+
+    var body: some View {
+        let all = model.catalogAvailable
+        let shown = query.isEmpty ? all : all.filter { $0.matches(query) }
+        Group {
+            if query.isEmpty { ComposioSection(model: model, router: router) }
+            if model.catalog == nil, model.isConnected {
+                Section { ForEach(0..<4, id: \.self) { _ in SkeletonLine() } }
+            } else if !all.isEmpty {
+                Section {
+                    if shown.isEmpty {
+                        Text("No app matches “\(query)”.").foregroundStyle(Color.hqLabel2).padding(.vertical, 4)
+                    }
+                    ForEach(shown) { entry in
+                        CatalogRow(entry: entry) { router.push(CatalogAppController(model: model, entry: entry, router: router)) }
+                    }
+                } header: { HQSectionLabel { Text(Self.appsHeader(shown.count)) } }
+            }
+            if !query.isEmpty { ComposioSection(model: model, router: router, searching: true) }
+            Section {
+                NavRow(title: Self.mineTitle, systemImage: CapabilitiesTab.connectors.symbol) {
+                    router.push(CapabilitiesViewController(services: model.services, profile: model.profile, tab: .connectors))
+                }
+                .accessibilityIdentifier("marketplace.connectors")
+                // The bot in Install To decides which apps are left to add: read for it, and again when it changes.
+                // (On this one row: a task on the group would run once for each section.)
+                .task(id: model.profile) {
+                    if !model.fresh("servers") { Task { await model.reloadServers() } }
+                    if !model.fresh("catalog") { await model.reloadCatalog() }
+                }
+            } footer: { HQSectionFooter {
+                Text("What \(model.botName) has connected, apps through a Nous account, and adding a connector by web address or command.")
+            } }
+        }
     }
 }

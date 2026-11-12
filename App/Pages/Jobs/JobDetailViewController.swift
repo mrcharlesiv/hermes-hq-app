@@ -403,6 +403,7 @@ struct JobDetailView: View {
         }
         .hqGroupedPage()   // [desktoplook] the page follows the skin
         .listStyle(.insetGrouped)
+        .hqMacReadableColumn()   // [mac-ten] the readable column, not the iPhone's page stretched across the pane
         // The title starts just under the bar (owner 2026-10-10: headers sat too low), not under a first-section gap.
         .contentMargins(.top, 8, for: .scrollContent)
         .listSectionSpacing(16)
@@ -487,6 +488,7 @@ struct JobDetailView: View {
     private func errorCard(_ error: String, busy: Bool) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Button {
+                Haptics.play(.selection)   // a fold, as Jobs' Completed fold
                 HQMotion.withAnimation(.snappy) { model.errorOpen.toggle() }
             } label: {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -601,7 +603,7 @@ private struct PromptBlock: View {
             AttributedTextView(text: attributed, maxLines: open ? 0 : 6, identifier: "job.prompt")
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             if !open && AttributedTextView.exceeds(attributed, lines: 6, width: width) {
-                Button("Show All") { HQMotion.withAnimation(.snappy) { open = true } }
+                Button("Show All") { Haptics.play(.selection); HQMotion.withAnimation(.snappy) { open = true } }
                     .font(Font.hq(.subheadline).weight(.semibold))
                     .buttonStyle(.plain)
                     .foregroundStyle(Color.hqTint)

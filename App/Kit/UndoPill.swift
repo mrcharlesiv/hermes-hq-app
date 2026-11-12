@@ -391,6 +391,9 @@ final class UndoPill: UIView {
     private func undo() {
         let action = onUndo
         onUndo = nil
+        // A light tap that the change was taken back (the pill going is the rest of the answer). Only when there was
+        // something to undo: a second press while the pill fades plays nothing.
+        if action != nil { Haptics.play(.light) }
         dismiss(animated: true)
         action?()
     }

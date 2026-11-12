@@ -42,8 +42,12 @@ import Foundation
 // answer about the flowers folded away: "never got an actual response from Hermes … I call that a big fail").
 // The bot's first reply after your message stays too when it's long (`answerLength`): that's the answer, and the
 // talk it starts is follow-up (owner, 2026-10-31, the answer about voice to text folded behind Otto's and Inbox's).
-// A reply written to the other bot ("Thanks, Otto. …", right after Otto's message) folds whatever follows it and
-// however long it is: it was never an answer to you (`Rows.writesToBot`; owner, 2026-11-11).
+// A reply written to the other bot folds whatever follows it and however long it is: it was never an answer to you
+// (`Rows.writesToBot`; owner, 2026-11-11). That is the reply right after a bot's message when that bot wrote first
+// (Otto asked Herald for a status and Herald answered it), or when it speaks to that bot by name ("Thanks, Otto. …").
+// Such a reply doesn't fold the ones before it either: the last reply written to you keeps its bubble however long the
+// bots go on between themselves (owner, 2026-11-11: a question's two short answers sat inside "With … · 7 messages"
+// once another bot wrote in the next day and this bot answered it, "Why didn't I get a response here?").
 
 nonisolated struct UpdatesGroup: Hashable {
     enum Mark: Hashable {
@@ -148,8 +152,9 @@ nonisolated enum UpdateGroups {
 
         /// [exchange] One of this bot's replies to you inside a talk with another bot: a message between the bots before it
         /// (since your last message) and, after it, another such message that the bot then replied to (ahead of your
-        /// next message). Each way the search stops where a talk ends (`endsTalk`) or `reach` messages out, so a region
-        /// rebuild finds what a full build does.
+        /// next message). That later reply is one to you, not one written to the other bot (`writesToBot`). Each way the
+        /// search stops where a talk ends (`endsTalk`) or `reach` messages out, so a region rebuild finds what a full
+        /// build does.
         func interim(_ m: Member) -> Bool {
             if let known = interims[m] { return known }
             let found = findInterim(m)
@@ -167,7 +172,9 @@ nonisolated enum UpdateGroups {
                 for (r, row) in at(i).enumerated() where i > m.message || r > m.row {
                     if UpdateGroups.endsTalk(row) { break ahead }
                     if UpdateGroups.isBotTalk(row) { talked = true }
-                    if talked, UpdateGroups.isBotsReply(row) { answered = true; break ahead }
+                    // A later reply written to the other bot isn't the answer that lets this one fold: with only
+                    // such replies after it, this is the last thing the bot said to you.
+                    if talked, UpdateGroups.isBotsReply(row), !writesToBot(i) { answered = true; break ahead }
                 }
             }
             guard answered else { return false }
@@ -184,11 +191,14 @@ nonisolated enum UpdateGroups {
         private var toBot: [Int: Bool] = [:]
 
         /// [exchange] The reply is written to the bot whose message it answers, not to you: that bot's message is the
-        /// last thing before it (a work line or a note between them aside) and its first words speak to that bot by
+        /// last thing before it (a work line or a note between them aside), and either that bot wrote first (this bot
+        /// hadn't written to it since your last message or a job's report) or the reply's first words speak to it by
         /// name ("Thanks, Otto. Your diagnosis was right…"). Hermes hands such a reply back to the bot that wrote; as a
         /// bubble it read as an answer to you (owner, 2026-11-11: "a message to a bot made it in to the chat instead of
-        /// the little pill"). A reply that only answers a bot's message keeps its bubble: it may be the news that bot
-        /// brought you ("The flowers are at the door"). A reply still being written stays a bubble until it ends.
+        /// the little pill"; then, of a long answer to another bot's own request, "Still getting messages meant for a
+        /// bot in the chat instead of in a pill"). A reply to a bot's answer to what this bot asked it keeps its bubble
+        /// unless it names that bot: it is the news that bot brought you ("Home confirmed the watch is running"). A
+        /// reply still being written stays a bubble until it ends.
         func writesToBot(_ message: Int) -> Bool {
             if let known = toBot[message] { return known }
             let found = findWritesToBot(message)
@@ -200,15 +210,32 @@ nonisolated enum UpdateGroups {
             guard !input.messages[message].isStreaming,
                   let first = at(message).first(where: UpdateGroups.isBotsReply), case .bubble(let b) = first.kind else { return false }
             for i in stride(from: message - 1, through: max(0, message - 8), by: -1) {
-                for row in at(i).reversed() {
+                for (r, row) in at(i).enumerated().reversed() {
                     guard case .backgroundResult(let from) = row.kind, UpdateGroups.isBotTalk(row) else {
                         if UpdateGroups.isSmall(row), !UpdateGroups.endsTalk(row) { continue }
                         return false
                     }
                     guard !from.sentTo else { return false }
+                    if let bot = from.face, !asked(bot, before: Member(message: i, row: r)) { return true }
                     let title = BackgroundResults.split(from.title).head
                     let names = [from.face?.name, from.face?.profile, title.hasPrefix("From ") ? String(title.dropFirst(5)) : nil]
                     return BotDMs.speaksTo(names.compactMap { $0 }, in: b.text)
+                }
+            }
+            return false
+        }
+
+        /// [exchange] This bot wrote to `bot` ("To Home") before the row at `m`, since your last message or a job's
+        /// report: that bot's message may be its answer. A bot's own request ("Otto asks Herald for a status") has
+        /// none before it; the flower watch's every "From Home" does.
+        private func asked(_ bot: ChatSender, before m: Member) -> Bool {
+            for i in stride(from: m.message, through: max(0, m.message - UpdateGroups.reach), by: -1) {
+                let own = at(i)
+                for row in own[..<(i == m.message ? m.row : own.count)].reversed() {
+                    if UpdateGroups.endsTalk(row) { return false }
+                    if case .backgroundResult(let to) = row.kind, to.sentTo, let face = to.face, UpdateGroups.sameBot(face, bot) {
+                        return true
+                    }
                 }
             }
             return false
@@ -266,6 +293,11 @@ nonisolated enum UpdateGroups {
     static func isBotTalk(_ row: ChatRow) -> Bool {
         if case .backgroundResult(let b) = row.kind { return b.sentTo || (b.delivery && !b.cron) }
         return false
+    }
+
+    /// [exchange] The same other bot on a "To" row and a "From" row (both keyed by its profile when the roster knows it).
+    static func sameBot(_ a: ChatSender, _ b: ChatSender) -> Bool {
+        a.key == b.key || a.name.trimmingCharacters(in: .whitespaces).lowercased() == b.name.trimmingCharacters(in: .whitespaces).lowercased()
     }
 
     /// A /btw answer that opened as it landed (SideTasks.swift) is what was asked for: it stands as a run of its own,
@@ -376,10 +408,11 @@ nonisolated enum UpdateGroups {
     /// `range` grown to cover every message of any run it touches (a rebuild must redraw the run's line). The message
     /// on each side counts too, looked through those that draw nothing: a run that ends there now may have reached into
     /// the range before this change (its line still counts the rows the range no longer draws).
-    static func widen(_ range: ClosedRange<Int>, input: ChatRowBuilder.Input) -> ClosedRange<Int> {
+    /// `pagedIn`: older messages were just added before the range (see `[exchange]` below).
+    static func widen(_ range: ClosedRange<Int>, input: ChatRowBuilder.Input, pagedIn: Bool = false) -> ClosedRange<Int> {
         let rows = Rows(input)
         let count = input.messages.count
-        var a = range.lowerBound, b = range.upperBound
+        var a = range.lowerBound, b = range.upperBound, answers = range.upperBound
         if a > 0 { a -= 1 }
         while a > 0, range.lowerBound - a < reach, rows.at(a).isEmpty { a -= 1 }
         if b + 1 < count { b += 1 }
@@ -388,17 +421,50 @@ nonisolated enum UpdateGroups {
         // bots that the bot replied to (since the talk began). A message to another bot and a reply after it in the
         // range fold them all.
         if input.room == nil {
-            var scan = range.lowerBound - 1, replied = false
+            var scan = range.lowerBound - 1, replied = false, earliest: Int?
             look: while scan >= 0, range.lowerBound - scan <= reach {
                 for row in rows.at(scan).reversed() {
                     if endsTalk(row) || (replied && isBotTalk(row)) { break look }
-                    if isBotsReply(row) { a = min(a, scan); replied = true }
+                    // A reply written to the other bot folds nothing before it, so the search goes on past it.
+                    if isBotsReply(row) { a = min(a, scan); earliest = scan; if !rows.writesToBot(scan) { replied = true } }
                 }
                 scan -= 1
             }
+            // One of those replies may stand now where it was folded (the reply after it ended, and is written to the
+            // other bot): the run it was in began at the small rows before it, back to the message that draws a real row.
+            if var first = earliest {
+                while first > 0, range.lowerBound - first < reach,
+                      rows.at(first - 1).indices.allSatisfy({ rows.small(Member(message: first - 1, row: $0)) }) { first -= 1 }
+                a = min(a, max(0, first - 1))
+            }
+            // [exchange] Older messages paged in above a "From Home" can hold the "To Home" it answers: whether this bot
+            // had written to that bot (`Rows.asked`) reads back to the talk's start, so the replies right after a bot's
+            // message up to the end of the talk the range is in may fold differently now. Nothing else changes what
+            // came before a reply without rebuilding through the newest message.
+            var after = range.lowerBound, from = false
+            look: while pagedIn, after < count, after - range.upperBound <= reach {
+                for row in rows.at(after) {
+                    if endsTalk(row) {
+                        if after > range.upperBound { break look }
+                        from = false
+                    }
+                    if case .backgroundResult(let r) = row.kind, isBotTalk(row), !r.sentTo { from = true }
+                    if from, after > range.upperBound, isBotsReply(row) { answers = after }
+                }
+                after += 1
+            }
+            if answers > range.upperBound {
+                // A reply that folded before may stand now: the run it was in went on through the small rows after it,
+                // to the next message that draws a real row.
+                var next = answers + 1
+                while next < count, next - answers <= reach,
+                      rows.at(next).indices.allSatisfy({ rows.small(Member(message: next, row: $0)) }) { next += 1 }
+                answers = min(count - 1, next)
+            }
+            b = max(b, answers)
         }
         let plan = plan(input, range: a..<(b + 1), rows: rows)
-        var lo = range.lowerBound, hi = range.upperBound
+        var lo = range.lowerBound, hi = answers
         for g in plan.groups where g.span.overlaps(a...b) {
             lo = min(lo, g.span.lowerBound)
             hi = max(hi, g.span.upperBound)

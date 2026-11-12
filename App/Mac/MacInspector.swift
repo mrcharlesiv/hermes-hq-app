@@ -68,6 +68,20 @@ final class MacInspector: UIViewController {
     private let bandFrost = DesktopFrostView()
     private lazy var bandHeight = band.heightAnchor.constraint(equalToConstant: 0)
     var bandBottom: CGFloat = 0 { didSet { if isViewLoaded, bandHeight.constant != bandBottom { bandHeight.constant = bandBottom } } }
+    /// [mac-ten] Owner 2026-11-11 ("weird UI issues"): the tabs stood 4 pt lower than the buttons of the chat's bar
+    /// beside them (12 pt under the window's toolbar height, whatever the bar's own middle was), so the window's top
+    /// row had two baselines. They are centred on the middle of the bar's row of buttons (from the split, in the
+    /// panel's own points); with no bar on show they keep the 12 pt.
+    var barMiddle: CGFloat = 0 { didSet { if isViewLoaded, barMiddle != oldValue { alignTabs() } } }
+    private lazy var tabsOnBar = tabsRow.centerYAnchor.constraint(equalTo: view.topAnchor, constant: 0)
+    private lazy var tabsUnderToolbar = tabsRow.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12)
+    private func alignTabs() {
+        let onBar = barMiddle > 0
+        tabsOnBar.constant = barMiddle
+        if !onBar { tabsOnBar.isActive = false }
+        tabsUnderToolbar.isActive = !onBar
+        tabsOnBar.isActive = onBar
+    }
     private let empty = InspectorEmptyView(symbol: "info.circle", title: "", hint: "")
 
     /// The inspector beside `screen`, when the window has room for one (two panes, the chat in the right one).
@@ -128,8 +142,7 @@ final class MacInspector: UIViewController {
             edge.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             edge.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             edge.widthAnchor.constraint(equalToConstant: pixel),
-            // Under the window's toolbar height, where the chat's bar sits beside it.
-            tabsRow.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
+            // Under the window's toolbar height, where the chat's bar sits beside it (`alignTabs`: on the bar's middle).
             tabsRow.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: InspectorLook.margin),
             tabsRow.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -InspectorLook.margin),
             segments,
@@ -151,6 +164,7 @@ final class MacInspector: UIViewController {
             grip.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             grip.widthAnchor.constraint(equalToConstant: 9),
         ])
+        alignTabs()
         followLook()
         NotificationCenter.default.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.followLook() }

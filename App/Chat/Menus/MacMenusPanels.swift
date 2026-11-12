@@ -170,6 +170,7 @@ import UIKit
             guard let self else { return }
             let providers = Set(self.models.map(\.provider).filter { !$0.isEmpty })
             let folded = self.context.prefs.foldedProviders
+            self.panel.fitNextRows()   // [mac-ten] no blank glass under five folded headings
             self.setFolds(fold ? folded.union(providers) : folded.subtracting(providers))
         }
         shownOffline = context.offline

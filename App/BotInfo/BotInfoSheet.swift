@@ -811,6 +811,9 @@ struct BotInfoSettingsTab: View {
             Text(BotMutes.scope)
         } }
 
+        // [bot-colour] Owner 2026-11-11: this bot's own message colour.
+        BotColourSection(bot: bot)
+
         Section {
             Toggle("Pinned", isOn: Binding(get: { model.bot.pinned }, set: { model.setPinned($0) }))
                 .accessibilityIdentifier("bot-info.pinned")
@@ -943,7 +946,7 @@ struct BotInfoAbout: View {
             if cut {
                 HStack {
                     Spacer(minLength: 0)
-                    Button(expanded ? "Less" : "More") { expanded.toggle() }
+                    Button(expanded ? "Less" : "More") { Haptics.play(.selection); expanded.toggle() }
                         .font(Font.hq(.footnote).weight(.semibold))
                         .buttonStyle(.borderless)
                         .frame(minHeight: 44)

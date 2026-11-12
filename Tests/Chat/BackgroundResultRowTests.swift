@@ -154,12 +154,16 @@ struct BackgroundResultRowTests {
         #expect(open.variant != row.variant)
     }
 
+    /// [exchange] Your message between them: a reply right after the other bot's message is written to that bot and
+    /// folds with it (BotExchangeFoldTests.aReplyToAnotherBotsOwnRequestFolds).
     @Test func theBotsOwnRepliesAfterADeliveryStayPlainBubbles() {
+        let you = ChatMessage(id: "u1", role: .user, parts: [.text("Answer them for me")],
+                              timestamp: Date(timeIntervalSince1970: 1_790_000_030), rowId: nil)
         let reply = ChatMessage(id: "a1", role: .assistant, parts: [.text("Thanks, I will reply first.")],
                                 timestamp: Date(timeIntervalSince1970: 1_790_000_060), rowId: nil)
-        let rows = ChatRowBuilder.build(.init(messages: [delivery("d1", "Lunch moved to 1 pm."), reply], isRunning: false,
+        let rows = ChatRowBuilder.build(.init(messages: [delivery("d1", "Lunch moved to 1 pm."), you, reply], isRunning: false,
                                               botName: "Hermes", expanded: []))
-        let bubbles = rows.compactMap { if case .bubble(let b) = $0.kind { return b } else { return nil } }
+        let bubbles = rows.compactMap { if case .bubble(let b) = $0.kind, !b.mine { return b } else { return nil } }
         #expect(bubbles.count == 1)
         #expect(bubbles[0].text == "Thanks, I will reply first.")
         #expect(!bubbles[0].senderInset && bubbles[0].byline == nil, "no face column or byline for a chat whose only other sender is collapsed")
@@ -314,12 +318,13 @@ struct BackgroundResultRowTests {
         let rows = ChatRowBuilder.build(.init(messages: messages, isRunning: false, botName: "Hermes", expanded: []))
         let dump = rows.map { "\($0.id) gap \($0.gapAbove) \($0.kind)" }
         #expect(!rows.contains { if case .notice = $0.kind { return true } else { return false } }, "\(dump)")
-        // [updates] Inbox's line on its own (the reply ends its run), then Research and Billing Bot as one group.
+        // [updates] One group: Inbox's message and the reply to it ([exchange] written to Inbox, it folds with it), then
+        // Research and Billing Bot.
         let lines = rows.filter { if case .backgroundResult = $0.kind { return true } else { return false } }
-        #expect(lines.count == 2, "\(dump)")
+        #expect(lines.count == 1, "\(dump)")
         let group = try #require(lines.last)
         guard case .backgroundResult(let b) = group.kind else { return }
-        #expect(b.group?.count == 2, "\(dump)")
+        #expect(b.group?.count == 4, "\(dump)")
 
         // The screen rebuilds from the message before a change: a region at Billing Bot's message widens to the group.
         let billing = try #require(messages.firstIndex { m in m.parts.contains { if case .text(let t) = $0 { t.contains("Invoice sent") } else { false } } })

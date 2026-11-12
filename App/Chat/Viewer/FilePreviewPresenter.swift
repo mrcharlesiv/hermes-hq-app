@@ -128,6 +128,7 @@ import AVFoundation
     }
 
     static func alert(_ message: String, on vc: UIViewController) {
+        Haptics.play(.error)   // as `FailureAlert`
         let alert = UIAlertController(title: "Couldn’t Open File", message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .default))
         vc.present(alert, animated: true)

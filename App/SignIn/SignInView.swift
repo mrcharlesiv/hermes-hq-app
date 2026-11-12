@@ -394,6 +394,20 @@ struct SignInView: View {
                     .accessibilityIdentifier("sign-in-address")
                 if model.checking {
                     ProgressView().controlSize(.small).accessibilityLabel("Checking the address")
+                } else if model.address.isEmpty {
+                    // One tap for the address Hermes (or the setup) sent: the system's own Paste, so nothing asks for
+                    // permission, and a whole pasted message gives up the address in it.
+                    PasteButton(payloadType: String.self) { strings in
+                        guard let text = strings.first else { return }
+                        Task { @MainActor in
+                            focus = nil
+                            model.fill(address: SignInAddress.pasted(text))
+                        }
+                    }
+                    .labelStyle(.titleOnly)
+                    .buttonBorderShape(.capsule)
+                    .tint(Color.hqTint)
+                    .accessibilityIdentifier("sign-in-paste")
                 }
             }
             .fieldStyle(height: fieldHeight, invalid: model.addressInvalid)

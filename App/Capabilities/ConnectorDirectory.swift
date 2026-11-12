@@ -68,11 +68,16 @@ struct ConnectorsSections: View {
             }
         }
         connectedSection
+        // [connect-find] Owner 2026-11-11 ("it feels buried"): Composio is the second thing on the page, named, saying
+        // that a key is all it takes. It was the last row, under More Ways to Connect, two screens down.
+        if query.isEmpty { ComposioSection(model: model, router: router) }
         let quietManaged = ManagedAppsSection.isQuiet(model)
         if !quietManaged { ManagedAppsSection(model: model, router: router) }   // [connectors] the Nous apps, as on the desktop
         // [connectors-ux] Popular ends in See All Apps (its own page): the ~65 catalog rows made this page about 7,000 pt
         // long, with Popular's apps listed twice. A search still lists every matching app here.
         if query.isEmpty { popularSection } else { catalogMatches }
+        // A search that Hermes' own apps may not answer (Gmail, Slack): Composio stays one tap away under the matches.
+        if !query.isEmpty { ComposioSection(model: model, router: router, searching: true) }
         otherWays
         if quietManaged { ManagedAppsSection(model: model, router: router) }    // just a footer line: below the rows that work
     }
@@ -187,32 +192,33 @@ struct ConnectorsSections: View {
     // MARK: Other ways
 
     @ViewBuilder private var otherWays: some View {
-        if query.isEmpty, model.servers != nil || model.catalog != nil {
+        if query.isEmpty, !model.readOnly, model.servers != nil || model.catalog != nil {
             Section {
-                if !model.readOnly {
-                    Button { (model.presenter as? CapabilitiesViewController)?.addConnector() } label: {
-                        wayRow("Add Your Own", detail: "By web address or command", symbol: "plus")
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("connectors.add")
+                Button { (model.presenter as? CapabilitiesViewController)?.addConnector() } label: {
+                    ConnectorWayRow(title: "Add Your Own", detail: "By web address or command", symbol: "plus")
                 }
-                if ConnectAppsFeature.isOn {
-                    Button { router.push(ConnectAppsScreens.makeRoot(services: model.services)) } label: {
-                        wayRow("Connect Apps", detail: "Gmail, Slack and hundreds more, via Composio", symbol: "powerplug")
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("connectors.connect-apps")
-                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("connectors.add")
             } header: { HQSectionLabel { Text("More Ways to Connect") } }
         }
     }
 
-    /// [connector-rows] Owner 2026-11-10 (design pick 26): the two details are short enough for a line or two (they
-    /// ran to three and four); the page each opens says the rest.
-    /// [connectors-ux] The symbol on the quiet tile a connector without a logo has (UX study #173 kept colour tiles for
-    /// More's own index), in the logos' 34 pt column: one icon treatment down the page, not tiles above and bare
-    /// outline glyphs here.
-    private func wayRow(_ title: String, detail: String, symbol: String) -> some View {
+    private func open(_ entry: McpCatalogEntry) {
+        router.push(CatalogAppController(model: model, entry: entry, router: router))
+    }
+}
+
+/// [connector-rows] Owner 2026-11-10 (design pick 26): the two details are short enough for a line or two (they
+/// ran to three and four); the page each opens says the rest.
+/// [connectors-ux] The symbol on the quiet tile a connector without a logo has (UX study #173 kept colour tiles for
+/// More's own index), in the logos' 34 pt column: one icon treatment down the page, not tiles above and bare
+/// outline glyphs here.
+struct ConnectorWayRow: View {
+    var title: String
+    var detail: String
+    var symbol: String
+
+    var body: some View {
         HStack(spacing: 12) {
             ConnectorSymbolTile(name: title, symbol: symbol, size: 34)
             VStack(alignment: .leading, spacing: 2) {
@@ -225,9 +231,38 @@ struct ConnectorsSections: View {
         .padding(.vertical, 3)
         .contentShape(Rectangle())
     }
+}
 
-    private func open(_ entry: McpCatalogEntry) {
-        router.push(CatalogAppController(model: model, entry: entry, router: router))
+/// [connect-find] Composio's own place on Connectors and in the Marketplace's Connectors: one row that says a
+/// Composio API key is all it takes, then (once a key is saved) that the apps are a tap away. It opens Connect Apps:
+/// the key page first, your apps after. Hidden with the feature (`ConnectAppsFeature`).
+struct ComposioSection: View {
+    let model: CapabilitiesModel
+    let router: SettingsRouter
+    /// Under a search's matches: the row says where else to look.
+    var searching = false
+    /// Read when the row shows (and again on the way back from the key page): the Keychain is not read per redraw.
+    @State private var keySaved = false
+
+    static let header = "Composio"
+    static func title(keySaved: Bool) -> String { keySaved ? "Your Composio Apps" : "Use Your Composio API Key" }
+    static func detail(keySaved: Bool, searching: Bool) -> String {
+        if searching { return keySaved ? "Not here? Look in your Composio apps" : "Not here? Composio has hundreds more apps" }
+        return keySaved ? "Add apps, choose which bots use them" : "Gmail, Slack and hundreds more"
+    }
+
+    var body: some View {
+        if ConnectAppsFeature.isOn {
+            Section {
+                Button { router.push(ConnectAppsScreens.makeRoot(services: model.services)) } label: {
+                    ConnectorWayRow(title: Self.title(keySaved: keySaved), detail: Self.detail(keySaved: keySaved, searching: searching),
+                                    symbol: "key")
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("connectors.connect-apps")
+                .onAppear { keySaved = ComposioKeychain().status().saved }
+            } header: { HQSectionLabel { Text(Self.header) } }
+        }
     }
 }
 

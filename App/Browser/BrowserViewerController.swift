@@ -783,7 +783,10 @@ final class BrowserViewerController: UIViewController, BrowserStageHost, UITextF
             let cancel = UIButton(configuration: .hqGlass())
             cancel.configuration?.title = "Cancel"
             cancel.accessibilityIdentifier = "browser.cancelTake"
-            cancel.addAction(UIAction { [weak self] _ in self?.session?.give() }, for: .primaryActionTriggered)
+            cancel.addAction(UIAction { [weak self] _ in
+                Haptics.play(.selection)   // the ask taken back, as Give Back
+                self?.session?.give()
+            }, for: .primaryActionTriggered)
             bar.addArrangedSubview(cancel)
         } else if someoneElse {
             caption.text = ControlWords.browserOther   // Take Control stays hidden until then

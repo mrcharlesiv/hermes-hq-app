@@ -35,9 +35,22 @@ final class OnboardingEndToEndTests: XCTestCase {
         XCTAssertEqual(app.buttons["onboarding.welcome.address"].label, "I Already Have an Address")
         shot("01-welcome")
 
+        // Get Started asks one plain question: a row per answer, nothing else.
         app.buttons["onboarding.welcome.start"].tap()
+        XCTAssertTrue(heading("onboarding.start").waitForExistence(timeout: 5))
+        XCTAssertEqual(heading("onboarding.start").label, "Where is your Hermes?")
+        for (id, title) in [("computer", "On my computer"), ("cloud", "On Hermes Cloud"), ("none", "I don’t have Hermes yet")] {
+            XCTAssertTrue(app.buttons["onboarding.start.\(id)"].label.hasPrefix(title), "\(id): \(app.buttons["onboarding.start.\(id)"].label)")
+        }
+        XCTAssertFalse(text(containing: "Tailscale").exists, "no jargon before a path is picked")
+        shot("01-start")
+        tap("onboarding.start.computer")
         XCTAssertTrue(heading("onboarding.hermes").waitForExistence(timeout: 5))
         XCTAssertEqual(heading("onboarding.hermes").label, "Let Hermes set it up.")
+        XCTAssertTrue(app.buttons["onboarding.hermes.copy"].isHittable && app.buttons["onboarding.hermes.have-address"].isHittable
+                      && app.buttons["onboarding.hermes.myself"].isHittable, "the message and both ways on show without scrolling")
+        back()
+        XCTAssertTrue(heading("onboarding.start").waitForExistence(timeout: 5), "Back returns to the question")
         back()
         XCTAssertTrue(app.buttons["onboarding.welcome.start"].waitForExistence(timeout: 5), "Back returns to the welcome")
 
@@ -53,25 +66,25 @@ final class OnboardingEndToEndTests: XCTestCase {
 
     @MainActor func testO02_BackStackLoops() throws {
         launch()
-        tap("onboarding.welcome.start")
+        start()
         tap("onboarding.hermes.have-address")
         XCTAssertTrue(app.textFields["sign-in-address"].waitForExistence(timeout: 5))
         tap("sign-in-help")                                           // pops back to "Let Hermes set it up"
         XCTAssertTrue(heading("onboarding.hermes").waitForExistence(timeout: 5))
-        back()
-        XCTAssertTrue(app.buttons["onboarding.welcome.start"].waitForExistence(timeout: 5), "one Back from the guide's first screen")
+        back(); back()
+        XCTAssertTrue(app.buttons["onboarding.welcome.start"].waitForExistence(timeout: 5), "two Backs from the message: the question, the welcome")
 
-        // The long way: hermes → where → mac 1, 2, 3 → form → help → hermes; Back is the welcome (no duplicates under it).
-        tap("onboarding.welcome.start"); tap("onboarding.hermes.myself"); tap("onboarding.where.mac")
+        // The long way: hermes → where → mac 1, 2, 3 → form → help → hermes; two Backs are the welcome (no duplicates under it).
+        start(); tap("onboarding.hermes.myself"); tap("onboarding.where.mac")
         tap("onboarding.mac-1.next"); tap("onboarding.mac-2.next"); tap("onboarding.mac-3.type-address")
         XCTAssertTrue(app.textFields["sign-in-address"].waitForExistence(timeout: 5))
         tap("sign-in-help")
         XCTAssertTrue(heading("onboarding.hermes").waitForExistence(timeout: 5))
-        back()
+        back(); back()
         XCTAssertTrue(app.buttons["onboarding.welcome.start"].waitForExistence(timeout: 5))
 
         // The edge swipe goes back one screen, like Back.
-        tap("onboarding.welcome.start"); tap("onboarding.hermes.myself")
+        start(); tap("onboarding.hermes.myself")
         XCTAssertTrue(heading("onboarding.where").waitForExistence(timeout: 5))
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.0, dy: 0.5)).press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)))
         XCTAssertTrue(heading("onboarding.hermes").waitForExistence(timeout: 5), "swipe back")
@@ -83,12 +96,12 @@ final class OnboardingEndToEndTests: XCTestCase {
         back()
         XCTAssertTrue(heading("onboarding.hermes").waitForExistence(timeout: 5), "one push, not two")
 
-        // STRESS 2 (short): the loop ten times, fast; the welcome is always one Back from "Let Hermes".
+        // STRESS 2 (short): the loop ten times, fast; the welcome is always two Backs from "Let Hermes".
         for _ in 0..<10 {
             tap("onboarding.hermes.have-address")
             tap("sign-in-help")
         }
-        back()
+        back(); back()
         XCTAssertTrue(app.buttons["onboarding.welcome.start"].waitForExistence(timeout: 5), "no leaked screens under the guide")
     }
 
@@ -97,31 +110,42 @@ final class OnboardingEndToEndTests: XCTestCase {
     @MainActor func testO03_WhereAndInstallLink() throws {
         let out = guideOut()
         launch(["-HQDebugGuideOut", out, "-HQDebugGuideFail", "open"])
-        tap("onboarding.welcome.start"); tap("onboarding.hermes.myself")
-        XCTAssertEqual(heading("onboarding.where").label, "Where does Hermes run?")
+        start(); tap("onboarding.hermes.myself")
+        XCTAssertEqual(heading("onboarding.where").label, "Which computer runs Hermes?")
         XCTAssertEqual(app.navigationBars.staticTexts.firstMatch.label, "Set it up yourself", "the small title on the bar row")
-        let rows = ["mac": "On a Mac", "linux": "On Linux or a server", "windows": "On Windows", "address": "Someone gave me an address"]
+        let rows = ["mac": "On a Mac", "linux": "On Linux or a server", "windows": "On Windows"]
         for (id, title) in rows {
             XCTAssertTrue(app.buttons["onboarding.where.\(id)"].label.hasPrefix(title), "\(id): \(app.buttons["onboarding.where.\(id)"].label)")
         }
+        XCTAssertFalse(app.buttons["onboarding.where.address"].exists || app.buttons["onboarding.where.cloud"].exists, "only the computers")
         shot("03-where")
-        // "Install Hermes first" asks for the docs; with opening made to fail, the line says where to go by hand.
-        let link = app.links["Install Hermes first"].exists ? app.links["Install Hermes first"] : app.staticTexts["onboarding.where.install-link"]
-        XCTAssertTrue(link.exists, "the install link")
-        link.tap()
-        XCTAssertTrue(waitUntil(timeout: 5) { self.read(out, "open.txt") == "https://hermes-agent.nousresearch.com/docs/" }, "the link asked for the docs")
-        let error = app.descendants(matching: .any)["onboarding.where.error"]
-        XCTAssertTrue(error.waitForExistence(timeout: 5))
-        XCTAssertEqual(error.label, "Couldn’t open the guide. Open this address in Safari: https://hermes-agent.nousresearch.com/docs/")
-        shot("03-where-link-error")
         for (id, next) in [("mac", "onboarding.mac-1"), ("linux", "onboarding.linux-1"), ("windows", "onboarding.other-1")] {
             tap("onboarding.where.\(id)")
             XCTAssertTrue(heading(next).waitForExistence(timeout: 5), next)
             back()
             XCTAssertTrue(heading("onboarding.where").waitForExistence(timeout: 5))
         }
-        tap("onboarding.where.address")
-        XCTAssertTrue(app.textFields["sign-in-address"].waitForExistence(timeout: 5), "Someone gave me an address → the form")
+        // No Hermes yet: its own row on the first question, and a screen with the two ways to get one. Install asks for
+        // the docs; with opening made to fail, the line says where to go by hand.
+        back(); back()
+        tap("onboarding.start.none")
+        XCTAssertEqual(heading("onboarding.get-hermes").label, "Get Hermes first.")
+        XCTAssertTrue(app.buttons["onboarding.get-hermes.cloud"].label.hasPrefix("Start one on Hermes Cloud"))
+        XCTAssertTrue(app.buttons["onboarding.get-hermes.install"].label.hasPrefix("Install it on a computer"))
+        shot("03-get-hermes")
+        tap("onboarding.get-hermes.install")
+        XCTAssertTrue(waitUntil(timeout: 5) { self.read(out, "open.txt") == "https://hermes-agent.nousresearch.com/docs/" }, "the row asked for the docs")
+        let error = app.descendants(matching: .any)["onboarding.get-hermes.error"]
+        XCTAssertTrue(error.waitForExistence(timeout: 5))
+        XCTAssertEqual(error.label, "Couldn’t open the guide. Open this address in Safari: https://hermes-agent.nousresearch.com/docs/")
+        shot("03-get-hermes-link-error")
+        // Installed: the way on is a button here, not a trip back.
+        XCTAssertTrue(text(containing: "Nous credit").exists || text(containing: "Nous account").exists || app.buttons["onboarding.get-hermes.cloud"].label.contains("Nous"), "the cost is said on the row")
+        XCTAssertEqual(app.buttons["onboarding.get-hermes.installed"].label, "I’ve Installed Hermes")
+        tap("onboarding.get-hermes.installed")
+        XCTAssertTrue(heading("onboarding.hermes").waitForExistence(timeout: 5), "on to the setup message")
+        back(); back()
+        XCTAssertTrue(heading("onboarding.start").waitForExistence(timeout: 5))
     }
 
     // MARK: - O04 Let Hermes set it up: Copy and Send…
@@ -129,7 +153,7 @@ final class OnboardingEndToEndTests: XCTestCase {
     @MainActor func testO04_LetHermesCopyAndShare() throws {
         let out = guideOut()
         launch(["-HQDebugGuideOut", out])
-        tap("onboarding.welcome.start")
+        start()
         XCTAssertTrue(heading("onboarding.hermes").waitForExistence(timeout: 5))
         XCTAssertFalse(app.descendants(matching: .any)["onboarding.hermes.status"].exists, "no line before a tap")
         shot("04-hermes")
@@ -176,7 +200,7 @@ final class OnboardingEndToEndTests: XCTestCase {
     @MainActor func testO05_MacGuide() throws {
         let out = guideOut()
         launch(["-HQDebugGuideOut", out])
-        tap("onboarding.welcome.start"); tap("onboarding.hermes.myself"); tap("onboarding.where.mac")
+        start(); tap("onboarding.hermes.myself"); tap("onboarding.where.mac")
         XCTAssertEqual(heading("onboarding.mac-1").label, "Get the setup command onto your Mac.")
         XCTAssertEqual(app.navigationBars.staticTexts.firstMatch.label, "Step 1 of 3")
         let command = "curl -fsSL https://raw.githubusercontent.com/mrcharlesiv/hermes-hq/main/connect.sh | sh"
@@ -221,7 +245,7 @@ final class OnboardingEndToEndTests: XCTestCase {
     @MainActor func testO06_LinuxGuide() throws {
         let out = guideOut()
         launch(["-HQDebugGuideOut", out])
-        tap("onboarding.welcome.start"); tap("onboarding.hermes.myself"); tap("onboarding.where.linux")
+        start(); tap("onboarding.hermes.myself"); tap("onboarding.where.linux")
         XCTAssertEqual(heading("onboarding.linux-1").label, "Get the setup command onto that computer.")
         XCTAssertEqual(app.buttons["onboarding.linux-1.share"].label, "Send…")
         shot("06-linux-1")
@@ -252,7 +276,7 @@ final class OnboardingEndToEndTests: XCTestCase {
     @MainActor func testO07_WindowsAndManual() throws {
         let out = guideOut()
         launch(["-HQDebugGuideOut", out])
-        tap("onboarding.welcome.start"); tap("onboarding.hermes.myself"); tap("onboarding.where.windows")
+        start(); tap("onboarding.hermes.myself"); tap("onboarding.where.windows")
         XCTAssertEqual(heading("onboarding.other-1").label, "Install Tailscale on both.")
         XCTAssertEqual(app.navigationBars.staticTexts.firstMatch.label, "Step 1 of 2")
         XCTAssertTrue(text(containing: "Tailscale is a free app that privately links this iPhone and the computer running Hermes").exists)
@@ -305,7 +329,7 @@ final class OnboardingEndToEndTests: XCTestCase {
     @MainActor func testO08_FailureLines() throws {
         let out = guideOut()
         launch(["-HQDebugGuideOut", out, "-HQDebugGuideFail", "copy,share,open"])
-        tap("onboarding.welcome.start")
+        start()
         tap("onboarding.hermes.copy")
         let status = app.staticTexts["onboarding.hermes.status"]
         XCTAssertTrue(status.waitForExistence(timeout: 5))
@@ -350,15 +374,18 @@ final class OnboardingEndToEndTests: XCTestCase {
         XCTAssertEqual(help.label, "Need help connecting?")
         // The web's heading and first lead for the form inside the flow (D36).
         XCTAssertEqual(app.staticTexts["sign-in-heading"].label, "Sign in to Hermes.")
-        XCTAssertTrue(app.staticTexts["Enter the address of your Hermes, then sign in."].exists, "the lead before an address is typed")
+        XCTAssertTrue(app.staticTexts["Paste or type the address of your Hermes, then sign in."].exists, "the lead before an address is typed")
         shot("09-form-first-run")
+        XCTAssertTrue(app.buttons["sign-in-paste"].exists, "Paste, while the address is empty")
         help.tap()
-        XCTAssertTrue(heading("onboarding.hermes").waitForExistence(timeout: 5), "help opens “Let Hermes set it up”")
+        XCTAssertTrue(heading("onboarding.start").waitForExistence(timeout: 5), "help from a form that came first opens the question")
+        tap("onboarding.start.computer")
         // DECISION D7: what was typed survives a trip to the guide.
         tap("onboarding.hermes.have-address")
         let address = app.textFields["sign-in-address"]
         address.tap(); address.typeText("kept.example.com")
-        tap("sign-in-help")
+        XCTAssertFalse(app.buttons["sign-in-paste"].exists, "Paste makes way for what was typed")
+        tap("sign-in-help")                                           // back to the message it came from
         tap("onboarding.hermes.have-address")
         XCTAssertEqual(app.textFields["sign-in-address"].value as? String, "kept.example.com", "the address is kept")
         // Sign in, then the same link in the Add Gateway sheet, where every guide page also has Cancel.
@@ -372,10 +399,10 @@ final class OnboardingEndToEndTests: XCTestCase {
         reveal(sheetHelp)
         shot("09-add-gateway-form")
         sheetHelp.tap()
-        XCTAssertTrue(heading("onboarding.hermes").waitForExistence(timeout: 5))
+        XCTAssertTrue(heading("onboarding.start").waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["add-gateway.cancel"].exists, "Cancel on a guide page of the sheet")
         shot("09-add-gateway-guide")
-        tap("onboarding.hermes.myself"); tap("onboarding.where.mac")
+        tap("onboarding.start.computer"); tap("onboarding.hermes.myself"); tap("onboarding.where.mac")
         XCTAssertTrue(heading("onboarding.mac-1").waitForExistence(timeout: 5))
         app.buttons["add-gateway.cancel"].tap()
         XCTAssertTrue(app.buttons["gateway.add"].waitForExistence(timeout: 8), "Cancel closes the whole sheet")
@@ -678,7 +705,7 @@ final class OnboardingEndToEndTests: XCTestCase {
 
     @MainActor func testO15_ConnectLinkDuringGuide() throws {
         launch()
-        tap("onboarding.welcome.start"); tap("onboarding.hermes.myself"); tap("onboarding.where.mac")
+        start(); tap("onboarding.hermes.myself"); tap("onboarding.where.mac")
         tap("onboarding.mac-1.next"); tap("onboarding.mac-2.next")
         XCTAssertTrue(heading("onboarding.mac-3").waitForExistence(timeout: 5))
         // The setup's QR code is this link (an invented address on the documentation domain).
@@ -732,6 +759,10 @@ final class OnboardingEndToEndTests: XCTestCase {
         reach("onboarding.welcome.start")
         shot("16-xxxl-welcome-end")
         tap("onboarding.welcome.start")
+        shot("16-xxxl-start")
+        reach("onboarding.start.none")
+        shot("16-xxxl-start-end")
+        reach("onboarding.start.computer"); tap("onboarding.start.computer")
         shot("16-xxxl-hermes")
         reach("onboarding.hermes.myself")
         shot("16-xxxl-hermes-end")
@@ -748,7 +779,7 @@ final class OnboardingEndToEndTests: XCTestCase {
         shot("16-xxxl-form")
         reach("sign-in-help")
         shot("16-xxxl-form-end")
-        tap("sign-in-help")
+        tap("sign-in-help")                                           // back to the message
         reach("onboarding.hermes.myself"); tap("onboarding.hermes.myself")
         reach("onboarding.where.windows"); tap("onboarding.where.windows")
         shot("16-xxxl-other-1")
@@ -776,17 +807,20 @@ final class OnboardingEndToEndTests: XCTestCase {
     @MainActor func testO26_TailnetOnlyChoice() throws {
         let out = guideOut()
         launch(["-HQDebugGuideOut", out])
-        tap("onboarding.welcome.start")
+        start()
         let toggle = app.switches["onboarding.hermes.tailnet"]
         XCTAssertTrue(toggle.waitForExistence(timeout: 5))
         XCTAssertEqual(toggle.value as? String, "0", "off at first")
         XCTAssertTrue(text(containing: "Tailscale runs only on that computer").exists)
+        XCTAssertTrue(text(containing: "Hermes on Windows? Tap Set It Up Myself.").exists)
+        reveal(toggle)                                                // last on the page: for the few who need it
+        app.swipeUp(velocity: .slow)                                  // clear of the pinned buttons
         toggle.tap()
         XCTAssertTrue(waitUntil(timeout: 5) { toggle.value as? String == "1" })
         XCTAssertTrue(text(containing: "Leave Tailscale connected on this iPhone").waitForExistence(timeout: 5))
         XCTAssertFalse(text(containing: "Tailscale runs only on that computer").exists)
         shot("26-hermes-tailnet")
-        reveal(app.buttons["onboarding.hermes.copy"])
+        for _ in 0..<6 where !app.buttons["onboarding.hermes.copy"].isHittable { app.swipeDown(velocity: .slow) }
         tap("onboarding.hermes.copy")
         XCTAssertTrue(app.staticTexts["onboarding.hermes.status"].waitForExistence(timeout: 5))
         let copied = read(out, "copy.txt") ?? ""
@@ -794,7 +828,7 @@ final class OnboardingEndToEndTests: XCTestCase {
         XCTAssertFalse(copied.contains("doesn't need Tailscale"), copied)
 
         // The choice carries to the Mac guide: the private command, and the phone's Tailscale asked for.
-        reach("onboarding.hermes.myself"); tap("onboarding.hermes.myself"); tap("onboarding.where.mac")
+        tap("onboarding.hermes.myself"); tap("onboarding.where.mac")
         XCTAssertEqual(app.switches["onboarding.mac-1.tailnet"].value as? String, "1", "still on")
         let command = "curl -fsSL https://raw.githubusercontent.com/mrcharlesiv/hermes-hq/main/connect.sh | sh -s -- --private"
         XCTAssertEqual(app.staticTexts["onboarding.mac-1.command"].label, command)
@@ -811,6 +845,7 @@ final class OnboardingEndToEndTests: XCTestCase {
 
         // Off again on the way back: the plain command.
         back(); back()
+        reveal(app.switches["onboarding.mac-1.tailnet"])
         app.switches["onboarding.mac-1.tailnet"].tap()
         XCTAssertTrue(waitUntil(timeout: 5) { self.app.staticTexts["onboarding.mac-1.command"].label == "curl -fsSL https://raw.githubusercontent.com/mrcharlesiv/hermes-hq/main/connect.sh | sh" })
         assertNothingForbidden()
@@ -818,7 +853,7 @@ final class OnboardingEndToEndTests: XCTestCase {
 
     @MainActor func testO26b_TailnetOnlyChoiceAtLargestType() throws {
         launch(["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"])
-        tap("onboarding.welcome.start")
+        start()
         let toggle = app.switches["onboarding.hermes.tailnet"]
         XCTAssertTrue(toggle.waitForExistence(timeout: 5))
         reveal(toggle)
@@ -859,7 +894,8 @@ final class OnboardingEndToEndTests: XCTestCase {
         launch()
         XCTAssertTrue(app.buttons["onboarding.welcome.start"].waitForExistence(timeout: 15))
         // No loading state between a tap and the next screen: the heading is there on the first look after the push.
-        let steps: [(String, String)] = [("onboarding.welcome.start", "onboarding.hermes"), ("onboarding.hermes.myself", "onboarding.where"),
+        let steps: [(String, String)] = [("onboarding.welcome.start", "onboarding.start"), ("onboarding.start.computer", "onboarding.hermes"),
+                                         ("onboarding.hermes.myself", "onboarding.where"),
                                          ("onboarding.where.linux", "onboarding.linux-1"), ("onboarding.linux-1.next", "onboarding.linux-2"),
                                          ("onboarding.linux-2.next", "onboarding.linux-3")]
         var slowest = 0.0
@@ -906,7 +942,9 @@ final class OnboardingEndToEndTests: XCTestCase {
         let help = app.buttons["sign-in-help"]
         reveal(help)
         help.tap()
-        XCTAssertTrue(heading("onboarding.hermes").waitForExistence(timeout: 5), "help opens the guide in the sheet")
+        XCTAssertTrue(heading("onboarding.start").waitForExistence(timeout: 5), "help opens the guide in the sheet")
+        tap("onboarding.start.computer")
+        XCTAssertTrue(heading("onboarding.hermes").waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["offline.sign-in.cancel"].exists, "Cancel on a guide page")
         shot("19-offline-sheet-guide")
         tap("onboarding.hermes.have-address")
@@ -1034,7 +1072,7 @@ final class OnboardingEndToEndTests: XCTestCase {
         XCTAssertTrue(text(containing: "your iPad").exists, "the welcome says iPad")
         XCTAssertFalse(text(containing: "your iPhone").exists)
         shot("21-pad-welcome")
-        tap("onboarding.welcome.start")
+        start()
         XCTAssertTrue(heading("onboarding.hermes").waitForExistence(timeout: 5))
         XCTAssertTrue(text(containing: "this iPad").exists, "the Tailscale line says iPad")
         shot("21-pad-hermes")
@@ -1114,7 +1152,7 @@ final class OnboardingEndToEndTests: XCTestCase {
         launch(["-HQA11yReduceMotion", "YES", "-HQA11yContrast", "YES", "-HQA11yBoldText", "YES"])
         XCTAssertTrue(app.buttons["onboarding.welcome.start"].waitForExistence(timeout: 15))
         shot("23-a11y-welcome")
-        tap("onboarding.welcome.start"); tap("onboarding.hermes.myself"); tap("onboarding.where.mac")
+        start(); tap("onboarding.hermes.myself"); tap("onboarding.where.mac")
         shot("23-a11y-mac-1")
         // The copied line appears (a fade, not a slide) and the disclosure opens at once.
         tap("onboarding.mac-1.copy")
@@ -1128,7 +1166,7 @@ final class OnboardingEndToEndTests: XCTestCase {
         for _ in 0..<10 { trouble.tap() }   // ten quick toggles end where they began: open
         XCTAssertTrue(app.descendants(matching: .any)["onboarding.mac-2.trouble.0"].waitForExistence(timeout: 2), "an even count of taps leaves it open")
         try a.control("/__onboarding/status", ["release_date": "2026.9.20", "version": "0.13.0"])
-        back(); back(); back(); back()
+        back(); back(); back(); back(); back()
         tap("onboarding.welcome.address")
         signIn(a)
         XCTAssertTrue(app.staticTexts["update-hermes.title"].waitForExistence(timeout: 20))
@@ -1141,7 +1179,7 @@ final class OnboardingEndToEndTests: XCTestCase {
         launch(["-HQDebugSkin", "midnight", "-HQDebugDesktopLook", "YES"])
         XCTAssertTrue(app.buttons["onboarding.welcome.start"].waitForExistence(timeout: 15))
         shot("23-skin-welcome")
-        tap("onboarding.welcome.start"); tap("onboarding.hermes.myself"); tap("onboarding.where.mac"); tap("onboarding.mac-1.next")
+        start(); tap("onboarding.hermes.myself"); tap("onboarding.where.mac"); tap("onboarding.mac-1.next")
         XCTAssertTrue(heading("onboarding.mac-2").waitForExistence(timeout: 5))
         shot("23-skin-mac-2")
         tap("onboarding.mac-2.next"); tap("onboarding.mac-3.type-address")
@@ -1245,22 +1283,28 @@ final class OnboardingEndToEndTests: XCTestCase {
     @MainActor func testO27_HermesCloudFromTheGuide() throws {
         launch()
         tap("onboarding.welcome.start")
-        XCTAssertTrue(heading("onboarding.hermes").waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["onboarding.hermes.cloud"].label.hasPrefix("Use Hermes Cloud Instead"), app.buttons["onboarding.hermes.cloud"].label)
-        shot("27-hermes-cloud-row")
-        tap("onboarding.hermes.cloud")
+        XCTAssertTrue(heading("onboarding.start").waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["onboarding.start.cloud"].label.hasPrefix("On Hermes Cloud"), app.buttons["onboarding.start.cloud"].label)
+        shot("27-start-cloud-row")
+        tap("onboarding.start.cloud")
         XCTAssertTrue(app.buttons["Continue with Nous"].waitForExistence(timeout: 10), "Hermes Cloud, at Continue with Nous")
         shot("27-hermes-cloud-sheet")
         tap("cloud-gateway.cancel")
-        XCTAssertTrue(heading("onboarding.hermes").waitForExistence(timeout: 5), "closing it leaves the guide")
+        XCTAssertTrue(heading("onboarding.start").waitForExistence(timeout: 5), "closing it leaves the guide")
 
-        tap("onboarding.hermes.myself")
-        XCTAssertTrue(app.buttons["onboarding.where.cloud"].label.hasPrefix("On Hermes Cloud"), app.buttons["onboarding.where.cloud"].label)
-        shot("27-where-cloud")
-        tap("onboarding.where.cloud")
+        // Someone with no Hermes can start one there too.
+        tap("onboarding.start.none")
+        tap("onboarding.get-hermes.cloud")
         XCTAssertTrue(app.buttons["Continue with Nous"].waitForExistence(timeout: 10))
         tap("cloud-gateway.cancel")
+        XCTAssertTrue(heading("onboarding.get-hermes").waitForExistence(timeout: 5))
+
+        // One place for it: the setup message's screen and the computers' list don't repeat the row.
+        back(); tap("onboarding.start.computer")
+        XCTAssertFalse(app.buttons["onboarding.hermes.cloud"].exists)
+        tap("onboarding.hermes.myself")
         XCTAssertTrue(heading("onboarding.where").waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["onboarding.where.cloud"].exists)
     }
 
     // MARK: - Helpers
@@ -1307,6 +1351,13 @@ final class OnboardingEndToEndTests: XCTestCase {
         XCTAssertTrue(button.waitForExistence(timeout: 8), "\(id) shows", file: file, line: line)
         reveal(button)
         button.tap()
+    }
+
+    /// Get Started, then "On my computer": the first question (docs/spec/3x-onboarding.md §19) on the way to
+    /// "Let Hermes set it up."
+    @MainActor func start(file: StaticString = #filePath, line: UInt = #line) {
+        tap("onboarding.welcome.start", file: file, line: line)
+        tap("onboarding.start.computer", file: file, line: line)
     }
 
     @MainActor func reveal(_ element: XCUIElement) {

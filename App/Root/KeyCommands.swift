@@ -146,6 +146,10 @@ extension MoreViewController: KeySearchable {}
             command("Actual Size", textNormal, "0", .command),
             command("Make Text Smaller", textSmaller, "-", .command),
         ]))
+        #else
+        // [ipad-polish] Mail's and Notes' sidebar key on the iPad: the list beside the chat goes away and comes back
+        // (`RootSplitController.setListHidden`).
+        menus.insert(UIMenu(title: "", options: .displayInline, children: [command("Hide List", toggleList, "s", [.control, .command])]), at: 0)
         #endif
         return menus
     }
@@ -158,6 +162,8 @@ extension MoreViewController: KeySearchable {}
     static let textSmaller = #selector(AppDelegate.hqTextSmaller(_:))
     static let toggleSidebar = #selector(AppDelegate.hqToggleSidebar(_:))
     static let keyboardShortcuts = #selector(AppDelegate.hqKeyboardShortcuts(_:))
+    #else
+    static let toggleList = #selector(AppDelegate.hqToggleList(_:))
     #endif
 
     /// The second key of three commands (⌃Tab, ⌃⇧Tab, ⌘period): the same actions, not listed twice in the menu or in
@@ -215,6 +221,11 @@ extension MoreViewController: KeySearchable {}
         builder.remove(menu: .newItem)
         builder.remove(menu: .find)
         builder.remove(menu: .document)
+        #if !targetEnvironment(macCatalyst)
+        // [ipad-polish] The system's own Show Sidebar (⌃⌘S) is for a split view controller the app does not use, and
+        // took the key from Hide List (the key reached the window and nothing happened).
+        builder.remove(menu: .sidebar)
+        #endif
         #if targetEnvironment(macCatalyst)
         MacWindow.trimMenus(builder)   // [mac]
         MacUpdater.addMenuItem(builder)
@@ -654,6 +665,11 @@ extension AppDelegate {
         // edits, not an alert) and then act, as a Mac window's own commands do; they no longer dim under every sheet.
         let givesWay = KeyCommands.sheetGivesWay(root)
         switch command.action {
+        #if !targetEnvironment(macCatalyst)
+        case KeyCommands.toggleList:   // [ipad-polish]
+            command.title = root.split?.listHidden == true ? "Show List" : "Hide List"
+            enabled = enabled && root.split?.canToggleList == true
+        #endif
         case KeyCommands.newChatHere:
             // [cmd-n] Off with no chat of one bot on show (a group chat, a page, nothing open).
             enabled = (enabled || givesWay) && root.sessionsViewController.organizer != nil && root.chatOnShow?.session is LiveChatSession
@@ -765,12 +781,18 @@ extension AppDelegate {
         #endif
     }
 
-    private static let ownActions: Set<Selector> = [
+    private static let ownActions: Set<Selector> = {
+        var actions: Set<Selector> = [
         KeyCommands.newChat, KeyCommands.newChatWith, KeyCommands.newChatHere, KeyCommands.closeChat, KeyCommands.find, KeyCommands.searchSessions, KeyCommands.nextChat,
         KeyCommands.previousChat, KeyCommands.selectTab, KeyCommands.settings, KeyCommands.refresh, KeyCommands.escape, KeyCommands.send,
         KeyCommands.messageActions, KeyCommands.back, KeyCommands.closeWindow, KeyCommands.openQuickly,
         KeyCommands.messageField, KeyCommands.archiveChat, KeyCommands.deleteChat,
-    ]
+        ]
+        #if !targetEnvironment(macCatalyst)
+        actions.insert(KeyCommands.toggleList)   // [ipad-polish]
+        #endif
+        return actions
+    }()
 
     #if targetEnvironment(macCatalyst)
     /// [mac] Mac polish #12: the app's commands while the Settings window is in front (`KeyCommands.settingsInFront`):
@@ -1074,6 +1096,9 @@ extension AppDelegate {
         guard let root = uncovered else { return }
         AppLog.note("keys", "search sessions")
         if root.shownTab != .sessions { root.select(.sessions) }
+        #if !targetEnvironment(macCatalyst)
+        root.split?.setListHidden(false)   // [ipad-polish] the search is in the list
+        #endif
         #if targetEnvironment(macCatalyst)
         // [mac] Stress test 2026-10-28 #14: a Bots tab chat left on the right beside the Sessions search (no row of
         // its own to mark there) goes back over the Bots list, as a tab click does.
@@ -1152,6 +1177,9 @@ extension AppDelegate {
             let places = root.placedTabs   // [mac-sidebar] every sidebar place, ⌘9 the last of more than nine
             guard let place = KeyCommands.tabIndex(forShortcut: index, among: places.map { $0.tabBarItem.tag }) else { return }
             root.show(places[place])
+            #if !targetEnvironment(macCatalyst)
+            root.split?.setListHidden(false)   // [ipad-polish] a tab picked by key is its list: put away, it comes back
+            #endif
             #if targetEnvironment(macCatalyst)
             root.split?.followSelectedTab()   // [mac] stress test #62: the right pane follows the tab, as a click does
             MacSelection.focus(on: .sidebar)   // [mac] Stress test 2026-10-28 #54: its mark is the accent, as after a click
@@ -1170,6 +1198,13 @@ extension AppDelegate {
             root.showSettings()   // its own tab when it has one: More then has no Settings row
         }
     }
+
+    #if !targetEnvironment(macCatalyst)
+    @objc func hqToggleList(_ sender: Any?) {
+        AppLog.note("keys", "hide or show the list")
+        KeyCommands.root?.split?.toggleList()
+    }
+    #endif
 
     @objc func hqRefresh(_ sender: Any?) {
         #if targetEnvironment(macCatalyst)

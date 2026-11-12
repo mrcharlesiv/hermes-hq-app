@@ -396,10 +396,12 @@ final class TasksStore {
     }
 
     /// Ticks one step.
-    func setStep(_ taskID: String, step: String, done: Bool) async {
-        guard let task = task(taskID) else { return }
+    /// False when the gateway refused it.
+    @discardableResult
+    func setStep(_ taskID: String, step: String, done: Bool) async -> Bool {
+        guard let task = task(taskID) else { return false }
         let steps = task.steps.map { s -> TodoStep in var s = s; if s.id == step { s.done = done }; return s }
-        await patch(taskID, ["steps": TodoWire.steps(steps)])
+        return await patch(taskID, ["steps": TodoWire.steps(steps)])
     }
 
     /// Deletes a task (a chat card's Undo too: the task may not be in the list yet).
@@ -489,34 +491,40 @@ final class TasksStore {
     }
 
     /// Moves tasks into `section` (nil: no section), at the end of it in the order given, or at `position` for one
-    /// dragged task.
-    func move(_ ids: [String], to section: String?, position: Double? = nil) async {
-        guard !refuse() else { return }
+    /// dragged task. False when any of them couldn't move (the notice has said why).
+    @discardableResult
+    func move(_ ids: [String], to section: String?, position: Double? = nil) async -> Bool {
+        guard !refuse() else { return false }
         guard sectionsSupported else {
             notice("Sections need the newest HQ add-on on your computer (0.9.36 or later).")
-            return
+            return false
         }
         var next = position ?? ((tasks.filter { $0.section == section && !ids.contains($0.id) }.map(\.order).max() ?? Date().timeIntervalSince1970) + 1)
         // Not `withTaskGroup`: optimized builds abort when a child finishes into a destroyed group (ChildTasks.swift).
-        await withChildTasks(of: Void.self) { group in
+        return await withChildTasks(of: Bool.self) { group in
             for id in ids {
                 guard let task = task(id) else { continue }
                 var fields: [String: JSONValue] = ["position": .number(next)]
                 if task.section != section { fields["section"] = TodoWire.optional(section) }
                 next += 1
                 let body = fields
-                group.addTask { _ = await self.patch(id, body) }
+                group.addTask { await self.patch(id, body) }
             }
+            var moved = true
+            while let ok = await group.next() { moved = moved && ok }
+            return moved
         }
     }
 
     /// Group By and Sort By (kept with the other Tasks settings on the gateway).
-    func setLayout(group: String? = nil, sort: String? = nil) async {
+    /// False when the gateway refused it.
+    @discardableResult
+    func setLayout(group: String? = nil, sort: String? = nil) async -> Bool {
         var next = settings
         if let group { next.group = group }
         if let sort { next.sort = sort }
-        guard next != settings else { return }
-        await saveSettings(next)
+        guard next != settings else { return true }
+        return await saveSettings(next)
     }
 
     /// After a change this app made: the bots whose "Task prep" job it may start or end (their own tools do it for theirs).

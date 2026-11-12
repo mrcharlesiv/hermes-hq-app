@@ -734,6 +734,7 @@ private final class ChatInfoList: UITableViewController {
         return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in
             UIMenu(children: [UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { _ in
                 UIPasteboard.general.string = text
+                Haptics.play(.success)   // as a tap on the row and Copy Chat Info
 #if DEBUG
                 DebugHooks.recordText(text, as: "info-copy.txt")
 #endif

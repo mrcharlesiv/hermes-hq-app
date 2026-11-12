@@ -1362,7 +1362,7 @@ private struct TaskCallout: View {
                     Text(long && !open ? String(detail.prefix(180)) + "…" : detail)
                         .font(Font.hq(.subheadline)).foregroundStyle(Color.hqLabel)
                     if long {
-                        Button(open ? "Show Less" : "Show More") { open.toggle() }
+                        Button(open ? "Show Less" : "Show More") { Haptics.play(.selection); open.toggle() }
                             .font(Font.hq(.footnote).weight(.semibold)).tint(tone).buttonStyle(.borderless)
                     }
                 }
@@ -1426,7 +1426,7 @@ struct FoldedMarkdown: View {
             AttributedTextView(text: attributed, maxLines: open ? 0 : lines)
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             if open || AttributedTextView.exceeds(attributed, lines: lines, width: width) {
-                Button(open ? "Show Less" : "Show More") { HQMotion.withAnimation(.snappy) { open.toggle() } }
+                Button(open ? "Show Less" : "Show More") { Haptics.play(.selection); HQMotion.withAnimation(.snappy) { open.toggle() } }
                     .font(Font.hq(.footnote).weight(.semibold))
                     .buttonStyle(.borderless)
             }

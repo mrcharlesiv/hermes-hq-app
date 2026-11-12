@@ -185,7 +185,7 @@ struct LogLineRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 2)
             .contentShape(Rectangle())
-            .onTapGesture { if line.count > 120 { whole.toggle() } }
+            .onTapGesture { if line.count > 120 { Haptics.play(.selection); whole.toggle() } }
             // A long line is a button to VoiceOver too (UX study #170).
             .accessibilityAddTraits(line.count > 120 ? .isButton : [])
             .accessibilityHint(line.count > 120 ? (whole ? "Shows the first lines" : "Shows the whole line") : "")

@@ -369,6 +369,18 @@ extension Bot {
     }
 }
 
+extension Head {
+    /// [bot-colour] The message colour a face gives its bot's chat: its accent, as the line beside its chats is
+    /// (`Bot.chatsTint`). An ink face is drawn black, so its chat is black too, with white text (owner 2026-11-11: "A
+    /// black bot face isn't showing a black chat bubble"; in dark it is deepened as any picked colour is). A paper
+    /// face is drawn white, so its chat gets the quiet grey pill.
+    var messageColour: MessageColour {
+        if color == .ink { return .custom(HeadTones.ink.hex) }
+        if color == .paper { return .preset(.graphite) }
+        return HeadTones.tones[color].map { .custom($0.accent) } ?? .preset(.graphite)
+    }
+}
+
 // MARK: - Settings › Appearance › Chats Under Bots
 
 /// [chats-under] The style's page: a preview of a bot's chats drawn in it, then the five styles.

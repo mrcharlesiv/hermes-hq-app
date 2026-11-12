@@ -2,12 +2,84 @@
 // UIKit re-resolves dynamic colours (views, layers drawn in draw(_:), attributed strings) when it changes.
 
 import UIKit
+import os
 
 nonisolated struct ThemeGenerationTrait: UITraitDefinition {
     static let defaultValue = 0
     static let affectsColorAppearance = true
     static let name = "hqThemeGeneration"
     static let identifier = "com.charlesmcdowell.hermeshq.themeGeneration"
+}
+
+/// [bot-colour] The colour a chat paints your messages with over the theme's (`BotMessageColour`): set on a chat's
+/// screen, so everything drawn in it (bubbles, their text, memos, reactions) resolves to it. nil: the theme's.
+/// The value is a plain number (0: none), as the theme's generation is: a named colour's place in its list, or a
+/// custom colour's `RRGGBB` with bit 32 set.
+nonisolated struct ChatColourTrait: UITraitDefinition {
+    static let defaultValue: UInt64 = 0
+    static let affectsColorAppearance = true
+    static let name = "hqChatColour"
+    static let identifier = "com.charlesmcdowell.hermeshq.chatColour"
+
+    static func code(_ colour: MessageColour?) -> UInt64 {
+        switch colour {
+        case .preset(let preset)?: UInt64((MessageColour.Preset.allCases.firstIndex(of: preset) ?? 0) + 1)
+        case .custom(let hex)?: 1 << 32 | UInt64(hex & 0xFFFFFF)
+        case .theme?, .botFace?, nil: 0
+        }
+    }
+
+    static func colour(_ code: UInt64) -> MessageColour? {
+        if code == 0 { return nil }
+        if code & (1 << 32) != 0 { return .custom(UInt32(code & 0xFFFFFF)) }
+        let presets = MessageColour.Preset.allCases
+        return code <= UInt64(presets.count) ? .preset(presets[Int(code) - 1]) : nil
+    }
+
+    /// Sets or clears the override on a view or a screen; false where it already said so. Reading an override that
+    /// was never set is an error in UIKit (it took the Mac app down a few seconds after a chat opened), so this asks
+    /// `contains` first.
+    @MainActor static func set(_ colour: MessageColour?, on overrides: inout UITraitOverrides) -> Bool {
+        let next = code(colour)
+        let now = overrides.contains(ChatColourTrait.self) ? overrides[ChatColourTrait.self] : 0
+        guard now != next else { return false }
+        if next == 0 { overrides.remove(ChatColourTrait.self) } else { overrides[ChatColourTrait.self] = next }
+        return true
+    }
+
+    /// The tokens a message colour changes (`ThemeResolver.paintMessage`).
+    static func paints(_ token: KeyPath<ThemeTokens, RGBA>) -> Bool {
+        token == \ThemeTokens.meBubble || token == \ThemeTokens.meText || token == \ThemeTokens.meTime || token == \ThemeTokens.chosenRow
+    }
+}
+
+/// [bot-colour] A theme's tokens with a chat's own message colour painted over them, kept by theme generation, mode
+/// and colour (a chat resolves these for every bubble).
+nonisolated enum ChatColours {
+    private struct Key: Hashable {
+        var generation: Int
+        var dark: Bool
+        var high: Bool
+        var colour: MessageColour
+    }
+    private static let cache = OSAllocatedUnfairLock(initialState: [Key: ThemeTokens]())
+
+    static func tokens(generation: Int, dark: Bool, high: Bool, colour: MessageColour) -> ThemeTokens {
+        let key = Key(generation: generation, dark: dark, high: high, colour: colour)
+        if let hit = cache.withLock({ $0[key] }) { return hit }
+        let set = ThemeTable.set(generation: generation)
+        var tokens = set.isStandardLook && high
+            ? (dark ? ThemedColor.increasedDark : ThemedColor.increasedLight)
+            : set.tokens(dark: dark, increaseContrast: high)
+        // The Desktop Look keeps its own boxes. A skin with one look is painted in the mode its page is.
+        if !set.state.desktopLook { ThemeResolver.paintMessage(&tokens, colour, dark: tokens.page.labL < 50) }
+        let painted = tokens
+        cache.withLock { cache in
+            if cache.count > 64 { cache.removeAll() }
+            cache[key] = painted
+        }
+        return painted
+    }
 }
 
 nonisolated extension RGBA {
@@ -18,11 +90,16 @@ nonisolated enum ThemedColor {
     /// A dynamic colour that reads one token of the theme its trait collection belongs to. `@Sendable`: SwiftUI
     /// resolves colours off the main thread.
     static func make(_ token: KeyPath<ThemeTokens, RGBA> & Sendable) -> UIColor {
-        UIColor { @Sendable traits in
+        let painted = ChatColourTrait.paints(token)
+        return UIColor { @Sendable traits in
             let dark = traits.userInterfaceStyle == .dark
             // [a11y] Increase Contrast (spec 3x-a11y §5.2): the standard look has its own stronger values; the Desktop
             // Look draws its High Contrast mixes (ThemeContrast). A picked skin keeps its own (the Theme page says so).
             let high = traits.accessibilityContrast == .high || HQAccessibility.overrides.contrast
+            // [bot-colour] In a chat with a colour of its own, your messages are that colour.
+            if painted, let colour = ChatColourTrait.colour(traits[ChatColourTrait.self]) {
+                return ChatColours.tokens(generation: traits[ThemeGenerationTrait.self], dark: dark, high: high, colour: colour)[keyPath: token].uiColor
+            }
             // [perf] Only the one RGBA leaves the lock, not a copy of the whole set per resolve (nil: the standard
             // look under Increase Contrast, read outside the lock).
             let rgba: RGBA? = ThemeTable.withSet(generation: traits[ThemeGenerationTrait.self]) { set in

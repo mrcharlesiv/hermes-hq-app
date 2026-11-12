@@ -92,6 +92,8 @@ nonisolated enum SettingsSearch {
         .init(id: "app:density", label: "Density", context: "Theme", keywords: ["compact", "dense", "smaller rows", "fit more", "ui scale", "zoom", "smaller text"], target: .root("theme")),
         // [theme-pages] Rows of their own beside Theme (they were its tabs); a background opens its own page.
         .init(id: "app:chat-bubbles", label: "Chat Bubbles", context: "Appearance", keywords: ["bubble corners", "rounded corners", "message corners", "glass bubbles", "tinted bubbles"], target: .root("chat-bubbles")),
+        // [message-colour] On Chat Bubbles; "color" as most people type it.
+        .init(id: "app:message-colour", label: "Message Colour", context: "Chat Bubbles", keywords: ["color", "message color", "bubble colour", "bubble color", "my messages", "blue", "graphite", "custom colour"], target: .root("chat-bubbles")),
         .init(id: "app:app-background", label: "App Background", context: "Backgrounds", keywords: ["wallpaper", "background picture", "page picture"], target: .root("background:app")),
         .init(id: "app:chat-background", label: "Chat Background", context: "Backgrounds", keywords: ["wallpaper", "background picture", "chat picture"], target: .root("background:chats")),
         .init(id: "app:backgrounds", label: "Backgrounds", context: "Appearance", keywords: ["wallpapers", "pictures"], target: .root("backgrounds")),   // [theme-pages] after its rows: "app background" finds the row first

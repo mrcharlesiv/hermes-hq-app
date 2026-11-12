@@ -235,26 +235,33 @@ final class TaskIdeasStore {
     }
 
     /// Undo a dismiss: after the dismiss has landed (one that failed has already put the idea back).
-    func restore(_ idea: TaskIdea) async {
-        if let pending = dismissing[idea.id], await !pending.value { return }
+    /// False when it couldn't come back (the notice says why).
+    @discardableResult
+    func restore(_ idea: TaskIdea) async -> Bool {
+        if let pending = dismissing[idea.id], await !pending.value { return true }   // the dismiss never landed
         do {
             try await api.restoreIdea(idea.id)
             decided.remove(idea.id)
             await refresh(force: true)
+            return true
         } catch {
             onNotice?("Couldn’t bring it back. \(PagesREST.reason(error))")
+            return false
         }
     }
 
     /// Look Now; the page says Looking… and reads again every few seconds until the look answers (ten minutes at most).
-    func lookNow() async {
+    @discardableResult
+    func lookNow() async -> Bool {
         do {
             _ = try await api.lookForIdeas()
             if var shownPage = page { shownPage.looking = true; page = shownPage; onChange?() }
             AppLog.note("tasks", "ideas look asked for")
             poll()
+            return true
         } catch {
             onNotice?("Couldn’t look now. \(PagesREST.reason(error))")
+            return false
         }
     }
 

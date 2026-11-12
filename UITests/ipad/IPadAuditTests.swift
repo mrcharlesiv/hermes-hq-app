@@ -42,7 +42,7 @@ final class IPadAuditTests: IPadTestCase {
 
         // Hover and secondary click on a list row.
         app.buttons["tab-bots"].tap()
-        let ivy = app.cells["bot-row-ivy"]
+        let ivy = IPad.otherBot(app)
         XCTAssertTrue(ivy.waitForExistence(timeout: 6))
         ivy.hover()
         Thread.sleep(forTimeInterval: 0.8)
@@ -61,8 +61,16 @@ final class IPadAuditTests: IPadTestCase {
         // reached iPadOS instead of the app and opened the system's Settings. Let the launch settle, press through
         // IPad.command, and if the app is no longer in front bring it back and press again.
         Thread.sleep(forTimeInterval: 2.0)
+        // [ipad-polish] A window the test has not touched yet does not have the keyboard on the simulator: the key went
+        // to iPadOS, which opened its own Settings app (the picture this test took, 2026-11-11). A tap on the tab that
+        // is already on show gives the window the keys and changes nothing.
+        short.buttons["tab-bots"].firstMatch.tap()
+        Thread.sleep(forTimeInterval: 0.6)
+        IPad.shot(short, "pointer-before-settings", in: self)
         IPad.command(short, ",")
-        let row = short.descendants(matching: .any)["settings.notifications"]
+        // [ipad-polish] Appearance's row: Notifications is now far enough down the short window that its row is not
+        // made until the list scrolls.
+        let row = short.descendants(matching: .any)["settings.appearance"].firstMatch
         if !row.waitForExistence(timeout: 8) {
             IPad.shot(short, "pointer-settings-not-open", in: self)
             print("IPAD-NOTE Command-comma did not open the app's Settings on the first press (app state \(short.state.rawValue))")
@@ -139,10 +147,22 @@ final class IPadAuditTests: IPadTestCase {
             XCTAssertTrue(task.waitForExistence(timeout: 10), "the board shows tasks")
             both("kanban-board")
             task.tap()
-            XCTAssertTrue(app.staticTexts["kanban.task.title"].waitForExistence(timeout: 8), "the task opens")
+            let title = app.staticTexts["kanban.task.title"]
+            XCTAssertTrue(title.waitForExistence(timeout: 8), "the task opens")
             IPad.shot(app, "audit-kanban-task", in: self)
             XCTAssertEqual(app.state, .runningForeground)
-            if !IPad.stopOrClose(app, "task sheet", done: { !app.staticTexts["kanban.task.title"].exists }) {
+            if IPad.isPad {
+                // [ipad-polish] In two panes the task is the right pane's page, beside the list, and its row is marked.
+                let list = app.collectionViews["kanban.list"]
+                XCTAssertGreaterThan(title.frame.minX, list.frame.maxX - 1, "the task is in the right pane, not a sheet")
+                XCTAssertFalse(IPad.placeholder(app).exists, "the placeholder is gone")
+                XCTAssertTrue(IPad.waitUntil(timeout: 5) { task.isSelected }, "the open task's row is marked")
+                IPad.toggleNarrow(app)
+                XCTAssertTrue(IPad.waitUntil(timeout: 6) { title.exists && !IPad.shows(list) }, "narrow, the task covers the list")
+                IPad.shot(app, "audit-kanban-task-phone", in: self)
+                IPad.toggleNarrow(app)
+                XCTAssertTrue(IPad.waitUntil(timeout: 6) { title.exists && IPad.shows(list) }, "wide again, the task is back beside the list")
+            } else if !IPad.stopOrClose(app, "task sheet", done: { !title.exists }) {
                 let close = app.buttons["Close"].firstMatch.exists ? app.buttons["Close"].firstMatch : app.buttons["Done"].firstMatch
                 if close.exists { close.tap() } else { IPad.back(app) }
             }

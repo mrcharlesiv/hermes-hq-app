@@ -254,7 +254,17 @@ nonisolated struct PluginInfo: Sendable, Hashable, Identifiable {
     var schema: [PluginField]
     /// [find-plugins] The Hermes catalog entry it was installed from (`catalog_name`); nil for every other source.
     var catalogName: String? = nil
+    /// [plugin-updates] What a Git install's update moves to (`update_target`: a commit, or a feed's version).
+    var updateTarget: String? = nil
     var id: String { name }
+
+    /// [plugin-updates] The version an update brings, as words: the catalog's version, else a short commit.
+    var newVersion: String? {
+        if let catalogVersion { return catalogVersion }
+        guard let target = catalogSha ?? updateTarget else { return nil }
+        let hex = target.count >= 12 && target.allSatisfy(\.isHexDigit)
+        return hex ? String(target.prefix(7)) : target
+    }
 
     var isKanban: Bool { name == "kanban" }
     var canUninstall: Bool { source == "user" || source == "git" }
@@ -278,7 +288,7 @@ nonisolated struct PluginInfo: Sendable, Hashable, Identifiable {
                                choices: (field["choices"]?.array ?? []).compactMap(\.string), env: RosterText.trimmed(field["env"]),
                                hasValue: field["has_value"]?.bool ?? false)
         }
-        return PluginInfo(name: name, key: RosterText.trimmed(row["key"]), version: RosterText.text(row["version"]),
+        var info = PluginInfo(name: name, key: RosterText.trimmed(row["key"]), version: RosterText.text(row["version"]),
                           description: RosterText.text(row["description"]), source: RosterText.trimmed(row["source"]) ?? "",
                           enabled: RosterText.trimmed(row["status"]) == "enabled", hasDesktopHalf: row["has_desktop_half"]?.bool ?? false,
                           servers: (row["servers"]?.array ?? []).compactMap { server in
@@ -288,6 +298,8 @@ nonisolated struct PluginInfo: Sendable, Hashable, Identifiable {
                           },
                           updateAvailable: row["update_available"]?.bool ?? false, catalogVersion: RosterText.trimmed(row["catalog_version"]),
                           catalogSha: RosterText.trimmed(row["catalog_sha"]), schema: schema, catalogName: RosterText.trimmed(row["catalog_name"]))
+        info.updateTarget = RosterText.trimmed(row["update_target"])
+        return info
     }
 }
 
@@ -340,6 +352,10 @@ nonisolated struct PluginResult: Sendable, Hashable {
     var warnings: [String]
     var consentRequired: Bool
     var deltaLines: [String]
+    /// [plugin-updates] Hermes's security scan stopped an update (nothing changed).
+    var scanBlocked = false
+    /// [plugin-updates] An update that found nothing newer.
+    var unchanged = false
 
     var needsRestart: Bool { restartRequired && !gatewayReloaded }
 
@@ -347,6 +363,7 @@ nonisolated struct PluginResult: Sendable, Hashable {
         PluginResult(ok: value["ok"]?.bool ?? false, name: RosterText.trimmed(value["plugin_name"]) ?? RosterText.trimmed(value["name"]),
                      restartRequired: value["restart_required"]?.bool ?? false, gatewayReloaded: value["gateway_reloaded"]?.bool ?? false,
                      missingEnv: (value["missing_env"]?.array ?? []).compactMap(\.string), warnings: (value["warnings"]?.array ?? []).compactMap(\.string),
-                     consentRequired: value["consent_required"]?.bool ?? false, deltaLines: (value["delta_lines"]?.array ?? []).compactMap(\.string))
+                     consentRequired: value["consent_required"]?.bool ?? false, deltaLines: (value["delta_lines"]?.array ?? []).compactMap(\.string),
+                     scanBlocked: value["scan_blocked"]?.bool ?? false, unchanged: value["unchanged"]?.bool ?? false)
     }
 }

@@ -37,7 +37,8 @@ the next launch). A call or Siri still pauses it (`pausedNotice(.interrupted)`),
   words, a 22 % black wash, `.colorScheme(.dark)`), the same as a reply's card (3x-presence.md §17.7). Build 404 drew the
   default black words on the Lock Screen's black, a blank card; until 2026-10-31 it was a dark card of its own (owner:
   "needs to be Liquid Glass not black"). The clock's range ends 24 h after the start, not at
-  `distantFuture` (a timer's text is as wide as its longest value), and sits leading, 64 pt at most. Dynamic Island: expanded (name, clock, title,
+  `distantFuture` (a timer's text is as wide as its longest value: since 2026-11-11 it ends at the next digit,
+  `LiveTimerSpan`, 3x-presence.md §17, and shrinks rather than be cut), and sits leading, 64 pt at most. Dynamic Island: expanded (name, clock, title,
   buttons), compact (symbol, clock), minimal (symbol). Green while listening, the accent while speaking, grey while
   waiting, red when muted.
 - The buttons are `LiveActivityIntent`s (`TalkMuteIntent`, `TalkEndIntent`, not shown in Shortcuts). They run in the

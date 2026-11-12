@@ -116,16 +116,28 @@ struct OnboardingGateTests {
         #expect(inSheet.steps == [.connect, .hermes, .where])
         inSheet.back(); inSheet.back()
         #expect(inSheet.steps == [.connect])
+
+        // The whole first run as it is tapped (2026-11-11): the question, the message, the computers, the three steps.
+        let whole = flow()
+        for step in [OnboardingStep.start, .hermes, .where, .mac1, .mac2, .mac3, .connect] { whole.go(step) }
+        #expect(whole.steps == [.welcome, .start, .hermes, .where, .mac1, .mac2, .mac3, .connect])
+        whole.go(.start)
+        whole.go(.getHermes)
+        #expect(whole.steps == [.welcome, .start, .getHermes])
+        whole.go(.hermes)                                    // "I’ve Installed Hermes"
+        #expect(whole.steps == [.welcome, .start, .getHermes, .hermes])
+        whole.back(); whole.back()
+        #expect(whole.steps == [.welcome, .start])
     }
 
     @Test func aStepIsOnTheStackAtMostOnce() {
         let flow = flow()
-        let walk: [OnboardingStep] = [.hermes, .where, .mac1, .mac2, .mac3, .connect, .hermes, .where, .linux1, .linux2, .linux3,
+        let walk: [OnboardingStep] = [.start, .getHermes, .start, .hermes, .where, .mac1, .mac2, .mac3, .connect, .hermes, .where, .linux1, .linux2, .linux3,
                                       .connect, .hermes, .where, .other1, .other2, .manual, .connect, .hermes, .connect, .welcome]
         for _ in 0..<50 {
             for step in walk {
                 flow.go(step)
-                #expect(Set(flow.steps).count == flow.steps.count && flow.steps.count <= 7, "\(flow.steps)")
+                #expect(Set(flow.steps).count == flow.steps.count && flow.steps.count <= 8, "\(flow.steps)")
             }
         }
         #expect(flow.steps == [.welcome])
@@ -207,10 +219,23 @@ struct OnboardingGateTests {
         #expect(flow.formModel.password.isEmpty, "the password is never kept")
     }
 
-    @Test func helpLinkGoesToLetHermes() {
+    /// "Need help connecting?": the first question from a form that came first, the setup message once the person
+    /// has been to it.
+    @Test func helpLinkGoesToTheQuestionOrBackToTheMessage() {
         let flow = flow(entry: .form)
         flow.formModel.onHelp?()
-        #expect(flow.current == .hermes)
+        #expect(flow.current == .start && flow.steps == [.welcome, .connect, .start])
+        flow.go(.hermes); flow.go(.connect)                  // On my computer, I Have the Address: back on the form
+        #expect(flow.steps == [.welcome, .connect])
+        flow.formModel.onHelp?()
+        #expect(flow.steps == [.welcome, .connect, .hermes], "the message again, not the question")
+        let first = self.flow()
+        for step in [OnboardingStep.start, .hermes, .connect] { first.go(step) }
+        first.formModel.onHelp?()
+        #expect(first.steps == [.welcome, .start, .hermes], "back to the message it came from")
+        let inSheet = self.flow(sheet)
+        inSheet.formModel.onHelp?()
+        #expect(inSheet.steps == [.connect, .start])
         let demo = SignInModel(driver: FlowDriver(), onSignedIn: {})
         #expect(demo.onHelp == nil, "a form with no guide shows no help link")
     }

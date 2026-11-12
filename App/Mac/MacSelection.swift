@@ -38,7 +38,8 @@ import UIKit
     /// The accent, soft enough that the row's own label and grey text still read on it (the rows draw their own
     /// colours; a Mac's white-on-accent would need every row redrawn).
     static let accent = UIColor { traits in
-        HQPalette.tint.resolvedColor(with: traits).withAlphaComponent(traits.userInterfaceStyle == .dark ? 0.42 : 0.24)
+        // [message-colour] The message colour where one is picked (owner 2026-11-11), else the tint.
+        HQPalette.chosenRow.resolvedColor(with: traits).withAlphaComponent(traits.userInterfaceStyle == .dark ? 0.42 : 0.24)
     }
     /// The unfocused mark and a press: the sidebar's grey.
     static let grey = UIColor { traits in

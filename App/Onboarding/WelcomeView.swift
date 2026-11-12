@@ -60,7 +60,7 @@ struct WelcomeView: View {
         // screens do: at the largest text sizes the words fill several screens, and the buttons must not hide below them.
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 12) {
-                GuideActionButton(title: OnboardingCopy.Welcome.start, id: "onboarding.welcome.start") { go(.hermes) }
+                GuideActionButton(title: OnboardingCopy.Welcome.start, id: "onboarding.welcome.start") { go(.start) }
                 GuideActionButton(title: OnboardingCopy.Welcome.haveAddress, id: "onboarding.welcome.address", prominent: false) { go(.connect) }
             }
             .frame(maxWidth: 440)

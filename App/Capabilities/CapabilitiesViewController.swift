@@ -291,15 +291,17 @@ struct WholeLabelSegments: View {
     @Binding var selected: Int
     /// [capabilities] Report the width every whole label needs (for `ViewThatFits`); otherwise take what is offered.
     var fitsWhole = false
+    /// A tick on a new pick (false: the caller plays its own).
+    var ticks = true
 
     var body: some View {
         let _ = Theme.touch()         // follows a live toggle of the look
         if Theme.isDesktop {
             DesktopSegmentStrip(options: titles.enumerated().map { ($0.element, $0.offset) }, selection: $selected,
-                                wholeLabels: true)
+                                wholeLabels: true, ticks: ticks)
                 .accessibilityElement(children: .contain)
         } else {
-            WholeLabelSegmentsControl(titles: titles, selected: $selected, fitsWhole: fitsWhole)
+            WholeLabelSegmentsControl(titles: titles, selected: $selected, fitsWhole: fitsWhole, ticks: ticks)
         }
     }
 }
@@ -308,6 +310,7 @@ struct WholeLabelSegmentsControl: UIViewRepresentable {
     var titles: [String]
     @Binding var selected: Int
     var fitsWhole = false
+    var ticks = true
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UISegmentedControl, context: Context) -> CGSize? {
         let font = (uiView as? WholeLabelSegmentedControl)?.drawnFont ?? HQFont.segmentedDefault
@@ -323,7 +326,7 @@ struct WholeLabelSegmentsControl: UIViewRepresentable {
         control.apportionsSegmentWidthsByContent = true
         control.addAction(UIAction { [weak control] _ in
             guard let control else { return }
-            Haptics.play(.selection)
+            if context.coordinator.ticks { Haptics.play(.selection) }
             context.coordinator.selected.wrappedValue = control.selectedSegmentIndex
         }, for: .valueChanged)
         control.setContentHuggingPriority(.required, for: .vertical)
@@ -333,6 +336,7 @@ struct WholeLabelSegmentsControl: UIViewRepresentable {
 
     func updateUIView(_ control: UISegmentedControl, context: Context) {
         context.coordinator.selected = $selected
+        context.coordinator.ticks = ticks
         if control.selectedSegmentIndex != selected { control.selectedSegmentIndex = selected }
         // [ui-sizing] A UI Scale change redraws the strip (`WholeLabelSegments` reads the theme): the titles follow it.
         let before = control.titleTextAttributes(for: .normal)?[.font] as? UIFont
@@ -340,11 +344,12 @@ struct WholeLabelSegmentsControl: UIViewRepresentable {
         if (control.titleTextAttributes(for: .normal)?[.font] as? UIFont) !== before { control.setNeedsLayout(); control.invalidateIntrinsicContentSize() }
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator(selected: $selected) }
+    func makeCoordinator() -> Coordinator { Coordinator(selected: $selected, ticks: ticks) }
 
     final class Coordinator {
         var selected: Binding<Int>
-        init(selected: Binding<Int>) { self.selected = selected }
+        var ticks: Bool
+        init(selected: Binding<Int>, ticks: Bool) { self.selected = selected; self.ticks = ticks }
     }
 }
 

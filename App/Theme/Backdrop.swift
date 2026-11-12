@@ -16,6 +16,8 @@
 //   own Dim and Blur. Picking a picture for chats, or None, turns it off.
 // - Kept on this device only: a photo is one JPEG (2560 px at most on its long side, no metadata) in Application Support
 //   (chat-background/, app-background/), plus the `hqn.chatBackground.*` and `hqn.appBackground.*` keys. Never sent.
+// - [backdrop-still] Two pages with the same picture keep it still between them as one slides over the other
+//   (`BackdropStill`): one wall behind the app, not a copy per page.
 // - DEBUG: `-HQDebugChatBackground` / `-HQDebugAppBackground <abs path | picture id>` set them at launch, with `…Dim
 //   <percent>` and `…Blur YES`; `-HQDebugChatBackgroundSame YES|NO` (App/Debug/ThemeDebugHooks.swift).
 
@@ -531,8 +533,19 @@ final class BackdropView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         let frame = alignedTo.map { $0.convert($0.bounds, to: self) } ?? bounds
-        imageView.frame = frame
+        // Bounds and centre, not the frame: the picture may be held still by a transform (`BackdropStill`).
+        imageView.bounds = CGRect(origin: .zero, size: frame.size)
+        imageView.center = CGPoint(x: frame.midX, y: frame.midY)
         veil.frame = frame.union(bounds)
+    }
+
+    /// The picture this view has up for its traits (nil with none on show): two pages with the same one keep it still
+    /// between them.
+    var shownPicture: BackdropPicture? { isHidden ? nil : backdrop.picture(for: traitCollection) }
+
+    /// How far the picture is drawn from its place on the page (`BackdropStill`).
+    var pictureShift: CGPoint = .zero {
+        didSet { imageView.transform = CGAffineTransform(translationX: pictureShift.x, y: pictureShift.y) }
     }
 
     override func didMoveToWindow() {
@@ -544,6 +557,7 @@ final class BackdropView: UIView {
             inSheet = controller?.presentingViewController != nil
         }
         refresh()
+        BackdropStill.follow(self)
     }
 
     func refresh() {
@@ -570,6 +584,132 @@ final class BackdropView: UIView {
         if was != !isHidden { onShowChange?(!isHidden) }
     }
 }
+
+/// [backdrop-still] One wall behind the app (owner 2026-11-11: the same picture on the app and on chats, "as you're
+/// swiping through … it doesn't look like we designed that feature to work for the same background for both"). Every
+/// page draws its own copy of the picture, so a push or a swipe back slid one copy over the other. When the page
+/// leaving and the page arriving show the same picture (the same one, blurred or not, at the same size), each copy is
+/// moved against its page's slide, so the picture stays where it is on screen and only the pages' contents move over
+/// it. Different pictures still slide with their pages, as cards do.
+///
+/// The system moves the pages with a spring of its own that an animation beside the transition doesn't share (that one
+/// is linear: the picture drifted up to 58 pt mid-slide), and a swipe back follows the finger. So each frame the
+/// picture is put back by as far as its page is from its place just then.
+@MainActor final class BackdropStill: NSObject {
+    private static var running: BackdropStill?
+    private let pages: [(page: UIView, pictures: [BackdropView])]
+    private weak var container: UIView?
+    /// Where a page stands when no slide runs, in the container.
+    private let rest: CGPoint
+    private var link: CADisplayLink?
+    private weak var coordinator: AnyObject?
+
+    /// Called by a page's picture as it comes on screen: a slide between two pages starts with the arriving one.
+    static func follow(_ view: BackdropView) {
+        #if DEBUG
+        // `-HQDebugBackdropSlides YES`: as before, each page's picture slides with it (the before picture).
+        if UserDefaults.standard.bool(forKey: "HQDebugBackdropSlides") { return }
+        #endif
+        let owner = sequence(first: view as UIResponder, next: \.next).first { $0 is UIViewController } as? UIViewController
+        guard let coordinator = owner?.transitionCoordinator, coordinator.isAnimated, running?.coordinator !== coordinator,
+              let from = coordinator.viewController(forKey: .from)?.viewIfLoaded,
+              let to = coordinator.viewController(forKey: .to)?.viewIfLoaded, from !== to,
+              from.bounds.size == to.bounds.size, from.bounds.width > 0 else { return }
+        let leaving = pictures(in: from), arriving = pictures(in: to)
+        guard let picture = arriving.first?.shownPicture, !leaving.isEmpty,
+              (leaving + arriving).allSatisfy({ $0.shownPicture == picture }) else { return }
+        running?.end()
+        let container = coordinator.containerView
+        let still = BackdropStill(pages: [(from, leaving), (to, arriving)], container: container,
+                                  rest: from.convert(CGPoint.zero, to: container), coordinator: coordinator)
+        running = still
+        coordinator.animate(alongsideTransition: { _ in still.begin() }, completion: { _ in still.end() })
+    }
+
+    private init(pages: [(page: UIView, pictures: [BackdropView])], container: UIView, rest: CGPoint, coordinator: AnyObject) {
+        self.pages = pages
+        self.container = container
+        self.rest = rest
+        self.coordinator = coordinator
+    }
+
+    /// The pages stand where the slide starts.
+    private func begin() {
+        guard link == nil, Self.running === self else { return }
+        hold(presented: false)
+        let link = CADisplayLink(target: self, selector: #selector(tick))
+        link.add(to: .main, forMode: .common)
+        self.link = link
+    }
+
+    @objc private func tick() { hold(presented: true) }
+
+    private func hold(presented: Bool) {
+        guard let container else { return end() }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (page, pictures) in pages where page.window != nil {
+            let at: CGPoint = if presented, let shown = page.layer.presentation(), let within = container.layer.presentation() {
+                shown.convert(CGPoint.zero, to: within)
+            } else {
+                page.convert(CGPoint.zero, to: container)
+            }
+            let shift = CGPoint(x: rest.x - at.x, y: rest.y - at.y)
+            for picture in pictures where picture.pictureShift != shift { picture.pictureShift = shift }
+        }
+        CATransaction.commit()
+        #if DEBUG
+        BackdropStillProbe.note(pages.flatMap(\.pictures))
+        #endif
+    }
+
+    private func end() {
+        link?.invalidate()
+        link = nil
+        pages.flatMap(\.pictures).forEach { $0.pictureShift = .zero }
+        if Self.running === self { Self.running = nil }
+        #if DEBUG
+        BackdropStillProbe.done()
+        #endif
+    }
+
+    private static func pictures(in view: UIView) -> [BackdropView] {
+        var found: [BackdropView] = []
+        func look(_ view: UIView) {
+            if let picture = view as? BackdropView { if picture.showsPicture { found.append(picture) }; return }
+            view.subviews.forEach(look)
+        }
+        look(view)
+        return found
+    }
+}
+
+#if DEBUG
+/// `-HQDebugBackdropStill YES`: logs how far the pictures were from still on screen through a slide (0 is still), as
+/// the layers stood when each frame was set.
+@MainActor enum BackdropStillProbe {
+    private static var worst: CGFloat = 0, frames = 0
+
+    static func note(_ views: [BackdropView]) {
+        guard UserDefaults.standard.bool(forKey: "HQDebugBackdropStill") else { return }
+        frames += 1
+        for view in views {
+            guard let image = view.subviews.first, view.window != nil else { continue }
+            var x = image.layer.frame.minX
+            var layer = image.layer.superlayer
+            while let up = layer { x += (up.presentation() ?? up).frame.minX - up.bounds.minX; layer = up.superlayer }
+            worst = max(worst, abs(x))
+        }
+    }
+
+    static func done() {
+        guard UserDefaults.standard.bool(forKey: "HQDebugBackdropStill") else { return }
+        NSLog("[backdrop-still] slide done: %d frames, furthest from still %.1f pt", frames, worst)
+        worst = 0
+        frames = 0
+    }
+}
+#endif
 
 nonisolated(unsafe) private var pageBackdropKey: UInt8 = 0
 
@@ -727,6 +867,7 @@ struct PageBackdropLayer: UIViewRepresentable {
                 Task { @MainActor in
                     do {
                         try await (place == .app ? Backdrop.app : Backdrop.chats).setPhoto(photo)
+                        Haptics.play(.success)   // your own photo is the background (a preset tile ticks as it's picked)
                         HQAnnounce.say(place == .app ? "App background set." : "Chat background set.")
                     } catch {
                         AppLog.trace("backdrop", "\(place.rawValue) background not stored: \(error)")

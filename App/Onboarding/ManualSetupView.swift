@@ -42,8 +42,8 @@ struct ManualSetupView: View {
                 GuideParagraph(copy.text3, font: .subheadline)
                 GuideBlock(text: setup.start, id: "onboarding.manual.start")
             }
+        } footer: {
             GuideActionButton(title: copy.signIn, id: "onboarding.manual.next") { go(.connect) }
-                .padding(.top, 8)
         }
     }
 

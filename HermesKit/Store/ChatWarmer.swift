@@ -162,13 +162,18 @@ final class ChatWarmer {
             // A finger-down read of this chat is out already (or just landed and was saved).
             if HistoryFlights.shared.has(HistoryFlights.Key(account: account.id, profile: bot.id, storedId: stored)) { continue }
             let request = HistoryRequest(storedSessionId: stored, profile: bot.id, limit: Self.rowsPerTail)
-            guard let (_, folded, _) = try? await HistoryAPI.fetchAndFold(client: client, request: request, features: features, cut: true)
+            guard let (page, folded, _) = try? await HistoryAPI.fetchAndFold(client: client, request: request, features: features, cut: true)
             else { continue }
             guard !Task.isCancelled else { aborted = true; break }
             reads += 1
             if folded.messages.isEmpty { readAt[next.target] = next.lastActive; continue }
             guard !isOpen(bot.id) else { continue }
-            cache.save(folded.messages, meta: folded.meta, account: account.id, profile: bot.id, storedId: stored)
+            // [right-open] Joined onto the saved copy (whole turns), never 24 rows in its place.
+            await LiveChatSession.saveReadAhead(page, folded, cache: cache, client: client, account: account.id, profile: bot.id,
+                                                storedId: stored, features: features, stillWanted: { [weak self] in
+                !(self?.isOpen(bot.id) ?? true)
+            })
+            guard !Task.isCancelled else { aborted = true; break }
             readAt[next.target] = next.lastActive
         }
         // A pass that had nothing to read (the slim roster carries no chats yet) or was cut short before it read
@@ -195,7 +200,11 @@ final class ChatWarmer {
         HistoryFlights.shared.start(key, { HistoryFlights.openRead(client: client, storedId: stored, profile: bot.id) }) {
             [weak self] answer in
             guard !answer.1.messages.isEmpty, !(self?.isOpen(bot.id) ?? true) else { return }
-            cache.save(answer.1.messages, meta: answer.1.meta, account: account, profile: bot.id, storedId: stored)
+            let features = client.latestReady.flatMap { PerformanceFeatures(ready: $0) }
+            Task {
+                await LiveChatSession.saveReadAhead(answer.0, answer.1, cache: cache, client: client, account: account, profile: bot.id,
+                                                    storedId: stored, features: features, stillWanted: { !(self?.isOpen(bot.id) ?? true) })
+            }
         }
     }
 }

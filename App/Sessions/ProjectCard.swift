@@ -467,6 +467,13 @@ final class SessionHeaderCell: UICollectionViewListCell {
         super.prepareForReuse()
         caption = nil
     }
+
+    /// [sessions-collapse] "Projects" takes its own taps (it closes every project; See All, Edit): kept over the
+    /// content, which UIKit's list cell can bring back to the front as it lays out.
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        if let captionView, subviews.last !== captionView { bringSubviewToFront(captionView) }
+    }
 }
 
 /// The same piece of card in SwiftUI (the header, New Chat). `highlight`: a dragged chat is held over the project.

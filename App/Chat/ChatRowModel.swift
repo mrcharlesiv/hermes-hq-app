@@ -35,6 +35,11 @@ struct ChatRowModel {
         let messages = input.messages
         var lo = max(0, messages.count - syncMessages)
         if let oldestShown, let index = messages.firstIndex(where: { $0.id == oldestShown }) { lo = min(lo, index) }
+        // [right-open] From the start of an update group the build begins inside: the group's line is drawn by its
+        // first message, so a build of its later messages alone made no rows at all. The owner's phone, 2026-11-11: a
+        // bot's chat ending in a long run of bot-to-bot updates went blank ("No messages yet") each time older
+        // messages loaded, until the background fill reached the group's first message.
+        if lo > 0, lo < messages.count { lo = min(lo, UpdateGroups.widen(lo...lo, input: input).lowerBound) }
         allRows = ChatRowBuilder.build(input, range: lo..<messages.count).reversed()
         builtFrom = lo
         generation += 1
@@ -149,7 +154,7 @@ struct ChatRowModel {
         let rows = UpdateGroups.Rows(input)
         var first = boundary
         while first < messages.count - 1, first - boundary < UpdateGroups.reach, rows.at(first).isEmpty { first += 1 }
-        let hi = min(messages.count - 1, max(first, UpdateGroups.widen(first...first, input: input).upperBound))
+        let hi = min(messages.count - 1, max(first, UpdateGroups.widen(first...first, input: input, pagedIn: true).upperBound))
         let fresh = ChatRowBuilder.build(input, range: boundary..<(hi + 1))
         let ids = Set(messages[boundary...hi].map(\.id))
         var suffix = 0

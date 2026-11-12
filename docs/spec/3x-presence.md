@@ -1646,6 +1646,19 @@ Talk's — use `lockScreenGlass()` (TalkActivityWidget/LockScreenGlass.swift):
   (`.regular.tint(…)` drew exactly as `.regular`), so a 22 % black wash between glass and words carries the contrast:
   every line ≥ 4.97:1 in light, ≥ 6.31:1 in dark on the default wallpaper (scripts/glass-contrast.swift).
 - The Dynamic Island is unchanged: the island itself is black hardware.
+- **The island's small views always fit (owner, 2026-11-11: the timer drew "16:0…", cut, beside another app's
+  activity).** The compact timer used to sit in a fixed 64 pt box (room for "0:00:00"); when the island offered less,
+  the box overflowed and the digits were cut. Now nothing in the island's small views has a fixed width. A running
+  timer's range ends where its next digit would appear (`LiveTimerSpan`, LiveKit: "59:59", "9:59:59", "99:59:59" —
+  picked so it can't get there before the card is drawn again, by an update or by going stale), so it asks for exactly
+  the room its digits take; offered less, it draws smaller (down to half size), never cut. A live timer still
+  takes every point it is offered, though, and the island offers a lot: build 948 stretched the island across the
+  clock and the status icons (owner: "Should this really be that large?"). So its place is sized by plain hidden
+  digits it is laid over (`LiveTimer`, "00:00" / "0:00:00" from `LiveTimerSpan.widest`), and a stopped Talk clock is
+  plain text: the island is as wide as the digits and no wider. A finished one says its
+  time in short words ("16m", "1h 5m"). Talk's clock is the same. `scripts/island-shots.sh` photographs every shape
+  (each timer length, over, Talk, and beside another app's activity — `TestSupport/IslandTwin`) from
+  `-HQDebugIsland` (App/Debug/IslandDebugHook.swift): look at the sheet after any change to these views — the island's width as well as its words.
 
 ### 17.5 Builds
 

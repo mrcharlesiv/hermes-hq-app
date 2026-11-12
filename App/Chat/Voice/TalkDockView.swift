@@ -827,7 +827,7 @@ final class TalkBarView: UIView, ComposerRowDock, UIContextMenuInteractionDelega
     @objc private func copyTapped() {
         guard let text = problemDetail?() else { return }
         VoiceClipboard.copy(TalkDockState.copyText(text, events: VoiceEvents.all))
-        Haptics.play(.selection)
+        Haptics.play(.success)   // a copy, as every Copy
         HQAnnounce.say("Copied")
         // The icon says it too: a check for two seconds, then the copy icon again (a second tap starts over).
         copyButton.configuration = iconConfig("checkmark", color: ChatPalette.tint)
@@ -1050,7 +1050,7 @@ final class TalkNoticeDock: TalkGlassCard, UITextViewDelegate, ComposerRowDock {
         guard let notice else { return }
         // With the recent voice events, so a notice with no detail of its own (the meter failure) still copies what led to it.
         VoiceClipboard.copy(TalkDockState.copyText(TalkDockState.noticeText(notice), events: VoiceEvents.all))
-        Haptics.play(.selection)
+        Haptics.play(.success)   // a copy, as every Copy
         setTitles(copied: true)
         HQAnnounce.say("Copied")
         copiedTimer?.invalidate()

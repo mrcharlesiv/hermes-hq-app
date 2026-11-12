@@ -115,6 +115,7 @@ final class ShareModel {
 
     func choose(_ bot: ShareBot) {
         guard bot.canReceive, !isSending else { return }
+        if selection != bot.key { ShareHaptics.selection() }
         selection = bot.key
     }
 

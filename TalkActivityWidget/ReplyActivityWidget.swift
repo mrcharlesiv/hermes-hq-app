@@ -53,8 +53,9 @@ struct ReplyActivityWidget: Widget {
                 Image(systemName: LiveLook.symbol(attributes.subject.kind, state.phase))
                     .foregroundStyle(LiveLook.tint(state.phase, accent: attributes.accent))
             } compactTrailing: {
-                // A slot "0:00:00" fits: at 52 pt a turn past an hour drew "1:00:…" (tester, 2026-11-06).
-                LiveElapsed(state: state, stale: context.isStale, slot: 64)
+                // No box of its own: it is as wide as its digits and shrinks into whatever the island offers
+                // (LiveElapsed). A fixed 64 pt one was cut to "16:0…" when the island gave it less (owner, 2026-11-11).
+                LiveElapsed(state: state, stale: context.isStale, short: true)
             } minimal: {
                 Image(systemName: LiveLook.symbol(attributes.subject.kind, state.phase))
                     .foregroundStyle(LiveLook.tint(state.phase, accent: attributes.accent))
@@ -152,29 +153,58 @@ struct LiveCard {
 struct LiveElapsed: View {
     let state: LiveActivityContent
     var stale = false
-    /// A fixed width for the running timer, which otherwise takes all the room it's offered.
+    /// A fixed width for the running timer on the Lock Screen's card, where the name beside it gives way first.
     var slot: CGFloat? = nil
+    /// The Dynamic Island's small view: a finished one's time in its shortest words ("16m", "1h 5m").
+    var short = false
 
     var body: some View {
         if let ended = state.endedAt {
-            Text(LiveActivityContent.took(ended.timeIntervalSince(state.startedAt)))
+            let seconds = ended.timeIntervalSince(state.startedAt)
+            Text(short ? LiveActivityContent.tookShort(seconds) : LiveActivityContent.took(seconds))
                 .monospacedDigit()
                 .lineLimit(1)
+                .minimumScaleFactor(LiveLook.squeeze)
         } else if stale {
             Image(systemName: "clock.badge.questionmark")
                 .foregroundStyle(.secondary)
                 .accessibilityLabel("Not heard from lately")
         } else {
-            Text(timerInterval: state.startedAt...Date.distantFuture, countsDown: false)
-                .monospacedDigit()
-                .multilineTextAlignment(.trailing)
-                .lineLimit(1)
+            LiveTimer(startedAt: state.startedAt, alignment: .trailing)
                 .frame(width: slot, alignment: .trailing)
         }
     }
 }
 
+/// [island-fit] A running timer that is exactly as wide as its digits. Its range ends at the next digit
+/// (LiveTimerSpan), and since a live timer still takes every point it is offered — which stretched the Dynamic Island
+/// across the clock and the status icons — its size comes from plain hidden digits ("00:00") it is laid over. Offered
+/// less than that, both draw smaller, never cut.
+struct LiveTimer: View {
+    let startedAt: Date
+    var alignment: Alignment = .trailing
+
+    var body: some View {
+        let now = Date()
+        Text(LiveTimerSpan.widest(startedAt: startedAt, now: now))
+            .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(LiveLook.squeeze)
+            .hidden()
+            .overlay(alignment: alignment) {
+                Text(timerInterval: startedAt...LiveTimerSpan.end(startedAt: startedAt, now: now), countsDown: false)
+                    .monospacedDigit()
+                    .multilineTextAlignment(alignment == .leading ? .leading : .trailing)
+                    .lineLimit(1)
+                    .minimumScaleFactor(LiveLook.squeeze)
+            }
+    }
+}
+
 enum LiveLook {
+    /// [island-fit] How small the island's words may draw before they would be cut: at half size "0:00:00" needs 30 pt.
+    static let squeeze: CGFloat = 0.5
+
     static func symbol(_ kind: LiveActivitySubject.Kind, _ phase: LiveActivityContent.Phase) -> String {
         switch phase {
         case .done: return "checkmark.circle.fill"

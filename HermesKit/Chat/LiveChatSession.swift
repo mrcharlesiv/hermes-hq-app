@@ -533,16 +533,18 @@ final class LiveChatSession: ChatSessionModel {
         releaseStashedQueue()
     }
 
-    /// Paints the newest ≤24 backend rows of the cached tail (03 §4.2), or holds a stale tail ≤300 ms (§4.3).
+    /// Paints the saved copy of the chat (03 §4.2), all of it and at once.
+    ///
+    /// [right-open] Owner 2026-11-11, with a recording: "A chat MUST load the correct messages IMMEDIATELY when opened."
+    /// Two older rules are gone. Only the newest 24 rows' worth was painted, which for a chat ending in a long turn is
+    /// that one reply alone: it drew as a bubble, then as a line of updates once its neighbours loaded. And a copy
+    /// saved before the chat's last activity was held back for up to 300 ms, a blank screen meanwhile; now it shows,
+    /// and what is new joins under it when the first page lands (`landFirstPage`).
     private func paintFromCache() {
         guard let stored = storedSessionId,
               let entry = cache.loadEntry(account: account.id, profile: profile, storedId: stored) else { return }
-        if let lastActive, entry.savedAt.addingTimeInterval(1) < lastActive {
-            AppLog.trace("chat", "cache paint held for \(AppLog.tag(stored)): saved before the chat's last activity (\(entry.messages.count) rows)")
-            heldPaint = entry
-            return
-        }
-        AppLog.trace("chat", "cache paint for \(AppLog.tag(stored)): \(entry.messages.count) cached rows")
+        let behind = lastActive.map { entry.savedAt.addingTimeInterval(1) < $0 } ?? false
+        AppLog.trace("chat", "cache paint for \(AppLog.tag(stored)): \(entry.messages.count) cached rows\(behind ? ", saved before the chat's last activity" : "")")
         applyCachedPaint(entry)
     }
 
@@ -550,7 +552,7 @@ final class LiveChatSession: ChatSessionModel {
         // Only backend truth is painted (03 §7.2); local cards never come back from the cache.
         // [presence] a titled request shows its title from the first paint (the cache may hold the stored prompt)
         let saved = entry.messages.filter { !$0.isLocal }
-        let window = LiveChatSession.sentTitles.applied(to: TranscriptMerge.openWindow(saved, meta: entry.meta))
+        let window = LiveChatSession.sentTitles.applied(to: saved)
         var meta: [String: MessageMeta] = [:]
         for m in window { if let mm = entry.meta[m.id] { meta[m.id] = mm } }
         let old = messages
@@ -559,10 +561,10 @@ final class LiveChatSession: ChatSessionModel {
         applyKnownMediaSizes()                                                                                 // [attachments]
         rebuildIndex()
         cachedOlderIds = Set(window.map(\.id))            // [smooth-open] all of it is the saved copy until a read lands
-        // Earlier messages are known only when the window left saved ones out (or the copy is a shortened one); else
-        // the first page says. "Show earlier messages" flashed over a four-message chat until the gateway answered,
-        // and could page nothing in before then anyway (`loadOlder` waits for the open) (Mac polish #24).
-        hasOlder = window.count < saved.count || entry.partial
+        // Earlier messages are known only when the copy is a shortened one; else the first page says. "Show earlier
+        // messages" flashed over a four-message chat until the gateway answered, and could page nothing in before
+        // then anyway (`loadOlder` waits for the open) (Mac polish #24).
+        hasOlder = entry.partial
         if !old.isEmpty || started { scheduleFlush() } else { changes = ChangeSet() }
     }
 
@@ -778,8 +780,7 @@ final class LiveChatSession: ChatSessionModel {
             do {
                 let (page, folded, _) = try await restTask.value
                 AppLog.trace("history", "open \(AppLog.tag(stored)): first page \(page.rows.count) rows, page id \(AppLog.tag(page.sessionId)), truncated=\(page.possiblyTruncated), \(AppLog.ms(since: openStart)) ms")
-                applyFirstPage(page, folded, keepCached: true)
-                firstPage = page
+                firstPage = await landFirstPage(page, folded)
             } catch {
                 AppLog.note("history", "open \(AppLog.tag(stored)): first page failed after \(AppLog.ms(since: openStart)) ms: \(AppLog.scrub(String(describing: error)))")
                 restFailed = !fresh

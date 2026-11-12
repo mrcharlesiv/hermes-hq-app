@@ -466,11 +466,13 @@ struct SessionHeaderFold {
     /// Every chat the group holds, and how many are unread (said while closed).
     var total: Int
     var unread: Int
+    /// [sessions-collapse] What `total` counts: chats, or the closed "Projects" header's projects.
+    var unit = "chat"
     var toggle: () -> Void
 
     /// "12 chats, 3 unread": a closed group's count.
-    static func countWords(total: Int, unread: Int) -> String {
-        let chats = total == 1 ? "1 chat" : "\(total) chats"
+    static func countWords(total: Int, unread: Int, unit: String = "chat") -> String {
+        let chats = total == 1 ? "1 \(unit)" : "\(total) \(unit)s"
         return unread > 0 ? "\(chats), \(unread) unread" : chats
     }
 }
@@ -535,6 +537,8 @@ struct SessionDateHeaderView: View {
     /// so the folded projects read as their own section under Pinned.
     var caption: String? = nil
     var onEditCaption: (() -> Void)? = nil
+    /// [sessions-collapse] A tap on "Projects" closes every project to one closed "Projects" header.
+    var onFoldCaption: (() -> Void)? = nil
     /// [sessions-fresh] Group By Recent: "See All N" on Pinned's caption and on "Projects".
     var seeAll: SessionSeeAll? = nil
     /// [project-unfold] Which of the header this view draws. Under "Projects" the list draws the caption apart
@@ -716,10 +720,7 @@ struct SessionDateHeaderView: View {
             .layoutPriority(1)
             if let badge, badge > 0 { countBadge(badge) }   // [sessions-layout] New for You's count
             star
-            if let seeAll {
-                Spacer(minLength: 8)
-                seeAllButton(seeAll)
-            }
+            // [sessions-collapse] The caret straight after the name, as "Projects ⌄", ahead of a See All.
             if let fold {
                 caret(fold.collapsed)
                 if fold.collapsed {
@@ -729,6 +730,10 @@ struct SessionDateHeaderView: View {
                         .monospacedDigit()
                         .lineLimit(1)
                 }
+            }
+            if let seeAll {
+                Spacer(minLength: 8)
+                seeAllButton(seeAll)
             }
         }
         // [project-unfold] A caption's fold changes nothing up or down: its caret and closed count move on this.
@@ -751,13 +756,31 @@ struct SessionDateHeaderView: View {
     /// "Projects", as the other groups' captions are drawn, and Edit on the right (Reorder Projects…).
     private func sectionCaption(_ caption: String) -> some View {
         HStack(spacing: 8) {
-            Group {
-                if Theme.isDesktop { Text(caption) } else { Text(caption).font(Font.hq(.subheadline).weight(.semibold)) }
+            // [sessions-collapse] The name, its caret and the room after it close every project (as a group's caption
+            // closes its group); See All and Edit keep their own taps.
+            HStack(spacing: 8) {
+                Group {
+                    if Theme.isDesktop { Text(caption) } else { Text(caption).font(Font.hq(.subheadline).weight(.semibold)) }
+                }
+                .foregroundStyle(Color.hqLabel2)
+                .hqDesktopLabel(color: .hqLabel2)
+                if onFoldCaption != nil {
+                    Image(systemName: "chevron.down")
+                        .font(Font.hq(.caption).weight(.semibold))
+                        .foregroundStyle(Color.hqLabel3)
+                }
+                Spacer(minLength: 8)
             }
-            .foregroundStyle(Color.hqLabel2)
-            .hqDesktopLabel(color: .hqLabel2)
-            .accessibilityAddTraits(.isHeader)
-            Spacer(minLength: 8)
+            .frame(minHeight: Self.captionHeight)
+            .contentShape(.interaction, RaisedHitShape(above: onFoldCaption == nil ? 0 : Self.hitAbove))
+            .onTapGesture { onFoldCaption?() }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(caption)
+            .accessibilityValue(onFoldCaption == nil ? "" : "Expanded")
+            .accessibilityHint(onFoldCaption == nil ? "" : "Hides the projects.")
+            .accessibilityAddTraits(onFoldCaption == nil ? .isHeader : [.isHeader, .isButton])
+            .accessibilityAction { onFoldCaption?() }
+            .accessibilityIdentifier("sessions.projects.caption")
             if let seeAll { seeAllButton(seeAll) }
             if let onEditCaption {
                 Button("Edit", action: onEditCaption)
@@ -820,7 +843,7 @@ struct SessionDateHeaderView: View {
     /// You keep their name alone here and say their figures in the value.
     private var spokenLabel: String {
         if summary != nil || badge != nil { return spokenTitle }
-        return fold.map { fold in fold.collapsed ? "\(spokenTitle), \(SessionHeaderFold.countWords(total: fold.total, unread: fold.unread))" : spokenTitle } ?? spokenTitle
+        return fold.map { fold in fold.collapsed ? "\(spokenTitle), \(SessionHeaderFold.countWords(total: fold.total, unread: fold.unread, unit: fold.unit))" : spokenTitle } ?? spokenTitle
     }
 
     /// Then: Collapsed or Expanded, and [sessions-layout] a project's count, newest chat and time, or New for You's count.

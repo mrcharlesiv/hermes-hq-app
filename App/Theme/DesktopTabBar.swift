@@ -320,6 +320,7 @@ final class DesktopTabBar: UIView {
         guard let controllers = host.viewControllers, index < controllers.count else { return nil }
         let target = controllers[index]
         if host.selectedIndex == index {
+            Haptics.play(.selection)   // [tab-haptic] a second tap ticks too, as the system bar's
             // The system bar's second tap: back to the tab's root; [tabretap] at the root already, to the page's top.
             if !TabRetap.scrollToTop(target, animated: animated) {
                 (target as? UINavigationController)?.popToRootViewController(animated: animated)

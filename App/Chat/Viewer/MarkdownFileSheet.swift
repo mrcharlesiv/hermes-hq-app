@@ -19,7 +19,9 @@ enum MarkdownFileSheet {
         let name = url.lastPathComponent
         let page = page(name, file: { url }, gateway: gateway)
         AppLog.trace("chatui", "markdown file opened formatted")
-        vc.present(ChatSheet.wrap(page, title: name, detents: [.large()]), animated: true)
+        let sheet = ChatSheet.wrap(page, title: name, detents: [.large()])
+        SheetStyle.widen(sheet, to: 780, from: vc)   // [ipad-polish] a note at a readable line, not a phone's width
+        vc.present(sheet, animated: true)
     }
 
     private static func page(_ name: String, file: @escaping () async throws -> URL,

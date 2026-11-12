@@ -192,8 +192,9 @@ final class TodoSheetModel {
         HQAnnounce.say(text)
     }
 
+    /// A refused edit gets the error tap with its notice (the change's own tap played as it was made).
     private func patch(_ fields: [String: JSONValue]) {
-        Task { await store.patch(taskID, fields) }
+        Task { if await !store.patch(taskID, fields) { PagesHaptics.error() } }
     }
 
     func setStatus(_ status: String) {
@@ -248,7 +249,7 @@ final class TodoSheetModel {
 
     func toggleStep(_ step: TodoStep) {
         PagesHaptics.selection()
-        Task { await store.setStep(taskID, step: step.id, done: !step.done) }
+        Task { if await !store.setStep(taskID, step: step.id, done: !step.done) { PagesHaptics.error() } }
     }
 
     /// Who does a step: from its menu (Give to <Bot> / Take It Myself), no longer a flip on one tap.
@@ -312,9 +313,8 @@ final class TodoSheetModel {
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         alert.addAction(UIAlertAction(title: "Delete", style: .destructive) { [weak self] _ in
             guard let self else { return }
-            PagesHaptics.selection()
             Task {
-                if await self.store.delete(self.taskID) { self.close?() } else { PagesHaptics.error() }
+                if await self.store.delete(self.taskID) { PagesHaptics.success(); self.close?() } else { PagesHaptics.error() }
             }
         })
         controller.present(alert, animated: true)

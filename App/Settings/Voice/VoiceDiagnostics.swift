@@ -291,7 +291,10 @@ nonisolated struct VoiceRouteRead: Sendable, Equatable {
         status = result
         running = nil
         KeepAwake.release(.diagnostics)
-        if case .recordFailed(let reason) = result { VoiceEvents.note("diagnostics: test take failed: \(reason)") }
+        if case .recordFailed(let reason) = result {
+            Haptics.play(.error)
+            VoiceEvents.note("diagnostics: test take failed: \(reason)")
+        }
         if result == .microphoneOff { VoiceEvents.note("diagnostics: the microphone is not allowed") }
         let capture = self.capture
         self.capture = nil
@@ -392,6 +395,7 @@ nonisolated struct VoiceRouteRead: Sendable, Equatable {
                 VoiceEvents.note("diagnostics: transcription answered in \(ms) ms, \(words.isEmpty ? "no speech" : "speech found")")
             case .failure(let failure):
                 let generic = failure.reason == "The gateway could not transcribe that."
+                Haptics.play(.error)
                 self.status = .transcribeFailed(generic ? nil : failure.reason)
                 VoiceEvents.note("diagnostics: transcription failed after \(ms) ms")
             }

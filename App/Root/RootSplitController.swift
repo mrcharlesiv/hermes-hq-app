@@ -72,11 +72,24 @@ final class RootSplitController: UIViewController {
         layout = decideLayout(for: panes, window: Self.debugSize(size).width)
         noteOpeningSize(layout, panes: panes, window: Self.debugSize(size), pixel: 1 / max(1, UITraitCollection.current.displayScale))
         if layout.isDouble { sweepTabsIntoDetail() }
+        _ = Self.keysWatch   // [ipad-polish] where the keyboard is, for `guideIsDead`
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(wentAway), name: UIScene.didEnterBackgroundNotification, object: nil)
         center.addObserver(self, selector: #selector(cameBack), name: UIScene.willEnterForegroundNotification, object: nil)
         #if DEBUG
         if UserDefaults.standard.bool(forKey: "HQDebugSnapshotResize") { replaySnapshotResizes() }
+        // [ipad-polish] `-HQDebugNarrowAt <seconds>` / `-HQDebugWidenAt <seconds>`: the stand-in window goes to the phone
+        // layout (420 pt) and back that long after launch, to watch a chat cross between the panes without a UI test.
+        for (key, width) in [("HQDebugNarrowAt", CGFloat(420) as CGFloat?), ("HQDebugWidenAt", nil)] {
+            let at = UserDefaults.standard.double(forKey: key)
+            guard at > 0 else { continue }
+            DispatchQueue.main.asyncAfter(deadline: .now() + at) { [weak self] in self?.setDebugSize(width: width, height: nil) }
+        }
+        #if !targetEnvironment(macCatalyst)
+        // [ipad-polish] `-HQDebugHideListAt <seconds>`: the list is put away that long after launch (pictures).
+        let hideAt = UserDefaults.standard.double(forKey: "HQDebugHideListAt")
+        if hideAt > 0 { DispatchQueue.main.asyncAfter(deadline: .now() + hideAt) { [weak self] in self?.setListHidden(true) } }
+        #endif
         #endif
     }
 
@@ -271,6 +284,11 @@ final class RootSplitController: UIViewController {
                     if next.isDouble { sweepTabsIntoDetail() } else { collapseDetailOntoTabs() }
                 }
                 AppLog.note("screen", next.isDouble ? "layout: two panes" : "layout: one pane")
+                #if !targetEnvironment(macCatalyst)
+                // [ipad-polish] The list was put away before the window went narrow: the layout was decided with the
+                // chat still over its list (nothing on the right yet), so it is decided again now that it has moved.
+                if next.isDouble { layout = decideLayout(for: rect.size, window: windowRect.width) }
+                #endif
             }
         }
         placePanes()
@@ -329,7 +347,11 @@ final class RootSplitController: UIViewController {
         if detail.view.isHidden != (!double || wide) { detail.view.isHidden = !double || wide }
         let folded = layout == .double(sidebar: 0)
         if hairline.isHidden != (!double || folded || wide) { hairline.isHidden = !double || folded || wide }
+        #if targetEnvironment(macCatalyst)
         if tabs.view.isHidden != folded { tabs.view.isHidden = folded }
+        #else
+        if tabs.view.isHidden != folded, !(folded && slidingList) { tabs.view.isHidden = folded }   // [ipad-polish] slides out first
+        #endif
         #if targetEnvironment(macCatalyst)
         grip.frame = lineFrame.insetBy(dx: -4, dy: 0)
         grip.isHidden = !double || folded || wide || boardPanel != nil   // the panel's width is the board's call, not the lists'
@@ -348,6 +370,10 @@ final class RootSplitController: UIViewController {
         // [mac-ui-issues] Its Desktop Look band ends where the chat's bar does.
         let bar = detail.navigationBar
         inspector.bandBottom = bar.isHidden || bar.window == nil ? 0 : max(0, bar.convert(bar.bounds, to: view).maxY - inspectorFrame.minY)
+        // [mac-ten] Its tabs sit level with the bar's buttons. The bar is 54 pt tall on the Mac and its buttons stand
+        // in its top 44 pt (measured 2026-11-11: bar y 41, buttons y 41 to 85), so the middle is that row's, not the bar's.
+        let barFrame = bar.convert(bar.bounds, to: view)
+        inspector.barMiddle = bar.isHidden || bar.window == nil ? 0 : max(0, barFrame.minY + min(barFrame.height, 44) / 2 - inspectorFrame.minY)
         NotificationCenter.default.post(name: MacSidebar.neighbourMayChange, object: nil)   // [sidebar-light] folded or not
         // A viewer over the panes (`PanePresentation`) follows them: a divider drag or a sidebar fold moves them
         // without resizing the window.
@@ -388,8 +414,14 @@ final class RootSplitController: UIViewController {
     /// One pane or two in `panes` (`window` wide): the list folded away, or the web's rule with the list as wide as it
     /// was dragged.
     private func decideLayout(for panes: CGSize, window: CGFloat) -> PaneLayout {
+        #if targetEnvironment(macCatalyst)
         listFolded ? .double(sidebar: 0)
             : PaneLayout.decide(size: panes, pad: true, preferred: preferredSidebar(window: window), foldable: Self.foldable)
+        #else
+        // [ipad-polish] A list put away only where there would be two panes: a narrow window is the phone layout.
+        let base = PaneLayout.decide(size: panes, pad: true, preferred: preferredSidebar(window: window), foldable: Self.foldable)
+        return base.isDouble && listFolded ? .double(sidebar: 0) : base
+        #endif
     }
 
     /// A chat built from now on lays its first screen out at the width it is about to get (§4.6): the right pane's, cut
@@ -464,6 +496,11 @@ final class RootSplitController: UIViewController {
             view.setNeedsLayout()   // a page opened beside a whole page, or closed; [mac-tools] a task beside the board
         }
         if isViewLoaded, listFolded != (layout == .double(sidebar: 0)) { listFoldMayHaveChanged() }   // [mac-ui-issues] Settings opened or closed
+        #else
+        // [ipad-polish] Nothing left on the right: the list comes back, and stays for the next thing opened.
+        if detailIsEmpty { listHidden = false }
+        syncListToggle()
+        if isViewLoaded, listFolded != (layout == .double(sidebar: 0)) { view.setNeedsLayout() }
         #endif
         onDetailChange?()
         tabs.paneSelectionChanged()
@@ -510,6 +547,7 @@ final class RootSplitController: UIViewController {
             moved.forEach { ($0 as? PaneNavigationFollowing)?.paneNavigationChanged(detail) }
             restoreFocus(focused, in: moved)
         }
+        syncListToggle()
         tabs.paneSelectionChanged()
     }
 
@@ -523,9 +561,79 @@ final class RootSplitController: UIViewController {
         // needs its room (`inspectorTakesList`).
         tabs.shownTab == .bots || listFoldedForInspector || settingsTakesList
         #else
-        false
+        listHidden && !detailIsEmpty   // [ipad-polish] put away by its button (`setListHidden`)
         #endif
     }
+
+    #if !targetEnvironment(macCatalyst)
+    // MARK: Hiding the list (iPad)
+
+    /// [ipad-polish] Owner 2026-11-11 ("get the app to work well on an iPad … you can do better"): an 11-inch iPad held
+    /// upright gives the chat 448 pt beside the list, a phone's width on a tablet. The button at the leading end of the
+    /// right pane's bar (Mail's and Notes' sidebar button, ⌃⌘S) puts the list away and the chat takes the window; the
+    /// same button brings it back, tabs and all. Only with something open on the right: closing it brings the list
+    /// back, since there is nothing else to look at. Not kept across launches.
+    private(set) var listHidden = false
+    /// The list is on its way out: it stays drawn until the slide ends.
+    private var slidingList = false
+    private weak var toggleHost: UIViewController?
+    private lazy var listToggle: UIBarButtonItem = {
+        let item = UIBarButtonItem(image: UIImage(systemName: "sidebar.leading"), primaryAction: UIAction { [weak self] _ in self?.toggleList() })
+        item.accessibilityIdentifier = "pane.listToggle"
+        return item
+    }()
+
+    /// A swipe in from the leading edge brings a hidden list back, as the sidebar comes back in Mail. Only on the
+    /// right pane's first screen: a pushed page's own swipe goes back.
+    private lazy var edgeSwipe: UIScreenEdgePanGestureRecognizer = {
+        let swipe = UIScreenEdgePanGestureRecognizer(target: self, action: #selector(edgeSwiped(_:)))
+        swipe.edges = view.effectiveUserInterfaceLayoutDirection == .rightToLeft ? .right : .left
+        swipe.delegate = self
+        return swipe
+    }()
+
+    @objc private func edgeSwiped(_ swipe: UIScreenEdgePanGestureRecognizer) {
+        if swipe.state == .began { setListHidden(false) }
+    }
+
+    /// The list can be put away or brought back now (the menu's item is on).
+    var canToggleList: Bool { isDouble && !detailIsEmpty }
+
+    func toggleList() { setListHidden(!listHidden) }
+
+    func setListHidden(_ hidden: Bool, animated: Bool = true) {
+        guard hidden != listHidden, hidden ? canToggleList : true else { return }
+        listHidden = hidden
+        AppLog.note("screen", hidden ? "list put away: the right pane takes the window" : "list back beside the right pane")
+        syncListToggle()
+        guard isViewLoaded else { return }
+        if hidden, edgeSwipe.view == nil { detail.view.addGestureRecognizer(edgeSwipe) }
+        view.setNeedsLayout()
+        guard animated, view.window != nil, !HQMotion.reduced else { view.layoutIfNeeded(); return }
+        slidingList = hidden
+        HQMotion.animate(0.25, options: [.curveEaseInOut, .beginFromCurrentState], changes: { self.view.layoutIfNeeded() }, completion: { _ in
+            self.slidingList = false
+            let folded = self.layout == .double(sidebar: 0)
+            if self.tabs.view.isHidden != folded { self.tabs.view.isHidden = folded }
+        })
+    }
+
+    /// The button sits on the right pane's first screen while there are two panes, and nowhere else: moved onto a
+    /// tab's stack (one pane) the screen needs its Back there.
+    private func syncListToggle() {
+        let first = isDouble ? detail.viewControllers.first : nil
+        let host = first is DetailPlaceholderViewController ? nil : first
+        if let old = toggleHost, old !== host, old.navigationItem.leftBarButtonItem === listToggle {
+            old.navigationItem.leftBarButtonItem = nil
+        }
+        toggleHost = host
+        if let host, host.navigationItem.leftBarButtonItems?.isEmpty ?? true { host.navigationItem.leftBarButtonItem = listToggle }
+        listToggle.accessibilityLabel = listHidden ? "Show List" : "Hide List"
+        listToggle.isSelected = false
+    }
+    #else
+    private func syncListToggle() {}
+    #endif
 
     #if targetEnvironment(macCatalyst)
     /// [mac-ui-issues] Owner 2026-11-09 (Settings "looks exactly like it does on the iPhone"): Settings in the right pane
@@ -650,6 +758,7 @@ final class RootSplitController: UIViewController {
         let focused = moved.last?.viewIfLoaded?.hqFirstResponder
         Self.lowerKeyboard(focused)
         detail.setViewControllers([DetailPlaceholderViewController()], animated: false)
+        syncListToggle()   // [ipad-polish] off the screen that is about to need its Back
         if tabs.selectedViewController !== target { tabs.selectedViewController = target }
         moved.first?.hidesBottomBarWhenPushed = true
         PaneNavigationController.passThrough { target.setViewControllers(target.viewControllers + moved, animated: false) }
@@ -681,7 +790,54 @@ final class RootSplitController: UIViewController {
         if let focused, focused.window != nil, !focused.isFirstResponder { focused.becomeFirstResponder() }
         moved.forEach { $0.viewIfLoaded?.setNeedsLayout() }
         view.layoutIfNeeded()
+        // [ipad-polish] The keyboard comes back up over the next half second; a guide that looked alive just now can
+        // still be one the keyboard no longer moves (see `guideIsDead`), so the moved screens are checked again once
+        // it has settled.
+        guard let focused else { return }
+        for (pass, delay) in [0.7, 1.5].enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, self.isViewLoaded else { return }
+                let stale = moved.filter { $0.parent != nil && Self.guideIsDead($0) }
+                guard !stale.isEmpty else { return }
+                let typing = focused.isFirstResponder
+                // Setting the guide up again takes the screen out of the window for a moment, which puts the keys
+                // down. The first time they come straight back, and the guide, alive now, follows them up. If it is
+                // dead a second time the keys stay down: the message box at the foot of the pane, the draft in it.
+                stale.forEach { Self.reviveKeyboardGuide($0) }
+                if pass == 0, typing, focused.window != nil, !focused.isFirstResponder { focused.becomeFirstResponder() }
+                moved.forEach { $0.viewIfLoaded?.setNeedsLayout() }
+                self.view.layoutIfNeeded()
+            }
+        }
     }
+
+    /// [ipad-polish] The screen's keyboard guide no longer follows the keyboard: it has no size (the first way this
+    /// was seen), or the keyboard is up and the guide's top is not where the window's own guide has the keys. The
+    /// second way is an iPad mini turned sideways while typing (one pane → two with the keyboard up): the guide kept
+    /// the place of a keyboard that was down, so the message box and the newest messages sat under the keys.
+    private static func guideIsDead(_ screen: UIViewController) -> Bool {
+        guard let view = screen.viewIfLoaded, let window = view.window, view.bounds.width > 0 else { return false }
+        let own = view.keyboardLayoutGuide.layoutFrame
+        if own.width == 0 { return true }
+        // Where the system last said the keyboard ends up (`keysFrame`), in the window: only a docked keyboard that is
+        // up says anything about the guide.
+        let keys = window.convert(keysFrame, from: window.screen.coordinateSpace)
+        guard keys.height > 100, keys.maxY >= window.bounds.maxY - 1, keys.minY < window.bounds.maxY - 100 else { return false }
+        return abs(view.convert(own, to: window).minY - keys.minY) > 2
+    }
+
+    /// [ipad-polish] The keyboard's last announced frame, in the screen's coordinates (`.zero`: never shown).
+    private static var keysFrame = CGRect.zero
+    private static let keysWatch: Void = {
+        for name in [UIResponder.keyboardWillChangeFrameNotification, UIResponder.keyboardDidChangeFrameNotification,
+                     UIResponder.keyboardDidHideNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { note in
+                let frame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue ?? .zero
+                let hidden = note.name == UIResponder.keyboardDidHideNotification
+                MainActor.assumeIsolated { keysFrame = hidden ? .zero : frame }
+            }
+        }
+    }()
 
     /// A screen that left the window while it had the keyboard can come back with a dead `keyboardLayoutGuide`: a
     /// zero-size guide that no later keyboard change moves (seen on iOS 27: the composer, which rides the guide,
@@ -689,8 +845,11 @@ final class RootSplitController: UIViewController {
     /// and putting it straight back makes UIKit set the guide up again.
     private static func reviveKeyboardGuide(_ screen: UIViewController) {
         guard let view = screen.viewIfLoaded, view.window != nil, view.bounds.width > 0,
-              view.keyboardLayoutGuide.layoutFrame.width == 0, let parent = view.superview,
+              guideIsDead(screen), let parent = view.superview,
               let index = parent.subviews.firstIndex(of: view) else { return }
+        if let window = view.window {
+            AppLog.note("screen", "keyboard guide dead after a move between panes: own \(view.convert(view.keyboardLayoutGuide.layoutFrame, to: window)), window's \(window.keyboardLayoutGuide.layoutFrame)")
+        }
         let frame = view.frame
         UIView.performWithoutAnimation {
             view.removeFromSuperview()
@@ -698,7 +857,7 @@ final class RootSplitController: UIViewController {
             view.frame = frame
             parent.layoutIfNeeded()
         }
-        AppLog.note("screen", "keyboard guide set up again after a move between panes (\(view.keyboardLayoutGuide.layoutFrame.width > 0 ? "ok" : "still dead"))")
+        AppLog.note("screen", "keyboard guide set up again after a move between panes (\(guideIsDead(screen) ? "still dead" : "ok"))")
     }
 
     // MARK: DEBUG: a smaller "window" for UI tests (`-HQDebugPaneWidth <points>`, `-HQDebugPaneHeight <points>`)
@@ -759,3 +918,11 @@ final class DetailNavigationController: UINavigationController {
     }
     #endif
 }
+
+#if !targetEnvironment(macCatalyst)
+extension RootSplitController: UIGestureRecognizerDelegate {
+    func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
+        listHidden && layout == .double(sidebar: 0) && detail.viewControllers.count == 1 && presentedViewController == nil
+    }
+}
+#endif

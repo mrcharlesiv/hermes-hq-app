@@ -203,7 +203,10 @@ struct LiveVoiceSection: View {
         let engine = engine, services = router.services
         Task {
             let missed = await LiveVoiceSaver.saveForEveryBot(engine, voice: voice.id, services: services)
-            if chosen == voice.id { failed = missed }
+            if chosen == voice.id {
+                failed = missed
+                if !missed.isEmpty { Haptics.play(.error) }   // the footer names the bots it didn't reach
+            }
         }
     }
 }

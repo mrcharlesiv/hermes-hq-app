@@ -65,11 +65,13 @@ struct CapabilitiesHubView: View {
             Section {
                 ForEach(CapabilitiesTab.allCases) { tab in
                     let issue = tab == .connectors ? status : nil
-                    NavRow(title: tab.title, systemImage: tab.symbol, value: issue?.text, valueIsIssue: issue != nil) {
+                    // [plugin-updates] Plugins says how many have an update ("2 Updates").
+                    let updates = tab == .plugins ? PluginUpdateReminder.shared.hubValue : nil
+                    NavRow(title: tab.title, systemImage: tab.symbol, value: issue?.text ?? updates, valueIsIssue: issue != nil) {
                         router.push(CapabilitiesPages.page(tab, services: services, settingsPage: settingsPage))
                     }
                     .accessibilityLabel(tab.title)
-                    .accessibilityValue(issue?.spoken ?? "")
+                    .accessibilityValue(issue?.spoken ?? updates ?? "")
                     .accessibilityIdentifier("capabilities.row.\(tab.rawValue)")
                 }
             } footer: { HQSectionFooter {

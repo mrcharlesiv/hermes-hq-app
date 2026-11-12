@@ -287,6 +287,7 @@ final class PreviewTabController: UIViewController, WKNavigationDelegate, WKUIDe
             UIAction(title: "Copy Link", image: UIImage(systemName: "link")) { [weak self] _ in
                 guard let self else { return }
                 UIPasteboard.general.url = self.web.url ?? self.url
+                Haptics.play(.success)
             },
         ]))
         more.accessibilityLabel = "More"

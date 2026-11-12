@@ -35,6 +35,7 @@ final class TodoSettingsModel {
         let ideas = next.ideas != before.ideas || next.ideasBot != before.ideasBot || next.ideasAt != before.ideasAt
             || next.ideasMax != before.ideasMax
         guard await store.saveSettings(next) else {
+            PagesHaptics.error()   // the HUD says why
             if draft == next { draft = store.settings }
             return
         }
@@ -74,7 +75,7 @@ struct TodoSettingsView: View {
         Form {
             Section {
                 HQSegmentedPicker("Catch Tasks in Chats", options: [("Ask First", "ask"), ("Automatic", "auto"), ("Off", "off")],
-                                  selection: Binding(get: { model.draft.capture }, set: { PagesHaptics.selection(); model.draft.capture = $0; model.save() }))
+                                  selection: Binding(get: { model.draft.capture }, set: { PagesHaptics.selection(); model.draft.capture = $0; model.save() }), ticks: false)
                     .accessibilityIdentifier("tasks.settings.capture")
             } header: { HQSectionLabel { Text("Catch Tasks in Chats") } } footer: { HQSectionFooter {
                 switch model.draft.capture {

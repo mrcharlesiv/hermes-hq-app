@@ -160,6 +160,7 @@ import UserNotifications
         watch?.cancel(); watch = nil; watchToken = nil
         pendingAsk = nil
         running = false
+        PluginUpdateFlow.shared.reset()   // [plugin-updates] its watch too: the sheet is the same one
         AddOnUpdate.shared.reset()
     }
 
@@ -216,6 +217,8 @@ import UserNotifications
             }
         }
         guard !running else { return false }
+        // [plugin-updates] The launch check doesn't take the sheet from a plugin update under way.
+        if !fromSettings, update.busy, update.pluginRun { return false }
         #if DEBUG
         // Films of other pages (`-HQDebugNoPushOffer YES`): no launch alert over them.
         if !fromSettings, UserDefaults.standard.bool(forKey: "HQDebugNoPushOffer") { return false }

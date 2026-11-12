@@ -492,10 +492,10 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass {
         backgroundColor = .clear
         desktopBox.isUserInteractionEnabled = false      // [desktoplook2] the one-box composer's box
         desktopBox.isHidden = true
-        macGlass.isUserInteractionEnabled = false
-        macGlass.isHidden = true
-        DesktopLayout.keepOwnLook(macGlass)
-        addSubview(macGlass)                             // [mac-glass-box] under the box's line
+        macBacking.isUserInteractionEnabled = false      // [mac-message-box] the page, under and beside the box
+        macBacking.isHidden = true
+        macBacking.layer.addSublayer(macBackingFade)
+        addSubview(macBacking)
         addSubview(desktopBox)
         addSubview(glassContainer)
         glassContainer.contentView.addSubview(field)
@@ -765,13 +765,41 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass {
     private let desktopBox = UIView()
     /// [mac-ui-issues] The one box's frame (in the composer), nil while the bar isn't the box.
     var macBoxFrame: CGRect? { desktopBox.isHidden || desktopBox.frame.isEmpty ? nil : desktopBox.frame }
-    /// [mac-glass-box] Owner 2026-11-09 ("Can the text input field area be in Liquid Glass like we have on iOS?"): in
-    /// the iOS look the Mac's message box is Liquid Glass, as the iPhone's bar is, keeping the Mac's own layout (the
-    /// model's name in the box, plain ☰ and mic glyphs). The Desktop Look keeps its solid box.
-    private let macGlass = UIVisualEffectView()
-    static var macGlassBox: Bool { DeviceWord.isMac && !Theme.isDesktop }
+    /// [mac-message-box] The Mac's message box in the iOS look: a plain surface, not glass. It has been three things.
+    /// Owner 2026-11-08: the iPhone's glass bar "didn't even try to make it look right on a Mac app", so it became the
+    /// one box. Owner 2026-11-09 asked for Liquid Glass on it. Owner 2026-11-11: "ours looks like it almost doesn't
+    /// belong somehow... it's like the lines and shadows aren't done right", pointing at another Mac chat app's box.
+    /// Measured on the glass box: a fill four times the page's brightness (48 against 13), a bright line along its top
+    /// and bottom and none down its sides, 14 pt corners on a 61 pt box, the chat smeared through it, and the hint
+    /// 3 pt above the line the ☰, +, model and mic stand on. The other app's box is its page one step lighter, one
+    /// faint line all round, rounder corners and no shadow. This is that recipe in the look's own colours
+    /// (`MacMessageBox`). The Desktop Look keeps its own box.
+    static var macPlainBox: Bool { DeviceWord.isMac && !Theme.isDesktop }
+    /// [mac-message-box] The page's own colour under the box: the chat scrolls behind the composer, and round a box
+    /// that is no longer see-through its bubbles showed in the 12 pt beside it and the strip under it (a blue corner
+    /// past the box's end). The transcript fades out over the 24 pt at the box's top edge and nothing shows below
+    /// that. Not over a Chat Background: the picture is the page there, and it runs to the window's foot.
+    private let macBacking = UIView()
+    private let macBackingFade = CAGradientLayer()
+    private static let backingRise: CGFloat = 14
+
+    private func layoutMacBacking(box: CGRect) {
+        let shown = Self.macPlainBox && !Backdrop.chats.shows
+        if macBacking.isHidden == shown { macBacking.isHidden = !shown }
+        guard shown else { return }
+        // Past the composer's own foot to the window's (the composer stands a little above it).
+        let frame = CGRect(x: 0, y: box.minY - Self.backingRise, width: bounds.width, height: bounds.height - box.minY + Self.backingRise + 400)
+        let page = ChatPalette.page.resolvedColor(with: traitCollection)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        macBacking.frame = frame
+        macBackingFade.frame = macBacking.bounds
+        macBackingFade.colors = [page.withAlphaComponent(0).cgColor, page.cgColor, page.cgColor]
+        macBackingFade.locations = [0, NSNumber(value: Double(min(1, (Self.backingRise + 10) / frame.height))), 1]
+        CATransaction.commit()
+    }
     /// [mac] The iOS look's one box: rounded, not the Desktop Look's square corners.
-    static let macBoxRadius: CGFloat = 14
+    static let macBoxRadius: CGFloat = MacMessageBox.radius
     private var appliedFieldRadius: CGFloat = -1
 
     /// True in the iOS look on the iPhone and iPad: the field's glass is the whole row's bar. [desktop-composer] In the
@@ -792,7 +820,6 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass {
     private func applySurfaces(side: CGFloat, rowTop: CGFloat) {
         let desktop = Self.oneBox
         desktopBox.isHidden = !desktop
-        if !desktop { macGlass.isHidden = true }
         // ☰ and + never draw glass of their own: they sit on the bar or in the box. [desktoplook3] A leading button that
         // holds its glass inside (the + circle) is flattened too.
         let leadingGlass = leadingViews.flatMap { view -> [UIVisualEffectView] in
@@ -806,31 +833,24 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass {
             flatten(field)
             let box = CGRect(x: side - boxOutset, y: rowTop - 3, width: bounds.width - 2 * side + 2 * boxOutset, height: fieldHeight + 6)
             desktopBox.frame = box
-            let glassBox = Self.macGlassBox
-            macGlass.isHidden = !glassBox
-            if glassBox {
-                macGlass.frame = box
-                if macGlass.effect == nil {
-                    let glass = UIGlassEffect(style: .regular)
-                    glass.isInteractive = true
-                    macGlass.effect = glass
-                }
-                macGlass.cornerConfiguration = .corners(radius: .fixed(Self.macBoxRadius))
-            }
-            desktopBox.backgroundColor = glassBox ? .clear : ChatPalette.editor
+            let plainBox = Self.macPlainBox
+            layoutMacBacking(box: box)
+            desktopBox.backgroundColor = plainBox ? MacMessageBox.fill : ChatPalette.editor
             // [mac] The iOS look's box rounder, as a Mac text field in Messages is. [desktop-corners] The Desktop Look's
             // takes the look's Corners, as your messages' boxes (the desktop's 4 pt unless another was picked), up to a
             // capsule at one line.
             desktopBox.layer.cornerRadius = Theme.isDesktop ? min(ChatMetrics.bubbleRadius, box.height / 2) : Self.macBoxRadius
             desktopBox.layer.cornerCurve = .continuous
-            // [mac-glass-box] The glass has its own rim: a line only while typing, the box's focus.
-            desktopBox.layer.borderWidth = glassBox && !textView.isFirstResponder ? 0 : 1
+            desktopBox.layer.borderWidth = 1
             // The desktop's surface keeps its quiet line (styles.css:1997, stroke-secondary); typing steps it up to the
             // bar's own outline, never the accent (a blue ring read as a web form field, owner 2026-10-15).
+            // [mac-message-box] The iOS look's box: one even line all round, a step stronger while typing.
             let focused = textView.isFirstResponder
-            desktopBox.layer.borderColor = (focused ? ChatPalette.composerBorder : ChatPalette.strokeSecondary).resolvedColor(with: traitCollection).cgColor
+            let line = plainBox ? (focused ? MacMessageBox.lineTyping : MacMessageBox.line)
+                                : (focused ? ChatPalette.composerBorder : ChatPalette.strokeSecondary)
+            desktopBox.layer.borderColor = line.resolvedColor(with: traitCollection).cgColor
         } else if field.effect == nil {
-            macGlass.isHidden = true
+            macBacking.isHidden = true
             let glass = UIGlassEffect(style: .regular)
             glass.isInteractive = true
             field.effect = glass
@@ -953,6 +973,10 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass {
     private var textInsets: UIEdgeInsets {
         let line = textView.font?.lineHeight ?? 20
         let v = max(8, ((ChatMetrics.control - line) / 2).rounded(.down))
+        // [mac-message-box] The words' capitals stand above the middle of their line, so centred by the line they sat
+        // 3 pt above the ☰, +, model name and mic (measured: capitals' middle 987.5, the glyphs' 990.5). One line only.
+        let drop: CGFloat = Self.macPlainBox && !expanded ? min(MacMessageBox.textDrop, v - 8) : 0
+        if drop > 0 { return UIEdgeInsets(top: v + drop, left: 0, bottom: v - drop, right: 0) }
         // [composer-expand] Two rows: the buttons' row below keeps its own room.
         // Owner 2026-10-31 ("it feels cluttered"): 16 pt above the text and 12 pt between it and the discs.
         return UIEdgeInsets(top: expanded ? barScaled(16) : v, left: 0, bottom: expanded ? barScaled(12) : v, right: 0)
@@ -1426,7 +1450,11 @@ final class PrimaryButton: UIControl {
     /// The circle as drawn: 36 pt, 4 pt in from the bar's end in its 44 pt slot (the touch takes 48), so its curve
     /// runs parallel to the bar's (radius 18 inside 22). The Mac's 54 pt bar: 44 pt, 5 pt in.
     private var drawn: CGRect {
-        if ComposerView.oneBox { return bounds.insetBy(dx: (bounds.width - 28) / 2, dy: (bounds.height - 28) / 2) }
+        if ComposerView.oneBox {
+            // [mac-talk-glyph] The Mac's plain box: a 36 pt circle, the box's one filled button (28 in the Desktop Look).
+            let side: CGFloat = ComposerView.macPlainBox ? MacMessageBox.circle : 28
+            return bounds.insetBy(dx: (bounds.width - side) / 2, dy: (bounds.height - side) / 2)
+        }
         let inset = (bounds.width * 4 / 44).rounded()
         return bounds.insetBy(dx: inset, dy: inset)
     }
@@ -1450,10 +1478,17 @@ final class PrimaryButton: UIControl {
         let s = bounds.width
         // The 36 pt circle's glyphs (owner 2026-10-24: "too small"); the Desktop Look's 28 pt circle keeps the smaller ones.
         let desk = ComposerView.oneBox
+        // [mac-talk-glyph] Owner 2026-11-11, circling the blue circle in the Mac's message box: "Make the blue voice
+        // icon better. It sucks.", then, shown five drawn bars: "Make it like the iOS icon but sized properly for Mac."
+        // It is the iPhone's waveform, as before, but the Mac's box drew it at 13 pt in a 28 pt circle, which the
+        // Mac shows at 77 %: a 10 pt smudge. The plain box keeps the iPhone's proportions on the screen instead: a
+        // 36 pt circle and the symbol at 19 pt, a weight heavier so its bars hold at that scale.
+        let macTalk = ComposerView.macPlainBox
         symbol.isHidden = kind != .talk
         if kind == .talk {
             glyph.path = nil
-            let config = UIImage.SymbolConfiguration(pointSize: desk ? 13 : 17, weight: .semibold)
+            let config = macTalk ? UIImage.SymbolConfiguration(pointSize: MacMessageBox.talkSymbol, weight: .bold)
+                                 : UIImage.SymbolConfiguration(pointSize: desk ? 13 : 17, weight: .semibold)
             if let image = UIImage(systemName: "waveform", withConfiguration: config) {
                 let size = image.size
                 symbol.frame = CGRect(x: ((s - size.width) / 2).rounded(), y: ((bounds.height - size.height) / 2).rounded(),

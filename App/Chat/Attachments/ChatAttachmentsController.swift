@@ -342,6 +342,7 @@ private extension AttachmentPrepareError {
             coordinator.animate(alongsideTransition: nil) { [weak self] _ in self?.showError(reason) }
             return
         }
+        Haptics.play(.error)   // alert or notice, as `FailureAlert`
         guard !(top is UIAlertController), top.presentedViewController == nil, !top.isBeingPresented else {
             // A reason that already says what failed ("Couldn’t upload …") stands alone.
             screen.showNotice(reason.hasPrefix("Couldn") ? reason : "Couldn’t attach: \(reason)")

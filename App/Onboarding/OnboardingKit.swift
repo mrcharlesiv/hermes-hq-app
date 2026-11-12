@@ -132,12 +132,19 @@ struct GuideParagraph: View {
 
 // MARK: - Page
 
-/// One guide screen: the heading (content, not the bar: DECISION D4), the screen's parts, and its error line.
-struct GuidePage<Content: View>: View {
+/// One guide screen: the heading (content, not the bar: DECISION D4), the screen's parts, and its error line. The way
+/// on (`footer`: Next, Sign In) is pinned under the words on the page colour, as on the welcome (UX study #123), so the
+/// next thing to tap is in the same place on every screen and never below the fold. At the accessibility text sizes
+/// two pinned buttons would take half the screen, so there the way on ends the page instead.
+struct GuidePage<Content: View, Footer: View>: View {
     let id: String
     let heading: String
     var error: String = ""
     @ViewBuilder var content: Content
+    @ViewBuilder var footer: Footer
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    private var pinsFooter: Bool { Footer.self != EmptyView.self && !typeSize.isAccessibilitySize }
 
     var body: some View {
         ScrollView {
@@ -158,6 +165,9 @@ struct GuidePage<Content: View>: View {
                         .accessibilityIdentifier(id + ".error")
                         .transition(.opacity)
                 }
+                if Footer.self != EmptyView.self, !pinsFooter {
+                    VStack(spacing: 12) { footer }.padding(.top, 8)
+                }
             }
             .frame(maxWidth: 440, alignment: .leading)
             .padding(.horizontal, 24)
@@ -166,7 +176,23 @@ struct GuidePage<Content: View>: View {
             .frame(maxWidth: .infinity)
             .animation(HQMotion.swiftUI(.smooth(duration: 0.2), fades: true), value: error)
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if pinsFooter {
+                VStack(spacing: 12) { footer }
+                    .frame(maxWidth: 440)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity)
+                    .background(Color.hqPage.ignoresSafeArea(edges: .bottom))
+            }
+        }
         .background(Color.hqPage.ignoresSafeArea())
+    }
+}
+
+extension GuidePage where Footer == EmptyView {
+    init(id: String, heading: String, error: String = "", @ViewBuilder content: () -> Content) {
+        self.init(id: id, heading: heading, error: error, content: content) { EmptyView() }
     }
 }
 
@@ -274,6 +300,7 @@ struct GuideDisclosure<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Button {
+                Haptics.play(.selection)   // a fold, as folds elsewhere
                 HQMotion.withAnimation(.smooth(duration: 0.25)) { open.toggle() }
             } label: {
                 HStack(spacing: 8) {

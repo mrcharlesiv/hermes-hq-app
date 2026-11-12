@@ -425,6 +425,12 @@ import UIKit
         }
     }
 
+    /// [mac-ten] Owner 2026-11-11 ("weird UI issues"): the next rows the driver shows size the panel afresh. Collapse
+    /// All left Models as a tall panel with five headings at its top and blank glass under them, because a panel never
+    /// shrinks while it is up (a search must not move the field under the caret). Collapse All and Expand All come
+    /// from a menu, not from a key or a click on a row that would move, so the panel fits what it then shows.
+    func fitNextRows() { tallestList = 0 }
+
     /// Marks a row and brings it into view (Models: the current model as the panel opens).
     func mark(key: String, scroll: Bool = true) {
         // The last match: a model in Favorites is also in its provider's section, which the mark prefers.

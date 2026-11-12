@@ -188,6 +188,7 @@ final class ArtifactTextViewController: UIViewController, UITextViewDelegate {
             segments.selectedSegmentIndex = mode.index
             segments.addAction(UIAction { [weak self, weak segments] _ in
                 guard let self, let segments else { return }
+                Haptics.play(.selection)   // as every segmented choice in the app (the Desktop Look's strip ticks itself)
                 self.mode.index = segments.selectedSegmentIndex
                 self.render()
             }, for: .valueChanged)

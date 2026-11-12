@@ -124,6 +124,15 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
     /// Rows whose Delete is on its way (dimmed, a spinner).
     private var busy: Set<String> = []
     private var barCapsule: PageBarCapsule?
+    /// [ipad-polish] The bar's compose button while this list is the page on show: New Chat hangs off it in two panes.
+    /// The bar and the compose button's place in it (the trailing-most item): a pop-over given the bar's item itself
+    /// grows out of the button and covers the page's title.
+    var composeAnchor: (bar: UIView, rect: CGRect)? {
+        guard viewIfLoaded?.window != nil, navigationController?.topViewController === self,
+              tabBarController?.selectedViewController === navigationController, barCapsule?.composeItem != nil,
+              let bar = navigationController?.navigationBar, !bar.isHidden else { return nil }
+        return (bar, bar.hqTrailingButtonRect)
+    }
     func openSearchFromKeyboard() { barCapsule?.openSearch() }   // [m9/ipad] Command-F, Command-Shift-F
     private let swipePeek = SwipePeek(key: SwipePeek.sessionsKey, markerId: "sessions.peek", revealColor: .systemGray, symbol: "ellipsis.circle.fill")
     static let peekKey = SwipePeek.sessionsKey
@@ -516,10 +525,11 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
         }
         let id = group.id
         let order = store != nil && !searching ? headerOrder(for: group, section: section) : nil
-        // [sessions-fresh] Group By Recent's Pinned never closes: See All draws the rest in place.
+        // [sessions-fresh] Group By Recent's Pinned: See All draws the rest in place. [sessions-collapse] It closes too.
         let freshPinned = !searching && freshLayout && id == "pinned"
-        let fold: SessionHeaderFold? = store != nil && !searching && SessionListPipeline.folds(group) && !freshPinned
-            ? SessionHeaderFold(collapsed: group.collapsed, total: group.total, unread: group.unread) { [weak self] in self?.toggleGroup(id) }
+        let fold: SessionHeaderFold? = store != nil && !searching && SessionListPipeline.folds(group)
+            ? SessionHeaderFold(collapsed: group.collapsed, total: group.total, unread: group.unread,
+                                unit: id == SessionListPipeline.projectsId ? "project" : "chat") { [weak self] in self?.toggleGroup(id) }
             : nil
         let dropTarget = id == dropTargetGroup
         // [sessions-layout] A project's header is its summary row. [project-cards] The top of its card: every bot in it,
@@ -537,6 +547,10 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
         let firstProject = summary != nil && (section == 0 || !SessionListPipeline.isProject(groups[section - 1].id))
         // [sessions-fresh] Group By Recent's "Projects" says See All (its rows' hold menu keeps Reorder Projects…).
         let onEdit = firstProject && !freshLayout ? order?.onReorder : nil
+        // [sessions-collapse] "Projects" closes every project to one closed header (a status or project filter shows
+        // them all, as it opens every group).
+        let foldsProjects = firstProject && store != nil && !searching && !listFiltered
+        let onFoldCaption: (() -> Void)? = foldsProjects ? { [weak self] in self?.toggleGroup(SessionListPipeline.projectsId) } : nil
         let seeAll: SessionSeeAll?
         if freshPinned, group.more > 0 || group.expanded {
             seeAll = SessionSeeAll(total: group.total, expanded: group.expanded, kind: "Pinned") { [weak self] in self?.toggleSeeAll(id) }
@@ -555,7 +569,8 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
         headerCardPads[ObjectIdentifier(header)] = summary.map { ProjectCardHeader.topPad(open: !$0.collapsed) }
         let view = SessionDateHeaderView(title: title, onNewChat: onNewChat, onRename: onRename, onDelete: onDelete, fold: fold,
                                          order: order, dropTarget: dropTarget, summary: summary, badge: badge,
-                                         caption: firstProject ? "Projects" : nil, onEditCaption: onEdit, seeAll: seeAll,
+                                         caption: firstProject ? SessionListPipeline.projectsTitle : nil, onEditCaption: onEdit,
+                                         onFoldCaption: onFoldCaption, seeAll: seeAll,
                                          first: section == 0, motion: motion)
         header.contentConfiguration = UIHostingConfiguration {
             view.with(part: firstProject ? .belowCaption : .whole)
@@ -565,6 +580,12 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
         // [project-unfold] "Projects" apart from the content, which the list moves as the row opens: it stays.
         header.caption = firstProject ? UIHostingConfiguration { view.with(part: .caption) }.margins(.all, 0) : nil
         header.backgroundConfiguration = .clear()
+    }
+
+    /// [sessions-collapse] A status or project filter narrows the list: every group shows open (`SessionListPipeline.folded`).
+    private var listFiltered: Bool {
+        guard let prefs = store?.view else { return false }
+        return !prefs.statusFilter.isEmpty || !prefs.projectFilter.isEmpty
     }
 
     /// The headers on screen say their group's state again (a fold or a count changed under the same section).
@@ -578,10 +599,19 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
 
     /// A header tapped: its group closes to the header (kept across launches for the chip's bot), or opens again.
     func toggleGroup(_ id: String) {
-        guard let store, let group = groups.first(where: { $0.id == id }) else { return }
+        guard let store else { return }
+        // [sessions-collapse] "Projects" open has no group of its own: its caption sits over the first project.
+        let collapsed: Bool
+        if let group = groups.first(where: { $0.id == id }) {
+            collapsed = group.collapsed
+        } else if id == SessionListPipeline.projectsId {
+            collapsed = false
+        } else {
+            return
+        }
         Haptics.play(.selection)
         unfoldOffscreen = offscreenPlaces(below: id)
-        store.setGroupCollapsed(id, !group.collapsed)
+        store.setGroupCollapsed(id, !collapsed)
         unfoldGroup = id
         FrameMeter.shared.end(foldMeter)
         foldMeter = FrameMeter.shared.begin(.fold, atMost: 3)

@@ -78,6 +78,10 @@ enum NewChatProjectChoice {
 enum NewChatLast {
     static let botKey = "hqn.newChat.lastBot"
     static let projectsKey = "hqn.newChat.lastProjects"
+    static let recentsKey = "hqn.newChat.recentProjects"
+    /// A sheet with this many projects or fewer lists them all; with more, `shownWhenMany` and All Projects.
+    nonisolated static let showAllUpTo = 6
+    nonisolated static let shownWhenMany = 5
     /// The stored word for No Project (a project's key is a folder path, never empty).
     nonisolated static let none = ""
 
@@ -93,6 +97,24 @@ enum NewChatLast {
         var all = (UserDefaults.standard.dictionary(forKey: projectsKey) as? [String: String]) ?? [:]
         all[bot] = project ?? none
         UserDefaults.standard.set(all, forKey: projectsKey)
+        guard let project else { return }
+        var recents = (UserDefaults.standard.dictionary(forKey: recentsKey) as? [String: [String]]) ?? [:]
+        recents[bot] = Array(([project] + (recents[bot] ?? []).filter { $0 != project }).prefix(8))
+        UserDefaults.standard.set(recents, forKey: recentsKey)
+    }
+
+    /// The projects `bot` started chats in from the sheet, newest first.
+    static func recents(for bot: String) -> [String] {
+        ((UserDefaults.standard.dictionary(forKey: recentsKey) as? [String: [String]]) ?? [:])[bot] ?? []
+    }
+
+    /// The projects the sheet lists, from `all` (their keys, in the list's own order): every one while there are few;
+    /// with many, the `recent` ones first (newest first), filled from the list, and All Projects holds the rest.
+    nonisolated static func shown(all: [String], recent: [String]) -> (keys: [String], more: Bool) {
+        guard all.count > showAllUpTo else { return (all, false) }
+        var keys: [String] = []
+        for key in recent + all where all.contains(key) && !keys.contains(key) { keys.append(key) }
+        return (Array(keys.prefix(shownWhenMany)), true)
     }
 
     /// Whether the row for `row` (nil: No Project) carries "Last used", given what is stored for the bot.

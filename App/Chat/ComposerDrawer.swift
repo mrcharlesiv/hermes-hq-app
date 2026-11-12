@@ -551,6 +551,7 @@ final class ComposerDrawerController: NSObject, UITableViewDataSource, UITableVi
         let point = press.location(in: panel.table)
         guard let indexPath = panel.table.indexPathForRow(at: point), favoriteToggle(at: indexPath) != nil else { return }
         menuRow = indexPath
+        Haptics.play(.medium)   // our own hold menu (an edit menu iOS gives no tap for), as the Talk pill's
         editMenu.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: point))
     }
 

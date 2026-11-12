@@ -343,21 +343,38 @@ final class CapabilitiesEndToEndTests: XCTestCase {
         let update = app.buttons["plugin.update"]
         XCTAssertTrue(update.waitForExistence(timeout: 8), "an update is offered")
         update.tap()
+        // [plugin-updates] The same sheet the app's add-on updates in: the plugin and its versions, the steps, Update.
+        let go = app.buttons["addon-update.go"]
+        XCTAssertTrue(go.waitForExistence(timeout: 10), "the update sheet asks first")
+        XCTAssertTrue(app.staticTexts["Update web-clipper?"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["addon-update.versions"].waitForExistence(timeout: 5), "from which version to which")
+        sleep(2)   // the sheet fits itself to its steps
+        shot(app, "plugin-update-sheet")
+        // The owner restarts Hermes themselves, so no chat opens under the test.
+        let mine = app.switches["addon-update.restart-choice"]
+        XCTAssertTrue(mine.waitForExistence(timeout: 5))
+        if (mine.value as? String) != "1" { mine.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap() }
+        XCTAssertTrue(waitUntil(timeout: 5) { (mine.value as? String) == "1" }, "the switch is on")
+        shot(app, "plugin-update-sheet-mine")
+        go.tap()
         // The update asks for more than the plugin had: the phone shows what and asks.
         let ask = app.alerts.firstMatch
         XCTAssertTrue(ask.waitForExistence(timeout: 8), "new permissions are asked for")
         shot(app, "plugin-update-consent")
-        ask.buttons.allElementsBoundByIndex.last?.tap()
+        ask.buttons["Apply Update"].tap()
         XCTAssertTrue(waitUntil(timeout: 10) { self.plugin("web-clipper")["update_available"] as? Bool == false }, "the gateway updated it")
+        XCTAssertTrue(app.staticTexts["Restart Hermes to Finish"].waitForExistence(timeout: 10), "installed; the restart is the owner's")
+        shot(app, "plugin-update-restart")
+        app.buttons["addon-update.close"].firstMatch.tap()
         XCTAssertTrue(waitUntil(timeout: 8) { !update.exists }, "the Update button goes")
         shot(app, "plugin-updated")
         // A catalog plugin is not removed from the phone; one installed from Git is.
         XCTAssertFalse(app.buttons["plugin.uninstall"].exists)
         app.navigationBars.buttons.firstMatch.tap()
-        let mine = app.descendants(matching: .any)["plugin-row-my-plugin"]
-        XCTAssertTrue(mine.waitForExistence(timeout: 8))
-        reach(app, mine)
-        mine.tap()
+        let own = app.descendants(matching: .any)["plugin-row-my-plugin"]
+        XCTAssertTrue(own.waitForExistence(timeout: 8))
+        reach(app, own)
+        own.tap()
         let uninstall = app.buttons["plugin.uninstall"]
         XCTAssertTrue(uninstall.waitForExistence(timeout: 5))
         uninstall.tap()
@@ -365,6 +382,32 @@ final class CapabilitiesEndToEndTests: XCTestCase {
         shot(app, "plugin-uninstall-confirm")
         app.alerts.firstMatch.buttons["Uninstall"].tap()
         XCTAssertTrue(waitUntil(timeout: 10) { !self.pluginNames().contains("my-plugin") }, "the gateway removed it")
+    }
+
+    /// [plugin-updates] A plugin with an update shows as the add-on's does: a red count on More's Settings row, a row at
+    /// the top of Settings saying which plugin, and that row opens the update sheet.
+    @MainActor func testC12b_PluginUpdateShowsInSettings() throws {
+        let app = launch()
+        openCapabilities(app, tab: "Plugins")   // the list, read: Hermes says web-clipper has an update
+        XCTAssertTrue(app.descendants(matching: .any)["plugin-row-web-clipper"].waitForExistence(timeout: 10))
+        app.navigationBars.buttons.firstMatch.tap()
+        let plugins = app.descendants(matching: .any)["capabilities.row.plugins"]
+        XCTAssertTrue(plugins.waitForExistence(timeout: 8))
+        XCTAssertEqual(plugins.value as? String, "1 Update", "Capabilities says so on its Plugins row")
+        shot(app, "plugin-update-capabilities")
+        app.navigationBars.buttons.firstMatch.tap()
+        sleep(1)
+        shot(app, "plugin-update-more")
+        openMoreRow(app, "settings")
+        let row = app.descendants(matching: .any)["settings.plugin-update"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "Settings has a Plugin Update Available row")
+        XCTAssertTrue(app.staticTexts["web-clipper has a newer version."].exists, "saying which plugin")
+        shot(app, "plugin-update-settings")
+        row.tap()
+        XCTAssertTrue(app.buttons["addon-update.go"].waitForExistence(timeout: 15), "the row opens the update sheet")
+        XCTAssertTrue(app.staticTexts["Update web-clipper?"].exists)
+        app.buttons["addon-update.close"].firstMatch.tap()
+        XCTAssertTrue(waitUntil(timeout: 8) { row.isHittable }, "Not Now: the row stays")
     }
 
     @MainActor func testC13_TerminalBackendAndWebProvider() throws {
@@ -815,9 +858,9 @@ final class CapabilitiesEndToEndTests: XCTestCase {
         let row = app.descendants(matching: .any)["connectors.connect-apps"]
         XCTAssertTrue(app.descendants(matching: .any)["capabilities.list"].waitForExistence(timeout: 10), "Connectors opens")
         for _ in 0..<6 where !(row.exists && row.isHittable) { app.swipeUp() }
-        XCTAssertTrue(row.exists, "Connectors offers Connect Apps")
+        XCTAssertTrue(row.exists, "Connectors offers Composio")
         row.tap()
-        XCTAssertTrue(app.navigationBars["Connect Apps"].waitForExistence(timeout: 10), "Connect Apps opens")
+        XCTAssertTrue(app.navigationBars["Composio"].waitForExistence(timeout: 10), "Composio opens")
     }
 
     /// The page's + / ⋯ button; with an item, the menu entry of that name.

@@ -10,6 +10,7 @@ import UIKit
     /// `presenter`: whoever presents the sheet (its window says the layout); nil reads the app's tabs.
     static func apply(_ navigation: UINavigationController, from presenter: UIViewController?,
                       detents: [UISheetPresentationController.Detent] = [.large()]) {
+        if PanePopover.take(navigation, detents: detents) { return }   // [ipad-polish] hung off its button in two panes
         navigation.modalPresentationStyle = twoPanes(presenter) ? .formSheet : .pageSheet
         navigation.sheetPresentationController?.detents = detents
         #if targetEnvironment(macCatalyst)
@@ -17,6 +18,18 @@ import UIKit
         // most of the window empty. On the Mac it's as tall as the window allows, at the same width (owner 2026-10-23).
         if navigation.modalPresentationStyle == .formSheet, let window = presentingWindow(presenter) {
             let tall = max(700, min(window.bounds.height - 120, 1100))
+            navigation.preferredContentSize = CGSize(width: 620, height: tall)
+            MacSheetFit.attach(to: navigation, tall: tall)
+        }
+        #else
+        // [ipad-polish] The iPad's own form sheet is 570 × 650 pt whatever the window, so on a 13-inch iPad Bot Info
+        // showed its header and two rows, and Settings stopped after Appearance, in a card a quarter of the screen. A
+        // full-height sheet (Bot Info, Settings, Edit Bot, a Kanban task) is now as tall as the window allows, at a
+        // phone's width, and follows its page the way the Mac's does: a short form stays short. Sheets that open at
+        // half height keep the system's card.
+        if navigation.modalPresentationStyle == .formSheet, detents.allSatisfy({ $0.identifier == .large }),
+           let window = presentingWindow(presenter) {
+            let tall = max(650, min(window.bounds.height - 140, 1000))
             navigation.preferredContentSize = CGSize(width: 620, height: tall)
             MacSheetFit.attach(to: navigation, tall: tall)
         }
@@ -34,6 +47,20 @@ import UIKit
         #endif
     }
 
+    static func inTwoPanes(_ presenter: UIViewController?) -> Bool { twoPanes(presenter) }
+
+    /// [ipad-polish] A sheet that shows a document (a live page or tile, a note, a folder of files) is wider than a form
+    /// on an iPad: up to `width`, with 40 pt of the window left on each side. A page made for a browser sat in a
+    /// phone's 620 pt on a 1,366 pt screen. Only the iPad's full-height form sheet in two panes; a no-op elsewhere.
+    static func widen(_ navigation: UINavigationController, to width: CGFloat, from presenter: UIViewController?) {
+        #if !targetEnvironment(macCatalyst)
+        guard navigation.modalPresentationStyle == .formSheet, let window = presentingWindow(presenter) else { return }
+        let wide = max(620, min(width, window.bounds.width - 80))
+        MacSheetFit.widen(navigation, to: wide)
+        navigation.preferredContentSize.width = wide
+        #endif
+    }
+
     private static func twoPanes(_ presenter: UIViewController?) -> Bool {
         let tabs = presenter?.viewIfLoaded?.window.flatMap { AppRoot.tabs($0) } ?? MainTabController.current
         return tabs?.split?.isDouble == true
@@ -44,10 +71,9 @@ import UIKit
     }
 }
 
-#if targetEnvironment(macCatalyst)
 /// [mac] Stress test 2026-10-28 #32: a short page (Usage & Limits, Model Prices, Changes, Commands) sat at the top of a
 /// window-tall sheet. The sheet now follows its page's scrolling content, from 320 pt up to the tall size a long list
-/// keeps. It waits for the content to settle (a page fills in after loading), then follows it (#80: it used to only
+/// keeps. [ipad-polish] The iPad's full-height form sheets in two panes use it too (`SheetStyle.apply`). It waits for the content to settle (a page fills in after loading), then follows it (#80: it used to only
 /// grow); while a field in it is being typed in it only grows. An empty page (its notice drawn over no rows) is 420.
 @MainActor final class MacSheetFit: UIView {
     private static var key: UInt8 = 0
@@ -55,12 +81,18 @@ import UIKit
     private weak var watched: UIScrollView?
     private var watch: NSKeyValueObservation?
     private var tall: CGFloat
+    /// The narrowest it is: a sheet's 620, or a pop-over's own width (`PanePopover`).
+    private var wide: CGFloat = 620
+    /// The shortest it is: a sheet's 320, less for a pop-over of a few rows.
+    private var floor: CGFloat = 320
     private var height: CGFloat = 0
     private var tries = 0
     private var settle: DispatchWorkItem?
 
-    static func attach(to navigation: UINavigationController, tall: CGFloat) {
+    static func attach(to navigation: UINavigationController, tall: CGFloat, wide: CGFloat = 620, floor: CGFloat = 320) {
         let fit = MacSheetFit(navigation, tall: tall)
+        fit.wide = wide
+        fit.floor = floor
         objc_setAssociatedObject(navigation, &key, fit, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         fit.frame = navigation.view.bounds
         fit.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -70,6 +102,11 @@ import UIKit
     /// [mac-audit K] Owner 2026-11-02: a settings page in a sheet (Tool Calls: seven choices, most with a two-line
     /// description) followed its list to 920 pt, nearly the whole window, for a few switches. It stops at `height` and
     /// its list scrolls the rest, as a Mac preferences sheet does.
+    /// [ipad-polish] The narrowest the sheet is from now on (`SheetStyle.widen`).
+    static func widen(_ navigation: UINavigationController, to width: CGFloat) {
+        (objc_getAssociatedObject(navigation, &key) as? MacSheetFit)?.wide = width
+    }
+
     static func cap(_ navigation: UINavigationController, at height: CGFloat) {
         guard let fit = objc_getAssociatedObject(navigation, &key) as? MacSheetFit, height < fit.tall else { return }
         fit.tall = height
@@ -136,7 +173,8 @@ import UIKit
         // [mac] A page showing its notice over no rows (Commands' "No Commands Available", an error) is the empty
         // page's 420, whatever the bare list's few points of padding add up to.
         let notice = navigation.topViewController?.contentUnavailableConfiguration != nil
-        let wanted = content > 0 && !notice ? content + scroll.adjustedContentInset.top + scroll.adjustedContentInset.bottom : 420
+        // An empty page's notice: 420 in a sheet, 280 in a pop-over (its `floor` is lower), where 420 was mostly air.
+        let wanted = content > 0 && !notice ? content + scroll.adjustedContentInset.top + scroll.adjustedContentInset.bottom : (floor < 320 ? 280 : 420)
         // Stress test 2026-10-28 #71, #74, #80: only growing kept the height of whatever showed while the page loaded
         // (Commands' skeleton rows, Prices' "Looking up list prices…"), so a settled page sat over 60 to 190 pt of empty
         // sheet, a different amount in each look. Settled, the sheet now follows its page both ways; only while
@@ -146,9 +184,9 @@ import UIKit
         // under that row for as long as the field held its words. Now a typing floor lasts until the list has been
         // still for `typingPause`, then the sheet fits the settled list.
         let typing = !settled && Self.typing(in: navigation.view, depth: 0)
-        let floor = typing ? height : 0
-        let next = min(tall, max(320, floor, wanted.rounded(.up)))
-        let fitted = min(tall, max(320, wanted.rounded(.up)))
+        let held = typing ? height : 0
+        let next = min(tall, max(floor, held, wanted.rounded(.up)))
+        let fitted = min(tall, max(floor, wanted.rounded(.up)))
         if typing, abs(next - fitted) > 1 {   // held up by the floor: fit once the list is still
             let work = DispatchWorkItem { [weak self, weak scroll] in if let scroll { self?.fit(scroll, settled: true) } }
             relax = work
@@ -157,7 +195,7 @@ import UIKit
         guard abs(next - height) > 1 || height == 0 else { return }
         height = next
         // A page that asks for more width keeps it (the Table page: a wide table's own width, up to 900).
-        let width = max(620, navigation.topViewController?.preferredContentSize.width ?? 0)
+        let width = max(wide, navigation.topViewController?.preferredContentSize.width ?? 0)
         navigation.preferredContentSize = CGSize(width: width, height: next)
     }
 
@@ -175,7 +213,87 @@ import UIKit
         return view.subviews.contains { typing(in: $0, depth: depth + 1) }
     }
 }
-#endif
+
+/// [ipad-polish] Owner 2026-11-11 ("you can do better"): in two panes a half-height sheet that a button opens (☰'s
+/// Commands, the model's Models, the title's Chat Info, ⋯'s Prompts, Sessions' New Chat) was the system's floating
+/// card in the middle of the window: across the line between the list and the chat, dimming both, a hand's width from
+/// the button that opened it. There it now hangs off its button as a pop-over, as the iPad's own apps do: nothing is
+/// dimmed, a tap anywhere else closes it, and it is as tall as its list. One pane (and the iPhone) keeps the sheet;
+/// if the window narrows while it is open the system turns it back into that sheet, detents and all.
+@MainActor enum PanePopover {
+    private static var next: (anchor: any UIPopoverPresentationControllerSourceItem, rect: CGRect?, arrow: UIPopoverArrowDirection,
+                              size: CGSize, bar: Bool)?
+
+    /// Call just before making the sheet (`ChatSheet.wrap`, `MenusSheet.wrap`, anything that goes through
+    /// `SheetStyle.apply`): in two panes it is made a pop-over hung off `anchor`. It has to be said first because a
+    /// sheet's presentation is fixed the moment its frame is made. Does nothing when this is not two panes on an iPad,
+    /// when there is nothing on screen to hang it from, or when another pop-up is already over `presenter`.
+    /// `rect`: the part of a view `anchor` it hangs from (a bar's button, since a pop-over given the bar's item itself
+    /// grows out of the button and covers the bar). `arrow`: which way it may point (down: above the message box).
+    static func hangNext(on anchor: (any UIPopoverPresentationControllerSourceItem)?, rect: CGRect? = nil,
+                         arrow: UIPopoverArrowDirection = .any, from presenter: UIViewController?,
+                         size: CGSize = CGSize(width: 360, height: 520), bar: Bool = true) {
+        #if !targetEnvironment(macCatalyst)
+        guard let anchor, SheetStyle.inTwoPanes(presenter), presenter?.presentedViewController == nil else { return }
+        if let view = anchor as? UIView, view.window == nil || view.isHidden || view.alpha < 0.05 { return }
+        let tall = min(size.height, max(320, (presenter?.viewIfLoaded?.window?.bounds.height ?? 800) - 160))
+        next = (anchor, rect, arrow, CGSize(width: size.width, height: tall), bar)
+        // Only the sheet made in this same turn: a caller that then makes none must not hang someone else's.
+        DispatchQueue.main.async { next = nil }
+        #endif
+    }
+
+    /// `SheetStyle.apply`'s first step: true when the sheet became the pop-over that was asked for.
+    fileprivate static func take(_ navigation: UINavigationController, detents: [UISheetPresentationController.Detent]) -> Bool {
+        guard let asked = next else { return false }
+        next = nil
+        navigation.modalPresentationStyle = .popover
+        guard let popover = navigation.popoverPresentationController else { return false }
+        popover.sourceItem = asked.anchor
+        if let rect = asked.rect { popover.sourceRect = rect }
+        popover.permittedArrowDirections = asked.arrow
+        let adaptive = popover.adaptiveSheetPresentationController
+        adaptive.detents = detents
+        adaptive.prefersGrabberVisible = false
+        navigation.preferredContentSize = asked.size
+        // The pop-over's own Liquid Glass with the rows on their soft cards, as the half-height sheets are on the
+        // iPhone (`GlassSheetTrait`).
+        if Theme.isDesktop {
+            // The look's raised surface, a step lighter than the page, inside the pop-over's own thin rim: on the
+            // page's colour with no rim a pop-over had no edge at all and its rows read as part of the page behind.
+            navigation.view.backgroundColor = ChatPalette.elevated.withAlphaComponent(0.94)
+        } else {
+            navigation.traitOverrides[GlassSheetTrait.self] = true
+            // Glass alone let a chat's coloured bubbles show through the rows (blue behind a model's price); a veil
+            // of the page's own colour over it keeps the glass at the edges and the words on a quiet ground.
+            navigation.view.backgroundColor = HQPalette.page.withAlphaComponent(0.82)
+        }
+        // `bar: false`: a pop-over with nothing in its bar but a name its button already says (Chat Info under the
+        // chat's title, New Chat under the compose button) starts at its first row.
+        navigation.additionalSafeAreaInsets.bottom = 10   // the last card clear of the pop-over's bottom edge
+        if !asked.bar {
+            navigation.setNavigationBarHidden(true, animated: false)
+            navigation.additionalSafeAreaInsets.top = 8   // the first row clear of the pop-over's rounded corner
+        }
+        MacSheetFit.attach(to: navigation, tall: asked.size.height, wide: asked.size.width, floor: 120)
+        // A pop-over closes with a tap outside it: its ✕ or Cancel would be a second way on the same page.
+        if let item = navigation.viewControllers.first?.navigationItem, let close = item.leftBarButtonItem,
+           ["sheet.close", "sheet.cancel"].contains(close.accessibilityIdentifier ?? "") {
+            item.leftBarButtonItem = nil
+        }
+        return true
+    }
+}
+
+extension UINavigationBar {
+    /// [ipad-polish] Where the bar's trailing-most button sits (Sessions' compose, a chat's ⋯), for a pop-over to hang
+    /// under: given the bar's item itself, a pop-over grows out of the button and covers the page's title.
+    var hqTrailingButtonRect: CGRect {
+        let side: CGFloat = 44, inset: CGFloat = 16
+        let rightToLeft = effectiveUserInterfaceLayoutDirection == .rightToLeft
+        return CGRect(x: rightToLeft ? inset : bounds.maxX - inset - side, y: bounds.midY - side / 2, width: side, height: side)
+    }
+}
 
 extension UIBarButtonItem {
     /// The item a sheet or viewer closes with. iPhone: the system's item (✕, Cancel, Done), as before. [mac] Stress test

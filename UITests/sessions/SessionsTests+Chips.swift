@@ -138,7 +138,7 @@ extension SessionsTests {
         XCTAssertTrue(pill.waitForExistence(timeout: 5), "New Chat")
         XCTAssertTrue(pill.isSelected, "Research is lit")
         shot(app, "C6-compose-with-chip-sheet")
-        app.buttons["new-chat-project-none"].tap()
+        app.buttons["new-chat-start"].tap()
         XCTAssertTrue(waitUntil(8) { self.rpc("session.create").contains { $0["profile"] as? String == "research" } },
                       "a new Research chat")
         XCTAssertTrue(app.tables["chat.table"].waitForExistence(timeout: 8), "the new chat opens")

@@ -52,7 +52,9 @@ final class WorkspacePage: UITableViewController {
     /// The page in its sheet (the ✕ leading, as every sheet).
     static func make(_ kind: Kind, workspace: ChatWorkspace, directory: String?, media: MediaContext? = nil, highlight: String? = nil) -> UINavigationController {
         let root = WorkspacePage(kind: kind, workspace: workspace, directory: directory, media: media, highlight: highlight)
-        return ChatSheet.wrap(root, title: kind == .files ? "Files" : "Changes", detents: [.large()])
+        let sheet = ChatSheet.wrap(root, title: kind == .files ? "Files" : "Changes", detents: [.large()])
+        SheetStyle.widen(sheet, to: 780, from: nil)   // [ipad-polish] file names and a file's text at a readable width
+        return sheet
     }
 
     /// Files opened at a path a bot named in its reply (`FileLinks`): the file on top of its folder's list (Back shows
@@ -64,6 +66,7 @@ final class WorkspacePage: UITableViewController {
         let sure = FileLinks.hasExtension(name)
         let root = WorkspacePage(kind: .files, workspace: workspace, directory: folder, media: media, reveal: sure ? nil : name)
         let sheet = ChatSheet.wrap(root, title: "Files", detents: [.large()])
+        SheetStyle.widen(sheet, to: 780, from: nil)   // [ipad-polish]
         if sure { sheet.pushViewController(root.filePage(WorkspaceEntry(name: name, path: path, isDirectory: false)), animated: false) }
         AppLog.trace("chatui", "file link opened in Files (\(sure ? "file" : "folder or file"))")
         return sheet

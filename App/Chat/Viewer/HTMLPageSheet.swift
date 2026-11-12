@@ -77,7 +77,9 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
                         from vc: UIViewController) -> HTMLPageSheet {
         let page = HTMLPageSheet(file: url, source: source, tile: tile)
         AppLog.trace("chatui", "html page opened live, talk-back \(source?.send != nil || tile?.send != nil ? "on" : "off")\(tile != nil ? ", as a tile" : "")")
-        vc.present(ChatSheet.wrap(page, title: title ?? tile?.name ?? url.lastPathComponent, detents: [.large()]), animated: true)
+        let sheet = ChatSheet.wrap(page, title: title ?? tile?.name ?? url.lastPathComponent, detents: [.large()])
+        SheetStyle.widen(sheet, to: 960, from: vc)   // [ipad-polish] a page made for a browser, not a phone's width
+        vc.present(sheet, animated: true)
         return page
     }
 

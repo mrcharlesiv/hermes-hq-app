@@ -488,6 +488,7 @@ import UIKit
                 return
             }
             AppLog.note("launch", "offline screen: switched gateway")
+            Haptics.play(.selection)   // as a switch from Settings
             self.signedIn(other, adopting: true)
         }
     }
@@ -510,6 +511,7 @@ import UIKit
                 return
             }
             AppLog.note("launch", "sign-in form: switched gateway")
+            Haptics.play(.selection)   // as a switch from Settings
             self.signedIn(other, adopting: true)
         }
     }

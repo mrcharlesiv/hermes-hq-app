@@ -229,7 +229,7 @@ final class KeyboardShortcutTests: IPadTestCase {
         XCTAssertTrue(choice.waitForExistence(timeout: 8), "Shift-Command-N asks which bot")
         IPad.shot(app, "keys-new-chat-choose", in: self)
         choice.tap()
-        app.descendants(matching: .any)["new-chat-project-none"].tap()
+        app.descendants(matching: .any)["new-chat-start"].tap()
         XCTAssertTrue(IPad.waitUntil(timeout: 10) { IPad.count("session.create", account) == 2 }, "one more session.create")
         XCTAssertEqual(try created(1)?["profile"] as? String, "research")
     }
@@ -315,12 +315,15 @@ final class KeyboardShortcutTests: IPadTestCase {
         let account = try IPad.account(.perf)
         let app = IPad.launch(account)
         let find = app.descendants(matching: .any)["chat.find.field"]
-        for (round, bot) in ["default", "ivy", "default"].enumerated() {
+        for round in 0..<3 {
+            // [ipad-polish] The main bot, another bot, the main bot again (`IPad.otherBot`: not one by name).
+            let row = round == 1 ? IPad.otherBot(app) : app.cells["bot-row-default"]
+            XCTAssertTrue(row.waitForExistence(timeout: 15), "the bot's row shows (round \(round + 1))")
+            row.tap()
             if round == 0 || !IPad.isPad {
-                IPad.openBot(app, bot)
+                XCTAssertTrue(IPad.table(app).waitForExistence(timeout: 12), "the chat opens (round \(round + 1))")
             } else {
-                app.cells["bot-row-\(bot)"].tap()
-                XCTAssertTrue(IPad.waitUntil(timeout: 10) { app.cells["bot-row-\(bot)"].isSelected && IPad.table(app).exists }, "the chat opens (round \(round + 1))")
+                XCTAssertTrue(IPad.waitUntil(timeout: 10) { row.isSelected && IPad.table(app).exists }, "the chat opens (round \(round + 1))")
             }
             IPad.command(app, "f")
             XCTAssertTrue(find.waitForExistence(timeout: 6), "Command-F opens Find in the chat (round \(round + 1))")

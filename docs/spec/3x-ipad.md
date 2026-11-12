@@ -784,3 +784,75 @@ New files: `HermesKit/Layout/PaneLayout.swift`, `App/Root/RootSplitController.sw
   Escape test skips itself when the key does not arrive. "Critical process crashed" issues from XCTest are dropped
   only when this test's own app is still running with the same process id (other agents' apps on the shared Mac
   crash under the same name).
+
+## 16. iPad pass of 2026-11-11 (branch `feat/ipad-polish`)
+
+Owner 2026-11-11: "get the app to work well on an iPad". Every screen the tour hook reaches was photographed on iPad
+simulators (13-inch and 11-inch in both orientations, mini) and the stream's UI tests were run again for the first
+time since October. Where this section and an older one disagree, this one is right.
+
+- **A streaming reply survives a crossing (fix).** `UINavigationController` ends the old pane's transition only when
+  that pane next lays out, so the chat got `viewDidDisappear` from the pane it left after `viewDidAppear` in the pane
+  it joined had already cleared `movingBetweenPanes`. The late call detached the session: the reply stopped where it
+  was until the chat was reopened. `ChatViewController.landedInOtherPane` (in a stack, in the window, within 2 s of a
+  move) keeps it attached. `IPadLayoutTests` test 4 failed on this and passes.
+- **The message box stays on the keys after a crossing with the keyboard up (fix).** The guide was called dead only
+  at zero size (§15, keyboard guide). On an iPad mini turned sideways while typing it kept a lowered keyboard's place
+  at full size, so the composer and the newest rows sat under the keys. `RootSplitController.guideIsDead` compares
+  the guide with the keyboard's last announced frame; `restoreFocus` checks again 0.7 s and 1.5 s after the move,
+  sets the guide up again and raises the keys once. `IPadLayoutTests` test 10 (mini) failed on this and passes.
+- **DECISION (sheets, replaces part of §4.8).** A full-height form sheet in two panes is 620 pt wide and as tall as
+  the window less 140 pt, between 650 and 1,000 pt, and follows its page's content as the Mac's does (`MacSheetFit`).
+  The system's own 570 × 650 pt card showed Bot Info's header and two rows on a 13-inch iPad. Sheets that open at
+  half height keep the system's floating card.
+- **DECISION (Kanban task, replaces the UX study's line in D6).** In two panes a Kanban task opens in the right pane
+  beside its list, as on the Mac (owner 2026-10-23 there). As a sheet it left the right pane on "Choose an item from
+  the list" for good. One pane: the sheet, as before.
+- **Not changed, on purpose.** The Mac's whole-window pages (Kanban's board of columns, Artifacts' grid, Files' table)
+  stay Mac only. The half-height sheets with no button of their own (Steps, a step, Error Details) stay the system's
+  floating card.
+
+### 16.1 Second pass, the same day (owner: "do another pass … you can do better")
+
+- **DECISION (hide the list, replaces §4.7 "Not built").** In two panes the right pane's first screen has a button at
+  the leading end of its bar (`sidebar.leading`, `pane.listToggle`) that puts the list away: the chat takes the window
+  (`PaneLayout.double(sidebar: 0)`, the Mac's folded-list layout). The same button, ⌃⌘S (View › Hide List / Show List;
+  the system's own Show Sidebar item is removed, it held the key), a swipe in from the leading edge, a tab's own key
+  (⌘1…) and Search Sessions bring it back. Closing what is on the right brings it back too and clears the choice;
+  a narrow window is the phone layout and comes back to the hidden list when it widens. Not kept across launches.
+  Why: an 11-inch iPad upright gives the chat 448 pt beside the list. `RootSplitController.setListHidden`.
+- **DECISION (pop-overs, replaces "Not changed" above for these five).** In two panes ☰'s Commands, the model's
+  Models, Chat Info (under the title), ⋯'s Prompts and Sessions' New Chat (under the compose button) are pop-overs
+  hung off their buttons. `PanePopover.hangNext(on:rect:arrow:from:size:bar:)` is called just before the sheet is
+  made, because a sheet's presentation is fixed the moment `sheetPresentationController` is first read;
+  `SheetStyle.apply` then makes the pop-over. One pane and the iPhone keep the sheets; the pop-over carries the
+  sheet's detents for a window that narrows under it. How they look (owner, of the first try, an opaque grey card:
+  "These pop-ups look like trash. Do better."):
+  - The pop-over's own Liquid Glass with the rows on their soft cards, as the half-height sheets on the iPhone
+    (`GlassSheetTrait`), under a veil of the page's colour (82 %) so a chat's coloured bubbles do not show through
+    the rows. The Desktop Look: the look's raised surface inside the pop-over's rim (on the page's colour it had no
+    edge at all).
+  - As tall as its rows and no taller (`MacSheetFit`, floor 120 pt, an empty page's notice 280 pt), 10 pt clear at
+    the foot. 360 pt wide; Chat Info 340, New Chat 400.
+  - No ✕ (a tap outside closes it). No title bar where the button already says it: Chat Info starts at the chat's
+    name, New Chat at Bot. Commands, Models and Prompts keep theirs (the search field and their buttons live there).
+  - It points at its button and never covers it: above the message box for ☰ and the model, under the bar for the
+    title, ⋯ and compose. A pop-over given a bar's own item grows out of the button and covers the page's title, so
+    those two hang from the button's place in the bar (`UINavigationBar.hqTrailingButtonRect`).
+- **DECISION (documents are wide).** A live page or tile opens up to 960 pt wide, a note and the chat's Files and
+  Changes up to 780 pt (`SheetStyle.widen`), 40 pt of the window left at each side. Forms stay 620.
+- **Fix.** The tour's chat finder looked under the tabs only, so `-HQDebugTour htmlstatus` (and any hook that needs
+  the chat) did nothing in two panes.
+- **Seen.** The Desktop Look on a 13-inch iPad: lists, a chat, Bot Info, Settings, the Commands pop-over, the list
+  button. New tests: `IPadLayoutTests` test 12 (the list) and test 13 (Commands as a pop-over, a sheet when narrow).
+- **Seen, fine.** A window dragged smaller (iPadOS windowed apps): the system's window controls take the bar's
+  leading corner and the titles and Back move over for them; 375 pt wide is the phone layout. Backgrounding in both
+  orientations (`IPadBackgroundTests`).
+- **Tests.** The stand-in gateway (outside this repository) names its second bot itself, so the tests ask for
+  `IPad.otherBot`. `IPadTurnTests` turns the simulator and drags the app's window corner, for pictures.
+  `IPadAuditTests` test 1 failed at Command-comma after a relaunch: a window the test has not touched does not have
+  the keyboard on the simulator, so the key went to iPadOS, which opened its own Settings app. The test now taps the
+  tab on show first (and reads Appearance's row; Notifications is under the short window's fold). All of
+  `UITests/ipad` passes on the 11-inch simulator (23 passed, 2 skipped: the mini's test and the plain Escape key),
+  and the mini's test passes on the mini.
+- **Not seen.** A real iPad, a real Magic Keyboard or trackpad, Split View beside another app, an external display.

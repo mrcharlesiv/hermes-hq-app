@@ -163,8 +163,8 @@ struct MemoNotice: Equatable {
     private func sessionNotice(_ info: MemoSessionNotice.Info?) {
         guard let info else { return }
         switch info.kind {
-        case .savedAsDraft: post(MemoNotice.savedAsDraft(bot: info.bot ?? "Hermes", detail: info.detail), scope: info.scope)
-        case .noTranscript: post(MemoNotice.noTranscript(bot: info.bot ?? "Hermes", detail: info.detail), scope: info.scope)
+        case .savedAsDraft: announce(MemoNotice.savedAsDraft(bot: info.bot ?? "Hermes", detail: info.detail), scope: info.scope)
+        case .noTranscript: announce(MemoNotice.noTranscript(bot: info.bot ?? "Hermes", detail: info.detail), scope: info.scope)
         }
     }
 
@@ -216,6 +216,19 @@ struct MemoNotice: Equatable {
             target?.host?.memoStateChanged()
         }
         for effect in effects { run(effect, before: before) }
+        buttonHaptic(input, before: before, after: next)
+    }
+
+    /// The locked recorder's own buttons (the gesture's effects carry only the hold's cues): Stop takes the memo to
+    /// review with a light tap, as recording and locking; Delete throws the take away with the rigid one cancelling
+    /// gives, once it is really gone (a long take asks first).
+    private func buttonHaptic(_ input: MemoInput, before: MemoGestureState, after: MemoGestureState) {
+        guard after.phase != before.phase else { return }
+        switch input {
+        case .stop: Haptics.play(.light)
+        case .delete, .deleteConfirmed: Haptics.play(.rigid)
+        default: break
+        }
     }
 
     private func settle() {
@@ -266,7 +279,7 @@ struct MemoNotice: Equatable {
         case .tip(let tip):
             target?.host?.memoShowTip(tip)
         case .failed(let code, let message):
-            if let target { post(MemoNotice.failure(code: code, message: message), scope: scope(target)) }
+            if let target { announce(MemoNotice.failure(code: code, message: message), scope: scope(target)) }
         case .haptic(let haptic):
             Haptics.play(haptic == .cancelArmed ? .rigid : .light)
         case .focusStatus:
@@ -366,7 +379,7 @@ struct MemoNotice: Equatable {
                 if action != .cancel, let target {
                     let reason = MemoRecorder.reason(error)
                     AppLog.note("talk", "memo \(AppLog.tag(scope: target.scope)) failed to save (\(action)): \(AppLog.scrub(reason))")
-                    post(MemoNotice(tone: .error, title: "Couldn’t Save the Memo",
+                    announce(MemoNotice(tone: .error, title: "Couldn’t Save the Memo",
                                     message: reason.isEmpty ? "The recording couldn’t be saved on this \(DeviceWord.name)."
                                         : "The recording couldn’t be saved: \(reason)."), scope: scope(target))
                 }
@@ -387,7 +400,7 @@ struct MemoNotice: Equatable {
         }
         deliverDraft(file, target)
         if kind == .send {
-            post(MemoNotice.savedAsDraft(bot: target.botName), scope: scope(target))
+            announce(MemoNotice.savedAsDraft(bot: target.botName), scope: scope(target))
         }
     }
 
@@ -437,7 +450,7 @@ struct MemoNotice: Equatable {
             case .failed(let error):
                 dropWords()   // [live words]
                 AppLog.note("talk", "memo \(AppLog.tag(scope: target.scope)) stopped natively (\(reason)), failed to save: \(AppLog.scrub("\(error)"))")
-                post(MemoNotice(tone: .error, title: "Couldn’t Save the Memo",
+                announce(MemoNotice(tone: .error, title: "Couldn’t Save the Memo",
                                 message: "\(MemoNotice.why(reason)) The \(length) recording couldn’t be saved"
                                     + (error.isEmpty ? " on this \(DeviceWord.name)." : ": \(error).")), scope: scope(target))
             case .draft(var file):
@@ -452,7 +465,7 @@ struct MemoNotice: Equatable {
                 } else {
                     deliverDraft(file, target)
                 }
-                post(MemoNotice(tone: .info, title: "Recording Stopped",
+                announce(MemoNotice(tone: .info, title: "Recording Stopped",
                                 message: "\(MemoNotice.why(reason)) Your \(length) memo is waiting in the message field."), scope: scope(target))
             case .discard, .await:
                 AppLog.trace("talk", "memo \(AppLog.tag(scope: target.scope)) stopped natively (\(reason)), discarded")
@@ -578,6 +591,17 @@ struct MemoNotice: Equatable {
     // MARK: Notices
 
     func notice(for scope: String) -> MemoNotice? { notices[scope] }
+
+    /// A memo's own notice, with the tap its tone gives (an info one plays none), as Dictation's. `post` alone stays
+    /// silent: Dictation and Talk post through it after playing their own.
+    private func announce(_ notice: MemoNotice, scope: String) {
+        switch notice.tone {
+        case .error: Haptics.play(.error)
+        case .warning: Haptics.play(.warning)
+        case .info: break
+        }
+        post(notice, scope: scope)
+    }
 
     func post(_ notice: MemoNotice, scope: String) {
         notices[scope] = notice

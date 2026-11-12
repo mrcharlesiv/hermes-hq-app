@@ -632,7 +632,7 @@ struct SettingsRootView: View {
     @ViewBuilder
     private var addOnReminder: some View {
         let reminder = AddOnReminder.shared, update = AddOnUpdate.shared
-        let busy = update.busy
+        let busy = update.busy && !update.pluginRun   // [plugin-updates] a plugin update shows on its own row
         if let title = busy ? update.rowLabel : reminder.title, let app = model.services as? AppModel {
             Section {
                 Button {
@@ -658,6 +658,37 @@ struct SettingsRootView: View {
         }
     }
 
+    /// [plugin-updates] Under the add-on's row, and drawn as it is: the plugins Hermes says have an update, with a red
+    /// count; a tap opens the same update sheet for them. While it runs the row says "Updating Plugin…" and the step
+    /// under way, and a tap brings the sheet back.
+    @ViewBuilder
+    private var pluginReminder: some View {
+        let reminder = PluginUpdateReminder.shared, update = AddOnUpdate.shared
+        let busy = update.busy && update.pluginRun
+        if let title = busy ? update.rowLabel : reminder.title, let app = model.services as? AppModel {
+            Section {
+                Button {
+                    PluginUpdateFlow.shared.run(model: app, from: router.presenter)
+                } label: {
+                    HStack(spacing: 12) {
+                        SettingsRowLabel(title: title, systemImage: "puzzlepiece.extension")
+                        Spacer(minLength: 16)
+                        HStack(spacing: 8) {
+                            if busy { ProgressView().controlSize(.small) } else { CountBadgeView(count: reminder.count) }
+                            SettingsChevron()
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .hqMacFormRowHeight()
+                .accessibilityAddTraits(.isButton)
+                .accessibilityIdentifier("settings.plugin-update")
+            } footer: {
+                if let footer = busy ? update.rowStatus : reminder.footer { HQSectionFooter { Text(footer) } }
+            }
+        }
+    }
+
     @ViewBuilder
     private var mainSections: some View {
         if !model.moreBeside, !model.twoColumn {   // in two columns the gateway heads the category column
@@ -669,7 +700,7 @@ struct SettingsRootView: View {
             }
         }
 
-        if model.shows(.general) { addOnReminder }
+        if model.shows(.general) { addOnReminder; pluginReminder }
 
         if model.shows(.appearance) {
         Section {
@@ -1240,12 +1271,30 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
     }
 }
 
-/// The category column: the gateway (its page), then the categories; the one on show is filled in the tint, as System
-/// Settings' sidebar marks its own.
+/// The category column: the gateway (its page), then the categories; the one on show carries the window's own mark.
+/// [mac-ten] Owner 2026-11-11 ("weird UI issues"): it was filled in the full tint with white words, as System
+/// Settings' sidebar marks its own: the one saturated row in the app, a few points from the sidebar's soft mark, and
+/// it stayed blue when Chat Bubbles › Colour (a page of this very list) gave the Mac's chosen row another colour.
+/// It is the sidebar's mark now (`MacSelection.accent`): the same fill, the name in semibold, the symbol in the tint.
 struct SettingsCategoryColumn: View {
     @Bindable var model: SettingsRootModel
     let router: SettingsRouter
     static let width: CGFloat = 270
+    /// The chosen category's fill and corners: the sidebar's on the Mac (the only place the column is drawn).
+    private static var mark: Color {
+        #if targetEnvironment(macCatalyst)
+        Color(uiColor: MacSelection.accent)
+        #else
+        Color.hqTint.opacity(0.3)
+        #endif
+    }
+    private static var markRadius: CGFloat {
+        #if targetEnvironment(macCatalyst)
+        MacSelection.radius
+        #else
+        9
+        #endif
+    }
     @FocusState private var searching: Bool
 
     var body: some View {
@@ -1309,17 +1358,17 @@ struct SettingsCategoryColumn: View {
                         HStack(spacing: 10) {
                             Image(systemName: category.symbol)
                                 .font(.system(size: 16))   // a11y-font-ok: as above
-                                .foregroundStyle(on ? Color.hqOnTint : Color.hqTintText)
+                                .foregroundStyle(Color.hqTintText)
                                 .frame(width: 30)
                             Text(category.title)
-                                .font(Font.hq(.body))
-                                .foregroundStyle(on ? Color.hqOnTint : Color.hqLabel)
+                                .font(Font.hq(.body).weight(on ? .semibold : .regular))
+                                .foregroundStyle(Color.hqLabel)
                                 .lineLimit(1)
                             Spacer(minLength: 0)
                         }
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
-                        .background(on ? Color.hqTint : Color.clear, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .background(on ? Self.mark : Color.clear, in: RoundedRectangle(cornerRadius: Self.markRadius, style: .continuous))
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)

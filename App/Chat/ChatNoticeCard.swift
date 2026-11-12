@@ -330,7 +330,10 @@ final class ChatNoticeCard: UIView {
     }
 
     @objc private func primaryTapped() { onPrimary?() }
-    @objc private func closeTapped() { onClose?() }
+    @objc private func closeTapped() {
+        Haptics.play(.selection)   // as the transcript error card's ✕ and the reply banner's
+        onClose?()
+    }
     @objc private func copyTapped() {
         guard let text = content?.copyText else { return }
         UIPasteboard.general.string = text

@@ -16,6 +16,9 @@
 // asked in its chat, as before, or "I'll Restart Hermes Myself". Then no chat opens: the sheet ends on "Restart Hermes to
 // Finish", and the app watches (for a day, not 15 minutes) and finishes once Hermes is back. "Ask <bot> Instead" hands
 // that one restart to the bot after all.
+// [plugin-updates] Owner 2026-11-11: a plugin with an update "shows just like an update for the HQ plugin". The same
+// sheet runs it (PluginUpdateFlow, App/Capabilities/PluginUpdates.swift): the same steps, the same restart choice, and
+// words that name the plugin (`pluginRun`, `plugins`).
 
 import SwiftUI
 import UIKit
@@ -92,7 +95,14 @@ import UIKit
         var lines: [AddOnChanges.Change] = []
         /// GitHub's answer is still on its way.
         var loading = true
+        /// [plugin-updates] A quiet line under the name ("For Hermes and Finance").
+        var note: String? = nil
     }
+
+    /// [plugin-updates] This run updates other plugins (PluginUpdateFlow), not the app's add-ons.
+    private(set) var pluginRun = false
+    /// The plugins it updates (empty until the check has found them).
+    private(set) var plugins: [String] = []
 
     /// [manual-restart] The owner restarts Hermes themselves after an add-on goes in (this gateway's choice).
     private(set) var byHand = false
@@ -128,8 +138,32 @@ import UIKit
         browserVersion = nil
         both = false
         addOns = .push
+        pluginRun = false
+        plugins = []
         steps = [Step(id: .check, title: Self.checkTitle, state: .active, started: Date())]
         changes = []
+    }
+
+    /// [plugin-updates] The same opening for a plugin update.
+    func beginPlugins(model: AppModel) {
+        begin(model: model)
+        pluginRun = true
+        setUp = false
+    }
+
+    /// [plugin-updates] What the check found: the plugins with an update, a card each, and the steps to come.
+    func foundPlugins(_ names: [String], why: String, bot: String, installNote: String?, cards: [Changing]) {
+        plugins = names
+        self.why = why
+        botName = bot
+        let started = steps.first { $0.id == .check }?.started ?? Date()
+        steps = [
+            Step(id: .check, title: Self.checkTitle, state: .done, started: started, finished: Date()),
+            Step(id: .install, title: names.count > 1 ? "Install the updates" : "Install the update", detail: installNote),
+            Step(id: .restart, title: Self.restartTitle, detail: byHand ? Self.restartPlanMine : Self.restartPlan(bot)),
+            Step(id: .verify, title: Self.verifyTitle(both: names.count > 1)),
+        ]
+        changes = cards
     }
 
     /// What the check found: the steps to come, and the words for the question (`asking`) or the work.
@@ -185,6 +219,7 @@ import UIKit
     /// "Ask <bot> Instead", on "Restart Hermes to Finish": this one restart goes to the bot's chat after all.
     func askBotInstead() {
         guard phase == .ended(.yours) else { return }
+        if pluginRun { PluginUpdateFlow.shared.askBotInstead(); return }   // [plugin-updates]
         PushSetupOffer.shared.askBotInstead()
     }
 
@@ -272,6 +307,8 @@ import UIKit
         watching = false
         phase = .idle
         steps = []
+        pluginRun = false
+        plugins = []
         close()
     }
 
@@ -331,6 +368,7 @@ import UIKit
     func retry() {
         guard let model else { return }
         let host = sheet?.presentingViewController
+        if pluginRun { PluginUpdateFlow.shared.retry(model: model, from: host); return }   // [plugin-updates]
         Task { @MainActor in _ = await PushSetupOffer.shared.check(model: model, fromSettings: true, from: host) }
     }
 
@@ -462,7 +500,8 @@ import UIKit
     nonisolated static let rowTitle = "Updating Add-on…"
     /// [browser-update] The row names the browser add-on, or both.
     var rowLabel: String {
-        switch addOns {
+        if pluginRun { return plugins.count > 1 ? "Updating Plugins…" : "Updating Plugin…" }   // [plugin-updates]
+        return switch addOns {
         case .push: Self.rowTitle
         case .browser: "Updating Browser Add-on…"
         case .both: "Updating Add-ons…"
@@ -472,7 +511,7 @@ import UIKit
     /// Under that row: the step under way, or that the restart is slow.
     var rowStatus: String? {
         guard busy else { return nil }
-        if case .ended(let end) = phase { return Self.headline(end, setUp: setUp, addOns: addOns) }
+        if case .ended(let end) = phase { return endHeadline(end) }
         guard let step = steps.first(where: { $0.state == .active }) else { return headline }
         return step.detail.map { "\(step.title): \($0)" } ?? step.title
     }
@@ -482,6 +521,7 @@ import UIKit
         switch phase {
         case .idle, .checking: return "Checking Hermes…"
         case .asking:
+            if pluginRun { return PluginUpdateWords.asking(plugins) }   // [plugin-updates]
             if addOns == .browser { return "Update the Browser Add-on?" }   // [browser-update]
             return setUp ? (both ? "Set Up the Add-ons?" : "Set Up the Add-on?") : (both ? "Update the Add-ons?" : "Update the Add-on?")
         case .working:
@@ -490,8 +530,13 @@ import UIKit
             case .verify?: return "Almost Done…"
             default: return setUp ? "Setting Up…" : "Updating…"
             }
-        case .ended(let end): return Self.headline(end, setUp: setUp, addOns: addOns)
+        case .ended(let end): return endHeadline(end)
         }
+    }
+
+    /// [plugin-updates] An ending's big words, for the add-ons or for the plugins this run updated.
+    private func endHeadline(_ end: End) -> String {
+        pluginRun ? PluginUpdateWords.headline(end, plugins) : Self.headline(end, setUp: setUp, addOns: addOns)
     }
 
     nonisolated static func headline(_ end: End, setUp: Bool, addOns: AddOns = .push) -> String {
@@ -517,7 +562,9 @@ import UIKit
         case .idle, .checking: return nil
         case .asking: return why
         case .working: return Self.keepsGoing
-        case .ended(let end): return Self.line(end, bot: botName, addOns: addOns, push: version, browser: browserVersion)
+        case .ended(let end):
+            if pluginRun, let words = PluginUpdateWords.line(end, plugins) { return words }   // [plugin-updates]
+            return Self.line(end, bot: botName, addOns: addOns, push: version, browser: browserVersion)
         }
     }
 
@@ -559,6 +606,11 @@ import UIKit
     /// The steps show while there is something to follow (not for "up to date" or "couldn't reach").
     /// [addon-whats-new] What the update brings, while it's asked and while it goes in.
     var showsChanges: Bool { (phase == .asking || phase == .working) && !changes.isEmpty }
+
+    /// The sheet is as tall as it goes whenever it shows what the update brings (a plugin's card too): fitted to its
+    /// rows instead, the List's size lagged them and the steps sat under Update ([addon-sheet-button], seen again with
+    /// a plugin's one-row card).
+    var fillsHeight: Bool { showsChanges }
 
     var showsSteps: Bool {
         switch phase {
@@ -624,7 +676,7 @@ final class AddOnUpdateController: UIHostingController<HQScaledRoot<AddOnUpdateV
                 guard let self else { return nil }
                 // [addon-sheet-button] With what's new it's as tall as it goes (it never fitted below that), from the
                 // start: the List's size lagged its lines until a touch, and the sheet grew under that first tap.
-                if self.update.showsChanges { return context.maximumDetentValue }
+                if self.update.fillsHeight { return context.maximumDetentValue }
                 return min(context.maximumDetentValue, self.measuredHeight() ?? Self.fitHeight(self.update))
             }
             sheet.detents = [fit, .large()]
@@ -682,7 +734,7 @@ final class AddOnUpdateController: UIHostingController<HQScaledRoot<AddOnUpdateV
         // [addon-sheet-button] Not while it goes: the list's insets change as the sheet slides down, and a refit then
         // took the sheet back up (✕ didn't close it).
         guard let sheet = sheetPresentationController, !isBeingDismissed, presentedViewController == nil else { return }
-        let height = update.showsChanges ? .greatestFiniteMagnitude : measuredHeight() ?? Self.fitHeight(update)
+        let height = update.fillsHeight ? .greatestFiniteMagnitude : measuredHeight() ?? Self.fitHeight(update)
         guard settled || abs(height - fitted) > 1 else { return }
         fitted = height
         if view.window == nil { sheet.invalidateDetents() } else { sheet.animateChanges { sheet.invalidateDetents() } }
@@ -748,7 +800,8 @@ struct AddOnUpdateView: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {   // not safeAreaBar: its soft edge ate the sheet's taps
                 UpdateSheetButtonBar(shown: update.hasAction) { buttons }
             }
-            .navigationTitle(update.setUp ? (update.both ? "Set Up Add-ons" : "Set Up Add-on") : (update.both ? "Update Add-ons" : "Update Add-on"))
+            .navigationTitle(update.pluginRun ? (update.plugins.count > 1 ? "Update Plugins" : "Update Plugin")
+                             : update.setUp ? (update.both ? "Set Up Add-ons" : "Set Up Add-on") : (update.both ? "Update Add-ons" : "Update Add-on"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { SheetCloseToolbar(word: closeWord, id: "addon-update.close") { update.close() } }   // [mac] Mac polish #123
             .animation(HQMotion.swiftUI(.smooth(duration: 0.3)), value: update.phase)
@@ -945,9 +998,17 @@ private struct AddOnChangesSection: View {
     var body: some View {
         Section {
             HStack(alignment: .firstTextBaseline) {
-                Text(item.title)
-                    .font(Font.hq(.body).weight(.semibold))
-                    .foregroundStyle(Color.hqLabel)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.title)
+                        .font(Font.hq(.body).weight(.semibold))
+                        .foregroundStyle(Color.hqLabel)
+                    if let note = item.note {   // [plugin-updates] which bots get it
+                        Text(note)
+                            .font(Font.hq(.footnote))
+                            .foregroundStyle(Color.hqLabel2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
                 Spacer(minLength: 8)
                 if let versions = AddOnUpdate.versions(from: item.from, to: item.to, setUp: setUp) {
                     Text(versions)
@@ -1055,6 +1116,10 @@ extension AddOnUpdate {
     func demo(_ state: String, bot: String, model: AppModel?) -> Bool {
         settleAnswer(false)
         self.model = model
+        pluginRun = false
+        plugins = []
+        // [plugin-updates] `plugin-<state>`: one plugin's update; `plugins-<state>`: three plugins'.
+        if state.hasPrefix("plugin-") || state.hasPrefix("plugins-") { return demoPlugins(state, bot: bot) }
         // [manual-restart] `yours`: installed, waiting for the owner's restart; `asking-mine`: the question with
         // the switch on.
         canChooseRestart = true
@@ -1181,6 +1246,81 @@ extension AddOnUpdate {
             return false
         }
         return true
+    }
+
+    /// [plugin-updates] A plugin update's sheet in one state: asking, asking-mine, installing, restarting, on, yours,
+    /// slow, uptodate, failed.
+    private func demoPlugins(_ state: String, bot: String) -> Bool {
+        let several = state.hasPrefix("plugins-")
+        let state = String(state.drop { $0 != "-" }.dropFirst())
+        canChooseRestart = true
+        byHand = state == "yours" || state == "asking-mine"
+        let now = Date()
+        func at(_ seconds: TimeInterval) -> Date { now.addingTimeInterval(-seconds) }
+        beginPluginsForDemo()
+        var cards = [Changing(plugin: "web-clipper", title: "web-clipper", from: "1.4.2", to: "1.5.0", loading: false,
+                              note: several ? "For \(bot) and Finance" : nil)]
+        if several {
+            cards.append(Changing(plugin: "field-notes", title: "field-notes", from: "0.8.0", to: "0.9.1", loading: false, note: "For \(bot)"))
+            cards.append(Changing(plugin: "spotify", title: "spotify", from: "2.1.0", to: "9f2c1ab", loading: false, note: "For Gym"))
+        }
+        let names = cards.map(\.plugin)
+        foundPlugins(names, why: PluginUpdateWords.why(names), bot: bot, installNote: nil, cards: cards)
+        func set(_ id: StepID, _ state: StepState, _ detail: String? = nil, from: TimeInterval, to: TimeInterval? = nil) {
+            guard let index = steps.firstIndex(where: { $0.id == id }) else { return }
+            steps[index].state = state
+            steps[index].detail = detail
+            steps[index].started = at(from)
+            steps[index].finished = to.map(at)
+        }
+        set(.check, .done, from: 40, to: 37)
+        watching = false
+        switch state {
+        case "asking", "asking-mine":
+            set(.check, .done, from: 4, to: 1)
+            phase = .asking
+        case "installing":
+            set(.install, .active, Self.installing(several ? "field-notes for \(bot)" : "web-clipper", several ? 3 : 1, of: several ? 4 : 1), from: 12)
+            phase = .working
+        case "restarting":
+            set(.install, .done, from: 37, to: 30)
+            set(.restart, .active, Self.botRestarts(bot), from: 30)
+            phase = .working
+            watching = true
+        case "on":
+            set(.install, .done, from: 37, to: 30)
+            set(.restart, .done, from: 30, to: 4)
+            set(.verify, .done, from: 4, to: 1)
+            phase = .ended(.on(version: nil))
+        case "yours":
+            set(.install, .done, from: 37, to: 30)
+            set(.restart, .active, Self.youRestart, from: 30)
+            phase = .ended(.yours)
+            watching = true
+        case "slow":
+            set(.install, .done, from: 300, to: 260)
+            set(.restart, .active, Self.botRestarts(bot), from: 260)
+            phase = .ended(.slow)
+            watching = true
+        case "uptodate":
+            steps = [steps[0]]
+            changes = []
+            phase = .ended(.upToDate)
+        case "failed":
+            set(.install, .failed, from: 37, to: 30)
+            phase = .ended(.failed(title: PluginUpdateWords.couldnt(["web-clipper"]), reason: PluginUpdateWords.scanBlocked))
+        default:
+            return false
+        }
+        return true
+    }
+
+    private func beginPluginsForDemo() {
+        pluginRun = true
+        setUp = false
+        both = false
+        addOns = .push
+        steps = [Step(id: .check, title: Self.checkTitle, state: .active, started: Date())]
     }
 }
 #endif

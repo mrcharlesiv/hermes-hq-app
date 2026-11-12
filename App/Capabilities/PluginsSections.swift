@@ -334,40 +334,12 @@ final class PluginPageModel {
         }
     }
 
-    func update(accept: Bool = false) {
-        guard let store, let plugin, !busy else { return }
-        busy = true
-        let start = ContinuousClock.now
-        Task {
-            defer { busy = false }
-            do {
-                let result = try await store.plugin(.update(name: plugin.name, accept: accept), profile: profile)
-                if result.consentRequired, !accept {
-                    busy = false
-                    AppLog.trace("capabilities", "plugin \(name) update asks consent for \(result.deltaLines.count) line(s)")
-                    askConsent(result.deltaLines)
-                    return
-                }
-                await parent.reloadPlugins()
-                flash("\(name) updated. Restart your gateway to apply.")
-                AppLog.trace("capabilities", "plugin \(name) update ok in \(AppLog.ms(since: start)) ms, accepted=\(accept)")
-            } catch {
-                AppLog.note("capabilities", "plugin \(name) update failed after \(AppLog.ms(since: start)) ms: \(CapabilitiesStore.detail(error))")
-                FailureAlert.present(title: "Couldn’t Update \(name)", reason: McpEntryMask.phone.text(CapabilitiesStore.detail(error)), from: presenter)
-            }
-        }
-    }
-
-    private func askConsent(_ lines: [String]) {
-        guard let host = FailureAlert.topmost(presenter) else { return }
-        var shown = Array(lines.prefix(12))
-        if lines.count > 12 { shown.append("and \(lines.count - 12) more") }
-        let alert = UIAlertController(title: "\(name) asks for more",
-                                      message: "The new version adds things the installed one does not have. Apply it only if you trust them:\n"
-                                        + shown.joined(separator: "\n"), preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Apply Update", style: .default) { [weak self] _ in self?.update(accept: true) })
-        host.present(alert, animated: true)
+    /// [plugin-updates] The same update sheet the app's own add-on gets (AddOnUpdate, run by PluginUpdateFlow), for this
+    /// bot's copy of this plugin: its steps, the question when the new version asks for more, and the restart. It used
+    /// to update with nothing on screen but "Updating…" and end on "Restart your gateway to apply."
+    func update() {
+        guard let app = (parent.services as? AppModel) ?? M2Wiring.model else { return }
+        PluginUpdateFlow.shared.run(model: app, only: .init(profile: profile, name: name), from: presenter)
     }
 
     func uninstall() {
@@ -380,6 +352,7 @@ final class PluginPageModel {
                 defer { busy = false }
                 do {
                     _ = try await store.plugin(.remove(name: name), profile: profile)
+                    Haptics.play(.success)   // as a skill's uninstall
                     parent.pluginNotice = "\(name) uninstalled. Restart your gateway to unload it."
                     parent.pluginNeedsKeys = false
                     parent.pluginNoticeAction = nil
@@ -462,7 +435,9 @@ struct PluginPageView: View {
                 if !page.readOnly, plugin.updateAvailable || plugin.canUninstall {
                     Section {
                         if plugin.updateAvailable {
-                            Button(page.busy ? "Updating…" : "Update to \(plugin.catalogVersion ?? String((plugin.catalogSha ?? "the latest version").prefix(7)))") { page.update() }
+                            // [plugin-updates] While its update runs a tap brings the sheet back.
+                            let updating = AddOnUpdate.shared.busy && AddOnUpdate.shared.pluginRun
+                            Button(updating ? "Updating…" : "Update to \(plugin.newVersion ?? "the Latest Version")") { page.update() }
                                 .disabled(page.busy)
                                 .accessibilityIdentifier("plugin.update")
                         }

@@ -288,11 +288,13 @@ final class ChatMenus: NSObject, ModelSwitchUI {
             },
             setApprovalMode: { [weak self] mode in
                 do { try await switcher.setApprovalMode(mode) } catch {
+                    Haptics.play(.error)
                     self?.failure(title: "Couldn’t Change Approvals", reason: MenusError.text(error), retry: nil)
                 }
             },
             setYolo: { [weak self] on in
                 do { try await switcher.setYolo(on) } catch {
+                    Haptics.play(.error)
                     self?.failure(title: on ? "Couldn’t Turn On YOLO" : "Couldn’t Turn Off YOLO", reason: MenusError.text(error), retry: nil)
                 }
             },
@@ -412,6 +414,9 @@ final class ChatMenus: NSObject, ModelSwitchUI {
         guard let screen else { return }
         let draft = screen.composer.text
         screen.stowKeys()
+        // [ipad-polish] Under ⋯ in two panes.
+        let bar = screen.navigationController?.navigationBar
+        PanePopover.hangNext(on: bar, rect: bar?.hqTrailingButtonRect, arrow: .up, from: screen)
         let sheet = PromptsSheet.make(draft: draft) { [weak screen] text in
             screen?.composer.insertPrompt(text)
         }
@@ -525,6 +530,7 @@ final class ChatMenus: NSObject, ModelSwitchUI {
                 guard let self else { return }
                 self.preparingShare = false
                 if fetches { self.screen?.hideNotice() }
+                Haptics.play(.error)
                 self.failure(title: "Couldn’t Share Chat", reason: MenusError.text(error)) { [weak self] in self?.shareTranscript() }
             }
         }
@@ -598,6 +604,7 @@ final class ChatMenus: NSObject, ModelSwitchUI {
         Task { [weak self] in
             do {
                 try await actions.rename(to: typed)
+                Haptics.play(.success)   // as a rename from Sessions
                 // Never the new title: just that it took.
                 if let self { AppLog.trace("chatui", "rename chat \(AppLog.tag(self.logScope)) succeeded") }
             } catch {
@@ -625,6 +632,7 @@ final class ChatMenus: NSObject, ModelSwitchUI {
         if let host = MenusSheet.top(screen) { _ = MacPickPanel.present(panel.panel, from: host) }
         return
         #else
+        PanePopover.hangNext(on: screen.composer.modelChip, arrow: .down, from: screen)   // [ipad-polish] off the model's name in two panes
         let sheet = ModelSheetViewController.make(context: context, query: query, bot: bot) { model in
             Task { await switcher.switchModel(model) }
         }
@@ -681,6 +689,7 @@ final class ChatMenus: NSObject, ModelSwitchUI {
         if let host = MenusSheet.top(screen) { _ = MacPickPanel.present(panel.panel, from: host) }
         #else
         // This profile's list paints at once when one was read before (then the fresh answer replaces it).
+        PanePopover.hangNext(on: screen.composer.commandsButton, arrow: .down, from: screen)   // [ipad-polish] off ☰ in two panes
         let sheet = CommandsSheetViewController.make(cached: live.latestCommandsCatalog, isBotChat: live.isBotChat,
                                                      favorites: CommandFavorites(accountId: live.account.id), loader: loader, onPick: onPick)
         MenusSheet.top(screen)?.present(sheet, animated: true)

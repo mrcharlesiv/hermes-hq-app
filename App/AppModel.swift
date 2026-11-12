@@ -306,6 +306,7 @@ final class AppModel: AppServices {
     private func finishSignOut(leaving: GatewayAccount?, bots: BotStore?, sessions: SessionStore?) {
         if let leaving { ServerIssues.shared.signOut(account: leaving.id) }   // [capabilities] 3x §8.1
         if let leaving { AddOnReminder.shared.signOut(account: leaving.id) }   // [addon-reminder]
+        if let leaving { PluginUpdateReminder.shared.signOut(account: leaving.id) }   // [plugin-updates]
         if leaving?.kind == .nous { NousSheetLogin.signedOut() }   // [nous-different-account] the next sheet asks who you are
         tearDown(shutdownClient: false)           // SignInService ends the client and still logs out with its cookies
         signIn.signOut()
@@ -450,6 +451,7 @@ final class AppModel: AppServices {
         if DebugHooks.resetSessionsView {          // UI tests: Filter and Sort from its defaults, no lost send or draft kept
             UserDefaults.standard.removeObject(forKey: NewChatLast.botKey)       // the New Chat sheet remembers nothing
             UserDefaults.standard.removeObject(forKey: NewChatLast.projectsKey)
+            UserDefaults.standard.removeObject(forKey: NewChatLast.recentsKey)
             sessions.setView { $0 = SessionsViewPrefs() }
             sessions.showBackgroundRuns = false
             sessions.showOutsideChats = false
@@ -1121,6 +1123,7 @@ final class AppModel: AppServices {
         let info = { [weak self, weak screen, weak model] in
             guard let self, let screen, let model else { return }
             // [sessions-m9] Session Info: the stored row comes from the Sessions store; Profile reads as the bot's name.
+            PanePopover.hangNext(on: screen.navigationItem.titleView, arrow: .up, from: screen, size: CGSize(width: 340, height: 680), bar: false)   // [ipad-polish] under the title in two panes
             screen.present(ChatInfoSheet.make(model: model, account: self.account,
                                               modelName: self.botStore?.profile(named: model.profile)?.model,
                                               store: self.sessionStore,

@@ -187,7 +187,7 @@ struct ThemeSettingsView: View {
 
     static var desktopChatsNote: String {
         ThemeState.textBoxIsFixed ? "How round your messages and the message box are. 4 pt is the desktop app’s."
-            : "How round your messages and the text box are. 4 pt is the desktop app’s. Liquid Glass is the iPhone’s own text box, rounded to match; Desktop is the desktop app’s flat box."
+            : "How round your messages and the text box are. 4 pt is the desktop app’s. Liquid Glass is the \(DeviceWord.name)’s own text box, rounded to match; Desktop is the desktop app’s flat box."
     }
 
     /// [desktop-corners] [desktop-composer] Corners (with a preview of a reply, your message and the text box) and
@@ -213,7 +213,7 @@ struct ThemeSettingsView: View {
                                       Haptics.play(.selection)
                                       theme.setDesktopComposer(next)
                                       AppLog.trace("settings", "desktop text box \(next.rawValue)")
-                                  }))
+                                  }), ticks: false)
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("theme.desktopComposer")
@@ -274,7 +274,7 @@ struct ThemeSettingsView: View {
                                   Haptics.play(.selection)
                                   theme.setDensity(next)
                                   AppLog.trace("settings", "density \(next.rawValue)")
-                              }))
+                              }), ticks: false)
             .labelsHidden()
             .fixedSize()
         }
@@ -294,7 +294,7 @@ struct ThemeSettingsView: View {
                                   Haptics.play(.selection)
                                   theme.setTopEdge(next)
                                   AppLog.trace("settings", "top edge \(next.rawValue)")
-                              }))
+                              }), ticks: false)
             .labelsHidden()
             .fixedSize()
         }
@@ -360,6 +360,15 @@ struct ChatBubblesSettingsView: View {
         "12 pt corners are the standard. With Reduce Transparency on, messages stay solid. The Desktop Look has its own Corners, in Theme. \(DeviceWord.onlyHere)"
     }
 
+    /// [message-colour] What Colour changes, and what Theme means in its row.
+    static var colourNote: String {
+        // [bot-colour] The face choice, and where a bot's own colour is.
+        let faces = "Bot’s Face gives each bot’s chat the colour of its face. A bot can have its own colour in Bot Info › Settings."
+        return DeviceWord.isMac
+            ? "Colour is for your own messages and the row chosen in the sidebar. Theme keeps your theme’s colour. \(faces)"
+            : "Colour is for your own messages. Theme keeps your theme’s colour. \(faces)"
+    }
+
     /// [tinted-bubbles] Tinted picked with no Chat Background: it has no colours to take.
     static let tintedNeedsBackground = "Tinted takes its colours from your Chat Background. Choose one in Settings › Backgrounds; until then, messages are solid."
 
@@ -371,8 +380,19 @@ struct ChatBubblesSettingsView: View {
                 BubbleCornersRow(stored: state.bubbleCorners, style: bubbleStyle(state)) { points in theme.setBubbleCorners(points) }
                     .hqRowPadding(4)
                 bubbleStylePicker(state)
+                // [message-colour] Owner 2026-11-11: your own messages in a colour of your choosing.
+                ColourSwatchRow(title: "Colour", value: state.messageColour.title, state: state,
+                                swatches: MessageColour.offered.map { ColourSwatch($0) },
+                                picked: state.messageColour.swatchID, custom: state.messageColour.customHex,
+                                identifier: "theme.messageColour") { swatch in
+                    setColour(MessageColour(stored: swatch.id))
+                } pickCustom: { hex in
+                    setColour(.custom(hex))
+                }
+                .hqRowPadding(4)
             } footer: { HQSectionFooter {
                 VStack(alignment: .leading, spacing: 6) {
+                    Text(Self.colourNote).accessibilityIdentifier("theme.messageColourNote")
                     if GlassBubbles.offered {
                         Text(Self.styleLine(bubbleStyle(state))).foregroundStyle(Color.hqLabel).accessibilityIdentifier("theme.bubbleStyleLine")
                         Text(Self.shortNote)
@@ -388,6 +408,13 @@ struct ChatBubblesSettingsView: View {
         .hqMacForm(settings: true)
         .hqGroupedPage()
         .listStyle(.insetGrouped)
+    }
+
+    /// [message-colour] Chat Bubbles › Colour.
+    private func setColour(_ colour: MessageColour) {
+        guard colour != theme.state.messageColour else { return }
+        theme.setMessageColour(colour)
+        AppLog.trace("settings", "message colour \(colour.stored ?? "theme")")
     }
 
     /// [glass-bubbles] [tinted-bubbles] The style the chats draw: Glass reads as Solid where it isn't offered (the Mac).
@@ -408,7 +435,7 @@ struct ChatBubblesSettingsView: View {
                 Text("Style").foregroundStyle(Color.hqLabel).fixedSize()   // [ui-sizing] whole beside its segments (it wrapped "Styl / e" at 150 %)
                 Spacer(minLength: 8)
                 HQSegmentedPicker("Style", options: BubbleStyles.offered.map { ($0.title, $0) },
-                                  selection: Binding(get: { style }, set: { pick($0) }))
+                                  selection: Binding(get: { style }, set: { pick($0) }), ticks: false)
                 .labelsHidden()
                 .fixedSize()
             }

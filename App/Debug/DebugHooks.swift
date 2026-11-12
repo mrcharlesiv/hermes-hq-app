@@ -54,6 +54,7 @@
 
 // - [onboarding] `-HQDebugWelcome YES`  a clean first run starts on the welcome (DEBUG builds start on the form, one Back
 //                                 from it, so suites that wait for the address field keep working; Release never does)
+// - [onboarding] `-HQDebugGuideStep <step>`  a first run opens on that guide screen (start, getHermes, hermes, where, mac1…)
 // - [onboarding] `-HQDebugCorruptSignIn YES`  simulator only: the saved sign-in is made unreadable before the first restore
 // - [onboarding] `-HQDebugGuideOut <folder>`  write what the guide's Copy put on the pasteboard (copy.txt), what Send…
 //                                 handed the share sheet (share.txt) and the last link asked to open (open.txt)
@@ -95,6 +96,9 @@ enum DebugHooks {
     }
 
     static func applyBeforeLaunch() {
+        #if canImport(ActivityKit) && !targetEnvironment(macCatalyst)
+        IslandDebugHook.start()               // [island-fit] -HQDebugIsland (App/Debug/IslandDebugHook.swift)
+        #endif
         VoiceDebugHooks.applyBeforeLaunch()   // VOICE: -HQDebugMemo…, -HQDebugSendOnRelease, -HQDebugResetVoice
         WordsBenchHook.applyBeforeLaunch()    // [more accurate words] -HQDebugWordsBench <speed>
         CapabilitiesDebugHooks.applyBeforeLaunch() // [capabilities] -HQDebugResetConnectApps, HQN_CAP_AUTH (App/Debug/CapabilitiesDebugHooks.swift)
@@ -175,6 +179,17 @@ enum DebugHooks {
                     guard let id = app?.account?.id else { return }
                     AddOnReminder.shared.report(account: id, state: .outdated, without: [])
                     AddOnReminder.shared.noteNotOut(account: id, want: PushSetupOffer.neededVersion(main: true))
+                    return
+                }
+                // [plugin-updates] `pluginrow`, `pluginsrow`: the reminder for one plugin with an update, or three.
+                if state == "pluginrow" || state == "pluginsrow", let id = app?.account?.id {
+                    func plugin(_ name: String, _ from: String, _ to: String) -> PluginInfo {
+                        PluginInfo(name: name, key: name, version: from, description: "", source: "catalog", enabled: true, hasDesktopHalf: false,
+                                   servers: [], updateAvailable: true, catalogVersion: to, catalogSha: nil, schema: [])
+                    }
+                    var list = [plugin("web-clipper", "1.4.2", "1.5.0")]
+                    if state == "pluginsrow" { list += [plugin("field-notes", "0.8.0", "0.9.1"), plugin("spotify", "2.1.0", "2.2.0")] }
+                    PluginUpdateReminder.shared.report(account: id, profile: "default", list: list)
                     return
                 }
                 if state == "row", let id = app?.account?.id { AddOnReminder.shared.report(account: id, state: .outdated, without: []); return }

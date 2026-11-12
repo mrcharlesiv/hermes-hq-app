@@ -214,6 +214,7 @@ extension AppModel {
 
     private static func screenSetupFailed(_ failure: ScreenSetupError, on host: UIViewController) {
         AppLog.note("screen", "setup failed")
+        Haptics.play(.error)   // as `FailureAlert`
         let alert = UIAlertController(title: ScreenSetupError.alertTitle, message: ScreenWire.plain(failure.message), preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .default))
         var top = host

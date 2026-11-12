@@ -185,6 +185,7 @@ final class AddConnectorState {
                 if let reason = ConnectorDraft.reason(for: error) {
                     FailureAlert.present(title: "Couldn’t Add \(name)", reason: reason, from: presenter)
                 } else {
+                    Haptics.play(.error)   // the refusal shows under the name
                     refused.insert(name)
                 }
                 return

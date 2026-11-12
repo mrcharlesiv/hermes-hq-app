@@ -61,7 +61,9 @@ enum IPadFixture { case perf, sessions, pages }
     /// A clean launch signed in to `account`. `arguments`: extra launch arguments (`-HQDebugPaneWidth`, `420`).
     static func launch(_ account: FixtureAccount, reset: Bool = true, arguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = (reset ? ["-HQDebugResetAccounts", "YES"] : []) + arguments
+        // [ipad-polish] On a simulator that was never asked, "Know When a Bot Replies?" came up after the first reply
+        // and sat over the chat for the rest of the test (the pointer test could not reach the transcript).
+        app.launchArguments = (reset ? ["-HQDebugResetAccounts", "YES"] : []) + ["-dispatch.notifications.asked", "YES"] + arguments
         app.launchEnvironment["HQN_SIGNIN_URL"] = account.url
         app.launchEnvironment["HQN_SIGNIN_USERNAME"] = account.username
         app.launchEnvironment["HQN_SIGNIN_PASSWORD"] = account.password
@@ -157,9 +159,13 @@ enum IPadFixture { case perf, sessions, pages }
         let bottom = keys.exists ? keys.frame.minY : window.maxY
         let gap = bottom - field(app).frame.maxY
         print("IPAD-NOTE \(what): field bottom \(field(app).frame.maxY), keys top \(bottom), keyboard \(keys.exists)")
-        // The keyboard element's frame leaves out the suggestions bar above the keys (about 55 pt on iPad).
-        XCTAssertTrue(gap > -2 && gap < 80, "\(what): the message field sits on the keyboard (gap \(gap) pt)")
-        XCTAssertGreaterThan(field(app).frame.minY, window.height * 0.35, "\(what): in the lower part of the window")
+        // The keyboard element's frame leaves out the suggestions bar above the keys (about 55 pt on iPad), and
+        // [ipad-polish] the message box now keeps its row of buttons (+, ☰, the model, the mic) under the words, about
+        // 56 pt more between the field's last line and the keys.
+        XCTAssertTrue(gap > -2 && gap < 140, "\(what): the message field sits on the keyboard (gap \(gap) pt)")
+        // [ipad-polish] With the keys up, "low" is "just above them": on an iPad mini held sideways the keyboard is
+        // more than half the window, so the field sits above the window's middle and is still where it belongs.
+        XCTAssertGreaterThan(field(app).frame.minY, keys.exists ? bottom - 260 : window.height * 0.35, "\(what): in the lower part of the window")
     }
 
     static func placeholder(_ app: XCUIApplication) -> XCUIElement { app.descendants(matching: .any)["pane.placeholder"] }
@@ -168,6 +174,12 @@ enum IPadFixture { case perf, sessions, pages }
 
     static func message(_ app: XCUIApplication, containing text: String) -> XCUIElement {
         app.tables["chat.table"].descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
+    }
+
+    /// [ipad-polish] A bot's row other than the main bot's. The stand-in gateway is read from outside this repository
+    /// and names its second bot itself, so the tests ask for "another bot", not for one by name.
+    static func otherBot(_ app: XCUIApplication) -> XCUIElement {
+        app.cells.matching(NSPredicate(format: "identifier BEGINSWITH 'bot-row-' AND identifier != 'bot-row-default'")).firstMatch
     }
 
     /// Opens a bot's chat from the Bots list and waits for its transcript.

@@ -1,5 +1,9 @@
 // [onboarding] The native guide's words against the web app's own (WebGuideStrings.swift, generated from build 240's
 // source): a drift in either direction fails. docs/spec/3x-onboarding.md §5, §9.1.
+//
+// Two screens are the native app's own since the 2026-11-11 simplification (§19): "Where is your Hermes?" and "Get
+// Hermes first." have no web page, and the chooser behind Set It Up Myself ("where") lists only the computers under its
+// own heading. `SimpleStartCopyTests` pins those; everything else still has to say the web's words.
 
 import Foundation
 import Testing
@@ -25,7 +29,7 @@ enum NativeGuideStrings {
         let o = OnboardingCopy.Windows.self, m = OnboardingCopy.Manual.self, s = OnboardingCopy.Setup.self
         var all: [String: [String]] = [
             "welcome": [w.headingLine1, w.headingLine2, w.lead, w.start, w.haveAddress] + w.points.flatMap { [$0.title, $0.text] },
-            "where": [wh.eyebrow, wh.heading, wh.lead, wh.footnote] + wh.choices.flatMap { [$0.title, $0.text] },
+            "where": [wh.eyebrow, wh.lead] + wh.choices(onMac: false).flatMap { [$0.title, $0.text] },
             "hermes": [h.heading, h.lead, h.copy, h.share, h.showMessage, OnboardingCopy.hermesConnectPrompt] + h.steps
                 + [h.footnote, h.haveAddress, h.myself],
             "other-1": [o.eyebrow1, o.heading1, o.lead1] + o.steps1 + [o.getTailscale, o.next],
@@ -58,6 +62,9 @@ struct OnboardingCopyTests {
             for string in (NativeGuideStrings.all[step] ?? []).sorted(by: { $0.count > $1.count }) {
                 rest = rest.replacingOccurrences(of: string, with: " ", options: .caseInsensitive)
             }
+            // "where": the web's question, its "Someone gave me an address" row and its "No Hermes yet?" footnote moved to
+            // the screens before it (the welcome's second button and "Where is your Hermes?"; `SimpleStartCopyTests`).
+            if step == "where" { continue }
             let left = rest.split(separator: " ").map(String.init).filter { $0 != "Back" }
             #expect(left.isEmpty, "\(step): the web also says \(left)")
         }
@@ -224,8 +231,8 @@ struct MacOnboardingCopyTests {
             let phone = OnboardingCopy.quick(kind, onMac: false), plain = OnboardingCopy.quick(kind)
             #expect(phone.heading3 == plain.heading3 && phone.steps3 == plain.steps3 && phone.steps2 == plain.steps2 && phone.typeAddress == plain.typeAddress)
         }
-        #expect(OnboardingCopy.Where.choices(onMac: false).map(\.id) == ["mac", "linux", "windows", "address"])
-        #expect(OnboardingCopy.Where.footnote(onMac: false) == OnboardingCopy.Where.footnote)
+        #expect(OnboardingCopy.Where.choices(onMac: false).map(\.id) == ["mac", "linux", "windows"])
+        #expect(OnboardingCopy.Start.choices(onMac: false).map(\.id) == [OnboardingCopy.Start.computerID])
     }
 
     @Test func stepThreeCopiesTheAddressInsteadOfScanning() {
@@ -258,28 +265,83 @@ struct MacOnboardingCopyTests {
         }
     }
 
-    @Test func theWherePageOffersThisMac() {
-        let choices = OnboardingCopy.Where.choices(onMac: true)
-        #expect(choices.map(\.id) == [OnboardingCopy.Where.localID, "mac", "linux", "windows", "address"])
-        #expect(choices[0].title == "On this Mac" && choices[0].step == .connect && choices[1].title == "On another Mac")
+    @Test func theFirstQuestionOffersThisMac() {
+        let choices = OnboardingCopy.Start.choices(onMac: true)
+        #expect(choices.map(\.id) == [OnboardingCopy.Start.localID, OnboardingCopy.Start.computerID])
+        #expect(choices[0].title == "On this Mac" && choices[0].step == .connect && choices[1].title == "On another computer")
         #expect(!choices.contains { $0.text.contains("iPhone") })
-        let local = try? GatewayAddress.validated(GatewayAddress.normalizeTyped(OnboardingCopy.Where.localAddress))
+        let local = try? GatewayAddress.validated(GatewayAddress.normalizeTyped(OnboardingCopy.Start.localAddress))
         #expect(local?.absoluteString == "http://127.0.0.1:9119", "plain http is allowed to this Mac itself")
-        let footnote = GuideText.plain(OnboardingCopy.Where.footnote(onMac: true))
-        #expect(footnote == "No Hermes yet? It runs on a computer, like this Mac. Install Hermes first, then come back.")
+        let computers = OnboardingCopy.Where.choices(onMac: true)
+        #expect(computers.map(\.id) == ["mac", "linux", "windows"] && computers[0].title == "On another Mac")
+        #expect(!computers.contains { $0.text.contains("iPhone") })
     }
 }
 
 /// The Hermes Cloud rows (native only): not in the web's lists, and never a setup step or Tailscale.
 struct CloudOnboardingCopyTests {
     @Test func theRowsAreNativeAndAskForNothing() {
-        let c = OnboardingCopy.Cloud.self
-        let words = [c.title, c.text, c.letHermesTitle, c.letHermesText]
+        let c = OnboardingCopy.Cloud.self, g = OnboardingCopy.GetHermes.self
+        let words = [c.title, c.text, g.cloudTitle, g.cloudText]
         for line in words {
             #expect(!line.contains("Tailscale") && !line.lowercased().contains("gateway"), "\(line)")
             for (step, strings) in NativeGuideStrings.all { #expect(!strings.contains(NativeGuideStrings.normalized(line)), "\(step): \(line)") }
         }
         #expect(!OnboardingCopy.Where.choices(onMac: false).contains { $0.id == c.id }, "the row is the view's, not the web's list")
-        #expect(!OnboardingCopy.Where.choices(onMac: true).contains { $0.id == c.id })
+        #expect(!OnboardingCopy.Start.choices(onMac: true).contains { $0.id == c.id })
+    }
+}
+
+/// The 2026-11-11 simplification (docs/spec/3x-onboarding.md §19): one plain question after Get Started, a way on for
+/// someone with no Hermes, and no jargon before a path is picked.
+struct SimpleStartCopyTests {
+    @Test func theFirstQuestionIsPlainAndShort() {
+        let s = OnboardingCopy.Start.self, c = OnboardingCopy.Cloud.self
+        #expect(s.heading == "Where is your Hermes?")
+        #expect(s.choices(onMac: false).map(\.title) == ["On my computer"] && s.choices(onMac: false)[0].step == .hermes)
+        #expect(c.title == "On Hermes Cloud" && s.noneTitle == "I don’t have Hermes yet")
+        let rows = s.choices(onMac: false).map(\.text) + s.choices(onMac: true).map(\.text) + [c.text, s.noneText]
+        for line in [s.heading, s.lead, s.noneTitle] + rows {
+            for word in ["Tailscale", "address", "gateway", "terminal", "SSH", "command", "MagicDNS"] {
+                #expect(!line.lowercased().contains(word.lowercased()), "“\(line)” says \(word) before a path is picked")
+            }
+        }
+        for line in rows { #expect(line.count <= 44, "“\(line)” is one short line under its title") }
+    }
+
+    @Test func noHermesYetHasTwoWaysOn() {
+        let g = OnboardingCopy.GetHermes.self
+        #expect(g.heading == "Get Hermes first." && g.cloudTitle == "Start one on Hermes Cloud" && g.installTitle == "Install it on a computer")
+        #expect(GuideText.plain(g.after).hasSuffix("\(DeviceWord.tap) \(g.installed).") && g.installed == "I’ve Installed Hermes", "the way on is a button, named")
+        #expect(g.cloudText.contains("Nous credit") || g.cloudText.contains("Nous account"), "what it costs is said before the tap")
+        #expect(OnboardingCopy.Links.hermes == WebGuideStrings.links["hermes"], "Install opens the web's own guide link")
+    }
+
+    /// The chooser behind Set It Up Myself keeps the web's rows for the computers and nothing else.
+    @Test func theComputersPageListsOnlyComputers() {
+        let w = OnboardingCopy.Where.self
+        #expect(w.heading == "Which computer runs Hermes?" && w.heading != OnboardingCopy.Start.heading)
+        #expect(w.choices(onMac: false).map(\.step) == [.mac1, .linux1, .other1])
+        for choice in w.choices(onMac: false) {
+            #expect((WebGuideStrings.sections["where"] ?? "").contains(choice.title + choice.text), "\(choice.title)")
+        }
+    }
+
+    /// The setup message can't set up Windows: the screen says where that path starts.
+    @Test func letHermesPointsWindowsAtSetItUpMyself() {
+        let h = OnboardingCopy.LetHermes.self
+        #expect(GuideText.plain(h.windows) == "Hermes on Windows? \(DeviceWord.Tap) \(h.myself).")
+    }
+
+    @Test func aPastedMessageGivesUpItsAddress() {
+        #expect(SignInAddress.pasted("  https://my-mac.tail1234.ts.net \n") == "https://my-mac.tail1234.ts.net")
+        #expect(SignInAddress.pasted("my-mac.tail1234.ts.net") == "my-mac.tail1234.ts.net")
+        #expect(SignInAddress.pasted("DONE. Here it is: https://my-mac.tail1234.ts.net. Paste it into Hermes HQ and tap Sign in with Nous.")
+                == "https://my-mac.tail1234.ts.net")
+        #expect(SignInAddress.pasted("Your address is **https://my-mac.tail1234.ts.net:8443** (keep the Mac awake)") == "https://my-mac.tail1234.ts.net:8443")
+        #expect(SignInAddress.pasted("it’s my-mac.tail1234.ts.net, paste that") == "my-mac.tail1234.ts.net")
+        #expect(SignInAddress.pasted("hermes://connect?url=https%3A%2F%2Fmy-mac.tail1234.ts.net") == "hermes://connect?url=https%3A%2F%2Fmy-mac.tail1234.ts.net")
+        #expect(SignInAddress.pasted("no address in here") == "no address in here", "taken as typed: the form says what is wrong")
+        #expect(SignInAddress.pasted("") == "")
     }
 }

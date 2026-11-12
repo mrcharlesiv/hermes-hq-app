@@ -35,8 +35,9 @@ private func theme(look: Bool, scale: Int) -> ThemeSet {
         #expect(!s.hasOlder, "four saved messages, all shown: no 'Show earlier messages' until the first page says so")
         let long = h.make()
         long.applyCachedPaint(TranscriptEntry(messages: rows(40), meta: [:], savedAt: Date()))
-        #expect(long.messages.count < 40)
-        #expect(long.hasOlder, "the window left saved messages out: there is something earlier")
+        // [right-open] the whole saved copy is painted, so nothing earlier is known until the first page says so
+        #expect(long.messages.count == 40)
+        #expect(!long.hasOlder)
         let shortened = h.make()
         shortened.applyCachedPaint(TranscriptEntry(messages: rows(2), meta: [:], savedAt: Date(), partial: true))
         #expect(shortened.hasOlder, "a shortened offline copy")

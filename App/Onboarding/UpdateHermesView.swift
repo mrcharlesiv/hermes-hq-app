@@ -57,6 +57,7 @@ import UIKit
             if let newer = answer.outdated {
                 self.info = newer
                 self.phase = .stillOutdated
+                Haptics.play(.error)   // the check answered: still too old (a pass plays success)
                 self.announce(OutdatedCopy.stillOlder)
                 AppLog.trace("onboard", "update-hermes recheck in \(AppLog.ms(since: start)) ms: still older, canUpdate=\(newer.canUpdate)")
             } else {

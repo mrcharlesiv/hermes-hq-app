@@ -269,7 +269,12 @@ extension CapabilitiesStore {
     func plugins(_ profile: String) async throws -> [PluginInfo] {
         let value = try await client.call("plugins.manage", ["action": "list", "profile": .string(profile)], timeout: .seconds(30))
         let list = (value["plugins"]?.array ?? []).compactMap(PluginInfo.read)
-        if value["plugins"]?.array != nil { pluginLists.store(list, account: client.account, profile: profile) }
+        if value["plugins"]?.array != nil {
+            pluginLists.store(list, account: client.account, profile: profile)
+            // [plugin-updates] Every list read says which of the bot's plugins have an update (none to make on a
+            // gateway this phone only reads).
+            PluginUpdateReminder.shared.report(account: client.account.id, profile: profile, list: readOnlyGateway ? [] : list)
+        }
         return list
     }
 

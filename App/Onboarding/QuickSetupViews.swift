@@ -20,11 +20,12 @@ struct QuickSetupCommandView: View {
         let copy = OnboardingCopy.quick(kind, tailnetOnly: reach.tailnetOnly), id = "onboarding.\(kind.rawValue)-1"
         GuidePage(id: id, heading: copy.heading1) {
             GuideParagraph(copy.lead1)
-            GuideTailnetToggle(reach: reach, id: id + ".tailnet")
             CommandCard(id: id, block: feedback.text, copyTitle: copy.copy, shareTitle: copy.share, feedback: feedback)
             GuideParagraph(copy.footnote1, font: .subheadline)
+            // For the few whose device runs Tailscale: under the command it changes, not above it.
+            GuideTailnetToggle(reach: reach, id: id + ".tailnet")
+        } footer: {
             GuideActionButton(title: copy.next, id: id + ".next") { go(kind == .mac ? .mac2 : .linux2) }
-                .padding(.top, 8)
         }
     }
 }
@@ -58,8 +59,8 @@ struct QuickSetupRunView: View {
                     }
                 }
             }
+        } footer: {
             GuideActionButton(title: copy.next, id: id + ".next") { go(kind == .mac ? .mac3 : .linux3) }
-                .padding(.top, 8)
         }
     }
 }
@@ -77,8 +78,8 @@ struct QuickSetupScanView: View {
             GuideParagraph(copy.lead3)
             GuideSteps(steps: copy.steps3)
             GuideNote(text: copy.note3)
+        } footer: {
             GuideActionButton(title: copy.typeAddress, id: id + ".type-address", prominent: DeviceWord.isMac) { go(.connect) }
-                .padding(.top, 8)
         }
     }
 }

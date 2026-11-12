@@ -68,6 +68,16 @@ nonisolated struct LiveActivityContent: Codable, Hashable, Sendable {
         let rest = minutes % 60
         return rest == 0 ? "\(minutes / 60) h" : "\(minutes / 60) h \(rest) min"
     }
+
+    /// [island-fit] The same in the Dynamic Island's small view, where every point counts: "45s", "16m", "1h 5m".
+    static func tookShort(_ seconds: TimeInterval) -> String {
+        let whole = max(0, Int(seconds.rounded()))
+        if whole < 60 { return "\(whole)s" }
+        let minutes = whole / 60
+        if minutes < 60 { return "\(minutes)m" }
+        let rest = minutes % 60
+        return rest == 0 ? "\(minutes / 60)h" : "\(minutes / 60)h \(rest)m"
+    }
 }
 
 /// [live-steps] A turn's steps as its Lock Screen card names them: the running one, the two before it, how many.
@@ -140,6 +150,44 @@ nonisolated struct LiveActivitySubject: Codable, Hashable, Sendable {
     nonisolated enum Kind: String, Codable, Hashable, Sendable { case turn, job }
     var kind: Kind
     var id: String
+}
+
+/// [island-fit] How far a running timer's text counts. A timer is as wide as the longest value in its range, so one
+/// running to `distantFuture` wants endless room and needed a fixed box — which the Dynamic Island cut off whenever it
+/// offered less (owner, 2026-11-11: "16:0…" beside another app's activity). The range ends where the next digit would
+/// appear ("59:59", "9:59:59", "99:59:59"), picked so the timer can't reach it before it is drawn again: every update
+/// redraws it, and one not heard from goes stale (and stops counting) well inside `reach`.
+nonisolated enum LiveTimerSpan {
+    /// Longer than any card goes without a redraw (`LiveActivityTiming.staleAfter`, Talk's own 10 min).
+    static let reach: TimeInterval = 40 * 60
+    static let limits: [TimeInterval] = [3_599, 35_999, 359_999]   // 59:59, 9:59:59, 99:59:59
+
+    /// The widest thing a timer with that range can say, in digits of one width: what sizes its place in the island.
+    /// A live timer takes all the room it is offered, however short its range, and the Dynamic Island offers a lot:
+    /// left to itself it stretched the island across the clock and the status icons (owner, 2026-11-11, build 948:
+    /// "Should this really be that large?").
+    static func widest(startedAt: Date, now: Date, reach: TimeInterval = LiveTimerSpan.reach) -> String {
+        switch end(startedAt: startedAt, now: now, reach: reach).timeIntervalSince(startedAt) {
+        case ..<3_600: return "00:00"
+        case ..<36_000: return "0:00:00"
+        case ..<360_000: return "00:00:00"
+        default: return "000:00:00"
+        }
+    }
+
+    /// A stopped clock as a timer writes it: "0:42", "16:10", "1:02:05".
+    static func clock(_ seconds: TimeInterval) -> String {
+        let whole = max(0, Int(seconds))
+        let rest = String(format: "%02d", whole % 60)
+        if whole < 3_600 { return "\(whole / 60):\(rest)" }
+        return "\(whole / 3_600):" + String(format: "%02d", whole % 3_600 / 60) + ":\(rest)"
+    }
+
+    /// Where a timer that began at `startedAt`, drawn at `now`, stops counting.
+    static func end(startedAt: Date, now: Date, reach: TimeInterval = LiveTimerSpan.reach) -> Date {
+        let farthest = max(0, now.timeIntervalSince(startedAt)) + reach
+        return startedAt.addingTimeInterval(limits.first { farthest < $0 } ?? 3_599_999)
+    }
 }
 
 /// How long a Live Activity lingers once it is over (shared with NotificationService.swift, which has no access to

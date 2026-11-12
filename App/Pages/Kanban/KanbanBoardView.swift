@@ -103,7 +103,14 @@ struct KanbanBoardColumn: Equatable {
     private var list: UICollectionView!
     private var data: UICollectionViewDiffableDataSource<Int, String>!
     private var ids: [String] = []
-    private var dropping = false { didSet { if dropping != oldValue { paint() } } }
+    private var dropping = false {
+        didSet {
+            guard dropping != oldValue else { return }
+            // A tick as the column lights for a card held over it, as a list's drop target does (Sessions' projects).
+            if dropping { Haptics.play(.selection) }
+            paint()
+        }
+    }
 
     init(status: String, board: KanbanBoardView) {
         self.status = status

@@ -16,7 +16,7 @@ final class ConnectAppsController: UIHostingController<HQScaledRoot<ConnectAppsR
     init(services: any AppServices) {
         model = ComposioModel(services: services)
         super.init(rootView: HQScaledRoot(ConnectAppsRootView(model: model)))
-        title = "Connect Apps"
+        title = "Composio"   // [connect-find] owner 2026-11-11: the page is named as the row that opens it
         navigationItem.largeTitleDisplayMode = .never
         model.presenter = self
         rootView.push = { [weak self] controller in
@@ -188,8 +188,6 @@ struct ConnectAppsSetupView: View {
     /// The last try was Use the Key on Your Gateway: what it ran into shows under that button, not by the key field
     /// further down (out of view on a phone).
     @State private var triedGatewayKey = false
-    /// The step badges grow with the text, so the digit keeps room in its circle at large sizes.
-    @ScaledMetric(relativeTo: .subheadline) private var badgeSide: CGFloat = 26
 
     var body: some View {
         List {
@@ -199,14 +197,15 @@ struct ConnectAppsSetupView: View {
                         ForEach(ComposioCatalog.hero, id: \.self) { AppLogo(slug: $0, name: $0, size: 48) }
                     }
                     Text("Let your bots use your apps").font(Font.hq(.title2).weight(.bold)).foregroundStyle(Color.hqLabel).multilineTextAlignment(.center)
-                    Text("Connect Gmail, Calendar, GitHub and hundreds more through your own free Composio account. Then choose which bots can use them.")
+                    // [connect-find] Owner 2026-11-11: say first that a Composio API key is all this takes.
+                    Text(Self.blurb)
                         .font(Font.hq(.subheadline)).foregroundStyle(Color.hqLabel2).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
                 .listRowBackground(Color.clear)
             }
-            // The one-tap way when the gateway already has a key, ahead of the steps for a new one (UX study #104).
+            // The one-tap way when the gateway already has a key, ahead of the field for another one (UX study #104).
             if model.gatewayKeyProfile != nil {
                 Section {
                     Button { triedGatewayKey = true; pasteNotice = nil; model.setUp(typed: nil) } label: {
@@ -219,42 +218,25 @@ struct ConnectAppsSetupView: View {
                     .listRowInsets(EdgeInsets())
                     .accessibilityIdentifier("connect-apps.use-gateway-key")
                 } footer: { HQSectionFooter {
-                    Text("Your gateway already has a Composio key. To use a different one, follow the steps below.")
+                    Text("Your gateway already has a Composio key. To use a different one, paste it below.")
                 } }
                 if triedGatewayKey, let notice = model.setupNotice {
                     Section { ConnectNotice(notice: notice).accessibilityIdentifier("connect-apps.notice") }
                 }
             }
+            // [connect-find] The key field leads (it was step 2, under "Get a free Composio key"): someone who has a
+            // key pastes it and is done; getting one is the row under Continue.
             Section {
                 HStack(spacing: 12) {
-                    badge("1")
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Get a free Composio key").foregroundStyle(Color.hqLabel)
-                        Text("Sign up, then copy a key from Settings › API Keys.").font(Font.hq(.subheadline)).foregroundStyle(Color.hqLabel2)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    Button("Open") { UIApplication.shared.open(URL(string: "https://platform.composio.dev")!) }
-                        .hqRowActionButtonStyle()
-                        .accessibilityIdentifier("connect-apps.open-composio")
+                    SecureField("Composio API key", text: $key)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.go)
+                        .onSubmit { if !key.isEmpty { triedGatewayKey = false; model.setUp(typed: key) } }
+                        .accessibilityLabel("Composio API key")
+                        .accessibilityIdentifier("connect-apps.key")
+                    Button("Paste") { paste() }.hqBorderedButtonStyle().accessibilityIdentifier("connect-apps.paste")
                 }
                 .padding(.vertical, 3)
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 12) {
-                        badge("2")
-                        Text("Paste it here").foregroundStyle(Color.hqLabel)
-                    }
-                    HStack(spacing: 12) {
-                        SecureField("Composio API key", text: $key)
-                            .textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.go)
-                            .onSubmit { if !key.isEmpty { triedGatewayKey = false; model.setUp(typed: key) } }
-                            .accessibilityLabel("Composio API key")
-                            .accessibilityIdentifier("connect-apps.key")
-                        Button("Paste") { paste() }.hqBorderedButtonStyle().accessibilityIdentifier("connect-apps.paste")
-                    }
-                }
-                .padding(.vertical, 3)
-            }
+            } header: { HQSectionLabel { Text(Self.keyHeader) } }
             // DECISION 10.4-b: the notice sits by the key field and Continue, where the keyboard leaves it in view
             // (at the top of the page it scrolls under the bar while the field has the keyboard).
             if let notice = (model.gatewayKeyProfile != nil && triedGatewayKey ? nil : model.setupNotice) ?? pasteNotice {
@@ -280,6 +262,20 @@ struct ConnectAppsSetupView: View {
                 Label("Your key stays in this \(DeviceWord.name)’s Keychain. Nothing changes on your gateway until you turn on a bot.", systemImage: "lock.fill")
                     .font(Font.hq(.footnote))
             } }
+            Section {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(Self.noKeyTitle).foregroundStyle(Color.hqLabel)
+                        Text(Self.noKeyDetail).font(Font.hq(.subheadline)).foregroundStyle(Color.hqLabel2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Button("Open") { UIApplication.shared.open(URL(string: "https://platform.composio.dev")!) }
+                        .hqRowActionButtonStyle()
+                        .accessibilityIdentifier("connect-apps.open-composio")
+                }
+                .padding(.vertical, 3)
+            }
         }
         .hqGroupedPage()   // [desktoplook] the page follows the skin
         .listStyle(.insetGrouped)
@@ -288,10 +284,10 @@ struct ConnectAppsSetupView: View {
         .onChange(of: model.phase) { key = "" }
     }
 
-    private func badge(_ text: String) -> some View {
-        Text(text).font(Font.hq(.subheadline).weight(.bold)).foregroundStyle(.white).frame(width: badgeSide, height: badgeSide).background(Color.hqTint, in: Circle())
-            .accessibilityHidden(true)
-    }
+    static let blurb = "All it takes is your Composio API key. Paste it to connect Gmail, Calendar, GitHub and hundreds more, then choose which bots can use them."
+    static let keyHeader = "Your Composio API Key"
+    static let noKeyTitle = "Don’t have a key?"
+    static let noKeyDetail = "Composio is free. Sign up, then copy a key from Settings › API Keys."
 
     private func paste() {
         model.setupNotice = nil
@@ -956,7 +952,7 @@ struct ConnectAppView: View {
         } header: { HQSectionLabel {
             Text("Bots That Will Use It")
         } } footer: { HQSectionFooter {
-            if !model.onBots.isEmpty { Text("These are the bots you turned on. Change them under Bots on the Connect Apps page.") }
+            if !model.onBots.isEmpty { Text("These are the bots you turned on. Change them under Bots on the Composio page.") }
         } }
     }
 
@@ -1068,6 +1064,7 @@ struct ConnectAppView: View {
                             await model.loadHome()
                             AppLog.trace("connect", "composio disconnect \(toolkit.slug) ok in \(AppLog.ms(since: start)) ms")
                         } catch {
+                            Haptics.play(.error)
                             disconnectError = (error as? ComposioError)?.message ?? ComposioError.problem.message
                             AppLog.note("connect", "composio disconnect \(toolkit.slug) failed after \(AppLog.ms(since: start)) ms: \(disconnectError ?? "")")
                         }
@@ -1127,6 +1124,7 @@ struct ConnectAppView: View {
                     await model.loadHome()
                     AppLog.trace("connect", "composio disconnect one \(toolkit.slug) account ok in \(AppLog.ms(since: start)) ms")
                 } catch {
+                    Haptics.play(.error)
                     accountNotice = "Couldn’t disconnect: \((error as? ComposioError)?.message ?? ComposioError.problem.message)"
                     AppLog.note("connect", "composio disconnect one \(toolkit.slug) account failed after \(AppLog.ms(since: start)) ms")
                 }
@@ -1164,6 +1162,7 @@ struct ConnectAppView: View {
                     if let fresh = try? await model.accounts(toolkit.slug) { model.setAccounts(toolkit.slug, fresh) }
                     AppLog.trace("connect", "composio \(toolkit.slug) account named in \(AppLog.ms(since: start)) ms, suggested=\(suggested != nil)")
                 } catch {
+                    Haptics.play(.error)
                     notice("Couldn’t save the name: \(error.message)")
                     AppLog.note("connect", "composio \(toolkit.slug) account naming failed after \(AppLog.ms(since: start)) ms: \(error.kind)")
                 }
@@ -1327,6 +1326,7 @@ struct ConnectAccountView: View {
                     host()?.navigationController?.popViewController(animated: true)
                     await changed()
                 } catch {
+                    Haptics.play(.error)
                     notice = "Couldn’t disconnect: \((error as? ComposioError)?.message ?? ComposioError.problem.message)"
                     AppLog.note("connect", "composio disconnect \(toolkit.slug) account from its page failed after \(AppLog.ms(since: start)) ms")
                 }

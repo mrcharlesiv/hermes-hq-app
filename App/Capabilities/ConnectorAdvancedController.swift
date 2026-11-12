@@ -40,7 +40,7 @@ struct ConnectorAdvancedView: View {
                         configScrolls = now
                     }
                     .accessibilityIdentifier("connector-config-text")
-                    .contextMenu { Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text } }
+                    .contextMenu { Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text; Haptics.play(.success) } }
                     Button("Copy") {
                         UIPasteboard.general.string = text
                         Haptics.play(.success)

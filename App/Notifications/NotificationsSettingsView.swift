@@ -130,6 +130,7 @@ final class NotificationsSettingsModel {
             guard testBlocker == nil else { return }
             let ok = await NotificationHub.shared.post(kind: "test", session: "", title: AppIdentity.current.displayName,
                                                        about: "Notifications are working.")
+            if !ok { Haptics.play(.error) }   // a sent one shows itself
             testNote = ok ? "Test sent. If nothing appears, check Focus or Do Not Disturb." : "Couldn’t send a test notification."
         }
     }

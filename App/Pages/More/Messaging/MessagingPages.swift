@@ -115,6 +115,7 @@ enum MessagingPages {
             page?.dismiss(animated: true)
             model?.telegramApplied(applied, for: profile)
         }
+        setup.onFinishRefused = { PagesHaptics.error() }
         let sheet = ChatSheet.wrap(page, title: "Set Up with Telegram", detents: [.large()])
         host.present(sheet, animated: true)
         setup.start()

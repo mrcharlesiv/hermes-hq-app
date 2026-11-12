@@ -177,6 +177,7 @@ final class TileUpdates {
                 PagesHUD.show("Updates \(frequency.title)", symbol: "clock.arrow.circlepath", from: host)
             } else {
                 AppLog.note("pages", "tile updates change failed: \(result)")
+                PagesHaptics.error()
                 PagesHUD.show("Couldn’t Change Updates", symbol: "exclamationmark.triangle", from: host)
             }
         }
@@ -192,6 +193,7 @@ final class TileUpdates {
             if result == .done {
                 PagesHUD.show(pause ? "Updates Paused" : "Updates Resumed", symbol: pause ? "pause.fill" : "play.fill", from: host)
             } else {
+                PagesHaptics.error()
                 PagesHUD.show("Couldn’t Change Updates", symbol: "exclamationmark.triangle", from: host)
             }
         }
@@ -214,6 +216,7 @@ final class TileUpdates {
                 }
             default:
                 AppLog.note("pages", "tile update now failed: \(result)")
+                PagesHaptics.error()
                 if let host { PagesHUD.show("Couldn’t Update", symbol: "exclamationmark.triangle", from: host) }
             }
         }

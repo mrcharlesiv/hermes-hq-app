@@ -36,6 +36,8 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     private var doneOpen = false
     private var ticking: Set<String> = []
     private var notices: PageNoticeHost!
+    /// Where a held task would land (section and index): a tick each time it moves to a new place.
+    private var dropPlace: String?
     private let scopeItem = ScopeBarItem()
     /// [bot-pills] The bots as Sessions' pills under the bar (iPhone and iPad), in place of "All Bots ⌄", with Me after
     /// All for your own tasks (owner 2026-11-05).
@@ -151,8 +153,15 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         control.accessibilityIdentifier = "tasks.mode.bar"
         control.setWidth(120, forSegmentAt: 0)
         control.setWidth(120, forSegmentAt: 1)
+        // [mac-ten] Owner 2026-11-11 ("weird UI issues"): as the bar's title view it was stretched to 48 pt, a third
+        // taller than Artifacts' filter in the same place on its page (36 pt). The two are one height.
+        control.translatesAutoresizingMaskIntoConstraints = false
+        let height = control.heightAnchor.constraint(equalToConstant: Self.barControlHeight)
+        height.priority = UILayoutPriority(999)
+        height.isActive = true
         return control
     }()
+    static let barControlHeight: CGFloat = 36
 
     private var barMiddle: UIView?
 
@@ -827,7 +836,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         guard let task = store.task(id) else { return }
         if task.isDone {
             PagesHaptics.selection()
-            Task { await store.setDone(id, false) }
+            Task { if await !store.setDone(id, false) { PagesHaptics.error() } }
             return
         }
         // The circle fills, the title strikes through; a moment later the task moves to Done.
@@ -838,7 +847,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         DispatchQueue.main.asyncAfter(deadline: .now() + (HQMotion.reduced ? 0.1 : 0.6)) { [weak self] in
             guard let self else { return }
             Task {
-                await self.store.setDone(id, true)
+                if await !self.store.setDone(id, true) { PagesHaptics.error() }   // the notice says why
                 self.ticking.remove(id)
                 self.reload(animated: true)
             }
@@ -901,9 +910,8 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     private func offerUndoDone(_ task: TodoTask) {
         guard task.repeatRule == nil || task.whoKind != .me else { return }
         UndoPill.show(label: "Marked Done", wayBack: "“\(task.title)” is back on the list", in: self) { [weak self] in
-            guard let self else { return }
-            PagesHaptics.selection()
-            Task { _ = await self.store.setDone(task.id, false) }
+            guard let self else { return }   // the pill plays Undo's tap
+            Task { if await !self.store.setDone(task.id, false) { PagesHaptics.error() } }
         }
     }
 
@@ -1062,17 +1070,17 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         PagesHaptics.selection()
         let pill = UndoPill.show(label: "Dismissed", in: self) { [weak self] in
             guard let self else { return }
-            Task { await self.ideas.restore(idea) }
+            Task { if await !self.ideas.restore(idea) { PagesHaptics.error() } }
         }
         Task {
-            if await !ideas.dismiss(idea) { pill?.dismiss(animated: true) }
+            if await !ideas.dismiss(idea) { pill?.dismiss(animated: true); PagesHaptics.error() }
         }
     }
 
     private func lookForIdeas() {
         guard !store.readOnlyGateway else { notices.show(JobsStore.readOnlyNotice); return }
         PagesHaptics.selection()
-        Task { await ideas.lookNow() }
+        Task { if await !ideas.lookNow() { PagesHaptics.error() } }
     }
 
     private func notePrimary(_ note: TaskIdeasNote) {
@@ -1140,7 +1148,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
 
     private func setLayout(group: String? = nil, sort: String? = nil) {
         PagesHaptics.selection()
-        Task { await store.setLayout(group: group, sort: sort) }
+        Task { if await !store.setLayout(group: group, sort: sort) { PagesHaptics.error() } }
     }
 
     private func toggleFold(_ id: String) {
@@ -1182,7 +1190,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         guard let at = next.firstIndex(where: { $0.id == id }), next.indices.contains(at + offset) else { return }
         PagesHaptics.selection()
         next.swapAt(at, at + offset)
-        Task { await store.saveSections(next) }
+        Task { if await store.saveSections(next) == nil { PagesHaptics.error() } }
     }
 
     private func deleteSection(_ id: String) {
@@ -1193,9 +1201,11 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         alert.addAction(UIAlertAction(title: "Delete Section", style: .destructive) { [weak self] _ in
             guard let self else { return }
-            PagesHaptics.selection()
             self.folded.remove(id)
-            Task { await self.store.saveSections(self.store.sections.filter { $0.id != id }) }
+            // The result's cue, as Rename Section's (the confirm button was the press).
+            Task {
+                if await self.store.saveSections(self.store.sections.filter { $0.id != id }) != nil { PagesHaptics.success() } else { PagesHaptics.error() }
+            }
         })
         present(alert, animated: true)
     }
@@ -1236,7 +1246,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
                 guard let self else { return }
                 PagesHaptics.selection()
                 Task {
-                    await self.store.move(ids, to: id.isEmpty ? nil : id)
+                    if await !self.store.move(ids, to: id.isEmpty ? nil : id) { PagesHaptics.error() }
                     after?()
                 }
             }
@@ -1283,7 +1293,11 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         guard !ids.isEmpty else { return }
         PagesHaptics.success()
         setSelecting(false)
-        Task { for id in ids where store.task(id)?.isDone == false { await store.setDone(id, true) } }
+        Task {
+            var allDone = true
+            for id in ids where store.task(id)?.isDone == false { if await !store.setDone(id, true) { allDone = false } }
+            if !allDone { PagesHaptics.error() }
+        }
     }
 
     private func deleteSelected() {
@@ -1293,9 +1307,13 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         let sheet = UIAlertController(title: title, message: nil, preferredStyle: .actionSheet)
         sheet.addAction(UIAlertAction(title: "Delete", style: .destructive) { [weak self] _ in
             guard let self else { return }
-            PagesHaptics.selection()
             self.setSelecting(false)
-            Task { for id in ids { await self.store.delete(id) } }
+            // One cue for the lot, once every delete has answered: success, or error if any was refused.
+            Task {
+                var allGone = true
+                for id in ids where !(await self.store.delete(id)) { allGone = false }
+                if allGone { PagesHaptics.success() } else { PagesHaptics.error() }
+            }
         })
         sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         sheet.popoverPresentationController?.barButtonItem = selectDeleteItem
@@ -1340,11 +1358,19 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
 
     func collectionView(_ collectionView: UICollectionView, dropSessionDidUpdate session: UIDropSession,
                         withDestinationIndexPath destinationIndexPath: IndexPath?) -> UICollectionViewDropProposal {
-        guard session.localDragSession != nil, dropTarget(destinationIndexPath) != nil else {
+        guard session.localDragSession != nil, let target = dropTarget(destinationIndexPath) else {
             return UICollectionViewDropProposal(operation: .forbidden)
+        }
+        let place = "\(target.section)#\(target.index)"
+        if place != dropPlace {
+            if dropPlace != nil { Haptics.play(.selection) }   // the first place is where the task was picked up
+            dropPlace = place
         }
         return UICollectionViewDropProposal(operation: .move, intent: .insertAtDestinationIndexPath)
     }
+
+    func collectionView(_ collectionView: UICollectionView, dropSessionDidExit session: UIDropSession) { dropPlace = nil }
+    func collectionView(_ collectionView: UICollectionView, dropSessionDidEnd session: UIDropSession) { dropPlace = nil }
 
     func collectionView(_ collectionView: UICollectionView, performDropWith coordinator: UICollectionViewDropCoordinator) {
         guard let drop = coordinator.items.first, let id = drop.dragItem.localObject as? String,
@@ -1361,11 +1387,11 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         let section = target.section.isEmpty ? nil : target.section
         let position = TodoSections.position(between: above, and: below)
         if let path = coordinator.destinationIndexPath { coordinator.drop(drop.dragItem, toItemAt: path) }
-        PagesHaptics.selection()
+        Haptics.play(.soft)   // the drop lands; the places crossed on the way ticked
         if store.settings.sort != "smart", store.task(id)?.section == section {
             notices.show("Sorted by \(store.settings.sort == "due" ? "Due Date" : "Date Added"). Choose My Order in Sort By to arrange tasks by hand.", seconds: 4)
         }
-        Task { await store.move([id], to: section, position: position) }
+        Task { if await !store.move([id], to: section, position: position) { PagesHaptics.error() } }
     }
 
     // MARK: Selection, menus, swipes
@@ -1384,7 +1410,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     /// Keep: it stays on the list and leaves "Still Need These?" for two weeks.
     private func keep(_ id: String) {
         PagesHaptics.success()
-        Task { await store.keep(id) }
+        Task { if await !store.keep(id) { PagesHaptics.error() } }
     }
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {

@@ -682,7 +682,10 @@ final class ComposioConnect {
     static var driver: ((URL, String) async -> URL?)?
 
     var phase = Phase.idle
-    var outcome: Outcome?
+    var outcome: Outcome? {
+        // Every way a connect can fail ends here: the error tap with the red line (success plays its own above).
+        didSet { if case .failed = outcome, outcome != oldValue { Haptics.play(.error) } }
+    }
     @ObservationIgnored private var authSession: NSObject?
     @ObservationIgnored private var provider: WebAuthAnchorProvider?
     @ObservationIgnored private var cancelled = false

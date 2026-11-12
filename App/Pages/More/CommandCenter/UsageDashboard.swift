@@ -61,7 +61,7 @@ struct UsageDashboard: View {
             }
             Spacer(minLength: 12)
             if model.busy { ProgressView().controlSize(.small) }
-            HQSegmentedPicker("Period", options: [7, 30, 90].map { (title: "\($0) Days", value: $0) }, selection: $model.days)
+            HQSegmentedPicker("Period", options: [7, 30, 90].map { (title: "\($0) Days", value: $0) }, selection: $model.days, ticks: false)   // `days` ticks as it changes
                 .labelsHidden()
             .frame(width: 330)
             .accessibilityIdentifier("more-usage.period")

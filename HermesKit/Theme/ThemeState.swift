@@ -35,6 +35,10 @@ nonisolated struct ThemeState: Sendable, Hashable {
     /// (a tester 2026-11-08: "everything a lot more compact", who used the Desktop Look at 90 % for it; owner: the same
     /// choice in the iOS look). Only with the Desktop Look off: the look keeps its own rows.
     var density = ListDensity.standard
+    /// [message-colour] Chat Bubbles › Colour: the colour of your own messages. The theme's own unless another was
+    /// picked (owner 2026-11-11: "keep the blue but make an option for Mac and iOS where you can change the color").
+    /// Only with the Desktop Look off: the look keeps its own boxes.
+    var messageColour = MessageColour.theme
 
     static let `default` = ThemeState()
     static let scalePresets = [90, 100, 110, 125, 150]
@@ -89,6 +93,8 @@ nonisolated struct ThemeState: Sendable, Hashable {
     var appliedBubbleStyle: BubbleStyle { desktopLook ? .solid : bubbleStyle }
     var appliedGlassBubbles: Bool { appliedBubbleStyle == .glass }
     var appliedTintedBubbles: Bool { appliedBubbleStyle == .tinted }
+    /// [message-colour] The Desktop Look keeps its skin's own box for your messages.
+    var appliedMessageColour: MessageColour { desktopLook ? .theme : messageColour }
     /// Everything a layout depends on (the mode is colours only; High Contrast boxes the look's replies, which then
     /// keep a bubble's padding).
     var layoutSignature: Int {
@@ -110,6 +116,62 @@ nonisolated enum ListDensity: String, Sendable, Hashable, CaseIterable {
     case standard
     /// Smaller faces and type, shorter rows, one line of preview.
     case compact
+}
+
+/// [message-colour] The colour of your own messages in the iOS look (Chat Bubbles › Colour): the theme's, one of nine
+/// named ones, or any colour picked from the system's colour panel. Stored as nothing, the name, or `#RRGGBB`.
+nonisolated enum MessageColour: Sendable, Hashable {
+    case theme
+    /// [bot-colour] Each bot's chat in the colour of its face (owner 2026-11-11). The theme's own where there is no
+    /// one bot (a group chat, the page's preview): the chat itself asks for the face's colour (`BotMessageColour`).
+    case botFace
+    case preset(Preset)
+    case custom(UInt32)
+
+    enum Preset: String, Sendable, Hashable, CaseIterable {
+        case blue, indigo, purple, pink, red, orange, green, teal, graphite
+
+        /// The bubble in light and in dark: each already deep enough for white text. Graphite has none: it is the
+        /// page's own grey (`ThemeResolver.paintMessage`).
+        func seed(dark: Bool) -> RGBA? {
+            func pick(_ light: UInt32, _ darkValue: UInt32) -> RGBA { RGBA(hex: dark ? darkValue : light) }
+            return switch self {
+            case .blue: pick(0x0053FD, 0x3863BF)      // the app's own blue (`ThemeResolver.base`)
+            case .indigo: pick(0x5856D6, 0x625BBF)
+            case .purple: pick(0x9A45D6, 0x8A49B8)
+            case .pink: pick(0xCE3F71, 0xAF3A62)
+            case .red: pick(0xD9342B, 0xB5392D)
+            case .orange: pick(0xBF5509, 0xA54B0A)
+            case .green: pick(0x1D883C, 0x257538)
+            case .teal: pick(0x0D8282, 0x1E7272)
+            case .graphite: nil
+            }
+        }
+    }
+
+    /// A stored value that is not a known name or a six-digit `#RRGGBB` is the theme's own.
+    init(stored: Any?) {
+        guard let text = stored as? String else { self = .theme; return }
+        if text == "botFace" {
+            self = .botFace
+        } else if let preset = Preset(rawValue: text) {
+            self = .preset(preset)
+        } else if text.hasPrefix("#"), text.count == 7, let hex = UInt32(text.dropFirst(), radix: 16) {
+            self = .custom(hex)
+        } else {
+            self = .theme
+        }
+    }
+
+    /// What is stored: nothing for the theme's own.
+    var stored: String? {
+        switch self {
+        case .theme: nil
+        case .botFace: "botFace"
+        case .preset(let preset): preset.rawValue
+        case .custom(let hex): String(format: "#%06X", hex & 0xFFFFFF)
+        }
+    }
 }
 
 /// [glass-bubbles] [tinted-bubbles] How chat bubbles are filled in the iOS look (Theme › Chats › Chat Bubbles › Style).
@@ -138,7 +200,7 @@ nonisolated enum TopEdge: String, Sendable, Hashable, CaseIterable {
     case hard
 }
 
-/// Reads and writes the thirteen `hqn.theme.*` keys.
+/// Reads and writes the fourteen `hqn.theme.*` keys.
 nonisolated struct ThemeStore: @unchecked Sendable {
     enum Key {
         static let skin = "hqn.theme.skin"
@@ -162,8 +224,10 @@ nonisolated struct ThemeStore: @unchecked Sendable {
         static let desktopComposer = "hqn.theme.desktopComposer"
         /// [density] `ListDensity`'s raw value, stored only when it isn't Standard.
         static let density = "hqn.theme.density"
+        /// [message-colour] `MessageColour.stored`, stored only when it isn't the theme's own.
+        static let messageColour = "hqn.theme.messageColour"
         static let all = [skin, chosen, desktopLook, skinBeforeLook, highContrast, uiScale, bubbleCorners, glassBubbles, bubbleStyle, topEdge,
-                          desktopCorners, desktopComposer, density]
+                          desktopCorners, desktopComposer, density, messageColour]
     }
 
     var defaults: UserDefaults = .standard
@@ -214,6 +278,7 @@ nonisolated struct ThemeStore: @unchecked Sendable {
         }
         if let edge = (defaults.object(forKey: Key.topEdge) as? String).flatMap(TopEdge.init(rawValue:)) { state.topEdge = edge }
         if let density = (defaults.object(forKey: Key.density) as? String).flatMap(ListDensity.init(rawValue:)) { state.density = density }
+        state.messageColour = MessageColour(stored: defaults.object(forKey: Key.messageColour))
         return state
     }
 
@@ -299,6 +364,11 @@ nonisolated struct ThemeStore: @unchecked Sendable {
     /// [density] Standard, the default, is stored as nothing.
     func setDensity(_ density: ListDensity) {
         if density == .standard { defaults.removeObject(forKey: Key.density) } else { defaults.set(density.rawValue, forKey: Key.density) }
+    }
+
+    /// [message-colour] The theme's own, the default, is stored as nothing.
+    func setMessageColour(_ colour: MessageColour) {
+        if let stored = colour.stored { defaults.set(stored, forKey: Key.messageColour) } else { defaults.removeObject(forKey: Key.messageColour) }
     }
 
     func reset() { Key.all.forEach(defaults.removeObject(forKey:)) }

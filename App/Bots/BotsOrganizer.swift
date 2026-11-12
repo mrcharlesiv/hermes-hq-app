@@ -103,7 +103,10 @@ import UIKit
         if let item = BotMenuHooks.item(.screen, bot, host) { info.append(item) }
 
         let readToggle: BotMenuNode = bot.unread
-            ? .action("Mark as Read", BotExtrasRules.readSymbol(unread: true)) { [weak self] in self?.services.markRead(bot) }
+            ? .action("Mark as Read", BotExtrasRules.readSymbol(unread: true)) { [weak self] in
+                Haptics.play(.selection)   // as Mark as Unread below, and the swipe
+                self?.services.markRead(bot)
+            }
             : .action("Mark as Unread", BotExtrasRules.readSymbol(unread: false)) { [weak self] in
                 Haptics.play(.selection)
                 self?.settings.markUnread(bot)
@@ -442,7 +445,8 @@ import UIKit
                            problem: { BotListLayout.sectionNameProblem($0, others: others) }, from: host) { [weak self] name in
             let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !clean.isEmpty, clean != record.name, BotListLayout.sectionNameProblem(clean, others: others) == nil else { return }
-            self?.run("Couldn’t Rename \(record.name)") { try await editing.renameSection(id, to: clean) }
+            self?.run("Couldn’t Rename \(record.name)", { try await editing.renameSection(id, to: clean) },
+                      done: { Haptics.play(.success) })   // as a chat's or a project's rename
         }
     }
 

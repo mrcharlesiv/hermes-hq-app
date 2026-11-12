@@ -234,6 +234,7 @@ final class ToolsetPageModel {
                 defer { keyBusy = nil }
                 do {
                     try await store.deleteEnv(key, profile: profile)
+                    Haptics.play(.success)   // as Settings › Keys' Remove
                     await load()
                     await parent.reloadTools()
                     AppLog.trace("capabilities", "tool key \(key) removed in \(AppLog.ms(since: start)) ms")
@@ -260,6 +261,7 @@ final class ToolsetPageModel {
                 }
             } catch {
                 install = .failed
+                Haptics.play(.error)
                 AppLog.note("capabilities", "toolset \(name) setup \(key) failed after \(AppLog.ms(since: start)) ms: \(type(of: error))")
                 return
             }
@@ -271,6 +273,7 @@ final class ToolsetPageModel {
                 AppLog.trace("capabilities", "toolset \(name) setup \(key) ok in \(AppLog.ms(since: start)) ms")
             } else {
                 install = .failed
+                Haptics.play(.error)
                 AppLog.note("capabilities", "toolset \(name) setup \(key) ended with exit code \(last?.exitCode.map(String.init) ?? "none") after \(AppLog.ms(since: start)) ms")
             }
         }
@@ -306,6 +309,7 @@ final class ToolsetPageModel {
 
     func setBackend(_ backend: TerminalBackend) {
         guard let store, settingBackend == nil else { return }
+        Haptics.play(.selection)   // a pick among the rows, as `select` and `setModel`
         settingBackend = backend.name
         let start = ContinuousClock.now
         Task {

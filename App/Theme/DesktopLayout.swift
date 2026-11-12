@@ -250,13 +250,19 @@ struct DesktopSegmentStrip<Value: Hashable>: View {
     @Binding var selection: Value
     /// Each segment at least as wide as its whole label (for `ViewThatFits`, which then falls back to rows).
     var wholeLabels = false
+    /// A tick when a tap changes the segment, as iOS-look segments (`WholeLabelSegmentsControl`) give. False where the
+    /// caller plays its own (Artifacts' filter), so one pick never taps twice.
+    var ticks = true
 
     var body: some View {
         HStack(spacing: 0) {
             ForEach(Array(options.enumerated()), id: \.offset) { index, option in
                 if index > 0 { Rectangle().fill(Color.hqStroke).frame(width: 1) }
                 let first = index == 0, last = index == options.count - 1, radius = DesktopRows.radius
-                Button { selection = option.value } label: {
+                Button {
+                    if ticks, selection != option.value { Haptics.play(.selection) }
+                    selection = option.value
+                } label: {
                     Text(option.title)
                         .font(Font.hq(.footnote).weight(selection == option.value ? .semibold : .regular))
                         .foregroundStyle(selection == option.value ? Color.hqLabel : Color.hqLabel2)
@@ -413,17 +419,28 @@ struct HQSegmentedPicker<Value: Hashable>: View {
     var label: String
     var options: [(title: String, value: Value)]
     @Binding var selection: Value
+    /// A tick on a new pick, whichever of the three controls draws it. False where the binding plays its own.
+    var ticks: Bool
 
-    init(_ label: String, options: [(title: String, value: Value)], selection: Binding<Value>) {
+    init(_ label: String, options: [(title: String, value: Value)], selection: Binding<Value>, ticks: Bool = true) {
         self.label = label
         self.options = options
         _selection = selection
+        self.ticks = ticks
+    }
+
+    /// The system segments' binding, with the tick the other two controls play themselves.
+    private var ticking: Binding<Value> {
+        Binding(get: { selection }, set: { next in
+            if ticks, next != selection { Haptics.play(.selection) }
+            selection = next
+        })
     }
 
     var body: some View {
         let _ = Theme.touch()         // follows a live toggle of the look
         if Theme.isDesktop {
-            DesktopSegmentStrip(options: options, selection: $selection)
+            DesktopSegmentStrip(options: options, selection: $selection, ticks: ticks)
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel(label)
         } else if HQFont.scale != 1 {
@@ -431,11 +448,12 @@ struct HQSegmentedPicker<Value: Hashable>: View {
             // SwiftUI segmented Picker keeps its 13 pt titles whatever font it is given (Chat Bubbles' Style, Marketplace).
             WholeLabelSegments(titles: options.map(\.title),
                                selected: Binding(get: { options.firstIndex { $0.value == selection } ?? 0 },
-                                                 set: { if options.indices.contains($0) { selection = options[$0].value } }))
+                                                 set: { if options.indices.contains($0) { selection = options[$0].value } }),
+                               ticks: ticks)
                 .frame(height: HQFont.scaled(32))
                 .accessibilityLabel(label)
         } else {
-            Picker(label, selection: $selection) {
+            Picker(label, selection: ticking) {
                 ForEach(Array(options.enumerated()), id: \.offset) { _, option in Text(option.title).tag(option.value) }
             }
             .pickerStyle(.segmented)

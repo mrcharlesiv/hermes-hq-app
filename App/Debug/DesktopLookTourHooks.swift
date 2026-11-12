@@ -75,6 +75,9 @@ enum DesktopLookTourHooks {
         guard let screen = UserDefaults.standard.string(forKey: "HQDebugTour"), !screen.isEmpty else { return }
         let wanted = UserDefaults.standard.string(forKey: "HQDebugTourBot")
         after(1.2) { go(screen, bot: wanted, root: root, attempts: 40) }
+        // [backdrop-still] `-HQDebugPopAt <seconds>`: the page on show goes back then (a slide the other way).
+        let popAt = UserDefaults.standard.double(forKey: "HQDebugPopAt")
+        if popAt > 0 { after(popAt) { (root.selectedViewController as? UINavigationController)?.popViewController(animated: true) } }
         // [glass] `-HQDebugTourDetent large`: the open sheet then grows to full height (glass → solid)
         if UserDefaults.standard.string(forKey: "HQDebugTourDetent") == "large" { after(5.5) { growSheet(root) } }
         let scroll = UserDefaults.standard.double(forKey: "HQDebugTourScroll")
@@ -179,7 +182,9 @@ enum DesktopLookTourHooks {
                 @MainActor func open(_ tries: Int) {
                     let model = page.model
                     let router = page.rootView.router
-                    if item == "allapps", model.catalog != nil {
+                    if item == "composio" {   // [connect-find] the Composio page (its key setup while no key is saved)
+                        nav.pushViewController(ConnectAppsScreens.makeRoot(services: services), animated: false)
+                    } else if item == "allapps", model.catalog != nil {
                         nav.pushViewController(CatalogBrowseController(model: model, router: router), animated: false)
                     } else if let server = model.servers?.first(where: { $0.name == item }) {
                         nav.pushViewController(ConnectorPageController(model: model, server: server, router: router), animated: false)
@@ -233,6 +238,8 @@ enum DesktopLookTourHooks {
                         MarketplaceLinks.open(target, services: services, from: root)
                     } else if item == "find" || item == "market" {   // [marketplace]
                         nav.pushViewController(MarketplaceController(model: model, router: router, kind: item == "find" ? .plugins : .all), animated: false)
+                    } else if item == "market-connectors" {   // [connect-find]
+                        nav.pushViewController(MarketplaceController(model: model, router: router, kind: .connectors), animated: false)
                     } else if item == "market-skills" {
                         nav.pushViewController(MarketplaceController(model: model, router: router, kind: .skills), animated: false)
                     } else if item.hasPrefix("skill:"), let skill = SkillCatalogStore.shared.entries?.first(where: { $0.name == String(item.dropFirst(6)) }) {
@@ -462,6 +469,8 @@ enum DesktopLookTourHooks {
     private static func findChat(in controller: UIViewController?) -> ChatViewController? {
         guard let controller else { return nil }
         if let chat = controller as? ChatViewController { return chat }
+        // [ipad-polish] Two panes: the chat is in the right pane, which is not under the tabs.
+        if let tabs = controller as? MainTabController, let chat = tabs.chatOnShow { return chat }
         if let presented = controller.presentedViewController, let chat = findChat(in: presented) { return chat }
         for child in controller.children { if let found = findChat(in: child) { return found } }
         return nil

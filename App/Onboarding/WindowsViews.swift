@@ -32,8 +32,8 @@ struct WindowsTailscaleView: View {
                         .accessibilityLabel("2. " + GuideText.spoken(copy.steps1[1]))
                 }
             }
+        } footer: {
             GuideActionButton(title: copy.next, id: "onboarding.other-1.next") { go(.other2) }
-                .padding(.top, 8)
         }
     }
 }
@@ -62,6 +62,7 @@ struct WindowsMessageView: View {
                 .foregroundStyle(Color.hqTint)
                 .frame(maxWidth: .infinity, minHeight: 44)
                 .accessibilityIdentifier("onboarding.other-2.myself")
+        } footer: {
             GuideActionButton(title: copy.signIn, id: "onboarding.other-2.next") { go(.connect) }
         }
     }

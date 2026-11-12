@@ -198,7 +198,7 @@ import UIKit
     func stop() {
         guard !stopping else { return }
         stopping = true
-        Haptics.play(.medium)
+        Haptics.play(.rigid)   // as a bot chat's Stop
         Task { [weak self] in
             guard let self else { return }
             let confirmed = await self.room.stopRoom()
@@ -373,7 +373,10 @@ import UIKit
         if room.undelivered[messageId] != nil {
             children.append(UIMenu(title: "", options: .displayInline, children: [
                 item("Send Again", "arrow.clockwise", id: "resend") { [weak self] in self?.retry(messageId) },
-                item("Delete", "trash", id: "delete", destructive: true) { [weak self] in self?.room.deleteUndelivered(messageId) },
+                item("Delete", "trash", id: "delete", destructive: true) { [weak self] in
+                    Haptics.play(.warning)   // as a bot chat's Delete of an unsent message
+                    self?.room.deleteUndelivered(messageId)
+                },
             ]))
         }
         let who = entry.from.kind == .user ? "You" : String(room.replyHeader(entry).split(separator: "·").last ?? "").trimmingCharacters(in: .whitespaces)

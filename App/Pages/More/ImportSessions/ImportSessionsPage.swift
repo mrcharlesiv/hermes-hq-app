@@ -257,7 +257,11 @@ struct ImportSessionRow: View {
             SettingsChevron()
                 .padding(.top, 4)
         }
-        .padding(.vertical, 12)
+        // [mac-ten] Owner 2026-11-11 ("weird UI issues"; 2026-11-08: "too much wasted space"): the phone's 12 pt
+        // above and under the words, on top of the list's own row insets, left about 35 pt of card between one
+        // conversation's last line and the next one's title, so four and a half fitted a window. The list's insets
+        // are the Mac's room.
+        .padding(.vertical, DeviceWord.isMac ? 2 : 12)
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(ForeignSessions.spoken(session))

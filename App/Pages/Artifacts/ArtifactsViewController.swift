@@ -473,6 +473,16 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
                     s.bottomSeparatorInsets = NSDirectionalEdgeInsets(top: 0, leading: 76, bottom: 0, trailing: 20)   // as Bots and Jobs
                     return s
                 }
+                // [mac-ten] The Unavailable heading has no line under it, as no heading has (see `toggleCell`).
+                if DeviceWord.isMac, case .unavailable = section {
+                    config.itemSeparatorHandler = { path, separator in
+                        var s = separator
+                        s.topSeparatorVisibility = .hidden
+                        if path.item == 0 { s.bottomSeparatorVisibility = .hidden }
+                        s.bottomSeparatorInsets = NSDirectionalEdgeInsets(top: 0, leading: 76, bottom: 0, trailing: 20)
+                        return s
+                    }
+                }
                 if case .day = section {
                     config.headerMode = .supplementary
                     // [pins] Swipe a file or link right to pin it (hold for the same in the menu).
@@ -837,6 +847,15 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
             var content = UIListContentConfiguration.cell().hqScaled()
             content.text = "Unavailable (\(count))"
             content.textProperties.color = HQPalette.label2
+            if DeviceWord.isMac {
+                // [mac-ten] Owner 2026-11-11 ("weird UI issues"): it folds a group, as Images, Today and Sunday name
+                // theirs, but drew as a body-size row with a line under it that started 56 pt in. The headings' type
+                // (the Desktop Look's tracked capitals), and no line (`itemSeparatorHandler`).
+                content.textProperties.font = MacType.sectionHeader
+                if Theme.isDesktop {
+                    content.attributedText = NSAttributedString(string: (content.text ?? "").uppercased(), attributes: DesktopLayout.labelAttributes())
+                }
+            }
             cell.contentConfiguration = content
             cell.accessories = [.outlineDisclosure(options: .init(style: .cell, tintColor: HQPalette.label3))]
             cell.accessibilityIdentifier = "artifacts.unavailable"
@@ -1161,6 +1180,8 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
     private var showsPages: Bool { pinnedOnly && fixedProfile == nil && query.pgTrim.isEmpty }
 
     private weak var pagesBar: DashboardPagesBar?
+    /// The slot a held tile last opened among the pins: a tick each time the others slide into a new one.
+    private var dropSlot: IndexPath?
     private var pageSwipes: [UISwipeGestureRecognizer] = []
 
     private func makePagesBar(in cell: UICollectionViewListCell) -> DashboardPagesBar {
@@ -1931,6 +1952,11 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
     private func stateMargins(for config: UIContentUnavailableConfiguration) -> NSDirectionalEdgeInsets {
         var margins = NSDirectionalEdgeInsets(top: 40, leading: 24, bottom: 40, trailing: 24)
         guard DeviceWord.isMac, let collectionView, collectionView.bounds.height > 0 else { return margins }
+        // [mac-ten] Owner 2026-11-11 ("weird UI issues"): in a wide window the line under "No Artifacts in Recent
+        // Chats" ran 900 pt across the page as one line. It wraps at a readable measure, as the pane's own states do.
+        let side = max(24, ((collectionView.bounds.width - MacInset.emptyMeasure) / 2).rounded(.down))
+        margins.leading = side
+        margins.trailing = side
         let visible = collectionView.bounds.height - collectionView.adjustedContentInset.top - collectionView.adjustedContentInset.bottom
         // The segments' row over it: where the list last laid the state out, else about its height.
         let laid = dataSource?.indexPath(for: .state).flatMap { collectionView.layoutAttributesForItem(at: $0)?.frame.minY }
@@ -2169,6 +2195,10 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
               dataSource.sectionIdentifier(for: destination.section) == .pinned else {
             return UICollectionViewDropProposal(operation: .forbidden)
         }
+        if destination != dropSlot {
+            if dropSlot != nil { Haptics.play(.selection) }   // the first slot is where the tile came from
+            dropSlot = destination
+        }
         return UICollectionViewDropProposal(operation: .move, intent: .insertAtDestinationIndexPath)
     }
 
@@ -2179,8 +2209,8 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         return id
     }
 
-    func collectionView(_ collectionView: UICollectionView, dropSessionDidExit session: UIDropSession) { pagesBar?.highlight(nil) }
-    func collectionView(_ collectionView: UICollectionView, dropSessionDidEnd session: UIDropSession) { pagesBar?.highlight(nil) }
+    func collectionView(_ collectionView: UICollectionView, dropSessionDidExit session: UIDropSession) { pagesBar?.highlight(nil); dropSlot = nil }
+    func collectionView(_ collectionView: UICollectionView, dropSessionDidEnd session: UIDropSession) { pagesBar?.highlight(nil); dropSlot = nil }
 
     func collectionView(_ collectionView: UICollectionView, performDropWith coordinator: UICollectionViewDropCoordinator) {
         if let pageId = pageUnderDrop(coordinator.session), let id = coordinator.items.first?.dragItem.localObject as? String,
@@ -2881,7 +2911,8 @@ private struct ArtifactFilterStrip: View {
 
     var body: some View {
         DesktopSegmentStrip(options: titles.enumerated().map { ($0.element, $0.offset) },
-                            selection: Binding(get: { choice.index }, set: { choice.index = $0; changed($0) }))
+                            selection: Binding(get: { choice.index }, set: { choice.index = $0; changed($0) }),
+                            ticks: false)   // `pickSegment` plays the tick
             .accessibilityElement(children: .contain)
     }
 }

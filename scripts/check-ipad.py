@@ -58,12 +58,16 @@ for path in sorted((ROOT / 'App').rglob('*.swift')):
     lines = path.read_text().splitlines()
     for i, line in enumerate(lines):
         code = line.split('//', 1)[0]
-        if rel not in SCREEN_OK and (re.search(r'UIScreen\.main', code) or re.search(r'\.screen\.bounds', code)):
+        # [ipad-polish] Not layout: the screen's pixel scale for a hairline, and the foldable test (PaneLayout.foldable /
+        # .unfolded), which is about the device's screen and not the window.
+        screen_use = re.search(r'UIScreen\.main(?!\.scale)', code) or (re.search(r'\.screen\.bounds', code) and 'PaneLayout.' not in code)
+        if rel not in SCREEN_OK and screen_use:
             find(f'(c) {rel}:{i + 1}: lays out from the screen; use the view\'s or the window\'s own size')
         if re.search(r'preferredStyle:\s*\.actionSheet|UIActivityViewController\(', code):
             window = '\n'.join(lines[max(0, i - 3):i + 45])
             if not ANCHOR.search(window): find(f'(d) {rel}:{i + 1}: an action sheet or share sheet with no popover anchor nearby')
-        if 'topViewController as? ChatViewController' in code and not rel.startswith('App/Root/'):
+        # [ipad-polish] The right pane's own stack asked by name (`split.detail`) is the pane's chat already.
+        if 'topViewController as? ChatViewController' in code and 'split.detail.topViewController' not in code and not rel.startswith('App/Root/'):
             find(f'(e) {rel}:{i + 1}: use MainTabController.chatOnShow or UINavigationController.paneChat')
         if re.search(r'rootViewController (is|as\?) MainTabController', code) and rel != 'App/Root/PaneRouter.swift':
             find(f'(f) {rel}:{i + 1}: the root may be the two-pane root; use AppRoot / MainTabController.current')
@@ -92,6 +96,8 @@ for base in ['App', 'HermesKit', 'Shared', 'NotificationService']:
             if line.strip().startswith('//'): continue
             for literal in re.findall(r'"((?:[^"\\]|\\.)*)"', line):
                 if literal == 'iPhone' and rel in WORD_TABLES: continue
+                # [ipad-polish] A model identifier ("iPhone19,4") and a log line are not wording anyone reads in the app.
+                if re.fullmatch(r'iPhone\d+,\d+', literal) or 'AppLog.' in line: continue
                 if 'iPhone' in literal: find(f'(h) {rel}:{i + 1}: a string says "iPhone"; use \\(DeviceWord.name)')
 
 # (i) the phone-shaped sheets are a centred form sheet in two panes (§4.8, D6): they go through SheetStyle

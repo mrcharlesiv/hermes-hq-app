@@ -235,7 +235,7 @@ extension AppModel: SessionsServices {}
 
     /// The bar's Compose (and the empty page's New Chat, ⇧⌘N): the one New Chat sheet. The bot is a lit pill (the
     /// picked chip's, else the bot the sheet started with last); a tap on a project's row starts the chat there
-    /// (No Project first, New Project… last). Tester 2026-11-10; owner: "There should be one go-to".
+    /// (Start Chat for none, New Project… last). Tester 2026-11-10; owner: "There should be one go-to".
     /// Filter › Project narrowed to one project: the new chat starts in it, with no sheet.
     /// `asksProject`: a caller that is the go-to. Without it a `profile` starts its chat in no project at once (⌘N, a
     /// Home card's New Chat row); so does a picked chip with Settings › Chat › New Chat Asks for a Project off.
@@ -271,19 +271,44 @@ extension AppModel: SessionsServices {}
             if let project { self?.newChat(inProject: project, profile: bot) } else { self?.newChat(profile: bot) }
         }
         let opensOn = NewChatLast.opensOn(picked: picked, last: NewChatLast.bot, among: ordered.map(\.id))
-        let view = NewChatSheetView(bots: ordered, projects: projects, bot: opensOn) { bot, project in
+        let pick: (String, String?) -> Void = { bot, project in
             guard let sheet = box.sheet, sheet.presentingViewController != nil else { start(bot, project); return }
             sheet.dismiss(animated: true) { start(bot, project) }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { start(bot, project) }
         }
+        // A bot's recent projects: the ones the sheet started for it, then the ones its newest chats are in.
+        let chats = (store?.sessions ?? []).sorted { ($0.lastActive ?? .distantPast) > ($1.lastActive ?? .distantPast) }
+        let byProfile = store?.projectsByProfile ?? [:]
+        let recent: (String) -> [String] = { bot in
+            NewChatLast.recents(for: bot) + chats.filter { $0.profile == bot }.map {
+                SessionProjects.key(cwd: $0.cwd, profile: bot, projectsByProfile: byProfile)
+            }
+        }
+        // All Projects: every project, A to Z, on a page of its own in the sheet (which goes to its full height).
+        let showAll: (String) -> Void = { bot in
+            guard let sheet = box.sheet else { return }
+            let name = ordered.first { $0.id == bot }?.name ?? "this bot"
+            let all = UIHostingController(rootView: HQScaledRoot(NewChatAllProjectsView(projects: projects, botName: name,
+                                                                                       last: NewChatLast.project(for: bot)) { pick(bot, $0) }))
+            all.view.backgroundColor = HQPalette.sheetPage
+            all.title = "All Projects"
+            all.navigationItem.largeTitleDisplayMode = .never
+            sheet.sheetPresentationController?.animateChanges { sheet.sheetPresentationController?.selectedDetentIdentifier = .large }
+            sheet.pushViewController(all, animated: true)
+        }
+        let view = NewChatSheetView(bots: ordered, projects: projects, bot: opensOn, recent: recent, start: pick, showAll: showAll)
         let page = UIHostingController(rootView: HQScaledRoot(view))
         page.view.backgroundColor = HQPalette.sheetPage   // [glass] the glass shows around the rows
         // The sheet is as tall as its rows (New Project…, the last one, is on show without a scroll) up to the full
-        // height: the title bar, the two headings and the pills, then No Project, each project and New Project….
-        let rows = CGFloat(projects.count + 2)
+        // height: the title bar, the pills, Start Chat and the heading, then the projects, All Projects and New Project….
+        let listed = NewChatLast.shown(all: projects.map(\.key), recent: [])
+        let rows = CGFloat(listed.keys.count + (listed.more ? 1 : 0) + 1)
         let fit = UISheetPresentationController.Detent.custom(identifier: .init("new-chat.fit")) { context in
-            min(232 + rows * HQFont.scaled(44), context.maximumDetentValue)
+            min(280 + rows * HQFont.scaled(44), context.maximumDetentValue)
         }
+        // [ipad-polish] Two panes: a pop-over off the compose button, as tall as its rows.
+        PanePopover.hangNext(on: host.composeAnchor?.bar, rect: host.composeAnchor?.rect, arrow: .up, from: host,
+                             size: CGSize(width: 400, height: 640), bar: false)
         let sheet = ChatSheet.wrap(page, title: "New Chat", detents: [fit, .large()])
         box.sheet = sheet
         host.present(sheet, animated: true)
@@ -794,44 +819,45 @@ struct ChooseBotView: View {
     }
 }
 
-/// Compose's New Chat sheet (owner 2026-11-10, "one go-to"): the bots as pills, one lit; under them No Project, each
-/// project and New Project… as rows. A tap on a pill changes the bot; a tap on a row starts the chat.
+/// Compose's New Chat sheet (owner 2026-11-10, "one go-to"; 2026-11-11, "without overwhelm"): the bots as pills, one
+/// lit; under "In a project (optional)" the projects (all of them while there are few, else the lit bot's five most
+/// recent and All Projects), then New Project…; Start Chat, the usual case, at the foot of the sheet. A tap on a pill
+/// changes the bot; the button or a project's row starts the chat.
 struct NewChatSheetView: View {
     /// The New Project… row (never a project's key, which is a folder path).
     static let newProjectTag = "\u{1F}new-project"
     var bots: [Bot]
     var projects: [SessionProjectEntry]
     @State var bot: String
-    /// `project`: nil (No Project), a project's key, or `newProjectTag`.
+    /// The lit bot's recent projects, newest first.
+    var recent: (String) -> [String] = { _ in [] }
+    /// `project`: nil (no project), a project's key, or `newProjectTag`.
     var start: (_ bot: String, _ project: String?) -> Void
+    var showAll: (_ bot: String) -> Void = { _ in }
 
     private var faceSize: CGFloat { Theme.isDesktop ? HQFont.scaled(20) : HQFont.scaled(24) }
+    private static let rowInsets = EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16)
 
-    private func row(_ title: String, key: String?, identifier: String) -> some View {
-        Button { start(bot, key) } label: {
+    private var botName: String { bots.first { $0.id == bot }?.name ?? "Hermes" }
+
+    private var newProjectRow: some View {
+        Button { start(bot, Self.newProjectTag) } label: {
             HStack(spacing: 12) {
-                Image(systemName: "folder")
-                    .foregroundStyle(key == nil ? Color.hqLabel3 : Color.hqLabel2)
-                    .frame(width: HQFont.scaled(24))
-                Text(title).foregroundStyle(Color.hqLabel).lineLimit(1)
-                Spacer(minLength: 8)
-                if NewChatLast.marks(stored: NewChatLast.project(for: bot), row: key) {
-                    Text("Last used")
-                        .font(Font.hq(.caption2).weight(.semibold))
-                        .foregroundStyle(Color.hqTintText)
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(Color.hqTint.opacity(0.16), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                }
-                Image(systemName: "chevron.right").font(Font.hq(.footnote).weight(.semibold)).foregroundStyle(Color.hqLabel3)
+                Image(systemName: "folder.badge.plus").frame(width: HQFont.scaled(24))
+                Text("New Project…")
+                Spacer(minLength: 0)
             }
+            .foregroundStyle(Color.hqTintText)
             .frame(height: HQFont.scaled(44))
             .contentShape(Rectangle())
         }
-        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-        .accessibilityIdentifier(identifier)
+        .listRowInsets(Self.rowInsets)
+        .accessibilityIdentifier("new-chat-project-new")
     }
 
     var body: some View {
+        let listed = NewChatLast.shown(all: projects.map(\.key), recent: recent(bot))
+        let last = NewChatLast.project(for: bot)
         List {
             Section {
                 ScrollViewReader { proxy in
@@ -856,34 +882,132 @@ struct NewChatSheetView: View {
                 .listRowBackground(Color.clear)
             } header: { HQSectionLabel { Text("Bot") } }
             Section {
-                row("No Project", key: nil, identifier: "new-chat-project-none")
-                ForEach(projects) { entry in row(entry.label, key: entry.key, identifier: "new-chat-project-\(entry.label)") }
-                Button { start(bot, Self.newProjectTag) } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "folder.badge.plus").frame(width: HQFont.scaled(24))
-                        Text("New Project…")
-                        Spacer(minLength: 0)
-                    }
-                    .foregroundStyle(Color.hqTintText)
-                    .frame(height: HQFont.scaled(44))
-                    .contentShape(Rectangle())
-                }
-                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-                .accessibilityIdentifier("new-chat-project-new")
-            } header: {
-                HQSectionLabel {
-                    HStack {
-                        Text("Project")
-                        Spacer(minLength: 8)
-                        Text("Tap one to start the chat").fontWeight(.regular)
+                ForEach(listed.keys, id: \.self) { key in
+                    if let entry = projects.first(where: { $0.key == key }) {
+                        NewChatProjectRow(title: entry.label, last: NewChatLast.marks(stored: last, row: key)) { start(bot, key) }
+                            .listRowInsets(Self.rowInsets)
+                            .accessibilityIdentifier("new-chat-project-\(entry.label)")
                     }
                 }
-            }
+                if listed.more {
+                    Button { showAll(bot) } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "folder").foregroundStyle(Color.hqLabel3).frame(width: HQFont.scaled(24))
+                            Text("All Projects").foregroundStyle(Color.hqLabel2)
+                            Spacer(minLength: 8)
+                            Text("\(projects.count)").foregroundStyle(Color.hqLabel2)
+                            Image(systemName: "chevron.right").font(Font.hq(.footnote).weight(.semibold)).foregroundStyle(Color.hqLabel3)
+                        }
+                        .frame(height: HQFont.scaled(44))
+                        .contentShape(Rectangle())
+                    }
+                    .listRowInsets(Self.rowInsets)
+                    .accessibilityIdentifier("new-chat-project-all")
+                }
+                if projects.isEmpty { newProjectRow }
+            } header: { HQSectionLabel { Text("In a project ") + Text("(optional)").fontWeight(.regular) } }
             .hqSheetRows()
+            if !projects.isEmpty {
+                Section { newProjectRow }.hqSheetRows()
+            }
         }
         .hqGroupedPage()   // [desktoplook] the page follows the skin
         .listStyle(.insetGrouped)
         .environment(\.defaultMinListRowHeight, HQFont.scaled(44))
+        .listSectionSpacing(.compact)
+        // Start Chat stays at the foot of the sheet, under the thumb, however long the list is (owner 2026-11-11).
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Button { start(bot, nil) } label: {
+                Text("Start Chat")
+                    .font(Font.hq(.body).weight(.semibold))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: HQFont.scaled(34))
+            }
+            .hqProminentButtonStyle()
+            .buttonBorderShape(.capsule)
+            .padding(.horizontal, 20)
+            .padding(.top, 8)
+            .padding(.bottom, 6)
+            .accessibilityLabel("Start Chat with \(botName)")
+            .accessibilityIdentifier("new-chat-start")
+        }
+    }
+}
+
+/// One project in the New Chat sheet: its name, and "Last used" on the one the lit bot started in last.
+private struct NewChatProjectRow: View {
+    var title: String
+    var last: Bool
+    /// The sheet keeps a name to one line (it is as tall as its rows); All Projects, which scrolls, gives it two.
+    var lines = 1
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: "folder").foregroundStyle(Color.hqLabel2).frame(width: HQFont.scaled(24))
+                // A long name is cut in the middle, so two that start alike ("acme-platform-…-web", "…-api") still
+                // read apart (owner 2026-11-11: "Test for very long project titles"). VoiceOver reads it whole.
+                Text(title).foregroundStyle(Color.hqLabel).lineLimit(lines).truncationMode(.middle)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 8)
+                if last {
+                    Text("Last used")
+                        .font(Font.hq(.caption2).weight(.semibold))
+                        .foregroundStyle(Color.hqTintText)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Color.hqTint.opacity(0.16), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                }
+            }
+            .padding(.vertical, lines > 1 ? 6 : 0)
+            .frame(minHeight: HQFont.scaled(44))
+            .frame(height: lines > 1 ? nil : HQFont.scaled(44))
+            .contentShape(Rectangle())
+        }
+    }
+}
+
+/// All Projects: every project A to Z with a search field; a tap starts the chat there with the sheet's lit bot.
+struct NewChatAllProjectsView: View {
+    var projects: [SessionProjectEntry]
+    var botName: String
+    var last: String?
+    var start: (String) -> Void
+    @State private var query = ""
+
+    private var rows: [SessionProjectEntry] {
+        let sorted = projects.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
+        let words = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return words.isEmpty ? sorted : sorted.filter { $0.label.localizedCaseInsensitiveContains(words) }
+    }
+
+    var body: some View {
+        List {
+            Section {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(Color.hqLabel2)
+                    TextField("Search projects", text: $query)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .accessibilityIdentifier("new-chat-all-search")
+                }
+                .frame(height: HQFont.scaled(40))
+                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+            }
+            .hqSheetRows()
+            Section {
+                ForEach(rows) { entry in
+                    NewChatProjectRow(title: entry.label, last: NewChatLast.marks(stored: last, row: entry.key), lines: 2) { start(entry.key) }
+                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                        .accessibilityIdentifier("new-chat-all-\(entry.label)")
+                }
+                if rows.isEmpty { Text("No projects match.").foregroundStyle(Color.hqLabel2) }
+            } footer: { HQSectionFooter { Text("Starts the chat with \(botName).") } }
+            .hqSheetRows()
+        }
+        .hqGroupedPage()   // [desktoplook] the page follows the skin
+        .listStyle(.insetGrouped)
+        .environment(\.defaultMinListRowHeight, HQFont.scaled(40))
         .listSectionSpacing(.compact)
     }
 }

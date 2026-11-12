@@ -19,7 +19,7 @@ struct AppIconPage: View {
         List { Group {
             Section {
                 HQSegmentedPicker("Look", options: AppIconLook.allCases.map { (title: $0.title, value: $0) },
-                                  selection: Binding(get: { look }, set: { new in pickLook(new) }))
+                                  selection: Binding(get: { look }, set: { new in pickLook(new) }), ticks: false)   // `pick` ticks
                     .accessibilityIdentifier("app-icon.look")
             } header: { HQSectionLabel {
                 Text("Look")
@@ -120,6 +120,7 @@ struct AppIconPage: View {
             // decides then: putting back the tick from before this tap could undo that one).
             if picking == 0 { HQMotion.withAnimation(.snappy) { (current, look) = AppIcons.worn } }
             // iOS's own words are a system error's ("The operation couldn’t be completed…"), not a reason.
+            Haptics.play(.error)
             refusal = "iOS didn’t change the icon. Try again in a moment."
         }
     }

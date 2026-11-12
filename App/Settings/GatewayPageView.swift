@@ -470,7 +470,7 @@ struct GatewayPageView: View {
                     }
                 }
                 .contextMenu {
-                    Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = model.address }
+                    Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = model.address; Haptics.play(.success) }
                 }
                 // Stress test 2026-10-28 #85 (both): every value in one colour (the system's secondary grey differed
                 // from Name's).

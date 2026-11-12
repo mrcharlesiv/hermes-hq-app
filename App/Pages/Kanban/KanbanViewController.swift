@@ -839,14 +839,13 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
 
     func openTask(_ id: String) {
         guard let services else { return }
-        #if targetEnvironment(macCatalyst)
         // [mac] In two panes the task opens in the right pane beside the board, as a job's page does beside Jobs (owner
-        // 2026-10-23: "Kanban using the right side"). The iPad keeps its centred sheet (3x-ipad D6).
+        // 2026-10-23: "Kanban using the right side"). [ipad-polish] The iPad too: its centred sheet (3x-ipad D6) left
+        // the right pane saying "Choose an item from the list" for good, since choosing one never filled it.
         if (tabBarController as? MainTabController)?.split?.isDouble == true {
             openDetail(KanbanTaskSheet.page(taskId: id, store: store, services: services, board: self))
             return
         }
-        #endif
         let sheet = KanbanTaskSheet.make(taskId: id, store: store, services: services)
         present(sheet, animated: true)
     }

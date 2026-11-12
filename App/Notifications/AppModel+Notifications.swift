@@ -79,6 +79,7 @@ extension AppModel {
         push.sync()
         DeviceAccessCenter.shared.accountReady()     // [device-access] this gateway hears what this phone shares
         PushSetupOffer.shared.afterLaunch(model: self)
+        PluginUpdateFlow.shared.afterLaunch(model: self)   // [plugin-updates] which plugins have an update
     }
 
     /// A saved gateway's name by its push owner tag (`PushPolicy.owner`), nil when no saved gateway has it.

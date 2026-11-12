@@ -124,40 +124,79 @@ nonisolated enum OnboardingCopy {
         static let haveAddress = "I Already Have an Address"
     }
 
-    // MARK: Where does Hermes run? (`:58-71`)
+    // MARK: Where is your Hermes? (native only: the first question after Get Started)
 
-    enum Where {
-        static let eyebrow = "Set it up yourself"
-        static let heading = "Where does Hermes run?"
-        static let lead = "Pick the computer Hermes is installed on."
+    /// One plain question before anything else (owner 2026-11-11: "so simple that anybody can easily figure out how to
+    /// get Hermes HQ up and running"): a computer, Hermes Cloud, or no Hermes yet. Each row leads to one short path, so
+    /// nobody has to read past choices that aren't theirs. The Hermes Cloud row is `Cloud`'s, drawn by the view.
+    enum Start {
+        static let heading = "Where is your Hermes?"
+        static let lead = "Hermes HQ connects to the Hermes you already use. Pick where yours runs."
         typealias Choice = (id: String, symbol: String, title: String, text: String, step: OnboardingStep)
         static let choices = choices(onMac: DeviceWord.isMac)
         /// [mac] On the Mac, "On this Mac" comes first and goes straight to the form at `localAddress` (no Tailscale, no
-        /// QR code); "On a Mac" becomes another Mac.
+        /// QR code); a computer is then another one.
         static func choices(onMac: Bool) -> [Choice] {
-            let here = onMac ? "Mac" : device
-            let quick = "One command sets it up. Then you sign in with your Nous account."
-            let rest: [Choice] = [
-                ("linux", "server.rack", "On Linux or a server", "The same one command, run there or over SSH. Then you sign in with Nous.", .linux1),
-                ("windows", "desktopcomputer", "On Windows", "Uses Tailscale, a free app, on that computer and this \(here), with a password.", .other1),
-                ("address", "link", "Someone gave me an address", "Sign in with the address and details they sent you.", .connect),
-            ]
-            guard onMac else { return [("mac", "laptopcomputer", "On a Mac", quick, .mac1)] + rest }
+            let kinds = "A Mac, Linux, Windows or a server."
+            guard onMac else { return [(computerID, "laptopcomputer", "On my computer", kinds, .hermes)] }
             return [
-                (localID, "laptopcomputer", "On this Mac", "Sign in to the Hermes running here. No Tailscale needed.", .connect),
-                ("mac", "display", "On another Mac", quick, .mac1),
-            ] + rest
+                (localID, "laptopcomputer", "On this Mac", "Sign in to the Hermes running here.", .connect),
+                (computerID, "display", "On another computer", kinds, .hermes),
+            ]
         }
+        static let computerID = "computer"
         /// [mac] The "On this Mac" choice's id.
         static let localID = "here"
         /// [mac] A Hermes on this same Mac: `hermes serve` listens on 127.0.0.1:9119 (the setup's own default). Not
         /// "localhost": Hermes turns away a Host it isn't bound to.
         static let localAddress = "http://127.0.0.1:9119"
-        /// The web says "your phone" here on every device; [mac] the Mac says where Hermes can run instead.
-        static let footnote = footnote(onMac: DeviceWord.isMac)
-        static func footnote(onMac: Bool) -> String {
-            let runs = onMac ? "It runs on a computer, like this Mac." : "It runs on a computer, not on your phone."
-            return "No Hermes yet? \(runs) <<Install Hermes first|\(Links.hermes)>>, then come back."
+        /// The last row: someone with no Hermes gets a way on, not a footnote.
+        static let noneID = "none"
+        static let noneSymbol = "questionmark.circle"
+        static let noneTitle = "I don’t have Hermes yet"
+        static let noneText = "See the two ways to get one."
+    }
+
+    // MARK: Get Hermes first (native only)
+
+    enum GetHermes {
+        static let heading = "Get Hermes first."
+        static let lead = "Hermes is the AI agent that Hermes HQ talks to. There are two ways to get one."
+        static let cloudTitle = "Start one on Hermes Cloud"
+/// What it costs, said before the tap. [app-store-review] Guideline 3.1.1: no price in the App Store build.
+        static var cloudText: String {
+            #if APP_STORE
+            "Nous runs it for you: no computer needed. It runs on your Nous account."
+            #else
+            "Nous runs it for you: no computer needed. " + (CloudPrices.lowestPerDay.map { "From \(CloudPrices.dollars($0)) a day, paid from your Nous credit." } ?? "Paid from your Nous credit.")
+            #endif
+        }
+        static let installSymbol = "arrow.down.circle"
+        static let installTitle = "Install it on a computer"
+        static let installText = "Opens the Hermes guide. Follow it on a Mac, Linux, Windows or a server."
+static let after = "After you install it, come back here and \(DeviceWord.tap) **\(installed)**."
+        /// The way on once Hermes is on a computer: the setup message ([mac] the question, where This Mac is a row).
+        static let installed = "I’ve Installed Hermes"
+    }
+
+    // MARK: Which computer runs Hermes? (`:58-71`)
+
+    enum Where {
+        static let eyebrow = "Set it up yourself"
+        /// The web says "Where does Hermes run?"; that question is `Start`'s now, so this one names what is left to pick.
+        static let heading = "Which computer runs Hermes?"
+        static let lead = "Pick the computer Hermes is installed on."
+        typealias Choice = (id: String, symbol: String, title: String, text: String, step: OnboardingStep)
+        static let choices = choices(onMac: DeviceWord.isMac)
+        /// Only the computers: an address someone gave you is the welcome's second button, Hermes Cloud and "no Hermes
+        /// yet" are `Start`'s rows. [mac] "On a Mac" is another Mac (this one is `Start`'s first row).
+        static func choices(onMac: Bool) -> [Choice] {
+            let here = onMac ? "Mac" : device
+            return [
+                ("mac", onMac ? "display" : "laptopcomputer", onMac ? "On another Mac" : "On a Mac", "One command sets it up. Then you sign in with your Nous account.", .mac1),
+                ("linux", "server.rack", "On Linux or a server", "The same one command, run there or over SSH. Then you sign in with Nous.", .linux1),
+                ("windows", "desktopcomputer", "On Windows", "Uses Tailscale, a free app, on that computer and this \(here), with a password.", .other1),
+            ]
         }
     }
 
@@ -175,6 +214,8 @@ nonisolated enum OnboardingCopy {
             "When it’s done, Hermes sends you the address. Paste it on the next screen and \(DeviceWord.tap) **Sign in with Nous**.",
         ]
         static let footnote = "Tailscale runs only on that computer: nothing to install on this \(device). Works when Hermes runs on a Mac or Linux, servers included."
+        /// After the footnote: the message can't set up Windows, and that path starts behind Set It Up Myself.
+        static let windows = "Hermes on Windows? \(DeviceWord.Tap) **Set It Up Myself**."
         static let haveAddress = "I Have the Address"
         static let myself = "Set It Up Myself"
     }
@@ -293,16 +334,14 @@ nonisolated enum OnboardingCopy {
     // MARK: Hermes Cloud (native only: not in the web's build 240)
 
     /// For a Hermes that Nous hosts (Nous Portal's Hermes Cloud), one already made or a new one: nothing to set up, and
-    /// the setup message would only make a cloud Hermes say it can't run there. The row opens Hermes Cloud
-    /// (App/Gateways/CloudGatewayFlow.swift), which lists the account's agents or, with none, makes the first.
+    /// the setup message would only make a cloud Hermes say it can't run there. The row (on "Where is your Hermes?")
+    /// opens Hermes Cloud (App/Gateways/CloudGatewayFlow.swift), which lists the account's agents or, with none, makes
+    /// the first.
     enum Cloud {
         static let id = "cloud"
         static let symbol = "cloud"
         static let title = "On Hermes Cloud"
-        static let text = "Nous runs it for you. Sign in with Nous, then pick your agent or make a new one. Nothing to set up."
-        /// The same row on "Let Hermes set it up.", above the message a cloud Hermes can't act on.
-        static let letHermesTitle = "Use Hermes Cloud Instead"
-        static let letHermesText = "Nous runs Hermes for you: no computer, no message to send. Sign in with Nous, then pick your agent or make a new one."
+        static let text = "Nous runs it for you. Just sign in."
     }
 
     // MARK: Windows, two steps (`:158-170`)
@@ -405,7 +444,7 @@ nonisolated enum OnboardingCopy {
     /// UX study #24: the form's own word for the install ("the address of your Hermes", "Name for this Hermes"), not
     /// the web's "Add a gateway.".
     static let addHeading = "Add another Hermes."
-    static let formLead = "Enter the address of your Hermes, then sign in."
+    static let formLead = "Paste or type the address of your Hermes, then sign in."
     /// Says what it names (UX study 2026-10-19 #78: "Name" beside Username read as your own name).
     static let nameLabel = "Name for this Hermes"
     static let namePlaceholder = "Optional, like Home Mac"
@@ -414,8 +453,8 @@ nonisolated enum OnboardingCopy {
 
 /// The web's `Step` (`W:src/connection-onboarding.ts:6`).
 nonisolated enum OnboardingStep: String, CaseIterable, Sendable {
-    case welcome, hermes, `where`, mac1, mac2, mac3, linux1, linux2, linux3, other1, other2, manual, connect
+    case welcome, start, getHermes, hermes, `where`, mac1, mac2, mac3, linux1, linux2, linux3, other1, other2, manual, connect
 
     /// The screens of the connection guide (everything but the welcome and the form).
-    static let guide: [OnboardingStep] = [.hermes, .where, .mac1, .mac2, .mac3, .linux1, .linux2, .linux3, .other1, .other2, .manual]
+    static let guide: [OnboardingStep] = [.start, .getHermes, .hermes, .where, .mac1, .mac2, .mac3, .linux1, .linux2, .linux3, .other1, .other2, .manual]
 }

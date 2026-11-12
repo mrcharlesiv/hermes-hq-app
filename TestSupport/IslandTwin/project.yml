@@ -1,0 +1,17 @@
+name: Twin
+options: { bundleIdPrefix: com.example, deploymentTarget: { iOS: "18.0" } }
+targets:
+  Twin:
+    type: application
+    platform: iOS
+    sources: [App, Shared]
+    dependencies: [{ target: TwinWidget }]
+    settings: { base: { PRODUCT_BUNDLE_IDENTIFIER: com.example.islandtwin, GENERATE_INFOPLIST_FILE: YES, INFOPLIST_KEY_NSSupportsLiveActivities: YES, INFOPLIST_KEY_UILaunchScreen_Generation: YES, CODE_SIGNING_ALLOWED: NO, SWIFT_VERSION: "5.0" } }
+  TwinWidget:
+    type: app-extension
+    platform: iOS
+    sources: [Widget, Shared]
+    info:
+      path: Widget/Info.plist
+      properties: { CFBundleDisplayName: Twin, NSExtension: { NSExtensionPointIdentifier: com.apple.widgetkit-extension } }
+    settings: { base: { PRODUCT_BUNDLE_IDENTIFIER: com.example.islandtwin.widget, CODE_SIGNING_ALLOWED: NO, SWIFT_VERSION: "5.0" } }

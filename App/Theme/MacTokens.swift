@@ -54,6 +54,9 @@ nonisolated enum MacInset {
     static let headerGap: CGFloat = 10
     /// Empty and error states are centred this far above the middle of the space they have (#9).
     static let emptyLift: CGFloat = 40
+    /// [mac-ten] The widest an empty state's words run before they wrap (about 430 pt on the screen at 100 %): a long
+    /// line under the title is two centred lines, not one line across a wide window.
+    @MainActor static var emptyMeasure: CGFloat { HQFont.scaled(480) }
 }
 
 /// [mac] #58: one symbol size and weight per context, in a fixed-width column.
@@ -283,3 +286,36 @@ private struct MacListedEmptyHeight: ViewModifier {
     }
 }
 #endif
+
+/// [mac-message-box] The Mac message box's surface in the iOS look (owner 2026-11-11: "the lines and shadows aren't
+/// done right"; see `ComposerView.macPlainBox`). The page one step lighter (darker in light), opaque, so the chat
+/// under it never shows through; one line all round, in the label at a tenth; no shadow, no glass.
+nonisolated enum MacMessageBox {
+    static let radius: CGFloat = 20
+    /// How far the words drop so their capitals stand on the middle line of the ☰, +, model name and mic.
+    static let textDrop: CGFloat = 3
+    static let fill = UIColor { @Sendable traits in
+        mix(ChatPalette.page.resolvedColor(with: traits), ChatPalette.label.resolvedColor(with: traits),
+            traits.userInterfaceStyle == .dark ? 0.07 : 0.04)
+    }
+    static let line = UIColor { @Sendable traits in
+        ChatPalette.label.resolvedColor(with: traits).withAlphaComponent(traits.userInterfaceStyle == .dark ? 0.10 : 0.12)
+    }
+    static let lineTyping = UIColor { @Sendable traits in
+        ChatPalette.label.resolvedColor(with: traits).withAlphaComponent(traits.userInterfaceStyle == .dark ? 0.20 : 0.24)
+    }
+
+    /// The box's filled circle (Talk, Send, Stop): the iPhone's 36 pt circle in its 44 pt bar, here in a 54 pt row.
+    static let circle: CGFloat = 36
+    /// [mac-talk-glyph] Talk's waveform, the iPhone's symbol (17 pt in its 36 pt circle), a little larger because the
+    /// Mac draws the app at 77 %.
+    static let talkSymbol: CGFloat = 19
+
+    /// `a` with `share` of `b` laid over it, opaque.
+    static func mix(_ a: UIColor, _ b: UIColor, _ share: CGFloat) -> UIColor {
+        var (ar, ag, ab, aa): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
+        var (br, bg, bb, ba): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
+        guard a.getRed(&ar, green: &ag, blue: &ab, alpha: &aa), b.getRed(&br, green: &bg, blue: &bb, alpha: &ba) else { return a }
+        return UIColor(red: ar + (br - ar) * share, green: ag + (bg - ag) * share, blue: ab + (bb - ab) * share, alpha: 1)
+    }
+}

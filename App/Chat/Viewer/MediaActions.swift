@@ -46,6 +46,7 @@ import UniformTypeIdentifiers
     }
 
     static func showSaveDenied(on vc: UIViewController) {
+        Haptics.play(.error)   // as the save's other failures
         // [mac] Mac polish #11: System Settings › Privacy & Security › Photos on the Mac (`PrivacySettingsLink`).
         let alert = UIAlertController(title: "Couldn’t Save",
                                       message: "Allow \(AppIdentity.current.displayName) to add photos in \(PrivacySettingsLink.place), then try again.",

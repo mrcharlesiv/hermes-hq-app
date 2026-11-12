@@ -58,6 +58,8 @@ final class OnboardingNavigationController: UINavigationController {
     /// "This iPhone already uses Tailscale", chosen on the first setup screen and kept for the ones after it.
     private let reach = SetupReach()
     private var form: OnboardingStepController?
+    /// "Let Hermes set it up." has been shown: the form's help link goes back there, not to the question before it.
+    private var sawMessage = false
     private let cancels = NSHashTable<UIBarButtonItem>.weakObjects()
     /// Tests turn the push and pop animations off.
     var animated = true
@@ -81,7 +83,12 @@ final class OnboardingNavigationController: UINavigationController {
         self.actions = actions ?? .live { [weak navigation] in navigation }
         formModel = SignInScreen.model(driver: driver, initialAddress: address, initialUsername: username, notice: notice,
                                        onOutcome: onOutcome)
-        formModel.onHelp = { [weak self] in self?.go(.hermes) }
+        // "Need help connecting?": the setup message once the person has been to it, else the first question (the form
+        // can be the first screen: a returning start, Add Gateway, "I Already Have an Address").
+        formModel.onHelp = { [weak self] in
+            guard let self else { return }
+            self.go(self.sawMessage ? .hermes : .start)
+        }
         // The headings: "Add another Hermes." when adding one (UX study #24; the web says "Add a gateway."), "Sign in to Hermes." everywhere else (D36).
         if case .sheet(let title, _) = mode, title == "Add Gateway" { formModel.heading = OnboardingCopy.addHeading }
         else { formModel.heading = OnboardingCopy.formHeading }
@@ -106,6 +113,7 @@ final class OnboardingNavigationController: UINavigationController {
         guard !isBusy, step != current, navigationController.topViewController is OnboardingStepController else { return }
         let leavingForm = current == .connect
         AppLog.trace("onboard", "onboarding step reached: \(step)")
+        if step == .hermes { sawMessage = true }
         if let existing = navigationController.viewControllers.first(where: { ($0 as? OnboardingStepController)?.step == step }) {
             // The form popped off for the guide keeps what was typed, except the password (DECISION D7).
             if leavingForm { formModel.leftForGuide() }
@@ -189,11 +197,15 @@ final class OnboardingNavigationController: UINavigationController {
         switch step {
         case .welcome:
             return OnboardingStepController(step: step) { WelcomeView(go: go) }
-        case .hermes:
-            return OnboardingStepController(step: step) { LetHermesView(actions: actions, reach: reach, go: go, cloud: cloud) }
-        case .where:
+        case .start:
             let fill: (String) -> Void = { [weak self] address in self?.showForm(address: address) }
-            return OnboardingStepController(step: step, title: OnboardingCopy.Where.eyebrow) { WhereView(actions: actions, go: go, fill: fill, cloud: cloud) }
+            return OnboardingStepController(step: step) { StartView(go: go, fill: fill, cloud: cloud) }
+        case .getHermes:
+            return OnboardingStepController(step: step) { GetHermesView(actions: actions, go: go, cloud: cloud) }
+        case .hermes:
+            return OnboardingStepController(step: step) { LetHermesView(actions: actions, reach: reach, go: go) }
+        case .where:
+            return OnboardingStepController(step: step, title: OnboardingCopy.Where.eyebrow) { WhereView(go: go) }
         case .mac1, .linux1:
             let kind: OnboardingCopy.QuickKind = step == .mac1 ? .mac : .linux
             return OnboardingStepController(step: step, title: OnboardingCopy.quick(kind).eyebrow1) {

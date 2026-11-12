@@ -183,9 +183,16 @@ struct BotExchangeFoldTests {
         #expect(opened.map(\.row.title) == ["From Home", "Hermes"])
         #expect(opened.last?.row.full.hasPrefix("Thanks, Home.") == true)
 
-        // News the other bot brought is for you: it keeps its bubble, also when it names the bot.
-        let news = before + [otto, m("a2", .assistant, "Home found the cause: cron scripts inherit the gateway's own path.", -60)]
-        #expect(bubbles(ChatRowBuilder.build(input(news))) == ["u1|b0", "a1|b0", "a2|b0"])
+        // News the other bot brought back, when this bot had asked it, is for you: it keeps its bubble, also when it
+        // names the bot.
+        let ask = ChatMessage(id: "a0", role: .assistant, parts: [
+            .tool(ToolCall(id: "t1", name: "message_agent", title: "message_agent", argsText: #"{"target":"home","message":"Why do the scripts fail?"}"#,
+                           summary: "Queued", state: .done, durationSeconds: 1)),
+            .text("I've asked Home why the scripts fail."),
+        ], timestamp: now.addingTimeInterval(-200), rowId: nil)
+        let news = before + [m("u2", .user, "Why do the scripts fail?", -210), ask, otto,
+                             m("a2", .assistant, "Home found the cause: cron scripts inherit the gateway's own path.", -60)]
+        #expect(bubbles(ChatRowBuilder.build(input(news))) == ["u1|b0", "a1|b0", "u2|b0", "a2|b0"])
         // Still being written: a bubble until it ends.
         var live = chat
         live[3].isStreaming = true
@@ -194,6 +201,96 @@ struct BotExchangeFoldTests {
         let ended = input(chat)
         let range = UpdateGroups.widen(3...3, input: ended)
         #expect(range.lowerBound <= 2)
+    }
+
+    /// Owner, 2026-11-11 (a bot's chat): another bot asked it for a status on its own, and the long answer, which never
+    /// named that bot, drew as a bubble ("Still getting messages meant for a bot in the chat instead of in a pill"). A
+    /// reply to a bot that wrote first is written to that bot: it folds with its message. Your next message's answer
+    /// keeps its bubble.
+    @Test func aReplyToAnotherBotsOwnRequestFolds() throws {
+        func m(_ id: String, _ role: ChatMessage.Role, _ text: String, _ s: Double) -> ChatMessage {
+            ChatMessage(id: id, role: role, parts: [.text(text)], timestamp: now.addingTimeInterval(s), rowId: nil)
+        }
+        let answer = "The image has no route, so it stays at a credential gate. The scan is still a real hold."
+            + String(repeating: " The cleanup target is already archived and read; no mailbox writes were made.", count: 10)
+        let chat = [
+            m("u1", .user, "Are you sending anything out?", -30_000),
+            m("a1", .assistant, "No. Nothing is sent without you.", -29_990),
+            m("c1", .user, "[Cronjob \"daily-update\" output — scheduled job, not the user. Review it, act on anything that needs action, "
+                + "and summarize for the chat.]\n\nTwo new messages.", -20_000),
+            m("a2", .assistant, "Two new messages came in; neither needs you.", -19_990),
+            m("d1", .user, "Message from 🤖 Home (@home): Return the image route or the exact credential gate. No user-facing progress bubble.", -100),
+            m("a3", .assistant, answer, -60),
+        ]
+        let rows = ChatRowBuilder.build(input(chat))
+        #expect(bubbles(rows) == ["u1|b0", "a1|b0", "a2|b0"], "\(rows.map(\.id))")
+        let line = try #require(lines(rows).last)
+        #expect(line.row.title == "With Home")
+        #expect(line.row.group?.tail == "2 messages")
+        let opened = members(ChatRowBuilder.build(input(chat, expanded: [line.id])))
+        #expect(opened.map(\.row.title) == ["From Home", "Hermes"])
+
+        // A short answer folds too, and your next message's answer stays.
+        let short = chat.map { $0.id == "a3" ? m("a3", .assistant, "Still on hold; no route to the image.", -60) : $0 }
+            + [m("u2", .user, "What is all of this for?", 0), m("a4", .assistant, "That reply was for Home, not you.", 5)]
+        #expect(bubbles(ChatRowBuilder.build(input(short))) == ["u1|b0", "a1|b0", "a2|b0", "u2|b0", "a4|b0"])
+    }
+
+    /// Owner, 2026-11-11 (a bot's chat): "Is the browser blocked?" got two short answers, the first with a message to
+    /// another bot. The next day that bot wrote in on its own and this bot answered it by name. Both answers sat inside
+    /// "With … · 7 messages" and nothing stood under the question ("Why didn't I get a response here?"). A reply written
+    /// to the other bot doesn't fold the ones before it: the last reply to you stays.
+    @Test func aReplyToTheOtherBotLeavesYourAnswer() throws {
+        func m(_ id: String, _ role: ChatMessage.Role, _ text: String, _ s: Double) -> ChatMessage {
+            ChatMessage(id: id, role: role, parts: [.text(text)], timestamp: now.addingTimeInterval(s), rowId: nil)
+        }
+        let ask = ChatMessage(id: "a1", role: .assistant, parts: [
+            .tool(ToolCall(id: "t1", name: "message_agent", title: "message_agent", argsText: #"{"target":"home","message":"What blocked the batch?"}"#,
+                           summary: "Queued", state: .done, durationSeconds: 1)),
+            .text("The site let me in; the browser tool refused the next batch. I've asked Home to find out why."),
+        ], timestamp: now.addingTimeInterval(-90_000), rowId: nil)
+        let report = "Home — the work is done: all 44 records are checked and matched."
+            + String(repeating: " The parsing now runs apart from the browser steps, so nothing is refused.", count: 10)
+        let chat = [
+            m("u1", .user, "Is the browser blocked?", -90_010),
+            ask,
+            m("d1", .user, "Message from 🤖 Home (@home): I couldn't run that check; my model turned the request down.", -89_990),
+            m("a2", .assistant, "Home couldn't run the check, so the refusal is still unexplained. I haven't retried.", -89_980),
+            m("d2", .user, "Message from 🤖 Home (@home): A continuation, not a request from the owner. Finish the comparison now.", -4_000),
+            m("a3", .assistant, report, -2_000),
+        ]
+        for style in [ToolCallStyle.bottom, .line, .header] {
+            let rows = ChatRowBuilder.build(input(chat, style: style))
+            #expect(bubbles(rows) == ["u1|b0", "a2|b0"], "\(style) \(rows.map(\.id))")
+            let talks = lines(rows).filter { $0.row.title == "With Home" }
+            #expect(talks.map { $0.row.group?.titles ?? [] } == [["To Home", "Hermes", "From Home"], ["From Home", "Hermes"]], "\(style)")
+            // Your answer sits between the two lines, right under the first.
+            let at = try #require(rows.firstIndex { $0.id == "a2|b0" })
+            #expect(rows[at - 1].id == talks.first?.id && rows[at + 1 ..< rows.count].contains { $0.id == talks.last?.id })
+        }
+        // A later reply that is to you folds the earlier ones, as before.
+        let news = chat.map { $0.id == "a3" ? m("a3", .assistant, "Home finished the comparison: all 44 records match.", -2_000) : $0 }
+        #expect(bubbles(ChatRowBuilder.build(input(news))) == ["u1|b0", "a3|b0"])
+        // While the reply to Home is being written it is a bubble; as it ends, a rebuild of it alone draws what a full
+        // build does (your answer comes back out of the line).
+        func ids(_ rows: [ChatRow]) -> [String] { rows.map { "\($0.id)#\($0.fingerprint)#\($0.variant)#\($0.gapAbove)" } }
+        var live = chat
+        live[5].isStreaming = true
+        var model = ChatRowModel()
+        model.rebuildAll(input(live, running: true), syncMessages: 100, oldestShown: nil)
+        #expect(model.allRows.contains { $0.id == "a3|b0" } && !model.allRows.contains { $0.id == "a2|b0" })
+        model.rebuildMessages(input(chat), 5...5)
+        #expect(ids(model.allRows.reversed()) == ids(ChatRowBuilder.build(input(chat))))
+        // Two replies to the other bot in a row: the reply to you before them both still comes back.
+        let more = chat + [m("d3", .user, "Message from 🤖 Home (@home): Send me the counts too.", -1_000),
+                           m("a4", .assistant, "Home, the counts: 22 and 22." + String(repeating: " None are left open.", count: 40), -900)]
+        var liveMore = more
+        liveMore[7].isStreaming = true
+        var second = ChatRowModel()
+        second.rebuildAll(input(liveMore, running: true), syncMessages: 100, oldestShown: nil)
+        second.rebuildMessages(input(more), 7...7)
+        #expect(ids(second.allRows.reversed()) == ids(ChatRowBuilder.build(input(more))))
+        #expect(bubbles(ChatRowBuilder.build(input(more))) == ["u1|b0", "a2|b0"])
     }
 
     @Test func speakingToABotByName() {
@@ -281,8 +378,9 @@ struct BotExchangeFoldTests {
             .map(\.id).contains("fx-a1|b1|in"))
     }
 
-    /// What Hermes said before it began talking with another bot keeps its bubble, as does a reply to you after a
-    /// bot wrote in unasked.
+    /// What Hermes said before it began talking with another bot keeps its bubble. Its reply to a bot that wrote in
+    /// unasked is written to that bot: it folds with that bot's message (owner, 2026-11-11: "Still getting messages
+    /// meant for a bot in the chat instead of in a pill").
     @Test func repliesBeforeTheTalkStay() {
         let at = now
         func you(_ id: String, _ text: String, _ s: Double) -> ChatMessage {
@@ -296,8 +394,8 @@ struct BotExchangeFoldTests {
             ChatMessage(id: "b", role: .assistant, parts: [.text("Noted: Home's camera is back.")], timestamp: at.addingTimeInterval(65), rowId: nil),
         ]
         let rows = ChatRowBuilder.build(input(thread))
-        #expect(bubbles(rows) == ["u|b0", "a|b0", "b|b0"])
-        #expect(lines(rows).map { $0.row.group?.titles ?? [] } == [["From Home"]])
+        #expect(bubbles(rows) == ["u|b0", "a|b0"])
+        #expect(lines(rows).map { $0.row.group?.titles ?? [] } == [["From Home", "Hermes"]])
 
         // Words before the first message to Home in the same reply stay too; the ones after it fold.
         let call = ToolCall(id: "c", name: "message_agent", title: "message_agent", argsText: #"{"target":"home","message":"Watch the door"}"#,

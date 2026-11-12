@@ -146,7 +146,9 @@ struct LiveChatSessionTests {
         #expect(s.statusText == nil)
     }
 
-    @Test func staleCacheIsHeldUntilFreshRows() async throws {
+    /// [right-open] A copy saved before the chat's last activity is shown at once (it was held back, a blank screen
+    /// for up to 300 ms); one the gateway's rows no longer meet then gives way to them.
+    @Test func staleCacheShowsAtOnceAndGivesWayToFreshRows() async throws {
         let h = try ChatHarness()
         try h.setPage("24", "perf-page-latest-24.json")
         let old = ChatMessage(id: "stored-row-5-user", role: .user, parts: [.text("old")], timestamp: nil, rowId: 5)
@@ -154,7 +156,7 @@ struct LiveChatSessionTests {
                      savedAt: Date(timeIntervalSinceNow: -60))
         h.cache.flush()
         let s = h.make(lastActive: Date())
-        #expect(s.messages.isEmpty)                         // stale: held (03 §4.3)
+        #expect(s.messages.map(\.id) == ["stored-row-5-user"])
         #expect(await h.open())
         #expect(s.messages.count == 24)
         #expect(!s.messages.contains { $0.id == "stored-row-5-user" })

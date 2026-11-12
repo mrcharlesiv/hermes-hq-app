@@ -70,7 +70,9 @@ import UIKit
 
         // A conversation that could not begin says why above the message field (§5.7).
         TalkController.shared.onStartFailure = { scope, failure, name in
-            MemoController.shared.post(startNotice(failure, name: name), scope: scope)
+            let notice = startNotice(failure, name: name)
+            Haptics.play(notice.tone == .error ? .error : .warning)
+            MemoController.shared.post(notice, scope: scope)
         }
     }
 
@@ -90,6 +92,7 @@ import UIKit
     /// What a Talk tile says when its chat never opened.
     static func showStartFailed(name: String, over presenter: UIViewController, animated: Bool = true) {
         guard presenter.presentedViewController == nil, presenter.viewIfLoaded?.window != nil else { return }
+        Haptics.play(.error)   // as `FailureAlert`
         let alert = UIAlertController(title: "Couldn’t Start Talking", message: "\(name)’s chat didn’t open.", preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .default))
         alert.view.accessibilityIdentifier = "talk.start-failed"

@@ -62,6 +62,8 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
     /// Where the screens stop: the keyboard's top, else the safe area's bottom.
     private let textBottom = UILayoutGuide()
     private var keyboardOverlap: NSLayoutConstraint?
+    /// The tab bar this page put away while the keyboard is up (`barUnderKeyboard`).
+    private var hidTabBar = false
     /// Another tab is coming in front, or one is going: its screen giving up the keyboard isn't the keyboard put away.
     private var switching = false
     /// Audit 09-2: over everything on the panel while the app isn't in front (the app switcher's picture), as the
@@ -301,6 +303,11 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
         } else if case .connection(.live) = state, presentedViewController == nil {
             _ = terminal.becomeFirstResponder()
         }
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        hideTabBar(false)
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -605,12 +612,13 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
     private func closeTab(at index: Int) {
         guard tabs.count > 1, tabs.indices.contains(index) else { return }
         let tab = tabs[index]
-        guard tab.phase == .live else { return remove(tab) }
+        guard tab.phase == .live else { Haptics.play(.light); return remove(tab) }
         let alert = UIAlertController(title: "Close This Tab?", message: "Its shell ends, with anything still running in it.",
                                       preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in self?.focus() })
         alert.addAction(UIAlertAction(title: "Close Tab", style: .destructive) { [weak self, weak tab] _ in
             guard let self, let tab else { return }
+            Haptics.play(.rigid)   // a running shell stopped, as Stop
             tab.closing = true
             tab.connection?.endShell()
             // The shell's exit closes it; a link that drops first doesn't leave the tab hanging.
@@ -665,6 +673,7 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
             let text = (alert?.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             tab.customName = String(text.prefix(40))
             saveTabs()
+            Haptics.play(.success)   // as a chat's rename
             strip.update(titles: tabTitles, current: current)
             AppLog.note("terminal", tab.customName.isEmpty ? "tab name cleared" : "tab renamed")
             focus()
@@ -763,11 +772,28 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
                 overlap = max(0, bounds.maxY - frame.minY)
             }
         }
+        hideTabBar(overlap > 0 && view.window != nil)
         guard let keyboardOverlap, keyboardOverlap.constant != -overlap else { return }
         UIView.performWithoutAnimation {
             keyboardOverlap.constant = -overlap
             view.layoutIfNeeded()
         }
+    }
+
+    /// Owner 2026-11-11 ("You can see the bottom menu behind the keyboard"): iOS 26's keyboard is glass, and the tab
+    /// bar showed through it under the key bar. The bar goes while the keyboard is up, so the terminal's own dark is
+    /// behind the keys; it's back when the keyboard goes or the page does.
+    private func hideTabBar(_ hide: Bool) {
+        guard hide != hidTabBar, let host = tabBarController as? MainTabController else { return }
+        if DesktopTabBar.wanted == nil {
+            if hide, host.isTabBarHidden { return }   // already away (a page under this one asked for that): not ours to bring back
+            host.setTabBarHidden(hide, animated: true)
+        } else if DesktopTabBar.wanted == .desktop {
+            host.desktopTabBar.isHidden = hide
+        } else {
+            return
+        }
+        hidTabBar = hide
     }
 
     // MARK: What shows over the panel
@@ -1142,7 +1168,7 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
         let alert = UIAlertController(title: "Start a New Shell?", message: "The shell open now ends, with anything still running in it.",
                                       preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        alert.addAction(UIAlertAction(title: "New Shell", style: .destructive) { _ in start() })
+        alert.addAction(UIAlertAction(title: "New Shell", style: .destructive) { _ in Haptics.play(.rigid); start() })   // the open one stops
         present(alert, animated: true)
     }
 
@@ -1151,6 +1177,7 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in self?.focus() })
         let tab = self.frontTab
         alert.addAction(UIAlertAction(title: "End Shell", style: .destructive) { [weak tab] _ in
+            Haptics.play(.rigid)   // a running shell stopped, as Stop
             tab?.endedHere = true
             tab?.connection?.endShell()
         })

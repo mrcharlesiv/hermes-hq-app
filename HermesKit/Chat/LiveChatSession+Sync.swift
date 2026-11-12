@@ -23,8 +23,9 @@ extension LiveChatSession {
     // MARK: Pages
 
     /// `keepCached` (the open's own reads): the saved copy's messages older than the page stay above it.
-    func applyFirstPage(_ page: HistoryPage, _ folded: HydratedPage, keepCached: Bool = false) {
-        let older = keepCached ? cachedOlderMessages(before: page) : []
+    /// `savedOlder` ([right-open]): the saved messages the caller already knows lie right before the page.
+    func applyFirstPage(_ page: HistoryPage, _ folded: HydratedPage, keepCached: Bool = false, savedOlder: [ChatMessage]? = nil) {
+        let older = savedOlder ?? (keepCached ? cachedOlderMessages(before: page) : [])
         heldPaint = nil
         noteStoredRows(page.rows)
         let ids = page.rows.compactMap(HistoryPage.rowId)
@@ -341,6 +342,20 @@ extension LiveChatSession {
            first > 0, (kept.count - first) * 2 >= kept.count, page.possiblyTruncated {
             kept.removeFirst(first)
             dropped = first
+        } else if page.possiblyTruncated, let cut = savedTurnCut(kept) {
+            // [right-open] These rows begin inside a turn that a saved message on top already shows whole: that message
+            // stays (a fold of the rows read here would put a piece of the turn in its place).
+            if cut == kept.count {
+                // Every row read belongs to it: nothing to add yet, paging goes on above them.
+                nextOffset = (page.pagination?.offset ?? page.requestedOffset) + page.rows.count
+                oldestRowId = kept.lazy.compactMap(HistoryPage.rowId).first ?? oldestRowId
+                kept.compactMap(HistoryPage.rowId).forEach { loadedRowIds.insert($0) }
+                headRows = kept + headRows
+                AppLog.trace("history", "older rows \(logIds): \(rows.count) rows all inside a turn the saved copy shows whole, kept as it is; next offset \(nextOffset)")
+                return
+            }
+            kept.removeFirst(cut)
+            dropped = cut
         }
         // The partial turn at the top of what is shown is folded again together with these older rows, so a turn that
         // crosses the page boundary reads as one reply (verification round 2: a 70-step turn reloaded as "Ran 11",
@@ -388,6 +403,23 @@ extension LiveChatSession {
         scheduleFlush()
     }
 
+    /// [right-open] Where older rows that begin inside a turn can be cut so the saved message showing that turn whole
+    /// stays: the index of their first turn start (their count when they hold none and the turn runs on into the rows
+    /// already loaded). nil: no saved message on top holds that turn from before these rows through its last row.
+    func savedTurnCut(_ rows: [JSONValue]) -> Int? {
+        let saved = cachedOlderCount
+        guard saved > 0, let first = rows.first.flatMap(HistoryPage.rowId), !LiveChatSession.isTurnStart(rows[0]) else { return nil }
+        let start = rows.firstIndex(where: LiveChatSession.isTurnStart)
+        // The turn's last row: the one before the first turn start, else it runs on through the partial turn on top.
+        let tail = start.map { Array(rows[..<$0]) } ?? (rows + LiveChatSession.leadingPartial(headRows))
+        guard let last = tail.lazy.compactMap(HistoryPage.rowId).max() else { return nil }
+        let holds = messages.prefix(saved).contains { m in
+            guard let from = metaById[m.id]?.firstRowId ?? m.rowId, let to = newestRow(m) else { return false }
+            return from < first && to >= last
+        }
+        return holds ? (start ?? rows.count) : nil
+    }
+
     /// How many messages at the top of the transcript were folded from `head` (the partial turn's raw rows).
     func shownHeadCount(_ head: [JSONValue]) -> Int {
         let headRowIds = Set(head.compactMap(HistoryPage.rowId))
@@ -407,18 +439,26 @@ extension LiveChatSession {
     /// Joins older rows onto `start` (a page read from the newest end) until `enough` holds for the rows, the chat's
     /// start, or `reachCap` rows. Each read overlaps one row with what is held (the 03 §5.2 join).
     func extendBack(_ start: HistoryPage, stored: String, until enough: ([JSONValue]) -> Bool) async -> (page: HistoryPage, grew: Bool) {
+        await LiveChatSession.readBack(start, client: client, stored: stored, profile: profileParam, features: perfFeatures,
+                                       until: enough)
+    }
+
+    /// `extendBack` for any reader (the open, the read-ahead before it): at most `reads` reads and `cap` rows.
+    static func readBack(_ start: HistoryPage, client: any GatewayClient, stored: String, profile: String?,
+                         features: PerformanceFeatures?, cap: Int = LiveChatSession.reachCap, reads limit: Int = 8,
+                         until enough: ([JSONValue]) -> Bool) async -> (page: HistoryPage, grew: Bool) {
         var page = start
         var grew = false
         var reads = 0
-        while page.isLatestTail, page.possiblyTruncated, page.rows.count < LiveChatSession.reachCap, !enough(page.rows),
-              reads < 8, !Task.isCancelled {
+        while page.isLatestTail, page.possiblyTruncated, page.rows.count < cap, !enough(page.rows),
+              reads < limit, !Task.isCancelled {
             reads += 1
             guard let join = page.rows.lazy.compactMap(HistoryPage.rowId).first else { break }
             let covered = page.nextOffset
-            let want = min(LiveChatSession.fullPageRows, LiveChatSession.reachCap - page.rows.count)
-            let request = HistoryRequest(storedSessionId: stored, profile: profileParam, limit: want + 1, offset: max(0, covered - 1))
+            let want = min(LiveChatSession.fullPageRows, cap - page.rows.count)
+            let request = HistoryRequest(storedSessionId: stored, profile: profile, limit: want + 1, offset: max(0, covered - 1))
             let olderPage: HistoryPage?
-            do { olderPage = try await HistoryAPI.fetch(client: client, request: request, features: perfFeatures).0 } catch {   // [diagnostics]
+            do { olderPage = try await HistoryAPI.fetch(client: client, request: request, features: features).0 } catch {   // [diagnostics]
                 AppLog.swallowed("history", "extend back \(AppLog.tag(stored)) read \(reads) at offset \(max(0, covered - 1))", error)
                 olderPage = nil
             }
@@ -688,7 +728,7 @@ extension LiveChatSession {
         }
         firstPageOwed = false
         AppLog.trace("history", "first page retry \(firstPageTries) \(logIds): got \(page.rows.count) rows")
-        applyFirstPage(page, folded, keepCached: true)
+        await landFirstPage(page, folded)
         changes.markState()
         scheduleFlush()
         readOlderAfterOpen()

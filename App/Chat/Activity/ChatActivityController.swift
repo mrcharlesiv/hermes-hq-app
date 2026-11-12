@@ -1188,6 +1188,7 @@ import UIKit
                         HQAnnounce.say("Goal resumed. It continues after the current reply.")
                     }
                 }
+                Haptics.play(.success)   // once the goal took it, as a steer
                 HQAnnounce.say("Action succeeded")
             } catch {
                 Haptics.play(.error)

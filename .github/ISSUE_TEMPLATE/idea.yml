@@ -15,3 +15,11 @@ body:
       label: Where
       multiple: true
       options: [iPhone, iPad, Mac, Add-on (Hermes plugin)]
+  - type: checkboxes
+    id: cla
+    attributes:
+      label: Contributor License Agreement
+      description: Issues often carry code, patches and other work that ends up in the app, so every issue needs this.
+      options:
+        - label: I have read the [Contributor License Agreement](https://github.com/mrcharlesiv/hermes-hq-app/blob/main/CLA.md) and agree that it covers any code, patch or other contribution I post in this issue and its comments.
+          required: true

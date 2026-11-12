@@ -8,6 +8,10 @@ Thanks for helping. Bug reports, ideas and code are all welcome. Everyone here f
 Open an issue. Say what you did, what you expected and what happened, and which device, app build and Hermes
 version you're on. Screenshots help. Never paste passwords, tokens or your gateway's address.
 
+Both issue forms have a required box that puts anything you post in the issue (a patch, a snippet, a design) under
+the [Contributor License Agreement](CLA.md). An issue opened without it, for example through the API, is closed by
+a bot until the line is added.
+
 ## Pull requests
 
 1. **Sign the CLA once.** The first time you open a pull request, a bot asks you to agree to the

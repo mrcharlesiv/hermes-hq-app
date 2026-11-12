@@ -1,0 +1,39 @@
+# Every issue carries the CLA agreement from its form (a required box). An issue opened another way (the API, the
+# gh command line) has no such line: it is closed with a note on how to add it. The owner's own issues are let through.
+name: Issue CLA
+on:
+  issues:
+    types: [opened, reopened]
+
+permissions:
+  issues: write
+
+jobs:
+  agreement:
+    runs-on: ubuntu-latest
+    if: github.event.issue.user.login != 'mrcharlesiv' && github.event.issue.user.type != 'Bot'
+    steps:
+      - name: Close an issue without the agreement
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BODY: ${{ github.event.issue.body }}
+          NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          line='- [x] I have read the [Contributor License Agreement](https://github.com/mrcharlesiv/hermes-hq-app/blob/main/CLA.md) and agree that it covers any code, patch or other contribution I post in this issue and its comments.'
+          if printf '%s' "$BODY" | tr -d '\r' | grep -qiF -- "$line"; then
+            echo "The agreement is in the issue."
+            exit 0
+          fi
+          {
+            echo "Thanks for writing this up. Every issue here needs the Contributor License Agreement line, because issues often carry code that ends up in the app, and this one came in without it, so it is closed for now."
+            echo
+            echo "To bring it back, edit the issue, add this line at the end exactly as written, then reopen it:"
+            echo
+            echo '```'
+            echo "$line"
+            echo '```'
+            echo
+            echo "The agreement is [CLA.md](https://github.com/$REPO/blob/main/CLA.md). Opening the issue from the Bug or Idea form adds the line for you."
+          } > note.md
+          gh issue close "$NUMBER" --repo "$REPO" --reason "not planned" --comment "$(cat note.md)"

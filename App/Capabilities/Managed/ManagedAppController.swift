@@ -564,7 +564,7 @@ struct ManagedAppView: View {
             Section {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Your organisation turned \(locked.count) tool\(locked.count == 1 ? "" : "s") off.").font(Font.hq(.subheadline)).foregroundStyle(Color.hqLabel)
-                    Button("Open the Connectors Admin") { UIApplication.shared.open(URL(string: "https://portal.nousresearch.com/connectors")!) }
+                    Button("Open the Connectors Admin") { LinkOpener.openOutside(URL(string: "https://portal.nousresearch.com/connectors")!) }
                         .font(Font.hq(.subheadline).weight(.semibold))
                         .accessibilityIdentifier("managed-org-admin")
                 }

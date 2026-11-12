@@ -290,7 +290,7 @@ final class BubbleMediaView: UIView, MediaTileHost, FileRowHost, UIContextMenuIn
         }
         if tile.phase == .failed && tile.opensAsLink {
             // "Open image: <name>" (spec §7.7): a URL in Safari, a path in the file preview.
-            if case .remote(let url) = item.attachment.source { UIApplication.shared.open(url) }
+            if case .remote(let url) = item.attachment.source { LinkOpener.openOutside(url) }
             else { delegate.chatCellOpenMediaAsFile(messageId: messageId, item: item) }
             return
         }

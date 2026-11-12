@@ -41,11 +41,11 @@ import UIKit
         })
         close.accessibilityIdentifier = "cloud-gateway.cancel"
         root.navigationItem.leftBarButtonItem = close
-        var moreActions = [UIAction(title: CloudCopy.manage, image: UIImage(systemName: "safari")) { _ in UIApplication.shared.open(Portal.agentsPage) }]
+        var moreActions = [UIAction(title: CloudCopy.manage, image: UIImage(systemName: "safari")) { _ in LinkOpener.openOutside(Portal.agentsPage) }]
         // [app-store-review] Guideline 3.1.1: Portal.newAgentPage is Nous Portal's priced "create an agent" page;
         // Manage on Nous Portal above only opens agent management, so it stays.
         #if !APP_STORE
-        moreActions.append(UIAction(title: CloudCopy.prices, image: UIImage(systemName: "tag")) { _ in UIApplication.shared.open(Portal.newAgentPage) })
+        moreActions.append(UIAction(title: CloudCopy.prices, image: UIImage(systemName: "tag")) { _ in LinkOpener.openOutside(Portal.newAgentPage) })
         #endif
         moreActions.append(UIAction(title: CloudCopy.signOut, image: UIImage(systemName: "rectangle.portrait.and.arrow.right"), attributes: .destructive) {
             [weak model, weak nav] _ in

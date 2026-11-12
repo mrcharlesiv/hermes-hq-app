@@ -52,14 +52,14 @@ final class ConnectAppsController: UIHostingController<HQScaledRoot<ConnectAppsR
     private func menuItems() -> [UIMenuElement] {
         guard model.phase == .ready else {
             return [UIAction(title: "Open Composio", image: UIImage(systemName: "safari")) { _ in
-                UIApplication.shared.open(URL(string: "https://platform.composio.dev")!)
+                LinkOpener.openOutside(URL(string: "https://platform.composio.dev")!)
             }]
         }
         let status = model.keys.status()
         let key = UIAction(title: "Composio Key", subtitle: status.hint.isEmpty ? "Saved on this \(DeviceWord.name)" : "•••• \(status.hint)",
                            image: UIImage(systemName: "key"), attributes: .disabled) { _ in }
         let open = UIAction(title: "Open Composio", image: UIImage(systemName: "safari")) { _ in
-            UIApplication.shared.open(URL(string: "https://platform.composio.dev")!)
+            LinkOpener.openOutside(URL(string: "https://platform.composio.dev")!)
         }
         let remove = UIAction(title: "Remove Composio", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
             guard let self else { return }
@@ -270,7 +270,7 @@ struct ConnectAppsSetupView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    Button("Open") { UIApplication.shared.open(URL(string: "https://platform.composio.dev")!) }
+                    Button("Open") { LinkOpener.openOutside(URL(string: "https://platform.composio.dev")!) }
                         .hqRowActionButtonStyle()
                         .accessibilityIdentifier("connect-apps.open-composio")
                 }

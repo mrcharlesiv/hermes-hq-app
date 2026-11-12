@@ -265,7 +265,7 @@ final class ZoomImagePage: UIViewController, UIScrollViewDelegate {
         config.title = "Open"
         config.image = UIImage(systemName: "safari")
         config.imagePadding = 6
-        let button = UIButton(configuration: config, primaryAction: UIAction { _ in UIApplication.shared.open(url) })
+        let button = UIButton(configuration: config, primaryAction: UIAction { _ in LinkOpener.openOutside(url) })
         button.accessibilityIdentifier = "artifact.image.open"
         button.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(button)

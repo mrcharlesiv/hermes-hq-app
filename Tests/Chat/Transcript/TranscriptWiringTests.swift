@@ -155,7 +155,8 @@ import UIKit
         }
         #expect(LinkTargets.target(URL(string: "http://127.example.com/")!) == .page(URL(string: "http://127.example.com/")!))
         #expect(LinkTargets.target(URL(string: "mailto:a@example.com")!) == .system(URL(string: "mailto:a@example.com")!))
-        for bad in ["file:///etc/hosts", "javascript:alert(1)", "ftp://example.com/x", "data:text/html,hi"] {
+        #expect(LinkTargets.target(URL(string: "file:///etc/hosts")!) == .file("/etc/hosts"))   // [links-browser] the app's viewer
+        for bad in ["file://elsewhere.example.com/etc/hosts", "javascript:alert(1)", "ftp://example.com/x", "data:text/html,hi"] {
             #expect(LinkTargets.target(URL(string: bad)!) == .refused, "\(bad)")
         }
     }

@@ -37,6 +37,9 @@
 	<!-- [live-steps] A reply's card gets each step the gateway's add-on pushes (a larger budget of prompt updates). -->
 	<key>NSSupportsLiveActivitiesFrequentUpdates</key><true/>
 	<key>ITSAppUsesNonExemptEncryption</key><false/>
+	<!-- [links-browser] Settings › Open Links In asks which of these browsers are installed (PhoneBrowsers.probes). -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array><string>googlechrome</string><string>firefox</string><string>firefox-focus</string><string>microsoft-edge-https</string><string>brave</string></array>
 	<!-- [mac] The Mac App Store category (Mac Catalyst build). -->
 	<key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
 	<key>LSRequiresIPhoneOS</key><true/>

@@ -1017,7 +1017,7 @@ extension ChatViewController {
         }
         var children: [UIMenuElement] = [open]
         if case .page(let page) = LinkTargets.target(url) {
-            let safari = UIAction(title: "Open in Safari", image: UIImage(systemName: "safari")) { _ in UIApplication.shared.open(page) }
+            let safari = UIAction(title: LinkOpener.outsideTitle, image: UIImage(systemName: "safari")) { _ in LinkOpener.openOutside(page) }   // [links-browser]
             safari.accessibilityIdentifier = "link.safari-open"
             children.append(safari)
         }

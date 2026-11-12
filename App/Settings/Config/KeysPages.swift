@@ -574,7 +574,7 @@ struct EnvKeyEditor: View {
         .settingsList().hqMacSettingsRows()
         .saveFailureFeedback(model.failure)
         .onChange(of: draft) { _, _ in saved = false }
-        .environment(\.openURL, OpenURLAction { url in .systemAction(url, prefersInApp: true) })
+        .environment(\.openURL, LinkOpener.openURLAction)   // [links-browser]
         .onDisappear { draft = "" }
     }
 }

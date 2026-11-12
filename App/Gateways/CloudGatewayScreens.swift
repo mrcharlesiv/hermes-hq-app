@@ -854,7 +854,7 @@ private struct CloudFailedView: View {
                 .accessibilityIdentifier("cloud-gateway.failure")
         } bar: {
             GuideActionButton(title: CloudCopy.tryAgain, id: "cloud-gateway.retry", action: model.retry)
-            GuideActionButton(title: CloudCopy.manage, id: "cloud-gateway.manage", prominent: false) { UIApplication.shared.open(Portal.agentsPage) }
+            GuideActionButton(title: CloudCopy.manage, id: "cloud-gateway.manage", prominent: false) { LinkOpener.openOutside(Portal.agentsPage) }
         }
     }
 }

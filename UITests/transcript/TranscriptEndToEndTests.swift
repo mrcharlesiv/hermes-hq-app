@@ -215,6 +215,36 @@ final class TranscriptEndToEndTests: XCTestCase {
         XCTAssertTrue(back, "Done returns to the chat")
     }
 
+    // MARK: T6b, T6c [links-browser] Settings › Open Links In: a web link leaves for the browser; a file never does
+
+    @MainActor func testT6b_WebLinkOpensInTheBrowserWhenChosen() throws {
+        let account = try FixtureAccount.load()
+        try preset(account, "text")
+        let app = launch(account, args: ["-hqn.links.browser", "default", "-HQNDebugOpenLink", "https://hermes-hq.invalid/install"], covered: true)
+        let safari = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
+        XCTAssertTrue(safari.wait(for: .runningForeground, timeout: 20), "the default browser took the page")
+        XCTAssertFalse(app.buttons["Done"].exists, "no Safari view inside the app")
+        shot("link-outside-browser")
+        app.activate()
+        XCTAssertTrue(app.tables["chat.table"].waitForExistence(timeout: 10), "the chat is as it was")
+    }
+
+    @MainActor func testT6c_FileLinkStaysInTheAppWhateverTheBrowser() throws {
+        let account = try FixtureAccount.load()
+        try preset(account, "text")
+        // The app's own page viewer takes it (the stand-in gateway answers any download with "{}"), not a browser.
+        let app = launch(account, args: ["-hqn.links.browser", "default", "-HQNDebugOpenLink", "file:///Users/me/pages/report.html"],
+                         covered: true)
+        let page = app.navigationBars["report.html"]
+        let title = app.staticTexts["report.html"]
+        let opened = page.waitForExistence(timeout: 15) || title.waitForExistence(timeout: 5)
+        shot("link-file-stays")
+        XCTAssertTrue(opened, "the page opened in the app's viewer")
+        XCTAssertEqual(app.state, .runningForeground, "no browser took over")
+        XCTAssertFalse(XCUIApplication(bundleIdentifier: "com.apple.mobilesafari").state == .runningForeground, "Safari stayed away")
+        XCTAssertFalse(app.buttons["Done"].exists, "no Safari view either")
+    }
+
     // MARK: T7 One of the app's links it has no screen for says so (L981)
 
     @MainActor func testT7_UnsupportedDeepLink() throws {

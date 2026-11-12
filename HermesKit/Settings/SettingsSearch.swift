@@ -60,6 +60,7 @@ nonisolated enum SettingsSearch {
     static let introSplashLabel = "Greeting on Empty Chats"
     static let fileBrowserLabel = "Files Button in Chats"
     static let sendWhileBusyLabel = "Send While Replying"   // [send-while-busy]
+    static let openLinksInLabel = "Open Links In"   // [links-browser]
     static let sessionsPageTitle = "Archiving & Project Folder"   // UX study 2026-10-21 #117: the page's two sections
     static let markLabel = "Mark a Slow Moment"
     static let liveActivitiesLabel = "Show Progress on Lock Screen"   // [live]
@@ -116,6 +117,7 @@ nonisolated enum SettingsSearch {
         .init(id: "app:tool-call-style", label: "Tool Call Style", context: "Chat", keywords: ["tool calls", "steps", "bubbles", "rows", "telegram", "commands"], target: .root("tool-calls")),
         .init(id: "app:tool-calls", label: "Tool Calls After Reply", context: "Chat", keywords: ["tool calls", "steps", "hide steps", "keep"], target: .root("tool-calls")),
         .init(id: "app:send-while-busy", label: sendWhileBusyLabel, context: "Chat", keywords: ["steer", "queue", "send mode", "busy", "while running", "interrupt", "busy input mode", "command return", "default send"], target: .root("row:send-while-busy")),   // [send-while-busy]
+        .init(id: "app:open-links-in", label: openLinksInLabel, context: "Chat", keywords: ["browser", "links", "urls", "web", "safari", "chrome", "firefox", "edge", "brave", "external browser", "default browser", "in-app browser"], target: .root("row:open-links-in")),   // [links-browser]
         .init(id: "app:new-chat-mode", label: "⌘N Opens", context: "Chat", keywords: ["command n", "cmd n", "shortcut", "keyboard", "bot chat", "new session", "persistent", "existing chat", "focus"], target: .root("row:new-chat-mode")),
         .init(id: "app:new-chat-key", label: "⌘N Bot", context: "Chat", keywords: ["command n", "cmd n", "shortcut", "keyboard", "new chat", "new session", "default bot", "default profile", "new chat here"], target: .root("row:new-chat-key")),
         .init(id: "app:new-chat-project", label: "⌘N Project", context: "Chat", keywords: ["command n", "cmd n", "shortcut", "default project", "folder", "workspace"], target: .root("row:new-chat-project")),   // [cmd-n] Mac only (filtered in `index`)

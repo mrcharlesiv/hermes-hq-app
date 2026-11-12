@@ -71,6 +71,9 @@ final class SettingsRootModel {
     var messageReactions = MessageReactionsPref.isOn
     /// [send-while-busy] What Send does with typed words while a reply runs.
     var sendWhileBusy = SendWhileBusy.chosen
+    /// [links-browser] Open Links In: the browsers on this device, and the one web links open in.
+    var linkBrowsers = LinkOpener.browsers()
+    var linkChoice = LinkOpener.choice
     var newChatKeyBot = NewChatKeyBot.chosen   // [cmd-n]
     var newChatKeyMode = NewChatKeyBot.mode     // [cmd-n] a tester: New Session or Bot Chat
     var newChatKeyProject = NewChatKeyBot.project ?? ""   // [cmd-n] "" is No Project
@@ -903,6 +906,44 @@ struct SettingsRootView: View {
                 }
                 .revealRow("row:send-while-busy", model.revealed)
             }
+            // [links-browser] Owner 2026-11-12: web links in a browser of your choice. A file a bot made (a page, a
+            // tile) opens in the app whatever is chosen here (`LinkRoute`).
+            let linkChoice = Binding(get: { model.linkChoice }, set: { (value: LinkBrowserChoice) in
+                Haptics.play(.selection)
+                model.linkChoice = value
+                LinkBrowserChoice.stored = value
+                AppLog.note("settings", "Open Links In set to \(value.saved)")
+            })
+            let linkChoices = LinkOpener.choices(installed: model.linkBrowsers)
+            if DeviceWord.isMac {
+                HStack(spacing: 12) {
+                    SettingsRowLabel(title: SettingsSearch.openLinksInLabel, systemImage: "safari")
+                    Spacer(minLength: 16)
+                    MacPopUp(label: SettingsSearch.openLinksInLabel, selection: linkChoice, options: linkChoices) {
+                        $0.title(installed: model.linkBrowsers)
+                    }
+                    .accessibilityIdentifier("settings.open-links-in")
+                    .hqMacSettingsControl()
+                }
+                .help("Web links open in this browser. Pages and files your bots make always open in the app.")
+                .revealRow("row:open-links-in", model.revealed)
+            } else {
+                SettingsMenuRowFace(label: SettingsRowLabel(title: SettingsSearch.openLinksInLabel, systemImage: "safari"),
+                                    value: model.linkChoice.title(installed: model.linkBrowsers))
+                .overlay {
+                    Menu {
+                        Picker(SettingsSearch.openLinksInLabel, selection: linkChoice) {
+                            ForEach(linkChoices, id: \.self) { Text($0.title(installed: model.linkBrowsers)).tag($0) }
+                        }
+                    } label: {
+                        Color.clear.contentShape(Rectangle())
+                    }
+                    .accessibilityLabel(SettingsSearch.openLinksInLabel)
+                    .accessibilityValue(model.linkChoice.title(installed: model.linkBrowsers))
+                    .accessibilityIdentifier("settings.open-links-in")
+                }
+                .revealRow("row:open-links-in", model.revealed)
+            }
             if DeviceWord.isMac {
                 // [cmd-n] A tester 2026-11-02: ⌘N opens the bot's own chat instead of a new one, when asked.
                 HStack(spacing: 12) {
@@ -996,6 +1037,7 @@ struct SettingsRootView: View {
                  + " New Chat Asks for a Project: off, New Chat with a bot picked on Sessions starts in no project at once, with no sheet."
                  + " Send While Replying is what Send does while a reply runs: Steer adds your message to that reply, Queue sends it when the reply finishes."
                  + (DeviceWord.isMac ? " ⌘Return does the other one." : " Touch and hold Send for the other one.")
+                 + " Open Links In is for web links: pages and files your bots make always open in the app."
                  + (DeviceWord.isMac ? (model.newChatKeyMode == .botChat
                     ? " ⌘N opens the ⌘N bot’s own chat, ready to type; ⌥⌘N starts a new chat like the one you’re in; ⇧⌘N asks for a bot and project."
                     : " ⌘N starts a new chat with the ⌘N bot, in its project, at once; ⌥⌘N starts one with the bot and project of the chat"

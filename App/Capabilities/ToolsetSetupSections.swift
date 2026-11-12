@@ -198,7 +198,7 @@ struct ToolsetSetupSections: View {
                 .disabled(page.readOnly)
                 .accessibilityIdentifier("toolset-key-\(variable.key)")
                 if let link = variable.url, let url = URL(string: link) {
-                    Button("Get a Key") { UIApplication.shared.open(url) }.accessibilityIdentifier("toolset-get-key-\(variable.key)")
+                    Button("Get a Key") { LinkOpener.openOutside(url) }.accessibilityIdentifier("toolset-get-key-\(variable.key)")
                 }
             }
         } header: { HQSectionLabel {

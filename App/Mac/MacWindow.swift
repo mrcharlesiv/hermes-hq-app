@@ -230,7 +230,7 @@ final class MacToolTips: NSObject, UIToolTipInteractionDelegate {
 }
 
 extension AppDelegate {
-    @objc func hqOpenSupport(_ sender: Any?) { UIApplication.shared.open(MacWindow.supportPage) }
+    @objc func hqOpenSupport(_ sender: Any?) { LinkOpener.openOutside(MacWindow.supportPage) }
     @objc func hqTextBigger(_ sender: Any?) { MacWindow.changeTextSize(by: 1) }
     @objc func hqTextSmaller(_ sender: Any?) { MacWindow.changeTextSize(by: -1) }
     @objc func hqTextNormal(_ sender: Any?) { MacWindow.changeTextSize(by: 0) }

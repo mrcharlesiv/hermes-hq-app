@@ -390,7 +390,7 @@ struct MessagingPlatformView: View {
         }.hqMacSettingsRowInsets() }
         .settingsList()
         .refreshable { await model.refresh() }
-        .environment(\.openURL, OpenURLAction { url in .systemAction(url, prefersInApp: true) })
+        .environment(\.openURL, LinkOpener.openURLAction)   // [links-browser]
         .accessibilityIdentifier("messaging.platform.list")
     }
 

@@ -9,6 +9,9 @@ nonisolated enum LinkTarget: Equatable, Sendable {
     case page(URL)
     /// mailto:, tel:, sms:, facetime: — the system's own app.
     case system(URL)
+    /// A `file://` link: a file on the gateway computer, by its path. It opens in the app's own viewer (a page runs
+    /// live there) and never in a browser, whichever one links are set to open in (`LinkRoute`).
+    case file(String)
     /// A page on the gateway computer itself (localhost, 127.0.0.0/8, ::1, 0.0.0.0).
     case loopback
     case refused
@@ -50,9 +53,24 @@ nonisolated enum LinkTargets {
             guard let host = url.host, !host.isEmpty else { return .refused }
             return isLoopback(host: host) ? .loopback : .page(url)
         case "mailto", "tel", "sms", "facetime", "facetime-audio": return .system(url)
+        case "file": return filePath(url).map(LinkTarget.file) ?? .refused
         default: return .refused
         }
     }
+
+    /// The path a `file://` link names on the gateway computer ("file:///Users/me/report.html",
+    /// "file://localhost/…", "file:///C:/Users/me/report.html" → "C:/Users/me/report.html"); nil for another
+    /// computer's file or no path at all.
+    static func filePath(_ url: URL) -> String? {
+        guard url.scheme?.lowercased() == "file" else { return nil }
+        let host = url.host?.lowercased() ?? ""
+        guard host.isEmpty || host == "localhost" else { return nil }
+        var path = url.path
+        if path.count >= 3, path.hasPrefix("/"), windowsDrive.test(String(path.dropFirst())) { path.removeFirst() }
+        return path.isEmpty || path == "/" ? nil : path
+    }
+
+    private static let windowsDrive = TRx(#"^[A-Za-z]:[\\/]"#)
 }
 
 /// A file path a bot names in inline code (`/Users/me/.hermes/profiles/otto/research/report.md`): a link in its reply

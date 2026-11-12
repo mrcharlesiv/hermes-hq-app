@@ -273,7 +273,7 @@ extension PagesTabs {
     /// its chat's folder) goes through the bot's Artifacts page.
     private func openBotArtifact(_ record: ArtifactRecord, model: BotArtifactsModel, from host: UIViewController) {
         if record.kind == .link || ArtifactFiles.opening(record) == .link {
-            if let url = URL(string: record.value) { UIApplication.shared.open(url) }
+            if let url = URL(string: record.value) { LinkOpener.openOutside(url) }
             return
         }
         let pin = ArtifactPin(record)

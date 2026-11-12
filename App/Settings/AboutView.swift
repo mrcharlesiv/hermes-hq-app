@@ -121,7 +121,7 @@ struct AboutView: View {
         .hqMacForm(settings: true)   // [mac] Stress test 2026-10-28 #8, #53: the readable width, one inset, small switches
         .hqGroupedPage()   // [desktoplook] the page follows the skin
         .listStyle(.insetGrouped)
-        .environment(\.openURL, OpenURLAction { url in .systemAction(url, prefersInApp: true) })
+        .environment(\.openURL, LinkOpener.openURLAction)   // [links-browser]
     }
 
     private func markMoment() {

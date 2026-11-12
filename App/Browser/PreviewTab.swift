@@ -280,9 +280,9 @@ final class PreviewTabController: UIViewController, WKNavigationDelegate, WKUIDe
         forwardItem.accessibilityLabel = "Forward"
         let more = UIBarButtonItem(image: UIImage(systemName: "ellipsis"), menu: UIMenu(children: [
             UIAction(title: "Reload", image: UIImage(systemName: "arrow.clockwise")) { [weak self] _ in self?.web.reload() },
-            UIAction(title: "Open in Safari", image: UIImage(systemName: "safari")) { [weak self] _ in
+            UIAction(title: LinkOpener.outsideTitle, image: UIImage(systemName: "safari")) { [weak self] _ in
                 guard let self else { return }
-                UIApplication.shared.open(self.web.url ?? self.url)
+                LinkOpener.openOutside(self.web.url ?? self.url)   // [links-browser]
             },
             UIAction(title: "Copy Link", image: UIImage(systemName: "link")) { [weak self] _ in
                 guard let self else { return }

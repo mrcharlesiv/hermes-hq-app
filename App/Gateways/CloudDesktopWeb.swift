@@ -170,9 +170,9 @@ final class CloudDesktopWebController: UIViewController, WKNavigationDelegate, W
     private func moreMenu() -> UIMenu {
         UIMenu(children: [
             UIAction(title: "Reload", image: UIImage(systemName: "arrow.clockwise")) { [weak self] _ in self?.reload() },
-            UIAction(title: "Open in Safari", image: UIImage(systemName: "safari")) { [weak self] _ in
+            UIAction(title: LinkOpener.outsideTitle, image: UIImage(systemName: "safari")) { [weak self] _ in
                 guard let self else { return }
-                UIApplication.shared.open(self.web.url.flatMap { $0.host?.lowercased() == self.agentHost ? $0 : nil } ?? self.url)
+                LinkOpener.openOutside(self.web.url.flatMap { $0.host?.lowercased() == self.agentHost ? $0 : nil } ?? self.url)
             },
             UIAction(title: CloudDesktopWeb.signOutTitle, image: UIImage(systemName: "rectangle.portrait.and.arrow.right"),
                      attributes: .destructive) { [weak self] _ in self?.signOut() },

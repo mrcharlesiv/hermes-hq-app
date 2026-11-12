@@ -306,7 +306,7 @@ struct BillingPageView: View {
         .settingsList().hqMacSettingsRows()
         .task { await load() }
         .refreshable { await load() }
-        .environment(\.openURL, OpenURLAction { url in .systemAction(url, prefersInApp: true) })
+        .environment(\.openURL, LinkOpener.openURLAction)   // [links-browser]
         .accessibilityIdentifier("billing.list")
     }
 

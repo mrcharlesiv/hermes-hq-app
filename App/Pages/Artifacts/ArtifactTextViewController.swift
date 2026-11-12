@@ -370,7 +370,7 @@ final class ArtifactTextViewController: UIViewController, UITextViewDelegate {
         switch ArtifactLinks.classify(href: destination) {
         case .hash(let fragment): scroll(toFragment: fragment)
         case .file(let target, let fragment): linkOpener?(target, fragment, self)
-        case .external(let url): UIApplication.shared.open(url)
+        case .external(let url): LinkOpener.openOutside(url)
         case .inert: break
         }
     }

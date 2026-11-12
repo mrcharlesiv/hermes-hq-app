@@ -2538,7 +2538,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
     func open(_ record: ArtifactRecord) {
         let opening = ArtifactFiles.opening(record)
         if opening == .link {
-            if let url = URL(string: record.value) { UIApplication.shared.open(url) }
+            if let url = URL(string: record.value) { LinkOpener.openOutside(url) }
             return
         }
         if opening == .image { openImage(record); return }

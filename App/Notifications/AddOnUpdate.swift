@@ -390,7 +390,8 @@ import UIKit
     /// "0.9.33 → 0.9.40", "New · 0.9.40" (not there yet), "0.9.33 → newest" (GitHub didn't answer).
     nonisolated static func versions(from: String?, to: String?, setUp: Bool) -> String? {
         switch (from, to) {
-        case let (from?, to?): return "\(from) → \(to)"
+        // [plugin-update-run] A newer build under the same version number ("2.0.1 → 2.0.1" said nothing).
+        case let (from?, to?): return from == to ? "\(from) · newer build" : "\(from) → \(to)"
         case let (nil, to?): return setUp ? "New · \(to)" : "To \(to)"
         case let (from?, nil): return "\(from) → newest"
         case (nil, nil): return nil
@@ -940,18 +941,38 @@ struct UpdateSheetButtonBar<Buttons: View>: View {
     var body: some View {
         if shown {
             let _ = Theme.touch()
-            let page = glass ? Color.clear : Color.hqGroupedPage
+            // [plugin-update-run] Owner 2026-11-11, a phone in the iOS look, dark: "doesn't look too great with the
+            // black at the bottom". A sheet as tall as it goes still shows the system's glass there, while the glass
+            // trait is off, so the page colour drew a black block under Update. In the iOS look on a phone or iPad the
+            // strip is frosted instead, which sits on the glass and on a solid sheet alike; the Desktop Look and the
+            // Mac keep the page colour their sheets are drawn in.
+            let frosted = !glass && !Theme.isDesktop && !DeviceWord.isMac
+            let page = glass || frosted ? Color.clear : Color.hqGroupedPage
             buttons
                 .frame(maxWidth: .infinity)
                 .background {
-                    page.ignoresSafeArea(edges: .bottom)
-                        .overlay(alignment: .top) {
-                            LinearGradient(colors: [page.opacity(0), page], startPoint: .top, endPoint: .bottom)
-                                .frame(height: Self.fade)
-                                .offset(y: -Self.fade)
-                                .allowsHitTesting(false)
-                                .accessibilityHidden(true)
-                        }
+                    if frosted {
+                        Rectangle().fill(.ultraThinMaterial)
+                            .padding(.top, -Self.fade)
+                            .mask {
+                                VStack(spacing: 0) {
+                                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: Self.fade)
+                                    Color.black
+                                }
+                            }
+                            .ignoresSafeArea(edges: .bottom)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    } else {
+                        page.ignoresSafeArea(edges: .bottom)
+                            .overlay(alignment: .top) {
+                                LinearGradient(colors: [page.opacity(0), page], startPoint: .top, endPoint: .bottom)
+                                    .frame(height: Self.fade)
+                                    .offset(y: -Self.fade)
+                                    .allowsHitTesting(false)
+                                    .accessibilityHidden(true)
+                            }
+                    }
                 }
         }
     }

@@ -46,6 +46,7 @@ import Testing
 
     @Test func sheetVersionWords() {
         #expect(AddOnUpdate.versions(from: "0.9.33", to: "0.9.40", setUp: false) == "0.9.33 → 0.9.40")
+        #expect(AddOnUpdate.versions(from: "2.0.1", to: "2.0.1", setUp: false) == "2.0.1 · newer build", "the same number: said, not 2.0.1 → 2.0.1")
         #expect(AddOnUpdate.versions(from: nil, to: "0.9.40", setUp: true) == "New · 0.9.40")
         #expect(AddOnUpdate.versions(from: "0.9.33", to: nil, setUp: false) == "0.9.33 → newest")
         #expect(AddOnUpdate.versions(from: nil, to: nil, setUp: false) == nil)

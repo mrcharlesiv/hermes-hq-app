@@ -344,7 +344,7 @@ final class PushEndToEndTests: XCTestCase {
         attach("notout-2-settings-row")
 
         // It comes out: the row checks again, and this time it goes in.
-        try account.control("/__fixture/push", ["version": "0.9.47"])
+        try account.control("/__fixture/push", ["version": "0.9.52"])
         row.tap()
         let go = updateSheetAsks(timeout: 15)
         XCTAssertTrue(go.exists, "the row offers the update again")

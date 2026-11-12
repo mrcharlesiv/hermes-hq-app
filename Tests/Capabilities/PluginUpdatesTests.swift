@@ -234,6 +234,15 @@ import Testing
         #expect(PluginUpdateConsent.result(["state": "failed", "output": ""]) == .failed("Hermes didn’t apply the update."))
     }
 
+    /// The app asks for the add-on that can (0.9.52): one that doesn't say `pluginUpdates` is offered its update; one
+    /// that says false (Hermes on Windows) is current, not offered an update it can never satisfy.
+    @Test func theAppAsksForTheAddOnThatAppliesUpdates() {
+        #expect(PushPolicy.wantedVersion == "0.9.52" && PushPolicy.everyBotVersion == "0.9.47", "the main bot's copy serves it; no bot needs its own")
+        #expect(!PushPolicy.pluginUpdatesKnown(["draftCards": true]) && !PushPolicy.pluginUpdatesKnown(nil))
+        #expect(PushPolicy.pluginUpdatesKnown(["pluginUpdates": true]) && PushPolicy.pluginUpdatesKnown(["pluginUpdates": false]))
+        #expect(!PushPolicy.current(["pluginUpdates": true]), "still needs every older flag")
+    }
+
     @Test func aCautionScanCanBeForcedAndADangerousOneCannot() throws {
         let caution = PluginResult.read(try Self.row(["ok": false, "scan_blocked": true, "scan_verdict": "caution",
                                                       "scan_findings": [["description": "reads environment variables", "file": "tools.py", "line": 12],

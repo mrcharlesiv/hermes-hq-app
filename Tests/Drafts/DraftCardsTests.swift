@@ -266,9 +266,9 @@ struct DraftCardsTests {
     }
 
     @Test func theAddOnIsToldOnceItOffersCards() {
-        #expect(DraftCards.cardsUntold(["draftCards": true, "draftCardsShown": false]))
-        #expect(DraftCards.cardsUntold(["draftCards": true]))
-        #expect(!DraftCards.cardsUntold(["draftCards": true, "draftCardsShown": true]))
+        #expect(DraftCards.cardsUntold(["draftCards": true, "pluginUpdates": true, "draftCardsShown": false]))
+        #expect(DraftCards.cardsUntold(["draftCards": true, "pluginUpdates": true]))
+        #expect(!DraftCards.cardsUntold(["draftCards": true, "pluginUpdates": true, "draftCardsShown": true]))
         #expect(!DraftCards.cardsUntold(["draftCards": false]))
         #expect(!DraftCards.cardsUntold(["version": "0.9.46"]))
         #expect(!DraftCards.cardsUntold(nil))

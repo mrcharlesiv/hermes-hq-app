@@ -52,7 +52,7 @@ TOKEN = 'f' * 64     # the action token the fixture puts in approval alerts
 
 
 # The add-on version the app asks for (PushPolicy.wantedVersion / everyBotVersion): a "ready" plugin reports it.
-CURRENT = '0.9.47'
+CURRENT = '0.9.52'
 
 
 def fresh_state():
@@ -68,7 +68,7 @@ def status_body(old=False):
         return {'ok': True, 'version': 2, 'kinds': ['turnDone', 'approval'], 'seal': True, 'delivery': 'Relay'}
     return {'ok': True, 'version': 6, 'plugin': 'hermes-hq-push', 'pluginVersion': CURRENT, 'delivery': 'Relay', 'tasks': True,
             'kinds': ['turnDone', 'approval'], 'seal': True, 'replies': 'watcher', 'desktopThemes': True, 'ownChats': True, 'quietStandIns': True, 'desktopOpens': True, 'askCards': True, 'pagePreviews': True, 'warmup': True, 'desktopForward': True, 'gatewayLogins': True, 'namedSites': True,
-            'restartGuard': True, 'perfLogs': True, 'moments': True, 'deviceAccess': True, 'deviceAccessKinds': True, 'liveSteps': True, 'liveEnds': True, 'liveQuick': True, 'terminal': True, 'terminalOff': False, 'draftCards': True, 'draftCardsShown': True,
+            'restartGuard': True, 'perfLogs': True, 'moments': True, 'deviceAccess': True, 'deviceAccessKinds': True, 'liveSteps': True, 'liveEnds': True, 'liveQuick': True, 'terminal': True, 'terminalOff': False, 'draftCards': True, 'pluginUpdates': True, 'draftCardsShown': True,
             'devices': len(STATE['devices'])}
 
 

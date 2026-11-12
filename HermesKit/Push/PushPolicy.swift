@@ -66,8 +66,13 @@ nonisolated enum PushPolicy {
             && askCards(body) && pagePreviews(body) && warmup(body) && desktopForward(body) && gatewayLogins(body)
             && namedSites(body) && deviceAccess(body) && deviceAccessKinds(body) && liveSteps(body) && liveEnds(body)
             && liveQuick(body) && terminalKnown(body) && tasks(body) && cronMedia(body) && namedTabs(body)
-            && ideasRun(body) && draftCardsKnown(body)
+            && ideasRun(body) && draftCardsKnown(body) && pluginUpdatesKnown(body)
     }
+    /// [plugin-consent] hermes-hq-push 0.9.52+ applies a plugin update the owner approved in the app when Hermes only
+    /// takes it from a terminal (it adds Python packages): POST /plugins/update (PluginUpdateConsent). Only that the
+    /// add-on says so: Hermes on Windows says false (no terminal to give the command) and must not be offered the
+    /// update forever.
+    static func pluginUpdatesKnown(_ body: [String: Any]?) -> Bool { body?["pluginUpdates"] is NSNumber }
     /// [drafts] hermes-hq-push 0.9.47+ has `draft_message`: a bot shows a message it wrote for someone else as a draft
     /// card with Send, Edit and Don't Send (DraftCards). Only that the add-on says so: one with `drafts.off` says false
     /// and must not be offered the update forever.
@@ -149,8 +154,10 @@ nonisolated enum PushPolicy {
     /// until a build asks for a newer level. 0.9.25: `terminal` (the main bot's copy serves it; no bot needs its own).
     /// 0.9.32: `tasks` (the shared task list and its routes). 0.9.42: `cronMedia` (a job's pictures in Bot Chat summaries).
     /// 0.9.44: `namedTabs` (a login or code card names the site the bot is signing in to). 0.9.45: `ideasRun` (the daily
-    /// Task ideas run saves its ideas again). 0.9.47: `draftCards` (a bot's draft for review as a card).
-    static let wantedVersion = "0.9.47"
+    /// Task ideas run saves its ideas again). 0.9.47: `draftCards` (a bot's draft for review as a card). 0.9.52:
+    /// `pluginUpdates` (the main bot's copy serves it, so a plugin update that adds Python packages finishes in the app;
+    /// no bot needs its own, so `everyBotVersion` stays).
+    static let wantedVersion = "0.9.52"
     static let offerLevel = "\(wantedVersion)/\(everyBotVersion)"
     static let pluginName = "hermes-hq-push"
 

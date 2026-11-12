@@ -124,11 +124,10 @@ nonisolated struct PortalAuth: Sendable {
 
     func authorizeURL(clientId: String, redirect: String, challenge: String, state: String) -> URL? {
         guard var parts = URLComponents(url: base.appendingPathComponent("oauth/authorize"), resolvingAgainstBaseURL: false) else { return nil }
-        parts.queryItems = [URLQueryItem(name: "response_type", value: "code"), URLQueryItem(name: "client_id", value: clientId),
-                            URLQueryItem(name: "redirect_uri", value: redirect), URLQueryItem(name: "code_challenge", value: challenge),
-                            URLQueryItem(name: "code_challenge_method", value: "S256"), URLQueryItem(name: "state", value: state),
-                            URLQueryItem(name: "scope", value: Portal.scope), URLQueryItem(name: "resource", value: Portal.resource)]
-        parts.percentEncodedQuery = parts.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+        // Strictly encoded, as the gateway's own sign-in is: no bare "+", no "=http://" for a proxy's filter to refuse.
+        parts.percentEncodedQuery = NousGatewayProtocol.strictQuery([
+            ("response_type", "code"), ("client_id", clientId), ("redirect_uri", redirect), ("code_challenge", challenge),
+            ("code_challenge_method", "S256"), ("state", state), ("scope", Portal.scope), ("resource", Portal.resource)])
         return parts.url
     }
 

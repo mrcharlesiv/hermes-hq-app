@@ -59,15 +59,25 @@ nonisolated struct BrowserLogin: Sendable, Equatable {
 
 nonisolated enum NousGatewayProtocol {
     /// `<gateway>/auth/native/authorize?provider=nous&code_challenge=…&code_challenge_method=S256&redirect_uri=…&state=…`
-    /// (a literal "+" is re-encoded as %2B: the gateway reads query values form-encoded).
     /// `provider` is the gateway's name for the login it brokers: "nous", or its own (a self-hosted OIDC login).
     static func authorizeURL(gateway: URL, provider: String = nous, challenge: String, redirect: String, state: String) -> URL? {
         guard var parts = URLComponents(string: gateway.absoluteString + "/auth/native/authorize") else { return nil }
-        parts.queryItems = [URLQueryItem(name: "provider", value: provider), URLQueryItem(name: "code_challenge", value: challenge),
-                            URLQueryItem(name: "code_challenge_method", value: "S256"), URLQueryItem(name: "redirect_uri", value: redirect),
-                            URLQueryItem(name: "state", value: state)]
-        parts.percentEncodedQuery = parts.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+        parts.percentEncodedQuery = strictQuery([("provider", provider), ("code_challenge", challenge), ("code_challenge_method", "S256"),
+                                                 ("redirect_uri", redirect), ("state", state)])
         return parts.url
+    }
+
+    /// A query whose names and values keep only letters, digits and "-._~"; everything else is percent-encoded.
+    /// `URLQueryItem` leaves ":", "/" and "+" as they are, which is a valid URL but not a safe one to send: the
+    /// gateway reads values form-encoded (a bare "+" is a space), and a reverse proxy's stock exploit filter refuses
+    /// any query holding "=http://" (Nginx Proxy Manager's Block Common Exploits answered the loopback
+    /// `redirect_uri` with 403 before the gateway saw it; a tester's report, 2026-11-12). The receiver decodes the
+    /// same text either way.
+    static func strictQuery(_ items: [(name: String, value: String)]) -> String {
+        // Spelled out: `CharacterSet.alphanumerics` holds the letters and digits of every script.
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        func enc(_ text: String) -> String { text.addingPercentEncoding(withAllowedCharacters: allowed) ?? text }
+        return items.map { enc($0.name) + "=" + enc($0.value) }.joined(separator: "&")
     }
 
     static let nous = "nous"

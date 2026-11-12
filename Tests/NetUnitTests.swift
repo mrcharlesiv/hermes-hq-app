@@ -348,7 +348,29 @@ import Testing
     @Test func authorizeURL() throws {
         let url = try #require(NousGatewayProtocol.authorizeURL(gateway: URL(string: "https://g.example.com")!, challenge: "c+d",
                                                                  redirect: "http://127.0.0.1:53124/callback", state: "s"))
-        #expect(url.absoluteString == "https://g.example.com/auth/native/authorize?provider=nous&code_challenge=c%2Bd&code_challenge_method=S256&redirect_uri=http://127.0.0.1:53124/callback&state=s")
+        #expect(url.absoluteString == "https://g.example.com/auth/native/authorize?provider=nous&code_challenge=c%2Bd&code_challenge_method=S256&redirect_uri=http%3A%2F%2F127.0.0.1%3A53124%2Fcallback&state=s")
+    }
+
+    /// A reverse proxy's stock exploit filter (Nginx Proxy Manager's Block Common Exploits) refuses any query that
+    /// holds "=http://", so the loopback callback goes out percent-encoded, and reads back exactly as it was.
+    @Test func authorizeURLPassesAProxyExploitFilter() throws {
+        let redirect = "http://127.0.0.1:43871/callback"
+        let url = try #require(NousGatewayProtocol.authorizeURL(gateway: URL(string: "https://g.example.com/hermes")!, provider: "self-hosted",
+                                                                 challenge: "a+b/c=", redirect: redirect, state: "s t&u=v~w"))
+        let query = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedQuery)
+        #expect(query.range(of: "[a-zA-Z0-9_]=http://", options: .regularExpression) == nil)
+        #expect(!query.contains("://") && !query.contains("+") && !query.contains(" "))
+        #expect(url.path == "/hermes/auth/native/authorize")
+        // What a server reads back (percent-decoded, and form-decoded, where "+" would be a space) is what was sent.
+        let read = Dictionary(uniqueKeysWithValues: query.split(separator: "&").map { pair -> (String, String) in
+            let halves = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+            return (halves[0], halves[1].replacingOccurrences(of: "+", with: " ").removingPercentEncoding ?? "")
+        })
+        #expect(read == ["provider": "self-hosted", "code_challenge": "a+b/c=", "code_challenge_method": "S256",
+                         "redirect_uri": redirect, "state": "s t&u=v~w"])
+        #expect(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "redirect_uri" }?.value == redirect)
+        // Only ASCII letters and digits stay bare.
+        #expect(NousGatewayProtocol.strictQuery([("n", "é1")]) == "n=%C3%A91")
     }
 
     @Test func offersNous() {

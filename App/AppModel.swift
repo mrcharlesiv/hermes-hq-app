@@ -794,7 +794,8 @@ final class AppModel: AppServices {
         if let id = tracked.storedId { workingLedger?.turnEnded(id) }   // [working-ledger] a read in the air can't bring it back
         setWorking(profile: tracked.profile, storedId: tracked.storedId, false)
         // The reply landed while its chat was off screen: the row says so now (and gets its dot).
-        if let reply { botStore?.noteChatActivity(profile: tracked.profile, sessionId: tracked.storedId, preview: reply, at: Date(), unseen: true) }
+        // [botsaid] Only the reply's words are known here, not whether it was written to another bot: the row reads the chat.
+        if let reply { botStore?.noteChatActivity(profile: tracked.profile, sessionId: tracked.storedId, preview: reply, at: Date(), unseen: true, said: false) }
         if let reply, let id = tracked.storedId { sessionStore?.noteLatest(profile: tracked.profile, sessionId: id, text: reply) }
     }
 
@@ -1080,10 +1081,13 @@ final class AppModel: AppServices {
                // [restated] Not your request as Hermes restated it after compressing the chat: a repeat.
                let last = chat.messages.last(where: { ($0.role == .assistant || $0.role == .user) && !$0.plainText.isEmpty
                    && !($0.role == .user && TimelineNotes.restatedRequest($0.plainText) != nil) }) {
-                // [botsaid] The Bots row shows the bot's own newest words: not yours, a run's report or another bot's.
-                let said = chat.messages.last { $0.role == .assistant && $0.sender == nil && $0.job == nil && !$0.silentNote
-                    && $0.report == nil && !$0.plainText.isEmpty }
-                botStore?.noteChatActivity(profile: chat.profile, sessionId: id, preview: said?.plainText, at: seen, unseen: false)
+                // [botsaid] The Bots row shows the bot's newest words to you, as the chat just drew them: not yours, a
+                // run's report, another bot's, nor a reply it wrote to another bot (BotSaidShown.swift).
+                let seats = DeliveryRoster.seats
+                let own = seats.first { $0.profile == chat.profile }
+                    ?? DeliveryMessages.Seat(profile: chat.profile, name: chat.title, head: chat.head)
+                let said = BotSaidRules.shown(Array(chat.messages.suffix(BotSaidRules.deepTail)), own: own, seats: seats)
+                botStore?.noteChatActivity(profile: chat.profile, sessionId: id, preview: said.text, at: seen, unseen: false)
                 sessionStore?.noteLatest(profile: chat.profile, sessionId: id, text: last.plainText)
             }
         }

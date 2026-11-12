@@ -26,6 +26,9 @@ nonisolated struct BotSaidEntry: Codable, Sendable, Hashable {
     /// The time of the newest stored row in the tail read (gateway seconds): the chat's real last activity, which the
     /// roster's `last_active` trails by up to a minute. nil until a read has measured it.
     var newest: Double? = nil
+    /// The rules the words were picked by (`BotSaidRules.rule`); nil for an entry kept by an older build, whose words
+    /// may be a reply written to another bot: its chat is read again and its words aren't carried over.
+    var rule: Int? = nil
 }
 
 nonisolated enum BotSaidRules {
@@ -33,6 +36,12 @@ nonisolated enum BotSaidRules {
     static let parallel = 3
     /// Rows asked for: enough to step past tool turns, a morning of scheduled runs and the owner's own messages.
     static let tail = 30
+    /// Rows asked for when the newest reply's turn began before that tail (a long turn of tool calls): what it
+    /// answers decides whether it was written to you (`Shown.settled`).
+    static let deepTail = 160
+    /// The rules the kept words were picked by. 2: the chat's own rows (`shown`), so a reply written to another bot
+    /// is never the preview.
+    static let rule = 2
     /// What a row is handed when the bot's chat holds none of its words: read as "the bot has spoken, nothing to show"
     /// (`RosterPreview.botPreview` draws the role line, never "No messages yet").
     static let nothingShown = "[SILENT]"
@@ -43,20 +52,10 @@ nonisolated enum BotSaidRules {
         "\(chat.lastActive ?? 0)|\(chat.messageCount ?? -1)|\(chat.liveMessageCount ?? -1)|\(chat.preview ?? "")"
     }
 
-    /// The newest assistant message that is the bot's own words, else nil.
-    static func latest(_ rows: [JSONValue]) -> String? {
-        let ordered = rows.enumerated().sorted { a, b in
-            let ia = HistoryPage.rowId(a.element), ib = HistoryPage.rowId(b.element)
-            if let ia, let ib, ia != ib { return ia > ib }
-            return a.offset > b.offset
-        }.map(\.element)
-        for row in ordered where row["role"]?.string == "assistant" {
-            let text = SessionLatestRules.words(row["content"])
-            guard isOwnWords(text) else { continue }
-            let line = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-            return line.count > 200 ? String(line.prefix(200)) : line
-        }
-        return nil
+    /// The bot's newest words to you in a tail of stored rows, else nil (`shown`, BotSaidShown.swift).
+    static func latest(_ rows: [JSONValue], own: DeliveryMessages.Seat = .init(profile: "", name: "", head: nil),
+                       seats: [DeliveryMessages.Seat] = []) -> String? {
+        shown(rows: rows, own: own, seats: seats).text
     }
 
     /// An assistant message's text is something the bot said to you: not a cron run's report, a delivery from another
@@ -135,9 +134,13 @@ extension BotStore {
         for profile in profiles {
             guard let canonical = profile.canonicalSession, !canonical.id.isEmpty, RosterRules.holdsMessages(canonical) else { continue }
             let at = canonical.lastActive ?? 0, mark = botSaidMarks[profile.name] ?? BotSaidRules.mark(canonical)
-            if let entry = said[profile.name], entry.session == canonical.openId, entry.mark == mark { continue }
+            let stale = botSaidStale.contains(profile.name)
+            if !stale, let entry = said[profile.name], entry.session == canonical.openId, entry.mark == mark,
+               entry.rule == BotSaidRules.rule { continue }
             // A read already out or waiting for this very state covers it; one for an older state is followed by another.
-            if botSaidOut[profile.name]?.mark == mark || botSaidQueue.contains(where: { $0.profile == profile.name && $0.mark == mark }) { continue }
+            if botSaidQueue.contains(where: { $0.profile == profile.name && $0.mark == mark }) { continue }
+            if !stale, botSaidOut[profile.name]?.mark == mark { continue }
+            botSaidStale.remove(profile.name)
             botSaidQueue.removeAll { $0.profile == profile.name }
             botSaidQueue.append((profile.name, canonical.openId, at, mark))
             queued += 1
@@ -146,13 +149,22 @@ extension BotStore {
         pumpBotSaid()
     }
 
-    /// The bot just said `text` in its Bot Chat, seen by this device: its row shows it before the next read. True when
-    /// the kept words changed (the caller rebuilds).
+    /// A reply landed in the bot's chat while this device wasn't showing it: only its words are known here, not what
+    /// they answer (it may be written to another bot), so the chat's tail is read now and the row follows that.
+    func rereadBotSaid(profile name: String) {
+        botSaidStale.insert(name)
+        refreshBotSaid()
+    }
+
+    /// The bot just said `text` to you in its Bot Chat, seen by this device (`BotSaidRules.shown` picked it from the
+    /// chat's own messages): its row shows it before the next read. True when the kept words changed (the caller
+    /// rebuilds).
     @discardableResult
     func noteBotSaid(profile name: String, sessionId: String, text: String, at: Double) -> Bool {
         guard BotSaidRules.isOwnWords(text) else { return false }
         let line = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        var entry = BotSaidEntry(session: sessionId, at: at, text: line.count > 200 ? String(line.prefix(200)) : line)
+        var entry = BotSaidEntry(session: sessionId, at: at, text: line.count > 200 ? String(line.prefix(200)) : line,
+                                 rule: BotSaidRules.rule)
         if let old = device.botSaid?[name], old.session == sessionId { entry.newest = old.newest }
         botSaidSeenAt[name] = .now
         guard device.botSaid?[name] != entry else { return false }
@@ -168,21 +180,33 @@ extension BotStore {
             let item = botSaidQueue.remove(at: next)
             botSaidOut[item.profile] = (item.mark, .now)
             let client = self.client
+            let seats = DeliveryRoster.seats
+            let own = seats.first { $0.profile == item.profile } ?? DeliveryMessages.Seat(profile: item.profile, name: item.profile, head: nil)
             Task { [weak self] in
-                let query = [URLQueryItem(name: "profile", value: item.profile),
-                             URLQueryItem(name: "limit", value: String(BotSaidRules.tail)),
-                             URLQueryItem(name: "order", value: "latest")]
                 let path = "/api/sessions/\(HistoryRequest.encodePathSegment(item.session))/messages"
-                let rows: [JSONValue]? = await {
+                func tail(_ limit: Int, images: Bool) async -> [JSONValue]? {
+                    var query = [URLQueryItem(name: "profile", value: item.profile),
+                                 URLQueryItem(name: "limit", value: String(limit)),
+                                 URLQueryItem(name: "order", value: "latest")]
+                    if !images { query.append(URLQueryItem(name: "inline_images", value: "false")) }
                     guard let data = try? await client.get(path, query), let root = try? JSONValue.parse(data) else { return nil }
                     return root["messages"]?.array ?? []
-                }()
-                self?.botSaidRead(item, rows: rows)
+                }
+                var rows = await tail(BotSaidRules.tail, images: true)
+                var shown = rows.map { BotSaidRules.shown(rows: $0, own: own, seats: seats) }
+                // The newest reply's turn began before these rows (or they hold no reply at all) and the chat goes
+                // further back: what the reply answers is read too, once.
+                if let short = rows, let first = shown, !first.settled, short.count >= BotSaidRules.tail,
+                   let deep = await tail(BotSaidRules.deepTail, images: false), deep.count > short.count {
+                    rows = deep
+                    shown = BotSaidRules.shown(rows: deep, own: own, seats: seats)
+                }
+                self?.botSaidRead(item, rows: rows, text: shown?.text)
             }
         }
     }
 
-    private func botSaidRead(_ item: (profile: String, session: String, at: Double, mark: String), rows: [JSONValue]?) {
+    private func botSaidRead(_ item: (profile: String, session: String, at: Double, mark: String), rows: [JSONValue]?, text: String?) {
         let asked = botSaidOut.removeValue(forKey: item.profile)?.asked
         defer { pumpBotSaid() }
         guard !stopped else { return }
@@ -197,10 +221,11 @@ extension BotStore {
             AppLog.trace("bots", "bot said \(item.profile): read crossed a reply seen here, the reply stays")
             return
         }
-        var entry = BotSaidEntry(session: item.session, at: item.at, text: BotSaidRules.latest(rows), mark: item.mark)
-        // Nothing of the bot's in the tail (a run of scheduled reports): the words already known for this chat stay.
+        var entry = BotSaidEntry(session: item.session, at: item.at, text: text, mark: item.mark, rule: BotSaidRules.rule)
+        // Nothing of the bot's to you in the tail (a run of scheduled reports, a talk between bots): the words already
+        // known for this chat stay, unless an older build picked them (they may be that talk's last reply).
         let old = device.botSaid?[item.profile].flatMap { $0.session == item.session ? $0 : nil }
-        if entry.text == nil, let old { entry.text = old.text }
+        if entry.text == nil, let old, old.rule == BotSaidRules.rule { entry.text = old.text }
         entry.newest = [HistoryPage.newestTimestamp(rows), old?.newest].compactMap { $0 }.max()
         if let newest = entry.newest {
             chatActivityRead(item.profile, session: item.session, newest: newest, first: device.botSaid?[item.profile]?.newest == nil)

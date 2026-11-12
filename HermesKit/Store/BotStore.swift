@@ -202,6 +202,8 @@ final class BotStore {
     /// [botsaid] Each Bot Chat's `BotSaidRules.mark` from the last full roster, as the gateway gave it.
     @ObservationIgnored var botSaidMarks: [String: String] = [:]
     @ObservationIgnored var botSaidDirty = 0
+    /// [botsaid] Bots whose chat is read again whatever the roster says of it (`rereadBotSaid`).
+    @ObservationIgnored var botSaidStale: Set<String> = []
 
     // Lifecycle and cadence.
     @ObservationIgnored private var started = false
@@ -373,7 +375,10 @@ final class BotStore {
     /// off screen): the row shows that reply and its time now instead of after the next roster read (up to 30 s on the
     /// list, verification round 3), and gets the dot when nobody was looking (`unseen`). The next full roster replaces
     /// the patch with the gateway's own values.
-    func noteChatActivity(profile name: String, sessionId: String?, preview: String?, at time: Date, unseen: Bool) {
+    ///
+    /// [botsaid] `said` is false for a reply known only by its words (a turn that ended off screen): it may be written
+    /// to another bot, so the row's words come from a read of the chat instead (`rereadBotSaid`).
+    func noteChatActivity(profile name: String, sessionId: String?, preview: String?, at time: Date, unseen: Bool, said: Bool = true) {
         guard let i = profiles.firstIndex(where: { $0.name == name }), var canonical = profiles[i].canonicalSession else { return }
         if let sessionId, !profiles[i].canonicalIds.contains(sessionId), mintedChats[name] != sessionId { return }
         var changed = false
@@ -382,12 +387,13 @@ final class BotStore {
             canonical.lastActive = stamp
             changed = true
         }
-        if let text = preview.map({ ChatText.compactPreview($0, max: 80) }), !text.isEmpty, text != canonical.preview {
+        if said, let text = preview.map({ ChatText.compactPreview($0, max: 80) }), !text.isEmpty, text != canonical.preview {
             canonical.preview = text
             changed = true
         }
         // [botsaid] The row draws the bot's own words: these are kept with the chat until its next read.
-        if let preview, noteBotSaid(profile: name, sessionId: canonical.openId, text: preview, at: stamp) { changed = true }
+        if said, let preview, noteBotSaid(profile: name, sessionId: canonical.openId, text: preview, at: stamp) { changed = true }
+        if !said, preview != nil { rereadBotSaid(profile: name) }
         if (canonical.messageCount ?? 0) == 0 { canonical.messageCount = max(1, canonical.messageCount ?? 0); changed = true }
         guard changed else { return }
         profiles[i].canonicalSession = canonical

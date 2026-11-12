@@ -310,6 +310,8 @@ struct TodoWeekStrip: View {
         var number: String
         var today: Bool
         var busy: Bool
+        /// The day on show: the list holds this day alone. A second tap shows every day again.
+        var picked = false
     }
 
     var days: [Day]
@@ -323,20 +325,23 @@ struct TodoWeekStrip: View {
                         Text(day.weekday.uppercased())
                             .font(Font.hq(.caption2).weight(.semibold))
                             .foregroundStyle(Color.hqLabel2)
+                        // The picked day is the filled circle; today, while it isn't picked, is the accent's number (as
+                        // Calendar's week). With no day picked the list holds every coming day.
                         Text(day.number)
-                            .font(Font.hq(.callout).weight(day.today ? .semibold : .regular)).monospacedDigit()
-                            .foregroundStyle(day.today ? Color.hqOnTint : (day.busy ? Color.hqLabel : Color.hqLabel2))
+                            .font(Font.hq(.callout).weight(day.today || day.picked ? .semibold : .regular)).monospacedDigit()
+                            .foregroundStyle(day.picked ? Color.hqOnTint : (day.today ? Color.hqTintText : (day.busy ? Color.hqLabel : Color.hqLabel2)))
                             .frame(width: HQFont.scaled(32), height: HQFont.scaled(32))
-                            .background { if day.today { Circle().fill(Color.hqTint) } }
+                            .background { if day.picked { Circle().fill(Color.hqTint) } }
                         Circle().fill(day.busy ? Color.hqLabel3 : Color.clear).frame(width: 5, height: 5)
                     }
                     .frame(maxWidth: .infinity)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .allowsHitTesting(day.busy)
-                .accessibilityLabel("\(day.weekday) \(day.number)")
+                .accessibilityLabel("\(day.weekday) \(day.number)\(day.today ? ", today" : "")")
                 .accessibilityValue(day.busy ? "Has tasks" : "No tasks")
+                .accessibilityAddTraits(day.picked ? .isSelected : [])
+                .accessibilityHint(day.picked ? "Shows every coming day again" : "Shows this day alone")
                 .accessibilityIdentifier("tasks.week.\(day.key)")
             }
         }

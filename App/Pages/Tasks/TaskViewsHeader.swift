@@ -88,12 +88,14 @@ private struct TaskViewsBand: View {
             }
             .scrollIndicators(.hidden)
             .hqScrollEdgeFade(width: 20)
-            .onAppear { proxy.scrollTo(model.picked.key, anchor: .center) }
+            // Only as far as it takes to show the picked pill whole (no anchor): centring it slid the whole row
+            // sideways on every tap, even with every pill already in view (owner 2026-11-12: "it's glitching").
+            .onAppear { proxy.scrollTo(model.picked.key) }
             .onChange(of: model.picked) { _, picked in
                 if reduceMotion {
-                    proxy.scrollTo(picked.key, anchor: .center)
+                    proxy.scrollTo(picked.key)
                 } else {
-                    withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(picked.key, anchor: .center) }
+                    withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(picked.key) }
                 }
             }
         }

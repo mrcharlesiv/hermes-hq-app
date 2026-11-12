@@ -27,12 +27,42 @@ extension PagesTests {
         XCTAssertTrue(app.cells["task-row-Find 3 venues for the party"].firstMatch.exists, "until it waits on you")
         settleViews(); shot("first-1-today" + Self.lookName)
 
-        // Upcoming: each coming day under the week.
-        app.buttons["tasks.view.upcoming"].firstMatch.tap()
+        // Upcoming: each coming day under the week. Its pill says how many before it is tapped, so it keeps its width
+        // (it grew as it was picked and ran into Inbox; owner 2026-11-12).
+        let upcoming = app.buttons["tasks.view.upcoming"].firstMatch
+        XCTAssertTrue(upcoming.label.contains("task"), "Upcoming says how many while another view is on show: \(upcoming.label)")
+        let widthBefore = upcoming.frame.width
+        upcoming.tap()
         XCTAssertTrue(app.descendants(matching: .any)["tasks.section.Tomorrow"].firstMatch.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.cells["task-row-Follow up with Ivy on the contract"].firstMatch.exists)
+        XCTAssertEqual(upcoming.frame.width, widthBefore, accuracy: 1, "the pill keeps its width when picked")
+        let contract = app.cells["task-row-Follow up with Ivy on the contract"].firstMatch
+        XCTAssertTrue(contract.exists)
         XCTAssertFalse(cleaning.exists, "today's tasks are not coming up")
         settleViews(); shot("first-2-upcoming" + Self.lookName)
+
+        // Every day on the week answers a tap (the days with no tasks did nothing; owner 2026-11-12): the list holds
+        // that day alone. The picked day again shows every coming day.
+        func weekDay(_ offset: Int) -> XCUIElement {
+            let date = Calendar.current.date(byAdding: .day, value: offset, to: Calendar.current.startOfDay(for: Date()))!
+            let parts = Calendar.current.dateComponents([.year, .month, .day], from: date)
+            return app.buttons[String(format: "tasks.week.%04d-%02d-%02d", parts.year!, parts.month!, parts.day!)].firstMatch
+        }
+        let empty = weekDay(5)   // nothing in the fixture is due in five days
+        XCTAssertTrue(empty.exists, "the week's days")
+        empty.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["tasks.view-empty"].firstMatch.waitForExistence(timeout: 5), "a day with nothing says so")
+        XCTAssertTrue(waitUntil(5) { !contract.exists }, "only the picked day is listed")
+        XCTAssertTrue(empty.isSelected, "the picked day is marked")
+        shot("first-2b-upcoming-empty-day" + Self.lookName)
+        weekDay(1).tap()
+        XCTAssertTrue(contract.waitForExistence(timeout: 5), "tomorrow's task")
+        XCTAssertFalse(app.cells["task-row-Pick a spot for Friday’s team lunch"].exists, "the day after is not listed")
+        shot("first-2c-upcoming-tomorrow" + Self.lookName)
+        weekDay(0).tap()
+        XCTAssertTrue(cleaning.waitForExistence(timeout: 5), "today's day shows what is due today")
+        weekDay(0).tap()
+        XCTAssertTrue(contract.waitForExistence(timeout: 5), "the picked day again shows every coming day")
+        XCTAssertTrue(waitUntil(5) { !cleaning.exists }, "and today's tasks are gone again")
 
         // Inbox: no date, no list.
         app.buttons["tasks.view.inbox"].firstMatch.tap()

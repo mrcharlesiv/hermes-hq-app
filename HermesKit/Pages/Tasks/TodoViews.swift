@@ -186,6 +186,25 @@ nonisolated enum TodoViews {
             .filter { $0.kind != .done }.reduce(0) { $0 + $1.tasks.count }
     }
 
+    /// Upcoming with one day picked on its week strip (owner 2026-11-12: "the calendar dates aren't clickable"): that
+    /// day's tasks alone. Today's are the ones due today (they aren't "coming up", so the whole view leaves them out).
+    static func dayGroups(_ tasks: [TodoTask], day key: String, sections: [TodoUserSection], bots: [String], now: Date,
+                          sort: String = "smart", calendar: Calendar = .current) -> [TodoGroup] {
+        if key == dayKey(calendar.startOfDay(for: now), calendar: calendar) {
+            return groups(tasks, view: .today, sections: sections, bots: bots, now: now, sort: sort, calendar: calendar)
+                .filter { $0.kind == .today }
+        }
+        return groups(tasks, view: .upcoming, sections: sections, bots: bots, now: now, sort: sort, calendar: calendar)
+            .filter { $0.kind == .day(key) }
+    }
+
+    /// A picked day with nothing on it: "Nothing due today.", "Nothing on Fri, Nov 13."
+    static func dayEmptyText(_ key: String, now: Date, calendar: Calendar = .current) -> String {
+        if key == dayKey(calendar.startOfDay(for: now), calendar: calendar) { return "Nothing due today." }
+        let heading = dayHeading(key, now: now, calendar: calendar)
+        return "Nothing on \(heading.detail ?? heading.title)."
+    }
+
     /// The day a new task takes in a view: today on Today, none elsewhere.
     static func startsToday(_ view: TodoView) -> Bool { view == .today }
 

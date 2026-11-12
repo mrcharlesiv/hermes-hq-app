@@ -95,6 +95,22 @@ struct TodoViewsTests {
         #expect(upcoming.map(\.1) == [["contract"], ["venues"], ["gift"]])
     }
 
+    /// A day picked on Upcoming's week: that day alone. Today's are the tasks due today; a day with none is empty.
+    @Test func aPickedDayShowsThatDayAlone() {
+        func day(_ key: String) -> [(TodoGroupKind, [String])] {
+            TodoViews.dayGroups(list, day: key, sections: lists, bots: ["default", "finance", "research"], now: Self.now,
+                                calendar: Self.calendar).map { ($0.kind, $0.tasks.map(\.id)) }
+        }
+        #expect(day("2026-11-05").map(\.0) == [.day("2026-11-05")])
+        #expect(day("2026-11-05").first?.1 == ["contract"])
+        #expect(day("2026-11-06").isEmpty, "nothing of yours on Friday")
+        #expect(day("2026-11-04").map(\.0) == [.today], "today's are the ones due today")
+        #expect(day("2026-11-04").first?.1.contains("cleaning") == true)
+        #expect(TodoViews.dayEmptyText("2026-11-06", now: Self.now, calendar: Self.calendar) == "Nothing on Fri, Nov 6.")
+        #expect(TodoViews.dayEmptyText("2026-11-05", now: Self.now, calendar: Self.calendar) == "Nothing on Thu, Nov 5.")
+        #expect(TodoViews.dayEmptyText("2026-11-04", now: Self.now, calendar: Self.calendar) == "Nothing due today.")
+    }
+
     /// Inbox: no date and no list yet. A task whose list was deleted counts as having none.
     @Test func inboxIsWhatHasNoDateAndNoList() {
         // Its Done is what was finished with no list.

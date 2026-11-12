@@ -32,6 +32,8 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     private var groups: [(TodoGroupKind, [String])] = []
     /// Upcoming's week strip.
     private var week: [TodoWeekStrip.Day] = []
+    /// The day picked on it ("2026-11-14"): the list holds that day alone. nil: every coming day.
+    private var pickedDay: String?
     private var selecting = false
     /// Select: the tasks picked, in the order they were tapped.
     private var picked: [String] = []
@@ -461,7 +463,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         let listShown = store.hasList && !store.needsAddOn
         settleView(tasks: all)
         // A search looks through every view: what's open, then what's done.
-        let made: [TodoGroup]
+        var made: [TodoGroup]
         if searching {
             let open = visible.filter { !$0.isDone }, done = visible.filter(\.isDone)
             made = [TodoGroup(kind: .open, tasks: TodoSections.ordered(open, sort: "due")),
@@ -470,13 +472,19 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
             made = TodoViews.groups(visible, view: current, sections: store.sections, bots: bots.map(\.id), now: now,
                                     sort: store.settings.sort)
         }
+        // Upcoming's week: its dots from every coming day (and today's own tasks), then the picked day alone.
+        week = current == .upcoming && !searching ? weekDays(made, visible: visible, now: now) : []
+        if pickedDay != nil, !week.contains(where: { $0.key == pickedDay }) { pickedDay = nil }   // another view, or the day has passed
+        if let pickedDay {
+            made = TodoViews.dayGroups(visible, day: pickedDay, sections: store.sections, bots: bots.map(\.id), now: now,
+                                       sort: store.settings.sort)
+        }
         groups = made.map { ($0.kind, $0.tasks.map(\.id)) }
         var nextRows: [String: TodoRowModel] = [:]
         // A task ticked here stays where it was until it moves (a moment later), so the tick shows first.
         for group in made {
             for task in group.tasks { nextRows[task.id] = rowModel(task, kind: group.kind, now: now, heads: heads) }
         }
-        week = current == .upcoming && !searching ? weekDays(made, now: now) : []
 
         var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
         if !store.hasList && store.loading && skeletonShown {
@@ -570,11 +578,13 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     /// The view on show changes (a pill, `-HQPagesTasksView`): the list starts at its top.
     func show(_ view: TodoView) {
         guard view != current else {
-            // The lit pill again: back to the top, as a tab's second tap.
+            // The lit pill again: back to the top, as a tab's second tap (and Upcoming to every day again).
+            if pickedDay != nil { pickedDay = nil; if isViewLoaded { reload(animated: false) } }
             if isViewLoaded { collectionView.setContentOffset(CGPoint(x: 0, y: -collectionView.adjustedContentInset.top), animated: true) }
             return
         }
         current = view
+        pickedDay = nil
         openIdea = nil
         guard isViewLoaded else { return }
         if view == .inbox { readIdeas() }
@@ -582,15 +592,16 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         collectionView.setContentOffset(CGPoint(x: 0, y: -collectionView.adjustedContentInset.top), animated: false)
     }
 
-    /// The row's pills: Today, Upcoming, Inbox, your lists, and Bots once a bot has a task of its own. Today and Inbox
-    /// always say how many; a list says it while it is the one on show.
+    /// The row's pills: Today, Upcoming, Inbox, your lists, and Bots once a bot has a task of its own. Each always
+    /// says how many it holds. (Upcoming and the lists said it only while picked: the pill grew as it was tapped and
+    /// ran into the next one; owner 2026-11-12, a screen recording: "Look at the Upcoming pill. It's glitching.")
     private func pills(_ tasks: [TodoTask], now: Date) -> [TaskViewPill] {
         func count(_ view: TodoView) -> Int { TodoViews.openCount(tasks, view: view, sections: store.sections, now: now) }
         var out = [TaskViewPill(view: .today, title: "Today", count: count(.today)),
-                   TaskViewPill(view: .upcoming, title: "Upcoming", count: current == .upcoming ? count(.upcoming) : nil),
+                   TaskViewPill(view: .upcoming, title: "Upcoming", count: count(.upcoming)),
                    TaskViewPill(view: .inbox, title: "Inbox", count: count(.inbox))]
         for list in store.sections {
-            out.append(TaskViewPill(view: .list(list.id), title: list.name, count: current == .list(list.id) ? count(.list(list.id)) : nil))
+            out.append(TaskViewPill(view: .list(list.id), title: list.name, count: count(.list(list.id))))
         }
         if TodoViews.showsBots(store.tasks) { out.append(TaskViewPill(view: .bots, title: "Bots", count: count(.bots))) }
         return out
@@ -605,33 +616,43 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     }
 
     private func emptyText(scope scoped: String) -> String {
+        if let pickedDay { return TodoViews.dayEmptyText(pickedDay, now: Date()) }
         let text = TodoViews.emptyText(current, listName: listName(currentList))
         guard scoped != PagesScope.all else { return text }
         return scoped == PagesScope.me ? "Nothing of your own here." : "Nothing with \(botName(scoped)) here."
     }
 
-    /// The next seven days, today first; a day with tasks carries a dot and goes to its heading.
-    private func weekDays(_ made: [TodoGroup], now: Date) -> [TodoWeekStrip.Day] {
+    /// The next seven days, today first; a day with tasks carries a dot. A tap on a day shows that day alone.
+    private func weekDays(_ made: [TodoGroup], visible: [TodoTask], now: Date) -> [TodoWeekStrip.Day] {
         let calendar = Calendar.current
-        let busy = Set(made.compactMap { group -> String? in if case .day(let key) = group.kind { return key } else { return nil } })
+        var busy = Set(made.compactMap { group -> String? in if case .day(let key) = group.kind { return key } else { return nil } })
+        // Today's own tasks aren't "coming up", but its day on the strip still says it has some.
+        let todayKey = TodoViews.dayKey(calendar.startOfDay(for: now), calendar: calendar)
+        if !TodoViews.dayGroups(visible, day: todayKey, sections: store.sections, bots: bots.map(\.id), now: now).isEmpty { busy.insert(todayKey) }
         let format = DateFormatter()
         format.setLocalizedDateFormatFromTemplate("EEE")
         return (0..<7).compactMap { offset in
             guard let date = calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: now)) else { return nil }
             let key = TodoViews.dayKey(date, calendar: calendar)
             return TodoWeekStrip.Day(key: key, weekday: format.string(from: date), number: "\(calendar.component(.day, from: date))",
-                                     today: offset == 0, busy: busy.contains(key))
+                                     today: offset == 0, busy: busy.contains(key), picked: key == pickedDay)
         }
     }
 
+    /// A day on the week: the list holds that day alone (every day answers, with tasks or without; the days with
+    /// none did nothing, owner 2026-11-12: "The calendar dates aren't clickable"). The picked day again, or the
+    /// Upcoming pill, shows every coming day. New Task starts on the picked day.
     private func goToDay(_ key: String) {
-        guard let section = dataSource.snapshot().indexOfSection(.group(.day(key))) else { return }
         PagesHaptics.selection()
-        guard let frame = collectionView.layoutAttributesForSupplementaryElement(
-            ofKind: UICollectionView.elementKindSectionHeader, at: IndexPath(item: 0, section: section))?.frame else { return }
-        let top = collectionView.adjustedContentInset.top
-        let limit = max(-top, collectionView.contentSize.height + collectionView.adjustedContentInset.bottom - collectionView.bounds.height)
-        collectionView.setContentOffset(CGPoint(x: 0, y: min(frame.minY - top, limit)), animated: !HQMotion.reduced)
+        pickedDay = pickedDay == key ? nil : key
+        reload(animated: false)
+        collectionView.setContentOffset(CGPoint(x: 0, y: -collectionView.adjustedContentInset.top), animated: false)
+    }
+
+    /// The day a new task is due as it opens: today on Today, the picked day on Upcoming, none elsewhere.
+    private var newTaskDay: Date? {
+        if TodoViews.startsToday(current) { return Date() }
+        return pickedDay.flatMap { TodoDates.day($0) }
     }
 
     private func rowModel(_ task: TodoTask, kind: TodoGroupKind, now: Date, heads: [String: JSONValue?]) -> TodoRowModel {
@@ -819,7 +840,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         PagesHaptics.selection()
         let scoped = scope.effective(bots: bots)
         let sheet = NewTodoSheet.make(store: store, bots: bots, preferredBot: scoped == PagesScope.all || scoped == PagesScope.me ? nil : scoped,
-                                      section: currentList, dueToday: TodoViews.startsToday(current)) { [weak self] task in
+                                      section: currentList, dueDay: newTaskDay) { [weak self] task in
             guard let self, let task else { return }
             self.reload(animated: true)
             // A bot asked to help hears about it now, in the task's own chat on its page, and says what it would take.

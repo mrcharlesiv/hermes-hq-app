@@ -25,13 +25,14 @@ final class NewTodoModel {
     @ObservationIgnored var onCreated: ((TodoTask?) -> Void)?
     @ObservationIgnored weak var controller: UIViewController?
 
-    init(store: TasksStore, bots: [Bot], preferredBot: String?, section: String? = nil, dueToday: Bool = false) {
+    init(store: TasksStore, bots: [Bot], preferredBot: String?, section: String? = nil, dueDay: Date? = nil) {
         self.store = store
         self.section = section
-        // [tasks-first] Added from Today, it is due today (a day, no time) until you say otherwise.
-        if dueToday {
+        // [tasks-first] Added from Today, it is due today (a day, no time) until you say otherwise; added with a day
+        // picked on Upcoming's week, it is due that day.
+        if let dueDay {
             hasDue = true
-            due = Calendar.current.startOfDay(for: Date()).addingTimeInterval(9 * 3600)
+            due = Calendar.current.startOfDay(for: dueDay).addingTimeInterval(9 * 3600)
         }
         self.bots = PagesNames.scopeChoices(bots)
         helper = preferredBot.flatMap { id in self.bots.contains { $0.id == id } ? id : nil }
@@ -70,9 +71,9 @@ final class NewTodoModel {
 }
 
 enum NewTodoSheet {
-    static func make(store: TasksStore, bots: [Bot], preferredBot: String?, section: String? = nil, dueToday: Bool = false,
+    static func make(store: TasksStore, bots: [Bot], preferredBot: String?, section: String? = nil, dueDay: Date? = nil,
                      onCreated: @escaping (TodoTask?) -> Void) -> UIViewController {
-        let model = NewTodoModel(store: store, bots: bots, preferredBot: preferredBot, section: section, dueToday: dueToday)
+        let model = NewTodoModel(store: store, bots: bots, preferredBot: preferredBot, section: section, dueDay: dueDay)
         model.onCreated = onCreated
         let host = NewTodoHost(model: model)
         let nav = ChatSheet.wrap(host, title: "New Task")

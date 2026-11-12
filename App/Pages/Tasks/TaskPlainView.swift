@@ -22,6 +22,11 @@ struct TaskPlainView: View {
     @Bindable var model: TodoSheetModel
     let task: TodoTask
     @FocusState private var focus: Field?
+    /// Long notes are open (More on the Notes heading); they start folded each time the page opens.
+    @State private var notesOpen = false
+    @State private var notesWidth: CGFloat = 0
+    /// The lines long notes fold to.
+    static let notesFold = 3
     enum Field: Hashable { case step, notes }
     @Environment(\.dynamicTypeSize) private var typeSize
     /// The page has a bot's conversation (a bot is on the task, or it had one): its section, card and message box show.
@@ -292,12 +297,35 @@ struct TaskPlainView: View {
 
     // MARK: Notes
 
-    /// The notes whole (no Show More). A tap on them starts writing; a tap on a link in them opens the link.
+    /// The notes: whole while they are short; longer than three lines they fold to three, with More at the heading's
+    /// end (owner 2026-11-12, a bot's twenty-line brief filling the page above the steps: "The notes section takes up
+    /// WAY too much space"). A tap on them starts writing (they are whole then); a tap on a link in them opens it.
     @ViewBuilder private var notes: some View {
         let filled = !task.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if model.editingNotes || filled {
+            let long = !model.editingNotes && AttributedTextView.exceeds(
+                TodoRich.attributed(task.notes, style: .callout, category: UIContentSizeCategory(typeSize)), lines: Self.notesFold, width: notesWidth)
             TaskBand()
-            TaskSectionHead(title: "Notes", count: nil) { EmptyView() }
+            TaskSectionHead(title: "Notes", count: nil) {
+                if long {
+                    Button {
+                        PagesHaptics.selection()
+                        HQMotion.withAnimation(.snappy) { notesOpen.toggle() }
+                    } label: {
+                        HStack(spacing: 3) {
+                            Text(notesOpen ? "Less" : "More")
+                            Image(systemName: notesOpen ? "chevron.up" : "chevron.down").imageScale(.small)
+                        }
+                        .font(Font.hq(.footnote))
+                        .foregroundStyle(Color.hqLabel2)
+                        .frame(minHeight: 32)
+                        .contentShape(Rectangle().inset(by: -8))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(notesOpen ? "Show Less of the Notes" : "Show All the Notes")
+                    .accessibilityIdentifier("task.notes.more")
+                }
+            }
             Group {
                 if model.editingNotes {
                     TextField("Notes", text: $model.notes, axis: .vertical)
@@ -309,9 +337,11 @@ struct TaskPlainView: View {
                         .id("task.notes")
                         .accessibilityIdentifier("task.notes")
                 } else {
-                    TodoRichTextView(text: task.notes, style: .callout, identifier: "task.notes.text",
+                    TodoRichTextView(text: task.notes, style: .callout, maxLines: long && !notesOpen ? Self.notesFold : 0,
+                                     identifier: "task.notes.text",
                                      onTap: model.gone || task.isDone ? nil : { model.editNotes() }, open: model.openPath)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { notesWidth = $0 }
                         .accessibilityHint("Double-tap to edit")
                     .accessibilityAction(named: "Edit Notes") { model.editNotes() }
                 }

@@ -1043,7 +1043,10 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     private func dismissIdea(_ id: String) {
         guard !store.readOnlyGateway else { notices.show(JobsStore.readOnlyNotice); return }
         guard let idea = idea(id) else { return }
-        PagesHaptics.selection()
+        // A press you feel (owner 2026-11-12: "clicking the X by each suggested task needs Taptic feedback"). It played
+        // the selection tick, the faintest cue there is, which a phone can let pass unfelt; a press that takes a row
+        // away is a light impact, as the Undo pill's Undo.
+        Haptics.play(.light)
         let pill = UndoPill.show(label: "Dismissed", in: self) { [weak self] in
             guard let self else { return }
             Task { if await !self.ideas.restore(idea) { PagesHaptics.error() } }

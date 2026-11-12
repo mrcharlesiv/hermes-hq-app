@@ -8,7 +8,7 @@ import XCTest
 
 extension PagesTests {
     @MainActor func testTasks_Ideas() throws {
-        app = launchSignedIn(Self.look + ["-HQPagesTab", "4", "-HQPagesMore", "tasks"])
+        app = launchSignedIn(Self.look + ["-HQDebugHapticsProbe", "YES", "-HQPagesTab", "4", "-HQPagesMore", "tasks"])
         // The page opens on Today; no switch gives half the page to Ideas.
         let inbox = app.buttons["tasks.view.inbox"].firstMatch
         XCTAssertTrue(inbox.waitForExistence(timeout: 20), "the views head the page")
@@ -69,6 +69,9 @@ extension PagesTests {
         let offsite = app.descendants(matching: .any)["tasks.idea.Book the team offsite venue"].firstMatch
         XCTAssertTrue(offsite.waitForExistence(timeout: 5))
         app.buttons["tasks.idea.dismiss.Book the team offsite venue"].firstMatch.tap()
+        // The × is felt: a light impact (it was the faint selection tick; owner 2026-11-12).
+        let probe = app.descendants(matching: .any)["debug.haptics"].firstMatch
+        XCTAssertTrue(waitUntil(5) { (probe.value as? String)?.hasSuffix("last=light") == true }, "× plays a light tap: \(probe.value ?? "no probe")")
         // Undo first: the pill lasts a few seconds, and a busy simulator answers slowly.
         let undo = app.buttons["undo-pill.undo"].firstMatch
         XCTAssertTrue(undo.waitForExistence(timeout: 5), "Undo shows with the dismiss")

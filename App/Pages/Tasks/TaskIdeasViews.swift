@@ -250,51 +250,60 @@ struct TaskIdeaRow: View {
 
     var body: some View {
         let large = typeSize.isAccessibilitySize
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Image(systemName: "sparkle")
-                .font(Font.hq(.footnote).weight(.semibold))
-                .foregroundStyle(Color.hqTintText)
-                .frame(width: HQFont.scaled(22))
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
+        // Up to two lines each (owner 2026-11-12, a screenshot of six ideas all cut short, "Find affordable hourly
+        // help for…": "allow a second line maybe so that they don't have an ellipsis"). A short one stays one line.
+        // The grey line runs under Add and × to the row's edge, so two lines hold half as much again.
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Image(systemName: "sparkle")
+                    .font(Font.hq(.footnote).weight(.semibold))
+                    .foregroundStyle(Color.hqTintText)
+                    .frame(width: HQFont.scaled(22))
+                    .accessibilityHidden(true)
                 Text(idea.title.isEmpty ? "Untitled Idea" : idea.title)
                     .font(Font.hq(.callout))
                     .foregroundStyle(Color.hqLabel)
-                    .lineLimit(large ? 3 : 1)
-                if !second.isEmpty {
-                    Text(second)
-                        .font(Font.hq(.footnote))
-                        .foregroundStyle(Color.hqLabel2)
-                        .lineLimit(large ? 3 : 1)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            Button(action: add) {
-                HStack(spacing: 4) {
-                    if card.busy { ProgressView().controlSize(.mini) }
-                    Text("Add")
-                }
-                .font(Font.hq(.footnote).weight(.semibold))
-                .foregroundStyle(Color.hqTintText)
-                .padding(.horizontal, 11).padding(.vertical, 5)
-                .background(Capsule().fill(Color.hqTint.opacity(0.14)))
-                .contentShape(Rectangle().inset(by: -8))
-            }
-            .buttonStyle(.plain)
-            .disabled(!enabled || card.busy)
-            .accessibilityLabel("Add to Tasks")
-            .accessibilityIdentifier("tasks.idea.add.\(idea.title)")
-            Button(action: dismiss) {
-                Image(systemName: "xmark")
+                    .lineLimit(large ? 4 : 2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button(action: add) {
+                    HStack(spacing: 4) {
+                        if card.busy { ProgressView().controlSize(.mini) }
+                        Text("Add")
+                    }
                     .font(Font.hq(.footnote).weight(.semibold))
-                    .foregroundStyle(Color.hqLabel3)
-                    .frame(width: 22, height: 22)
-                    .contentShape(Rectangle().inset(by: -10))
+                    .foregroundStyle(Color.hqTintText)
+                    .padding(.horizontal, 11).padding(.vertical, 5)
+                    .background(Capsule().fill(Color.hqTint.opacity(0.14)))
+                    .contentShape(Rectangle().inset(by: -8))
+                    // The pill counts as a line of text in the row's height, so the grey line sits as close under a
+                    // one-line name as under a two-line one.
+                    .padding(.vertical, -3)
+                }
+                .buttonStyle(.plain)
+                .disabled(!enabled || card.busy)
+                .accessibilityLabel("Add to Tasks")
+                .accessibilityIdentifier("tasks.idea.add.\(idea.title)")
+                Button(action: dismiss) {
+                    Image(systemName: "xmark")
+                        .font(Font.hq(.footnote).weight(.semibold))
+                        .foregroundStyle(Color.hqLabel3)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle().inset(by: -10))
+                }
+                .buttonStyle(.plain)
+                .disabled(!enabled || card.busy)
+                .accessibilityLabel("Dismiss")
+                .accessibilityIdentifier("tasks.idea.dismiss.\(idea.title)")
             }
-            .buttonStyle(.plain)
-            .disabled(!enabled || card.busy)
-            .accessibilityLabel("Dismiss")
-            .accessibilityIdentifier("tasks.idea.dismiss.\(idea.title)")
+            if !second.isEmpty {
+                Text(second)
+                    .font(Font.hq(.footnote))
+                    .foregroundStyle(Color.hqLabel2)
+                    .lineLimit(large ? 4 : 2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, HQFont.scaled(22) + 12)
+            }
         }
         .padding(.vertical, Theme.isDesktop ? 10 : 8)
         .padding(.horizontal, 20)

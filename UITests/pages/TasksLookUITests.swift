@@ -95,8 +95,17 @@ extension PagesTests {
         shot("tasks-look-notes-activity" + Self.lookName)
         app.buttons["sheet.close"].firstMatch.tap()
 
-        // [tasks-first] The notes show whole, and a tap on them writes (no Edit button, no ⋯ › Details › Edit Notes).
-        XCTAssertFalse(app.buttons["Show More"].exists, "the notes show whole")
+        // Long notes fold to three lines with More at the heading's end (owner 2026-11-12: "The notes section takes up
+        // WAY too much space"); More shows them whole, Less folds them again.
+        let notesMore = app.buttons["task.notes.more"].firstMatch
+        XCTAssertTrue(notesMore.waitForExistence(timeout: 5), "five lines of notes fold")
+        let foldedHeight = notes.frame.height
+        notesMore.tap()
+        XCTAssertTrue(waitUntil(5) { notes.frame.height > foldedHeight + 20 }, "More shows the notes whole")
+        shot("tasks-look-notes-open" + Self.lookName)
+        notesMore.tap()
+        XCTAssertTrue(waitUntil(5) { notes.frame.height < foldedHeight + 5 }, "Less folds them again")
+        // [tasks-first] A tap on the notes writes (no Edit button, no ⋯ › Details › Edit Notes).
         cues = hapticCount()
         notes.tap()
         XCTAssertTrue(app.textViews["task.notes"].firstMatch.waitForExistence(timeout: 3) || app.textFields["task.notes"].firstMatch.exists,

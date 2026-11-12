@@ -403,7 +403,8 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
             let row = UIHostingConfiguration {
                 SessionRowView(session: session, ownerName: owner.name, ownerHead: owner.head,
                                time: ListTime.string(session.lastActive), busy: busy, detail: detail, muted: muted,
-                               origin: origin, compact: compact, shortPreview: short, card: card, fresh: fresh, faces: faces)
+                               origin: origin, compact: compact, shortPreview: short, card: card, fresh: fresh, faces: faces,
+                               recentLayout: self.freshLayout)
             }
             .margins(.all, 0)
             // [sessions-layout] A one-line row is as tall as it draws itself (44 pt), not the list's taller least row.
@@ -1827,7 +1828,7 @@ extension SessionsViewController {
     /// The chip's bot (nil: All).
     var pickedBot: String? { store?.botFilter }
 
-    var rowDetail: Set<SessionRowDetail> { store?.view.rowDetail ?? [.preview, .time] }
+    var rowDetail: Set<SessionRowDetail> { store?.view.shownDetail ?? [.preview, .time] }
 
     /// [sessions-fresh] Group By Recent: Pinned and Projects say See All, Recent's rows are one line.
     var freshLayout: Bool { store.map { SessionListPipeline.isFresh($0.view) } ?? false }
@@ -1889,7 +1890,7 @@ extension SessionsViewController {
         // The tapped row's own check, at once (the redraw below says the rest).
         if let item, item.attributes.contains(.keepsMenuPresented) {
             switch action {
-            case .detail(let value): item.state = state.prefs.rowDetail.contains(value) ? .on : .off
+            case .detail(let value): item.state = state.prefs.shownDetail.contains(value) ? .on : .off
             case .status(let value): item.state = state.prefs.statusFilter.contains(value) ? .on : .off
             case .project(let key): item.state = state.prefs.projectFilter.contains(key) ? .on : .off
             case .allBots: item.state = state.botFilter == nil ? .on : .off

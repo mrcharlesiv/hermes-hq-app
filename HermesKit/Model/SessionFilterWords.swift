@@ -166,7 +166,7 @@ nonisolated enum SessionFilterWords {
     }
 
     static func detailSubtitle(_ state: SessionFilterState) -> String {
-        picked(detailOptions(state).filter(state.prefs.rowDetail.contains).map(name), none: "None")
+        picked(detailOptions(state).filter(state.prefs.shownDetail.contains).map(name), none: "None")
     }
 
     static func statusSubtitle(_ state: SessionFilterState) -> String {
@@ -307,7 +307,7 @@ nonisolated enum SessionFilterMenuModel {
             id: "sessions.filter.detail", title: "Row Detail", subtitle: W.detailSubtitle(state), symbol: "text.alignleft",
             kind: .submenu(single: false),
             children: W.detailOptions(state).map {
-                check("sessions.filter.detail.\(detailId($0))", W.name($0), prefs.rowDetail.contains($0), .detail($0))
+                check("sessions.filter.detail.\(detailId($0))", W.name($0), prefs.shownDetail.contains($0), .detail($0))
             })
         let status = SessionFilterNode(
             id: "sessions.filter.status", title: "Status", subtitle: W.statusSubtitle(state), symbol: "circle.dashed",
@@ -371,6 +371,7 @@ nonisolated enum SessionFilterApply {
         switch action {
         case .sort(let value): state.prefs.sortBy = value
         case .group(let value): state.prefs.groupBy = value
+        case .detail(.preview) where SessionListPipeline.isFresh(state.prefs): state.prefs.recentPreview.toggle()
         case .detail(let value): state.prefs.rowDetail.formSymmetricDifference([value])
         case .status(let value): state.prefs.statusFilter.formSymmetricDifference([value])
         case .project(let key): state.prefs.projectFilter.formSymmetricDifference([key])

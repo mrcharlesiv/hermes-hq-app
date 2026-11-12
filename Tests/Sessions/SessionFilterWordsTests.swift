@@ -26,7 +26,8 @@ import Testing
         #expect(nodes.map(\.id) == ["sessions.filter.view", "sessions.filter.filters", "sessions.filter.end"])
         #expect(nodes[1].title == "Filter" && nodes.allSatisfy { $0.kind == .inline })
         #expect(nodes[0].children.map(\.title) == ["Sort By", "Group By", "Row Detail"])
-        #expect(nodes[0].children.map(\.subtitle) == ["Updated", "Recent", "Time, Preview"])     // [sessions-fresh] was Date
+        // [sessions-fresh] was Date. Recent's rows are one line until Preview is picked there (`recentPreview`).
+        #expect(nodes[0].children.map(\.subtitle) == ["Updated", "Recent", "Time"])
         #expect(nodes[0].children.map(\.symbol) == ["arrow.up.arrow.down", "rectangle.grid.1x2", "text.alignleft"])
         #expect(nodes[1].children.map(\.title) == ["Status", "Project", "All Bots", "Show"])
         #expect(nodes[1].children.map(\.subtitle) == ["Any", "Any", nil, "Chats"])
@@ -41,7 +42,7 @@ import Testing
         let detail = try #require(node("sessions.filter.detail", in: nodes))
         #expect(detail.children.map(\.id) == ["sessions.filter.detail.time", "sessions.filter.detail.preview",
                                               "sessions.filter.detail.tokens", "sessions.filter.detail.cost"])
-        #expect(detail.children.allSatisfy(\.keepsOpen) && detail.children.filter(\.checked).map(\.title) == ["Time", "Preview"])
+        #expect(detail.children.allSatisfy(\.keepsOpen) && detail.children.filter(\.checked).map(\.title) == ["Time"])
         let status = try #require(node("sessions.filter.status", in: nodes))
         #expect(status.children.map(\.title) == ["Needs Input", "Working", "Unread", "Draft", "Idle"])
         #expect(status.children.map(\.id).first == "sessions.filter.status.needs-input")
@@ -62,6 +63,27 @@ import Testing
         SessionFilterApply.apply(.projectChatsInRecent, to: &hidden, homeBot: "default")
         #expect(!hidden.prefs.projectChatsInRecent && SessionFilterWords.filterCount(hidden) == 0)
         #expect(node("sessions.filter.allbots", in: nodes)?.checked == true)
+    }
+
+    /// A tester, 2026-11-12: Row Detail › Preview did nothing under Group By Recent (its rows are one line). There it
+    /// is its own switch (`recentPreview`, off by default); the other groupings keep `rowDetail`'s, and neither moves the other.
+    @Test func previewUnderRecentIsItsOwnSwitch() throws {
+        var s = state()
+        #expect(!s.prefs.shownDetail.contains(.preview))
+        SessionFilterApply.apply(.detail(.preview), to: &s, homeBot: "default")
+        #expect(s.prefs.recentPreview && s.prefs.rowDetail == [.preview, .time] && s.prefs.shownDetail == [.preview, .time])
+        let detail = try #require(node("sessions.filter.detail", in: SessionFilterMenuModel.nodes(s)))
+        #expect(detail.children.filter(\.checked).map(\.title) == ["Time", "Preview"])
+        #expect(SessionFilterWords.detailSubtitle(s) == "Time, Preview")
+        s.prefs.groupBy = .project
+        SessionFilterApply.apply(.detail(.preview), to: &s, homeBot: "default")
+        #expect(s.prefs.recentPreview && s.prefs.rowDetail == [.time] && s.prefs.shownDetail == [.time])
+        // Kept across a save.
+        var saved = SessionsViewPrefs()
+        saved.recentPreview = true
+        let back = try JSONDecoder().decode(SessionsViewPrefs.self, from: JSONEncoder().encode(saved))
+        #expect(back.recentPreview && back.shownDetail.contains(.preview))
+        #expect(try JSONDecoder().decode(SessionsViewPrefs.self, from: Data("{}".utf8)).recentPreview == false)
     }
 
     @Test func optionsThatComeAndGo() {
@@ -98,8 +120,8 @@ import Testing
         #expect(SessionFilterWords.picked(["Working", "Unread"]) == "Working, Unread")
         #expect(SessionFilterWords.picked(["a", "b", "c"]) == "3 Selected")
         #expect(SessionFilterWords.detailSubtitle(state { $0.prefs.rowDetail = [] }) == "None")
-        #expect(SessionFilterWords.detailSubtitle(state { $0.prefs.rowDetail = [.time, .preview, .tokens] }) == "3 Selected")
-        #expect(SessionFilterWords.detailSubtitle(state { $0.prefs.rowDetail = Set(SessionRowDetail.allCases) }) == "4 Selected")
+        #expect(SessionFilterWords.detailSubtitle(state { $0.prefs.groupBy = .project; $0.prefs.rowDetail = [.time, .preview, .tokens] }) == "3 Selected")
+        #expect(SessionFilterWords.detailSubtitle(state { $0.prefs.groupBy = .project; $0.prefs.rowDetail = Set(SessionRowDetail.allCases) }) == "4 Selected")
         #expect(SessionFilterWords.detailSubtitle(state { $0.prefs.rowDetail = [.cost, .time] }) == "Time, Cost")     // menu order
         #expect(SessionFilterWords.statusSubtitle(state { $0.prefs.statusFilter = [.unread, .working] }) == "Working, Unread")
         #expect(SessionFilterWords.projectSubtitle(state { $0.prefs.projectFilter = ["/s"] }) == "Site")

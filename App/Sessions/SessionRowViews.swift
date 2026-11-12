@@ -33,6 +33,8 @@ struct SessionRowView: View {
     /// or waits on you). `faces`: Show › Bot Faces (the cards' rows follow it too).
     var fresh: Fresh? = nil
     var faces = true
+    /// Group By Recent is on: a card chat follows its Preview (`previewLine`); the other groupings' cards keep one line.
+    var recentLayout = false
     enum Fresh { case pinned, recent }
     @Environment(\.dynamicTypeSize) private var typeSize
     private var large: Bool { typeSize.isAccessibilitySize }
@@ -109,6 +111,8 @@ struct SessionRowView: View {
                         .foregroundStyle(status.color)
                         .lineLimit(large ? 3 : 1)
                         .padding(.bottom, 2)
+                } else if recentLayout, let previewLine {
+                    previewText(previewLine)
                 }
             }
         }
@@ -173,6 +177,8 @@ struct SessionRowView: View {
                             .lineLimit(large ? 3 : 1)
                     }
                     .padding(.bottom, 2)
+                } else if fresh == .recent, let previewLine {
+                    previewText(previewLine)
                 }
             }
         }
@@ -186,6 +192,26 @@ struct SessionRowView: View {
         .accessibilityAddTraits(.isButton)
         .rowArc(showsArc)
         .opacity(busy ? 0.45 : 1)
+    }
+
+    /// Row Detail › Preview under Group By Recent (`SessionsViewPrefs.recentPreview`): the last message, one line, under
+    /// a Recent or card chat's title while its bot is not working or waiting on you. nil: Preview off, or nothing to show
+    /// (a chat without a title of its own already shows its preview as the title).
+    private var previewLine: String? {
+        guard detail.contains(.preview), session.searchSnippet == nil,
+              !session.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let words = session.preview?.split(whereSeparator: \.isNewline).joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return words.isEmpty ? nil : words
+    }
+
+    private func previewText(_ words: String) -> some View {
+        Text(words)
+            .font(Font.hq(desk ? .footnote : .subheadline))
+            .foregroundStyle(Color.hqLabel2)
+            .lineLimit(large ? 3 : 1)
+            .truncationMode(.tail)
+            .padding(.bottom, 2)
     }
 
     /// [project-cards] The second line a chat in a card has only while it needs one: waiting on you, or its bot's step.

@@ -22,6 +22,7 @@ extension SessionStore: GatewaySynced {
             "sortBy": .string(view.sortBy.rawValue),
             "groupBy": .string(view.groupBy.rawValue),
             "rowDetail": .array(rows.map { .string($0) }),
+            "recentPreview": .bool(view.recentPreview),
         ]
     }
 
@@ -52,6 +53,7 @@ extension SessionStore: GatewaySynced {
                 let detail = Set(raw.compactMap(\.string).compactMap(SessionRowDetail.init(rawValue:)))
                 if !detail.isEmpty { prefs.rowDetail = detail }
             }
+            if let on = value["recentPreview"]?.bool { prefs.recentPreview = on }
             view = prefs
             device.view = prefs
         }

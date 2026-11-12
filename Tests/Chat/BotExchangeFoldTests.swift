@@ -482,4 +482,30 @@ struct BotExchangeFoldTests {
         }
         }
     }
+
+    /// Your message's turn failed, and the next day another bot wrote in and was answered: the failure's note is the
+    /// only answer your message got, so it stays under it; only the bots' talk folds (owner, 2026-11-12).
+    @Test func aFailedTurnsNoteStaysUnderYourMessage() throws {
+        let day = 86_400.0, t0 = 1_790_000_000.0
+        let stored: [JSONValue] = [
+            ["id": 1, "role": "user", "content": "Add the new ceiling light.", "timestamp": .number(t0)],
+            ["id": 2, "role": "assistant", "display_kind": "failed_turn", "timestamp": .number(t0 + 10),
+             "content": "Your request was not processed. Send it again if you still want me to carry it out."],
+            ["id": 3, "role": "user", "display_kind": "internal_notification", "timestamp": .number(t0 + 4 * day),
+             "content": "Message from 🤖 Home (@home): Please check the side door."],
+            ["id": 4, "role": "assistant", "content": "The side door is open.", "timestamp": .number(t0 + 4 * day + 20)],
+            ["id": 5, "role": "user", "display_kind": "internal_notification", "timestamp": .number(t0 + 4 * day + 40),
+             "content": "Message from 🤖 Home (@home): Please close it."],
+            ["id": 6, "role": "assistant", "content": "The side door is closed.", "timestamp": .number(t0 + 4 * day + 60)],
+        ]
+        for style in [ToolCallStyle.bottom, .line, .header] {
+            let rows = ChatRowBuilder.build(input(Hydration.fold(stored).messages, style: style))
+            let notes = rows.compactMap { if case .notice(let words) = $0.kind { return words } else { return nil } }
+            #expect(notes.count == 1 && notes[0].hasPrefix("Your request was not processed."), "\(style) \(rows.map(\.id))")
+            let found = lines(rows)
+            #expect(found.count == 1 && found[0].row.title == "With Home" && found[0].row.group?.count == 4, "\(style) \(found.map(\.row.title))")
+            let note = try #require(rows.firstIndex { if case .notice = $0.kind { return true } else { return false } })
+            #expect(rows[..<note].contains { $0.isBubble } && rows[note...].filter(\.isBubble).isEmpty)
+        }
+    }
 }

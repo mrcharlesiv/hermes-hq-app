@@ -17,6 +17,8 @@ nonisolated enum TimelineNote: Equatable, Sendable {
 nonisolated enum TimelineNotes {
     private static let modelSwitch = TRx(#"^\[System: The active model for this chat has changed to (\S+?)(?: via provider (\S+?))?\. From this point"#)
     private static let failedTurn = TRx(#"^(?:Your request was not processed\.|This turn did not complete\.)"#)
+    /// The note of a turn that failed ("Your request was not processed. …").
+    static func isFailedTurn(_ words: String) -> Bool { failedTurn.test(words) }
     private static let systemNote = TRx(#"^\[System:\s*([\s\S]*?)\]?\s*$"#)
     /// A reply's text longer than this (UTF-8 bytes, all text parts) can't be a padded "[SILENT]".
     static let silentScanLimit = 256

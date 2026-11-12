@@ -308,7 +308,24 @@ nonisolated enum UpdateGroups {
     }
 
     /// A small row that joins the rows beside it into one run.
-    private static func joinsRun(_ m: Member, rows: Rows) -> Bool { rows.small(m) && !standsAlone(rows.at(m.message)[m.row]) }
+    private static func joinsRun(_ m: Member, rows: Rows) -> Bool {
+        rows.small(m) && !standsAlone(rows.at(m.message)[m.row]) && !failedYours(m, rows: rows)
+    }
+
+    /// The note that your own message's turn failed ("Your request was not processed. …"): the only answer that
+    /// message got, so it stays a line of its own under it and never folds into the run that follows (owner,
+    /// 2026-11-12: a message read as unanswered, its note inside the next day's "With Otto · 4 messages").
+    static func failedYours(_ m: Member, rows: Rows) -> Bool {
+        guard case .notice(let words) = rows.at(m.message)[m.row].kind, TimelineNotes.isFailedTurn(words) else { return false }
+        var scan = m.message - 1
+        while scan >= 0, scan >= m.message - 8 {
+            let before = rows.input.messages[scan]
+            if before.role == .user { return before.sender == nil && before.job == nil }
+            if before.role == .assistant { return false }
+            scan -= 1
+        }
+        return false
+    }
 
     /// The expansion key (and row id) of a group's line: its first row's message's id, or, when a real row splits that
     /// message's small rows into two runs ("To Hermes", the reply's words, "To Hermes" twice), the later run's first
@@ -379,7 +396,7 @@ nonisolated enum UpdateGroups {
         for i in start...end {
             if i > start, dayBreak(before: i, input: input, rows: rows), !wholly(i, rows: rows) { close() }
             for (r, row) in rows.at(i).enumerated() {
-                if standsAlone(row) {
+                if standsAlone(row) || failedYours(Member(message: i, row: r), rows: rows) {
                     close()
                     run = [Member(message: i, row: r)]
                     close()

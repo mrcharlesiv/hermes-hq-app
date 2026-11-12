@@ -181,6 +181,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate, LaunchHost {
         #if !targetEnvironment(macCatalyst)
         DesktopSegments.macTitles(UISegmentedControl.appearance())   // [ui-sizing] segments at the UI Scale from launch
         #endif
+        KeyboardTapOut.install(on: window)             // [tap-out] a tap off the keyboard ticks, then closes it
         AppearanceSetting.apply(to: window)            // settings stream: System / Light / Dark before the first frame
         // [desktoplook] The stored skin and look are on the first frame (launch screen included).
         Theme.shared.adopt(window)
@@ -221,6 +222,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate, LaunchHost {
             return
         }
         if let count = ChatDemo.argument("-HQDemoChat").flatMap(Int.init) {
+            Haptics.installProbeIfAsked()              // [tap-out] the demo chat counts cues too
             window.rootViewController = ChatDemo.makeRoot(count: count)
             window.makeKeyAndVisible()
             ThemeDebugHooks.openThemeOverDemo(window.rootViewController)   // [backdrop] Theme with no sign-in

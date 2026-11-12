@@ -623,7 +623,7 @@ final class ComposerDrawerController: NSObject, UITableViewDataSource, UITableVi
 
 /// The glass panel (radius 18): a plain table of rows. In the Desktop Look the app's glass pass makes it a flat,
 /// outlined box on the editor surface (ThemeChrome `solidify`), like every other panel the chat floats.
-final class ComposerDrawerPanel: UIView {
+final class ComposerDrawerPanel: UIView, KeepsKeyboardOnTap {
     let glass: UIVisualEffectView = {
         let view = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
         view.cornerConfiguration = .corners(radius: .fixed(18))

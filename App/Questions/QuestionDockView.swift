@@ -26,7 +26,7 @@ import UIKit
     func dockDraftChanged(_ dock: QuestionDockView)
 }
 
-final class QuestionDockView: UIView {
+final class QuestionDockView: UIView, KeepsKeyboardOnTap {
     let prompt: ClarifyPrompt
     private(set) var draft: ClarifyDraft
     weak var delegate: QuestionDockDelegate?

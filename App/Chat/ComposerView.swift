@@ -10,7 +10,7 @@ protocol ComposerFieldWatching: AnyObject {
 /// keyboard down, 8 pt from the sides and above the keys with it up. The view controller pins this view to the keyboard
 /// layout guide; the side inset follows the row's own distance from the screen bottom, so it changes inside the
 /// keyboard's animation.
-final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass {
+final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboardOnTap {
     /// VOICE: `.talk` starts a live conversation and `.stopDictation` ends a dictation (docs/spec/3x-talk.md §5.1, §8).
     enum Primary: Equatable { case send, stop, disabled, talk, stopDictation }
 

@@ -146,6 +146,63 @@ import Testing
         #expect(PluginUpdateWords.restartTitle(["a", "b"]) == "Restart Hermes so the updated plugins load.")
     }
 
+    // MARK: A run's ending ([plugin-update-run])
+
+    private static func outcome(_ name: String, _ profile: String, _ result: PluginUpdateFlow.CopyResult) -> PluginUpdateFlow.Outcome {
+        .init(item: .init(profile: profile, bot: profile.capitalized, plugin: plugin(name)), result: result)
+    }
+
+    /// The owner's run, 2026-11-11: five plugins on twelve bots, two of them only Hermes's computer can approve.
+    @Test func endingSaysWhatWentInAndWhatNeedsTheComputer() {
+        let refusal = "The update declares new Python dependencies (tzdata; platform_system == 'Windows'); run `hermes plugins update homeassistant` in a terminal to review them."
+        #expect(PluginUpdateWords.isForComputer(refusal))
+        #expect(!PluginUpdateWords.isForComputer("plugin not found"))
+        let names = ["claude-sdk", "homeassistant", "honcho", "memory-wiki", "phone-harness"]
+        let tally = PluginUpdateFlow.Tally([
+            Self.outcome("claude-sdk", "default", .done), Self.outcome("claude-sdk", "finance", .done),
+            Self.outcome("homeassistant", "default", .computer), Self.outcome("homeassistant", "finance", .computer),
+            Self.outcome("honcho", "default", .doneNeedsRestart),
+            Self.outcome("memory-wiki", "default", .done),
+            Self.outcome("phone-harness", "default", .computer),
+        ], plugins: names)
+        #expect(tally.updated == ["claude-sdk", "honcho", "memory-wiki"])
+        #expect(tally.computer == ["homeassistant", "phone-harness"])
+        #expect(tally.title == "Updated 3 of 5 Plugins")
+        #expect(tally.reason == "homeassistant and phone-harness add Python packages, which Hermes only lets you approve on its computer. Run hermes plugins update homeassistant there, and the same for the other.")
+
+        let all = PluginUpdateFlow.Tally([Self.outcome("a", "default", .done), Self.outcome("a", "x", .done)], plugins: ["a"])
+        #expect(all.updated == ["a"] && all.reason == nil, "every copy in: nothing to explain")
+        let part = PluginUpdateFlow.Tally([Self.outcome("a", "default", .done), Self.outcome("a", "x", .failed("No room."))], plugins: ["a"])
+        #expect(part.updated.isEmpty && part.failed == ["a"], "a plugin with a copy left behind isn't updated")
+        #expect(part.title == "Couldn’t Update a" && part.reason == "No room.")
+        let one = PluginUpdateFlow.Tally([Self.outcome("a", "default", .computer)], plugins: ["a"])
+        #expect(one.reason == "a adds Python packages, which Hermes only lets you approve on its computer. Run hermes plugins update a there.")
+        let no = PluginUpdateFlow.Tally([Self.outcome("a", "default", .declined), Self.outcome("b", "default", .done)], plugins: ["a", "b"])
+        #expect(no.declined == ["a"] && no.reason == nil, "turned down at its question: not a failure")
+        let mixed = PluginUpdateFlow.Tally([Self.outcome("a", "default", .done), Self.outcome("b", "default", .failed("No room.")),
+                                            Self.outcome("c", "default", .computer)], plugins: ["a", "b", "c"])
+        #expect(mixed.title == "Updated 1 of 3 Plugins")
+        #expect(mixed.reason?.hasSuffix("b: No room.") == true)
+    }
+
+    @Test func aPluginForTheComputerStopsCountingUntilANewerVersion() throws {
+        let defaults = try #require(UserDefaults(suiteName: "plugin-updates-\(UUID().uuidString)"))
+        let reminder = PluginUpdateReminder(defaults: defaults)
+        reminder.report(account: "A", profile: "default", list: [Self.plugin("homeassistant"), Self.plugin("honcho")])
+        #expect(reminder.count == 2)
+        reminder.noteNeedsComputer(account: "A", name: "homeassistant", to: "1.1.0")
+        #expect(reminder.names == ["honcho"] && reminder.title == "Plugin Update Available")
+        #expect(reminder.needsComputer("homeassistant", to: "1.1.0") && !reminder.needsComputer("honcho", to: "1.1.0"))
+        let later = PluginUpdateReminder(defaults: defaults)
+        later.use(account: "A")
+        #expect(later.names == ["honcho"], "kept across launches")
+        later.report(account: "A", profile: "default", list: [Self.plugin("homeassistant", to: "1.2.0")])
+        #expect(later.names == ["homeassistant"], "a newer version is asked about again")
+        // A reminder saved before this field existed still reads.
+        let old = try JSONDecoder().decode(PluginUpdateReminder.Saved.self, from: Data(#"{"items":{},"read":{}}"#.utf8))
+        #expect(old.computer == nil)
+    }
+
     // MARK: The sheet itself
 
     @Test func theAddOnSheetRunsAPluginUpdate() {

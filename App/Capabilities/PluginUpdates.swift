@@ -30,6 +30,26 @@ import UIKit
     nonisolated struct Saved: Codable, Equatable, Sendable {
         var items: [String: [Item]] = [:]
         var read: [String: Double] = [:]
+        /// [plugin-update-run] Plugin → the version Hermes would only take on its computer (it adds Python packages):
+        /// not counted, since there is nothing to tap here for it, until a newer version is out.
+        var computer: [String: String]? = nil
+    }
+
+    /// An update found `name`'s new version (`to`) is one only Hermes's computer can approve.
+    func noteNeedsComputer(account: String, name: String, to: String?) {
+        guard !account.isEmpty else { return }
+        use(account: account)
+        var next = saved
+        var all = next.computer ?? [:]
+        all[name] = to ?? ""
+        next.computer = all
+        store(next, account)
+        show(next)
+    }
+
+    func needsComputer(_ name: String, to: String?) -> Bool {
+        guard let held = saved.computer?[name] else { return false }
+        return held == (to ?? "")
     }
 
     /// How long a bot's list stands before the launch check asks it again (PluginListCache's own keep).
@@ -114,7 +134,7 @@ import UIKit
 
     /// The plugins with an update, each once (a plugin three bots have is one update), A to Z.
     var names: [String] {
-        Array(Set(saved.items.values.flatMap { $0.map(\.name) })).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        Array(Set(saved.items.values.flatMap { $0.filter { !needsComputer($0.name, to: $0.to) }.map(\.name) })).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
     var count: Int { names.count }
@@ -198,6 +218,18 @@ nonisolated enum PluginUpdateWords {
 
     static let scanBlocked = "Hermes’s security scan stopped the update, and nothing changed. Look at what it found on Hermes’s computer (hermes plugins update)."
     static let checking = "Checking the plugins"
+    /// [plugin-update-run] The install step's line while the gateway is out of reach (the app was in the background).
+    static let paused = "Paused. Carries on when Hermes is back in reach."
+    static let awayTooLong = "Hermes stayed out of reach. Try again."
+
+    /// Hermes's refusal for an update that adds Python packages: only `hermes plugins update` on its computer shows
+    /// them for review, so nothing the app sends can apply it.
+    static func isForComputer(_ message: String) -> Bool { message.contains("declares new Python dependencies") }
+
+    static func needsComputer(_ names: [String]) -> String {
+        let one = names.count == 1
+        return "\(AddOnReminder.names(names)) \(one ? "adds" : "add") Python packages, which Hermes only lets you approve on its computer. Run hermes plugins update \(names[0]) there\(one ? "" : ", and the same for the \(names.count == 2 ? "other" : "others")")."
+    }
     static let othersWentIn = "The other updates went in."
 
     /// The restart, asked of the main bot. `profiles`: the bots' profile ids, when not only the main one's.
@@ -241,6 +273,7 @@ nonisolated enum PluginUpdateWords {
         var bot: Bot?
         var done: [Item]
         var failure: String?
+        var failureTitle: String? = nil
     }
 
     /// After an update went in (or a check found the lists changed): open plugin lists read theirs again.
@@ -333,7 +366,13 @@ nonisolated enum PluginUpdateWords {
         if profiles.count > 1 { update.detail(.check, "Checking each bot’s plugins") }
         lists.merge(await Self.readLists(store: store, profiles: Array(profiles.dropFirst()))) { first, _ in first }
         let items: [Item] = profiles.flatMap { profile in
-            (lists[profile] ?? []).filter { PluginUpdateReminder.counts($0) && (target == nil || $0.name == target?.name) }
+            (lists[profile] ?? []).filter {
+                guard PluginUpdateReminder.counts($0) else { return false }
+                // A plugin's own page tries it whatever was found before; an update of them all leaves out the ones
+                // Hermes sent to its computer (until a newer version is out).
+                if let target { return $0.name == target.name }
+                return !PluginUpdateReminder.shared.needsComputer($0.name, to: $0.newVersion)
+            }
                 .map { Item(profile: profile, bot: names[profile] ?? profile, plugin: $0) }
         }
         guard !items.isEmpty else {
@@ -358,37 +397,40 @@ nonisolated enum PluginUpdateWords {
         update.work()
         update.step(.install, .active)
 
-        var done: [Item] = [], failed: [(item: Item, reason: String)] = [], declined = 0, restart = false
-        for (index, item) in items.enumerated() {
-            let name = item.plugin.name
-            update.detail(.install, AddOnUpdate.installing(several ? "\(name) for \(item.bot)" : name, index + 1, of: items.count))
-            do {
-                var result = try await store.plugin(.update(name: name, accept: false), profile: item.profile)
-                if result.consentRequired {
-                    // The new version does more than the installed one: shown, and applied only on the owner's word.
-                    guard await Self.consent(name, bot: several ? item.bot : nil, lines: result.deltaLines) else { declined += 1; continue }
-                    result = try await store.plugin(.update(name: name, accept: true), profile: item.profile)
-                }
-                if result.scanBlocked { failed.append((item, PluginUpdateWords.scanBlocked)); continue }
-                guard result.ok, !result.consentRequired else { failed.append((item, "Hermes didn’t apply the update.")); continue }
-                done.append(item)
-                if result.needsRestart { restart = true }
-            } catch {
-                AppLog.note("plugins", "update: \(name) failed (\(CapabilitiesStore.detail(error)))")
-                failed.append((item, McpEntryMask.phone.text(CapabilitiesStore.detail(error))))
-            }
+        // [plugin-update-run] The bots' copies go in three bots at a time, the app waits out a trip to the background,
+        // and a new version that asks for more is asked about once for the plugin, not once for each bot.
+        var outcomes = await install(items, accept: false, store: store, model: model, several: several)
+        let asking = outcomes.compactMap { outcome -> (Item, [String])? in
+            if case .consent(let lines) = outcome.result { return (outcome.item, lines) } else { return nil }
+        }
+        var accepted = Set<String>()
+        for name in Self.distinct(asking.map(\.0.plugin.name)) {
+            let lines = asking.first { $0.0.plugin.name == name }?.1 ?? []
+            if await Self.consent(name, bot: nil, lines: lines) { accepted.insert(name) }
+        }
+        let again = asking.map(\.0).filter { accepted.contains($0.plugin.name) }
+        if !again.isEmpty {
+            let second = await install(again, accept: true, store: store, model: model, several: several)
+            outcomes = outcomes.filter { !again.contains($0.item) } + second
         }
         NotificationCenter.default.post(name: Self.didChange, object: nil)
-        let failure = failed.first.map { _ in
-            PluginUpdateWords.couldnt(Self.distinct(failed.map(\.item.plugin.name)))
+        let done = outcomes.filter { $0.result == .done || $0.result == .doneNeedsRestart }.map(\.item)
+        let restart = outcomes.contains { $0.result == .doneNeedsRestart }
+        let tally = Tally(outcomes, plugins: plugins)
+        // What only Hermes's computer can approve stops counting: there is nothing to tap here for it.
+        if let account = model.account?.id {
+            for name in tally.computer {
+                PluginUpdateReminder.shared.noteNeedsComputer(account: account, name: name, to: items.first { $0.plugin.name == name }?.plugin.newVersion)
+            }
         }
+        AppLog.note("plugins", "update: \(done.count) of \(items.count) copies installed; \(tally.updated.count) of \(plugins.count) plugin(s) whole, \(tally.computer.count) for Hermes's computer, \(tally.failed.count) failed, \(tally.declined.count) declined, restart \(restart ? "needed" : "not needed")")
         guard !done.isEmpty else {
             // Nothing went in: said why, or (every one turned down at its question) nothing more to say.
-            if let failure, let first = failed.first { update.end(.failed(title: failure, reason: first.reason)) } else { update.reset() }
+            if let reason = tally.reason { update.end(.failed(title: tally.title, reason: reason)) } else { update.reset() }
             return
         }
-        let leftover = failed.first.map { "\($0.reason) \(PluginUpdateWords.othersWentIn)" }
-        AppLog.note("plugins", "update: \(done.count) installed, \(failed.count) failed, \(declined) declined, restart \(restart ? "needed" : "not needed")")
+        let failure: String? = tally.reason == nil ? nil : tally.title
+        let leftover = tally.reason
         update.step(.install, .done)
         guard restart else {
             update.step(.restart, .skipped, detail: AddOnUpdate.notNeeded)
@@ -396,7 +438,7 @@ nonisolated enum PluginUpdateWords {
             await finish(done: done, failureTitle: failure, failure: leftover, bot: mainBot?.name, store: store)
             return
         }
-        let waiting = Pending(bot: mainBot, done: done, failure: leftover)
+        let waiting = Pending(bot: mainBot, done: done, failure: leftover, failureTitle: failure)
         // [manual-restart] The owner restarts Hermes themselves (or there is no main bot to ask): the sheet says what's left.
         guard !update.byHand, let mainBot else {
             leaveRestart(waiting, model: model)
@@ -485,7 +527,7 @@ nonisolated enum PluginUpdateWords {
                 update.complete([.install, .restart])
                 update.work()
                 update.step(.verify, .active, detail: PluginUpdateWords.checking)
-                await self?.finish(done: waiting.done, failureTitle: waiting.failure.map { _ in "Some Updates Didn’t Go In" },
+                await self?.finish(done: waiting.done, failureTitle: waiting.failureTitle,
                                    failure: waiting.failure, bot: botName, store: store)
                 return
             }
@@ -526,6 +568,152 @@ nonisolated enum PluginUpdateWords {
         }
         update.step(.verify, .done)
         update.end(.on(version: nil))
+    }
+
+    // MARK: Installing ([plugin-update-run])
+
+    /// How one copy's update went.
+    enum CopyResult: Equatable, Sendable {
+        case done, doneNeedsRestart
+        /// The new version does more than the installed one (its lines): applied only on the owner's word.
+        case consent([String])
+        /// The owner said no to that question.
+        case declined
+        /// Hermes only lets this update be approved on its computer (it adds Python packages).
+        case computer
+        case failed(String)
+    }
+
+    struct Outcome: Equatable, Sendable {
+        var item: Item
+        var result: CopyResult
+    }
+
+    /// What a whole run came to, by plugin: a plugin is updated when every copy of it went in.
+    struct Tally: Equatable {
+        var total: Int
+        var updated: [String] = []
+        var computer: [String] = []
+        var declined: [String] = []
+        var failed: [String] = []
+        var firstFailure: String?
+
+        init(_ outcomes: [Outcome], plugins: [String]) {
+            total = plugins.count
+            for name in plugins {
+                let results = outcomes.filter { $0.item.plugin.name == name }.map(\.result)
+                if results.contains(.computer) { computer.append(name) }
+                else if let reason = results.compactMap({ result -> String? in if case .failed(let reason) = result { reason } else { nil } }).first {
+                    failed.append(name)
+                    if firstFailure == nil { firstFailure = reason }
+                }
+                else if results.contains(where: { if case .consent = $0 { true } else { $0 == .declined } }) { declined.append(name) }
+                else if !results.isEmpty { updated.append(name) }
+            }
+        }
+
+        /// "Updated 3 of 5 Plugins", or "Couldn't Update …" when none went in whole.
+        var title: String {
+            updated.isEmpty ? PluginUpdateWords.couldnt(computer + failed + declined) : "Updated \(updated.count) of \(total) Plugins"
+        }
+
+        /// Why the rest didn't; nil when nothing failed (all updated, or only turned down at the question).
+        var reason: String? {
+            var parts: [String] = []
+            if !computer.isEmpty { parts.append(PluginUpdateWords.needsComputer(computer)) }
+            if let firstFailure {
+                parts.append(failed.count == 1 && computer.isEmpty && updated.isEmpty ? firstFailure : "\(AddOnReminder.names(failed)): \(firstFailure)")
+            }
+            return parts.isEmpty ? nil : parts.joined(separator: " ")
+        }
+    }
+
+    /// How many bots' copies go in at once (a bot's own run one after another: Hermes locks each plugin's folder).
+    static let installWidth = 3
+    private var installed = 0
+    private var installTotal = 0
+    /// Plugins Hermes sent to its computer for one bot: the other bots' copies get the same answer without asking.
+    private var computerOnly = Set<String>()
+
+    private func install(_ items: [Item], accept: Bool, store: CapabilitiesStore, model: AppModel, several: Bool) async -> [Outcome] {
+        installed = 0
+        installTotal = items.count
+        computerOnly = []
+        if let first = items.first {
+            AddOnUpdate.shared.detail(.install, AddOnUpdate.installing(several ? "\(first.plugin.name) for \(first.bot)" : first.plugin.name, 1, of: items.count))
+        }
+        var byBot: [[Item]] = []
+        for profile in Self.distinct(items.map(\.profile)) { byBot.append(items.filter { $0.profile == profile }) }
+        var out: [Outcome] = []
+        await withChildTasks(of: [Outcome].self) { group in
+            var queue = byBot.makeIterator()
+            for _ in 0..<Self.installWidth {
+                guard let next = queue.next() else { break }
+                group.addTask { await self.install(bot: next, accept: accept, store: store, model: model, several: several) }
+            }
+            while let results = await group.next() {
+                out += results
+                if let next = queue.next() { group.addTask { await self.install(bot: next, accept: accept, store: store, model: model, several: several) } }
+            }
+        }
+        // In the order asked, whatever order the bots finished in.
+        return items.compactMap { item in out.first { $0.item == item } }
+    }
+
+    private func install(bot items: [Item], accept: Bool, store: CapabilitiesStore, model: AppModel, several: Bool) async -> [Outcome] {
+        var out: [Outcome] = []
+        for item in items {
+            let name = item.plugin.name
+            let result: CopyResult = computerOnly.contains(name) ? .computer
+                : await one(item, accept: accept, store: store, model: model)
+            if result == .computer { computerOnly.insert(name) }
+            installed += 1
+            if installed < installTotal {
+                AddOnUpdate.shared.detail(.install, AddOnUpdate.installing(several ? "\(name) for \(item.bot)" : name, installed + 1, of: installTotal))
+            }
+            out.append(Outcome(item: item, result: result))
+        }
+        return out
+    }
+
+    /// One copy's update. A call the connection dropped under (the app went to the background, Hermes blinked) is
+    /// made again once the gateway is back: the update is the same asked twice, and answers "unchanged" if it had
+    /// gone in. Only Hermes's own refusal is a failure.
+    private func one(_ item: Item, accept: Bool, store: CapabilitiesStore, model: AppModel) async -> CopyResult {
+        let name = item.plugin.name
+        var lastError = ""
+        for attempt in 0..<4 {
+            guard await Self.linkReady(model) else { return .failed(PluginUpdateWords.awayTooLong) }
+            do {
+                let result = try await store.plugin(.update(name: name, accept: accept), profile: item.profile)
+                if result.consentRequired { return .consent(result.deltaLines) }
+                if result.scanBlocked { return .failed(PluginUpdateWords.scanBlocked) }
+                guard result.ok else { return .failed("Hermes didn’t apply the update.") }
+                return result.needsRestart ? .doneNeedsRestart : .done
+            } catch let refusal as RPCError {
+                AppLog.note("plugins", "update: \(name) refused (\(refusal.message))")
+                if PluginUpdateWords.isForComputer(refusal.message) { return .computer }
+                return .failed(McpEntryMask.phone.text(CapabilitiesStore.detail(refusal)))
+            } catch {
+                lastError = McpEntryMask.phone.text(CapabilitiesStore.detail(error))
+                AppLog.note("plugins", "update: \(name) not answered (\(lastError)), try \(attempt + 1)")
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+        return .failed(lastError)
+    }
+
+    /// Waits for the gateway's connection (up to ten minutes awake; time in the background doesn't count, the app
+    /// isn't running then), saying so in the sheet. False when it never came back.
+    private static func linkReady(_ model: AppModel) async -> Bool {
+        guard model.connection != .ready else { return true }
+        let update = AddOnUpdate.shared
+        let before = update.steps.first { $0.id == .install }?.detail
+        update.detail(.install, PluginUpdateWords.paused)
+        for _ in 0..<1200 where model.connection != .ready { try? await Task.sleep(for: .milliseconds(500)) }
+        guard model.connection == .ready else { return false }
+        update.detail(.install, before)
+        return true
     }
 
     // MARK: Pieces

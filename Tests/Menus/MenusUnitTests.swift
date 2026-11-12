@@ -219,9 +219,8 @@ struct MenusStoreTests {
     /// its catalog loaded, and could only be cleared all at once.
     @Test func staleStarsStayOutBeforeTheCatalogLoads() {
         let keys = ["commandcode::deepseek-v4.1-flash", "nous::gpt-6.1-sol", "clinepass::glm-5.3"]
-        // No catalog and none read before: every star, as before.
-        #expect(ModelMenuContext.favorites(keys: keys, catalog: nil, knownProviders: nil).map(\.provider)
-                == ["commandcode", "nous", "clinepass"])
+        // [ghost-stars] No catalog and none read before: no star, since any of them may be a removed provider's.
+        #expect(ModelMenuContext.favorites(keys: keys, catalog: nil, knownProviders: nil).isEmpty)
         // The bot's last catalog listed only Nous.
         #expect(ModelMenuContext.favorites(keys: keys, catalog: nil, knownProviders: ["nous"]).map(\.key) == ["nous::gpt-6.1-sol"])
         // A catalog (this chat's or another chat's of the bot) wins.
@@ -236,7 +235,8 @@ struct MenusStoreTests {
         // Clinepass is still there, but the last catalog didn't list its DeepSeek V4 Pro.
         #expect(ModelMenuContext.favorites(keys: keys, catalog: nil, knownProviders: ["clinepass"], missing: ["clinepass::deepseek-v4-pro"])
                     .map(\.key) == ["clinepass::glm-5.3"])
-        #expect(ModelMenuContext.favorites(keys: keys, catalog: nil, knownProviders: nil, missing: [keys[0]]).map(\.key) == Array(keys[1...]))
+        #expect(ModelMenuContext.favorites(keys: keys, catalog: nil, knownProviders: ["commandcode", "clinepass"], missing: [keys[0]])
+                    .map(\.key) == Array(keys[1...]))
         // An older catalog still lists Commandcode, removed in Settings since.
         let catalog = ModelSheetModel.favoritesFromKeys(keys)
         #expect(ModelMenuContext.favorites(keys: keys, catalog: catalog, knownProviders: ["clinepass"]).map(\.provider)

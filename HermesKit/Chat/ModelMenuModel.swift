@@ -240,6 +240,9 @@ final class ModelMenuContext {
     /// that catalog was read is still in it (tester 2026-11-10: "the ghost favorites are still there").
     nonisolated static func favorites(keys: [String], catalog: [ModelChoice]?, knownProviders: Set<String>?,
                                       missing: Set<String> = []) -> [ModelChoice] {
+        // [ghost-stars] No catalog and none read for this bot on this device (its first chat here, or after Sign Out):
+        // no star is known to exist yet, so none shows until the read answers (a removed provider's stars did).
+        if catalog == nil, knownProviders == nil { return [] }
         let rows = catalog.map { ModelSheetModel.favoriteRows($0, keys: keys) }
             ?? ModelSheetModel.favoritesFromKeys(keys).filter { !missing.contains($0.key) }
         guard let knownProviders else { return rows }

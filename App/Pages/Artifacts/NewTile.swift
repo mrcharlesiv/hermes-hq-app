@@ -1,8 +1,9 @@
 // [dashboard] New Tile (owner 2026-11-03: "an easy button" for live dashboards that size and work properly): pick a bot,
 // say what the tile should show, and the bot makes it in a new chat while you stay on the Dashboard. The bot follows
 // the add-on's dashboard-tile skill (hermes-hq-push 0.9.30: a page that fills its tile at any size, checked at every
-// size, kept fresh by a scheduled job). When its reply names the page, the tile pins itself; a reply without one
-// (a question, a refusal) offers its chat instead.
+// size, kept fresh by a scheduled job; 0.9.50: the bot gives the tile's data and the skill's kit draws it, so the
+// words here leave the how to the skill, whichever one that bot has). When its reply names the page, the tile pins
+// itself; a reply without one (a question, a refusal) offers its chat instead.
 
 import SwiftUI
 import UIKit
@@ -260,9 +261,9 @@ final class TileMaker {
         """
         Make me a live tile for my Hermes HQ Dashboard showing: \(what)
 
-        Use the hermes-hq-push:dashboard-tile skill (open it with skill_view first) and follow it: start from its \
-        template, put the real data in, run its check_tile.py until it passes, and look at the tile pictures it makes. \
-        Keep it up to date with a scheduled job on a sensible schedule, and tell me how often.
+        Use the hermes-hq-push:dashboard-tile skill (open it with skill_view first) and follow it: make the tile \
+        the way it says, with the real numbers in, run its check_tile.py until it passes, and look at the pictures \
+        it makes. Keep it up to date with a scheduled job on a sensible schedule, and tell me how often.
 
         If that skill isn't there: one self-contained .html file that fills its window exactly at any size from \
         about 160×160 to 800×600 (100vw/100vh, text in em from a size that grows with the window, charts in SVG \
@@ -282,10 +283,11 @@ final class TileMaker {
         """
         Change my Hermes HQ Dashboard tile \(path): \(what)
 
-        Use the hermes-hq-push:dashboard-tile skill (open it with skill_view first). Edit that same file in place: keep \
-        its path, its <title> (unless I asked for a new name), its <meta name="hq-tile-job"> and everything I didn't ask \
-        to change. If a scheduled job or a refresh script rewrites this tile, change it too so the next update keeps the \
-        change. Run check_tile.py until it passes and look at the tile pictures.
+        Use the hermes-hq-push:dashboard-tile skill (open it with skill_view first). Change that same tile in place, \
+        the way the skill says: keep its path, its name (unless I asked for a new one), the job that keeps it fresh \
+        (its <meta name="hq-tile-job">) and everything I didn't ask to change. If a \
+        scheduled job or a refresh script rewrites this tile, change it too so the next update keeps the change. Run \
+        check_tile.py until it passes and look at the pictures it makes.
 
         If you need something from me first (which data, a sign-in), ask me and leave out the MEDIA line. When it's \
         done, say in a line or two what you changed, then end your reply with the page alone on its own line: \
@@ -301,8 +303,9 @@ final class TileMaker {
         """
         \(prompt)
 
-        (Asked from my Hermes HQ tile “\(name)”, \(path). Do it, then update that file in place so the tile shows the \
-        result; keep its look, <title> and <meta> tags. Reply in a line or two.)
+        (Asked from my Hermes HQ tile “\(name)”, \(path). Do it, then give that tile its new data in place so it \
+        shows the result (the way the hermes-hq-push:dashboard-tile skill says); keep its look, its name and its \
+        job. Reply in a line or two.)
         """
     }
 

@@ -146,8 +146,11 @@ nonisolated enum PushPolicy {
     /// summary (`cronMedia`: the summary is saved through each bot's own copy); 0.9.44 the first whose login or code card
     /// names the site that bot named, not another site's tab left open (`namedTabs`: the tab is picked in each bot's
     /// own copy); 0.9.45 the first whose daily Task ideas run is let in (`ideasRun`: the ideas bot is any bot); 0.9.47
-    /// the first that gives that bot `draft_message` (`draftCards`: each bot's own copy registers the tool and its guard).
-    static let everyBotVersion = "0.9.47"
+    /// the first that gives that bot `draft_message` (`draftCards`: each bot's own copy registers the tool and its guard);
+    /// 0.9.50 the first whose dashboard-tile skill draws a tile from the bot's data with a kit (`tileFit`: a bot reads
+    /// the skill from its own copy, so a bot with an older one still writes the page itself; a tester's status boards
+    /// came out cut off and crowded, 2026-11-11).
+    static let everyBotVersion = "0.9.50"
 
     /// [addon-reminder] The add-on version whose flags `current` checks: raise it with every flag added there. The
     /// launch alert offers an update once per `offerLevel`; after Not Now the app only reminds quietly (AddOnReminder)
@@ -156,7 +159,7 @@ nonisolated enum PushPolicy {
     /// 0.9.44: `namedTabs` (a login or code card names the site the bot is signing in to). 0.9.45: `ideasRun` (the daily
     /// Task ideas run saves its ideas again). 0.9.47: `draftCards` (a bot's draft for review as a card). 0.9.52:
     /// `pluginUpdates` (the main bot's copy serves it, so a plugin update that adds Python packages finishes in the app;
-    /// no bot needs its own, so `everyBotVersion` stays).
+    /// no bot needs its own for that).
     static let wantedVersion = "0.9.52"
     static let offerLevel = "\(wantedVersion)/\(everyBotVersion)"
     static let pluginName = "hermes-hq-push"

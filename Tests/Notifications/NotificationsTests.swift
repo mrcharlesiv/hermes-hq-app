@@ -299,7 +299,7 @@ enum UIImageForTests {
         func row(_ name: String, _ version: String, on: Bool = true) -> PluginInfo {
             PluginInfo.read(.object(["name": .string(name), "version": .string(version), "status": .string(on ? "enabled" : "disabled")]))!
         }
-        #expect(PushPolicy.botHasPlugin([row("hermes-hq-push", "0.9.47")]) && PushPolicy.botHasPlugin([row("x", "1"), row("hermes-hq-push", "0.10.0")]))
+        #expect(PushPolicy.botHasPlugin([row("hermes-hq-push", "0.9.50")]) && PushPolicy.botHasPlugin([row("x", "1"), row("hermes-hq-push", "0.10.0")]))
         #expect(!PushPolicy.botHasPlugin([row("hermes-hq-push", "0.9.11")]), "0.9.11 has no question cards")
         #expect(!PushPolicy.botHasPlugin([row("hermes-hq-push", "0.9.16")]), "0.9.16: a bot another bot messaged can't ask for a login")
         #expect(!PushPolicy.botHasPlugin([row("hermes-hq-push", "0.9.17")]), "0.9.17: the bot can ask for whichever tab is in front")
@@ -313,7 +313,10 @@ enum UIImageForTests {
         #expect(!PushPolicy.botHasPlugin([row("hermes-hq-push", "0.9.43")]), "0.9.43: a login card can name another site's tab")
         #expect(!PushPolicy.botHasPlugin([row("hermes-hq-push", "0.9.44")]), "0.9.44: the daily Task ideas run is turned away")
         #expect(!PushPolicy.botHasPlugin([row("hermes-hq-push", "0.9.46")]), "0.9.46: the bot has no draft_message, so it can't show a draft card")
-        #expect(!PushPolicy.botHasPlugin([row("hermes-hq-push", "0.9.47", on: false)]) && !PushPolicy.botHasPlugin([]))
+        #expect(!PushPolicy.botHasPlugin([row("hermes-hq-push", "0.9.50", on: false)]) && !PushPolicy.botHasPlugin([]))
+        // [tiles] A bot reads the tile skill from its own copy: one from before the kit (0.9.50) still writes the page itself.
+        #expect(PushPolicy.everyBotVersion == "0.9.50" && !PushPolicy.botHasPlugin([row("hermes-hq-push", "0.9.49")]))
+        #expect(PushPolicy.versionAtLeast(PushPolicy.wantedVersion, PushPolicy.everyBotVersion), "the update on offer satisfies every bot")
         #expect(!PushPolicy.botHasPlugin([row("dispatch-push", "0.9.12")]))
         #expect(PushPolicy.versionAtLeast("0.9.12", "0.9.9") && PushPolicy.versionAtLeast("0.9.12", "0.9.12") && PushPolicy.versionAtLeast("1.0", "0.9.12"))
         #expect(!PushPolicy.versionAtLeast("0.9.9", "0.9.12") && !PushPolicy.versionAtLeast("", "0.9.12") && !PushPolicy.versionAtLeast("0.9.x", "0.9.1"))

@@ -92,6 +92,13 @@ import UIKit
                 guard let model else { return nil }
                 return CapabilitiesPages.page(.connectors, services: model)
             }
+            // [composio-row] Owner 2026-11-12: Composio is a row of its own, right under Connectors (and off the
+            // Connectors page), so Hermes' own connectors and Composio are each easy to find and apart.
+            let composio = MoreRow(id: ComposioRow.id, title: ComposioRow.title, symbol: ComposioRow.symbol, image: nil,
+                                   tile: UIColor(red: 0x30 / 255, green: 0xB0 / 255, blue: 0xC7 / 255, alpha: 1)) { [weak model] in
+                guard let model else { return nil }
+                return ConnectAppsScreens.makeRoot(services: model)
+            }
             // [passwords-page] Owner 2026-11-11: every password in one organized place, a tap from More (the same page
             // as Settings › Passwords): what the bots fill, password managers, keys, and this device's Keychain.
             let passwords = MoreRow(id: "passwords", title: "Passwords", symbol: "key.fill", image: nil,
@@ -99,7 +106,7 @@ import UIKit
                 guard let model else { return nil }
                 return PasswordsPageController(router: SettingsRouter(services: model, navigation: nil))
             }
-            return [row, market, connectors, passwords]
+            return [row, market, connectors] + (ConnectAppsFeature.isOn ? [composio] : []) + [passwords]
         })
 
         // [morepages] More › Bot Profiles, Messaging, Files, Review, Status & Maintenance, Usage, Spawn Tree, Star Map,

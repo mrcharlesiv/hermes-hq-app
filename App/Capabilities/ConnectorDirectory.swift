@@ -68,18 +68,26 @@ struct ConnectorsSections: View {
             }
         }
         connectedSection
-        // [connect-find] Owner 2026-11-11 ("it feels buried"): Composio is the second thing on the page, named, saying
-        // that a key is all it takes. It was the last row, under More Ways to Connect, two screens down.
-        if query.isEmpty { ComposioSection(model: model, router: router) }
+        // [composio-row] Owner 2026-11-12: Composio is a row of its own in More, under Connectors, and off this page,
+        // so Hermes' own connectors and Composio are apart and neither sits over the other.
         let quietManaged = ManagedAppsSection.isQuiet(model)
         if !quietManaged { ManagedAppsSection(model: model, router: router) }   // [connectors] the Nous apps, as on the desktop
         // [connectors-ux] Popular ends in See All Apps (its own page): the ~65 catalog rows made this page about 7,000 pt
         // long, with Popular's apps listed twice. A search still lists every matching app here.
         if query.isEmpty { popularSection } else { catalogMatches }
-        // A search that Hermes' own apps may not answer (Gmail, Slack): Composio stays one tap away under the matches.
-        if !query.isEmpty { ComposioSection(model: model, router: router, searching: true) }
+        // A search nothing here answers (no connector, no Hermes app, no Nous app) is not a dead end: one row says
+        // Composio may have it. Only then: with any match, the page is Hermes' own.
+        if ComposioSection.cameUpShort(query: query, loaded: model.catalog != nil, matches: searchMatches(quietManaged: quietManaged)) {
+            ComposioSection(model: model, router: router)
+        }
         otherWays
         if quietManaged { ManagedAppsSection(model: model, router: router) }    // just a footer line: below the rows that work
+    }
+
+    /// How many rows a search found on this page: connected ones, Hermes' apps, and the Nous apps while they list.
+    private func searchMatches(quietManaged: Bool) -> Int {
+        let managed = quietManaged ? 0 : (model.managed?.apps ?? []).filter { $0.matches(query) }.count
+        return model.shownServers.count + model.catalogAvailable.filter { $0.matches(query) }.count + managed
     }
 
     // MARK: Connected
@@ -233,29 +241,28 @@ struct ConnectorWayRow: View {
     }
 }
 
-/// [connect-find] Composio's own place on Connectors and in the Marketplace's Connectors: one row that says a
-/// Composio API key is all it takes, then (once a key is saved) that the apps are a tap away. It opens Connect Apps:
-/// the key page first, your apps after. Hidden with the feature (`ConnectAppsFeature`).
+/// [composio-row] Composio's one row on Connectors and in the Marketplace's Connectors: under a search that found
+/// nothing, it says where else to look. Composio's place is its own row in More (owner 2026-11-12), not these pages.
+/// It opens the Composio page: the key page first, your apps after. Hidden with the feature (`ConnectAppsFeature`).
 struct ComposioSection: View {
     let model: CapabilitiesModel
     let router: SettingsRouter
-    /// Under a search's matches: the row says where else to look.
-    var searching = false
     /// Read when the row shows (and again on the way back from the key page): the Keychain is not read per redraw.
     @State private var keySaved = false
 
     static let header = "Composio"
     static func title(keySaved: Bool) -> String { keySaved ? "Your Composio Apps" : "Use Your Composio API Key" }
-    static func detail(keySaved: Bool, searching: Bool) -> String {
-        if searching { return keySaved ? "Not here? Look in your Composio apps" : "Not here? Composio has hundreds more apps" }
-        return keySaved ? "Add apps, choose which bots use them" : "Gmail, Slack and hundreds more"
+    static func detail(keySaved: Bool) -> String {
+        keySaved ? "Not here? Look in your Composio apps" : "Not here? Composio has hundreds more apps"
     }
+    /// The row shows only when a search is typed, the page's lists have loaded, and none of them holds a match.
+    static func cameUpShort(query: String, loaded: Bool, matches: Int) -> Bool { !query.isEmpty && loaded && matches == 0 }
 
     var body: some View {
         if ConnectAppsFeature.isOn {
             Section {
                 Button { router.push(ConnectAppsScreens.makeRoot(services: model.services)) } label: {
-                    ConnectorWayRow(title: Self.title(keySaved: keySaved), detail: Self.detail(keySaved: keySaved, searching: searching),
+                    ConnectorWayRow(title: Self.title(keySaved: keySaved), detail: Self.detail(keySaved: keySaved),
                                     symbol: "key")
                 }
                 .buttonStyle(.plain)

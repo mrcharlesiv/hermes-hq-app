@@ -58,6 +58,12 @@ struct CapabilitiesHubView: View {
     var settingsPage = false
 
     static let footer = "Each bot has its own. Choose the bot at the top of each page."
+    /// [composio-row] Under the Mac's Composio row: why it is apart from the four lists.
+    static let composioFooter = "Apps through your own Composio API key, shared by the bots you choose."
+    /// [composio-row] Owner 2026-11-12 ("get it right"): on the Mac, where More dissolves and Connectors lives on this
+    /// page, Composio is here too, right under the four lists and in a group of its own (it is one account for all
+    /// bots, not a list each bot has). The iPhone has its row in More, under Connectors, so not a second one here.
+    static var showsComposio: Bool { DeviceWord.isMac && ConnectAppsFeature.isOn }
 
     var body: some View {
         let status = CapabilitiesIssues.moreStatus()
@@ -77,6 +83,16 @@ struct CapabilitiesHubView: View {
             } footer: { HQSectionFooter {
                 Text(Self.footer)
             } }
+            if Self.showsComposio {
+                Section {
+                    NavRow(title: ComposioRow.title, systemImage: ComposioRow.symbol) {
+                        router.push(ConnectAppsScreens.makeRoot(services: services))
+                    }
+                    .accessibilityIdentifier("capabilities.row.composio")
+                } footer: { HQSectionFooter {
+                    Text(Self.composioFooter)
+                } }
+            }
         }.hqMacSettingsRowInsets() }
         .hqMacForm(settings: settingsPage)   // [mac] as the lists: Settings' rows when opened there
         .hqGroupedPage()   // [desktoplook] the page follows the skin

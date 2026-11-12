@@ -157,6 +157,7 @@ nonisolated enum SettingsSearch {
         ("billing", "Billing", ["balance", "credits", "plan", "nous portal", "usage"]),
         ("sessions", sessionsPageTitle, ["sessions", "archive", "chats", "project folder", "chat folder", "retention"]),
         ("capabilities", "Capabilities", ["abilities", "what bots can do"]),   // [cap-pages]
+        ("composio", "Composio", ["connect apps", "api key", "gmail", "slack", "apps"]),   // [composio-row]
         ("about", "About", ["version", "support", "privacy"]),
     ].map { SettingsSearchEntry(id: "page:\($0.0)", label: $0.1, context: "", keywords: $0.2, target: .root($0.0), isPage: true) }
         + capabilitiesPages

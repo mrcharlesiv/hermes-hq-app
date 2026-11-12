@@ -47,6 +47,12 @@ enum SettingsNavigator {
         case "providers": router.push("Providers", ProvidersPageView(router: router))
         case "keys": router.push("Keys", KeysPageView(router: router))
         case "vault": router.push(PasswordsPageController(router: router))   // [passwords-page] the page More › Passwords opens
+        case ComposioRow.id:   // [composio-row] the page More › Composio opens; on the Mac it lives in Capabilities (Back goes there)
+            if CapabilitiesHubView.showsComposio {
+                router.push([CapabilitiesHubController(services: services, settingsPage: true), ConnectAppsScreens.makeRoot(services: services)])
+            } else {
+                router.push(ConnectAppsScreens.makeRoot(services: services))
+            }
         case "billing": router.push("Billing", BillingPageView(router: router))
         case "sessions":
             guard let store = router.gatewaySettings?.configStore else { return }

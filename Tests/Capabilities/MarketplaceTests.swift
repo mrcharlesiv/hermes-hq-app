@@ -4,6 +4,7 @@
 
 import Foundation
 import Testing
+import UIKit
 @testable import HermesHQNative
 
 @Suite struct MarketplaceTests {
@@ -238,10 +239,30 @@ private extension MarketplaceItem {
 
     @Test func composioRowNamesTheKey() {
         #expect(ComposioSection.title(keySaved: false) == "Use Your Composio API Key")
-        #expect(ComposioSection.detail(keySaved: false, searching: false) == "Gmail, Slack and hundreds more")
         #expect(ComposioSection.title(keySaved: true) == "Your Composio Apps")
-        #expect(ComposioSection.detail(keySaved: false, searching: true).hasPrefix("Not here?"))
+        #expect(ComposioSection.detail(keySaved: false) == "Not here? Composio has hundreds more apps")
+        #expect(ComposioSection.detail(keySaved: true) == "Not here? Look in your Composio apps")
         #expect(ConnectAppsSetupView.blurb.hasPrefix("All it takes is your Composio API key."))
+    }
+
+    /// [composio-row] Owner 2026-11-12: Composio has its own row in More; on Connectors and in the Marketplace it
+    /// shows only under a search that found nothing, once the lists have loaded.
+    @Test func composioShowsOnlyWhenASearchFindsNothing() {
+        #expect(!ComposioSection.cameUpShort(query: "", loaded: true, matches: 0))
+        #expect(!ComposioSection.cameUpShort(query: "gmail", loaded: false, matches: 0))
+        #expect(!ComposioSection.cameUpShort(query: "git", loaded: true, matches: 2))
+        #expect(ComposioSection.cameUpShort(query: "gmail", loaded: true, matches: 0))
+    }
+
+    @Test func composioIsAMorePageOfItsOwn() {
+        #expect(UIImage(systemName: ComposioRow.symbol) != nil)
+        #expect(TabChoice(key: "page.composio") == .page(ComposioRow.id))
+        #expect(TabChoice.pageIDs.last == ComposioRow.id)   // new pages go at the end: the others keep their tags
+        #expect(TabOrderPage.fallback(ComposioRow.id).title == "Composio")
+        #expect(MoreSearch.pageKeywords[ComposioRow.id]?.contains("gmail") == true)
+        #expect(SettingsSearch.rootPages.contains { $0.id == "page:composio" && $0.label == "Composio" })
+        // The Mac has no More: its row is on Capabilities, where Connectors is. The iPhone's is in More, not there too.
+        #expect(CapabilitiesHubView.showsComposio == DeviceWord.isMac)
     }
 
     @Test func appsHeaderCounts() {

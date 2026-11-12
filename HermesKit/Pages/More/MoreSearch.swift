@@ -49,6 +49,7 @@ nonisolated enum MoreSearch {
         "command-center": ["command center", "system", "status", "maintenance"],
         "usage": ["usage", "tokens", "cost"],
         "passwords": ["passwords", "logins", "cards", "addresses", "keys", "vault", "keychain", "1password", "bitwarden"],   // [passwords-page]
+        "composio": ["composio", "connect apps", "api key", "gmail", "slack", "apps"],   // [composio-row]
         "webhooks": ["webhooks", "hooks", "triggers"],
         "import-sessions": ["import", "claude", "codex", "conversation", "sessions"],
     ]

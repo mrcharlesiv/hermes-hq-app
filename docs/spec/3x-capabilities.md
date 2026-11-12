@@ -1267,6 +1267,12 @@ Composio" / "Check your connection, then try again." / "Try Again" with the reas
   while "All Bots" is being applied.
 - One sheet at a time; opening More › Connect Apps twice quickly presents once.
 
+- **Where it lives now (owner 2026-11-12, `[composio-row]`).** A More row of its own, "Composio", right under
+  Connectors (`ComposioRow`, id `composio`; it can be a tab; on the Mac, where Connectors lives in Settings › Bots & Tools ›
+  Capabilities, it is a row in a group of its own on that page, under the four lists). The Connectors page and Marketplace › Connectors no longer hold a Composio section, so Hermes' own
+  connectors and Composio are apart. One exception: a search on either page that finds nothing ends with one
+  "Not here?" row to Composio (`ComposioSection.cameUpShort`). Passwords still lists the Composio key.
+
 ### 10.2 `ComposioClient` (HermesKit) — rows L725, L997 (network half)
 
 **Web/native bridge.** `ref:ios/App/App/HermesComposio.swift`: base `https://backend.composio.dev`; the key is

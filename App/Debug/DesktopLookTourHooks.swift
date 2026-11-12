@@ -190,6 +190,9 @@ enum DesktopLookTourHooks {
                     let router = page.rootView.router
                     if item == "composio" {   // [connect-find] the Composio page (its key setup while no key is saved)
                         nav.pushViewController(ConnectAppsScreens.makeRoot(services: services), animated: false)
+                    } else if item.hasPrefix("search:") {   // [composio-row] the page searched (a miss ends in Composio's row)
+                        guard model.catalog != nil, model.servers != nil else { if tries > 0 { after(0.3) { open(tries - 1) } }; return }
+                        model.query = String(item.dropFirst(7))
                     } else if item == "allapps", model.catalog != nil {
                         nav.pushViewController(CatalogBrowseController(model: model, router: router), animated: false)
                     } else if let server = model.servers?.first(where: { $0.name == item }) {
@@ -246,6 +249,8 @@ enum DesktopLookTourHooks {
                         nav.pushViewController(MarketplaceController(model: model, router: router, kind: item == "find" ? .plugins : .all), animated: false)
                     } else if item == "market-connectors" {   // [connect-find]
                         nav.pushViewController(MarketplaceController(model: model, router: router, kind: .connectors), animated: false)
+                    } else if item.hasPrefix("market-connectors-search:") {   // [composio-row]
+                        nav.pushViewController(MarketplaceController(model: model, router: router, kind: .connectors, query: String(item.dropFirst(25))), animated: false)
                     } else if item == "market-skills" {
                         nav.pushViewController(MarketplaceController(model: model, router: router, kind: .skills), animated: false)
                     } else if item.hasPrefix("skill:"), let skill = SkillCatalogStore.shared.entries?.first(where: { $0.name == String(item.dropFirst(6)) }) {
@@ -266,6 +271,16 @@ enum DesktopLookTourHooks {
             }
         case "settings":
             SettingsScreens.presentSettings(from: root, services: services)
+        case "settings-root":   // [composio-row] Settings on one of its own pages: `-HQDebugTourItem capabilities|composio|vault|…`
+            let item = UserDefaults.standard.string(forKey: "HQDebugTourItem") ?? ""
+            #if targetEnvironment(macCatalyst)
+            // The Mac's Settings is a window of its own: the page is pushed there, on that window's router.
+            if MacSettingsWindow.open(then: { router in after(1.5) { SettingsNavigator.openRoot(item, router: router) } }) { break }
+            #endif
+            SettingsScreens.presentSettings(from: root, services: services) { navigation in
+                guard let router = (navigation.viewControllers.first as? SettingsRootController)?.router, !item.isEmpty else { return }
+                after(1.0) { SettingsNavigator.openRoot(item, router: router) }
+            }
         case "settings-model", "settings-context":   // [context-window] Settings › Model, and its Context Window page
             SettingsScreens.presentSettings(from: root, services: services) { navigation in
                 guard let router = (navigation.viewControllers.first as? SettingsRootController)?.router,

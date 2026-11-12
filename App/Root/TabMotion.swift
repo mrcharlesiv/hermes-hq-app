@@ -209,6 +209,8 @@ enum TabMotion {
         case "apple.terminal", "apple.terminal.fill", "terminal", "terminal.fill": return .terminal
         case "checklist", "checklist.checked": return .checklist   // [tasks]
         case "bag", "bag.fill": return .bag   // [marketplace-row]
+        case "app.connected.to.app.below.fill": return .bag   // [composio-row] Composio: lifts and swings as the bag does
+        case "key", "key.fill": return .bag   // [passwords-page] Passwords had no motion as a tab (TabMotionTests failed on main)
         case "chart.bar", "chart.bar.fill": return .bars   // Usage, a Tool on the Mac (owner 2026-11-07)
         default: return nil
         }

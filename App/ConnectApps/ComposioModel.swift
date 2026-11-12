@@ -14,6 +14,15 @@ enum ConnectAppsFeature {
     }
 }
 
+/// [composio-row] Composio's row in More (and, on the Mac, in Capabilities): its id is the page's tab and search id.
+enum ComposioRow {
+    static let id = "composio"
+    static let title = "Composio"
+    static let symbol = "app.connected.to.app.below.fill"
+    /// For a bar, the Mac's rows and Settings › Tabs: the symbol has no outline of its own.
+    static let outline = symbol
+}
+
 @MainActor @Observable
 final class ComposioModel {
     enum Phase: Equatable { case loading, setup, ready, failed(String) }

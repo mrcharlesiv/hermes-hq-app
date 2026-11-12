@@ -1998,7 +1998,7 @@ struct MarketplaceMore: View {
 
 // MARK: - Connectors
 
-/// [connect-find] Marketplace › Connectors: Composio (your own API key), then every app in Hermes' own catalog the bot
+/// [connect-find] Marketplace › Connectors: every app in Hermes' own catalog the bot
 /// in Install To doesn't have yet, each opening the page that installs it, and a way to what the bot has connected.
 /// The page's search narrows the apps.
 struct MarketplaceConnectors: View {
@@ -2013,7 +2013,6 @@ struct MarketplaceConnectors: View {
         let all = model.catalogAvailable
         let shown = query.isEmpty ? all : all.filter { $0.matches(query) }
         Group {
-            if query.isEmpty { ComposioSection(model: model, router: router) }
             if model.catalog == nil, model.isConnected {
                 Section { ForEach(0..<4, id: \.self) { _ in SkeletonLine() } }
             } else if !all.isEmpty {
@@ -2026,7 +2025,10 @@ struct MarketplaceConnectors: View {
                     }
                 } header: { HQSectionLabel { Text(Self.appsHeader(shown.count)) } }
             }
-            if !query.isEmpty { ComposioSection(model: model, router: router, searching: true) }
+            // [composio-row] Only under a search no Hermes app answers (Composio's place is its row in More).
+            if ComposioSection.cameUpShort(query: query, loaded: model.catalog != nil, matches: shown.count) {
+                ComposioSection(model: model, router: router)
+            }
             Section {
                 NavRow(title: Self.mineTitle, systemImage: CapabilitiesTab.connectors.symbol) {
                     router.push(CapabilitiesViewController(services: model.services, profile: model.profile, tab: .connectors))

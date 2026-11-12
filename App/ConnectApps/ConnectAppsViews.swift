@@ -5,7 +5,7 @@ import SwiftUI
 import UIKit
 
 @MainActor enum ConnectAppsScreens {
-    /// More › Connect Apps pushes this on More's own stack (DECISION: a pushed page instead of a second sheet over the
+    /// More › Composio pushes this on More's own stack (DECISION: a pushed page instead of a second sheet over the
     /// tab, so the sign-in sheet and the chat hand-off have one presenter; the content is the spec's).
     static func makeRoot(services: any AppServices) -> UIViewController { ConnectAppsController(services: services) }
 }

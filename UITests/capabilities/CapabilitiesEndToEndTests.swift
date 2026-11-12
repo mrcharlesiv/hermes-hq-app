@@ -916,13 +916,8 @@ final class CapabilitiesEndToEndTests: XCTestCase {
     }
 
     @MainActor func openConnectApps(_ app: XCUIApplication) {
-        // [directory] Connect Apps lives inside More › Connectors now, under More Ways to Connect.
-        openMoreRow(app, "connectors")
-        let row = app.descendants(matching: .any)["connectors.connect-apps"]
-        XCTAssertTrue(app.descendants(matching: .any)["capabilities.list"].waitForExistence(timeout: 10), "Connectors opens")
-        for _ in 0..<6 where !(row.exists && row.isHittable) { app.swipeUp() }
-        XCTAssertTrue(row.exists, "Connectors offers Composio")
-        row.tap()
+        // [composio-row] Composio is a More row of its own, under Connectors.
+        openMoreRow(app, "composio")
         XCTAssertTrue(app.navigationBars["Composio"].waitForExistence(timeout: 10), "Composio opens")
     }
 

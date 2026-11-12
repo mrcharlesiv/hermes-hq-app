@@ -442,6 +442,37 @@ final class CapabilitiesEndToEndTests: XCTestCase {
         XCTAssertEqual(plugin("web-clipper")["update_available"] as? Bool, true, "the app itself changed nothing")
     }
 
+    /// [plugin-consent] With the add-on that can (0.9.52), an update that adds Python packages is finished from the
+    /// app: the sheet shows the packages, and on Install and Update the add-on applies it. No bot, no command.
+    @MainActor func testC12d_PluginUpdateWithPackagesFromTheApp() throws {
+        try control(gateway.url, "/__seed", ["python_deps": ["web-clipper": "readability-lxml==0.8.1, tzdata; platform_system == 'Windows'"],
+                                             "addon_updates": true])
+        let app = launch()
+        openCapabilities(app, tab: "Plugins")
+        let row = app.descendants(matching: .any)["plugin-row-web-clipper"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        row.tap()
+        let update = app.buttons["plugin.update"]
+        XCTAssertTrue(update.waitForExistence(timeout: 8))
+        update.tap()
+        let go = app.buttons["addon-update.go"]
+        XCTAssertTrue(go.waitForExistence(timeout: 10))
+        let mine = app.switches["addon-update.restart-choice"]
+        XCTAssertTrue(mine.waitForExistence(timeout: 5))
+        if (mine.value as? String) != "1" { mine.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap() }
+        sleep(1)
+        go.tap()
+        let ask = app.alerts["web-clipper adds Python packages"]
+        XCTAssertTrue(ask.waitForExistence(timeout: 15), "the packages are shown and asked about")
+        XCTAssertTrue(ask.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "readability-lxml")).firstMatch.exists)
+        shot(app, "plugin-update-packages-ask")
+        ask.buttons["Install and Update"].tap()
+        XCTAssertTrue(waitUntil(timeout: 20) { self.plugin("web-clipper")["update_available"] as? Bool == false }, "the add-on applied it")
+        XCTAssertTrue(app.staticTexts["Restart Hermes to Finish"].waitForExistence(timeout: 15), "installed; only the restart is left")
+        XCTAssertFalse(app.buttons["addon-update.ask-bot-update"].exists, "nothing handed to a bot")
+        shot(app, "plugin-update-packages-done")
+    }
+
     @MainActor func testC13_TerminalBackendAndWebProvider() throws {
         let app = launch()
         openCapabilities(app, tab: "Tools")

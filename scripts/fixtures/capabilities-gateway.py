@@ -643,6 +643,27 @@ def handler(gateway):
             profile = (query.get('profile') or ['default'])[0]
             if path.startswith('/__'):
                 return self.control(method, path, query)
+            # [plugin-consent] /__seed addon_updates:true: hermes-hq-push 0.9.52's routes. Its status says pluginUpdates;
+            # POST /plugins/update applies the update the app's own call was refused (python_deps) and answers a job.
+            push = '/api/plugins/hermes-hq-push'
+            if X.get('addon_updates') and (path == push + '/status' or path.startswith(push + '/plugins/update')):
+                body = self.body() if method != 'GET' else {}
+                if not self.authed(path):
+                    return True
+                enter('rest', f'{method} {path}', profile, body if isinstance(body, dict) else {}); leave()
+                if path == push + '/status':
+                    return self.reply(200, {'ok': True, 'version': 6, 'plugin': 'hermes-hq-push', 'pluginVersion': '0.9.52', 'pluginUpdates': True}) or True
+                if method == 'POST':
+                    with LOCK:
+                        row = next((r for r in X['plugins'].setdefault(str(body.get('profile') or 'default'), []) if r['name'] == body.get('name')), None)
+                        if row is None:
+                            return self.reply(400, {'detail': 'bad plugin or profile name'}) or True
+                        row['version'], row['update_available'] = row.get('catalog_version') or row['version'], False
+                        X.setdefault('addon_jobs', {})['job1'] = {'state': 'done', 'code': 0, 'unchanged': False, 'packages': True,
+                                                                  'output': 'Updated %s.' % row['name'], 'profile': body.get('profile'), 'name': row['name']}
+                    return self.reply(200, {'job': 'job1'}) or True
+                job = X.get('addon_jobs', {}).get(path.rsplit('/', 1)[1])
+                return self.reply(200 if job else 404, job or {'detail': 'no such update'}) or True
             if ARGS.page_plugin and path.startswith(('/api/dashboard/plugins', '/dashboard-plugins/', '/api/plugins/')):
                 return self.page_plugin(method, path, query, profile)
             watched = path.startswith(('/api/tools/', '/api/analytics/', '/api/logs', '/api/env', '/api/config', '/api/actions/tools-post-setup',
@@ -990,6 +1011,8 @@ def handler(gateway):
                         seed_all()
                     if 'page_routes_missing' in body:   # [plugin-pages] as --page-routes-missing, switched while running
                         X['routes_missing'] = bool(body['page_routes_missing'])
+                    if 'addon_updates' in body:   # [plugin-consent] the add-on that applies an approved update
+                        X['addon_updates'] = bool(body['addon_updates'])
                     if 'python_deps' in body:   # [plugin-ask-bot] {plugin: "its new packages"}: that plugin's update is refused
                         X['python_deps'] = dict(body['python_deps'])
                     if 'clear_fail' in body:

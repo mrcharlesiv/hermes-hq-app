@@ -501,6 +501,41 @@ nonisolated enum PluginUpdateWords {
             let second = await install(again, accept: true, store: store, model: model, several: several)
             outcomes = outcomes.filter { !again.contains($0.item) } + second
         }
+        // [plugin-consent] Owner 2026-11-11: "Every plugin needs to be able to be updated from the app." What Hermes
+        // holds back for a person's word is asked here and then applied: a scan that said "caution" (what it found,
+        // Update Anyway), and new Python packages (their names, Install and Update: the add-on runs Hermes's own
+        // update on its computer and answers that question, hermes-hq-push 0.9.52).
+        let cautions = outcomes.compactMap { outcome -> (Item, [String])? in
+            if case .caution(let findings) = outcome.result { return (outcome.item, findings) } else { return nil }
+        }
+        var forced = Set<String>()
+        for name in Self.distinct(cautions.map(\.0.plugin.name)) {
+            if await Self.cautionConsent(name, findings: cautions.first { $0.0.plugin.name == name }?.1 ?? []) { forced.insert(name) }
+        }
+        let forcedItems = cautions.map(\.0).filter { forced.contains($0.plugin.name) }
+        if !forcedItems.isEmpty {
+            let third = await install(forcedItems, accept: true, force: forced, store: store, model: model, several: several)
+            outcomes = outcomes.filter { !forcedItems.contains($0.item) } + third
+        }
+        let held = outcomes.compactMap { outcome -> (Item, String)? in
+            if case .computer(let packages) = outcome.result { return (outcome.item, packages) } else { return nil }
+        }
+        if !held.isEmpty, await PluginUpdateConsent.available() {
+            var approved = Set<String>()
+            for name in Self.distinct(held.map(\.0.plugin.name)) {
+                if await Self.packagesConsent(name, packages: held.first { $0.0.plugin.name == name }?.1 ?? "") { approved.insert(name) }
+            }
+            for (index, (item, _)) in held.enumerated() {
+                let name = item.plugin.name
+                var result = CopyResult.declined
+                if approved.contains(name) {
+                    update.detail(.install, AddOnUpdate.installing("\(several ? "\(name) for \(item.bot)" : name), with its packages", index + 1, of: held.count))
+                    result = await PluginUpdateConsent.apply(profile: item.profile, name: name, acceptCapabilities: accepted.contains(name),
+                                                             force: forced.contains(name))
+                }
+                if let at = outcomes.firstIndex(where: { $0.item == item }) { outcomes[at].result = result }
+            }
+        }
         NotificationCenter.default.post(name: Self.didChange, object: nil)
         let done = outcomes.filter { $0.result == .done || $0.result == .doneNeedsRestart }.map(\.item)
         let restart = outcomes.contains { $0.result == .doneNeedsRestart }
@@ -680,6 +715,8 @@ nonisolated enum PluginUpdateWords {
         case done, doneNeedsRestart
         /// The new version does more than the installed one (its lines): applied only on the owner's word.
         case consent([String])
+        /// [plugin-consent] Hermes's security scan said "caution" (what it found): applied only on the owner's word.
+        case caution([String])
         /// The owner said no to that question.
         case declined
         /// Hermes only lets this update be approved on its computer (it adds Python packages: `packages`, as Hermes
@@ -716,7 +753,12 @@ nonisolated enum PluginUpdateWords {
                     failed.append(name)
                     if firstFailure == nil { firstFailure = reason }
                 }
-                else if results.contains(where: { if case .consent = $0 { true } else { $0 == .declined } }) { declined.append(name) }
+                else if results.contains(where: { result in
+                    switch result {
+                    case .consent, .caution, .declined: true
+                    default: false
+                    }
+                }) { declined.append(name) }
                 else if !results.isEmpty { updated.append(name) }
             }
         }
@@ -744,7 +786,7 @@ nonisolated enum PluginUpdateWords {
     /// Plugins Hermes sent to its computer for one bot: the other bots' copies get the same answer without asking.
     private var computerOnly: [String: String] = [:]
 
-    private func install(_ items: [Item], accept: Bool, store: CapabilitiesStore, model: AppModel, several: Bool) async -> [Outcome] {
+    private func install(_ items: [Item], accept: Bool, force: Set<String> = [], store: CapabilitiesStore, model: AppModel, several: Bool) async -> [Outcome] {
         installed = 0
         installTotal = items.count
         computerOnly = [:]
@@ -758,24 +800,24 @@ nonisolated enum PluginUpdateWords {
             var queue = byBot.makeIterator()
             for _ in 0..<Self.installWidth {
                 guard let next = queue.next() else { break }
-                group.addTask { await self.install(bot: next, accept: accept, store: store, model: model, several: several) }
+                group.addTask { await self.install(bot: next, accept: accept, force: force, store: store, model: model, several: several) }
             }
             while let results = await group.next() {
                 out += results
-                if let next = queue.next() { group.addTask { await self.install(bot: next, accept: accept, store: store, model: model, several: several) } }
+                if let next = queue.next() { group.addTask { await self.install(bot: next, accept: accept, force: force, store: store, model: model, several: several) } }
             }
         }
         // In the order asked, whatever order the bots finished in.
         return items.compactMap { item in out.first { $0.item == item } }
     }
 
-    private func install(bot items: [Item], accept: Bool, store: CapabilitiesStore, model: AppModel, several: Bool) async -> [Outcome] {
+    private func install(bot items: [Item], accept: Bool, force: Set<String>, store: CapabilitiesStore, model: AppModel, several: Bool) async -> [Outcome] {
         var out: [Outcome] = []
         for item in items {
             let name = item.plugin.name
             let result: CopyResult
             if let packages = computerOnly[name] { result = .computer(packages: packages) }
-            else { result = await one(item, accept: accept, store: store, model: model) }
+            else { result = await one(item, accept: accept, force: force.contains(name), store: store, model: model) }
             if case .computer(let packages) = result { computerOnly[name] = packages }
             installed += 1
             if installed < installTotal {
@@ -789,15 +831,17 @@ nonisolated enum PluginUpdateWords {
     /// One copy's update. A call the connection dropped under (the app went to the background, Hermes blinked) is
     /// made again once the gateway is back: the update is the same asked twice, and answers "unchanged" if it had
     /// gone in. Only Hermes's own refusal is a failure.
-    private func one(_ item: Item, accept: Bool, store: CapabilitiesStore, model: AppModel) async -> CopyResult {
+    private func one(_ item: Item, accept: Bool, force: Bool = false, store: CapabilitiesStore, model: AppModel) async -> CopyResult {
         let name = item.plugin.name
         var lastError = ""
         for attempt in 0..<4 {
             guard await Self.linkReady(model) else { return .failed(PluginUpdateWords.awayTooLong) }
             do {
-                let result = try await store.plugin(.update(name: name, accept: accept), profile: item.profile)
+                let result = try await store.plugin(.update(name: name, accept: accept, force: force), profile: item.profile)
                 if result.consentRequired { return .consent(result.deltaLines) }
-                if result.scanBlocked { return .failed(PluginUpdateWords.scanBlocked) }
+                if result.scanBlocked {
+                    return result.scanVerdict == "caution" && !force ? .caution(result.scanFindings) : .failed(PluginUpdateWords.scanBlocked)
+                }
                 guard result.ok else { return .failed("Hermes didn’t apply the update.") }
                 return result.needsRestart ? .doneNeedsRestart : .done
             } catch let refusal as RPCError {
@@ -852,6 +896,35 @@ nonisolated enum PluginUpdateWords {
         return values.filter { seen.insert($0).inserted }
     }
 
+    /// [plugin-consent] The update adds Python packages (as Hermes names them): shown over the sheet; installed and
+    /// the update applied only on "Install and Update".
+    private static func packagesConsent(_ name: String, packages: String) async -> Bool {
+        let names = PluginUpdateWords.packageNames([packages])
+        let list = names.isEmpty ? "The new version adds Python packages to Hermes." : "The new version adds to Hermes:\n" + names.joined(separator: "\n")
+        return await ask(title: "\(name) adds Python packages", message: "\(list)\nInstall \(names.count == 1 ? "it" : "them") only if you trust the plugin.",
+                         yes: "Install and Update")
+    }
+
+    /// [plugin-consent] Hermes's security scan flagged the update ("caution"): what it found, and Update Anyway.
+    private static func cautionConsent(_ name: String, findings: [String]) async -> Bool {
+        var shown = Array(findings.prefix(8))
+        if findings.count > 8 { shown.append("and \(findings.count - 8) more") }
+        let found = shown.isEmpty ? "" : ":\n" + shown.joined(separator: "\n")
+        return await ask(title: "Hermes’s scan flagged \(name)", message: "Its security scan of the new version said caution\(found)\nUpdate only if you trust the plugin.",
+                         yes: "Update Anyway")
+    }
+
+    private static func ask(title: String, message: String, yes: String) async -> Bool {
+        guard let host = AddOnUpdate.shared.shownSheet ?? FailureAlert.topmost(MainTabController.current) else { return false }
+        return await withCheckedContinuation { continuation in
+            let answer = AlertAnswer(continuation, unanswered: false)
+            let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in answer.answer(false) })
+            alert.addAction(UIAlertAction(title: yes, style: .default) { _ in answer.answer(true) })
+            host.present(alert, animated: true)
+        }
+    }
+
     /// The new version adds things the installed one doesn't have (tools, hooks): shown over the sheet, and applied
     /// only on "Apply Update". False for Cancel, or an alert that went away unanswered.
     private static func consent(_ name: String, bot: String?, lines: [String]) async -> Bool {
@@ -867,5 +940,57 @@ nonisolated enum PluginUpdateWords {
             alert.addAction(UIAlertAction(title: "Apply Update", style: .default) { _ in answer.answer(true) })
             host.present(alert, animated: true)
         }
+    }
+}
+
+// MARK: - The add-on applies what Hermes holds for a terminal ([plugin-consent])
+
+/// hermes-hq-push 0.9.52 (`pluginUpdates` in its status): POST /plugins/update runs Hermes's own `hermes plugins update`
+/// on its computer and answers the Python-packages question the owner answered in the app; GET /plugins/update/<job>
+/// says how it went. An older add-on, or Hermes on Windows, doesn't offer it, and the ending hands on to the main bot.
+@MainActor enum PluginUpdateConsent {
+    static let path = "/plugins/update"
+
+    nonisolated static func offered(_ status: [String: Any]?) -> Bool { (status?["pluginUpdates"] as? NSNumber)?.boolValue == true }
+
+    static func available() async -> Bool {
+        guard let call = PushRegistrar.shared.call else { return false }
+        let status = await call(PushPolicy.route + "/status", "GET", nil)
+        return status.status == 200 && offered(status.body)
+    }
+
+    /// How the job went, from its answer; nil while it runs.
+    nonisolated static func result(_ job: [String: Any]?) -> PluginUpdateFlow.CopyResult? {
+        switch job?["state"] as? String {
+        case "done": return (job?["unchanged"] as? NSNumber)?.boolValue == true ? .done : .doneNeedsRestart
+        case "failed":
+            let said = (job?["output"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return .failed(said.isEmpty ? "Hermes didn’t apply the update." : said)
+        default: return nil
+        }
+    }
+
+    /// Starts the update and looks every two seconds until it's over (six minutes of looking; a look that gets no
+    /// answer, as while the app is in the background, is just looked again).
+    static func apply(profile: String, name: String, acceptCapabilities: Bool, force: Bool) async -> PluginUpdateFlow.CopyResult {
+        guard let call = PushRegistrar.shared.call else { return .failed("Hermes’s add-on didn’t answer.") }
+        let started = await call(PushPolicy.route + path, "POST", ["profile": profile, "name": name, "accept_capabilities": acceptCapabilities, "force": force])
+        guard started.status == 200, let job = started.body?["job"] as? String else {
+            AppLog.note("plugins", "update: add-on didn't start \(name) (\(started.status))")
+            return .failed((started.body?["detail"] as? String) ?? "Hermes’s add-on couldn’t start the update.")
+        }
+        var looks = 0
+        while looks < 180 {
+            try? await Task.sleep(for: .seconds(2))
+            let answer = await call(PushPolicy.route + path + "/" + job, "GET", nil)
+            if answer.status == 404 { return .failed("Hermes restarted before the update finished. Try again.") }
+            guard answer.status == 200 else { continue }   // no answer: not a look
+            looks += 1
+            if let result = result(answer.body) {
+                AppLog.note("plugins", "update: add-on \(result == .done || result == .doneNeedsRestart ? "applied" : "couldn't apply") \(name)")
+                return result
+            }
+        }
+        return .failed("The update is taking too long. Look at it on Hermes’s computer.")
     }
 }

@@ -221,6 +221,31 @@ import Testing
         #expect(old.computer == nil)
     }
 
+    // MARK: What Hermes holds for a person's word ([plugin-consent])
+
+    @Test func theAddOnAppliesAnUpdateTheOwnerApproved() throws {
+        #expect(PluginUpdateConsent.offered(["pluginUpdates": true]))
+        #expect(!PluginUpdateConsent.offered(["pluginUpdates": false]) && !PluginUpdateConsent.offered([:]) && !PluginUpdateConsent.offered(nil),
+                "an older add-on, or Hermes on Windows: the main bot is asked instead")
+        #expect(PluginUpdateConsent.result(["state": "running"]) == nil)
+        #expect(PluginUpdateConsent.result(["state": "done", "unchanged": false]) == .doneNeedsRestart, "new code on disk: Hermes restarts to load it")
+        #expect(PluginUpdateConsent.result(["state": "done", "unchanged": true]) == .done)
+        #expect(PluginUpdateConsent.result(["state": "failed", "output": "Error: no room\n"]) == .failed("Error: no room"))
+        #expect(PluginUpdateConsent.result(["state": "failed", "output": ""]) == .failed("Hermes didn’t apply the update."))
+    }
+
+    @Test func aCautionScanCanBeForcedAndADangerousOneCannot() throws {
+        let caution = PluginResult.read(try Self.row(["ok": false, "scan_blocked": true, "scan_verdict": "caution",
+                                                      "scan_findings": [["description": "reads environment variables", "file": "tools.py", "line": 12],
+                                                                        ["category": "network"]]]))
+        #expect(caution.scanBlocked && caution.scanVerdict == "caution")
+        #expect(caution.scanFindings == ["reads environment variables (tools.py)", "network"])
+        #expect(PluginAction.update(name: "x", accept: true, force: true).params(profile: "default")["force"]?.bool == true)
+        #expect(PluginAction.update(name: "x", accept: false).params(profile: "default")["force"] == nil, "never forced unasked")
+        let tally = PluginUpdateFlow.Tally([Self.outcome("a", "default", .caution(["x"]))], plugins: ["a"])
+        #expect(tally.declined == ["a"] && tally.reason == nil, "left as it was at the owner's Cancel: not a failure")
+    }
+
     // MARK: The sheet itself
 
     @Test func theAddOnSheetRunsAPluginUpdate() {

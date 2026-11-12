@@ -307,7 +307,8 @@ nonisolated struct PluginInfo: Sendable, Hashable, Identifiable {
 /// (V:store/agent-plugins.ts:158, 207, 306, 376, 412, 466).
 nonisolated enum PluginAction: Sendable, Equatable {
     case toggle(key: String, enable: Bool)
-    case update(name: String, accept: Bool)
+    /// `force`: apply it though Hermes's security scan said "caution" (the owner saw what it found).
+    case update(name: String, accept: Bool, force: Bool = false)
     case remove(name: String)
     case install(identifier: String, force: Bool, enable: Bool, ref: String?)
     /// [find-plugins] A Hermes catalog plugin by its catalog name: Hermes installs the commit Nous reviewed.
@@ -319,9 +320,10 @@ nonisolated enum PluginAction: Sendable, Equatable {
         switch self {
         case .toggle(let key, let enable):
             out["action"] = "toggle"; out["key"] = .string(key); out["enable"] = .bool(enable)
-        case .update(let name, let accept):
+        case .update(let name, let accept, let force):
             out["action"] = "update"; out["name"] = .string(name)
             if accept { out["accept_capabilities"] = true }
+            if force { out["force"] = true }
         case .remove(let name):
             out["action"] = "remove"; out["name"] = .string(name)
         case .install(let identifier, let force, let enable, let ref):
@@ -356,6 +358,10 @@ nonisolated struct PluginResult: Sendable, Hashable {
     var scanBlocked = false
     /// [plugin-updates] An update that found nothing newer.
     var unchanged = false
+    /// [plugin-consent] The scan's verdict when it stopped the update ("caution" can be forced, "dangerous" never),
+    /// and what it found, a line each.
+    var scanVerdict: String? = nil
+    var scanFindings: [String] = []
 
     var needsRestart: Bool { restartRequired && !gatewayReloaded }
 
@@ -364,6 +370,11 @@ nonisolated struct PluginResult: Sendable, Hashable {
                      restartRequired: value["restart_required"]?.bool ?? false, gatewayReloaded: value["gateway_reloaded"]?.bool ?? false,
                      missingEnv: (value["missing_env"]?.array ?? []).compactMap(\.string), warnings: (value["warnings"]?.array ?? []).compactMap(\.string),
                      consentRequired: value["consent_required"]?.bool ?? false, deltaLines: (value["delta_lines"]?.array ?? []).compactMap(\.string),
-                     scanBlocked: value["scan_blocked"]?.bool ?? false, unchanged: value["unchanged"]?.bool ?? false)
+                     scanBlocked: value["scan_blocked"]?.bool ?? false, unchanged: value["unchanged"]?.bool ?? false,
+                     scanVerdict: RosterText.trimmed(value["scan_verdict"]),
+                     scanFindings: (value["scan_findings"]?.array ?? []).compactMap { finding in
+                         guard let what = RosterText.trimmed(finding["description"]) ?? RosterText.trimmed(finding["category"]) else { return nil }
+                         return RosterText.trimmed(finding["file"]).map { "\(what) (\($0))" } ?? what
+                     })
     }
 }

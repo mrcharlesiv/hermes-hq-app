@@ -160,27 +160,45 @@ import Testing
         let names = ["claude-sdk", "homeassistant", "honcho", "memory-wiki", "phone-harness"]
         let tally = PluginUpdateFlow.Tally([
             Self.outcome("claude-sdk", "default", .done), Self.outcome("claude-sdk", "finance", .done),
-            Self.outcome("homeassistant", "default", .computer), Self.outcome("homeassistant", "finance", .computer),
+            Self.outcome("homeassistant", "default", .computer(packages: "tzdata; platform_system == 'Windows'")), Self.outcome("homeassistant", "finance", .computer(packages: "tzdata; platform_system == 'Windows'")),
             Self.outcome("honcho", "default", .doneNeedsRestart),
             Self.outcome("memory-wiki", "default", .done),
-            Self.outcome("phone-harness", "default", .computer),
+            Self.outcome("phone-harness", "default", .computer(packages: "tzdata; platform_system == 'Windows'")),
         ], plugins: names)
         #expect(tally.updated == ["claude-sdk", "honcho", "memory-wiki"])
         #expect(tally.computer == ["homeassistant", "phone-harness"])
         #expect(tally.title == "Updated 3 of 5 Plugins")
         #expect(tally.reason == "homeassistant and phone-harness add Python packages, which Hermes only lets you approve on its computer. Run hermes plugins update homeassistant there, and the same for the other.")
 
+        // [plugin-ask-bot] The ending hands those to the main bot: what they add, in plain names, and one button.
+        #expect(PluginUpdateWords.packages(in: refusal) == "tzdata; platform_system == 'Windows'")
+        #expect(PluginUpdateWords.packages(in: "something else") == "")
+        #expect(PluginUpdateWords.packageNames(["tzdata; platform_system == 'Windows'", "phone-harness==0.3.3, requests>=2", "tzdata"]) == ["tzdata", "phone-harness", "requests"])
+        #expect(tally.packages["homeassistant"] == "tzdata; platform_system == 'Windows'")
+        #expect(PluginUpdateWords.needsBot(tally.computer, packages: ["tzdata; platform_system == 'Windows'", "phone-harness==0.3.3"], bot: "Hermes")
+                == "homeassistant and phone-harness add Python packages (tzdata and phone-harness), which Hermes only installs when asked on its own computer. Hermes can do that from its chat.")
+        #expect(PluginUpdateWords.askBot("Hermes", count: 2) == "Ask Hermes to Update Them" && PluginUpdateWords.askBot("Otto", count: 1) == "Ask Otto to Update It")
+        #expect(PluginUpdateWords.addsPackages(["a"]) == "a Adds Python Packages")
+        let prompt = PluginUpdateWords.botUpdatePrompt([("homeassistant", "tzdata; platform_system == 'Windows'", ["default", "finance"]),
+                                                        ("phone-harness", "phone-harness==0.3.3", ["default"])])
+        #expect(prompt.contains("- homeassistant (adds: tzdata; platform_system == 'Windows'), for the profiles default, finance"))
+        #expect(prompt.contains("- phone-harness (adds: phone-harness==0.3.3), for the profile default"))
+        #expect(prompt.contains("I approve them") && prompt.contains("don't get around it another way"))
+        #expect(PluginUpdateWords.botUpdateTitle(["homeassistant", "phone-harness"]) == "Update homeassistant and phone-harness on this Hermes.")
+        #expect(AddOnUpdate.headline(.more(title: "Updated 3 of 5 Plugins", reason: "R"), setUp: false) == "Updated 3 of 5 Plugins")
+        #expect(AddOnUpdate.line(.more(title: "T", reason: "R"), bot: "Hermes") == "R")
+
         let all = PluginUpdateFlow.Tally([Self.outcome("a", "default", .done), Self.outcome("a", "x", .done)], plugins: ["a"])
         #expect(all.updated == ["a"] && all.reason == nil, "every copy in: nothing to explain")
         let part = PluginUpdateFlow.Tally([Self.outcome("a", "default", .done), Self.outcome("a", "x", .failed("No room."))], plugins: ["a"])
         #expect(part.updated.isEmpty && part.failed == ["a"], "a plugin with a copy left behind isn't updated")
         #expect(part.title == "Couldn’t Update a" && part.reason == "No room.")
-        let one = PluginUpdateFlow.Tally([Self.outcome("a", "default", .computer)], plugins: ["a"])
+        let one = PluginUpdateFlow.Tally([Self.outcome("a", "default", .computer(packages: "tzdata; platform_system == 'Windows'"))], plugins: ["a"])
         #expect(one.reason == "a adds Python packages, which Hermes only lets you approve on its computer. Run hermes plugins update a there.")
         let no = PluginUpdateFlow.Tally([Self.outcome("a", "default", .declined), Self.outcome("b", "default", .done)], plugins: ["a", "b"])
         #expect(no.declined == ["a"] && no.reason == nil, "turned down at its question: not a failure")
         let mixed = PluginUpdateFlow.Tally([Self.outcome("a", "default", .done), Self.outcome("b", "default", .failed("No room.")),
-                                            Self.outcome("c", "default", .computer)], plugins: ["a", "b", "c"])
+                                            Self.outcome("c", "default", .computer(packages: "tzdata; platform_system == 'Windows'"))], plugins: ["a", "b", "c"])
         #expect(mixed.title == "Updated 1 of 3 Plugins")
         #expect(mixed.reason?.hasSuffix("b: No room.") == true)
     }

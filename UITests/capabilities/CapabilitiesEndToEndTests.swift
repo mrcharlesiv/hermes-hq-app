@@ -410,6 +410,38 @@ final class CapabilitiesEndToEndTests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 8) { row.isHittable }, "Not Now: the row stays")
     }
 
+    /// [plugin-ask-bot] An update Hermes refuses from the app (it adds Python packages) isn't left as a command to
+    /// type: the ending names the packages and offers the main bot, and the request goes to its chat.
+    @MainActor func testC12c_PluginUpdateHandedToTheBot() throws {
+        try control(gateway.url, "/__seed", ["python_deps": ["web-clipper": "readability-lxml==0.8.1, tzdata; platform_system == 'Windows'"]])
+        let app = launch()
+        openCapabilities(app, tab: "Plugins")
+        let row = app.descendants(matching: .any)["plugin-row-web-clipper"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        row.tap()
+        let update = app.buttons["plugin.update"]
+        XCTAssertTrue(update.waitForExistence(timeout: 8))
+        update.tap()
+        let go = app.buttons["addon-update.go"]
+        XCTAssertTrue(go.waitForExistence(timeout: 10))
+        sleep(1)
+        go.tap()
+        let ask = app.buttons["addon-update.ask-bot-update"]
+        XCTAssertTrue(ask.waitForExistence(timeout: 15), "the ending offers the main bot")
+        XCTAssertTrue(app.staticTexts["web-clipper Adds Python Packages"].exists)
+        let line = app.staticTexts["addon-update.line"]
+        XCTAssertTrue(line.label.contains("(readability-lxml and tzdata)"), "the packages, by name: \(line.label)")
+        XCTAssertFalse(app.buttons["addon-update.retry"].exists, "no Try Again that would only fail again")
+        shot(app, "plugin-update-ask-bot")
+        ask.tap()
+        XCTAssertTrue(waitUntil(timeout: 20) {
+            let prompts = (try? self.control(self.gateway.url, "/__state"))?["prompts"] as? [[String: Any]] ?? []
+            return prompts.contains { ($0["text"] as? String)?.contains("- web-clipper (adds: readability-lxml==0.8.1") == true }
+        }, "the request reached the main bot, naming the plugin and its packages")
+        shot(app, "plugin-update-asked-bot")
+        XCTAssertEqual(plugin("web-clipper")["update_available"] as? Bool, true, "the app itself changed nothing")
+    }
+
     @MainActor func testC13_TerminalBackendAndWebProvider() throws {
         let app = launch()
         openCapabilities(app, tab: "Tools")

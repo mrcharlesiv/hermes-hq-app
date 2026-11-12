@@ -55,6 +55,9 @@ import UIKit
         /// [manual-restart] Installed; the owner restarts Hermes themselves, and the app goes on watching.
         case yours
         case failed(title: String, reason: String)
+        /// [plugin-ask-bot] Done as far as the app can: what's left is the main bot's to do from its chat, on the
+        /// owner's tap (plugins whose update adds Python packages).
+        case more(title: String, reason: String)
     }
 
     nonisolated enum Phase: Equatable, Sendable { case idle, checking, asking, working, ended(End) }
@@ -328,7 +331,7 @@ import UIKit
         phase = .ended(end)
         switch end {
         case .on, .upToDate: Haptics.play(.success)
-        case .notOut, .slow, .yours: break
+        case .notOut, .slow, .yours, .more: break
         case .unreachable, .failed: Haptics.play(.warning)
         }
         AppLog.note("push", "update sheet: \(Self.logWord(end))")
@@ -553,7 +556,7 @@ import UIKit
         case .unreachable: "Couldn’t Reach Hermes"
         case .slow: "Hermes Hasn’t Restarted Yet"
         case .yours: "Restart Hermes to Finish"
-        case .failed(let title, _): title
+        case .failed(let title, _), .more(let title, _): title
         }
     }
 
@@ -600,7 +603,7 @@ import UIKit
             case .both: "Both add-ons are installed."
             }
             return "\(what) Now restart Hermes on its computer (hermes dashboard or hermes serve, and the gateway if it runs on its own). The app finishes once it’s back."
-        case .failed(_, let reason): return reason
+        case .failed(_, let reason), .more(_, let reason): return reason
         }
     }
 
@@ -622,6 +625,7 @@ import UIKit
             case .upToDate, .unreachable, .notOut: return false
             case .failed: return steps.contains { $0.id == .install && $0.state == .done }
             case .on, .slow, .yours: return steps.count > 1
+            case .more: return steps.contains { $0.id == .install && $0.state == .done }   // steps only when some ran
             }
         }
     }
@@ -629,7 +633,7 @@ import UIKit
     /// A button under the steps (Update, Try Again, Open the bot's chat).
     var hasAction: Bool {
         switch phase {
-        case .asking, .ended(.unreachable), .ended(.failed), .ended(.slow), .ended(.yours): true
+        case .asking, .ended(.unreachable), .ended(.failed), .ended(.slow), .ended(.yours), .ended(.more): true
         default: false
         }
     }
@@ -645,6 +649,8 @@ import UIKit
             case .notOut: return ("clock.badge.exclamationmark", .orange)
             case .slow: return ("hourglass", .orange)
             case .yours: return ("arrow.clockwise.circle.fill", .hqTint)
+            case .more:   // a tick when something went in; otherwise the plugin's own mark (nothing failed, nothing done)
+                return steps.contains { $0.id == .install && $0.state == .done } ? ("checkmark.circle.fill", .green) : ("puzzlepiece.extension", .hqTint)
             case .unreachable, .failed: return ("exclamationmark.triangle.fill", .orange)
             }
         }
@@ -659,6 +665,7 @@ import UIKit
         case .slow: "slow restart"
         case .yours: "waiting for the owner's restart"
         case .failed(let title, _): "failed: \(title)"
+        case .more(let title, _): "handed on: \(title)"
         }
     }
 }
@@ -890,6 +897,8 @@ struct AddOnUpdateView: View {
             action("Open \(update.botName)’s Chat", id: "addon-update.chat") { update.openBotChat() }
         case .ended(.yours):   // [manual-restart]
             action(AddOnUpdate.askInstead(update.botName), id: "addon-update.ask-bot") { update.askBotInstead() }
+        case .ended(.more):   // [plugin-ask-bot]
+            action(PluginUpdateFlow.shared.handOffButton, id: "addon-update.ask-bot-update") { PluginUpdateFlow.shared.askBotToFinish() }
         default:
             EmptyView()
         }

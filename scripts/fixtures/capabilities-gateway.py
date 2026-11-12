@@ -452,6 +452,9 @@ def plugins_manage(profile, params):
         row = by_name(params.get('name'))
         if row is None:
             raise RPCFailure(4064, 'plugin not found')
+        if row['name'] in X.get('python_deps', {}):   # [plugin-ask-bot] /__seed python_deps: Hermes's own refusal
+            raise RPCFailure(4021, "The update declares new Python dependencies (%s); run `hermes plugins update %s` in a terminal to review them."
+                             % (X['python_deps'][row['name']], row['name']))
         if not params.get('accept_capabilities'):
             lines = X['install'].get('delta_lines') or ['+ tool: clip_page', '+ hook: on_session_start']
             return {'ok': False, 'consent_required': True, 'sha': '9f2c1ab04d11', 'delta_lines': lines}
@@ -987,6 +990,8 @@ def handler(gateway):
                         seed_all()
                     if 'page_routes_missing' in body:   # [plugin-pages] as --page-routes-missing, switched while running
                         X['routes_missing'] = bool(body['page_routes_missing'])
+                    if 'python_deps' in body:   # [plugin-ask-bot] {plugin: "its new packages"}: that plugin's update is refused
+                        X['python_deps'] = dict(body['python_deps'])
                     if 'clear_fail' in body:
                         X['fail'] = []
                     if 'clear_log' in body:

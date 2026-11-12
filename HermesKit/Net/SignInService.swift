@@ -80,9 +80,11 @@ import UIKit
         defer { signingIn = false }
         let transport = HTTPTransport(cookies: false)
         do {
-            try await SignInFlows.nousStatus(base: base, transport: transport)
-            let outcome = try await NousSignIn.run(gateway: base, browser: browser, relay: relay)
-            let tokens = try await SignInFlows.redeemNous(base: base, code: outcome.code, verifier: outcome.verifier, transport: transport)
+            // [own-login] "nous", or the gateway's own login provider (self-hosted OIDC) when it has no Nous one.
+            let provider = try await SignInFlows.nousStatus(base: base, transport: transport)
+            let outcome = try await NousSignIn.run(gateway: base, provider: provider, browser: browser, relay: relay)
+            let tokens = try await SignInFlows.redeemNous(base: base, code: outcome.code, verifier: outcome.verifier,
+                                                          provider: provider, transport: transport)
             let candidate = StoredAccount(url: base.absoluteString, username: StoredAccount.nousUsername(userId: tokens.userId),
                                           label: Self.accountLabel(label), nous: tokens)   // [onboarding] the optional Name
             // Check the bearer (renewing first if it is already due), then save the pair the gateway now honours.

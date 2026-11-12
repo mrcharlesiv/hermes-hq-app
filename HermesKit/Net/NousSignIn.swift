@@ -187,9 +187,10 @@ final class WebAuthAnchorProvider: NSObject {
 
     /// Runs the browser half; returns the one-time code and this attempt's verifier. Throws `nousCancelled` when the
     /// person closes the sheet, `nousFailed` on a missing or mismatched state, `timeout` after 10 minutes.
-    static func run(gateway: URL, browser: NousBrowser, relay: LoopbackRelay = .shared) async throws -> Outcome {
+    static func run(gateway: URL, provider: String = NousGatewayProtocol.nous, browser: NousBrowser,
+                    relay: LoopbackRelay = .shared) async throws -> Outcome {
         try await run(browser: browser, relay: relay) { redirect, challenge, state in
-            NousGatewayProtocol.authorizeURL(gateway: gateway, challenge: challenge, redirect: redirect, state: state)
+            NousGatewayProtocol.authorizeURL(gateway: gateway, provider: provider, challenge: challenge, redirect: redirect, state: state)
         }.outcome
     }
 

@@ -307,7 +307,7 @@ final class AppModel: AppServices {
         if let leaving { ServerIssues.shared.signOut(account: leaving.id) }   // [capabilities] 3x §8.1
         if let leaving { AddOnReminder.shared.signOut(account: leaving.id) }   // [addon-reminder]
         if let leaving { PluginUpdateReminder.shared.signOut(account: leaving.id) }   // [plugin-updates]
-        if leaving?.kind == .nous { NousSheetLogin.signedOut() }   // [nous-different-account] the next sheet asks who you are
+        if leaving?.kind == .nous, leaving?.usesOwnLogin != true { NousSheetLogin.signedOut() }   // [nous-different-account] the next sheet asks who you are
         tearDown(shutdownClient: false)           // SignInService ends the client and still logs out with its cookies
         signIn.signOut()
         shareLeaving()                                // [share] the sheet offers nobody once signed out

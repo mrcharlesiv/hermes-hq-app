@@ -46,7 +46,7 @@ struct AccountView: View {
     /// How the account is named: "Nous account" for Sign in with Nous, never its id (spec 01 §2.1).
     static func signedInAs(_ account: GatewayAccount?) -> String {
         guard let account else { return "—" }
-        if account.kind == .nous { return "Nous account" }
+        if account.kind == .nous { return GatewayNaming.accountName(account) }
         return account.username?.isEmpty == false ? account.username! : "—"
     }
 

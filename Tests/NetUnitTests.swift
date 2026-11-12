@@ -357,6 +357,89 @@ import Testing
         #expect(!NousGatewayProtocol.offersNous(status: ["auth_providers": ["basic"], "auth_flows": ["native_pkce"]]))
     }
 
+    /// [own-login] A gateway whose browser login is its own (self-hosted OIDC), not Nous (tester Papy 2026-11-12).
+    @Test func ownLoginProvider() throws {
+        let status: JSONValue = ["auth_providers": ["self-hosted"], "auth_flows": ["cookie", "native_pkce"]]
+        #expect(!NousGatewayProtocol.offersNous(status: status) && NousGatewayProtocol.offersBrowserSignIn(status: status))
+        #expect(!NousGatewayProtocol.offersBrowserSignIn(status: ["auth_providers": ["self-hosted"], "auth_flows": ["cookie"]]))
+        let listed: JSONValue = ["providers": [["name": "basic", "display_name": "Password", "supports_password": true],
+                                               ["name": "self-hosted", "display_name": "Self-Hosted OIDC", "supports_password": false]]]
+        let own = try #require(NousGatewayProtocol.ownLogin(providers: listed))
+        #expect(own == BrowserLogin(provider: "self-hosted", displayName: "Self-Hosted OIDC"))
+        #expect(own.buttonTitle == "Sign in with Single Sign-On")
+        #expect(BrowserLogin(provider: "okta", displayName: "Okta").buttonTitle == "Sign in with Okta")
+        #expect(BrowserLogin(provider: "x", displayName: "").buttonTitle == "Sign in with Single Sign-On")
+        // Nous and password providers are never "its own login"; nor is an empty list.
+        #expect(NousGatewayProtocol.ownLogin(providers: ["providers": [["name": "nous", "display_name": "Nous"], ["name": "basic", "supports_password": true]]]) == nil)
+        #expect(NousGatewayProtocol.ownLogin(providers: ["providers": []]) == nil)
+
+        let url = try #require(NousGatewayProtocol.authorizeURL(gateway: URL(string: "https://g.example.com")!, provider: "self-hosted",
+                                                                 challenge: "c", redirect: "http://127.0.0.1:53124/callback", state: "s"))
+        #expect(url.absoluteString.contains("/auth/native/authorize?provider=self-hosted&code_challenge=c&"))
+
+        // The pair is taken only from the provider the account signed in with, and remembers it for renewals.
+        let body = Data(#"{"access_token":"a","refresh_token":"r","expires_at":1791234567,"provider":"self-hosted","user_id":"sub-1"}"#.utf8)
+        #expect(NousGatewayProtocol.answer(status: 200, body: body) == .unavailable(502))
+        guard case .tokens(let tokens) = NousGatewayProtocol.answer(status: 200, body: body, provider: "self-hosted", now: 5) else {
+            Issue.record("no tokens"); return
+        }
+        #expect(tokens.provider == "self-hosted" && tokens.providerName == "self-hosted" && tokens.userId == "sub-1")
+        let nousBody = Data(#"{"access_token":"a","refresh_token":"r","provider":"nous","user_id":"u"}"#.utf8)
+        #expect(NousGatewayProtocol.answer(status: 200, body: nousBody, provider: "self-hosted") == .unavailable(502))
+        guard case .tokens(let nous) = NousGatewayProtocol.answer(status: 200, body: nousBody) else { Issue.record("no tokens"); return }
+        #expect(nous.provider == nil && nous.providerName == "nous")
+
+        // No refresh token (a login without offline_access): taken for its own login only, never renewed ahead of time.
+        let bare = Data(#"{"access_token":"a","refresh_token":"","expires_at":100,"provider":"self-hosted","user_id":"sub-1"}"#.utf8)
+        guard case .tokens(let short) = NousGatewayProtocol.answer(status: 200, body: bare, provider: "self-hosted", now: 10) else {
+            Issue.record("no tokens"); return
+        }
+        #expect(!short.canRenew && !short.needsRenewal(now: 99) && !short.renewsAlongside(now: 99))
+        #expect(NousGatewayProtocol.answer(status: 200, body: Data(#"{"access_token":"a","refresh_token":"","provider":"nous","user_id":"u"}"#.utf8)) == .unavailable(502))
+        #expect(ShareNous(["accessToken": "a", "refreshToken": "", "userId": "u"] as [String: Any]) == nil)
+        #expect(ShareNous(["accessToken": "a", "refreshToken": "", "userId": "u", "provider": "self-hosted", "expiresAt": 100, "obtainedAt": 10] as [String: Any])?.needsRenewal(now: 99) == false)
+
+        // Saved and read back with its provider; a pair saved by an older build (no provider) is Nous.
+        let stored = StoredAccount(url: "https://g.example.com", username: StoredAccount.nousUsername(userId: tokens.userId), nous: tokens)
+        let read = try #require(SavedAccounts.decode(try SavedAccounts(current: stored.key, accounts: [stored]).encoded())?.active)
+        #expect(read.nous?.provider == "self-hosted" && read.isNous)
+        let account = try #require(read.gatewayAccount)
+        #expect(account.kind == .nous && account.usesOwnLogin && GatewayNaming.accountName(account) == "Single sign-on")
+        let old = try #require(SavedAccounts.decode(Data(#"{"current":"https://g.example.com\nnous:u","accounts":[{"url":"https://g.example.com","username":"nous:u","nous":{"accessToken":"a","refreshToken":"r","expiresAt":1,"userId":"u"}}]}"#.utf8))?.active)
+        #expect(old.nous?.provider == nil && old.gatewayAccount?.usesOwnLogin == false)
+        #expect(GatewayNaming.accountName(try #require(old.gatewayAccount)) == "Nous account")
+
+        // The Share extension renews the same pair by the same rule.
+        let shared = try #require(ShareNous(["accessToken": "a", "refreshToken": "r", "userId": "sub-1", "provider": "self-hosted"] as [String: Any]))
+        #expect(shared.providerName == "self-hosted" && shared.json["provider"] as? String == "self-hosted")
+        #expect(ShareNous.renewed(status: 200, body: body, userId: "sub-1") == nil)
+        #expect(ShareNous.renewed(status: 200, body: body, userId: "sub-1", provider: shared.provider, now: 9)?.provider == "self-hosted")
+
+        // The form: the browser way in is this login; the words never name Nous.
+        let options = SignInOptions(reachable: true, offersNous: false, offersPassword: false, ownLoginTitle: own.buttonTitle)
+        #expect(SignInWays(options) == .nous)
+        #expect(ProbeResult(known: true, nous: false, password: true, ownLogin: own).ways == .both)
+        #expect(!SignInCopy.subtitle(.nous, ownLogin: true).contains("Nous") && !SignInCopy.footnote(.nous, ownLogin: true).contains("Nous"))
+        #expect(SignInCopy.message(for: SignInError("nous-failed"), ownLogin: true) == "The sign-in didn’t finish. Try again.")
+        #expect(SignInCopy.message(for: SignInError("nous-failed"), ownLogin: false) == "Nous sign-in didn’t finish. Try again.")
+    }
+
+    /// [own-vpn] A WireGuard (or any own VPN's) private address or name takes plain http://, as Tailscale's does.
+    @Test func ownVPNAddresses() throws {
+        for host in ["10.8.0.1", "172.16.5.2", "192.168.42.10", "fd00:1234::1", "hermes.lan", "hermes.home.arpa", "box.wg.internal", "HERMES.LAN."] {
+            #expect(GatewayAddress.cleartextAllowed(host: host), "\(host)")
+            #expect(SignInAddress.isLocalHost(host), "\(host)")
+        }
+        for host in ["hermes.example.com", "evil-lan.com", "internal.example.org", "hermes.lan.example.com"] {
+            #expect(!GatewayAddress.cleartextAllowed(host: host), "\(host)")
+            #expect(!SignInAddress.isLocalHost(host), "\(host)")
+        }
+        #expect(GatewayAddress.normalizeTyped("hermes.lan:9119") == "http://hermes.lan:9119")
+        #expect(try GatewayAddress.validated("http://hermes.home.arpa:9119").absoluteString == "http://hermes.home.arpa:9119")
+        // A WireGuard address is not "tailnet-only": nothing waits for Tailscale.
+        #expect(GatewayAddress.reachable(URL(string: "http://10.8.0.1:9119")!, interfaces: { [] }))
+    }
+
     @Test func tokenAnswers() {
         let good = Data(#"{"access_token":"a","refresh_token":"r","token_type":"Bearer","expires_at":1791234567,"provider":"nous","user_id":"user_abc"}"#.utf8)
         guard case .tokens(let tokens) = NousGatewayProtocol.answer(status: 200, body: good, now: 1791234500) else { Issue.record("no tokens"); return }

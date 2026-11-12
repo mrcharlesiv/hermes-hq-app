@@ -376,6 +376,9 @@ static let after = "After you install it, come back here and \(DeviceWord.tap) *
         static let title1 = "Share Hermes on your Tailscale network"
         static let text1 = "It prints your address, like https://your-computer.your-tailnet.ts.net. If this computer already shares something with Tailscale Serve, this replaces it: use --https=8443 instead and add :8443 to the address."
         static let link1 = "Tailscale Serve guide"
+        /// [own-vpn] Native only (not in the web's guide): Tailscale is one way, not the only one (tester Papy
+        /// 2026-11-12, a WireGuard user: "it's a tailscale only connectivity?").
+        static let ownAddress = "Not using Tailscale? Any address this \(device) can reach works: your own VPN such as WireGuard, your local network, or your own https:// address. Skip this step and use that address in step 2."
         static let title2 = "Turn on sign-in"
         static let secretLead = "Make a secret:"
         static let envLead = "Add four lines to the file ~/.hermes/.env, with your own username, password, that secret and the address from step 1:"

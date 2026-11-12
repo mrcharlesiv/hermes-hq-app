@@ -38,6 +38,10 @@ final class SignInModel {
     var password = "" { didSet { if password != oldValue { passwordInvalid = false } } }
     /// nil until the address has been asked about (only the field shows).
     private(set) var ways: SignInWays?
+    /// [own-login] The browser button's words when this Hermes signs in with its own login provider (self-hosted
+    /// OIDC), not Nous; nil for Nous.
+    private(set) var ownLoginTitle: String?
+    var browserTitle: String { ownLoginTitle ?? "Sign in with Nous" }
     private(set) var checking = false { didSet { if checking && !oldValue { HQAnnounce.say("Checking the address", priority: .low, coalesce: true) } } }   // [a11y]
     /// The probe could not reach the address: the form stays (the probe can be wrong) and this says so under the field.
     private(set) var note: String?
@@ -129,7 +133,7 @@ final class SignInModel {
         debounce?.cancel()
         let text = address.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.isEmpty {
-            asked = ""; ways = nil; note = nil; checking = false
+            asked = ""; ways = nil; ownLoginTitle = nil; note = nil; checking = false
             return
         }
         // [mac] A pasted setup link (hermes://connect?url=…, what the setup's QR code holds) becomes the address in it.
@@ -152,7 +156,7 @@ final class SignInModel {
         guard !text.isEmpty, text != asked else { return }
         asked = text
         guard SignInAddress.looksLikeAddress(text) else {
-            ways = .both; note = nil; checking = false
+            ways = .both; ownLoginTitle = nil; note = nil; checking = false
             return
         }
         checking = true
@@ -169,14 +173,15 @@ final class SignInModel {
             }
             self.checking = false
             self.ways = SignInWays(options)
+            self.ownLoginTitle = options.reachable && !options.offersNous ? options.ownLoginTitle : nil
             self.note = options.reachable ? nil : (options.message ?? SignInCopy.unreachableNote)
             AppLog.trace("signin", "address probe settled: reachable=\(options.reachable)")
         }
     }
 
     /// Until the address has been asked about, the hosted form says the web's first lead (`connection-onboarding.ts:98`).
-    var subtitle: String { ways == nil && heading != nil ? OnboardingCopy.formLead : SignInCopy.subtitle(ways) }
-    var footnote: String { SignInCopy.footnote(ways) }
+    var subtitle: String { ways == nil && heading != nil ? OnboardingCopy.formLead : SignInCopy.subtitle(ways, ownLogin: ownLoginTitle != nil) }
+    var footnote: String { SignInCopy.footnote(ways, ownLogin: ownLoginTitle != nil) }
 
     func signInWithNous() {
         guard busy == nil else { return }
@@ -184,7 +189,7 @@ final class SignInModel {
         let text = address.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
             addressInvalid = true
-            error = "Enter the address, then \(DeviceWord.tap) Sign in with Nous."
+            error = "Enter the address, then \(DeviceWord.tap) \(browserTitle)."
             return
         }
         busy = .nous
@@ -245,7 +250,7 @@ final class SignInModel {
                 }
                 AppLog.note("signin", "sign-in (\(method)) failed after \(AppLog.ms(since: start)) ms: \(code)")
                 Haptics.play(.error)
-                self.error = SignInCopy.message(for: error)
+                self.error = SignInCopy.message(for: error, ownLogin: self.ownLoginTitle != nil)
                 self.addressInvalid = SignInCopy.marksAddress(code)
                 self.passwordInvalid = SignInCopy.marksPassword(code)
             }
@@ -439,7 +444,7 @@ struct SignInView: View {
                     Button(action: { focus = nil; model.signInWithNous() }) {
                         HStack(spacing: 8) {
                             if model.busy == .nous { ProgressView().tint(.white) }
-                            Text(model.busy == .nous ? "Signing In…" : "Sign in with Nous").font(Font.hq(.headline))
+                            Text(model.busy == .nous ? "Signing In…" : model.browserTitle).font(Font.hq(.headline))
                         }
                         .frame(maxWidth: .infinity, minHeight: fieldHeight - 16)
                     }
@@ -448,8 +453,10 @@ struct SignInView: View {
                     .controlSize(.large)
                     .disabled(model.busy != nil)
                     .accessibilityIdentifier("sign-in-nous")
-                    NousOtherAccountLink(id: "sign-in-nous-other") { focus = nil; model.signInWithOtherNousAccount() }
-                        .disabled(model.busy != nil)
+                    if model.ownLoginTitle == nil {   // [own-login] a Nous matter: their own sign-in page picks the account
+                        NousOtherAccountLink(id: "sign-in-nous-other") { focus = nil; model.signInWithOtherNousAccount() }
+                            .disabled(model.busy != nil)
+                    }
                 }
             }
             if ways == .both {

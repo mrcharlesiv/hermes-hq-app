@@ -35,10 +35,17 @@ nonisolated struct SignInOptions: Sendable, Equatable {
     var offersPassword: Bool
     /// Optional plain-language note about the address (shown calmly under the field, never as an error).
     var message: String?
+    /// [own-login] The browser button's words when the gateway signs in with its own login provider rather than Nous
+    /// ("Sign in with Single Sign-On"); nil for Nous. The browser way in is then this one.
+    var ownLoginTitle: String?
 
-    init(reachable: Bool, offersNous: Bool, offersPassword: Bool, message: String? = nil) {
+    init(reachable: Bool, offersNous: Bool, offersPassword: Bool, message: String? = nil, ownLoginTitle: String? = nil) {
         self.reachable = reachable; self.offersNous = offersNous; self.offersPassword = offersPassword; self.message = message
+        self.ownLoginTitle = ownLoginTitle
     }
+
+    /// Some sign-in in the browser sheet: Nous, or the gateway's own login.
+    var offersBrowser: Bool { offersNous || ownLoginTitle != nil }
 }
 
 /// A sign-in failure as one of spec 01 §18's stable codes ("auth-rejected", "unreachable", "nous-cancelled"…).
@@ -52,8 +59,8 @@ extension SignInWays {
     /// unknown → both; Nous only → nous; password only → password; both or neither → both.
     nonisolated init(_ options: SignInOptions?) {
         guard let options, options.reachable else { self = .both; return }
-        if options.offersNous && !options.offersPassword { self = .nous }
-        else if options.offersPassword && !options.offersNous { self = .password }
+        if options.offersBrowser && !options.offersPassword { self = .nous }
+        else if options.offersPassword && !options.offersBrowser { self = .password }
         else { self = .both }
     }
 }
@@ -67,7 +74,7 @@ nonisolated enum SignInCopy {
         "no-password": "No password sign-in here: try Sign in with Nous, or add HERMES_DASHBOARD_BASIC_AUTH_USERNAME and HERMES_DASHBOARD_BASIC_AUTH_PASSWORD to ~/.hermes/.env on the computer running Hermes and restart the Hermes dashboard.",
         "signed-out": "Sign in to Hermes to continue.",
         "session-ended": "Your session on this Hermes ended. Enter your password to sign in again.",
-        "insecure-url": "Use an https:// address. Plain http:// works only for Tailscale, local network and .local addresses.",
+        "insecure-url": "Use an https:// address. Plain http:// works only for private addresses: your local network, a VPN such as Tailscale or WireGuard, and .local names.",
         "tailscale-ip": "\(device) allows plain http:// to a Tailscale machine only by its name. Use the Tailscale name of the computer running Hermes (in the Tailscale app, like mac-mini.tailnet-name.ts.net) instead of its 100.x address, or use https://.",
         "invalid-url": "Enter the full address, like https://my-mac.tail1234.ts.net.",
         "missing-fields": "Enter the address, username and password.",
@@ -137,6 +144,37 @@ nonisolated enum SignInCopy {
 
     /// Failures that mark the password field: the gateway turned the password down.
     static func marksPassword(_ code: String) -> Bool { code == "auth-rejected" || code == "session-ended" }
+
+    /// [own-login] The words for a gateway that signs in with its own login provider (self-hosted OIDC), not Nous.
+    enum OwnLogin {
+        static let subtitleOnly = "This Hermes uses its own sign-in page. Use the account it was set up with."
+        static let subtitleBoth = "This Hermes has its own sign-in page, and a username and password."
+        static let footnote = "You sign in on your own sign-in page, in a secure sheet; Hermes HQ never sees that password. Your session stays in \(DeviceWord.system) Keychain to reconnect."
+        static let messages: [String: String] = [
+            "nous-failed": "The sign-in didn’t finish. Try again.",
+            "not-owner": "This account isn’t allowed in. Sign in with the one this Hermes was set up for.",
+            "nous-unavailable": "This Hermes doesn’t offer a browser sign-in to apps. Sign in with its username and password.",
+        ]
+    }
+
+    static func subtitle(_ ways: SignInWays?, ownLogin: Bool) -> String {
+        guard ownLogin else { return subtitle(ways) }
+        switch ways {
+        case .nous: return OwnLogin.subtitleOnly
+        case .both: return OwnLogin.subtitleBoth
+        default: return subtitle(ways)
+        }
+    }
+
+    static func footnote(_ ways: SignInWays?, ownLogin: Bool) -> String {
+        ownLogin && ways == .nous ? OwnLogin.footnote : footnote(ways)
+    }
+
+    /// A failure's words; with the gateway's own login, the ones that would name Nous say what happened instead.
+    static func message(for error: Error, ownLogin: Bool) -> String {
+        if ownLogin, let words = OwnLogin.messages[code(for: error)] { return words }
+        return message(for: error)
+    }
 
     static func subtitle(_ ways: SignInWays?) -> String {
         switch ways {
@@ -219,5 +257,6 @@ nonisolated enum SignInAddress {
         }
         if host.allSatisfy({ Self.isASCIIDigit($0) || $0 == "." }) { return false }
         return host == "localhost" || !host.contains(".") || host.hasSuffix(".local") || host.hasSuffix(".ts.net")
+            || GatewayAddress.privateNameSuffixes.contains(where: host.hasSuffix)   // [own-vpn]
     }
 }

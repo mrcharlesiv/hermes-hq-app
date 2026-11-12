@@ -99,7 +99,8 @@ nonisolated enum GatewayAddress {
     // MARK: Transport policy (HermesTransportShared.swift)
 
     /// Plain http:// only on networks the user controls: loopback, RFC 1918, link-local, Tailscale (100.64/10,
-    /// fd7a:115c:a1e0::/48, *.ts.net), unique-local IPv6, .local and single-label names.
+    /// fd7a:115c:a1e0::/48, *.ts.net), unique-local IPv6, .local, single-label and private-use names. A WireGuard or
+    /// other VPN's 10.x / 172.16–31.x / 192.168.x / fd… addresses are RFC 1918 or unique-local, so they are in.
     static func cleartextAllowed(host raw: String) -> Bool {
         let host = raw.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]."))
         guard !host.isEmpty else { return false }
@@ -118,7 +119,14 @@ nonisolated enum GatewayAddress {
         }
         if host.allSatisfy({ $0.isNumber || $0 == "." }) { return false }
         return host == "localhost" || !host.contains(".") || host.hasSuffix(".local") || host.hasSuffix(".ts.net")
+            || privateNameSuffixes.contains(where: host.hasSuffix)
     }
+
+    /// [own-vpn] Names that exist only on a network someone runs themselves (a home router's or a WireGuard VPN's own
+    /// DNS; tester Papy 2026-11-12, "old school WireGuard user"): `.home.arpa` (RFC 8375) and `.internal` are reserved
+    /// for private use, and `.lan` is what home routers hand out and is not a public domain. None resolves on the
+    /// internet, so plain http:// to one stays on that network, as with `.local`.
+    static let privateNameSuffixes = [".home.arpa", ".internal", ".lan"]
 
     /// A plain-http gateway reached only through Tailscale (a tailnet address or a *.ts.net name, spec 01 §2.5).
     static func tailnetOnly(_ url: URL) -> Bool {

@@ -300,6 +300,8 @@ actor GatewayAuth {
     /// Rotates the Nous pair; returns how, for the log ("rotated", "adopted a saved pair", …).
     private func refreshNous() async throws -> String {
         guard var tokens = stored.nous else { throw GatewayFailure.signedOut }
+        // [own-login] No refresh token (a self-hosted login without offline_access): the session is over.
+        guard tokens.canRenew else { throw GatewayFailure.sessionEnded }
         // [n20 B1] Sign-out after updating: a renewal while the sign-in item can't be read can't save the successor,
         // so it would live only in memory and be lost if iOS ends the app before the next unlock — spending the
         // refresh token for nothing, since Portal ends the whole session on a replay. Never post it then. This comes
@@ -388,10 +390,10 @@ actor GatewayAuth {
         request.httpShouldHandleCookies = false
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["refresh_token": tokens.refreshToken, "provider": "nous"])
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["refresh_token": tokens.refreshToken, "provider": tokens.providerName])
         do {
             let (data, response) = try await transport.data(for: request, pool: .control, ceiling: 1 << 20)
-            switch NousGatewayProtocol.answer(status: response.statusCode, body: data) {
+            switch NousGatewayProtocol.answer(status: response.statusCode, body: data, provider: tokens.providerName) {
             case .tokens(let renewed): return renewed.userId == tokens.userId ? .tokens(renewed) : .refused
             case .refused: return .refused
             case .unavailable(let status):

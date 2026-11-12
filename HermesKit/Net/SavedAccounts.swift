@@ -52,8 +52,18 @@ nonisolated struct NousTokens: Codable, Sendable, Hashable {
     var userId: String
     /// Phone clock (s since 1970) when this pair arrived (D6). nil for a pair this app did not mint.
     var obtainedAt: Double?
+    /// [own-login] The gateway's name for the login this pair came from when it isn't Nous (a self-hosted OIDC
+    /// provider); nil for Nous. Renewals name it, and take only that provider's pair back.
+    var provider: String? = nil
 
     static let renewBefore: Double = 60
+
+    /// [own-login] False for a login that handed out no refresh token: nothing to renew with, so the session ends
+    /// when its access token does (the gateway's 401), and the form asks to sign in again.
+    var canRenew: Bool { !refreshToken.isEmpty }
+
+    /// The provider name renewals send: "nous" unless the pair says otherwise.
+    var providerName: String { provider ?? NousGatewayProtocol.nous }
 
     /// Seconds the access token lives, measured on this phone (nil without `obtainedAt`).
     var lifetime: Double? { obtainedAt.map { expiresAt - $0 } }
@@ -62,6 +72,7 @@ nonisolated struct NousTokens: Codable, Sendable, Hashable {
     /// renewal when `expires_at` is missing or the lifetime is not positive (the 401 → renew → retry path covers it).
     /// Without `obtainedAt`, the web rule: renew within 60 s of expiry (and, as above, never ahead of time without one).
     func needsRenewal(now: Double = Date().timeIntervalSince1970) -> Bool {
+        guard canRenew else { return false }
         guard let obtainedAt else { return expiresAt > 0 && expiresAt - now < Self.renewBefore }
         let lifetime = expiresAt - obtainedAt
         guard expiresAt > 0, lifetime > 0 else { return false }
@@ -72,7 +83,7 @@ nonisolated struct NousTokens: Codable, Sendable, Hashable {
     /// before it, which still goes out with this token. Callers test `needsRenewal` first (that one blocks). False
     /// without a known issue time or a positive lifetime (then only `needsRenewal` and the 401 path renew).
     func renewsAlongside(now: Double = Date().timeIntervalSince1970) -> Bool {
-        guard let obtainedAt, expiresAt > 0 else { return false }
+        guard canRenew, let obtainedAt, expiresAt > 0 else { return false }
         let lifetime = expiresAt - obtainedAt
         guard lifetime > 0 else { return false }
         return now >= obtainedAt + lifetime / 2
@@ -121,6 +132,7 @@ nonisolated struct StoredAccount: Codable, Sendable, Hashable {
     }
 
     var key: String { GatewayAddress.accountKey(url: url, username: username) }
+    /// A browser sign-in (a bearer pair): Nous, or [own-login] the gateway's own login provider.
     var isNous: Bool { nous != nil || username.hasPrefix("nous:") }
     /// Holds a session a launch can resume (cookies or a bearer pair).
     var hasSession: Bool { !(cookies ?? []).isEmpty || nous != nil }
@@ -131,7 +143,8 @@ nonisolated struct StoredAccount: Codable, Sendable, Hashable {
         let host = base.host(percentEncoded: false) ?? url
         let name = label?.trimmingCharacters(in: .whitespacesAndNewlines)
         return GatewayAccount(id: url + "|" + username, baseURL: base, kind: isNous ? .nous : .password,
-                              username: isNous ? nil : username, label: name?.isEmpty == false ? name! : host)
+                              username: isNous ? nil : username, label: name?.isEmpty == false ? name! : host,
+                              provider: isNous ? (nous?.provider ?? provider) : nil)
     }
 
     /// What a refused session leaves behind: the prefilled sign-in form's address and username.

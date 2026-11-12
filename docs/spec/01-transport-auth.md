@@ -219,9 +219,23 @@ Every request and socket asks `admitTransport` (`HermesNative.swift:1606-1610`);
 | C. Legacy session token (`X-Hermes-Session-Token`, `Authorization: Bearer <_SESSION_TOKEN>`, `?token=` on WS) | Only when **not** gated (loopback/desktop-owned backend) (`HA:hermes_cli/web_server.py:387,457-477,702-720`; `HA:hermes_cli/web_server_chat.py:369-374`) | **No.** Native WS refuses `token`/`ticket` in renderer URLs (`socket.ts:238`, `HermesNative.swift:2524`); `request` never adds the header. Gated mode explicitly rejects `_SESSION_TOKEN` (`web_server_chat.py:250-268`). | — | — |
 | D. Gated `?token=<session access token>` on WS | Accepted (`web_server_chat.py:332-365`) | No (tickets only) | — | — |
 | E. Ticket in `Sec-WebSocket-Protocol` (`hermes-gateway-v1` + `hermes-gateway-ticket.<t>`) | Accepted; selected protocol echoed is `hermes-gateway-v1` (`web_server_chat.py:207-222,299-317`) | No | — | — |
-| F. Other session providers (e.g. `self-hosted` OIDC, `HA:plugins/dashboard_auth/self_hosted/__init__.py:83`) via native PKCE | Server's native flow is provider-agnostic (`routes.py:279-335`) | No (iOS pins `provider=nous`, `HermesNousSignIn.swift:58-66`) | — | — |
+| F. Other session providers (e.g. `self-hosted` OIDC, `HA:plugins/dashboard_auth/self_hosted/__init__.py:83`) via native PKCE | Server's native flow is provider-agnostic (`routes.py:279-335`) | No (iOS pins `provider=nous`, `HermesNousSignIn.swift:58-66`). **HQ Native: yes** ([own-login], below) | `Authorization: Bearer` (the provider's verified ID token) | `?ticket=` |
 
 The native rebuild needs **A and B**.
+
+**[own-login] Mode F in HQ Native** (tester Papy, 2026-11-12: "not working with a self-hosted OIDC"). When `/api/status`
+lists `native_pkce` but no `nous` provider, the probe reads `GET /api/auth/providers` and takes the first provider that
+is neither `nous` nor a password one (`NousGatewayProtocol.ownLogin`). The form's browser button then reads "Sign in
+with Single Sign-On" (or "Sign in with <display_name>" for a provider the gateway named itself), and the sign-in is
+mode B with that provider's name in `/auth/native/authorize?provider=` and in `/auth/native/refresh`. The pair is saved
+as a `.nous`-kind account whose tokens carry `provider` (nil = Nous; `GatewayAccount.usesOwnLogin`); an answer for any
+other provider is refused. A login that hands out no refresh token (no `offline_access` scope) is accepted for these
+providers only: nothing renews, and the session ends with its access token (`NousTokens.canRenew`). With Nous also on
+offer, Nous stays the browser way in. Not run against a real IdP here (unit tests only).
+
+**[own-vpn]** Plain `http://` is also allowed for names under `.home.arpa`, `.internal` and `.lan`
+(`GatewayAddress.privateNameSuffixes`): a WireGuard or home network's own DNS. Its 10.x / 172.16–31.x / 192.168.x /
+`fd…` addresses were always allowed; only Tailscale addresses wait for Tailscale to be on (2.5).
 
 Server-side gate order for HTTP (`HA:hermes_cli/web_server.py:629-731`): Host check (400) → gated middleware (cookie or
 bearer; `HA:hermes_cli/dashboard_auth/middleware.py:160-217`) → legacy token middleware (no-op when gated) → token-route
@@ -1349,8 +1363,8 @@ hooks. Keep the behaviours, not the mechanisms.
 5. ~~Keychain migration from the Capacitor app~~ **Resolved (D3, 2.4.1):** no migration and no shared group. HQ Native
    keeps its own item (`ai.hermes.hqnative.gateway` / `primary`) and the owner signs in once. Sharing would let two apps
    rotate one Nous refresh-token family and risk signing out both.
-6. Self-hosted OIDC (or any non-`nous` session provider) through `/auth/native/authorize`: server-supported, never
-   exercised by the iOS client.
+6. Self-hosted OIDC (or any non-`nous` session provider) through `/auth/native/authorize`: server-supported; HQ
+   Native now uses it ([own-login], section 3), unit-tested only, not yet run against a real IdP.
 7. That `URLSessionWebSocketTask` auto-answers server pings (uvicorn 20 s/20 s) while the app's run loop is busy;
    assumed from platform behaviour, not measured here.
 8. Behaviour of a second Nous account against the real Portal + edge (only tested with the fixture,

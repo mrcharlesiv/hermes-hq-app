@@ -42,38 +42,75 @@ nonisolated enum NousPKCE {
     }
 }
 
+/// [own-login] A browser login a gateway offers that isn't Nous: its provider name on the wire, and what the gateway
+/// calls it.
+nonisolated struct BrowserLogin: Sendable, Equatable {
+    var provider: String
+    var displayName: String
+
+    /// The button's words. The gateway's stock name for a self-hosted OIDC login is jargon; anything else it named
+    /// itself is shown as named.
+    var buttonTitle: String {
+        let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if provider == "self-hosted" || name.isEmpty || name.count > 24 { return "Sign in with Single Sign-On" }
+        return "Sign in with " + name
+    }
+}
+
 nonisolated enum NousGatewayProtocol {
     /// `<gateway>/auth/native/authorize?provider=nous&code_challenge=…&code_challenge_method=S256&redirect_uri=…&state=…`
     /// (a literal "+" is re-encoded as %2B: the gateway reads query values form-encoded).
-    static func authorizeURL(gateway: URL, challenge: String, redirect: String, state: String) -> URL? {
+    /// `provider` is the gateway's name for the login it brokers: "nous", or its own (a self-hosted OIDC login).
+    static func authorizeURL(gateway: URL, provider: String = nous, challenge: String, redirect: String, state: String) -> URL? {
         guard var parts = URLComponents(string: gateway.absoluteString + "/auth/native/authorize") else { return nil }
-        parts.queryItems = [URLQueryItem(name: "provider", value: "nous"), URLQueryItem(name: "code_challenge", value: challenge),
+        parts.queryItems = [URLQueryItem(name: "provider", value: provider), URLQueryItem(name: "code_challenge", value: challenge),
                             URLQueryItem(name: "code_challenge_method", value: "S256"), URLQueryItem(name: "redirect_uri", value: redirect),
                             URLQueryItem(name: "state", value: state)]
         parts.percentEncodedQuery = parts.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
         return parts.url
     }
 
+    static let nous = "nous"
+
     /// `/api/status` offers Nous to native apps: providers ∋ "nous" and flows ∋ "native_pkce".
     static func offersNous(status: JSONValue) -> Bool {
         let providers = status["auth_providers"]?.array?.compactMap(\.string) ?? []
-        let flows = status["auth_flows"]?.array?.compactMap(\.string) ?? []
-        return providers.contains("nous") && flows.contains("native_pkce")
+        return providers.contains(nous) && offersBrowserSignIn(status: status)
+    }
+
+    /// `/api/status` offers some browser sign-in to native apps (flows ∋ "native_pkce").
+    static func offersBrowserSignIn(status: JSONValue) -> Bool {
+        (status["auth_flows"]?.array?.compactMap(\.string) ?? []).contains("native_pkce")
+    }
+
+    /// [own-login] The gateway's own browser login when it has no Nous one (a self-hosted OIDC provider: Authentik,
+    /// Keycloak, Authelia…; tester Papy 2026-11-12), from `GET /api/auth/providers`: the first provider that signs in
+    /// in a browser rather than with a typed password. The gateway's native sign-in brokers any such provider.
+    static func ownLogin(providers body: JSONValue) -> BrowserLogin? {
+        for entry in body["providers"]?.array ?? [] {
+            guard let name = entry["name"]?.string, !name.isEmpty, name != nous, entry["supports_password"]?.bool != true else { continue }
+            return BrowserLogin(provider: name, displayName: entry["display_name"]?.string ?? "")
+        }
+        return nil
     }
 
     enum Answer: Equatable, Sendable { case tokens(NousTokens), refused(String), unavailable(Int) }
 
     /// The `/auth/native/token` or `/auth/native/refresh` answer (spec 01 §6.1 step 10).
-    static func answer(status: Int, body: Data, now: Double = Date().timeIntervalSince1970) -> Answer {
+    /// The pair must be for `provider`, the login this account signed in with.
+    static func answer(status: Int, body: Data, provider: String = nous, now: Double = Date().timeIntervalSince1970) -> Answer {
         let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
         switch status {
         case 200:
             guard let object, let access = object["access_token"] as? String, !access.isEmpty,
-                  let refresh = object["refresh_token"] as? String, !refresh.isEmpty,
+                  // [own-login] A self-hosted login may hand out no refresh token (no offline_access scope): the
+                  // session then lasts as long as its access token. Nous always sends one.
+                  let refresh = object["refresh_token"] as? String, !refresh.isEmpty || provider != nous,
                   let user = (object["user_id"] as? String) ?? (object["user_id"] as? NSNumber)?.stringValue, !user.isEmpty,
-                  object["provider"] as? String == "nous" else { return .unavailable(502) }
+                  object["provider"] as? String == provider else { return .unavailable(502) }
             let expires = (object["expires_at"] as? NSNumber)?.doubleValue ?? 0
-            return .tokens(NousTokens(accessToken: access, refreshToken: refresh, expiresAt: expires, userId: user, obtainedAt: now))
+            return .tokens(NousTokens(accessToken: access, refreshToken: refresh, expiresAt: expires, userId: user, obtainedAt: now,
+                                      provider: provider == nous ? nil : provider))
         case 400, 401: return .refused((object?["error"] as? String) ?? "session_expired")
         case 403: return .refused((object?["error"] as? String) ?? "not_authorized")
         default: return .unavailable(status)

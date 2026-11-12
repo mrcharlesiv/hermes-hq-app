@@ -8,6 +8,8 @@ import Foundation
 nonisolated enum GatewayNaming {
     static let unnamed = "Your Gateway"
     static let nousAccountName = "Nous account"
+    /// [own-login] Signed in on the gateway's own sign-in page (self-hosted OIDC), not with Nous.
+    static let ownLoginAccountName = "Single sign-on"
 
     private static let localSuffix = JSRegex(#"\.(?:local|lan|home|localdomain)$"#, "i")
     private static let ipv4 = JSRegex(#"^\d{1,3}(?:\.\d{1,3}){3}$"#)
@@ -63,7 +65,7 @@ nonisolated enum GatewayNaming {
 
     /// The account's name in a row: "Nous account" for Sign in with Nous, else the username.
     static func accountName(_ account: GatewayAccount) -> String {
-        account.kind == .nous ? nousAccountName : (account.username ?? "")
+        account.kind == .nous ? (account.usesOwnLogin ? ownLoginAccountName : nousAccountName) : (account.username ?? "")
     }
 
     /// `gatewayRows`: the row's title and subtitle. `label` is the name given on this phone (nil when none).

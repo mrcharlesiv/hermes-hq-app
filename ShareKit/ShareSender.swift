@@ -408,6 +408,7 @@ nonisolated final class ShareSender: NSObject, URLSessionTaskDelegate, @unchecke
             return
         }
         guard !renewedNous else { throw ShareFailure.sessionEnded }       // one rotation per share, never a loop
+        guard !sent.refreshToken.isEmpty else { throw ShareFailure.sessionEnded }   // [own-login] nothing to renew with
         // [reliability] B16: the app may be renewing this same pair right now. Wait for its pair rather than send the
         // same refresh token a second time (NousRenewalLease.swift).
         let keychain = self.keychain, spentPair = sent
@@ -425,11 +426,11 @@ nonisolated final class ShareSender: NSObject, URLSessionTaskDelegate, @unchecke
         request.httpMethod = "POST"
         request.httpShouldHandleCookies = false
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["refresh_token": sent.refreshToken, "provider": "nous"])
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["refresh_token": sent.refreshToken, "provider": sent.providerName])
         let (body, raw): (Data, URLResponse)
         do { (body, raw) = try await session.data(for: request) } catch { throw ShareFailure.transport(error) }
         guard let response = raw as? HTTPURLResponse else { throw ShareFailure.refused("") }
-        guard let rotated = ShareNous.renewed(status: response.statusCode, body: body, userId: sent.userId) else {
+        guard let rotated = ShareNous.renewed(status: response.statusCode, body: body, userId: sent.userId, provider: sent.provider) else {
             // [reliability] B16: refused because the app spent this pair a moment earlier (outside the lease: an older
             // app, or the lease couldn't be written)? Its successor is then in the Keychain: use it, as the app does
             // after a refusal (`GatewayAuth.refreshNous`).

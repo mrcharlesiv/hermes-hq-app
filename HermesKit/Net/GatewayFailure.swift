@@ -97,7 +97,7 @@ nonisolated enum GatewayFailure: Error, Sendable, Hashable, CustomStringConverti
         case .noPassword: "This gateway has no password sign-in. Try Sign in with Nous, or turn on a username and password on \(HostWord.phrase)."
         case .signedOut: "Sign in to your gateway to continue."
         case .invalidURL, .invalidDestination: "Enter the full address, like https://my-mac.tail1234.ts.net."
-        case .insecureURL: "Use an https:// address. Plain http:// works only for Tailscale, local network and .local addresses."
+        case .insecureURL: "Use an https:// address. Plain http:// works only for private addresses: your local network, a VPN such as Tailscale or WireGuard, and .local names."
         case .missingFields: "Enter the address, username and password."
         case .notHermes: "That address answered, but it isn’t Hermes. Check the address, including any :port at the end."
         case .hostRejected: "Your gateway doesn’t accept connections at this address yet. On \(HostWord.phrase), set HERMES_DASHBOARD_PUBLIC_URL in ~/.hermes/.env to this exact address, restart the Hermes dashboard, then try again."

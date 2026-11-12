@@ -29,6 +29,8 @@ struct ManualSetupView: View {
                 GuideBlock(text: setup.serve, id: "onboarding.manual.serve")
                 GuideParagraph(copy.text1, font: .subheadline)
                 link(copy.link1, OnboardingCopy.Links.tailscaleServe, "onboarding.manual.serve-link")
+                GuideParagraph(copy.ownAddress, font: .subheadline)
+                    .accessibilityIdentifier("onboarding.manual.own-address")
             }
             section(2, copy.title2) {
                 GuideParagraph(copy.secretLead, font: .subheadline)

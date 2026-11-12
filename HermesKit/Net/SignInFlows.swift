@@ -9,14 +9,18 @@ nonisolated struct ProbeResult: Sendable, Equatable {
     var known: Bool
     var nous: Bool
     var password: Bool
+    /// [own-login] The gateway's own browser login (self-hosted OIDC), offered when it has no Nous one. With it the
+    /// browser way in is this login, not Nous.
+    var ownLogin: BrowserLogin? = nil
 
     static let unknown = ProbeResult(known: false, nous: false, password: false)
 
-    /// unknown → both; Nous only → nous; password only → password; else both.
+    /// unknown → both; browser only → nous; password only → password; else both.
     var ways: SignInWays {
         guard known else { return .both }
-        if nous && !password { return .nous }
-        if password && !nous { return .password }
+        let browser = nous || ownLogin != nil
+        if browser && !password { return .nous }
+        if password && !browser { return .password }
         return .both
     }
 }
@@ -52,7 +56,19 @@ nonisolated enum SignInFlows {
         guard let (data, response) = try? await plain.data(for: request, pool: .bulk, ceiling: 1 << 20), response.statusCode == 200,
               let status = try? JSONValue.parseFast(data), let providers = status["auth_providers"]?.array?.compactMap(\.string)
         else { return .unknown }
-        return ProbeResult(known: true, nous: NousGatewayProtocol.offersNous(status: status), password: providers.contains("basic"))
+        var result = ProbeResult(known: true, nous: NousGatewayProtocol.offersNous(status: status), password: providers.contains("basic"))
+        // [own-login] No Nous, but a browser sign-in and a provider that isn't the password one: ask what it is.
+        if !result.nous, NousGatewayProtocol.offersBrowserSignIn(status: status), providers.contains(where: { $0 != "basic" }),
+           let listURL = try? GatewayAddress.endpoint(base: base, path: "/api/auth/providers") {
+            var list = URLRequest(url: listURL, timeoutInterval: 5)
+            list.httpShouldHandleCookies = false
+            list.setValue("application/json", forHTTPHeaderField: "Accept")
+            if let (body, answer) = try? await plain.data(for: list, pool: .bulk, ceiling: 1 << 20), answer.statusCode == 200,
+               let parsed = try? JSONValue.parseFast(body) {
+                result.ownLogin = NousGatewayProtocol.ownLogin(providers: parsed)
+            }
+        }
+        return result
     }
 
     // MARK: Password (spec 01 §5.1)
@@ -93,22 +109,30 @@ nonisolated enum SignInFlows {
 
     // MARK: Nous (spec 01 §6.1)
 
-    /// Step 2: 200 JSON with an `auth_required` key, else not Hermes; must offer Nous to native apps.
-    static func nousStatus(base: URL, transport: HTTPTransport) async throws {
+    /// Step 2: 200 JSON with an `auth_required` key, else not Hermes; must offer a browser sign-in to native apps.
+    /// Answers the provider to sign in with: "nous", or [own-login] the gateway's own login when it has no Nous one.
+    @discardableResult static func nousStatus(base: URL, transport: HTTPTransport) async throws -> String {
         let (status, body) = try await control(base, "/api/status", transport: transport)
         guard status == 200, let value = try? JSONValue.parseFast(body), value["auth_required"] != nil else {
             if status == 429 { throw GatewayFailure.rateLimited }
             if status == 400, String(decoding: body.prefix(512), as: UTF8.self).contains("Invalid Host header") { throw GatewayFailure.hostRejected }
             throw GatewayFailure.notHermes
         }
-        guard NousGatewayProtocol.offersNous(status: value) else { throw GatewayFailure.nousUnavailable }
+        if NousGatewayProtocol.offersNous(status: value) { return NousGatewayProtocol.nous }
+        guard NousGatewayProtocol.offersBrowserSignIn(status: value),
+              let (code, list) = try? await control(base, "/api/auth/providers", transport: transport), code == 200,
+              let parsed = try? JSONValue.parseFast(list), let own = NousGatewayProtocol.ownLogin(providers: parsed)
+        else { throw GatewayFailure.nousUnavailable }
+        AppLog.note("auth", "browser sign-in with the gateway's own login provider")
+        return own.provider
     }
 
     /// Steps 9–10: redeem the one-time code with this sign-in's verifier (the code is consumed on every path).
-    static func redeemNous(base: URL, code: String, verifier: String, transport: HTTPTransport) async throws -> NousTokens {
+    static func redeemNous(base: URL, code: String, verifier: String, provider: String = NousGatewayProtocol.nous,
+                           transport: HTTPTransport) async throws -> NousTokens {
         let body = try JSONSerialization.data(withJSONObject: ["code": code, "code_verifier": verifier])
         let (status, data) = try await control(base, "/auth/native/token", method: "POST", body: body, transport: transport)
-        switch NousGatewayProtocol.answer(status: status, body: data) {
+        switch NousGatewayProtocol.answer(status: status, body: data, provider: provider) {
         case .tokens(let tokens):
             if let lifetime = tokens.lifetime { AppLog.note("auth", "nous access token lifetime \(Int(lifetime)) s (sign-in)") }
             return tokens

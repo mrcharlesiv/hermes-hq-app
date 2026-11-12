@@ -81,6 +81,12 @@ nonisolated struct GatewayAccount: Codable, Sendable, Hashable, Identifiable {
     var kind: Kind
     var username: String?        // password accounts only; never shown for Nous ("Nous account")
     var label: String            // human label for the gateway (host name)
+    /// [own-login] `.nous` accounts signed in with the gateway's own login provider instead (self-hosted OIDC): its
+    /// name on the wire. nil for Nous and for password accounts.
+    var provider: String? = nil
+
+    /// Signed in in the browser with the gateway's own login provider, not Nous.
+    var usesOwnLogin: Bool { kind == .nous && provider != nil && provider != "nous" }
 }
 
 nonisolated enum ConnectionState: Sendable, Equatable {

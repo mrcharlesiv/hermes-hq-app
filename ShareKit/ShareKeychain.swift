@@ -64,23 +64,33 @@ nonisolated struct ShareNous: Equatable, Sendable {
     var userId: String
     /// When this pair was issued or last rotated, by this phone's clock (absent on a pair saved by an older build).
     var obtainedAt: Double?
+    /// [own-login] The gateway's name for the login this pair came from when it isn't Nous (`NousTokens.provider`).
+    var provider: String? = nil
 
-    init(accessToken: String, refreshToken: String, expiresAt: Double, userId: String, obtainedAt: Double? = nil) {
+    /// The provider name a renewal sends, and the only one whose pair it takes back.
+    var providerName: String { provider ?? "nous" }
+
+    init(accessToken: String, refreshToken: String, expiresAt: Double, userId: String, obtainedAt: Double? = nil,
+         provider: String? = nil) {
         self.accessToken = accessToken; self.refreshToken = refreshToken
-        self.expiresAt = expiresAt; self.userId = userId; self.obtainedAt = obtainedAt
+        self.expiresAt = expiresAt; self.userId = userId; self.obtainedAt = obtainedAt; self.provider = provider
     }
 
     init?(_ value: Any?) {
         guard let entry = value as? [String: Any], let access = entry["accessToken"] as? String, !access.isEmpty,
-              let refresh = entry["refreshToken"] as? String, !refresh.isEmpty,
+              let refresh = entry["refreshToken"] as? String,
               let user = entry["userId"] as? String, !user.isEmpty else { return nil }
+        // [own-login] Only a self-hosted login's pair may have no refresh token (`NousTokens.canRenew`).
+        guard !refresh.isEmpty || (entry["provider"] as? String)?.isEmpty == false else { return nil }
         self.init(accessToken: access, refreshToken: refresh, expiresAt: (entry["expiresAt"] as? NSNumber)?.doubleValue ?? 0,
-                  userId: user, obtainedAt: (entry["obtainedAt"] as? NSNumber)?.doubleValue)
+                  userId: user, obtainedAt: (entry["obtainedAt"] as? NSNumber)?.doubleValue,
+                  provider: (entry["provider"] as? String).flatMap { $0.isEmpty ? nil : $0 })
     }
 
     var json: [String: Any] {
         var entry: [String: Any] = ["accessToken": accessToken, "refreshToken": refreshToken, "expiresAt": expiresAt, "userId": userId]
         if let obtainedAt { entry["obtainedAt"] = obtainedAt }
+        if let provider { entry["provider"] = provider }
         return entry
     }
 
@@ -94,21 +104,23 @@ nonisolated struct ShareNous: Equatable, Sendable {
     /// refusal renews it then). A pair without an issue time keeps the older rule: within a minute of its end (and,
     /// with no expiry either, never ahead of time).
     func needsRenewal(now: Double = Date().timeIntervalSince1970) -> Bool {
+        guard !refreshToken.isEmpty else { return false }
         guard let obtainedAt else { return expiresAt > 0 && expiresAt - now < 60 }
         let lifetime = expiresAt - obtainedAt
         guard expiresAt > 0, lifetime > 0 else { return false }
         return now >= obtainedAt + max(lifetime - 60, lifetime / 2)
     }
 
-    /// The `/auth/native/refresh` answer: the rotated pair, for this same Nous account only.
-    static func renewed(status: Int, body: Data, userId: String, now: Double = Date().timeIntervalSince1970) -> ShareNous? {
+    /// The `/auth/native/refresh` answer: the rotated pair, for this same account and login provider only.
+    static func renewed(status: Int, body: Data, userId: String, provider: String? = nil,
+                        now: Double = Date().timeIntervalSince1970) -> ShareNous? {
         guard status == 200, let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any],
-              object["provider"] as? String == "nous",
+              object["provider"] as? String == provider ?? "nous",
               let access = object["access_token"] as? String, !access.isEmpty,
               let refresh = object["refresh_token"] as? String, !refresh.isEmpty,
               let user = (object["user_id"] as? String) ?? (object["user_id"] as? NSNumber)?.stringValue, user == userId else { return nil }
         return ShareNous(accessToken: access, refreshToken: refresh, expiresAt: (object["expires_at"] as? NSNumber)?.doubleValue ?? 0,
-                         userId: user, obtainedAt: now)
+                         userId: user, obtainedAt: now, provider: provider)
     }
 }
 

@@ -13,7 +13,8 @@ final class SignInServiceDriver: SignInDriving {
     func probe(_ address: String) async -> SignInOptions {
         let result = await service.probe(address)
         // `.unknown` (unreachable, not Hermes, odd answer) shows both ways in; the attempt itself says what is wrong.
-        return SignInOptions(reachable: result.known, offersNous: result.nous, offersPassword: result.password)
+        return SignInOptions(reachable: result.known, offersNous: result.nous, offersPassword: result.password,
+                             ownLoginTitle: result.ownLogin?.buttonTitle)
     }
 
     func signInWithPassword(address: String, username: String, password: String) async throws {

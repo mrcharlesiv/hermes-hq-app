@@ -1,0 +1,42 @@
+name: Build and test
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  ios:
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pick the newest Xcode
+        run: |
+          ls -d /Applications/Xcode*.app
+          XCODE=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          echo "DEVELOPER_DIR=$XCODE/Contents/Developer" >> "$GITHUB_ENV"
+          echo "Using $XCODE"
+      - name: Generate the project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Pick a simulator
+        run: |
+          SIM=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for r in sorted(d, reverse=True) if "iOS" in r for x in d[r] if x["name"].startswith("iPhone")))')
+          echo "SIM=$SIM" >> "$GITHUB_ENV"
+          xcrun simctl list devices | grep "$SIM"
+      - name: Build
+        run: |
+          set -o pipefail
+          xcodebuild -project HermesHQNative.xcodeproj -scheme HermesHQNative -destination "platform=iOS Simulator,id=$SIM" \
+            -derivedDataPath build/dd CODE_SIGNING_ALLOWED=NO build-for-testing -quiet 2>&1 | grep -v '^note:' | tail -200
+      - name: Unit tests
+        run: |
+          set -o pipefail
+          xcodebuild -project HermesHQNative.xcodeproj -scheme HermesHQNative -destination "platform=iOS Simulator,id=$SIM" \
+            -derivedDataPath build/dd CODE_SIGNING_ALLOWED=NO -only-testing:HermesHQNativeTests test-without-building \
+            -quiet 2>&1 | grep -v '^note:' | tail -200

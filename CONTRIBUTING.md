@@ -1,6 +1,7 @@
 # Contributing to Hermes HQ
 
-Thanks for helping. Bug reports, ideas and code are all welcome.
+Thanks for helping. Bug reports, ideas and code are all welcome. Everyone here follows the
+[code of conduct](CODE_OF_CONDUCT.md).
 
 ## Reporting a bug or asking for something
 
@@ -33,6 +34,8 @@ text, hosts or keys, in code, tests, comments, screenshots or commit messages. U
 Security below) instead of quoting it in an issue.
 
 ## Security
+
+The full policy is in [SECURITY.md](SECURITY.md).
 
 If you find a security problem, don't open a public issue. Use GitHub's
 [private vulnerability reporting](../../security/advisories/new) for this repository instead.

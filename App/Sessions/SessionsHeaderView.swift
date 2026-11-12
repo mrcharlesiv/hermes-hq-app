@@ -443,6 +443,8 @@ struct SessionPill<Face: View>: View {
     var hasFace = false
     /// [sessions-fresh] The room before a small mark (a status chip's), in place of the face's.
     var lead: CGFloat? = nil
+    /// [tasks-first] A quiet count after the caption ("Today 6"), in the caption's ink at two-thirds strength.
+    var detail: String? = nil
     var action: () -> Void
     @ViewBuilder var face: () -> Face
 
@@ -460,6 +462,14 @@ struct SessionPill<Face: View>: View {
                     .foregroundStyle(picked ? Color.hqOnTint : Color.hqLabel)
                     .lineLimit(1)
                     .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+                if let detail {
+                    Text(detail)
+                        .font(Font.hq(Theme.isDesktop ? .footnote : .subheadline)).monospacedDigit()
+                        .foregroundStyle((picked ? Color.hqOnTint : Color.hqLabel).opacity(0.65))
+                        .lineLimit(1)
+                        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+                        .padding(.leading, -1)
+                }
             }
             .padding(.leading, lead ?? (hasFace ? (height - Self.faceSize) / 2 : 14))
             .padding(.trailing, hasFace ? 12 : 14)

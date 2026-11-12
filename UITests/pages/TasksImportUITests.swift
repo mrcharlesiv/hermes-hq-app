@@ -32,7 +32,7 @@ extension PagesTests {
         }
 
         // The real menu, as you'd tap it: everything is in already.
-        app.buttons["tasks.more"].firstMatch.tap()   // [bot-pills] the page's commands; the bots are pills under the bar
+        app.buttons["pages.scope"].firstMatch.tap()   // [tasks-first] Filter: the bots, then the page's commands
         let menuItem = app.buttons["Import from Reminders…"]
         XCTAssertTrue(menuItem.waitForExistence(timeout: 5))
         menuItem.tap()

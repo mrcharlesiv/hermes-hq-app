@@ -18,7 +18,11 @@ extension PagesTests {
         }
         app = launchSignedIn(arguments + ["-HQDebugHapticsProbe", "YES", "-HQPagesTab", "4", "-HQPagesMore", "tasks"])
 
-        // The group sits at the bottom, above Done, and says why.
+        // [tasks-first] They have no date and no list, so they are in Inbox: the group sits under its tasks, above
+        // Done, and says why.
+        let inbox = app.buttons["tasks.view.inbox"].firstMatch
+        XCTAssertTrue(inbox.waitForExistence(timeout: 20), "the views head the page")
+        inbox.tap()
         let header = app.descendants(matching: .any)["tasks.section.Still Need These?"].firstMatch
         for _ in 0..<8 where !(header.exists && header.isHittable) { app.swipeUp(velocity: .slow) }
         XCTAssertTrue(header.waitForExistence(timeout: 15), "forgotten bot tasks ask to be kept")
@@ -53,8 +57,8 @@ extension PagesTests {
         app.buttons["Keep"].firstMatch.tap()
 
         // Tasks Settings: Ask First is the default, first in the picker.
-        for _ in 0..<8 where !app.buttons["tasks.more"].firstMatch.isHittable { app.swipeDown(velocity: .fast) }
-        app.buttons["tasks.more"].firstMatch.tap()   // [bot-pills] the page's commands; the bots are pills under the bar
+        for _ in 0..<8 where !app.buttons["pages.scope"].firstMatch.isHittable { app.swipeDown(velocity: .fast) }
+        app.buttons["pages.scope"].firstMatch.tap()   // [tasks-first] Filter: the bots, then the page's commands
         app.buttons["Tasks Settings…"].firstMatch.tap()
         let footer = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "When you say you need to do something, a bot asks")).firstMatch
         XCTAssertTrue(footer.waitForExistence(timeout: 10), "Ask First is on")

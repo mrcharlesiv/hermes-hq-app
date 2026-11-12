@@ -22,15 +22,6 @@ struct MacPolish7Tests {
         #expect(day.hasPrefix("This Mac reminds you at 9:00") && day.hasSuffix("that day."), "\(day)")
         #expect(TodoWords.newTaskHelpNote("Ivy", tap: "click").hasPrefix("When you click Add, Ivy’s chat opens"))
         #expect(TodoWords.newTaskHelpNote("Ivy", tap: "tap").hasPrefix("When you tap Add, Ivy’s chat opens"))
-        #expect(TasksViewController.ideasFromBotsText(mac: true) == "Ideas come from your bots. Choose All Bots to see them.")
-        #expect(TasksViewController.ideasFromBotsText(mac: false) == "Ideas come from your bots. Tap All to see them.")
-        #expect(TodoEmptySectionRow.words(mac: false) == "Drag tasks here, or hold a task and choose Move To.")
-        #expect(TodoEmptySectionRow.words(mac: true) == "Drag tasks here, or \(DeviceWord.hold) a task and choose Move To.")
-    }
-
-    /// #139: the add-on by its update sheet's name, on the computer running Hermes (not "your computer").
-    @Test func ideasNamesTheAddOn() {
-        #expect(TaskIdeasNote.updateText == "Ideas needs Hermes HQ Add-on 0.9.39 or later on the computer running Hermes.")
     }
 
     /// #45: two tiles named by files that read the same keep their extensions; a name of their own wins.

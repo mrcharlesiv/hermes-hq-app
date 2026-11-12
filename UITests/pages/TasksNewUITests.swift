@@ -19,17 +19,18 @@ extension PagesTests {
         app = launchSignedIn(arguments + ["-HQPagesTab", "4", "-HQPagesMore", "tasks"])
         let plus = app.buttons["tasks.new"].firstMatch
         XCTAssertTrue(plus.waitForExistence(timeout: 20), "the page has +")
-        // The bar has three buttons, Search in the middle (owner 2026-11-04). [bot-pills] The bots are pills under the
-        // bar (owner 2026-11-05), so the page's commands keep their ⋯: [⋯] [Search] [+], and no "All Bots ⌄".
-        let filter = app.buttons["tasks.more"].firstMatch, search = app.buttons["tasks.search"].firstMatch
-        XCTAssertTrue(filter.exists && search.exists, "⋯ and Search")
-        XCTAssertFalse(app.buttons["pages.scope"].exists, "no bot menu in the bar")
-        XCTAssertTrue(app.descendants(matching: .any)["tasks.chips"].exists, "the bot pills")
+        // The bar has three buttons, Search in the middle (owner 2026-11-04): [Filter] [Search] [+]. [tasks-first] The
+        // views are the row under the bar, so the bots are Filter's first rows and the page's commands follow them.
+        let filter = app.buttons["pages.scope"].firstMatch, search = app.buttons["tasks.search"].firstMatch
+        XCTAssertTrue(filter.exists && search.exists, "Filter and Search")
+        XCTAssertFalse(app.descendants(matching: .any)["tasks.chips"].exists, "no bot pills")
+        XCTAssertTrue(app.descendants(matching: .any)["tasks.views"].exists, "the views")
         XCTAssertLessThan(filter.frame.midX, search.frame.midX)
         XCTAssertLessThan(search.frame.midX, plus.frame.midX)
         filter.tap()
-        XCTAssertTrue(app.buttons["Tasks Settings…"].firstMatch.waitForExistence(timeout: 5), "the page's commands are in ⋯")
+        XCTAssertTrue(app.buttons["Tasks Settings…"].firstMatch.waitForExistence(timeout: 5), "the page's commands are in Filter")
         XCTAssertTrue(app.buttons["Import from Reminders…"].firstMatch.exists)
+        XCTAssertTrue(app.buttons["All Bots"].firstMatch.exists && app.buttons["Me"].firstMatch.exists, "the bots, and Me, lead it")
         shot("tasks-bar-menu" + name)
         app.buttons["Tasks Settings…"].firstMatch.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: -40, dy: -200)).tap()
         _ = waitUntil(2) { !app.buttons["Tasks Settings…"].firstMatch.exists }

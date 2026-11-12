@@ -1,7 +1,7 @@
-// [tasks] The Tasks page's rows (owner-approved mockup 1-list, 2026-11-04): a circle to tick for your tasks (a bot's
-// own task leads with its face instead), the title, and one line whose start is coloured by where the task stands
-// (Ready green, the bot at work blue, Needs you orange, Overdue red); a together task carries the bot's small face at
-// its end. Sizes as the Jobs rows (20 pt in, 22 pt faces centred on the title's first line).
+// [tasks-first] The Tasks page's rows (owner 2026-11-12, mockup 1-list-today: "One line per task"): a circle to tick,
+// the name, a tiny 2/4 with steps, and when it's due at the end. A bot on the task is a small face after that, with a
+// dot for what it is doing (blue working, green finished its part, orange has a question). A second line shows only
+// when the bot has something for you, in its words. The Mac's table (a window-wide list) keeps its columns.
 
 import SwiftUI
 import UIKit
@@ -33,14 +33,15 @@ enum TodoTable {
 struct TodoRowModel: Hashable {
     var id: String
     var title: String
+    /// [tasks-first] When, the steps, and the bot's line and dot.
+    var words = TodoRowWords()
+    /// [mac-tools] The Mac table's status and details columns.
     var line: TodoRowLine
     var done: Bool
     /// Ticked here and about to move to Done.
     var ticking = false
-    /// A bot's own task: its face leads (no circle).
-    var leadFace: String?
-    /// A together task: the bot's face at the end.
-    var trailFace: String?
+    /// The bot on the task (its own, or one you share): its face at the row's end.
+    var face: String?
     var head: JSONValue?
     /// Select: the lead is a pick circle (filled when `picked`), the whole row toggles it.
     var selecting = false
@@ -55,7 +56,7 @@ struct TodoRowView: View {
     var row: TodoRowModel
     var toggle: () -> Void
     @Environment(\.dynamicTypeSize) private var typeSize
-    @ScaledMetric(relativeTo: .callout) private var textFaceSize: CGFloat = 22
+    @ScaledMetric(relativeTo: .callout) private var textFaceSize: CGFloat = 20
     /// [ui-sizing] × UI Scale too: a ScaledMetric follows only the text size, and at 150 % the text grew around it.
     private var faceSize: CGFloat { HQFont.scaled(textFaceSize) }
     @ScaledMetric(relativeTo: .callout) private var textCircleSize: CGFloat = 22
@@ -86,7 +87,7 @@ struct TodoRowView: View {
                 .lineLimit(1)
                 .frame(width: TodoTable.details, alignment: .leading)
             HStack(spacing: 7) {
-                if let profile = row.trailFace {
+                if let profile = row.face {
                     HeadImage(raw: row.head, profile: profile, size: 18).frame(width: 18, height: 18)
                         .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + HQFont.preferred(.subheadline).capHeight / 2 }
                 }
@@ -109,34 +110,64 @@ struct TodoRowView: View {
     private var list: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             lead
-            VStack(alignment: .leading, spacing: 3) {
-                Text(row.title)
-                    .font(Font.hq(.callout))
-                    .foregroundStyle(row.done || row.ticking ? Color.hqLabel2 : Color.hqLabel)
-                    .strikethrough(row.done || row.ticking, color: Color.hqLabel3)
-                    .lineLimit(large ? 4 : 2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                if !row.line.text.isEmpty {
-                    line
+            VStack(alignment: .leading, spacing: 2) {
+                // At the largest sizes the date goes under the name, so the name keeps the row's width.
+                let top = large ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2)) : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 6))
+                top {
+                    // The marks run on after the name's last word, so a long name wraps to a second line with them
+                    // (cut to one line it read "Reply to Ivy about the ve…").
+                    titleLine
+                        .lineLimit(large ? 4 : 2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if let when = row.words.when {
+                        Text(when)
+                            .font(Font.hq(.footnote)).monospacedDigit()
+                            .foregroundStyle(row.words.late && !row.done ? Color.hqRed : Color.hqLabel2)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
+                }
+                if let note = row.words.note {
+                    Text(note)
                         .font(Font.hq(.footnote))
+                        .foregroundStyle(TodoInk.color(row.words.tone))
                         .lineLimit(large ? nil : 1)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            if let profile = row.trailFace {
-                face(profile)
-            }
+            if let profile = row.face { face(profile) }
         }
-        .padding(.vertical, Theme.isDesktop ? 12 : 9)
+        .padding(.vertical, Theme.isDesktop ? 10 : 8)
         .padding(.leading, 20)
         .padding(.trailing, 20)
-        .frame(minHeight: Theme.isDesktop ? 56 : 52, alignment: .leading)
+        .frame(minHeight: Theme.isDesktop ? 46 : 44, alignment: .leading)
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(row.title), \(row.line.text)")
+        .accessibilityLabel(row.words.spoken.isEmpty ? row.title : "\(row.title), \(row.words.spoken)")
         .accessibilityValue(row.done ? "Done" : "")
         .accessibilityAddTraits(.isButton)
         .accessibilityAction(named: row.done ? "Mark Not Done" : "Mark Done") { toggle() }
+    }
+
+    /// The name, then small and grey: steps done of all, and a mark for a task that repeats. (A mark for notes was
+    /// tried and dropped: it pushed long names onto a second line and said little.) The marks are
+    /// tied to the name's last word (no-break spaces), so a long name wraps with them: a count never sits on a line
+    /// alone.
+    private var titleLine: Text {
+        let struck = row.done || row.ticking
+        var line = Text(row.title)
+            .font(Font.hq(.callout))
+            .foregroundStyle(struck ? Color.hqLabel2 : Color.hqLabel)
+            .strikethrough(struck, color: Color.hqLabel3)
+        let small = Font.hq(.caption)
+        let gap = "\u{00A0}\u{00A0}"
+        if let steps = row.words.steps {
+            line = Text("\(line)\(gap)\(Text(Image(systemName: "checklist")).font(small).foregroundStyle(Color.hqLabel2))\u{00A0}\(Text(steps).font(small).monospacedDigit().foregroundStyle(Color.hqLabel2))")
+        }
+        if row.words.repeats {
+            line = Text("\(line)\(gap)\(Text(Image(systemName: "repeat")).font(small).foregroundStyle(Color.hqLabel3))")
+        }
+        return line
     }
 
     @ViewBuilder private var lead: some View {
@@ -149,8 +180,6 @@ struct TodoRowView: View {
                 .contentTransition(.symbolEffect(.replace))
                 .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + HQFont.preferred(.callout).capHeight / 2 }
                 .accessibilityHidden(true)
-        } else if let profile = row.leadFace {
-            face(profile)
         } else {
             Button(action: toggle) {
                 let size = min(30, circleSize).rounded()
@@ -167,35 +196,74 @@ struct TodoRowView: View {
         }
     }
 
+    /// The bot's face, with a dot at its foot for what it is doing.
     private func face(_ profile: String) -> some View {
-        let size = min(32, faceSize).rounded()
+        let size = min(30, faceSize).rounded()
+        let dot = (size * 0.42).rounded()
         return HeadImage(raw: row.head, profile: profile, size: size)
             .frame(width: size, height: size)
+            .overlay(alignment: .bottomTrailing) {
+                if let kind = row.words.dot, !row.done {
+                    Circle().fill(TodoRowView.dotColor(kind))
+                        .frame(width: dot, height: dot)
+                        .overlay { Circle().strokeBorder(Color.hqPage, lineWidth: 1.5) }
+                        .offset(x: dot * 0.3, y: dot * 0.3)
+                }
+            }
             .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + HQFont.preferred(.callout).capHeight / 2 }
             .accessibilityHidden(true)
     }
 
-    private var line: Text {
-        let rest = Text(row.line.rest.joined(separator: " · ")).foregroundStyle(Color.hqLabel2)
-        guard let lead = row.line.lead else { return rest }
-        let colored = Text(lead).foregroundStyle(TodoInk.color(row.line.tone))
-        return row.line.rest.isEmpty ? colored : Text("\(colored)\(Text(" · ").foregroundStyle(Color.hqLabel2))\(rest)")
+    static func dotColor(_ dot: TodoDot) -> Color {
+        switch dot {
+        case .working: return Color.hqTint
+        case .ready: return Color(uiColor: TodoInk.ready)
+        case .question: return Color.hqOrange
+        }
     }
 }
 
-/// A section's header: "Ready for You 2" with the green sparkle, "Needs You" with an orange hand, Done with Hide.
-struct TodoSectionHeaderView: View {
-    var section: TodoSection
-    var count: Int
-    var open: Bool
-    var toggle: (() -> Void)?
+/// A group's heading: "Overdue 1" in red, "Today 5", "Tomorrow  Fri, Nov 13", a bot's face and name in Bots, and Done
+/// with Show or Hide at its end.
+struct TodoGroupHeaderView: View {
+    var title: String
+    var detail: String?
+    var count: Int?
+    var red = false
+    /// Bots: the bot whose tasks follow.
+    var face: (profile: String, head: JSONValue?)?
+    /// "Still Need These?": why they're here.
+    var note: String?
+    /// Done: "Show" or "Hide", and what it does.
+    var fold: (title: String, action: () -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            line
-            if section == .stale {
-                // Why these are here, and what to do (swipe or hold a row for Keep).
-                Text(TodoWords.staleNote)
+            HStack(spacing: 6) {
+                if let face {
+                    HeadImage(raw: face.head, profile: face.profile, size: 18).frame(width: 18, height: 18).accessibilityHidden(true)
+                }
+                words
+                Spacer(minLength: 8)
+                if let fold {
+                    Button(action: fold.action) {
+                        Text(fold.title).padding(.top, 16).padding(.bottom, 6).padding(.leading, 12).contentShape(Rectangle())
+                    }
+                    .font(Font.hq(.subheadline))
+                    .foregroundStyle(Color.hqTintText)
+                    .buttonStyle(.plain)
+                    .padding(.top, -16).padding(.bottom, -6)
+                    .accessibilityIdentifier("tasks.show-done")
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, note == nil ? 4 : 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
+            if let note {
+                Text(note)
                     .font(Font.hq(.footnote))
                     .foregroundStyle(Color.hqLabel2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -207,165 +275,92 @@ struct TodoSectionHeaderView: View {
         }
     }
 
-    private var line: some View {
-        HStack(spacing: 6) {
-            switch section {
-            case .ready:
-                Image(systemName: "sparkles").foregroundStyle(Color(uiColor: TodoInk.ready)).font(Font.hq(.subheadline).weight(.semibold))
-            case .needsYou:
-                Image(systemName: "hand.raised.fill").foregroundStyle(Color.hqOrange).font(Font.hq(.subheadline))
-            case .overdue:
-                Image(systemName: "exclamationmark.circle.fill").foregroundStyle(Color.hqRed).font(Font.hq(.subheadline))
-            case .stale:
-                Image(systemName: "questionmark.circle").foregroundStyle(Color.hqLabel2).font(Font.hq(.subheadline))
-            default:
-                EmptyView()
-            }
-            if section == .ready, !Theme.isDesktop {
-                // Mockup 1-list: "Ready for You 2" in the sparkle's green.
-                let number = Text("\(count)").font(Font.hq(.subheadline)).monospacedDigit()
-                Text("\(Text(section.rawValue).font(Font.hq(.subheadline).weight(.semibold))) \(number)")
-                    .foregroundStyle(Color(uiColor: TodoInk.ready))
+    private var words: some View { Words(title: title, detail: detail, count: count, red: red) }
+
+    /// "Today  5": the name in the label's ink, what follows in grey (the Desktop Look's small capitals there).
+    struct Words: View {
+        var title: String
+        var detail: String?
+        var count: Int?
+        var red: Bool
+
+        var body: some View {
+            if Theme.isDesktop {
+                Text(([title] + [detail].compactMap { $0 } + [count.map { "\($0)" }].compactMap { $0 }).joined(separator: " · "))
+                    .monospacedDigit()
+                    .hqDesktopLabel(color: red ? .hqRed : .hqLabel2)
             } else {
-                JobsHeaderWords(title: section.rawValue, count: count)
-            }
-            Spacer(minLength: 8)
-            if section == .done, open, let toggle {
-                Button(action: toggle) {
-                    Text("Hide").padding(.top, 18).padding(.bottom, 6).contentShape(Rectangle())
+                let name = Text(title).font(Font.hq(.subheadline).weight(.semibold)).foregroundStyle(red ? Color.hqRed : Color.hqLabel)
+                let rest = [detail, count.map { "\($0)" }].compactMap { $0 }.joined(separator: "  ")
+                if rest.isEmpty {
+                    name
+                } else {
+                    Text("\(name)  \(Text(rest).font(Font.hq(.subheadline)).monospacedDigit().foregroundStyle(Color.hqLabel2))")
                 }
-                .font(Font.hq(.subheadline))
-                .foregroundStyle(Color.hqTint)
-                .padding(.top, -18).padding(.bottom, -6)
             }
         }
-        .padding(.leading, 20)
-        .padding(.trailing, 20)
-        .padding(.top, 20)
-        .padding(.bottom, section == .stale ? 2 : 6)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isHeader)
     }
 }
 
-/// "Show N Done ⌄", the folded Done section's only row.
-struct ShowDoneRowView: View {
-    var count: Int
-    var body: some View {
-        HStack(spacing: 6) {
-            Text("Show \(count) Done").font(Font.hq(.callout))
-            Image(systemName: "chevron.down").font(Font.hq(.footnote).weight(.semibold))
-            Spacer()
-        }
-        .foregroundStyle(Color.hqTint)
-        .padding(.vertical, 12)
-        .padding(.horizontal, 20)
-        .frame(minHeight: 48)
-        .contentShape(Rectangle())
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Show \(count) Done")
-        .accessibilityAddTraits(.isButton)
-    }
-}
-
-/// Group By › My Sections: one of your sections' headers. Tap folds it; ⋯ holds Add Task, Rename, Move Up/Down and
-/// Delete. "No Section" (`menu` nil) only folds.
-struct TodoUserSectionHeaderView: View {
-    struct Menu {
-        var add: () -> Void
-        var rename: () -> Void
-        var moveUp: (() -> Void)?
-        var moveDown: (() -> Void)?
-        var delete: () -> Void
+/// Upcoming's week: the next seven days, a dot under a day with tasks. A tap on such a day goes to it.
+struct TodoWeekStrip: View {
+    struct Day: Hashable {
+        var key: String
+        var weekday: String
+        var number: String
+        var today: Bool
+        var busy: Bool
     }
 
-    var name: String
-    var count: Int
-    var folded: Bool
-    var toggle: () -> Void
-    var menu: Menu?
+    var days: [Day]
+    var pick: (String) -> Void
 
     var body: some View {
-        HStack(spacing: 6) {
-            Button(action: toggle) {
-                HStack(spacing: 6) {
-                    Image(systemName: "chevron.right")
-                        .font(Font.hq(.caption).weight(.bold))
-                        .foregroundStyle(Color.hqLabel3)
-                        .rotationEffect(.degrees(folded ? 0 : 90))
-                        .frame(width: 12)
-                    JobsHeaderWords(title: name, count: count)
-                    Spacer(minLength: 8)
+        HStack(spacing: 0) {
+            ForEach(days, id: \.key) { day in
+                Button { pick(day.key) } label: {
+                    VStack(spacing: 3) {
+                        Text(day.weekday.uppercased())
+                            .font(Font.hq(.caption2).weight(.semibold))
+                            .foregroundStyle(Color.hqLabel2)
+                        Text(day.number)
+                            .font(Font.hq(.callout).weight(day.today ? .semibold : .regular)).monospacedDigit()
+                            .foregroundStyle(day.today ? Color.hqOnTint : (day.busy ? Color.hqLabel : Color.hqLabel2))
+                            .frame(width: HQFont.scaled(32), height: HQFont.scaled(32))
+                            .background { if day.today { Circle().fill(Color.hqTint) } }
+                        Circle().fill(day.busy ? Color.hqLabel3 : Color.clear).frame(width: 5, height: 5)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
                 }
-                .padding(.top, 20).padding(.bottom, 6)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("\(name), \(count)")
-            .accessibilityValue(folded ? "Folded" : "Open")
-            .accessibilityHint(folded ? "Shows its tasks" : "Hides its tasks")
-            .accessibilityAddTraits(.isHeader)
-            if let menu {
-                SwiftUI.Menu {
-                    Button { menu.add() } label: { Label("Add Task", systemImage: "plus") }
-                    Button { menu.rename() } label: { Label("Rename…", systemImage: "pencil") }
-                    if let up = menu.moveUp { Button { up() } label: { Label("Move Up", systemImage: "arrow.up") } }
-                    if let down = menu.moveDown { Button { down() } label: { Label("Move Down", systemImage: "arrow.down") } }
-                    Divider()
-                    Button(role: .destructive) { menu.delete() } label: { Label("Delete Section…", systemImage: "trash") }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(Font.hq(.subheadline).weight(.semibold))
-                        .foregroundStyle(Color.hqLabel2)
-                        .frame(width: 32, height: 28)
-                        .contentShape(Rectangle().inset(by: -8))   // a 44 pt target (audit 10-18)
-                }
-                .menuStyle(.button)
                 .buttonStyle(.plain)
-                .padding(.top, 14)
-                .accessibilityLabel("\(name) Options")
-                .accessibilityIdentifier("tasks.section-menu.\(name)")
+                .allowsHitTesting(day.busy)
+                .accessibilityLabel("\(day.weekday) \(day.number)")
+                .accessibilityValue(day.busy ? "Has tasks" : "No tasks")
+                .accessibilityIdentifier("tasks.week.\(day.key)")
             }
         }
-        .animation(HQMotion.reduced ? nil : .snappy(duration: 0.2), value: folded)
-        .padding(.leading, 14)
-        .padding(.trailing, 14)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.top, 6)
+        .padding(.bottom, 4)
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
     }
 }
 
-/// An empty section's one row: where a dragged task can land, and how to get one there.
-struct TodoEmptySectionRow: View {
-    /// [mac] Mac polish #138: a task's menu is a Control-click on the Mac, not a hold.
-    static func words(mac: Bool) -> String {
-        "Drag tasks here, or \(mac ? DeviceWord.hold : "hold") a task and choose Move To."
-    }
+/// A view with nothing in it: one quiet line.
+struct TodoViewEmptyRow: View {
+    var text: String
 
     var body: some View {
-        Text(Self.words(mac: DeviceWord.isMac))
-            .font(Font.hq(.footnote))
-            .foregroundStyle(Color.hqLabel3)
-            .padding(.horizontal, 32)
-            .padding(.vertical, 10)
-            .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
-    }
-}
-
-/// "+ New Section", under your sections.
-struct TodoNewSectionRow: View {
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "plus.rectangle.on.rectangle").font(Font.hq(.callout))
-            Text("New Section").font(Font.hq(.callout))
-            Spacer()
-        }
-        .foregroundStyle(Color.hqTint)
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .frame(minHeight: 48)
-        .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isButton)
+        Text(text)
+            .font(Font.hq(.subheadline))
+            .foregroundStyle(Color.hqLabel2)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 36)
+            .padding(.top, 48)
+            .padding(.bottom, 16)
+            .accessibilityIdentifier("tasks.view-empty")
     }
 }

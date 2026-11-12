@@ -153,7 +153,7 @@ extension PagesTests {
     /// (NotificationHub.open → openNotifiedChat): the task opens at the reply, the task above it, its name on top.
     @MainActor func testTasks_ChatAlertOpensTask() throws {
         app = launchSignedIn(Self.look + ["-HQPagesTab", "4", "-HQPagesMore", "tasks"])
-        XCTAssertTrue(app.descendants(matching: .any)["tasks.mode"].firstMatch.waitForExistence(timeout: 20), "the list is read")
+        XCTAssertTrue(app.descendants(matching: .any)["tasks.views"].firstMatch.waitForExistence(timeout: 20), "the list is read")
         tab("Bots")
         openTaskChatLink()
         // Step 3: a reply's alert lands at the reply with the task as its bar (one line: the bot's latest word).

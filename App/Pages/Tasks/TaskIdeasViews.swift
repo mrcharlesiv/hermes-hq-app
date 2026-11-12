@@ -1,34 +1,8 @@
-// [task-ideas] The Tasks page's To Do | Ideas switch (in the place of the Add a task field, owner 2026-11-05) and the
-// Ideas page's rows: who looks and when with Look Now, one card per idea (Add, Add & Let <Bot> Start, ×), the card
-// that turns Ideas on, and a line on where ideas come from. The + in the bar still adds a task.
+// [task-ideas] A bot's ideas for your list. [tasks-first] Owner 2026-11-12 (mockup 2-list-other-views): they no longer
+// take half of a To Do | Ideas switch; they are short rows at the foot of Inbox under "Suggested by <Bot>": the idea,
+// what the bot could do, Add and ×. A tap on one opens its card (why now, where it came from, Add & Let <Bot> Start).
 
 import SwiftUI
-
-nonisolated enum TasksMode: Hashable, Sendable { case toDo, ideas }
-
-/// To Do | Ideas, the page's first row. "Ideas 2" while two new ideas wait.
-struct TasksModeSwitch: View {
-    var ideas: Int
-    var mode: TasksMode
-    var select: (TasksMode) -> Void
-
-    private func title(_ mode: TasksMode) -> String {
-        switch mode {
-        case .toDo: return "To Do"
-        case .ideas: return ideas > 0 ? "Ideas \(ideas)" : "Ideas"
-        }
-    }
-
-    var body: some View {
-        WholeLabelTabs(tabs: [TasksMode.toDo, .ideas], title: title,
-                       selection: Binding(get: { mode }, set: { if $0 != mode { select($0) } }), identifier: "tasks.mode")
-            // The segmented control keeps the titles it was made with: a new count makes it again.
-            .id(title(.ideas))
-            .padding(.horizontal, 16)
-            .padding(.top, 6)
-            .padding(.bottom, 4)
-    }
-}
 
 /// An idea card's words, with the bot's name and face.
 struct TaskIdeaCardModel: Hashable {
@@ -182,7 +156,7 @@ struct TaskIdeaCard: View {
             }
         }
         .buttonStyle(IdeaButtonStyle(prominent: true))
-        .accessibilityLabel("Add to To Do")
+        .accessibilityLabel("Add to Tasks")
         .accessibilityIdentifier("tasks.idea.add.\(idea.title)")
         if idea.botHelps {
             Button { add(true) } label: {
@@ -194,101 +168,151 @@ struct TaskIdeaCard: View {
     }
 }
 
-/// The Ideas page's top line: who looks and when, when it last looked; Look Now (Looking… while it runs).
-struct TaskIdeasStatusRow: View {
+/// "Suggested by Hermes 3" over the ideas, with when it last looked at its end: a menu with Look Now.
+struct TaskIdeasHead: View {
     var botName: String
-    var head: JSONValue?
-    var profile: String
+    var count: Int
     var at: String
     var ranAt: String?
     var looking: Bool
     var enabled: Bool
     var lookNow: () -> Void
-    @ScaledMetric(relativeTo: .footnote) private var faceSize: CGFloat = 20
-    @Environment(\.dynamicTypeSize) private var typeSize
+    var settings: () -> Void
 
     static func time(_ at: String) -> String {
         TodoSettingsModel.time(at).formatted(date: .omitted, time: .shortened)
     }
 
-    // Owner 2026-11-08: one sentence with "· Looked nov 5" broke after the dot and lowercased the month. Now two
-    // lines that each stand alone: when it looks, then when it last did.
-    private var words: String {
-        looking ? "\(botName) is looking at your recent chats…" : "\(botName) looks each day at \(Self.time(at))"
-    }
-
-    /// "Last looked Nov 5", "Last looked 2 h ago", "Last looked just now"; nil before the first look and while looking.
-    private var lastLooked: String? {
-        guard !looking else { return nil }
+    /// "Looked 3 h ago", "Looked just now"; "Looks at 7:30 AM" before its first look.
+    private var looked: String {
         let ago = TodoWords.ago(ranAt, now: Date())
-        guard !ago.isEmpty else { return nil }
-        return "Last looked \(ago == "Just now" ? "just now" : ago)"
+        guard !ago.isEmpty else { return "Looks at \(Self.time(at))" }
+        return "Looked \(ago == "Just now" ? "just now" : ago)"
     }
 
     var body: some View {
-        // At the accessibility sizes Look Now goes under the words (beside them, the words ran to four short lines).
-        let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
-                                                  : AnyLayout(HStackLayout(spacing: 10))
-        layout {
-            HStack(spacing: 10) {
-                let size = min(28, faceSize).rounded()
-                HeadImage(raw: head, profile: profile, size: size)
-                    .frame(width: size, height: size)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(words)
-                        .font(Font.hq(.footnote))
-                        .foregroundStyle(Color.hqLabel)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("tasks.ideas.status")
-                    if let lastLooked {
-                        Text(lastLooked)
-                            .font(Font.hq(.caption))
-                            .foregroundStyle(Color.hqLabel2)
-                            .lineLimit(1)
-                            .accessibilityIdentifier("tasks.ideas.last-looked")
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
+        HStack(spacing: 6) {
+            TodoGroupHeaderView.Words(title: "Suggested by \(botName)", detail: nil, count: count > 0 ? count : nil, red: false)
+                .accessibilityAddTraits(.isHeader)
+                .accessibilityIdentifier("tasks.ideas.status")
+            Spacer(minLength: 8)
             if looking {
-                ProgressView().controlSize(.small)
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.mini)
+                    Text("Looking…").font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
+                }
+                .accessibilityIdentifier("tasks.ideas.looking")
             } else {
-                Button("Look Now", action: lookNow)
-                    .font(Font.hq(.footnote).weight(.semibold))
-                    .fixedSize()
-                    .foregroundStyle(Color.hqTintText)
-                    .buttonStyle(.borderless)
-                    .disabled(!enabled)
-                    .accessibilityIdentifier("tasks.ideas.look-now")
+                Menu {
+                    Button { lookNow() } label: { Label("Look Now", systemImage: "arrow.clockwise") }.disabled(!enabled)
+                    Button { settings() } label: { Label("Ideas Settings…", systemImage: "gearshape") }
+                } label: {
+                    HStack(spacing: 3) {
+                        Text(looked).font(Font.hq(.footnote))
+                        Image(systemName: "chevron.down").font(Font.hq(.caption2).weight(.semibold))
+                    }
+                    .foregroundStyle(Color.hqLabel2)
+                    .padding(.vertical, 8).padding(.leading, 12)
+                    .contentShape(Rectangle())
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .padding(.vertical, -8)
+                .accessibilityLabel("\(looked). Options")
+                .accessibilityIdentifier("tasks.ideas.look")
             }
         }
         .padding(.horizontal, 20)
-        .padding(.top, 6)
+        .padding(.top, 20)
         .padding(.bottom, 4)
-        .frame(minHeight: 44)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-/// The Ideas page's other rows.
-nonisolated enum TaskIdeasNote: Hashable, Sendable {
-    /// Ideas is off: what it does, and Turn On.
-    case intro(looker: String)
-    /// The add-on on the computer has no Ideas yet.
-    case update(asked: Bool)
-    /// On, and nothing new.
-    case empty(String)
-    /// Ideas couldn't be read and none are saved: the reason, and Try Again.
-    case failed(String)
-    /// Under the cards: where ideas come from.
-    case footer
-    /// To Do with nothing to show: no tasks at all, or none with the bot picked in the pills (under the switch, so
-    /// Ideas stays a tap away). `imports`: Import from Reminders is offered (it adds your own tasks).
-    case noTasks(text: String, imports: Bool)
+/// One idea as a row: a sparkle, the to-do, Add and ×; under it what the bot could do (else why now). A tap opens
+/// its card.
+struct TaskIdeaRow: View {
+    var card: TaskIdeaCardModel
+    var enabled: Bool
+    var add: () -> Void
+    var dismiss: () -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
 
-    /// Mac polish #139: the add-on by the name its update sheet uses, on the computer that runs it (on a Mac, "your
-    /// computer" read as this Mac).
-    static let updateText = "Ideas needs \(AddOnUpdate.pushName) 0.9.39 or later on \(HostWord.phrase)."
+    private var idea: TaskIdea { card.idea }
+
+    private var second: String {
+        if idea.botHelps {
+            let can = idea.who == "bot" ? "can do this" : "can help"
+            return idea.help.isEmpty ? "\(card.botName) \(can)" : "\(card.botName) \(can): \(idea.help)"
+        }
+        return idea.why
+    }
+
+    var body: some View {
+        let large = typeSize.isAccessibilitySize
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Image(systemName: "sparkle")
+                .font(Font.hq(.footnote).weight(.semibold))
+                .foregroundStyle(Color.hqTintText)
+                .frame(width: HQFont.scaled(22))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(idea.title.isEmpty ? "Untitled Idea" : idea.title)
+                    .font(Font.hq(.callout))
+                    .foregroundStyle(Color.hqLabel)
+                    .lineLimit(large ? 3 : 1)
+                if !second.isEmpty {
+                    Text(second)
+                        .font(Font.hq(.footnote))
+                        .foregroundStyle(Color.hqLabel2)
+                        .lineLimit(large ? 3 : 1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: add) {
+                HStack(spacing: 4) {
+                    if card.busy { ProgressView().controlSize(.mini) }
+                    Text("Add")
+                }
+                .font(Font.hq(.footnote).weight(.semibold))
+                .foregroundStyle(Color.hqTintText)
+                .padding(.horizontal, 11).padding(.vertical, 5)
+                .background(Capsule().fill(Color.hqTint.opacity(0.14)))
+                .contentShape(Rectangle().inset(by: -8))
+            }
+            .buttonStyle(.plain)
+            .disabled(!enabled || card.busy)
+            .accessibilityLabel("Add to Tasks")
+            .accessibilityIdentifier("tasks.idea.add.\(idea.title)")
+            Button(action: dismiss) {
+                Image(systemName: "xmark")
+                    .font(Font.hq(.footnote).weight(.semibold))
+                    .foregroundStyle(Color.hqLabel3)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle().inset(by: -10))
+            }
+            .buttonStyle(.plain)
+            .disabled(!enabled || card.busy)
+            .accessibilityLabel("Dismiss")
+            .accessibilityIdentifier("tasks.idea.dismiss.\(idea.title)")
+        }
+        .padding(.vertical, Theme.isDesktop ? 10 : 8)
+        .padding(.horizontal, 20)
+        .frame(minHeight: 44, alignment: .leading)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("tasks.idea.\(idea.title)")
+    }
+}
+
+/// The page's other rows.
+nonisolated enum TaskIdeasNote: Hashable, Sendable {
+    /// Ideas is off: one line at Inbox's foot, and Turn On.
+    case off(looker: String)
+    /// On, and nothing new: when it looks next.
+    case quiet(String)
+    /// No tasks at all: New Task, and Import from Reminders when `imports`.
+    case noTasks(text: String, imports: Bool)
 }
 
 struct TaskIdeasNoteView: View {
@@ -299,46 +323,38 @@ struct TaskIdeasNoteView: View {
 
     var body: some View {
         switch note {
-        case .intro(let looker):
-            card(symbol: "lightbulb.max", title: "Ideas for Your List",
-                 text: "Once a day, \(looker) looks through your recent chats and whatever else it can reach, like your calendar or email, and suggests a few tasks you may want. Nothing goes on your list or starts until you choose.",
-                 button: "Turn On Ideas", id: "tasks.ideas.turn-on",
-                 small: "Choose who looks and when in Tasks Settings.")
-        case .update(let asked):
-            card(symbol: "puzzlepiece.extension", title: "Update the Add-on",
-                 text: TaskIdeasNote.updateText,
-                 button: asked ? "Updating…" : "Update Add-on", id: "tasks.ideas.update", small: nil)
-        case .failed(let reason):
-            // Reading again is no change: Try Again works on a read-only gateway too.
-            card(symbol: "exclamationmark.triangle", title: "Couldn’t Load Ideas", text: reason.isEmpty ? "Ideas couldn’t be read." : reason,
-                 button: "Try Again", id: "tasks.ideas.retry", small: nil, enabled: true)
-        case .empty(let text):
-            VStack(spacing: 6) {
-                Image(systemName: "lightbulb")
-                    .font(Font.hq(.title2))
+        case .off(let looker):
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Image(systemName: "sparkle")
+                    .font(Font.hq(.footnote).weight(.semibold))
                     .foregroundStyle(Color.hqLabel3)
-                Text("No New Ideas").font(Font.hq(.headline)).foregroundStyle(Color.hqLabel)
-                Text(text)
+                    .frame(width: HQFont.scaled(22))
+                    .accessibilityHidden(true)
+                Text("\(looker) can suggest tasks from your chats, once a day.")
                     .font(Font.hq(.footnote))
                     .foregroundStyle(Color.hqLabel2)
-                    .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button("Turn On", action: primary)
+                    .font(Font.hq(.footnote).weight(.semibold))
+                    .foregroundStyle(Color.hqTintText)
+                    .buttonStyle(.borderless)
+                    .fixedSize()
+                    .disabled(!enabled)
+                    .accessibilityIdentifier("tasks.ideas.turn-on")
             }
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 32)
-            .padding(.vertical, 36)
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("tasks.ideas.empty")
-        case .footer:
-            Text("Ideas come from your recent chats and whatever else your bot can reach. Nothing happens until you add one.")
+            .padding(.horizontal, 20)
+            .padding(.top, 22)
+            .padding(.bottom, 12)
+        case .quiet(let text):
+            Text(text)
                 .font(Font.hq(.footnote))
-                .foregroundStyle(Color.hqLabel3)
+                .foregroundStyle(Color.hqLabel2)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 20)
-                .padding(.top, 8)
-                .padding(.bottom, 20)
+                .padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityIdentifier("tasks.ideas.footer")
+                .accessibilityIdentifier("tasks.ideas.empty")
         case .noTasks(let text, let imports):
             VStack(spacing: 8) {
                 Image(systemName: "checklist")
@@ -384,39 +400,5 @@ struct TaskIdeasNoteView: View {
             .padding(.top, 56)
             .padding(.bottom, 24)
         }
-    }
-
-    private func card(symbol: String, title: String, text: String, button: String, id: String, small: String?,
-                      enabled: Bool? = nil) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                Image(systemName: symbol)
-                    .font(Font.hq(.title3).weight(.semibold))
-                    .foregroundStyle(Color.hqTintText)
-                    .accessibilityHidden(true)
-                Text(title).font(Font.hq(.headline)).foregroundStyle(Color.hqLabel)
-            }
-            Text(text)
-                .font(Font.hq(.subheadline))
-                .foregroundStyle(Color.hqLabel2)
-                .fixedSize(horizontal: false, vertical: true)
-            Button(action: primary) {
-                Text(button).font(Font.hq(.subheadline).weight(.semibold)).frame(minHeight: 30).padding(.horizontal, 4)
-            }
-            .hqProminentButtonStyle()
-            .buttonBorderShape(.capsule)
-            .disabled(!(enabled ?? self.enabled))
-            .padding(.top, 2)
-            .accessibilityIdentifier(id)
-            if let small {
-                // Mac polish #68: the card's last line in its note grey (label 2 in the iOS look; label 3 read 2.2:1).
-                Text(small).font(Font.hq(.caption)).foregroundStyle(Color(uiColor: HQPalette.cardNote))
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .modifier(IdeaCardBackground())
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
     }
 }

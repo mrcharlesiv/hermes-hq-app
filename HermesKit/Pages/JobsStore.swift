@@ -143,7 +143,8 @@ final class JobsStore {
     }
 
     private func setJobs(_ list: [CronJob]) {
-        let list = list.map { job in
+        // [tasks-first] Tasks' own runners are plumbing, not jobs you made: they stay out of the list.
+        let list = list.filter { !TodoRunnerJobs.isOne($0) }.map { job in
             var job = job
             job.botWorking = botWorking[job.key]
             return job

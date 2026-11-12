@@ -255,8 +255,17 @@ final class TasksStore {
     /// A read's list, keeping tasks that have a write on its way and ones added here and not yet answered.
     private func adopt(_ fresh: [TodoTask], rev: Int, settings: TodoSettings?) {
         var next = fresh
-        for local in tasks where inFlight[local.id] != nil || TodoIDs.isLocal(local.id) {
-            if let at = next.firstIndex(where: { $0.id == local.id }) { next[at] = local } else { next.append(local) }
+        let places = Dictionary(next.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
+        for local in tasks {
+            let inHand = inFlight[local.id] != nil || TodoIDs.isLocal(local.id)
+            if let at = places[local.id] {
+                // [tasks-first] A read that left before a change landed carries the task as it was (an older rev): it
+                // never takes the change back. (Move To › New List… saved the list, which reads the list again, then
+                // moved the task; the read's late answer put the task back in no list until the next read.)
+                if inHand || next[at].rev < local.rev { next[at] = local }
+            } else if inHand {
+                next.append(local)
+            }
         }
         tasks = next
         self.rev = rev

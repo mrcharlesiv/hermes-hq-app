@@ -10,7 +10,8 @@
 // - `-HQPagesTaskPage YES`       …and open that task's Task Page (Tasks)
 // - `-HQPagesNewTask YES`        …and open New Task (Kanban's, or Tasks')
 // - `-HQPagesTasksSettings YES`  …and open Tasks Settings (on Tasks)
-// - `-HQPagesTasksIdeas YES`     …and switch Tasks to Ideas
+// - `-HQPagesTasksIdeas YES`     …and show Tasks' Inbox (the bot's ideas are at its foot)
+// - `-HQPagesTasksView <key>`    …and show that Tasks view (today, upcoming, inbox, bots, or a list by its name)
 // - `-HQPagesImportReminders N`  …and add N reminders to Reminders (0 adds none), then tap Import from Reminders (on Tasks)
 // - `-HQPagesChip <status>`      …and pick that Kanban chip
 // - `-HQPagesFilter <kind>`      …and pick that Artifacts segment (image, file, link)
@@ -90,6 +91,10 @@ enum PagesDebug {
                 }
                 if defaults.bool(forKey: "HQPagesNewTask") { tasks.newTask() }
                 if defaults.bool(forKey: "HQPagesTasksIdeas") { tasks.showIdeas() }
+                if let key = defaults.string(forKey: "HQPagesTasksView") {
+                    if let view = TodoView(key: key), !key.hasPrefix("list:") { tasks.show(view) }
+                    else if let list = tasks.store.sections.first(where: { $0.name == key }) { tasks.show(.list(list.id)) }
+                }
                 if defaults.bool(forKey: "HQPagesTasksSettings") { tasks.openSettings() }
                 if let count = defaults.string(forKey: "HQPagesImportReminders").flatMap(Int.init) {
                     Task {

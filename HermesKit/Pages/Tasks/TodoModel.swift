@@ -270,9 +270,10 @@ nonisolated struct TodoSettings: Codable, Hashable, Sendable {
     var quietStart: String = "22:00"
     var quietEnd: String = "08:00"
     var prepEveryHours: Int = 3
-    /// "smart" (Ready for You, Needs You, Today, …) | "sections" (your own). Kept on the gateway, so iPhone and Mac match.
+    /// "smart" | "sections": how the page grouped its tasks before its views (2026-11-12). Kept as the gateway sends
+    /// it, so an older app on the same gateway keeps its choice; this app no longer reads it.
     var group: String = "smart"
-    /// "smart" (each group's own order; your drag order in My Sections) | "due" | "added".
+    /// A list's order: "smart" (your drag order) | "due" | "added".
     var sort: String = "smart"
     /// [task-ideas] Ideas (hermes-hq-push 0.9.39): one bot reads your recent chats each day and suggests a few tasks.
     /// nil from an older add-on, and then never sent back.
@@ -289,8 +290,6 @@ nonisolated struct TodoSettings: Codable, Hashable, Sendable {
         case group, sort
         case ideas, ideasBot = "ideas_bot", ideasAt = "ideas_at", ideasMax = "ideas_max"
     }
-
-    var groupsBySections: Bool { group == "sections" }
 
     init() {}
 
@@ -440,7 +439,8 @@ nonisolated enum TodoDates {
 
 // MARK: - Sections
 
-/// The page's sections, top to bottom (owner-approved mockup 1-list).
+/// Where a task stands (the page's sections until 2026-11-12, when its views took over: `TodoViews`). Still what the
+/// Mac table's status words go by, and the name of "Still Need These?".
 nonisolated enum TodoSection: String, CaseIterable, Sendable {
     case ready = "Ready for You"
     case needsYou = "Needs You"
@@ -485,17 +485,6 @@ nonisolated enum TodoSections {
         return now.timeIntervalSince(touched) >= staleAfter
     }
 
-    /// The tasks in their sections, each section in its order; empty sections left out.
-    static func grouped(_ tasks: [TodoTask], now: Date, sort: String = "smart", calendar: Calendar = .current) -> [(TodoSection, [TodoTask])] {
-        var buckets: [TodoSection: [TodoTask]] = [:]
-        for task in tasks { buckets[section(task, now: now, calendar: calendar), default: []].append(task) }
-        return TodoSection.allCases.compactMap { section in
-            guard let items = buckets[section], !items.isEmpty else { return nil }
-            let smart = sort == "smart" || section == .done
-            return (section, smart ? sorted(items, in: section, calendar: calendar) : ordered(items, sort: sort, calendar: calendar))
-        }
-    }
-
     static func sorted(_ items: [TodoTask], in section: TodoSection, calendar: Calendar = .current) -> [TodoTask] {
         let far = Date.distantFuture
         func due(_ t: TodoTask) -> Date { TodoDates.due(t.due, calendar: calendar)?.date ?? far }
@@ -526,23 +515,6 @@ nonisolated enum TodoSections {
         case .done:
             return items.sorted { (TodoDates.moment($0.doneAt) ?? updated($0), $0.id) > (TodoDates.moment($1.doneAt) ?? updated($1), $1.id) }
         }
-    }
-
-    /// Group By › My Sections: open tasks under no section first, then each of yours in order (empty ones too, so a
-    /// task can be dragged in); a task whose section is gone counts as no section. Done keeps its own group, last.
-    static func byUserSection(_ tasks: [TodoTask], sections: [TodoUserSection], sort: String,
-                              calendar: Calendar = .current) -> (open: [(String, [TodoTask])], done: [TodoTask]) {
-        let known = Set(sections.map(\.id))
-        var buckets: [String: [TodoTask]] = [:]
-        var done: [TodoTask] = []
-        for task in tasks {
-            if task.isDone { done.append(task); continue }
-            let key = task.section.flatMap { known.contains($0) ? $0 : nil } ?? ""
-            buckets[key, default: []].append(task)
-        }
-        let order = [""] + sections.map(\.id)
-        let open = order.map { ($0, ordered(buckets[$0] ?? [], sort: sort, calendar: calendar)) }
-        return (open, sorted(done, in: .done, calendar: calendar))
     }
 
     /// A group's tasks in the Sort By order: "smart" is your drag order (`position`), "due" soonest first (no date
@@ -984,17 +956,18 @@ nonisolated extension TodoWords {
     }
 
     /// Delete Section's message: what happens to the tasks in it, open and done (both lose the section; none is deleted).
-    static func deleteSectionMessage(open: Int, done: Int) -> String? {
+    static func deleteListMessage(open: Int, done: Int) -> String? {
+        // [tasks-first] A list is where a task is filed, not the task: deleting it keeps every task, in no list.
         switch (open, done) {
         case (0, 0): return nil
-        case (1, 0): return "Its task moves to No Section."
-        case (0, 1): return "Its done task moves to No Section."
-        case (_, 0): return "Its \(open) tasks move to No Section."
-        case (0, _): return "Its \(done) done tasks move to No Section."
+        case (1, 0): return "Its task is kept, in no list."
+        case (0, 1): return "Its done task is kept, in no list."
+        case (_, 0): return "Its \(open) tasks are kept, in no list."
+        case (0, _): return "Its \(done) done tasks are kept, in no list."
         default:
             let tasks = open == 1 ? "1 task" : "\(open) tasks"
             let finished = done == 1 ? "1 done task" : "\(done) done tasks"
-            return "Its \(tasks) and \(finished) move to No Section."
+            return "Its \(tasks) and \(finished) are kept, in no list."
         }
     }
 

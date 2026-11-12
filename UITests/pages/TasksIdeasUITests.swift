@@ -1,29 +1,28 @@
-// [task-ideas] Owner 2026-11-05: "Instead of the add a task box at the top, I want a toggle between two pages: active
-// tasks and suggested tasks … you land on the main tasks page but you can click the additional tab/page to see tasks
-// that your agent suggests could be started based on all of your context." To Do | Ideas heads the page; Ideas starts
-// off and says what it does; once on, each idea can be added (with its bot starting) or dismissed (Undo brings it
-// back), and Look Now asks for more. Run with scripts/e2e-pages.sh (HQN_PAGES_ONLY=testTasks_Ideas); HQN_TASKS_LOOK
-// picks the look.
+// [task-ideas] A bot's ideas for your list. Owner 2026-11-05 had them behind a To Do | Ideas switch; [tasks-first]
+// owner 2026-11-12 (mockup 2-list-other-views): they are short rows at the foot of Inbox. Ideas starts off and says
+// what it does in one line; once on, each idea can be added from its row, opened as a card (with its bot starting), or
+// dismissed (Undo brings it back), and the heading's menu looks for more. Run with scripts/e2e-pages.sh
+// (HQN_PAGES_ONLY=testTasks_Ideas); HQN_TASKS_LOOK picks the look.
 
 import XCTest
 
 extension PagesTests {
     @MainActor func testTasks_Ideas() throws {
         app = launchSignedIn(Self.look + ["-HQPagesTab", "4", "-HQPagesMore", "tasks"])
-        // The page opens on To Do, with the switch where Add a task was.
-        let modeSwitch = app.descendants(matching: .any)["tasks.mode"].firstMatch
-        XCTAssertTrue(modeSwitch.waitForExistence(timeout: 20), "To Do | Ideas heads the page")
-        XCTAssertFalse(app.textFields["tasks.quick-add"].exists, "the Add a task field is gone")
+        // The page opens on Today; no switch gives half the page to Ideas.
+        let inbox = app.buttons["tasks.view.inbox"].firstMatch
+        XCTAssertTrue(inbox.waitForExistence(timeout: 20), "the views head the page")
+        XCTAssertFalse(app.descendants(matching: .any)["tasks.mode"].exists, "no To Do | Ideas switch")
         XCTAssertTrue(app.descendants(matching: .any)["task-row-Call the dentist"].firstMatch.waitForExistence(timeout: 10),
-                      "the page opens on To Do")
-        shot("tasks-ideas-1-todo" + Self.lookName)
+                      "the page opens on your day")
+        shot("tasks-ideas-1-today" + Self.lookName)
 
-        // Ideas is off until you turn it on: what it does, and one button.
-        modeSwitch.buttons["Ideas"].firstMatch.tap()
+        // Ideas is off until you turn it on: one line at Inbox's foot, and one button.
+        inbox.tap()
         let turnOn = app.buttons["tasks.ideas.turn-on"].firstMatch
         XCTAssertTrue(turnOn.waitForExistence(timeout: 10), "Ideas starts off and offers Turn On")
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "until you choose")).firstMatch.exists,
-                      "it says nothing happens until you choose")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "can suggest tasks from your chats")).firstMatch.exists,
+                      "it says what it does")
         XCTAssertFalse(app.descendants(matching: .any)["tasks.idea.Renew the car registration"].exists, "no ideas while off")
         shot("tasks-ideas-2-off" + Self.lookName)
         turnOn.tap()
@@ -31,36 +30,40 @@ extension PagesTests {
             self.restCalls("PUT", suffix: "/tasks/settings").contains { ($0["body"] as? [String: Any])?["ideas"] as? Bool == true }
         }, "Turn On saves Ideas on")
 
-        // The ideas, newest first: who looks and when, and a card each.
+        // The ideas, newest first, under who suggested them: a short row each.
         let registration = app.descendants(matching: .any)["tasks.idea.Renew the car registration"].firstMatch
         XCTAssertTrue(registration.waitForExistence(timeout: 10), "the ideas show once on")
         let status = app.staticTexts["tasks.ideas.status"].firstMatch
         XCTAssertTrue(status.exists)
-        XCTAssertTrue(status.label.contains("looks each day at"), status.label)
-        // When it last looked stands on its own line (it had run on after a dot and broken there, owner 2026-11-08).
-        let last = app.staticTexts["tasks.ideas.last-looked"].firstMatch
-        XCTAssertTrue(last.exists && last.label.hasPrefix("Last looked "), last.label)
-        XCTAssertFalse(status.label.contains("Looked"), status.label)
-        XCTAssertTrue(modeSwitch.buttons["Ideas 3"].firstMatch.waitForExistence(timeout: 5), "the switch counts the new ideas")
-        XCTAssertFalse(app.buttons["tasks.idea.start.Renew the car registration"].exists, "your own idea has no bot to start")
-        XCTAssertTrue(app.buttons["tasks.idea.start.Compare internet plans before the promo ends"].exists,
-                      "an idea a bot can help with offers it starting")
-        shot("tasks-ideas-3-cards" + Self.lookName)
+        XCTAssertTrue(status.label.hasPrefix("Suggested by Hermes") && status.label.hasSuffix("3"), status.label)
+        let look = app.buttons["tasks.ideas.look"].firstMatch
+        XCTAssertTrue(look.exists, "when it looked is the heading's menu")
+        XCTAssertTrue(look.label.hasPrefix("Look"), look.label)
+        let internet = "Compare internet plans before the promo ends"
+        XCTAssertFalse(app.buttons["tasks.idea.start.\(internet)"].exists, "a row has Add and ×; the bot starting is on its card")
+        shot("tasks-ideas-3-rows" + Self.lookName)
 
-        // Add: it goes on To Do; the switch's count drops.
+        // Add, from the row: it becomes a task (here, in Inbox) and leaves the ideas.
         app.buttons["tasks.idea.add.Renew the car registration"].firstMatch.tap()
-        XCTAssertTrue(waitUntil(10) { !registration.exists }, "an added idea leaves Ideas")
+        XCTAssertTrue(waitUntil(10) { !registration.exists }, "an added idea leaves the ideas")
         XCTAssertTrue(waitUntil(5) { !self.restCalls("POST", suffix: "/ideas/i_registration/add").isEmpty }, "the add is sent")
-        XCTAssertTrue(modeSwitch.buttons["Ideas 2"].firstMatch.waitForExistence(timeout: 5), "two ideas left")
+        XCTAssertTrue(app.descendants(matching: .any)["task-row-Renew the car registration"].firstMatch.waitForExistence(timeout: 10),
+                      "the added idea is a task")
+        XCTAssertTrue(waitUntil(5) { status.label.hasSuffix("2") }, "two ideas left: \(status.label)")
 
-        // Add & Let Finance Start: added with its bot starting.
-        app.buttons["tasks.idea.start.Compare internet plans before the promo ends"].firstMatch.tap()
+        // A tap opens an idea's card: why now, where it came from, and Add & Let Finance Start.
+        let internetRow = app.descendants(matching: .any)["tasks.idea.\(internet)"].firstMatch
+        for _ in 0..<4 where !internetRow.isHittable { app.swipeUp(velocity: .slow) }
+        internetRow.tap()
+        let start = app.buttons["tasks.idea.start.\(internet)"].firstMatch
+        XCTAssertTrue(start.waitForExistence(timeout: 5), "the card offers its bot starting")
+        shot("tasks-ideas-4-card" + Self.lookName)
+        start.tap()
         XCTAssertTrue(waitUntil(10) {
             self.restCalls("POST", suffix: "/ideas/i_internet/add").contains { ($0["body"] as? [String: Any])?["start"] as? Bool == true }
         }, "the add asks its bot to start")
         let notice = app.descendants(matching: .any)["pages.notice"].firstMatch
         XCTAssertTrue(waitUntil(5) { notice.label.contains("is starting on it") }, "says the bot is starting: \(notice.label)")
-        shot("tasks-ideas-4-added" + Self.lookName)
 
         // ×: gone at once, with Undo.
         let offsite = app.descendants(matching: .any)["tasks.idea.Book the team offsite venue"].firstMatch
@@ -76,24 +79,22 @@ extension PagesTests {
         XCTAssertTrue(offsite.waitForExistence(timeout: 10), "Undo brings it back")
         XCTAssertFalse(restCalls("POST", suffix: "/ideas/i_offsite/restore").isEmpty, "the restore is sent")
 
-        // Look Now: Looking… then the new idea.
-        let look = app.buttons["tasks.ideas.look-now"].firstMatch
-        XCTAssertTrue(look.waitForExistence(timeout: 5))
+        // Look Now, in the heading's menu: Looking… then the new idea.
+        for _ in 0..<4 where !look.isHittable { app.swipeUp(velocity: .slow) }
         look.tap()
-        XCTAssertTrue(waitUntil(5) { status.label.contains("is looking") }, "says it's looking: \(status.label)")
+        let lookNow = app.buttons["Look Now"].firstMatch
+        XCTAssertTrue(lookNow.waitForExistence(timeout: 5))
+        lookNow.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["tasks.ideas.looking"].firstMatch.waitForExistence(timeout: 5), "says it's looking")
         shot("tasks-ideas-6-looking" + Self.lookName)
         XCTAssertTrue(app.descendants(matching: .any)["tasks.idea.Plan dinners for next week"].firstMatch.waitForExistence(timeout: 20),
                       "the look's new idea shows")
         shot("tasks-ideas-7-new" + Self.lookName)
 
-        // Back on To Do, the added ideas are tasks.
-        modeSwitch.buttons.element(boundBy: 0).tap()
-        let added = app.descendants(matching: .any)["task-row-Renew the car registration"].firstMatch
-        let started = app.descendants(matching: .any)["task-row-Compare internet plans before the promo ends"].firstMatch
-        XCTAssertTrue(app.descendants(matching: .any)["task-row-Call the dentist"].firstMatch.waitForExistence(timeout: 10))
-        for _ in 0..<6 where !(added.exists && started.exists) { app.swipeUp(velocity: .slow) }
-        XCTAssertTrue(added.exists, "the added idea is on To Do")
-        XCTAssertTrue(started.exists, "so is the one its bot started")
+        // The one its bot started is a task too.
+        let started = app.descendants(matching: .any)["task-row-\(internet)"].firstMatch
+        for _ in 0..<4 where !started.exists { app.swipeDown(velocity: .slow) }
+        XCTAssertTrue(started.exists, "the one its bot started is a task")
 
         // Tasks Settings has Ideas, on.
         app.terminate()

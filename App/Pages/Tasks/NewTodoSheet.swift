@@ -18,16 +18,21 @@ final class NewTodoModel {
     var due = Calendar.current.startOfDay(for: Date().addingTimeInterval(86_400)).addingTimeInterval(9 * 3600)
     var hasTime = false
     var repeatRule: String?
-    /// One of your sections (Add Task in a section's menu starts there), or nil.
+    /// One of your lists (a task added while a list shows starts there), or nil.
     var section: String?
     var saving = false
     var failure: String?
     @ObservationIgnored var onCreated: ((TodoTask?) -> Void)?
     @ObservationIgnored weak var controller: UIViewController?
 
-    init(store: TasksStore, bots: [Bot], preferredBot: String?, section: String? = nil) {
+    init(store: TasksStore, bots: [Bot], preferredBot: String?, section: String? = nil, dueToday: Bool = false) {
         self.store = store
         self.section = section
+        // [tasks-first] Added from Today, it is due today (a day, no time) until you say otherwise.
+        if dueToday {
+            hasDue = true
+            due = Calendar.current.startOfDay(for: Date()).addingTimeInterval(9 * 3600)
+        }
         self.bots = PagesNames.scopeChoices(bots)
         helper = preferredBot.flatMap { id in self.bots.contains { $0.id == id } ? id : nil }
     }
@@ -65,9 +70,9 @@ final class NewTodoModel {
 }
 
 enum NewTodoSheet {
-    static func make(store: TasksStore, bots: [Bot], preferredBot: String?, section: String? = nil,
+    static func make(store: TasksStore, bots: [Bot], preferredBot: String?, section: String? = nil, dueToday: Bool = false,
                      onCreated: @escaping (TodoTask?) -> Void) -> UIViewController {
-        let model = NewTodoModel(store: store, bots: bots, preferredBot: preferredBot, section: section)
+        let model = NewTodoModel(store: store, bots: bots, preferredBot: preferredBot, section: section, dueToday: dueToday)
         model.onCreated = onCreated
         let host = NewTodoHost(model: model)
         let nav = ChatSheet.wrap(host, title: "New Task")
@@ -151,8 +156,8 @@ struct NewTodoView: View {
                     .submitLabel(.done)
                     .accessibilityIdentifier("tasks.new.title")
                 if !model.store.sections.isEmpty {
-                    Picker("Section", selection: Binding(get: { model.section }, set: { PagesHaptics.selection(); model.section = $0 })) {
-                        Text("No Section").tag(String?.none)
+                    Picker("List", selection: Binding(get: { model.section }, set: { PagesHaptics.selection(); model.section = $0 })) {
+                        Text("No List").tag(String?.none)
                         ForEach(model.store.sections) { section in Text(section.name).tag(Optional(section.id)) }
                     }
                     .hqMenuPicker()

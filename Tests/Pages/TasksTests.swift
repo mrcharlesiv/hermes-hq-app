@@ -46,7 +46,7 @@ struct TasksTests {
 
     // MARK: Sections
 
-    @Test func sectionsFollowTheMockup() {
+    @Test func whereATaskStands() {
         let list = [
             task("cleaning", due: "2026-11-04T18:00:00-06:00"),
             task("invoices", who: "bot", bot: "finance", status: "working", due: "2026-11-05"),
@@ -58,9 +58,8 @@ struct TasksTests {
             task("water", status: "done"),
             task("passport", who: "together", bot: "default", status: "working", due: "2026-11-04"),
         ]
-        let groups = TodoSections.grouped(list, now: Self.now, calendar: Self.calendar)
-        #expect(groups.map(\.0) == [.ready, .needsYou, .overdue, .today, .bots, .upcoming, .noDate, .done])
-        let ids = Dictionary(uniqueKeysWithValues: groups.map { ($0.0, Set($0.1.map(\.id))) })
+        // Where each stands (the Mac table's status words go by it; the page's own order is TodoViewsTests').
+        let ids = Dictionary(grouping: list) { TodoSections.section($0, now: Self.now, calendar: Self.calendar) }.mapValues { Set($0.map(\.id)) }
         #expect(ids[.ready] == ["dentist"])
         #expect(ids[.needsYou] == ["venues"], "a bot's question is yours, above its other work")
         #expect(ids[.today] == ["cleaning", "passport"])
@@ -94,11 +93,13 @@ struct TasksTests {
             task("ready", who: "together", bot: "default", status: "ready", updated: old, created: old, by: "default"),
             task("water", status: "done", updated: old, created: old, by: "default"),
         ]
-        let groups = TodoSections.grouped(list, now: Self.now, calendar: Self.calendar)
-        #expect(groups.map(\.0) == [.ready, .bots, .upcoming, .noDate, .stale, .done], "the group sits above Done")
-        let ids = Dictionary(uniqueKeysWithValues: groups.map { ($0.0, $0.1.map(\.id)) })
+        let ids = Dictionary(grouping: list) { TodoSections.section($0, now: Self.now, calendar: Self.calendar) }.mapValues { $0.map(\.id) }
         #expect(ids[.stale] == ["forgotten", "together"], "13 days isn't two weeks; you, a date or a bot at work keep it out")
         #expect(Set(ids[.noDate] ?? []) == ["recent", "yours"])
+        // [tasks-first] They wait at Inbox's foot, above its Done.
+        let inbox = TodoViews.groups(list, view: .inbox, now: Self.now, calendar: Self.calendar)
+        #expect(inbox.map(\.kind) == [.open, .stale, .done], "the group sits above Done")
+        #expect(inbox[1].tasks.map(\.id) == ["forgotten", "together"])
         let later = task("later", updated: "2026-10-21T09:00:00-05:00", created: old, by: "default")
         #expect(TodoSections.sorted([later, list[0]], in: .stale, calendar: Self.calendar).map(\.id) == ["forgotten", "later"],
                 "the longest forgotten first")
@@ -284,6 +285,37 @@ struct TasksTests {
         #expect(s.tasks.isEmpty && !s.hasList)
         #expect(listed == [[]], "only the sign-out's own empty list reached the reminders")
         #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "tasks.json").path), "nothing written back")
+    }
+
+    /// [tasks-first] A read that left before a change landed never takes the change back (Move To › New List… read the
+    /// list while it moved the task, and the read's late answer showed the task in no list).
+    @Test func anOlderReadNeverUndoesANewerChange() async throws {
+        let before = task("t_1", "Pick up dry cleaning", rev: 3)
+        var after = before
+        after.rev = 4
+        after.section = "s_errands"
+        let moved = Self.wire(after)
+        let client = PagesFakeClient { _ in .object(["rev": 5, "tasks": .array([Self.wire(before)]), "sections": .array([])]) }
+        let s = store(client, directory: nil)
+        await s.refresh()
+        client.respond { request in
+            if request.method == "PATCH" { return moved }
+            try await Task.sleep(for: .milliseconds(200))   // the read answers late, with the task as it was
+            return .object(["rev": 5, "tasks": .array([Self.wire(before)]), "sections": .array([])])
+        }
+        let read = Task { await s.refresh(force: true) }
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(await s.move(["t_1"], to: "s_errands"))
+        await read.value
+        #expect(s.task("t_1")?.section == "s_errands", "the late read left the move alone")
+        // A read after it that has the change wins as usual.
+        var renamed = after
+        renamed.rev = 5
+        renamed.title = "Pick up the dry cleaning"
+        let newest = Self.wire(renamed)
+        client.respond { _ in .object(["rev": 6, "tasks": .array([newest]), "sections": .array([])]) }
+        await s.refresh(force: true)
+        #expect(s.task("t_1")?.title == "Pick up the dry cleaning")
     }
 
     @Test func aStaleRevIsResentWhenNothingClashes() async throws {
@@ -590,10 +622,10 @@ struct TasksTests {
         #expect(TasksViewController.nothingText(scope: "@me", botName: "Hermes") == "Nothing of your own yet.")
         #expect(TasksViewController.nothingText(scope: "finance", botName: "Finance") == "Nothing with Finance yet.")
         #expect(TasksViewController.nothingText(scope: "all", botName: "").hasPrefix("Add what you need to do."))
-        #expect(TodoWords.deleteSectionMessage(open: 0, done: 0) == nil)
-        #expect(TodoWords.deleteSectionMessage(open: 2, done: 0) == "Its 2 tasks move to No Section.")
-        #expect(TodoWords.deleteSectionMessage(open: 0, done: 1) == "Its done task moves to No Section.")
-        #expect(TodoWords.deleteSectionMessage(open: 1, done: 3) == "Its 1 task and 3 done tasks move to No Section.")
+        #expect(TodoWords.deleteListMessage(open: 0, done: 0) == nil)
+        #expect(TodoWords.deleteListMessage(open: 2, done: 0) == "Its 2 tasks are kept, in no list.")
+        #expect(TodoWords.deleteListMessage(open: 0, done: 1) == "Its done task is kept, in no list.")
+        #expect(TodoWords.deleteListMessage(open: 1, done: 3) == "Its 1 task and 3 done tasks are kept, in no list.")
         #expect(TodoWords.alertNote(hasTime: true) == "This phone reminds you at that time.")
         let day = TodoWords.alertNote(hasTime: false, calendar: Self.calendar, locale: Locale(identifier: "en_US"))
         #expect(day.hasPrefix("This phone reminds you at 9:00") && day.hasSuffix("that day."), "\(day)")
@@ -654,7 +686,7 @@ struct TasksTests {
         #expect(TodoDates.moment("soon") == nil)
     }
 
-    @Test func mySectionsGroupInYourOrder() throws {
+    @Test func aListIsInYourOrder() throws {
         var a = task("a", "Milk"), b = task("b", "Bread"), c = task("c", "Report"), d = task("d", "Old", status: "done")
         var e = task("e", "Lost section")
         a.section = "home"; a.position = 20
@@ -663,11 +695,14 @@ struct TasksTests {
         e.section = "gone"
         let sections = [TodoUserSection(id: "work", name: "Work"), TodoUserSection(id: "home", name: "Home")]
         d.section = "home"
-        let split = TodoSections.byUserSection([a, b, c, d, e], sections: sections, sort: "smart", calendar: Self.calendar)
-        #expect(split.open.map(\.0) == ["", "work", "home"])
-        #expect(split.open[0].1.map(\.id) == ["e"], "a task whose section is gone counts as no section")
-        #expect(split.open[2].1.map(\.id) == ["b", "a"], "your drag order")
-        #expect(split.done.map(\.id) == ["d"], "done stays in Done")
+        func shown(_ view: TodoView) -> [TodoGroup] {
+            TodoViews.groups([a, b, c, d, e], view: view, sections: sections, now: Self.now, calendar: Self.calendar)
+        }
+        #expect(shown(.inbox).first?.tasks.map(\.id) == ["e"], "a task whose list is gone counts as in no list")
+        #expect(shown(.list("home")).map(\.kind) == [.open, .done])
+        #expect(shown(.list("home"))[0].tasks.map(\.id) == ["b", "a"], "your drag order")
+        #expect(shown(.list("home"))[1].tasks.map(\.id) == ["d"], "done stays in the list's Done")
+        #expect(shown(.list("work"))[0].tasks.map(\.id) == ["c"])
 
         #expect(TodoSections.position(between: b, and: a) == 15)
         #expect(TodoSections.position(between: a, and: nil) == 21)
@@ -685,8 +720,6 @@ struct TasksTests {
         let newer = task("newer", created: "2026-11-04T08:00:00-06:00")
         #expect(TodoSections.ordered([none, later, soon], sort: "due", calendar: Self.calendar).map(\.id) == ["soon", "later", "none"])
         #expect(TodoSections.ordered([soon, newer], sort: "added", calendar: Self.calendar).map(\.id) == ["newer", "soon"])
-        let grouped = TodoSections.grouped([later, soon], now: Self.now, sort: "added", calendar: Self.calendar)
-        #expect(grouped.map { $0.0 } == [TodoSection.upcoming])
     }
 }
 

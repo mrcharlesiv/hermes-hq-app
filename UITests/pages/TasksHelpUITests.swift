@@ -1,6 +1,7 @@
 // [tasks] Owner 2026-11-04 (build 755: "it just added it to my to-do list. I think we can do better"). A task of yours
-// alone gets "Ask Hermes to Help" on its chat card and in its sheet; one Hermes takes part in shows its steps, with its
-// own step started. Run with scripts/e2e-pages.sh (HQN_PAGES_ONLY=testTasks_AskToHelp).
+// alone gets "Ask Hermes to Help" on its chat card; one Hermes takes part in shows its steps, with its own step
+// started. [tasks-first] On the task's own page the way a bot comes in is Assign on the who row (owner 2026-11-12).
+// Run with scripts/e2e-pages.sh (HQN_PAGES_ONLY=testTasks_AskToHelp).
 
 import XCTest
 
@@ -36,13 +37,30 @@ extension PagesTests {
         XCTAssertTrue(bubble.waitForExistence(timeout: 5), "your bubble says it short")
         shot("tasks-help-asked")
 
-        // The task sheet: a task of yours with no steps gets the same button.
+        // [tasks-first] The task's own page: a task of yours has nothing of a bot's on it. Assign on its who row gives
+        // it to a bot; the page comes back with that bot's conversation, asking which parts it should take.
         app.terminate()
-        app = launchSignedIn(["-HQPagesTab", "4", "-HQPagesMore", "tasks", "-HQPagesOpenTask", "Pick up dry cleaning"])
-        let sheetHelp = app.buttons["task.help"].firstMatch
-        XCTAssertTrue(sheetHelp.waitForExistence(timeout: 15), "the sheet offers help")
-        XCTAssertTrue(sheetHelp.label.contains("Ask Hermes to Help"), sheetHelp.label)
+        app = launchSignedIn(["-HQPagesTab", "4", "-HQPagesMore", "tasks", "-HQPagesOpenTask", "Fix the porch light"])
+        let who = app.descendants(matching: .any)["task.who"].firstMatch
+        XCTAssertTrue(who.waitForExistence(timeout: 15), "the task opens with its who row")
+        XCTAssertTrue(who.label.contains("Who: Me"), who.label)
+        XCTAssertFalse(app.buttons["task.help"].exists, "no Ask Hermes to Help row")
+        XCTAssertFalse(app.buttons["task.message"].exists, "nobody to message yet")
         shot("tasks-help-sheet")
+        who.tap()
+        let hermes = app.buttons["Hermes"].firstMatch   // the first: With Me
+        XCTAssertTrue(hermes.waitForExistence(timeout: 5), "the who row's menu offers Hermes")
+        hermes.tap()
+        XCTAssertTrue(waitUntil(10) {
+            self.requests().contains { $0.method == "PATCH" && $0.path.hasSuffix("/tasks/t_porch")
+                && ($0.body?["who"] as? String) == "together" && ($0.body?["bot"] as? String) == "default" }
+        }, "the task is yours and Hermes's")
+        XCTAssertTrue(waitUntil(15) { self.prompts().contains { $0.contains("(Task id t_porch)") } }, "Hermes is asked at once: \(prompts())")
+        let assigned = prompts().first { $0.contains("(Task id t_porch)") } ?? ""
+        XCTAssertTrue(assigned.hasPrefix("Help me with this: ask me which parts you should take, then start them."), assigned)
+        XCTAssertTrue(app.descendants(matching: .any)["task.bar"].firstMatch.waitForExistence(timeout: 10),
+                      "the page is the task with Hermes's conversation now")
+        shot("tasks-help-assigned")
     }
 
     /// What the app sent Hermes as prompts, oldest first.

@@ -50,15 +50,18 @@ extension PagesTests {
         app.buttons["sheet.close"].firstMatch.tap()
         XCTAssertTrue(state.waitForExistence(timeout: 5))
 
-        // A task with no chat yet: opening it makes none; the first message makes one, hidden, with Hermes, and its
-        // reply comes in under the task.
+        // A task you share with a bot that has no chat yet: opening it makes none; the first message makes one,
+        // hidden, with Hermes, and its reply comes in under the task. [tasks-first] The task's view has one line to
+        // write in; the chat's full box comes with the chat.
         app.terminate()
-        app = launchSignedIn(Self.look + ["-HQPagesTab", "4", "-HQPagesMore", "tasks", "-HQPagesOpenTask", "Pick up dry cleaning"])
+        app = launchSignedIn(Self.look + ["-HQPagesTab", "4", "-HQPagesMore", "tasks", "-HQPagesOpenTask", "Mom’s birthday gift"])
         let field = app.textViews["composer.text"].firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 20), "the task opens with the chat's bar")
+        let message = app.buttons["task.message"].firstMatch
+        XCTAssertTrue(message.waitForExistence(timeout: 20), "the task opens with its one-line message box")
+        XCTAssertFalse(field.exists, "not the chat's full box")
         XCTAssertTrue(app.descendants(matching: .any)["task.sheet"].firstMatch.exists, "with the task on top")
         let made: () -> [String: Any]? = {
-            self.taskRPC("session.create").first { ($0["title"] as? String)?.hasPrefix("Task: Pick up dry cleaning") == true }
+            self.taskRPC("session.create").first { ($0["title"] as? String)?.hasPrefix("Task: Mom’s birthday gift") == true }
         }
         XCTAssertNil(made(), "opening the task makes no chat")
         shot("tasks-chat-2-empty" + Self.lookName)
@@ -73,15 +76,17 @@ extension PagesTests {
         XCTAssertTrue(keys.waitForExistence(timeout: 5), "the keys come up for the step")
         // Writing a step: the chat's bar steps aside (step 3), and the field stands under the chat's bar, above the keys.
         let barBottom = app.navigationBars.firstMatch.frame.maxY
-        XCTAssertTrue(waitUntil(3) { !app.textViews["composer.text"].firstMatch.exists }, "the chat's bar steps aside while you write a step")
+        XCTAssertTrue(waitUntil(3) { !message.exists && !field.exists }, "the message box steps aside while you write a step")
         XCTAssertTrue(waitUntil(3) { step.frame.minY >= barBottom - 1 && step.frame.maxY <= keys.frame.minY },
                       "the step field shows between the bar (\(barBottom)) and the keys (\(keys.frame.minY)): \(step.frame)")
         shot("tasks-chat-2b-step" + Self.lookName)
-        step.typeText("\n")   // an empty step closes its field, and the chat's bar comes back
-        XCTAssertTrue(field.waitForExistence(timeout: 5), "the chat's bar is back")
+        step.typeText("\n")   // an empty step closes its field, and the message box comes back
+        XCTAssertTrue(message.waitForExistence(timeout: 5), "the message box is back")
+        message.tap()          // the chat takes the screen with its own box
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "the chat's full box comes with the chat")
         sendInComposer("Is there a cleaner open late?")
-        XCTAssertTrue(waitUntil(10) { self.taskPrompts().contains { $0.contains("(Task id t_cleaning)") } }, "asks: \(taskPrompts())")
-        let asked = taskPrompts().first { $0.contains("(Task id t_cleaning)") } ?? ""
+        XCTAssertTrue(waitUntil(10) { self.taskPrompts().contains { $0.contains("(Task id t_gift)") } }, "asks: \(taskPrompts())")
+        let asked = taskPrompts().first { $0.contains("(Task id t_gift)") } ?? ""
         XCTAssertTrue(asked.hasPrefix("Is there a cleaner open late?"), asked)
         XCTAssertEqual(made()?["hidden"] as? Bool, true, "the task's chat is made hidden: \(String(describing: made()))")
         let bubble = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "Is there a cleaner open late?")).firstMatch
@@ -91,7 +96,7 @@ extension PagesTests {
         // The link was saved on the task; a second message goes as typed.
         XCTAssertTrue(waitUntil(10) {
             let rest = ((try? self.account.control("/__fixture/state")) ?? [:])["rest"] as? [[String: Any]] ?? []
-            return rest.contains { ($0["method"] as? String) == "PATCH" && ($0["path"] as? String)?.hasSuffix("/t_cleaning") == true
+            return rest.contains { ($0["method"] as? String) == "PATCH" && ($0["path"] as? String)?.hasSuffix("/t_gift") == true
                 && (($0["body"] as? [String: Any])?["chat"] as? [String: Any])?["profile"] as? String == "default" }
         }, "the chat is saved on the task")
         shot("tasks-chat-3-sent" + Self.lookName)
@@ -141,11 +146,14 @@ extension PagesTests {
         XCTAssertFalse(app.webViews.firstMatch.buttons["Ask for an Update"].firstMatch.isHittable, "no chat yet: nothing to ask in")
         shot("tasks-page-5-plain" + Self.lookName)
 
-        // Your own task has no page.
+        // Your own task has no page (and, [tasks-first], no bot's conversation: it stands alone).
         app.terminate()
-        app = launchSignedIn(Self.look + ["-HQPagesTab", "4", "-HQPagesMore", "tasks", "-HQPagesOpenTask", "Pick up dry cleaning"])
-        XCTAssertTrue(app.textViews["composer.text"].firstMatch.waitForExistence(timeout: 20))
+        app = launchSignedIn(Self.look + ["-HQPagesTab", "4", "-HQPagesMore", "tasks", "-HQPagesOpenTask", "Go through the open job applications"])
+        XCTAssertTrue(app.buttons["task.check"].firstMatch.waitForExistence(timeout: 20))
         XCTAssertFalse(app.buttons["task.page.open"].exists, "your own task has no Task Page")
+        app.buttons["task.more"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["History"].firstMatch.waitForExistence(timeout: 5), "its own ⋯")
+        XCTAssertFalse(app.buttons["Task Page"].exists, "no Task Page in ⋯ either")
     }
 
     /// Owner 2026-11-05: a reply alert from a task's chat "did not open back up in the task. It opened up in a new
@@ -195,22 +203,27 @@ extension PagesTests {
     /// typed and not sent are still there when the task opens again; and ⋯ › Chat has nothing that would cut the chat
     /// from its task.
     @MainActor func testTasks_ChatBelongsToTheTask() throws {
-        app = launchSignedIn(Self.look + ["-HQPagesTab", "4", "-HQPagesMore", "tasks", "-HQPagesOpenTask", "Pick up dry cleaning"])
-        let field = app.textViews["composer.text"].firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 20), "the task opens with the chat's bar")
+        // [tasks-first] A task you share with a bot (a task of your own has no chat to write in).
+        app = launchSignedIn(Self.look + ["-HQPagesTab", "4", "-HQPagesMore", "tasks", "-HQPagesOpenTask", "Renew passport"])
+        let message = app.buttons["task.message"].firstMatch
+        XCTAssertTrue(message.waitForExistence(timeout: 20), "the task opens with its one-line message box")
         let made: () -> Bool = {
-            self.taskRPC("session.create").contains { ($0["title"] as? String)?.hasPrefix("Task: Pick up dry cleaning") == true }
+            self.taskRPC("session.create").contains { ($0["title"] as? String)?.hasPrefix("Task: Renew passport") == true }
         }
-        field.tap()
+        message.tap()
+        let field = app.textViews["composer.text"].firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "the chat's box comes with the chat")
         field.typeText("Ask if they press shirts")
         XCTAssertFalse(waitUntil(3) { made() }, "writing makes no chat")
         shot("tasks-step2-1-typed" + Self.lookName)
 
         // Closed and opened again: the words are still in the bar.
         app.buttons["sheet.close"].firstMatch.tap()
-        let row = app.staticTexts["Pick up dry cleaning"].firstMatch
+        let row = app.cells["task-row-Renew passport"].firstMatch
         XCTAssertTrue(waitUntil(10) { row.exists && row.isHittable && !app.textViews["composer.text"].firstMatch.exists }, "back on the list")
         row.tap()
+        XCTAssertTrue(message.waitForExistence(timeout: 15), "the task opens again")
+        message.tap()
         let again = app.textViews["composer.text"].firstMatch
         XCTAssertTrue(again.waitForExistence(timeout: 15))
         XCTAssertTrue(waitUntil(5) { ((again.value as? String) ?? "").contains("press shirts") }, "the draft is kept: \(again.value ?? "")")

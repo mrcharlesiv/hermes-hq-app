@@ -288,6 +288,47 @@ nonisolated enum TodoViews {
         }
     }
 
+    // MARK: The task's page ([tasks-first] step 2: a task is a task; a bot is added to it like a co-worker)
+
+    /// The task has a bot on it: its page carries the bot's conversation. A task of your own has none.
+    static func hasTeammate(_ task: TodoTask) -> Bool { task.helper != nil }
+
+    /// The who row's words: "Me", "Me & Hermes", "Finance".
+    static func who(_ task: TodoTask, botName: (String?) -> String) -> String {
+        switch task.whoKind {
+        case .me: return "Me"
+        case .together: return "Me & \(botName(task.helper))"
+        case .bot: return botName(task.helper)
+        }
+    }
+
+    /// What the task's bot is doing, at the who row's end: "Working", "Has a question", "Finished its part". Nil for a
+    /// task of your own, one that is done, and a bot that hasn't started. `running`: its turn is on in the task's chat.
+    static func botState(_ task: TodoTask, running: Bool = false) -> (words: String, tone: TodoTone)? {
+        guard task.helper != nil, !task.isDone else { return nil }
+        if running { return ("Working", .working) }
+        switch task.status {
+        case "working": return ("Working", .working)
+        case "needs_you": return ("Has a question", .needsYou)
+        case "ready": return ("Finished its part", .ready)
+        default: return nil
+        }
+    }
+
+    /// The bot waits on an answer from you: its card stands right under the who row, with its answers as taps.
+    /// Everything else it says stays in its section at the page's foot.
+    static func asksYou(_ task: TodoTask) -> Bool {
+        guard task.helper != nil, !task.isDone else { return false }
+        return task.status == "needs_you" || (task.status == "ready" && !task.choices.isEmpty)
+    }
+
+    /// The bar's words on a task's page: the list it is in, else "No List"; plain "Task" for someone with no lists
+    /// (nothing to say, and nowhere to move it).
+    static func listTitle(_ task: TodoTask, sections: [TodoUserSection]) -> String {
+        guard !sections.isEmpty else { return "Task" }
+        return task.section.flatMap { id in sections.first { $0.id == id }?.name } ?? "No List"
+    }
+
     /// What a view says with nothing in it.
     static func emptyText(_ view: TodoView, listName: String?) -> String {
         switch view {

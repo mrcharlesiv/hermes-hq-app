@@ -1,3 +1,11 @@
+// [tasks-first] Owner 2026-11-12 ("every task is pure task management first, agent stuff second … THEN agent stuff
+// built along side it so it feels more like you have a teammate in there"; mockups 3-task-your-own and
+// 4-task-with-a-bot, "I love all of this"): the same view for every task. The title, then one line each for when it's
+// due, how it repeats and who has it; notes; steps; files. A task of your own stops there: no bot's name, no message
+// box. A bot on the task is named on the who row with what it is doing, its face is on its steps and files, and its
+// conversation is the page's last section with a one-line message box under it. Only a question for you moves up,
+// as one card under the who row with its answers as taps. "Assign" on the who row is the one way a bot comes in.
+//
 // [tasks] The task's view, organized the way the task apps organize a task (owner 2026-11-09: the plain page "doesn't
 // feel well organized … like we just threw everything on there. Go look at how task management tools organize
 // everything and let's just copy them", then "Yeah do that" to the recommendation; references and mockups in
@@ -16,37 +24,50 @@ struct TaskPlainView: View {
     @FocusState private var focus: Field?
     enum Field: Hashable { case step, notes }
     @Environment(\.dynamicTypeSize) private var typeSize
+    /// The page has a bot's conversation (a bot is on the task, or it had one): its section, card and message box show.
+    private var teammate: Bool { model.embedded }
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     titleRow
-                    TimelineView(.periodic(from: .now, by: 1)) { _ in standingRow }
+                    completedRow
                     dueRow
-                    checkRow
-                    askRow
+                    repeatRow
+                    whoRow
                     if model.gone {
-                        TaskGridRow(last: true) { Image(systemName: "trash") } text: {
+                        TaskGridRow(last: true, topLine: true) { Image(systemName: "trash") } text: {
                             Text("This task was deleted.").foregroundStyle(Color.hqLabel2)
                         }
                     }
-                    // The tick is passed in so the section is drawn again each second (the chat's messages and its
-                    // running turn aren't observed).
-                    TimelineView(.periodic(from: .now, by: 1)) { context in TaskPlainUpdate(model: model, task: task, tick: context.date) }
+                    moreRow
+                    if teammate {
+                        TimelineView(.periodic(from: .now, by: 1)) { context in TaskTeammate(model: model, task: task, part: .ask, tick: context.date) }
+                    }
                     notes
                     steps(proxy)
+                    files
+                    if teammate {
+                        TimelineView(.periodic(from: .now, by: 1)) { context in TaskTeammate(model: model, task: task, part: .foot, tick: context.date) }
+                    }
                 }
                 .padding(.bottom, 16)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 // What the page draws, said at once and on every change (the scroll view's own geometry said nothing
                 // until something changed, so a page that drew right the first time kept its starting height).
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { model.onLeadHeight?($0) }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { model.onLeadHeight?($0 + (showsMessageLine ? TaskMessageLine.height : 0)) }
             }
-            .scrollDisabled(!model.briefScrolls)
+            // On a chat's page the view scrolls only once it is taller than its panel; standing alone it is the page.
+            .scrollDisabled(model.embedded && !model.briefScrolls)
             .scrollDismissesKeyboard(.interactively)
             .onChange(of: model.editingNotes) { _, editing in
                 if editing { DispatchQueue.main.async { HQMotion.withAnimation(.snappy) { proxy.scrollTo("task.notes", anchor: .bottom) } } }
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if showsMessageLine {
+                TaskMessageLine(name: model.botName(model.chatBot(task)), draft: model.draft) { model.writeMessage() }
             }
         }
         .toolbar {
@@ -60,7 +81,12 @@ struct TaskPlainView: View {
             }
         }
         .onChange(of: task.rev) { _, rev in model.taskChanged(rev) }
+        // The bar's title is the task's list: a move (or a rename) shows there at once.
+        .onChange(of: model.listTitle) { _, _ in model.onBriefLayoutChange?() }
     }
+
+    /// The one-line message box: on a task with a bot's conversation, while no field of the view has the keys.
+    private var showsMessageLine: Bool { teammate && !model.gone && !model.editingBrief }
 
     // MARK: Top
 
@@ -90,27 +116,19 @@ struct TaskPlainView: View {
         }
     }
 
-    /// Where it stands, in its state's colour: "Ready for you", "Hermes is on it", "Completed today, 11:40 AM". A task
-    /// still to do has no such row. A tap shows its History.
-    @ViewBuilder private var standingRow: some View {
-        let running = model.chat?.session.isRunning == true
-        let words: String? = {
-            if task.isDone { return TaskBarView.completed(task) }
-            if running { return "\(model.botName(TodoSheetView.speaker(task))) is on it" }
-            return task.status == "open" ? nil : TodoWords.stateWords(task, botName: model.botName)
-        }()
-        if let words {
-            let color = running && !task.isDone ? Color.hqTintText : TodoSheetView.statusColor(task.status)
+    /// A finished task says when: "Completed today, 11:40 AM". A tap shows its History.
+    @ViewBuilder private var completedRow: some View {
+        if task.isDone {
             Button { model.showHistory() } label: {
                 TaskGridRow {
-                    Circle().fill(color).frame(width: 10, height: 10)
+                    Image(systemName: "checkmark").foregroundStyle(Color.hqLabel2)
                 } text: {
-                    Text(words).fontWeight(.semibold).foregroundStyle(color).lineLimit(1)
+                    Text(TaskBarView.completed(task)).foregroundStyle(Color.hqLabel2).lineLimit(1)
                 }
             }
             .buttonStyle(.plain)
             .accessibilityHint("Shows the task’s history")
-            .accessibilityIdentifier("task.standing")
+            .accessibilityIdentifier("task.completed")
         }
     }
 
@@ -131,13 +149,14 @@ struct TaskPlainView: View {
             Button("Choose Date…") { pickDate() }
             if due != nil { Button("No Due Date", role: .destructive) { model.setDue(nil, hasTime: false) } }
         } label: {
-            TaskGridRow(last: TodoWords.nextCheckLine(task) == nil) {
+            TaskGridRow {
                 Image(systemName: "calendar").foregroundStyle(due == nil || color == Color.hqLabel ? Color.hqLabel2 : color)
             } text: {
                 Text(words).foregroundStyle(due == nil ? Color.hqLabel3 : color).lineLimit(1)
             }
         }
         .buttonStyle(.plain)
+        .disabled(model.gone)
         .accessibilityLabel("Due: \(words). Change")
         .accessibilityIdentifier("task.due")
     }
@@ -151,56 +170,138 @@ struct TaskPlainView: View {
         controller.present(picker, animated: true)
     }
 
-    /// When its bot looks at it again by itself ("Checks again tomorrow, 9:00 AM"): a detail of the task, like its date.
-    @ViewBuilder private var checkRow: some View {
-        if let later = TodoWords.nextCheckLine(task) {
-            TaskGridRow(last: true) {
-                Image(systemName: "clock").foregroundStyle(Color.hqLabel2)
-            } text: {
-                Text(later).foregroundStyle(Color.hqLabel).lineLimit(1)
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityIdentifier("task.next-check")
-        }
-    }
-
-    /// A task nobody has started on: one row that asks its bot to help, or to start.
-    @ViewBuilder private var askRow: some View {
-        if model.chat?.session.isRunning != true, let now = TaskNow.pick(task, phone: nil, deleted: model.gone),
-           let action = [now.primary, now.secondary].compactMap({ $0 }).first(where: { $0 == .askHelp || $0 == .askStart }) {
-            let words = action.label(botName: model.botName(model.chatBot(task)))
-            Button { model.perform(action, task: task) } label: {
-                TaskGridRow(last: true, topLine: true) {
-                    Image(systemName: action.symbol).foregroundStyle(Color.hqTintText)
+    /// How it repeats, once it does: a menu ("Every Week"). A task that doesn't has "+ Repeat" under the who row.
+    @ViewBuilder private var repeatRow: some View {
+        if let rule = task.repeatRule {
+            Menu { repeatChoices } label: {
+                TaskGridRow {
+                    Image(systemName: "repeat").foregroundStyle(Color.hqLabel2)
                 } text: {
-                    Text(words).foregroundStyle(Color.hqTintText).lineLimit(1)
+                    Text(TodoWords.repeatLabel(rule)).foregroundStyle(Color.hqLabel).lineLimit(1)
                 }
             }
             .buttonStyle(.plain)
-            .accessibilityIdentifier(action.identifier)
+            .disabled(model.gone)
+            .accessibilityLabel("Repeats: \(TodoWords.repeatLabel(rule)). Change")
+            .accessibilityIdentifier("task.repeat")
+        }
+    }
+
+    @ViewBuilder private var repeatChoices: some View {
+        ForEach(TodoWords.repeatRules, id: \.self) { rule in
+            Button { model.setRepeat(rule) } label: {
+                if task.repeatRule == rule { Label(TodoWords.repeatLabel(rule), systemImage: "checkmark") } else { Text(TodoWords.repeatLabel(rule)) }
+            }
+        }
+        if task.repeatRule != nil { Button("Don’t Repeat", role: .destructive) { model.setRepeat(nil) } }
+    }
+
+    /// Who has it: "Me", "Me & Hermes", "Finance", with the bot's face, and at the row's end what the bot is doing
+    /// ("Working", "Has a question", "Finished its part"); on a task of your own, "Assign". A menu: Just Me, a bot
+    /// with you, a bot by itself.
+    private var whoRow: some View {
+        let bots = PagesNames.scopeChoices(model.context.bots)
+        let words = TodoViews.who(task, botName: model.botName)
+        return Menu {
+            Button { model.assign(.me, bot: nil) } label: {
+                if task.whoKind == .me { Label("Just Me", systemImage: "checkmark") } else { Text("Just Me") }
+            }
+            if !bots.isEmpty {
+                Section("With Me") {
+                    ForEach(bots, id: \.id) { bot in
+                        Button { model.assign(.together, bot: bot.id) } label: {
+                            if task.whoKind == .together, task.helper == bot.id { Label(bot.name, systemImage: "checkmark") } else { Text(bot.name) }
+                        }
+                    }
+                }
+                Section("By Itself") {
+                    ForEach(bots, id: \.id) { bot in
+                        Button { model.assign(.bot, bot: bot.id) } label: {
+                            if task.whoKind == .bot, task.helper == bot.id { Label(bot.name, systemImage: "checkmark") } else { Text(bot.name) }
+                        }
+                    }
+                }
+            }
+        } label: {
+            TaskGridRow(last: true) {
+                Image(systemName: task.whoKind == .together ? "person.2" : "person").foregroundStyle(Color.hqLabel2)
+            } text: {
+                HStack(spacing: 6) {
+                    if task.whoKind == .together { Text("Me &").foregroundStyle(Color.hqLabel) }
+                    if let helper = task.helper {
+                        HeadImage(raw: model.head(helper), profile: helper, size: 18).frame(width: 18, height: 18).accessibilityHidden(true)
+                        Text(model.botName(helper)).foregroundStyle(Color.hqLabel).lineLimit(1)
+                    } else {
+                        Text("Me").foregroundStyle(Color.hqLabel)
+                    }
+                    Spacer(minLength: 8)
+                    if task.helper != nil {
+                        // Only these words are drawn again each second (the chat's running turn isn't observed). The
+                        // whole row in a timeline lost its menu's place: the sheet behind the open menu went blank.
+                        TimelineView(.periodic(from: .now, by: 1)) { _ in
+                            if let state = TodoViews.botState(task, running: model.chat?.session.isRunning == true) {
+                                Text(state.words)
+                                    .font(Font.hq(.footnote).weight(.medium))
+                                    .foregroundStyle(TodoInk.color(state.tone))
+                                    .lineLimit(1)
+                                    .accessibilityIdentifier("task.bot-state")
+                            }
+                        }
+                    } else if task.whoKind == .me, !task.isDone {
+                        HStack(spacing: 3) {
+                            Text("Assign")
+                            Image(systemName: "chevron.up.chevron.down").imageScale(.small)
+                        }
+                        .font(Font.hq(.footnote))
+                        .foregroundStyle(Color.hqLabel2)
+                    }
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(model.gone || bots.isEmpty)
+        .accessibilityLabel("Who: \(words)\(TodoViews.botState(task, running: model.chat?.session.isRunning == true).map { ", \($0.words)" } ?? ""). Change")
+        .accessibilityIdentifier("task.who")
+    }
+
+    /// What isn't set yet, as quiet words under the who row: "+ Notes", and "+ Repeat" on a task of your own.
+    @ViewBuilder private var moreRow: some View {
+        let noNotes = task.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.editingNotes
+        let canRepeat = task.whoKind == .me && task.repeatRule == nil
+        if !task.isDone, !model.gone, noNotes || canRepeat {
+            HStack(spacing: 18) {
+                if noNotes {
+                    Button("+ Notes") { model.editNotes() }
+                        .accessibilityLabel("Add Notes")
+                        .accessibilityIdentifier("task.notes.add")
+                }
+                if canRepeat {
+                    Menu { repeatChoices } label: { Text("+ Repeat") }
+                        .accessibilityLabel("Repeat")
+                        .accessibilityIdentifier("task.repeat.add")
+                }
+                Spacer(minLength: 0)
+            }
+            .font(Font.hq(.footnote))
+            .foregroundStyle(Color.hqLabel2)
+            .buttonStyle(.plain)
+            .padding(.leading, TaskGrid.text).padding(.trailing, TaskGrid.edge)
+            .frame(minHeight: 36)
         }
     }
 
     // MARK: Notes
 
+    /// The notes whole (no Show More). A tap on them starts writing; a tap on a link in them opens the link.
     @ViewBuilder private var notes: some View {
         let filled = !task.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         if model.editingNotes || filled {
             TaskBand()
-            TaskSectionHead(title: "Notes", count: nil) {
-                if !model.editingNotes {
-                    Button("Edit") { model.editNotes() }
-                        .font(Font.hq(.subheadline))
-                        .foregroundStyle(Color.hqTintText)
-                        .buttonStyle(.borderless)
-                        .accessibilityLabel("Edit Notes")
-                        .accessibilityIdentifier("task.notes.edit")
-                }
-            }
+            TaskSectionHead(title: "Notes", count: nil) { EmptyView() }
             Group {
                 if model.editingNotes {
                     TextField("Notes", text: $model.notes, axis: .vertical)
-                        .lineLimit(2...10)
+                        .lineLimit(2...14)
                         .font(Font.hq(.callout))
                         .focused($focus, equals: .notes)
                         .onAppear { focus = .notes }
@@ -208,10 +309,14 @@ struct TaskPlainView: View {
                         .id("task.notes")
                         .accessibilityIdentifier("task.notes")
                 } else {
-                    TodoFoldedText(text: task.notes, lines: 4, identifier: "task.notes.text", open: model.openPath)
+                    TodoRichTextView(text: task.notes, style: .callout, identifier: "task.notes.text",
+                                     onTap: model.gone || task.isDone ? nil : { model.editNotes() }, open: model.openPath)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityHint("Double-tap to edit")
+                    .accessibilityAction(named: "Edit Notes") { model.editNotes() }
                 }
             }
-            .padding(.horizontal, TaskGrid.edge).padding(.bottom, 8)
+            .padding(.horizontal, TaskGrid.edge).padding(.bottom, 10)
         }
     }
 
@@ -221,7 +326,7 @@ struct TaskPlainView: View {
     @ViewBuilder private func steps(_ proxy: ScrollViewProxy) -> some View {
         if !(task.isDone && task.steps.isEmpty) {
             let open = task.steps.filter { !$0.done }, done = task.steps.filter(\.done)
-            // Your next open step on a task you share: its "You" in the accent.
+            // Your next open step on a task you share: its "Me" in the accent.
             let yours = task.whoKind == .me ? nil : open.first { $0.who != "bot" }?.id
             TaskBand()
             TaskSectionHead(title: "Steps", count: task.steps.isEmpty ? nil : "\(done.count)/\(task.steps.count)") { EmptyView() }
@@ -262,7 +367,7 @@ struct TaskPlainView: View {
 
     private func stepRow(_ step: TodoStep, yours: Bool, last: Bool) -> some View {
         let bot = step.who == "bot"
-        let owner: String? = task.whoKind == .me && !bot ? nil : (bot ? model.botName(task.helper) : "You")
+        let shared = task.whoKind != .me || bot
         let long = step.title.count > TodoSheetView.stepFold
         return TaskGridRow(last: last) {
             Button { model.toggleStep(step) } label: {
@@ -274,7 +379,7 @@ struct TaskPlainView: View {
             .buttonStyle(.plain)
             .accessibilityLabel(step.done ? "Done" : "Not done")
         } text: {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
                 Text(step.title)
                     .foregroundStyle(step.done ? Color.hqLabel3 : Color.hqLabel)
                     .strikethrough(step.done, color: Color.hqLabel3)
@@ -284,13 +389,20 @@ struct TaskPlainView: View {
                     .contentShape(Rectangle())
                     .onTapGesture { if long { HQMotion.withAnimation(.snappy) { model.toggleOpen(step) } } }
                     .accessibilityIdentifier("task.step.title")
-                if let owner {
-                    Text(owner)
-                        .font(Font.hq(.footnote).weight(yours ? .semibold : .regular))
-                        .foregroundStyle(yours ? Color.hqTintText : Color.hqLabel2)
-                        .lineLimit(1)
-                        .fixedSize()
-                        .accessibilityLabel(yours ? "Yours, next" : "\(owner)’s")
+                // Whose it is, on a task you share: the bot's face on its steps, "Me" on yours.
+                if shared {
+                    if bot, let helper = task.helper {
+                        HeadImage(raw: model.head(helper), profile: helper, size: 16).frame(width: 16, height: 16)
+                            .opacity(step.done ? 0.6 : 1)
+                            .accessibilityLabel("\(model.botName(helper))’s")
+                    } else {
+                        Text("Me")
+                            .font(Font.hq(.footnote).weight(yours ? .semibold : .regular))
+                            .foregroundStyle(yours ? Color.hqTintText : Color.hqLabel2)
+                            .lineLimit(1)
+                            .fixedSize()
+                            .accessibilityLabel(yours ? "Yours, next" : "Yours")
+                    }
                 }
             }
             .padding(.vertical, 6)
@@ -308,16 +420,96 @@ struct TaskPlainView: View {
             Button("Delete Step", systemImage: "trash", role: .destructive) { model.deleteStep(step) }
         }
     }
+
+    // MARK: Files
+
+    /// What is attached to the task: today, what its bot made for it (a file, a link, a draft), each with the bot's
+    /// face at its end. (Your own files come with the add-on's next fields.)
+    @ViewBuilder private var files: some View {
+        let made = TodoWords.shownMade(task)
+        if !made.isEmpty {
+            TaskBand()
+            TaskSectionHead(title: "Files", count: "\(made.count)") { EmptyView() }
+            ForEach(Array(made.enumerated()), id: \.element.id) { index, item in
+                Button { model.open(item) } label: {
+                    TaskGridRow(last: index == made.count - 1) {
+                        Image(systemName: TodoSheetView.madeLook(item).symbol).foregroundStyle(Color.hqLabel2)
+                    } text: {
+                        HStack(spacing: 8) {
+                            Text(item.title.isEmpty ? item.ref : item.title).foregroundStyle(Color.hqLabel).lineLimit(1)
+                            Spacer(minLength: 4)
+                            if let helper = task.helper {
+                                HeadImage(raw: model.head(helper), profile: helper, size: 16).frame(width: 16, height: 16)
+                                    .accessibilityHidden(true)
+                            }
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                .contextMenu { Button("Share…", systemImage: "square.and.arrow.up") { model.share(item) } }
+                .accessibilityIdentifier("task.made.\(item.kind)")
+            }
+        }
+    }
 }
 
-/// [tasks] The bot's section, on the page's own rows (owner 2026-11-09: the middle section was "too big and has a
-/// different layout than the top part"): its name as the heading, when it spoke and the way into the whole chat; then
-/// its latest word beside its face, each thing it made as a plain row, and its answers across the page's width (the
-/// best filled, the others tinted). What it just changed shows for a few minutes as a row; when it looks again is a
-/// row in the details at the top. Redrawn every second (the chat's turn has no observation of its own).
-struct TaskPlainUpdate: View {
+/// [tasks-first] The task view's one-line message box (owner 2026-11-12, mockup 4: "One-line message box, only on a
+/// task with a bot. It grows into the full box … when you tap it"): the whole line is one button that gives the chat
+/// the screen with its own box and the keys up.
+struct TaskMessageLine: View {
+    var name: String
+    /// What you had started to write in the chat's box: it shows here, so it isn't forgotten.
+    var draft: String? = nil
+    var action: () -> Void
+    static let height: CGFloat = 62
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Text(draft ?? "Message \(name)")
+                    .font(Font.hq(.callout))
+                    .foregroundStyle(draft == nil ? Color.hqLabel2 : Color.hqLabel)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(Font.hq(.title2))
+                    .foregroundStyle(Color.hqLabel3)
+                    .accessibilityHidden(true)
+            }
+            .padding(.leading, 16).padding(.trailing, 8)
+            .frame(maxWidth: .infinity, minHeight: 46)
+            .background {
+                if Theme.isDesktop {
+                    RoundedRectangle(cornerRadius: DesktopRows.radius, style: .continuous).fill(Color.hqFill3)
+                } else {
+                    Capsule().fill(Color(uiColor: TaskPanel.card))
+                        .overlay { Capsule().strokeBorder(Color(uiColor: TaskPanel.edge), lineWidth: 1) }
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .padding(.top, 8).padding(.bottom, 8)
+        .frame(height: Self.height)
+        .background(Color(uiColor: TaskPanel.fill))
+        .accessibilityLabel("Message \(name)")
+        .accessibilityValue(draft ?? "")
+        .accessibilityHint("Opens the chat")
+        .accessibilityIdentifier("task.message")
+    }
+}
+
+/// [tasks-first] The bot on the task, in its two places. `.ask`: under the who row, only while it waits on an answer
+/// from you: who asks and since when, its words, and its answers across the page's width (the best filled, the others
+/// tinted; owner 2026-11-09). `.foot`: the page's last section, like the comments under a task in Asana: the bot's
+/// name and face, when it spoke, the way into the whole chat, then its latest word, what it just changed and when it
+/// looks again. Redrawn every second (the chat's turn has no observation of its own).
+struct TaskTeammate: View {
+    enum Part { case ask, foot }
     @Bindable var model: TodoSheetModel
     let task: TodoTask
+    var part: Part
     /// The timeline's tick: a new value each second draws the section again.
     var tick = Date()
     @State private var wasRunning = false
@@ -325,9 +517,10 @@ struct TaskPlainUpdate: View {
     var body: some View {
         let running = model.chat?.session.isRunning == true
         let profile = model.chatBot(task)
+        let name = model.botName(profile)
         let summary = task.page?.summary.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let note = task.statusNote.trimmingCharacters(in: .whitespacesAndNewlines)
-        let asks = !task.isDone && (task.status == "needs_you" || task.status == "ready")
+        let asks = TodoViews.asksYou(task) && !running
         // Its question (the line it wrote with needs_you), unless its page already says the same. A ready task's line
         // only restates its page ("No reply yet; a nudge is drafted"), so it stands only where there is no page.
         let question = task.status == "needs_you" && !note.isEmpty && !summary.contains(note) ? note : nil
@@ -342,118 +535,144 @@ struct TaskPlainUpdate: View {
             if question == nil, let latest { return latest.mine ? "You: \(latest.words)" : latest.words }
             return nil
         }()
-        let made = TodoWords.shownMade(task)
-        // What it changed, while it is news (ten minutes): the steps and the date already show where things stand.
-        let changes = TodoWords.recentChanges(task, within: 600)
         let answer = model.sentAnswer.flatMap { running || $0.rev == task.rev ? $0.words : nil }
-        let choices = asks && !running ? Array(task.choices.prefix(3)) : []
-        let next = task.isDone || TodoWords.nextCheckLine(task) != nil ? nil : TodoWords.nextLine(task)?.text
-        let says = words != nil || question != nil || next != nil || answer != nil
-        let shows = says || !made.isEmpty || !changes.isEmpty || !choices.isEmpty || count > 0
-        let unread = latest.map { model.isUnread($0) } ?? false
-        let tail = !made.isEmpty || !changes.isEmpty || !choices.isEmpty   // rows follow its words
+        let choices = asks ? Array(task.choices.prefix(3)) : []
         Group {
-            if shows {
-                TaskBand()
-                TaskSectionHead(title: model.botName(profile), count: task.isDone ? nil : TodoWords.stateTime(task, now: Date())) {
-                    if count > 0 {
-                        Button { model.showChat() } label: {
-                            HStack(spacing: 4) {
-                                if unread { Circle().fill(Color.hqTint).frame(width: 7, height: 7).accessibilityHidden(true) }
-                                Text(unread ? "New reply" : "All \(count) \(count == 1 ? "message" : "messages")")
-                            }
-                            .font(Font.hq(.subheadline).weight(unread ? .semibold : .regular))
-                            .foregroundStyle(unread ? Color.hqTintText : Color.hqLabel2)
-                            .frame(minHeight: 32)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityHint("Opens the chat")
-                        .accessibilityIdentifier("task.chat-line")
-                    }
+            switch part {
+            case .ask:
+                if asks, words != nil || question != nil || !choices.isEmpty {
+                    askCard(name: name, profile: profile, words: words, question: question, choices: choices)
                 }
-                if says {
-                    HStack(alignment: .top, spacing: TaskGrid.gap) {
-                        HeadImage(raw: model.head(profile), profile: profile, size: TaskGrid.icon)
-                            .padding(.top, 1)
-                            .accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 6) {
-                            if let answer {
-                                Text("You: \(answer)").foregroundStyle(Color.hqLabel2)
-                                    .accessibilityIdentifier("task.answered")
-                            }
-                            if running, answer != nil {
-                                Text("\(model.botName(profile)) is on it…").foregroundStyle(Color.hqLabel2)
-                                    .accessibilityIdentifier("task.working")
-                            } else {
-                                if let words { TodoRichTextView(text: words, identifier: "task.words", open: model.openPath) }
-                                if let question {
-                                    Text(question)
-                                        .fontWeight(.semibold)
-                                        .foregroundStyle(Color.hqLabel)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                        .accessibilityIdentifier("task.question")
-                                }
-                                if let next {
-                                    Text(next).font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                        .accessibilityIdentifier("task.next")
-                                }
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .font(Font.hq(.callout))
-                    .padding(.horizontal, TaskGrid.edge).padding(.bottom, 10)
-                    .overlay(alignment: .bottom) {
-                        if tail { TaskPlainHairline().padding(.leading, TaskGrid.text).padding(.trailing, TaskGrid.edge) }
-                    }
-                }
-                ForEach(Array(made.enumerated()), id: \.element.id) { index, item in
-                    madeRow(item, last: index == made.count - 1 && changes.isEmpty && choices.isEmpty)
-                }
-                ForEach(Array(changes.enumerated()), id: \.offset) { index, line in
-                    TaskGridRow(last: index == changes.count - 1 && choices.isEmpty) {
-                        Image(systemName: "checkmark").foregroundStyle(Color(uiColor: TodoInk.ready))
-                    } text: {
-                        Text(line).foregroundStyle(Color.hqLabel2).lineLimit(2)
-                    }
-                    .accessibilityIdentifier("task.change")
-                }
-                if !choices.isEmpty { answers(choices, name: model.botName(profile)) }
+            case .foot:
+                foot(name: name, profile: profile, running: running, asks: asks, words: words, question: question,
+                     answer: answer, latest: latest, count: count)
             }
         }
         .onChange(of: running) { _, now in
             // The turn ended: read the list now, so what the bot changed shows at once.
-            if wasRunning, !now { Task { await model.store.refresh(force: true) } }
+            if part == .foot, wasRunning, !now { Task { await model.store.refresh(force: true) } }
             wasRunning = now
         }
         .onAppear { wasRunning = running }
     }
 
-    /// What the bot made, as a row like any other: its kind's icon, its name, an arrow.
-    private func madeRow(_ made: TodoMade, last: Bool) -> some View {
-        Button { model.open(made) } label: {
-            TaskGridRow(last: last) {
-                Image(systemName: TodoSheetView.madeLook(made).symbol).foregroundStyle(Color.hqLabel2)
-            } text: {
-                HStack(spacing: 8) {
-                    Text(made.title.isEmpty ? made.ref : made.title).foregroundStyle(Color.hqLabel).lineLimit(1)
-                    Spacer(minLength: 4)
-                    Image(systemName: "chevron.right").font(Font.hq(.caption).weight(.semibold)).foregroundStyle(Color.hqLabel3)
-                        .accessibilityHidden(true)
+    /// The bot's question, set off as one soft card in its state's colour, under the who row.
+    private func askCard(name: String, profile: String, words: String?, question: String?, choices: [String]) -> some View {
+        let tone: TodoTone = task.status == "needs_you" ? .needsYou : .ready
+        let ink = TodoInk.color(tone)
+        let since = TodoWords.stateTime(task, now: Date())
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 7) {
+                HeadImage(raw: model.head(profile), profile: profile, size: 18).frame(width: 18, height: 18).accessibilityHidden(true)
+                Text(task.status == "needs_you" ? "\(name) asks" : "\(name) finished its part")
+                    .font(Font.hq(.footnote).weight(.semibold)).foregroundStyle(ink)
+                if let since { Text("· \(since)").font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2) }
+                Spacer(minLength: 0)
+            }
+            .lineLimit(1)
+            if let words { TodoRichTextView(text: words, style: .callout, identifier: "task.words", open: model.openPath) }
+            if let question {
+                Text(question)
+                    .font(Font.hq(.callout).weight(.semibold))
+                    .foregroundStyle(Color.hqLabel)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("task.question")
+            }
+            if !choices.isEmpty { answers(choices, name: name).padding(.top, 2) }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: Theme.isDesktop ? DesktopRows.radius : 14, style: .continuous)
+                .fill(ink.opacity(0.10))
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 6).padding(.bottom, 10)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("task.ask")
+    }
+
+    /// The bot's section at the page's foot.
+    @ViewBuilder private func foot(name: String, profile: String, running: Bool, asks: Bool, words: String?, question: String?,
+                                   answer: String?, latest: TodoSheetModel.Glimpse?, count: Int) -> some View {
+        // What it changed, while it is news (ten minutes): the steps and the date already show where things stand.
+        let changes = TodoWords.recentChanges(task, within: 600)
+        let next = task.isDone ? nil : TodoWords.nextLine(task)?.text
+        let later = TodoWords.nextCheckLine(task)
+        let unread = latest.map { model.isUnread($0) } ?? false
+        // Its words stand here unless they are already in its card under the who row.
+        let said = asks ? nil : words
+        let says = said != nil || (!asks && question != nil) || answer != nil
+        TaskBand()
+        HStack(alignment: .center, spacing: 8) {
+            HeadImage(raw: model.head(profile), profile: profile, size: 20).frame(width: 20, height: 20).accessibilityHidden(true)
+            Text(name).font(Font.hq(.callout).weight(.bold)).foregroundStyle(Color.hqLabel).lineLimit(1)
+            if let since = task.isDone ? nil : TodoWords.stateTime(task, now: Date()) {
+                Text(since).font(Font.hq(.subheadline)).foregroundStyle(Color.hqLabel2).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Button { model.showChat() } label: {
+                HStack(spacing: 4) {
+                    if unread { Circle().fill(Color.hqTint).frame(width: 7, height: 7).accessibilityHidden(true) }
+                    Text(unread ? "New reply" : (count > 0 ? "\(count) \(count == 1 ? "message" : "messages")" : "Open chat"))
+                    Image(systemName: "chevron.right").font(Font.hq(.caption2).weight(.semibold))
                 }
+                .font(Font.hq(.subheadline).weight(unread ? .semibold : .regular))
+                .foregroundStyle(unread ? Color.hqTintText : Color.hqLabel2)
+                .frame(minHeight: 32)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Opens the chat")
+            .accessibilityIdentifier("task.chat-line")
+        }
+        .padding(.horizontal, TaskGrid.edge)
+        .frame(minHeight: 40)
+        .accessibilityElement(children: .contain)
+        VStack(alignment: .leading, spacing: 6) {
+            if let answer {
+                Text("You: \(answer)").foregroundStyle(Color.hqLabel2)
+                    .accessibilityIdentifier("task.answered")
+            }
+            if running, answer != nil {
+                Text("\(name) is on it…").foregroundStyle(Color.hqLabel2)
+                    .accessibilityIdentifier("task.working")
+            } else if says {
+                if let said { TodoRichTextView(text: said, style: .callout, identifier: "task.words", open: model.openPath) }
+                if !asks, let question {
+                    Text(question).fontWeight(.semibold).foregroundStyle(Color.hqLabel)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("task.question")
+                }
+            } else if !asks, count == 0, !task.isDone {
+                Text("Ask anything about this task.").foregroundStyle(Color.hqLabel2)
+            }
+            if let next {
+                Text(next).font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("task.next")
+            }
+            ForEach(Array(changes.enumerated()), id: \.offset) { _, line in
+                Label { Text(line).lineLimit(2) } icon: { Image(systemName: "checkmark").foregroundStyle(Color(uiColor: TodoInk.ready)) }
+                    .font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
+                    .accessibilityIdentifier("task.change")
+            }
+            if let later {
+                Label(later, systemImage: "clock")
+                    .font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("task.next-check")
             }
         }
-        .buttonStyle(.plain)
-        .contextMenu { Button("Share…", systemImage: "square.and.arrow.up") { model.share(made) } }
-        .accessibilityIdentifier("task.made.\(made.kind)")
+        .font(Font.hq(.callout))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, TaskGrid.edge).padding(.bottom, 10)
     }
 
     /// The bot's answers, edge to edge (owner 2026-11-09, on the small left-aligned button with words under it: "have
     /// this section fill the entire width of the screen and always be able to fill the width … a primary button and
     /// only two secondary buttons … designed a little bit differently"): the best answer filled, the others tinted, all
-    /// one height, sharing the page's width (`TaskAnswerRow`).
+    /// one height, sharing the card's width (`TaskAnswerRow`).
     private func answers(_ choices: [String], name: String) -> some View {
         TaskAnswerRow(spacing: 8) {
             ForEach(Array(choices.enumerated()), id: \.offset) { index, choice in
@@ -465,7 +684,7 @@ struct TaskPlainUpdate: View {
                         .foregroundStyle(index == 0 ? Color.hqOnTint : Color.hqTintText)
                         .padding(.horizontal, 10)
                         .frame(maxWidth: .infinity, minHeight: 40)
-                        .background(Capsule().fill(index == 0 ? Color.hqTint : Color.hqTint.opacity(0.12)))
+                        .background(Capsule().fill(index == 0 ? Color.hqTint : Color(uiColor: TaskPanel.fill)))
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
@@ -473,8 +692,6 @@ struct TaskPlainUpdate: View {
                 .accessibilityIdentifier("task.choice.\(index)")
             }
         }
-        .padding(.horizontal, TaskGrid.edge)
-        .padding(.top, 10).padding(.bottom, 12)
     }
 }
 

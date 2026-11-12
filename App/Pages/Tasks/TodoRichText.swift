@@ -60,17 +60,19 @@ struct TodoRichTextView: View {
     var color: UIColor? = nil
     var maxLines = 0
     var identifier: String?
+    /// [tasks-first] A tap on the words that isn't on a link (a task's notes start writing).
+    var onTap: (() -> Void)? = nil
     var open: (String) -> Void
     @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         AttributedTextView(text: TodoRich.attributed(text, style: style, category: UIContentSizeCategory(typeSize), readable: readable, color: color),
-                           maxLines: maxLines, identifier: identifier, detectors: [.link, .phoneNumber]) { url in
+                           maxLines: maxLines, identifier: identifier, detectors: [.link, .phoneNumber], openLink: { url in
             guard let path = FileLinks.path(fromLink: url) else { return false }
             Haptics.play(.selection)
             open(path)
             return true
-        }
+        }, onTap: onTap)
     }
 }
 

@@ -1,3 +1,8 @@
+// [tasks-first] Owner 2026-11-12 ("pure task management first, agent stuff second"; mockups 3 and 4): only a task with
+// a bot on it (or a conversation it already had) is a chat's page. A task of your own stands alone (`TodoSheetHost`):
+// no bot's name, no message box. On a shared task the bar names the task's list, not its bot, and the chat's own
+// message box shows with the chat only: the task's view has a one-line box of its own that opens it.
+//
 // [tasks] A task's page is the task's own chat (owner 2026-11-05, "Yes" to: the task's chat on the task page itself,
 // not sliding over it). Owner 2026-11-07 (Pinned Task, step 3): the task's brief (TodoSheetView) is pinned under the
 // bar on its own panel, outside the chat's scroll, and the chat starts right under it. When you take up the
@@ -22,8 +27,11 @@ final class TaskBriefHost: UIHostingController<HQScaledRoot<TaskBriefRoot>> {
 
     @MainActor required dynamic init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
+    private weak var field: UITextView?
+
     /// Writing in the chat's field rolls the brief up; the keys going away with nothing sent bring it back.
     func watch(field: UITextView) {
+        self.field = field
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(fieldBegan), name: UITextView.textDidBeginEditingNotification, object: field)
         center.addObserver(self, selector: #selector(keysHiding), name: UIResponder.keyboardWillHideNotification, object: nil)
@@ -31,7 +39,15 @@ final class TaskBriefHost: UIHostingController<HQScaledRoot<TaskBriefRoot>> {
     }
 
     @objc private func fieldBegan() { model.tuck(.focus) }
-    @objc private func keysHiding() { if model.tuckReason == .focus { model.untuck() } }
+    /// The keys went because you stopped writing (the field let go of them): the task's view comes back. The on-screen
+    /// keys also hide while the field keeps writing, when a hardware keyboard takes over (and in a UI test's typing):
+    /// that rolled the task back over the chat and dropped the words being typed.
+    @objc private func keysHiding() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.model.tuckReason == .focus, self.field?.isFirstResponder != true else { return }
+            self.model.untuck()
+        }
+    }
     @objc private func keysChanged() { onKeysChanged?() }
 
     override func viewDidLoad() {
@@ -77,10 +93,12 @@ struct TaskBriefRoot: View {
 
 @MainActor
 enum TaskPage {
-    /// The task's chat with its details on top; nil before the task is read or with no bots (the page stands alone).
+    /// The task's chat with its details on top; nil before the task is read, with no bots, or for a task of your
+    /// own that never had a conversation (the page stands alone).
     static func make(model sheet: TodoSheetModel) -> ChatViewController? {
         let store = sheet.store, context = sheet.context
         guard let task = store.task(sheet.taskID) else { return nil }
+        guard TodoViews.hasTeammate(task) || TaskChatLinks.link(task, account: context.account) != nil else { return nil }
         guard let chatModel = chatModel(task, store: store, context: context),
               let chat = context.makeChat(chatModel) as? ChatViewController else { return nil }
         sheet.embedded = true
@@ -99,7 +117,8 @@ enum TaskPage {
             // Owner 2026-11-08 ("I like A, but … the buttons you need to click stay above the fold"): never half and
             // half. The task's view covers the chat down to its composer, its move and the chat's line at its foot;
             // the chat's view is the whole chat under the task's bar.
-            let cap = max(120, chat.roomToComposer)
+            // [tasks-first] The task's view covers the chat's message box too (its own one-line box is at its foot).
+            let cap = max(120, sheet.tucked ? chat.roomToComposer : chat.roomToComposerFoot)
             if !sheet.tucked {
                 if !sheet.briefTight, drawn > cap + 0.5 {
                     untight = drawn
@@ -110,8 +129,11 @@ enum TaskPage {
             }
             sheet.briefScrolls = !sheet.tucked && drawn > cap + 0.5
             chat.transcriptCovered = !sheet.tucked
-            // The bar names the bot over the task's view (its title is right under it), the task over its chat.
-            chat.titleOverride = sheet.tucked ? nil : sheet.store.task(sheet.taskID).map { sheet.botName(sheet.chatBot($0)) }
+            // [tasks-first] Over the task's view the bar names the task's list (a menu, to move it), with no face; over
+            // its chat, the chat's own title (the task, its bot under it), whose tap brings the task back.
+            chat.titleOverride = sheet.tucked ? nil : sheet.listTitle
+            chat.titleHidesFace = !sheet.tucked
+            chat.titleMenu = sheet.tucked || sheet.gone ? nil : sheet.listMenu
             if sheet.tucked {
                 chat.setTopAccessoryHeight(drawn, insets: true, animated: animated)
             } else {
@@ -139,6 +161,7 @@ enum TaskPage {
         chat.onTitleTap = { [weak sheet] in sheet?.untuck() }
         brief.onKeysChanged = { apply(false) }
         brief.watch(field: chat.composer.textView)
+        sheet.syncComposer(animated: false)
         chat.view.accessibilityIdentifier = "task.page"
         // ⋯: the task's own rows first, then the chat's (Share, Find, Info, Model…) under Chat, then Delete Task….
         let chatMenu = chat.moreMenu

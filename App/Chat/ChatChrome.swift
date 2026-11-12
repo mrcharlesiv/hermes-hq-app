@@ -272,6 +272,27 @@ final class ChatTitleView: UIView {
             setNeedsLayout()
         }
     }
+    /// [tasks-first] A menu the title opens on a tap, in place of `onTap` (a task's page: the list the task is in,
+    /// to move it). A small up-and-down chevron follows the name while it has one.
+    var menu: UIMenu? {
+        didSet {
+            menuButton.menu = menu
+            menuButton.isHidden = menu == nil
+            guard (menu == nil) != (oldValue == nil) else { return }
+            accessibilityHint = menu == nil ? nil : "Shows a menu"
+            setName()
+            invalidateIntrinsicContentSize()
+            setNeedsLayout()
+        }
+    }
+    private let menuButton: UIButton = {
+        let button = UIButton(type: .custom)
+        button.showsMenuAsPrimaryAction = true
+        button.isHidden = true
+        button.isAccessibilityElement = false
+        return button
+    }()
+
     /// UX study #248: the chat's bot is muted; a bell.slash follows the name and VoiceOver says "Muted".
     var muted = false {
         didSet {
@@ -290,7 +311,7 @@ final class ChatTitleView: UIView {
     /// The name with the muted bell after it (Desktop Look draws its capitals in `applyLook`, on every layout).
     private func setName() {
         if Theme.isDesktop { setNeedsLayout(); return }
-        if muted, let font = nameLabel.font {
+        if muted || menu != nil, let font = nameLabel.font {
             nameLabel.attributedText = nameText(title, attributes: [.font: font, .foregroundColor: ChatPalette.label])
         } else if nameLabel.attributedText?.containsAttachments(in: NSRange(location: 0, length: nameLabel.attributedText?.length ?? 0)) == true
                     || nameLabel.text != title {
@@ -300,11 +321,13 @@ final class ChatTitleView: UIView {
 
     private func nameText(_ text: String, attributes: [NSAttributedString.Key: Any]) -> NSAttributedString {
         let name = NSMutableAttributedString(string: text, attributes: attributes)
-        guard muted, let font = attributes[.font] as? UIFont,
-              let bell = UIImage(systemName: "bell.slash", withConfiguration: UIImage.SymbolConfiguration(font: font, scale: .small))
-        else { return name }
-        name.append(NSAttributedString(string: "\u{2009}", attributes: attributes))
-        name.append(NSAttributedString(attachment: NSTextAttachment(image: bell.withTintColor(ChatPalette.label2, renderingMode: .alwaysOriginal))))
+        guard let font = attributes[.font] as? UIFont else { return name }
+        // The muted bell, then the menu's chevron, each a hair after the name.
+        for symbol in [muted ? "bell.slash" : nil, menu != nil ? "chevron.up.chevron.down" : nil].compactMap({ $0 }) {
+            guard let mark = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(font: font, scale: .small)) else { continue }
+            name.append(NSAttributedString(string: "\u{2009}", attributes: attributes))
+            name.append(NSAttributedString(attachment: NSTextAttachment(image: mark.withTintColor(ChatPalette.label2, renderingMode: .alwaysOriginal))))
+        }
         return name
     }
 
@@ -320,6 +343,7 @@ final class ChatTitleView: UIView {
         glass.contentView.addSubview(subtitleLabel)
         let tap = UITapGestureRecognizer(target: self, action: #selector(tapped))
         glass.addGestureRecognizer(tap)
+        addSubview(menuButton)   // over the glass: with a menu, the tap is the menu's
         isAccessibilityElement = true
         accessibilityTraits = .header
         accessibilityIdentifier = "chat.title"
@@ -388,6 +412,7 @@ final class ChatTitleView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         glass.frame = bounds
+        menuButton.frame = bounds
         applyLook()
         if Theme.isDesktop { layoutDesktop(); return }
         var x: CGFloat = showsAccessory ? 5 : 14

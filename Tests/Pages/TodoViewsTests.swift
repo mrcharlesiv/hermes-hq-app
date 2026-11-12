@@ -18,7 +18,7 @@ struct TodoViewsTests {
     private func task(_ id: String, who: String = "me", bot: String? = nil, status: String = "open", note: String = "",
                       due: String? = nil, section: String? = nil, steps: [Bool] = [], notes: String = "", repeats: String? = nil,
                       updated: String = "2026-11-04T08:00:00-06:00", created: String = "2026-11-03T08:00:00-06:00",
-                      doneAt: String? = nil, by: String? = nil, position: Double = 0) -> TodoTask {
+                      doneAt: String? = nil, by: String? = nil, position: Double = 0, choices: [String] = []) -> TodoTask {
         var o: [String: JSONValue] = ["id": .string(id), "title": .string(id), "who": .string(who), "status": .string(status),
                                       "status_note": .string(note), "updated_at": .string(updated), "created_at": .string(created),
                                       "notes": .string(notes), "position": .number(position)]
@@ -28,6 +28,7 @@ struct TodoViewsTests {
         if let repeats { o["repeat"] = .string(repeats) }
         if let doneAt { o["done_at"] = .string(doneAt) }
         if let by { o["created_by"] = .string(by) }
+        if !choices.isEmpty { o["choices"] = .array(choices.map(JSONValue.string)) }
         o["steps"] = .array(steps.enumerated().map { .object(["id": .string("s\($0.offset)"), "title": "x", "who": "me", "done": .bool($0.element)]) })
         return try! JSONDecoder().decode(TodoTask.self, from: JSONValue.object(o).encoded())
     }
@@ -222,6 +223,45 @@ struct TodoViewsTests {
         #expect(TodoViews.emptyText(.list("work"), listName: "Work") == "No tasks in Work yet.")
         #expect(TodoViews.emptyText(.today, listName: nil) == "Nothing due today.")
         #expect(row(task("a", due: "2026-11-04T17:00:00-06:00", steps: [true, false]), .today).spoken == "5:00 PM, 1 of 2 steps")
+    }
+
+    // MARK: The task's page (step 2)
+
+    /// The who row names the bot like a co-worker, and says what it is doing; a task of your own says "Me".
+    @Test func theWhoRowNamesTheBotAndWhatItIsDoing() {
+        #expect(TodoViews.who(task("a"), botName: name) == "Me")
+        #expect(TodoViews.who(task("a", who: "together", bot: "default"), botName: name) == "Me & Hermes")
+        #expect(TodoViews.who(task("a", who: "bot", bot: "finance"), botName: name) == "Finance")
+        #expect(TodoViews.botState(task("a")) == nil, "a task of your own has no bot's state")
+        #expect(TodoViews.botState(task("a", who: "together", bot: "default")) == nil, "a bot that hasn't started says nothing")
+        let working = TodoViews.botState(task("a", who: "together", bot: "default", status: "working"))
+        #expect(working?.words == "Working" && working?.tone == .working)
+        let asks = TodoViews.botState(task("a", who: "bot", bot: "research", status: "needs_you"))
+        #expect(asks?.words == "Has a question" && asks?.tone == .needsYou)
+        let ready = TodoViews.botState(task("a", who: "together", bot: "default", status: "ready"))
+        #expect(ready?.words == "Finished its part" && ready?.tone == .ready)
+        #expect(TodoViews.botState(task("a", who: "together", bot: "default", status: "done")) == nil)
+        // Its turn running in the task's chat is work, whatever the task last said.
+        #expect(TodoViews.botState(task("a", who: "together", bot: "default", status: "needs_you"), running: true)?.words == "Working")
+        #expect(TodoViews.hasTeammate(task("a", who: "bot", bot: "finance")) && !TodoViews.hasTeammate(task("a")))
+    }
+
+    /// Only an answer the bot waits on moves up under the who row; the rest of what it says stays at the foot.
+    @Test func onlyAQuestionForYouMovesUp() {
+        #expect(TodoViews.asksYou(task("a", who: "bot", bot: "research", status: "needs_you")))
+        #expect(TodoViews.asksYou(task("a", who: "together", bot: "default", status: "ready", choices: ["Send it", "Wait a day"])))
+        #expect(!TodoViews.asksYou(task("a", who: "together", bot: "default", status: "ready")), "finished, nothing to answer")
+        #expect(!TodoViews.asksYou(task("a", who: "together", bot: "default", status: "working")))
+        #expect(!TodoViews.asksYou(task("a", who: "bot", bot: "research", status: "done", choices: ["Yes"])))
+        #expect(!TodoViews.asksYou(task("a", status: "needs_you")), "nobody to ask on a task of your own")
+    }
+
+    /// The bar on a task's page says its list, never a bot's name; plain "Task" for someone with no lists.
+    @Test func theBarSaysTheTasksList() {
+        #expect(TodoViews.listTitle(task("a", section: "work"), sections: lists) == "Work")
+        #expect(TodoViews.listTitle(task("a"), sections: lists) == "No List")
+        #expect(TodoViews.listTitle(task("a", section: "gone"), sections: lists) == "No List")
+        #expect(TodoViews.listTitle(task("a", who: "bot", bot: "finance"), sections: []) == "Task")
     }
 
     // MARK: Jobs

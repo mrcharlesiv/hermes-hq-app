@@ -93,11 +93,29 @@ struct AttributedTextView: UIViewRepresentable {
     var detectors: UIDataDetectorTypes = [.link]
     /// A tapped link this page opens itself (a file link); false leaves it to iOS.
     var openLink: ((URL) -> Bool)?
+    /// [tasks-first] A tap on the words that isn't on a link (a task's notes: the tap starts writing). The text view
+    /// keeps taps from SwiftUI's own gesture, so it is the view's recognizer that says so.
+    var onTap: (() -> Void)?
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    final class Coordinator: NSObject, UITextViewDelegate {
+    final class Coordinator: NSObject, UITextViewDelegate, UIGestureRecognizerDelegate {
         var openLink: ((URL) -> Bool)?
+        var onTap: (() -> Void)?
+
+        @objc func tapped(_ gesture: UITapGestureRecognizer) {
+            guard let onTap, let view = gesture.view as? UITextView, gesture.state == .ended else { return }
+            // A tap on a link is the link's.
+            let length = view.attributedText.length
+            if length > 0, let position = view.closestPosition(to: gesture.location(in: view)) {
+                let index = min(max(0, view.offset(from: view.beginningOfDocument, to: position)), length - 1)
+                if view.attributedText.attribute(.link, at: index, effectiveRange: nil) != nil { return }
+            }
+            onTap()
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 
         func textView(_ textView: UITextView, primaryActionFor textItem: UITextItem, defaultAction: UIAction) -> UIAction? {
             guard case .link(let url) = textItem.content, let openLink, FileLinks.path(fromLink: url) != nil else { return defaultAction }
@@ -117,11 +135,16 @@ struct AttributedTextView: UIViewRepresentable {
         view.dataDetectorTypes = detectors
         view.delegate = context.coordinator
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tapped(_:)))
+        tap.cancelsTouchesInView = false
+        tap.delegate = context.coordinator
+        view.addGestureRecognizer(tap)
         return view
     }
 
     func updateUIView(_ view: UITextView, context: Context) {
         context.coordinator.openLink = openLink
+        context.coordinator.onTap = onTap
         if view.dataDetectorTypes != detectors { view.dataDetectorTypes = detectors }
         if view.attributedText != text { view.attributedText = text }
         view.textContainer.maximumNumberOfLines = maxLines

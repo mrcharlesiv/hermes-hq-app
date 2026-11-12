@@ -95,30 +95,30 @@ extension PagesTests {
         shot("tasks-look-notes-activity" + Self.lookName)
         app.buttons["sheet.close"].firstMatch.tap()
 
-        // The plain task view (owner 2026-11-09): notes are edited from ⋯ › Details › Edit Notes.
+        // [tasks-first] The notes show whole, and a tap on them writes (no Edit button, no ⋯ › Details › Edit Notes).
+        XCTAssertFalse(app.buttons["Show More"].exists, "the notes show whole")
         cues = hapticCount()
-        let notesMore = app.buttons["task.more"].firstMatch
-        (notesMore.exists ? notesMore : app.buttons["chat.more"].firstMatch).tap()
-        app.buttons["Details"].firstMatch.tap()
-        app.buttons["Edit Notes"].firstMatch.tap()
+        notes.tap()
         XCTAssertTrue(app.textViews["task.notes"].firstMatch.waitForExistence(timeout: 3) || app.textFields["task.notes"].firstMatch.exists,
-                      "Edit opens the field")
-        XCTAssertGreaterThan(hapticCount(), cues, "Edit is felt")
-        // Done over the keys ends writing in the brief (the chat's bar steps aside meanwhile, step 3).
+                      "a tap on the notes opens the field")
+        XCTAssertGreaterThan(hapticCount(), cues, "starting to write is felt")
+        // Done over the keys ends writing.
         let editDone = app.buttons["task.edit-done"].firstMatch
         XCTAssertTrue(editDone.waitForExistence(timeout: 5), "Done over the keys")
         editDone.tap()
-        XCTAssertTrue(app.textViews["composer.text"].firstMatch.waitForExistence(timeout: 5), "the chat's bar is back")
+        XCTAssertTrue(notes.waitForExistence(timeout: 5), "the notes read formatted again")
+        XCTAssertFalse(app.textViews["composer.text"].exists, "a task of your own has no message box")
 
-        // Ask Hermes to Help is felt the moment it's tapped. (A swipe over the chat rolls the task up to its bar
-        // (step 3); a tap on the bar brings it back.)
-        let rolled = app.descendants(matching: .any)["task.bar"].firstMatch
-        if rolled.waitForExistence(timeout: 2) { rolled.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.5)).tap() }
-        let help = app.buttons["task.help"].firstMatch
-        XCTAssertTrue(help.waitForExistence(timeout: 15), "Ask Hermes to Help stands at the task’s foot")
+        // Giving it to a bot is felt the moment it's chosen: the who row's menu.
+        let who = app.descendants(matching: .any)["task.who"].firstMatch
+        for _ in 0..<3 where !who.isHittable { app.swipeDown(velocity: .slow) }
+        XCTAssertTrue(who.waitForExistence(timeout: 5), "the who row")
+        who.tap()
+        let hermes = app.buttons["Hermes"].firstMatch
+        XCTAssertTrue(hermes.waitForExistence(timeout: 5), "the menu offers Hermes")
         cues = hapticCount()
-        help.tap()
-        XCTAssertTrue(waitUntil(3) { self.hapticCount() > cues }, "Ask Hermes to Help is felt")
+        hermes.tap()
+        XCTAssertTrue(waitUntil(3) { self.hapticCount() > cues }, "Assign is felt")
     }
 
     /// Every look (check-every-look): TEST_RUNNER_HQN_TASKS_LOOK=dark | desktop | desktop-dark; light when unset.

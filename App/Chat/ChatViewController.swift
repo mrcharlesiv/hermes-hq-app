@@ -12,7 +12,15 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     let session: any ChatSessionModel
 
     /// A view drawn left of the name in the title (the bot's head, added at integration). 34 pt.
-    var titleAccessoryView: UIView? { didSet { titleView.accessory = titleAccessoryView; sizeTitle(); noteTitleHead() } }
+    var titleAccessoryView: UIView? { didSet { titleView.accessory = titleHidesFace ? nil : titleAccessoryView; sizeTitle(); noteTitleHead() } }
+    /// [tasks-first] The bar's title stands without the bot's face (a task's view: the title is the task's list).
+    var titleHidesFace = false {
+        didSet {
+            guard titleHidesFace != oldValue else { return }
+            titleView.accessory = titleHidesFace ? nil : titleAccessoryView
+            sizeTitle()
+        }
+    }
 
     /// DEBUG: the header head's shape (a dot-matrix head's outline) and eyes as the title's accessibility value (UI tests
     /// check it follows an edit).
@@ -26,6 +34,8 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     }
     /// Tapping the title (Bot Info, later).
     var onTitleTap: (() -> Void)? { didSet { titleView.onTap = onTitleTap } }
+    /// [tasks-first] A menu the bar's title opens in place of its tap (a task's view: the list it is in, to move it).
+    var titleMenu: UIMenu? { didSet { titleView.menu = titleMenu; sizeTitle() } }
     /// UX study #121: the "Signed Out" status pill signs in again (OfflineHub.signInAgain).
     var onSignInAgain: (() -> Void)? { didSet { statusPill.onSignIn = onSignInAgain } }
     /// The ⋯ menu; the button shows only when a menu is set.
@@ -129,8 +139,9 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     var suppressesTalkTip = false
     /// [tasks] The page's panel covers the whole transcript (a task's whole view, owner 2026-11-08: "I like A"): the
     /// chat's own floating pieces (status line, ↓, earlier pill) stay away until the transcript shows again.
-    /// [tasks] What the bar's title says instead of the chat's name: the task's view names its bot there, the task's
-    /// own title standing large right under it (owner 2026-11-08: the name had been said twice). nil: the chat's name.
+    /// [tasks] What the bar's title says instead of the chat's name, with no second line under it: the task's view
+    /// names the task's list there ([tasks-first]; its bot until 2026-11-12), the task's own title standing large right
+    /// under it (owner 2026-11-08: the name had been said twice). nil: the chat's name.
     var titleOverride: String? {
         didSet {
             guard titleOverride != oldValue, isViewLoaded else { return }
@@ -859,8 +870,9 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
 
         titleView.title = shownTitle
         let owner = botName.trimmingCharacters(in: .whitespaces)
-        titleView.subtitle = owner.isEmpty || owner == shownTitle.trimmingCharacters(in: .whitespaces) ? nil : owner
+        titleView.subtitle = titleOverride != nil || owner.isEmpty || owner == shownTitle.trimmingCharacters(in: .whitespaces) ? nil : owner
         titleView.onTap = onTitleTap
+        titleView.menu = titleMenu
         titleView.onSizeChange = { [weak self] in self?.sizeTitle() }
         sizeTitle()
         updateMoreButton()
@@ -2121,6 +2133,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
             subtitle = parts.isEmpty ? nil : parts.joined(separator: " · ")
         }
         #endif
+        if titleOverride != nil { subtitle = nil }   // [tasks-first] the page's own words stand alone (a task's list)
         roomChrome?.stateChanged()                                                     // [groups]
         if titleView.title != shownTitle || titleView.subtitle != subtitle {
             let renamed = titleView.title != shownTitle
@@ -4200,6 +4213,13 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     var roomToComposer: CGFloat {
         let barBottom = view.safeAreaInsets.top - additionalSafeAreaInsets.top
         return max(0, composer.frame.minY - barBottom)
+    }
+
+    /// [tasks-first] The room from the bar down to the composer's foot: a task's view covers the composer too (its own
+    /// one-line message box stands at its foot), and ends where the composer does (above the keys while they are up).
+    var roomToComposerFoot: CGFloat {
+        let barBottom = view.safeAreaInsets.top - additionalSafeAreaInsets.top
+        return max(0, composer.frame.maxY - barBottom)
     }
 
     func setLead(_ controller: UIViewController) {

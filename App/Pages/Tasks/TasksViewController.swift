@@ -64,7 +64,11 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     private var addingIdeas: Set<String> = []
     private var shownIdeaCards: [String: TaskIdeaCardModel] = [:]
     /// The idea whose card is open (a tap on its row).
-    private var openIdea: String?
+    private let ideaOpen = TaskIdeaOpen()
+    private var openIdea: String? {
+        get { ideaOpen.id }
+        set { if ideaOpen.id != newValue { ideaOpen.id = newValue } }
+    }
 
     private lazy var addItem: UIBarButtonItem = {
         let item = UIBarButtonItem(image: UIImage(systemName: "plus"), primaryAction: UIAction { [weak self] _ in self?.newTask() })
@@ -340,20 +344,22 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         let ideaRowCell = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, id in
             guard let self, let card = self.ideaCards[id] else { return }
             let enabled = !self.store.readOnlyGateway
-            if self.openIdea == id {
-                cell.contentConfiguration = UIHostingConfiguration {
-                    TaskIdeaCard(card: card, enabled: enabled,
-                                 add: { [weak self] start in self?.addIdea(id, start: start) },
-                                 dismiss: { [weak self] in self?.dismissIdea(id) })
-                }.margins(.all, 0)
-            } else {
-                cell.contentConfiguration = UIHostingConfiguration {
-                    TaskIdeaRow(card: card, enabled: enabled,
-                                add: { [weak self] in self?.addIdea(id, start: false) },
-                                dismiss: { [weak self] in self?.dismissIdea(id) })
-                }.margins(.all, 0)
+            // One view for both states: it opens and closes by itself (`ideaOpen`), with the cell's height.
+            cell.contentConfiguration = UIHostingConfiguration {
+                TaskIdeaCell(card: card, open: self.ideaOpen, enabled: enabled,
+                             add: { [weak self] start in self?.addIdea(id, start: start) },
+                             dismiss: { [weak self] in self?.dismissIdea(id) })
+            }.margins(.all, 0)
+            // The card is laid out whole from the first frame; the cell shows as much of it as it has grown to.
+            cell.clipsToBounds = true
+            cell.contentView.clipsToBounds = true
+            // Pressed only while the finger is down: a suggestion is never "selected", and the grey fading out over
+            // a cell that is growing into its card read as a flash.
+            cell.configurationUpdateHandler = { cell, state in
+                var background = UIBackgroundConfiguration.clear()
+                background.backgroundColor = state.isHighlighted ? HQPalette.cellPressed : .clear
+                (cell as! UICollectionViewListCell).backgroundConfiguration = background
             }
-            cell.configurationUpdateHandler = { cell, state in Self.rowBackground(cell as! UICollectionViewListCell, state) }
         }
         let ideaHeadCell = UICollectionView.CellRegistration<UICollectionViewListCell, Item> { [weak self] cell, _, _ in
             guard let self, let page = self.ideas.page else { return }
@@ -1001,12 +1007,17 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     }
 
     /// A tap on an idea's row opens its card in place; a tap on the card folds it again.
+    /// A tap on a suggestion: its card opens (and the one that was open closes). Two things move together: the list
+    /// animates the cells' heights (and the rows under them), and inside each cell the row fades into the card. The
+    /// cell clips, so the card never lies over the next row while it grows. (A cell that resized itself from its
+    /// SwiftUI content alone changed height in one frame.)
     private func toggleIdea(_ id: String) {
         PagesHaptics.selection()
         let before = openIdea
-        openIdea = before == id ? nil : id
+        let next = before == id ? nil : id
+        ideaOpen.id = next
         var snapshot = dataSource.snapshot()
-        let touched = [before, openIdea].compactMap { $0 }.map(Item.idea).filter { snapshot.itemIdentifiers.contains($0) }
+        let touched = [before, next].compactMap { $0 }.map(Item.idea).filter { snapshot.itemIdentifiers.contains($0) }
         guard !touched.isEmpty else { return }
         snapshot.reconfigureItems(touched)
         dataSource.apply(snapshot, animatingDifferences: !HQMotion.reduced)
@@ -1378,7 +1389,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         }
         switch dataSource.itemIdentifier(for: indexPath) {
         case .idea(let id)?:
-            collectionView.deselectItem(at: indexPath, animated: true)
+            collectionView.deselectItem(at: indexPath, animated: false)
             toggleIdea(id)
         case .task(let id)?:
             PagesHaptics.selection()

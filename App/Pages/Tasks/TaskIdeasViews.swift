@@ -63,6 +63,67 @@ private struct IdeaCardBackground: ViewModifier {
 }
 
 /// One idea: the to-do, why now, who could help and how, where it came from; Add, Add & Let <Bot> Start, and ×.
+/// Which suggestion's card is open (one at a time). The rows read it themselves, so a row opens and closes inside
+/// one animation with the list (owner 2026-11-12, a screen recording: "This animation isn't smooth enough").
+@MainActor @Observable
+final class TaskIdeaOpen {
+    var id: String?
+}
+
+/// A suggestion's cell: its short row, or its card while it is the open one. Both live in the same cell, so the
+/// change is the cell's own: the row fades into the card as the cell grows, and the rows under it move with it. (The
+/// list used to swap the cell's whole content at once and then slide the rows: for a moment the card lay over the
+/// next row, and on closing it left a hole.)
+struct TaskIdeaCell: View {
+    var card: TaskIdeaCardModel
+    var open: TaskIdeaOpen
+    var enabled: Bool
+    var add: (_ start: Bool) -> Void
+    var dismiss: () -> Void
+    /// The card is in the cell: from the tap that opens it until its fade out has ended. A closed suggestion has no
+    /// card at all (its buttons would otherwise be there for VoiceOver and the tests, unseen).
+    @State private var cardMounted = false
+
+    var body: some View {
+        let isOpen = open.id == card.idea.id
+        // Both are in the cell, and only the one on show gives it its height: the other fades out over it. A fade
+        // tied to `isOpen` runs however the cell was told to change (the list reconfigures it without an animation
+        // of its own, which made an if/else swap at once).
+        ZStack(alignment: .top) {
+            TaskIdeaRow(card: card, enabled: enabled, add: { add(false) }, dismiss: dismiss)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(height: isOpen ? 0 : nil, alignment: .top)
+                .opacity(isOpen ? 0 : 1)
+                .allowsHitTesting(!isOpen)
+                .accessibilityHidden(isOpen)
+            if isOpen || cardMounted {
+                // It comes in clear and fades up on the next pass (`cardMounted`), and fades out before it leaves.
+                TaskIdeaCard(card: card, enabled: enabled, add: add, dismiss: dismiss)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(height: isOpen ? nil : 0, alignment: .top)
+                    .opacity(isOpen && cardMounted ? 1 : 0)
+                    .allowsHitTesting(isOpen)
+                    .accessibilityHidden(!isOpen)
+            }
+        }
+        .animation(HQMotion.reduced ? nil : .easeInOut(duration: 0.28), value: isOpen)
+        .animation(HQMotion.reduced ? nil : .easeInOut(duration: 0.28), value: cardMounted)
+        .onChange(of: isOpen, initial: true) { _, now in
+            if now {
+                cardMounted = true
+            } else if cardMounted {
+                let id = card.idea.id
+                DispatchQueue.main.asyncAfter(deadline: .now() + (HQMotion.reduced ? 0 : 0.32)) {
+                    if open.id != id { cardMounted = false }
+                }
+            }
+        }
+        .id(card.idea.id)   // a reused cell starts again for its new suggestion
+        // Pinned to the cell's top while the cell grows or shrinks (centred, the row slid down as its card came in).
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+}
+
 struct TaskIdeaCard: View {
     var card: TaskIdeaCardModel
     var enabled: Bool

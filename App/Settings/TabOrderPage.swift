@@ -308,7 +308,7 @@ struct TabOrderPage: View {
         let known: [String: (String, String)] = ["settings": ("Settings", "gearshape"), "capabilities": ("Capabilities", "square.grid.2x2"),
                                                   "connectors": ("Connectors", "powerplug"), "artifacts": ("Artifacts", "photo.on.rectangle"),
                                                   "kanban": ("Kanban", "rectangle.split.3x1"), "pinned": ("Tiles", "rectangle.3.group"),
-                                                  "marketplace": ("Marketplace", "bag")]
+                                                  "marketplace": ("Marketplace", "bag"), "passwords": ("Passwords", "key")]
         let (title, symbol) = known[id] ?? (id.capitalized, "square.dashed")
         return PageChoice(id: id, title: title, symbol: symbol)
     }

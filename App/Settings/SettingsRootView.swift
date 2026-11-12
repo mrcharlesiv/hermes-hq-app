@@ -1109,7 +1109,7 @@ struct SettingsRootView: View {
                         .accessibilityIdentifier("settings.config.\(section.id)")
                     if section.id == "browser" {
                         // UX study #67: Safety keeps the shield; Keys already has "key".
-                        NavRow(title: "Passwords & Logins", systemImage: "person.badge.key") { SettingsNavigator.openRoot("vault", router: router) }
+                        NavRow(title: "Passwords", systemImage: "person.badge.key") { SettingsNavigator.openRoot("vault", router: router) }
                             .accessibilityIdentifier("settings.vault")
                     }
                 }

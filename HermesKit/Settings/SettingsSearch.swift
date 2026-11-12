@@ -151,7 +151,7 @@ nonisolated enum SettingsSearch {
                                     // [provider-manager] What its pages do: rename a provider or a model, show or hide models.
                                     "models", "rename model", "hide model", "show model", "model names", "custom provider"]),
         ("keys", "Keys", ["api keys", "tools", "tokens", "environment", "env"]),
-        ("vault", "Passwords & Logins", ["vault", "passwords", "logins", "cards", "1password", "bitwarden"]),
+        ("vault", "Passwords", ["vault", "passwords", "logins", "cards", "addresses", "keychain", "1password", "bitwarden"]),
         ("billing", "Billing", ["balance", "credits", "plan", "nous portal", "usage"]),
         ("sessions", sessionsPageTitle, ["sessions", "archive", "chats", "project folder", "chat folder", "retention"]),
         ("capabilities", "Capabilities", ["abilities", "what bots can do"]),   // [cap-pages]

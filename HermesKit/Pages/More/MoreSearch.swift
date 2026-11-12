@@ -48,6 +48,7 @@ nonisolated enum MoreSearch {
         "review": ["review", "changes", "diff", "git"],
         "command-center": ["command center", "system", "status", "maintenance"],
         "usage": ["usage", "tokens", "cost"],
+        "passwords": ["passwords", "logins", "cards", "addresses", "keys", "vault", "keychain", "1password", "bitwarden"],   // [passwords-page]
         "webhooks": ["webhooks", "hooks", "triggers"],
         "import-sessions": ["import", "claude", "codex", "conversation", "sessions"],
     ]

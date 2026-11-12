@@ -172,6 +172,12 @@ enum DesktopLookTourHooks {
                     list.delegate?.collectionView?(list, didSelectItemAt: path)
                 }
             }
+        case "passwords":   // [passwords-page] More › Passwords
+            root.select(.more)
+            after(0.8) {
+                guard let nav = root.selectedViewController as? UINavigationController else { return }
+                nav.pushViewController(PasswordsPageController(router: SettingsRouter(services: services, navigation: nav)), animated: false)
+            }
         case "connectors":   // [connectors-ux] More › Connectors; `-HQDebugTourItem <name>` then opens that connector or app
             root.select(.more)
             after(0.8) {

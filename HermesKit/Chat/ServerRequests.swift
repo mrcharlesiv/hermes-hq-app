@@ -1292,6 +1292,6 @@ nonisolated enum LateLogin {
 
     /// What the chat sends: it starts a turn, and the bot finds the login under Passwords & Logins.
     static func message(site: String) -> String {
-        "I saved my \(site) login in Passwords & Logins. Sign in with it and carry on."
+        "I saved my \(site) login in Passwords. Sign in with it and carry on."
     }
 }

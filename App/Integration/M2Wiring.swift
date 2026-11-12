@@ -92,7 +92,14 @@ import UIKit
                 guard let model else { return nil }
                 return CapabilitiesPages.page(.connectors, services: model)
             }
-            return [row, market, connectors]
+            // [passwords-page] Owner 2026-11-11: every password in one organized place, a tap from More (the same page
+            // as Settings › Passwords): what the bots fill, password managers, keys, and this device's Keychain.
+            let passwords = MoreRow(id: "passwords", title: "Passwords", symbol: "key.fill", image: nil,
+                                    tile: UIColor(red: 0x5E / 255, green: 0x5C / 255, blue: 0xE6 / 255, alpha: 1)) { [weak model] in
+                guard let model else { return nil }
+                return PasswordsPageController(router: SettingsRouter(services: model, navigation: nil))
+            }
+            return [row, market, connectors, passwords]
         })
 
         // [morepages] More › Bot Profiles, Messaging, Files, Review, Status & Maintenance, Usage, Spawn Tree, Star Map,

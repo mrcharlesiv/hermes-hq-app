@@ -46,7 +46,7 @@ enum SettingsNavigator {
         case "notifications": router.push(NotificationsSettingsController(app: services as? AppModel))
         case "providers": router.push("Providers", ProvidersPageView(router: router))
         case "keys": router.push("Keys", KeysPageView(router: router))
-        case "vault": router.push("Passwords & Logins", VaultPageView(router: router))
+        case "vault": router.push(PasswordsPageController(router: router))   // [passwords-page] the page More › Passwords opens
         case "billing": router.push("Billing", BillingPageView(router: router))
         case "sessions":
             guard let store = router.gatewaySettings?.configStore else { return }

@@ -237,6 +237,10 @@ struct MenusStoreTests {
                     .map(\.key) == ["clinepass::glm-5.3"])
         #expect(ModelMenuContext.favorites(keys: keys, catalog: nil, knownProviders: ["commandcode", "clinepass"], missing: [keys[0]])
                     .map(\.key) == Array(keys[1...]))
+        // Hide Favorites Until Models Load: no catalog, no stars, whatever the last read left; a catalog still wins.
+        #expect(ModelMenuContext.favorites(keys: keys, catalog: nil, knownProviders: ["clinepass"], waitForCatalog: true).isEmpty)
+        let listed = ModelSheetModel.favoritesFromKeys([keys[2]])
+        #expect(ModelMenuContext.favorites(keys: keys, catalog: listed, knownProviders: nil, waitForCatalog: true) == listed)
         // An older catalog still lists Commandcode, removed in Settings since.
         let catalog = ModelSheetModel.favoritesFromKeys(keys)
         #expect(ModelMenuContext.favorites(keys: keys, catalog: catalog, knownProviders: ["clinepass"]).map(\.provider)

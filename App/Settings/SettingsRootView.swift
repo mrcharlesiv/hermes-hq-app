@@ -51,6 +51,7 @@ final class SettingsRootModel {
     var fewerTimestamps = ToolCallSettings.fewerTimestamps
     var showFileChanges = ToolCallSettings.showFileChanges
     var newChatAsksProject = NewChatProjectChoice.isOn
+    var waitForModels = ModelPrefs.waitForModels
     // [settings] On this iPhone: Haptics (docs/spec/3x-settings.md §1) and Intro Splash (§7).
     var haptics = Haptics.isOn
     /// [thinking-drive] How the model panel's thinking bar looks and feels as it climbs.
@@ -847,6 +848,15 @@ struct SettingsRootView: View {
             }
             .accessibilityIdentifier("settings.new-chat-asks-project")
             .revealRow("row:new-chat-asks-project", model.revealed)
+            // [ghost-stars] A provider removed in Hermes itself leaves its stars in a new chat until its models load.
+            Toggle(isOn: Binding(get: { model.waitForModels }, set: { on in
+                model.waitForModels = on
+                ModelPrefs.waitForModels = on
+            })) {
+                SettingsRowLabel(title: "Hide Favorites Until Models Load", systemImage: "star.slash")
+            }
+            .accessibilityIdentifier("settings.wait-for-models")
+            .revealRow("row:wait-for-models", model.revealed)
             // [settings] §4
             if DeviceWord.isMac {
                 // [mac] Stress test 2026-10-28 #81, round 2: with a gateway it lives in Chat Behavior › Attachments,

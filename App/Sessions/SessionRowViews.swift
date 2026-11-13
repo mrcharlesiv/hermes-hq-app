@@ -727,7 +727,12 @@ struct SessionDateHeaderView: View {
     static let captionHeight: CGFloat = 24
     /// The break above a caption, between one group's last row and the next group: wide, so each caption reads as its
     /// own rows' (the list's first, under the bar, needs less).
-    static func breakAbove(first: Bool) -> CGFloat { first ? 6 : Density.compact ? 12 : 20 }   // [density]
+    /// [soft-cards] On a card every caption is its card's first line: the same room over each, sized so the words stand
+    /// as far under the card's top as the last row's over its foot.
+    static func breakAbove(first: Bool) -> CGFloat {
+        if ProjectCard.soft { return (Density.compact ? 7 : 10) + BackdropCards.grown(12) }
+        return first ? 6 : Density.compact ? 12 : 20   // [density]
+    }
     /// How far a caption's touch reaches up into that break. [ui-sizing 2026-11-09] All of it: with the caption, 44 pt in
     /// Standard (it was 36, under iOS's 44 for its +, ⋯, Edit and See All); Compact's break is 12.
     static var hitAbove: CGFloat { Density.compact ? 12 : 20 }
@@ -820,8 +825,8 @@ struct SessionDateHeaderView: View {
             }
         }
         .frame(minHeight: Self.captionHeight)
-        .padding(.leading, 20)
-        .padding(.trailing, 20)
+        // [soft-cards] On a card the name starts where the rows' faces do.
+        .padding(.horizontal, ProjectCard.soft ? 20 + BackdropCards.side : 20)
         .padding(.top, Self.breakAbove(first: first))
     }
 

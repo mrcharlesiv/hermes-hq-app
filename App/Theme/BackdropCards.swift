@@ -54,6 +54,26 @@ import UIKit
         list.map { objc_getAssociatedObject($0, cardedKey) != nil } ?? false
     }
 
+    /// For a row or a header drawn in SwiftUI on a tab's own list (which always shows the app's picture when there is
+    /// one): Soft Cards is on and the picture shows. Owner 2026-11-13 (a screenshot of Bots): "Look at the padding on top
+    /// and bottom of these. It's not even." A title brings room above it sized for the plain page, where it parts one
+    /// group from the last; on a card that room is the card's own inset, so a title on a card stands as far under the
+    /// card's top as its last row's words stand over the card's foot (about 17 pt). Each header takes its room from here.
+    static var live: Bool { Backdrop.app.cards && Backdrop.app.shows }
+
+    /// `perWhole` for each whole of UI Scale past 100 % (less under it). A card's ends stay even at every UI Scale: the
+    /// words grow with it inside a title's or a row's fixed room, so the room over a title is tuned by this (measured
+    /// at 85, 100 and 115 % on a one-colour picture, build/tools/measure.py).
+    static func grown(_ perWhole: CGFloat) -> CGFloat { perWhole * (HQFont.scale - 1) }
+
+    /// Every row and header of `dataSource`'s list drawn again (they draw differently on a card).
+    static func redraw<Section: Hashable & Sendable, Item: Hashable & Sendable>(_ dataSource: UICollectionViewDiffableDataSource<Section, Item>?) {
+        guard let dataSource else { return }
+        var snapshot = dataSource.snapshot()
+        snapshot.reloadSections(snapshot.sectionIdentifiers)
+        dataSource.apply(snapshot, animatingDifferences: false)
+    }
+
     /// Whether `controller`'s lists draw cards just now: its picture shows (`PageBackdrop`).
     static func on(_ controller: UIViewController?) -> Bool {
         !Theme.isDesktop && Backdrop.app.cards && PageBackdrop.showsPicture(on: controller)
@@ -65,16 +85,19 @@ import UIKit
     /// - `keepWidth`: a section that lays out its own width (the Bots faces, centred in three columns) keeps it; the
     ///   card stands `side` from the page's edges behind it.
     /// - `join`: the card runs on into the section above or below.
-    static func card(_ section: NSCollectionLayoutSection, on: Bool, header: Bool = false, keepWidth: Bool = false, join: Join = []) {
+    /// - `extraTop`, `extraBottom`: more room inside the card at that end, where what stands there brings less of its
+    ///   own than a row does (so the card's two ends stay even).
+    static func card(_ section: NSCollectionLayoutSection, on: Bool, header: Bool = false, keepWidth: Bool = false, join: Join = [],
+                     extraTop: CGFloat = 0, extraBottom: CGFloat = 0) {
         guard on else { return }
         var insets = section.contentInsets
         if !keepWidth {
             insets.leading += side
             insets.trailing += side
         }
-        let top = join.contains(.above) || header ? 0 : pad, bottom = join.contains(.below) ? 0 : pad
+        let top = (join.contains(.above) || header ? 0 : pad) + extraTop, bottom = (join.contains(.below) ? 0 : pad) + extraBottom
         insets.top += top
-        insets.bottom += join.contains(.below) ? 0 : pad + gap
+        insets.bottom += bottom + (join.contains(.below) ? 0 : gap)
         section.contentInsets = insets
         let card = NSCollectionLayoutDecorationItem.background(elementKind: kind(join))
         card.contentInsets = NSDirectionalEdgeInsets(top: join.contains(.above) || header ? 0 : max(0, insets.top - top),
@@ -169,7 +192,9 @@ class BackdropCardView: UICollectionReusableView {
     private let loose: Set<String>
     private static let key = malloc(1)!
     /// Room under a note's words past the room it comes with.
-    static let notePad: CGFloat = 6
+    static var notePad: CGFloat { 9 - BackdropCards.grown(12) }
+    /// Room over a title's words past the room it comes with (so it stands as far in as the last row's words do).
+    static var titlePad: CGFloat { max(0, 3 - BackdropCards.grown(20)) }
     /// The space between sections while cards show (iOS's compact spacing left them touching).
     static let sectionSpacing: CGFloat = 28
     /// How far a card reaches past its section's rows.
@@ -208,6 +233,25 @@ class BackdropCardView: UICollectionReusableView {
         plates.schedule()
     }
 
+    /// More room under `list`'s notes, where its rows stand further under a card's top than a plain row does (Files'
+    /// folder row, two lines tall).
+    static func setNoteExtra(_ extra: CGFloat, for list: UIScrollView) {
+        guard let plates = objc_getAssociatedObject(list, key) as? BackdropPlates else { return }
+        plates.noteExtra = extra
+        plates.schedule()
+    }
+    private var noteExtra: CGFloat = 0
+
+    /// Whether `list`'s sections stand on soft cards (asked while it lays out, before the cards are drawn).
+    static func wanted(for list: UIScrollView) -> Bool {
+        guard let plates = objc_getAssociatedObject(list, key) as? BackdropPlates else { return false }
+        return plates.shows() && Backdrop.app.cards && !Theme.isDesktop
+    }
+
+    /// The room a table leaves over a section's rows on soft cards, for cards `sectionSpacing` apart as on the other
+    /// More pages: a card takes `rim` past its rows, and `notePad` past a note.
+    static func tableGap(afterNote: Bool) -> CGFloat { sectionSpacing + (afterNote ? notePad - rim : 0) }
+
     /// Whether `row` (a list or table cell) stands on a soft card just now, so it draws no card of its own.
     static func softRows(for row: UIView) -> Bool {
         var view = row.superview
@@ -239,7 +283,12 @@ class BackdropCardView: UICollectionReusableView {
         if on != active {
             active = on
             // The rows take iOS's card back, or give it up.
-            if let table = list as? UITableView { table.visibleCells.forEach { $0.setNeedsUpdateConfiguration() } }
+            if let table = list as? UITableView {
+                table.visibleCells.forEach { $0.setNeedsUpdateConfiguration() }
+                // A table that spaces its sections for the cards (Files) measures them again.
+                table.beginUpdates()
+                table.endUpdates()
+            }
             if let grid = list as? UICollectionView { grid.visibleCells.forEach { $0.setNeedsUpdateConfiguration() } }
         }
         let boxes = on ? sections(of: list, near: list.bounds.insetBy(dx: 0, dy: -600)) : []
@@ -263,8 +312,8 @@ class BackdropCardView: UICollectionReusableView {
             // Each edge is set by what is there: a title or a note keeps the room it comes with and `notePad` more
             // under a note (owner 2026-11-12: a note sat tight on the foot); bare rows get `rim` all round.
             let all = [section.cards, section.title, section.note].compactMap { $0 }.reduce(CGRect.null) { $0.union($1) }
-            let top = section.title?.minY ?? ((section.cards?.minY ?? all.minY) - Self.rim)
-            let bottom = section.note.map { $0.maxY + Self.notePad } ?? ((section.cards?.maxY ?? all.maxY) + Self.rim)
+            let top = section.title.map { $0.minY - Self.titlePad } ?? ((section.cards?.minY ?? all.minY) - Self.rim)
+            let bottom = section.note.map { $0.maxY + Self.notePad + noteExtra } ?? ((section.cards?.maxY ?? all.maxY) + Self.rim)
             // `rim` past the section's rows (10 pt from an iPhone's edges, as the plain lists' cards; on an iPad, whose
             // rows stand further in, still just round them). A table's section is as wide as the table: `side` in.
             let edge = section.cards ?? all

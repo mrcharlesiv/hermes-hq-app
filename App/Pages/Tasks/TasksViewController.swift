@@ -184,6 +184,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         view.addSubview(collectionView)
         ListBarAppearance.pinTitle(in: self, softEdgeAround: collectionView)
         let backdrop = PageBackdrop.install(in: self, clearing: [collectionView])
+        backdrop.onCardsChange = { [weak self] in BackdropCards.redraw(self?.dataSource) }   // [soft-cards] titles keep a card's room
         header.install(in: self, list: collectionView, backdrop: backdrop)
         notices = PageNoticeHost(in: view)
         let refresh = UIRefreshControl()
@@ -314,7 +315,9 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
             // [backdrop-cards] The tasks' groups and the ideas; the week and an empty view's line stay as they are.
             let carded: Bool = switch self?.dataSource?.sectionIdentifier(for: index) { case .group?, .ideas?: true; default: false }
             let onCards = carded && BackdropCards.on(self)
-            BackdropCards.card(layout, on: onCards, header: config.headerMode == .supplementary)
+            // A folded group is its heading alone: as much under the name as over it.
+            let folded = config.headerMode == .supplementary && (self?.collectionView.numberOfItems(inSection: index) ?? 1) == 0
+            BackdropCards.card(layout, on: onCards, header: config.headerMode == .supplementary, extraBottom: folded ? 4 : 0)
             return layout
         }
         BackdropCards.register(in: cards)   // [backdrop-cards]
@@ -432,6 +435,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         guard case .group(let kind) = section, let words = heading(kind) else { return }
         let count = groups.first { $0.0 == kind }?.1.count ?? 0
         var view = TodoGroupHeaderView(title: words.title, detail: words.detail, count: count, red: kind == .overdue)
+        view.onCard = BackdropCards.on(self)
         switch kind {
         case .bot(let profile):
             view.face = (profile, bots.first { $0.id == profile }?.head)

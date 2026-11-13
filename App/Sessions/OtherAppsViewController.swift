@@ -44,7 +44,7 @@ final class OtherAppsViewController: UIViewController, UICollectionViewDelegate 
         collectionView.alwaysBounceVertical = true
         collectionView.accessibilityIdentifier = "otherApps.list"
         view.addSubview(collectionView)
-        PageBackdrop.install(in: self, clearing: [collectionView])   // [backdrop] Theme › App Background
+        PageBackdrop.install(in: self, clearing: [collectionView]).onCardsChange = { [weak self] in BackdropCards.redraw(self?.dataSource) }   // [backdrop] Theme › App Background
         let refresh = UIRefreshControl()
         refresh.addAction(UIAction { [weak self] _ in self?.pulledToRefresh() }, for: .valueChanged)
         collectionView.hqInstallRefresh(refresh)

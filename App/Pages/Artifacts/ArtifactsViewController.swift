@@ -454,7 +454,9 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
                     BackdropCards.card(pinned, on: BackdropCards.on(self), header: true, keepWidth: true, join: next == .allPins ? .below : [])
                 } else if ArtifactPins.view != .cards {
                     // The grid's names stand under its tiles, on the page: a card behind it too (it keeps its own width).
-                    BackdropCards.card(pinned, on: BackdropCards.on(self), header: true, keepWidth: ArtifactPins.view == .grid)
+                    // Under the grid's names, as much as over "6 Items" (they bring 6 pt; a list's last row its own).
+                    BackdropCards.card(pinned, on: BackdropCards.on(self), header: true, keepWidth: ArtifactPins.view == .grid,
+                                       extraBottom: ArtifactPins.view == .grid ? 11 : 0)
                 }
                 return pinned
             case .images where self.isGrid:
@@ -478,8 +480,9 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
                     s.boundarySupplementaryItems = [header]
                     s.supplementaryContentInsetsReference = .none   // the header spans the width, as the day headers do
                     // [soft-cards] "Images" and its pictures on a card, with Show All Images as its foot.
-                    BackdropCards.card(s, on: BackdropCards.on(self), header: true, keepWidth: true,
-                                       join: self.dataSource?.sectionIdentifier(for: index + 1) == .showAllImages ? .below : [])
+                    // The pictures bring 4 pt under them, a row's words about 14: as much under them as over "Images" (17 pt).
+                    let foot = self.dataSource?.sectionIdentifier(for: index + 1) == .showAllImages
+                    BackdropCards.card(s, on: BackdropCards.on(self), header: true, keepWidth: true, join: foot ? .below : [], extraBottom: foot ? 0 : 10)
                 } else {
                     s.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0)
                 }
@@ -527,14 +530,15 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
                     // [backdrop-cards] On a picture each day is a card, its date at the card's top (not pinned over others).
                     let cards = BackdropCards.on(self)
                     s.boundarySupplementaryItems.forEach { $0.pinToVisibleBounds = !cards }
-                    BackdropCards.card(s, on: cards, header: true)
+                    BackdropCards.card(s, on: cards, header: true, extraBottom: 6)   // 17 pt under the last row's words, as over the date
                 }
                 // [soft-cards] "See All" is the foot of the shelf's card above it, Show All Images of the pictures'. What is
                 // listed but can't be opened, and Show More, are cards of their own.
                 let above = index > 0 ? self.dataSource?.sectionIdentifier(for: index - 1) : nil
                 switch section {
                 case .allPins where above == .pinned, .showAllImages where above == .images:
-                    BackdropCards.card(s, on: BackdropCards.on(self), join: .above)
+                    // The foot's words stand in a 44 pt row: its own room under them is enough.
+                    BackdropCards.card(s, on: BackdropCards.on(self), join: .above, extraBottom: -BackdropCards.pad)
                 case .more, .unavailable:
                     BackdropCards.card(s, on: BackdropCards.on(self))
                 default: break
@@ -778,10 +782,14 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         var config = UICollectionLayoutListConfiguration(appearance: .plain)
         config.backgroundColor = .clear
         config.separatorConfiguration.color = HQPalette.separator
-        config.itemSeparatorHandler = { _, separator in
+        config.itemSeparatorHandler = { [weak self] path, separator in
             var s = separator
             s.topSeparatorVisibility = .hidden
             s.bottomSeparatorInsets = NSDirectionalEdgeInsets(top: 0, leading: 76, bottom: 0, trailing: 20)
+            // [soft-cards] No rule under a card's last row.
+            if let self, BackdropCards.on(self), path.item == self.collectionView.numberOfItems(inSection: path.section) - 1 {
+                s.bottomSeparatorVisibility = .hidden
+            }
             return s
         }
         config.headerMode = .supplementary
@@ -951,6 +959,18 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
             content.textProperties.font = HQFont.preferred(.subheadline).pagesWeight(.semibold)
             content.textProperties.color = HQPalette.label2
             content.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 8, leading: 20, bottom: 6, trailing: 20)
+            // [soft-cards] Owner 2026-11-13 ("Recheck everything"): on a card the name stands as far under the card's
+            // top as the last row's words stand over its foot (17 pt).
+            if BackdropCards.on(self) {
+                switch self.dataSource.sectionIdentifier(for: path.section) {
+                case .day?: content.directionalLayoutMargins.top = 14
+                case .images?: content.directionalLayoutMargins.top = 11
+                // "Tiles" over the shelf, "6 Items" over the Tiles page's list and grid (its cards stand alone: the
+                // count is a line of its own there).
+                case .pinned? where !(self.pinnedOnly && ArtifactPins.view == .cards): content.directionalLayoutMargins.top = 14
+                default: break
+                }
+            }
             // Mac polish #116: the Desktop Look's tracked capitals, as its other section labels (Kanban's, the forms').
             // The Tiles page's count ("6 Items") is not a heading and keeps its words.
             let count: Bool
@@ -968,7 +988,15 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
                 header.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 0, leading: 20, bottom: 0, trailing: trailing)
                 // [dashboard] On the Dashboard, ＋ (New Tile) before it.
                 let tiles = self.pinnedOnly && !self.editingTiles && self.services != nil
-                let view: UIView = tiles ? self.newTileAndViewButtons() : self.pinsHeaderButton(openAll: !self.pinnedOnly)
+                var view: UIView = tiles ? self.newTileAndViewButtons() : self.pinsHeaderButton(openAll: !self.pinnedOnly)
+                // [soft-cards] On a card the name stands lower in its header (more room over it than under): the
+                // buttons stay on its line.
+                if BackdropCards.on(self), !(self.pinnedOnly && ArtifactPins.view == .cards) {
+                    let box = UIView(frame: view.bounds)
+                    view.frame.origin.y = 4
+                    box.addSubview(view)
+                    view = box
+                }
                 header.accessories = [.customView(configuration: .init(customView: view, placement: .trailing(),
                                                                        reservedLayoutWidth: .custom(self.editingTiles ? 56 : tiles ? 88 : 44), tintColor: HQPalette.label2,
                                                                        maintainsFixedSize: true))]

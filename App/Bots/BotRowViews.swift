@@ -568,8 +568,10 @@ struct BotSectionHeaderView: View {
         }
         .padding(.leading, 20)
         .padding(.trailing, 20)
-        .frame(minHeight: Density.ios(44, 34))   // [density]
-        .padding(.top, Density.compact ? 4 : 8)
+        // [soft-cards] On a card the name stands as far under the card's top as the last row's words over its foot:
+        // no room above for parting it from the group before (the card's own edge does that).
+        .frame(minHeight: BackdropCards.live ? Density.ios(34, 28) : Density.ios(44, 34))   // [density]
+        .padding(.top, BackdropCards.live ? 0 : Density.compact ? 4 : 8)
         .contentShape(Rectangle())
         .modifier(SectionHeaderAccessibility(label: spokenLabel, collapsed: collapsed, actions: actions))
     }

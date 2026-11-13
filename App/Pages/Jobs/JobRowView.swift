@@ -152,6 +152,9 @@ struct JobSectionHeaderView: View {
     var count: Int
     var open: Bool
     var toggle: (() -> Void)?
+    /// [soft-cards] The section stands on a soft card: the name starts where the rows' pictures do, and as far under
+    /// the card's top as the last row's words stand over its foot.
+    var onCard = false
 
     var body: some View {
         HStack(spacing: 6) {
@@ -175,9 +178,8 @@ struct JobSectionHeaderView: View {
                     .padding(.top, -18).padding(.bottom, -6)
             }
         }
-        .padding(.leading, 20)
-        .padding(.trailing, 20)
-        .padding(.top, 20)
+        .padding(.horizontal, onCard ? 20 + BackdropCards.side : 20)
+        .padding(.top, onCard ? 12 + BackdropCards.grown(9) : 20)
         .padding(.bottom, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)

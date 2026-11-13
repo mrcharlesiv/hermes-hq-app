@@ -387,7 +387,9 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
                     if self.isProjectSection(section - 1) { join.insert(.above) }
                     if self.isProjectSection(section + 1) { join.insert(.below) }
                 }
-                BackdropCards.card(list, on: BackdropCards.on(self), header: config.headerMode == .supplementary, keepWidth: open, join: join)
+                // A project's row ends closer to its foot than a chat's: 3 pt more under the last, so the card's ends are even.
+                BackdropCards.card(list, on: BackdropCards.on(self), header: config.headerMode == .supplementary, keepWidth: open, join: join,
+                                   extraBottom: self.isProjectSection(section) && !join.contains(.below) ? 3 : 0)
             }
             return list
         }

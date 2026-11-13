@@ -156,7 +156,8 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
         ListBarAppearance.apply(to: navigationItem)
         view.addSubview(collectionView)
         ListBarAppearance.pinTitle(in: self, softEdgeAround: collectionView)
-        PageBackdrop.install(in: self, clearing: [collectionView])   // [backdrop] Theme › App Background
+        // [backdrop] Theme › App Background. [soft-cards] A section's name draws with a card's room on one: again as that flips.
+        PageBackdrop.install(in: self, clearing: [collectionView]).onCardsChange = { [weak self] in BackdropCards.redraw(self?.dataSource) }
 
         let refresh = UIRefreshControl()
         refresh.addAction(UIAction { [weak self] _ in self?.pulledToRefresh() }, for: .valueChanged)
@@ -359,7 +360,11 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
             if case .list = section {
                 var join: BackdropCards.Join = isPinned(index - 1) && isLoose(index) ? .above : []
                 if isPinned(index), isLoose(index + 1) { join.insert(.below) }
-                BackdropCards.card(list, on: BackdropCards.on(self), join: join)
+                // A group chat's faces end 3 pt over where a bot's face does (1 pt in Compact): that much less under a card's last one.
+                var lastIsRoom = false
+                let count = self.collectionView.numberOfItems(inSection: index)
+                if count > 0, case .room? = self.dataSource?.itemIdentifier(for: IndexPath(item: count - 1, section: index)) { lastIsRoom = true }
+                BackdropCards.card(list, on: BackdropCards.on(self), join: join, extraBottom: lastIsRoom && !join.contains(.below) ? (Density.compact ? -1 : -3) : 0)
             }
             return list
         }
@@ -395,7 +400,10 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
         // [top-bar-gap] The iPhone and iPad's Desktop Look: the look's room under its bar's edge, not 4 pt.
         let top = first ? (roomy ? Self.openingGap : 4 + DesktopRows.underBar) : 4
         section.contentInsets = NSDirectionalEdgeInsets(top: top, leading: inset, bottom: 8, trailing: inset)
-        BackdropCards.card(section, on: BackdropCards.on(self), keepWidth: true, join: joinBelow ? .below : [])   // [backdrop-cards] the faces' names too
+        // [backdrop-cards] The faces' names too. Joined to the rows under them, the faces stand as far under the card's
+        // top as the last row stands over its foot.
+        BackdropCards.card(section, on: BackdropCards.on(self), keepWidth: true, join: joinBelow ? .below : [],
+                           extraTop: joinBelow ? (Density.compact ? 4 : 7) + BackdropCards.grown(12) : 0)
         return section
     }
 
@@ -534,6 +542,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
                         .background(highlighted ? Color.hqTint.opacity(0.14) : Color.clear, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
                 .margins(.all, 0)
+                .minSize(height: BackdropCards.live ? 0 : nil)   // [soft-cards] on a card the name is 34 pt, under a list row's 44 pt least
                 cell.accessibilityIdentifier = "section-header-\(section.title ?? "")"
             } else if id == .unassigned {
                 // [bots-groupby] Unassigned, once there are sections: its bots and group chats; a drop target lights up.
@@ -544,6 +553,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
                         .background(highlighted ? Color.hqTint.opacity(0.14) : Color.clear, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
                 .margins(.all, 0)
+                .minSize(height: BackdropCards.live ? 0 : nil)   // [soft-cards] on a card the name is 34 pt, under a list row's 44 pt least
                 cell.accessibilityIdentifier = "section-header-unassigned"
             } else if id == .groups || id != .hidden && id != .pinned && section.bots.isEmpty && !section.rooms.isEmpty
                         || { if case .groupSection = id { true } else { false } }() {
@@ -555,6 +565,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
                         .background(highlighted ? Color.hqTint.opacity(0.14) : Color.clear, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
                 .margins(.all, 0)
+                .minSize(height: BackdropCards.live ? 0 : nil)   // [soft-cards] on a card the name is 34 pt, under a list row's 44 pt least
                 cell.accessibilityIdentifier = id == .groups ? "section-header-groups" : "section-header-group-\(section.title ?? "")"
             } else {
                 // The folded faces count too; under Hidden, its rooms (UX study #254), and under Pinned the pinned rooms
@@ -565,6 +576,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
                                          unit: section.rooms.isEmpty ? ("bot", "bots") : ("chat", "chats"))
                 }
                 .margins(.all, 0)
+                .minSize(height: BackdropCards.live ? 0 : nil)   // [soft-cards] on a card the name is 34 pt, under a list row's 44 pt least
                 if case .hidden = id { cell.accessibilityIdentifier = "section-header-hidden" }      // settings stream (UI tests)
             }
             cell.backgroundConfiguration = .clear()

@@ -238,6 +238,9 @@ struct TodoGroupHeaderView: View {
     var detail: String?
     var count: Int?
     var red = false
+    /// [soft-cards] The group stands on a soft card: the name starts where the rows' circles do, and as far under the
+    /// card's top as the last row's words stand over its foot.
+    var onCard = false
     /// Bots: the bot whose tasks follow.
     var face: (profile: String, head: JSONValue?)?
     /// "Still Need These?": why they're here.
@@ -264,8 +267,8 @@ struct TodoGroupHeaderView: View {
                     .accessibilityIdentifier("tasks.show-done")
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 16)
+            .padding(.horizontal, onCard ? 20 + BackdropCards.side : 20)
+            .padding(.top, onCard ? 13 : 16)
             .padding(.bottom, note == nil ? 4 : 2)
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
@@ -275,7 +278,7 @@ struct TodoGroupHeaderView: View {
                     .font(Font.hq(.footnote))
                     .foregroundStyle(Color.hqLabel2)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 20)
+                    .padding(.horizontal, onCard ? 20 + BackdropCards.side : 20)
                     .padding(.bottom, 6)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier("tasks.stale.note")

@@ -66,4 +66,35 @@ import UIKit
         let flat = SoftCardTone.measure(try #require(context.makeImage()))
         #expect(abs(flat.bright - flat.dark) < 0.01)
     }
+
+    // Owner 2026-11-13 (a screenshot of Bots on build 972): "Look at the padding on top and bottom of these. It's not
+    // even." A card's two ends are tuned apart: what stands at one end (a name, faces, a foot row) brings other room
+    // of its own than a row does.
+    @MainActor @Test func aCardTakesMoreRoomAtOneEndOnly() {
+        func insets(extraTop: CGFloat = 0, extraBottom: CGFloat = 0, header: Bool = false, join: BackdropCards.Join = []) -> NSDirectionalEdgeInsets {
+            let item = NSCollectionLayoutItem(layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .absolute(44)))
+            let group = NSCollectionLayoutGroup.vertical(layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .absolute(44)), subitems: [item])
+            let section = NSCollectionLayoutSection(group: group)
+            BackdropCards.card(section, on: true, header: header, join: join, extraTop: extraTop, extraBottom: extraBottom)
+            return section.contentInsets
+        }
+        let plain = insets()
+        #expect(plain.top == BackdropCards.pad)
+        #expect(plain.bottom == BackdropCards.pad + BackdropCards.gap)
+        #expect(insets(extraTop: 7).top == plain.top + 7)
+        #expect(insets(extraTop: 7).bottom == plain.bottom)
+        #expect(insets(extraBottom: 10).bottom == plain.bottom + 10)
+        #expect(insets(extraBottom: -3).bottom == plain.bottom - 3)
+        // Under a header the card adds no room of its own at the top (the header brings it), and still takes more if asked.
+        #expect(insets(header: true).top == 0)
+        // A card joined to the one below keeps no gap and no foot; one that takes its foot's room back ends at the row.
+        #expect(insets(join: .below).bottom == 0)
+        #expect(insets(extraBottom: -BackdropCards.pad, join: .above).bottom == BackdropCards.gap)
+    }
+
+    @MainActor @Test func aTablesSectionsStandOneGapApartOnCards() {
+        // Rows alone: a card takes `rim` past its rows at both ends. After a note the card takes `notePad` past it.
+        #expect(BackdropPlates.tableGap(afterNote: false) == BackdropPlates.sectionSpacing)
+        #expect(BackdropPlates.tableGap(afterNote: true) - BackdropPlates.notePad == BackdropPlates.tableGap(afterNote: false) - BackdropPlates.rim)
+    }
 }

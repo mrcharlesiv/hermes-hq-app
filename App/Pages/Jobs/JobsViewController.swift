@@ -97,7 +97,8 @@ final class JobsViewController: UIViewController, UICollectionViewDelegate, UISe
         collectionView.accessibilityIdentifier = "jobs.list"
         view.addSubview(collectionView)
         ListBarAppearance.pinTitle(in: self, softEdgeAround: collectionView)   // owner 2026-11-01: every tab's top
-        PageBackdrop.install(in: self, clearing: [collectionView])   // [backdrop] Theme › App Background
+        // [backdrop] Theme › App Background. [soft-cards] A group's title draws with a card's room on one: again as that flips.
+        PageBackdrop.install(in: self, clearing: [collectionView]).onCardsChange = { [weak self] in BackdropCards.redraw(self?.dataSource) }
         notices = PageNoticeHost(in: view)
         let refresh = UIRefreshControl()
         refresh.addAction(UIAction { [weak self] _ in self?.pulledToRefresh() }, for: .valueChanged)
@@ -447,8 +448,9 @@ final class JobsViewController: UIViewController, UICollectionViewDelegate, UISe
         let count = sections.first { $0.0 == section }?.1.count ?? 0
         let open = completedOpen || !query.isEmpty
         let toggle: (() -> Void)? = section == .completed && query.isEmpty ? { [weak self] in self?.toggleCompleted() } : nil
+        let onCard = BackdropCards.on(self)
         header.contentConfiguration = UIHostingConfiguration {
-            JobSectionHeaderView(section: section, count: count, open: open, toggle: toggle)
+            JobSectionHeaderView(section: section, count: count, open: open, toggle: toggle, onCard: onCard)
         }.margins(.all, 0)
         header.backgroundConfiguration = .clear()
         header.accessibilityIdentifier = "jobs.section.\(section.rawValue)"

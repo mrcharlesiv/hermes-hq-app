@@ -317,7 +317,10 @@ final class MoreWorkspaceController: UITableViewController {
         super.viewDidLoad()
         tableView.accessibilityIdentifier = isChooser ? "workspace.chooser" : showsChanges ? "more.review" : "more.files"
         tableView.backgroundColor = isTable ? HQPalette.page : HQPalette.groupedPage
-        if !isTable { PageBackdrop.install(behind: tableView) }   // [backdrop] Theme › App Background
+        if !isTable {
+            PageBackdrop.install(behind: tableView)   // [backdrop] Theme › App Background
+            BackdropPlates.setNoteExtra(Self.softNoteExtra, for: tableView)   // [soft-cards]
+        }
         // Cards 16 pt in, as the More root and the other More pages (the system's 20 pt made the edges jump).
         viewRespectsSystemMinimumLayoutMargins = false
         // [mac] Stress test 2026-10-28 #53: the Mac's one page inset (20), as Messaging and Capabilities.
@@ -582,8 +585,36 @@ final class MoreWorkspaceController: UITableViewController {
         isTable && section == contentSection ? tableHeader : nil
     }
 
+    /// [soft-cards] Owner 2026-11-13 ("Recheck everything"): on soft cards the folder's card (whose note stands in it)
+    /// sat 3 pt over the files' card and 23 pt under the Bot card. The sections stand one gap apart, as on the other
+    /// More pages: all of it over a section's rows, none under the one before.
+    private func softGap(over section: Int) -> CGFloat? {
+        guard !isTable, section > 0, BackdropPlates.wanted(for: tableView),
+              self.tableView(tableView, titleForHeaderInSection: section) == nil else { return nil }
+        let afterNote = self.tableView(tableView, titleForFooterInSection: section - 1) != nil
+        return BackdropPlates.tableGap(afterNote: afterNote) + (afterNote ? Self.softNoteExtra : 0)
+    }
+    /// The folder's row is two lines: its name stands 3 pt further under the card's top than a one-line row, so the
+    /// note under it keeps that much more over the card's foot.
+    private static let softNoteExtra: CGFloat = 3
+
+    /// A section with no note, on soft cards: no room under it (the next section's `softGap` is all of it).
+    private func softNoFoot(_ section: Int) -> Bool {
+        !isTable && section < numberOfSections(in: tableView) - 1 && BackdropPlates.wanted(for: tableView)
+            && self.tableView(tableView, titleForFooterInSection: section) == nil && softGap(over: section + 1) != nil
+    }
+
+    override func tableView(_ tableView: UITableView, heightForFooterInSection section: Int) -> CGFloat {
+        softNoFoot(section) ? .leastNormalMagnitude : UITableView.automaticDimension
+    }
+
+    // A grouped table keeps its own room under a section with no footer view, whatever height is asked: an empty one.
+    override func tableView(_ tableView: UITableView, viewForFooterInSection section: Int) -> UIView? {
+        softNoFoot(section) ? UIView() : nil
+    }
+
     override func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
-        guard isTable, section == contentSection else { return UITableView.automaticDimension }
+        guard isTable, section == contentSection else { return softGap(over: section) ?? UITableView.automaticDimension }
         var columns = false
         switch content {
         case .entries, .changes: columns = true

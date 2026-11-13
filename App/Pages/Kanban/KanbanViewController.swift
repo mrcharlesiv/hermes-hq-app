@@ -316,6 +316,8 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
                 }
                 config.leadingSwipeActionsConfigurationProvider = { [weak self] path in self?.leadingSwipe(path) }
                 config.trailingSwipeActionsConfigurationProvider = { [weak self] path in self?.trailingSwipe(path) }
+                // [soft-cards] On a card the group's line stands as far under the card's top as the last task over its foot.
+                if BackdropCards.on(self) { config.headerTopPadding = 4 }
                 let s = NSCollectionLayoutSection.list(using: config, layoutEnvironment: environment)
                 s.contentInsets.leading = 20
                 s.contentInsets.trailing = 20

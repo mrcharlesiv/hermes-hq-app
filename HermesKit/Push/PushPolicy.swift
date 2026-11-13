@@ -66,13 +66,12 @@ nonisolated enum PushPolicy {
             && askCards(body) && pagePreviews(body) && warmup(body) && desktopForward(body) && gatewayLogins(body)
             && namedSites(body) && deviceAccess(body) && deviceAccessKinds(body) && liveSteps(body) && liveEnds(body)
             && liveQuick(body) && terminalKnown(body) && tasks(body) && cronMedia(body) && namedTabs(body)
-            && ideasRun(body) && draftCardsKnown(body) && pluginUpdatesKnown(body)
+            && ideasRun(body) && draftCardsKnown(body) && pluginUpdatesKnown(body) && taskFields(body)
     }
     /// [tasks-first] hermes-hq-push 0.9.53+ keeps what a task manager's task has: priority, tags, an alert, a start
     /// day, repeat on a task you share with a bot, and your own files and links on it (`task_fields`, `task_files`;
     /// owner 2026-11-12: "complex enough to handle any task or use case"). The main bot's copy serves the list; no bot
-    /// needs its own for that. Not part of `current` yet: 0.9.53 is not published (2026-11-12), and the app must not
-    /// offer an update that isn't there. Once it is, add this to `current` and raise `wantedVersion` to 0.9.53.
+    /// needs its own for that. Part of `current` since 0.9.53 was published (2026-11-12 evening).
     static func taskFields(_ body: [String: Any]?) -> Bool { (body?["task_fields"] as? NSNumber)?.boolValue == true }
     /// [plugin-consent] hermes-hq-push 0.9.52+ applies a plugin update the owner approved in the app when Hermes only
     /// takes it from a terminal (it adds Python packages): POST /plugins/update (PluginUpdateConsent). Only that the
@@ -165,9 +164,8 @@ nonisolated enum PushPolicy {
     /// 0.9.44: `namedTabs` (a login or code card names the site the bot is signing in to). 0.9.45: `ideasRun` (the daily
     /// Task ideas run saves its ideas again). 0.9.47: `draftCards` (a bot's draft for review as a card). 0.9.52:
     /// `pluginUpdates` (the main bot's copy serves it, so a plugin update that adds Python packages finishes in the app;
-    /// no bot needs its own for that). Next: 0.9.53's `task_fields` (a task's priority, tags, alert, start day and
-    /// files), once that add-on is published.
-    static let wantedVersion = "0.9.52"
+    /// no bot needs its own for that). 0.9.53: `task_fields` (a task's priority, tags, alert, start day and files).
+    static let wantedVersion = "0.9.53"
     static let offerLevel = "\(wantedVersion)/\(everyBotVersion)"
     static let pluginName = "hermes-hq-push"
 

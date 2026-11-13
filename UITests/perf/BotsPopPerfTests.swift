@@ -83,4 +83,33 @@ extension SettingsEndToEndTests {
         }
         cutPhase(app)
     }
+
+    /// A slow swipe back held under the finger, let go early (the chat stays) and then let go late (back to Bots):
+    /// the tab bar stays out of sight while the finger holds the page and comes in whole when it lets go
+    /// (`HeldSwipeTabBar`). What the bar looks like mid-swipe is judged on film: run with HQN_BOTSPOP=held against the
+    /// back-to-Bots fixture while `xcrun simctl io <SIM> recordVideo` films the simulator.
+    @MainActor func testP02_HeldSwipeBack() throws {
+        guard ProcessInfo.processInfo.environment["HQN_BOTSPOP"] == "held" else {
+            throw XCTSkip("Run with HQN_BOTSPOP=held against the back-to-Bots fixture, filming the simulator.")
+        }
+        let app = launchSignedIn()
+        popOpen(app, "ivy")
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.005, dy: 0.5))
+        let half = app.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: half, withVelocity: .slow, thenHoldForDuration: 3)
+        Thread.sleep(forTimeInterval: 1.5)   // let go under the middle: the chat comes back
+        XCTAssertTrue(app.tables["chat.table"].exists, "a swipe let go before the middle keeps the chat")
+        let far = app.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: far, withVelocity: .slow, thenHoldForDuration: 3)
+        Thread.sleep(forTimeInterval: 1.5)
+        XCTAssertTrue(waitUntil(timeout: 6) { !app.tables["chat.table"].exists }, "back on the Bots list")
+        XCTAssertTrue(app.buttons["tab-bots"].isHittable, "the tab bar is back")
+        // A quick flick, and the Back button: the bar is there after each.
+        popOpen(app, "ivy")
+        popBack(app, swipe: true)
+        XCTAssertTrue(app.buttons["tab-bots"].isHittable, "the tab bar is back after a flick")
+        popOpen(app, "ivy")
+        popBack(app, swipe: false)
+        XCTAssertTrue(app.buttons["tab-bots"].isHittable, "the tab bar is back after the Back button")
+    }
 }

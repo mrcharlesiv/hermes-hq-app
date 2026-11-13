@@ -1301,10 +1301,20 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
                     UIView.addKeyframe(withRelativeStartTime: 0.25, relativeDuration: 0.75, animations: restore)
                 })
             }, completion: { _ in restore() })
+        } else if coordinator.isInteractive, HeldSwipeTabBar.applies {
+            // A swipe back held by the finger: the tab bar stays hidden until the finger lets go (`HeldSwipeTabBar`:
+            // iOS showed its buttons with no glass behind them for as long as the page was held), so the chat's bar
+            // rides with its page until then, and the two change places as the slide finishes. A swipe let go early
+            // leaves the chat's bar as it was.
+            coordinator.notifyWhenInteractionChanges { context in
+                guard !context.isCancelled else { return }
+                HQMotion.animate(0.15, changes: { bar.forEach { $0.alpha = 0 } })
+            }
+            coordinator.animate(alongsideTransition: nil, completion: { _ in restore() })
         } else {
-            // A pop: the tab bar shows at full strength the moment a swipe back starts, however slow the finger, so
-            // the chat's bar goes on the clock, not with the finger. A cancelled swipe drops the tab bar at its end:
-            // the chat's bar comes back after it.
+            // A pop by the Back button (or under the Desktop Look's own bar): the tab bar shows from the start, so the
+            // chat's bar goes on the clock. A cancelled swipe drops the tab bar at its end: the chat's bar comes back
+            // after it.
             HQMotion.animate(0.15, changes: { bar.forEach { $0.alpha = 0 } })
             coordinator.animate(alongsideTransition: nil, completion: { context in
                 if context.isCancelled { HQMotion.animate(0.2, changes: restore) } else { restore() }

@@ -51,6 +51,7 @@ final class PushedPageTitles: NSObject, UINavigationControllerDelegate {
         FrameMeter.shared.navigation(navigationController, to: viewController, animated: animated, chat: viewController is ChatViewController)   // [diagnostics]
         // [desktoplook] The docked tab bar leaves under a page that hides the bottom bar (a chat), as the system bar does.
         if DesktopTabBar.wanted != nil { MainTabController.current?.desktopTabBar.navigationWillShow(viewController, in: navigationController, animated: animated) }
+        HeldSwipeTabBar.willShow(viewController, in: navigationController)   // the tab bar waits for the finger to let go
         PoppedPageRelease.watch(navigationController, animated: animated)   // [perf] build 300
         #if targetEnvironment(macCatalyst)
         MacBackTitle.name(under: viewController, in: navigationController)   // [mac] stress test #104

@@ -220,9 +220,11 @@ final class ModelMenuContext {
         let recents = prefs.recents.compactMap { row in catalog.first { $0.id == row.id && $0.provider == row.provider } }
         // [ghost-stars] The bot's newest catalog, this chat's or another's: this chat's own may be the older one (read
         // before a provider or a model went away).
-        let favorites = Self.favorites(keys: prefs.favorites, catalog: cache.sibling(key)?.choices ?? options?.choices,
+        // Favorites Wait for Models: only this chat's own catalog, never another chat's or the last read's guess.
+        let wait = ModelPrefs.waitForModels
+        let favorites = Self.favorites(keys: prefs.favorites, catalog: wait ? options?.choices : cache.sibling(key)?.choices ?? options?.choices,
                                        knownProviders: prefs.knownProviders(profile: key.profile),
-                                       missing: prefs.missingStars(profile: key.profile))
+                                       missing: prefs.missingStars(profile: key.profile), waitForCatalog: wait)
         let effort = chat.modelState.reasoningEffort
         let fast = fastControl()
         return ModelMenuInput(current: model, recents: recents, favorites: favorites,
@@ -239,7 +241,11 @@ final class ModelMenuContext {
     /// its catalog loaded). [ghost-stars] The known providers hold over a catalog too: one removed in Settings since
     /// that catalog was read is still in it (tester 2026-11-10: "the ghost favorites are still there").
     nonisolated static func favorites(keys: [String], catalog: [ModelChoice]?, knownProviders: Set<String>?,
-                                      missing: Set<String> = []) -> [ModelChoice] {
+                                      missing: Set<String> = [], waitForCatalog: Bool = false) -> [ModelChoice] {
+        // [ghost-stars] No catalog and none read for this bot on this device (its first chat here, or after Sign Out):
+        // no star is known to exist yet, so none shows until the read answers (a removed provider's stars did).
+        // `waitForCatalog` (the owner's setting): none without a catalog at all.
+        if catalog == nil, waitForCatalog || knownProviders == nil { return [] }
         let rows = catalog.map { ModelSheetModel.favoriteRows($0, keys: keys) }
             ?? ModelSheetModel.favoritesFromKeys(keys).filter { !missing.contains($0.key) }
         guard let knownProviders else { return rows }

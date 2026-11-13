@@ -108,6 +108,7 @@ nonisolated enum SettingsSearch {
         .init(id: "app:tasks", label: "Tasks", context: "Turn Tasks On or Off", keywords: ["tasks", "to do", "todo", "turn off tasks", "disable tasks", "task list"], target: .root("row:tasks")),
         .init(id: "app:show-file-changes", label: "Show File Changes", context: "Chat", keywords: ["files changed", "file changed", "changes", "edits", "review", "card", "diff"], target: .root("row:show-file-changes")),
         .init(id: "app:new-chat-asks-project", label: "New Chat Asks for a Project", context: "Chat", keywords: ["new chat", "project", "no project", "ask", "choose project", "folder"], target: .root("row:new-chat-asks-project")),
+        .init(id: "app:wait-for-models", label: "Favorites Wait for Models", context: "Chat", keywords: ["favorites", "favourites", "hide favorites", "starred models", "ghost", "removed provider", "model list"], target: .root("row:wait-for-models")),
         .init(id: "app:fewer-timestamps", label: "Fewer Timestamps", context: "Chat", keywords: ["timestamps", "times", "dates", "day line", "clock"], target: .root("row:fewer-timestamps")),
         .init(id: "app:enable-notifications", label: "Enable Notifications", context: "Notifications", keywords: ["notifications", "alerts", "push", "turn off"], target: .root("notifications")),
         .init(id: "app:previews", label: "Show Previews", context: "Notifications", keywords: ["previews", "alerts", "message text", "lock screen"], target: .root("notifications")),

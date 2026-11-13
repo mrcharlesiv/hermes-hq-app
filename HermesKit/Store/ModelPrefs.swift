@@ -31,7 +31,19 @@ final class ModelPrefs {
     static let knownProvidersKey = "hq.models.known-providers"
     /// Ours: per profile, the starred keys the last catalog read didn't list (their model or provider is gone there).
     static let missingStarsKey = "hq.models.missing-stars"
+    /// Ours, every account: Settings › Chat › Favorites Wait for Models (stored only when on).
+    static let waitForModelsKey = "hq.models.waitForCatalog"
     static let recentsLimit = 3
+
+    /// [ghost-stars] A new chat's menus list no favourites until its own catalog read answers, instead of guessing from
+    /// the bot's last read (which still lists a provider removed in Hermes itself since). Off by default: the wait.
+    static var waitForModels: Bool {
+        get { UserDefaults.standard.bool(forKey: waitForModelsKey) }
+        set {
+            if newValue { UserDefaults.standard.set(true, forKey: waitForModelsKey) }
+            else { UserDefaults.standard.removeObject(forKey: waitForModelsKey) }
+        }
+    }
 
     let accountId: String
     private let defaults: UserDefaults

@@ -22,7 +22,7 @@ nonisolated enum SyncedSettingKeys {
         // Chat
         "hqn.inAppTips", "hqn.introSplash", "hqn.fileBrowser", "hqn.attachmentLimitMb", "hqn.reactions", "hqn.reactions.touched",
         "hq.chat.toolCallStyle", "hq.chat.toolCallsAfterReply", "hq.chat.fewerTimestamps", "hq.chat.showFileChanges", "hqn.thinkingDrive",
-        "hqn.newChatKeyBot", "hqn.newChatKeyMode", "hqn.newChatKeyProject", "hqn.newChatAsksProject", "hqn.sendWhileBusy",
+        "hqn.newChatKeyBot", "hqn.newChatKeyMode", "hqn.newChatKeyProject", "hqn.newChatAsksProject", "hqn.sendWhileBusy", "hq.models.waitForCatalog",
         // Sounds
         "hqn.completionSoundOn", "hqn.completionSoundVariant",
         // Voice

@@ -179,7 +179,8 @@ struct JobSectionHeaderView: View {
             }
         }
         .padding(.horizontal, onCard ? 20 + BackdropCards.side : 20)
-        .padding(.top, onCard ? 12 + BackdropCards.grown(9) : 20)
+        // (UI Scale moves the name up in its line, the iPhone's text size down: measured at each.)
+        .padding(.top, onCard ? 12 + BackdropCards.grown(9) - 10 * (BackdropCards.textSize - 1) : 20)
         .padding(.bottom, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)

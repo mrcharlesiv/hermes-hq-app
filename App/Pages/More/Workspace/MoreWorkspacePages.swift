@@ -596,7 +596,7 @@ final class MoreWorkspaceController: UITableViewController {
     }
     /// The folder's row is two lines: its name stands 3 pt further under the card's top than a one-line row, so the
     /// note under it keeps that much more over the card's foot.
-    private static let softNoteExtra: CGFloat = 3
+    private static var softNoteExtra: CGFloat { max(0, max(2.3, 3 + BackdropCards.grown(20)) - 6 * (BackdropCards.textSize - 1)) }   // the row's words grow with UI Scale
 
     /// A section with no note, on soft cards: no room under it (the next section's `softGap` is all of it).
     private func softNoFoot(_ section: Int) -> Bool {
@@ -1319,6 +1319,23 @@ final class MoreWorkspaceRootCell: UITableViewCell {
             nameLabel.setContentHuggingPriority(beside ? .required : .defaultLow, for: .horizontal)
             nameLabel.setContentCompressionResistancePriority(beside ? .required : .defaultHigh, for: .horizontal)
             setNeedsLayout()
+            remeasure()
+        }
+    }
+
+    /// The name and the path went beside each other or one over the other after the table had measured this row
+    /// (the row's width is only known here): the table measures it again. Found 2026-11-13 at UI Scale 115 %: about
+    /// one launch in three the row kept its one-line height and the folder's name was cut off above the path.
+    private func remeasure() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.window != nil else { return }
+            var view = self.superview
+            while let current = view, !(current is UITableView) { view = current.superview }
+            guard let table = view as? UITableView else { return }
+            UIView.performWithoutAnimation {
+                table.beginUpdates()
+                table.endUpdates()
+            }
         }
     }
 

@@ -789,14 +789,16 @@ nonisolated(unsafe) private var pageBackdropKey: UInt8 = 0
     private var switchWatch: NSObjectProtocol?
     /// [soft-cards] Called after the page's lists went on cards or came off them (a page whose rows draw differently
     /// on a card redraws them).
-    var onCardsChange: (() -> Void)?
+    /// Set after the page's lists were already on cards (the picture was up at once): called then too.
+    var onCardsChange: (() -> Void)? { didSet { if carded == true { onCardsChange?() } } }
 
     private func apply() {
         let shows = view.showsPicture
         for page in cleared { page.view.value?.backgroundColor = shows ? .clear : page.colour }
         // [backdrop-cards] The lists lay their sections out again, on cards or off them.
         let cards = shows && Backdrop.app.cards
-        let flipped = carded != nil && carded != cards
+        // Flipped, or on from the start: a page that lays itself out for cards hears of both.
+        let flipped = carded != cards && (carded != nil || cards)
         carded = cards
         for page in cleared {
             guard let list = page.view.value as? UIScrollView else { continue }

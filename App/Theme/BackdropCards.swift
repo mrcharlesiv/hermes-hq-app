@@ -31,10 +31,15 @@ import UIKit
         static let below = Join(rawValue: 2)
     }
 
-    private static func kind(_ join: Join) -> String { join.isEmpty ? kind : kind + ".\(join.rawValue)" }
+    fileprivate static func kind(_ join: Join) -> String { join.isEmpty ? kind : kind + ".\(join.rawValue)" }
+    /// One card behind a run of joined sections (`BackdropCardLayout`).
+    static let runKind = kind + ".run"
+    fileprivate static let topKind = kind(.below), footKind = kind(.above), middleKind = kind([.above, .below])
+    fileprivate static let pieceKinds = [topKind, middleKind, footKind]
 
     static func register(in layout: UICollectionViewLayout) {
         layout.register(BackdropCardView.self, forDecorationViewOfKind: kind)
+        layout.register(BackdropCardView.self, forDecorationViewOfKind: runKind)
         layout.register(BackdropCardTopView.self, forDecorationViewOfKind: kind(.below))
         layout.register(BackdropCardFootView.self, forDecorationViewOfKind: kind(.above))
         layout.register(BackdropCardMiddleView.self, forDecorationViewOfKind: kind([.above, .below]))
@@ -65,6 +70,22 @@ import UIKit
     /// words grow with it inside a title's or a row's fixed room, so the room over a title is tuned by this (measured
     /// at 85, 100 and 115 % on a one-colour picture, build/tools/measure.py).
     static func grown(_ perWhole: CGFloat) -> CGFloat { perWhole * (HQFont.scale - 1) }
+
+    /// The same for a room that follows the words' size whatever made them bigger: UI Scale and the iPhone's own
+    /// text size together (Sessions' captions, a fixed 24 pt tall, behave alike under both).
+    static func grownWithText(_ perWhole: CGFloat) -> CGFloat { perWhole * (HQFont.preferred(.body).pointSize / 17 - 1) }
+
+    /// And for the iPhone's own text size alone (1 at the standard size), where a view answers it otherwise than UI Scale.
+    static var textSize: CGFloat { HQFont.preferred(.body).pointSize / 17 / max(HQFont.scale, 0.1) }
+
+    /// `room` more over `list`'s first section (so its first card stands one gap under what is over the list); a list
+    /// resting at its top stays at its top.
+    static func setTopRoom(_ room: CGFloat, of list: UIScrollView) {
+        guard abs(list.contentInset.top - room) > 0.1 else { return }
+        let resting = abs(list.contentOffset.y + list.adjustedContentInset.top) < 1
+        list.contentInset.top = room
+        if resting { list.contentOffset.y = -list.adjustedContentInset.top }
+    }
 
     /// Every row and header of `dataSource`'s list drawn again (they draw differently on a card).
     static func redraw<Section: Hashable & Sendable, Item: Hashable & Sendable>(_ dataSource: UICollectionViewDiffableDataSource<Section, Item>?) {
@@ -109,20 +130,220 @@ import UIKit
     }
 }
 
+/// [soft-cards] Owner 2026-11-13 (a screenshot of Sessions on build 974, three projects on one card): each project
+/// showed as a band of its own. A joined card was one piece of frosted glass per section, and each piece softens only
+/// the stretch of picture behind its own frame, so over a picture that changes down the page the pieces come out in
+/// different tones and the joins show. In this layout a run of joined sections has ONE card behind all of it (`runKind`,
+/// placed at the run's first section and as tall as the whole run); the sections' own pieces only mark where it goes.
+/// A list with a section that scrolls sideways (Kanban's chips, Artifacts' shelf) drops a card this layout adds (it is
+/// shown, then taken back on the next pass, whatever its index path). Such a list sets `placesCards`: the run's card
+/// is then a view this layout keeps in the list itself, placed again whenever a piece comes, goes or moves. (That one
+/// does not move with an animated change; the runs in those lists never fold.)
+class BackdropCardLayout: UICollectionViewCompositionalLayout {
+    /// The run's card is a view of the list's own, not a decoration (see above). Set before the list first lays out.
+    var placesCards = false
+    private var placed: [SoftCardSurface] = []
+    private var placing = false
+
+    override func layoutAttributesForElements(in rect: CGRect) -> [UICollectionViewLayoutAttributes]? {
+        guard let all = super.layoutAttributesForElements(in: rect) else { return nil }
+        guard !placesCards else { return all }
+        let runs = runs(among: all.filter(Self.isPiece))
+        return runs.isEmpty ? all : all + runs
+    }
+
+    /// Every run that `pieces` are part of, whole.
+    private func runs(among pieces: [UICollectionViewLayoutAttributes]) -> [UICollectionViewLayoutAttributes] {
+        var known: [Int: UICollectionViewLayoutAttributes] = [:]
+        for piece in pieces { known[piece.indexPath.section] = piece }
+        var runs: [Int: UICollectionViewLayoutAttributes] = [:]
+        for section in known.keys.sorted() {
+            guard let piece = known[section] else { continue }
+            let run = run(through: piece, known: &known)
+            runs[run.indexPath.section] = run
+        }
+        return Array(runs.values)
+    }
+
+    /// A piece of a joined card came, went or moved (`BackdropCardPieceView`): with `placesCards`, the runs' cards are
+    /// put where the layout has them now, once this pass is over.
+    func piecesChanged() {
+        guard placesCards, !placing else { return }
+        placing = true
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                self?.placing = false
+                self?.place()
+            }
+        }
+    }
+
+    private func place() {
+        guard let list = collectionView, list.window != nil else { return }
+        let near = CGRect(x: 0, y: list.bounds.minY - 800, width: max(1, list.bounds.width), height: list.bounds.height + 1600)
+        let frames = runs(among: pieces(in: near)).map(\.frame).sorted { $0.minY < $1.minY }
+        while placed.count < frames.count {
+            let card = SoftCardSurface()
+            card.layer.zPosition = -1   // under the rows, as a section's own card
+            list.insertSubview(card, at: 0)
+            placed.append(card)
+        }
+        for (index, card) in placed.enumerated() {
+            card.isHidden = index >= frames.count
+            guard index < frames.count else { continue }
+            if card.superview !== list { list.insertSubview(card, at: 0) }
+            if card.frame != frames[index] { card.frame = frames[index] }
+        }
+        // A strip that scrolls sideways inside a card (the Tiles shelf, Kanban's chips) ran on past the card's edge to
+        // the screen's: it is cut at the card's sides.
+        for strip in list.subviews {
+            guard let strip = strip as? UIScrollView else { continue }
+            let card = frames.first { $0.minY <= strip.frame.midY && strip.frame.midY <= $0.maxY }
+            SidewaysClip.set(card.map { (left: $0.minX - strip.frame.minX, right: strip.frame.maxX - $0.maxX) }, on: strip)
+        }
+    }
+
+    override func layoutAttributesForDecorationView(ofKind kind: String, at indexPath: IndexPath) -> UICollectionViewLayoutAttributes? {
+        guard kind == BackdropCards.runKind else { return super.layoutAttributesForDecorationView(ofKind: kind, at: indexPath) }
+        // The run that starts at this section: found from where the section stands.
+        let section = indexPath.section
+        guard let list = collectionView, section >= 0, section < list.numberOfSections else { return nil }
+        let head = super.layoutAttributesForSupplementaryView(ofKind: UICollectionView.elementKindSectionHeader, at: IndexPath(item: 0, section: section))
+        let row = list.numberOfItems(inSection: section) > 0 ? super.layoutAttributesForItem(at: IndexPath(item: 0, section: section)) : nil
+        guard let place = [head?.frame, row?.frame].compactMap({ $0 }).first(where: { $0.height > 0 }) else { return nil }
+        var known: [Int: UICollectionViewLayoutAttributes] = [:]
+        for piece in pieces(in: place) { known[piece.indexPath.section] = piece }
+        guard let piece = known[section] else { return nil }
+        let run = run(through: piece, known: &known)
+        return run.indexPath.section == section ? run : nil
+    }
+
+    /// The run card's item in its section: clear of the index paths the sections' own decorations use.
+    static let runItem = 4096
+
+    private static func isPiece(_ attributes: UICollectionViewLayoutAttributes) -> Bool {
+        attributes.representedElementCategory == .decorationView && BackdropCards.pieceKinds.contains(attributes.representedElementKind ?? "")
+    }
+
+    private func pieces(in rect: CGRect) -> [UICollectionViewLayoutAttributes] {
+        (super.layoutAttributesForElements(in: rect) ?? []).filter(Self.isPiece)
+    }
+
+    /// The whole run `start` is part of, from its top piece to its foot. Pieces off the screen are not in `known` (the
+    /// list asks only for what shows): they are read from the stretch next to the last piece found.
+    private func run(through start: UICollectionViewLayoutAttributes, known: inout [Int: UICollectionViewLayoutAttributes]) -> UICollectionViewLayoutAttributes {
+        func next(to edge: UICollectionViewLayoutAttributes, above: Bool, known: inout [Int: UICollectionViewLayoutAttributes]) -> UICollectionViewLayoutAttributes? {
+            let section = edge.indexPath.section + (above ? -1 : 1)
+            if let piece = known[section] { return piece }
+            let reach: CGFloat = 1200
+            let beside = CGRect(x: edge.frame.minX, y: above ? edge.frame.minY - reach : edge.frame.maxY, width: max(1, edge.frame.width), height: reach)
+            for piece in pieces(in: beside) where known[piece.indexPath.section] == nil { known[piece.indexPath.section] = piece }
+            return known[section]
+        }
+        var frame = start.frame, first = start.indexPath.section
+        var current = start
+        while current.representedElementKind != BackdropCards.topKind, let above = next(to: current, above: true, known: &known),
+              above.representedElementKind != BackdropCards.footKind {
+            frame = frame.union(above.frame)
+            first = above.indexPath.section
+            current = above
+        }
+        current = start
+        while current.representedElementKind != BackdropCards.footKind, let below = next(to: current, above: false, known: &known),
+              below.representedElementKind != BackdropCards.topKind {
+            frame = frame.union(below.frame)
+            current = below
+        }
+        let run = UICollectionViewLayoutAttributes(forDecorationViewOfKind: BackdropCards.runKind, with: IndexPath(item: Self.runItem, section: first))
+        run.frame = frame
+        run.zIndex = start.zIndex
+        return run
+    }
+}
+
+/// Keeps a sideways-scrolling strip cut at its card's sides: a mask that stays where it is while the strip's content
+/// moves under it (a layer's mask moves with what it scrolls).
+private final class SidewaysClip: NSObject {
+    private static let key = malloc(1)!
+    private let mask = CALayer()
+    private var watch: NSKeyValueObservation?
+    private var sides: (left: CGFloat, right: CGFloat)
+
+    /// `sides`: how far in from the strip's own edges the card's sides are; nil takes the cut off.
+    @MainActor static func set(_ sides: (left: CGFloat, right: CGFloat)?, on strip: UIScrollView) {
+        let clip = objc_getAssociatedObject(strip, key) as? SidewaysClip
+        guard let sides, sides.left > 0 || sides.right > 0 else {
+            if clip != nil {
+                strip.layer.mask = nil
+                objc_setAssociatedObject(strip, key, nil, .OBJC_ASSOCIATION_RETAIN)
+            }
+            return
+        }
+        if let clip {
+            clip.sides = sides
+            clip.fit(strip)
+        } else {
+            objc_setAssociatedObject(strip, key, SidewaysClip(strip, sides), .OBJC_ASSOCIATION_RETAIN)
+        }
+    }
+
+    @MainActor private init(_ strip: UIScrollView, _ sides: (left: CGFloat, right: CGFloat)) {
+        self.sides = sides
+        super.init()
+        mask.backgroundColor = UIColor.black.cgColor
+        strip.layer.mask = mask
+        fit(strip)
+        watch = strip.observe(\.bounds) { [weak self] strip, _ in
+            MainActor.assumeIsolated { self?.fit(strip) }
+        }
+    }
+
+    @MainActor private func fit(_ strip: UIScrollView) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        mask.frame = CGRect(x: strip.bounds.minX + sides.left, y: strip.bounds.minY - 40,
+                            width: max(0, strip.bounds.width - sides.left - sides.right), height: strip.bounds.height + 80)
+        CATransaction.commit()
+    }
+}
+
+/// A joined section's piece of card. In a `BackdropCardLayout` it draws nothing (the run's one card is behind it); in any
+/// other layout it is the card's piece itself.
+class BackdropCardPieceView: BackdropCardView {
+    private weak var layout: BackdropCardLayout?
+
+    override func didMoveToSuperview() {
+        super.didMoveToSuperview()
+        if let list = superview as? UICollectionView { layout = list.collectionViewLayout as? BackdropCardLayout }
+        surface.isHidden = layout != nil
+        layout?.piecesChanged()
+    }
+
+    override func apply(_ layoutAttributes: UICollectionViewLayoutAttributes) {
+        super.apply(layoutAttributes)
+        layout?.piecesChanged()
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        layout?.piecesChanged()
+    }
+}
+
 /// A card joined to the one below: round only at the top.
-final class BackdropCardTopView: BackdropCardView {
+final class BackdropCardTopView: BackdropCardPieceView {
     override init(frame: CGRect) { super.init(frame: frame); surface.open = .bottom }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 }
 
 /// A card joined to the one above: round only at the foot.
-final class BackdropCardFootView: BackdropCardView {
+final class BackdropCardFootView: BackdropCardPieceView {
     override init(frame: CGRect) { super.init(frame: frame); surface.open = .top }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 }
 
 /// A card joined both ways: square.
-final class BackdropCardMiddleView: BackdropCardView {
+final class BackdropCardMiddleView: BackdropCardPieceView {
     override init(frame: CGRect) { super.init(frame: frame); surface.open = [.top, .bottom] }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 }
@@ -185,6 +406,8 @@ class BackdropCardView: UICollectionReusableView {
     private var plates: [SoftCardSurface] = []
     private var watches: [NSKeyValueObservation] = []
     private var scheduled = false
+    /// How far the list's start is moved so its first card stands one gap under the bar (`lift`).
+    private var lifted: CGFloat = 0
     private var switchWatch: NSObjectProtocol?
     /// Soft cards are drawn just now (the rows are clear on them).
     private(set) var active = false
@@ -192,11 +415,12 @@ class BackdropCardView: UICollectionReusableView {
     private let loose: Set<String>
     private static let key = malloc(1)!
     /// Room under a note's words past the room it comes with.
-    static var notePad: CGFloat { 9 - BackdropCards.grown(12) }
+    static var notePad: CGFloat { rim - slack(.note) }
     /// Room over a title's words past the room it comes with (so it stands as far in as the last row's words do).
-    static var titlePad: CGFloat { max(0, 3 - BackdropCards.grown(20)) }
-    /// The space between sections while cards show (iOS's compact spacing left them touching).
-    static let sectionSpacing: CGFloat = 28
+    static var titlePad: CGFloat { max(0, rim - slack(.title)) }
+    /// The space a list leaves between sections while cards show: `BackdropCards.gap` between two cards, and a
+    /// card's `rim` past its rows on each side of it.
+    static let sectionSpacing: CGFloat = BackdropCards.gap + 2 * rim
     /// How far a card reaches past its section's rows.
     static let rim: CGFloat = 6
 
@@ -248,9 +472,9 @@ class BackdropCardView: UICollectionReusableView {
         return plates.shows() && Backdrop.app.cards && !Theme.isDesktop
     }
 
-    /// The room a table leaves over a section's rows on soft cards, for cards `sectionSpacing` apart as on the other
-    /// More pages: a card takes `rim` past its rows, and `notePad` past a note.
-    static func tableGap(afterNote: Bool) -> CGFloat { sectionSpacing + (afterNote ? notePad - rim : 0) }
+    /// The room a table leaves over a section's rows on soft cards: the lists' `sectionSpacing`, whatever the section
+    /// above ends with (`edges` shares it out).
+    static func tableGap(afterNote: Bool) -> CGFloat { sectionSpacing }
 
     /// Whether `row` (a list or table cell) stands on a soft card just now, so it draws no card of its own.
     static func softRows(for row: UIView) -> Bool {
@@ -301,6 +525,8 @@ class BackdropCardView: UICollectionReusableView {
         let width = list.bounds.width
         // A table's picture is its background view, which a card must stand on; a SwiftUI list's is behind the list.
         let picture = (list as? UITableView)?.backgroundView
+        let edges = Self.edges(of: boxes.map { ($0.first, $0.last) }, noteExtra: noteExtra)
+        lift(on ? edges.first?.top : nil, in: list)
         for (index, plate) in plates.enumerated() {
             guard index < boxes.count else { plate.isHidden = true; continue }
             let section = boxes[index]
@@ -309,17 +535,16 @@ class BackdropCardView: UICollectionReusableView {
                 plate.layer.zPosition = picture.layer.zPosition
                 list.insertSubview(plate, aboveSubview: picture)
             }
-            // Each edge is set by what is there: a title or a note keeps the room it comes with and `notePad` more
-            // under a note (owner 2026-11-12: a note sat tight on the foot); bare rows get `rim` all round.
             let all = [section.cards, section.title, section.note].compactMap { $0 }.reduce(CGRect.null) { $0.union($1) }
-            let top = section.title.map { $0.minY - Self.titlePad } ?? ((section.cards?.minY ?? all.minY) - Self.rim)
-            let bottom = section.note.map { $0.maxY + Self.notePad + noteExtra } ?? ((section.cards?.maxY ?? all.maxY) + Self.rim)
-            // `rim` past the section's rows (10 pt from an iPhone's edges, as the plain lists' cards; on an iPad, whose
-            // rows stand further in, still just round them). A table's section is as wide as the table: `side` in.
+            let top = edges[index].top, bottom = edges[index].bottom
+            // `side` from the list's edges, as the plain lists' cards. A table's section is as wide as the table.
             let edge = section.cards ?? all
             let inset = edge.minX > 1
-            let left = inset ? max(0, edge.minX - Self.rim) : BackdropCards.side
-            let right = inset ? min(width, edge.maxX + Self.rim) : width - BackdropCards.side
+            // (An iPad's rows stand 20 pt in, an iPhone's 16: the card is `side` from the edges on both, as every
+            // list's cards. Rows set far in, a column in the middle of a wide page, keep a card that hugs them.)
+            let hugs = edge.minX - Self.rim > BackdropCards.side + Self.rim
+            let left = inset && hugs ? max(0, edge.minX - Self.rim) : BackdropCards.side
+            let right = inset && hugs ? min(width, edge.maxX + Self.rim) : width - BackdropCards.side
             let frame = CGRect(x: left, y: top, width: max(0, right - left), height: max(0, bottom - top))
             if plate.frame != frame { plate.frame = frame }
             if plate.superview !== list {
@@ -328,8 +553,96 @@ class BackdropCardView: UICollectionReusableView {
         }
     }
 
+    /// [soft-cards] Owner 2026-11-13: "Stuff is just not consistent." Each page's first card began where that page's
+    /// first row happened to (8 to 40 pt under the bar: Settings, Files, Bot Profiles, Passwords all differed), because
+    /// every kind of page keeps its own room over its first section. On Soft Cards the list's start is moved so the
+    /// first card stands one gap under the bar (or whatever is over the list), as the cards stand from each other.
+    /// `top`: the first card's top in the list, or nil with no cards. Only while the list's start is among the
+    /// sections read, and never under a table's own header view with something in it.
+    private func lift(_ top: CGFloat?, in list: UIScrollView) {
+        var wanted: CGFloat = lifted
+        if let top {
+            let header = (list as? UITableView)?.tableHeaderView
+            let plain = header == nil || (header?.subviews.isEmpty == true && (header?.frame.height ?? 0) <= 44)
+            if list.bounds.minY - 600 <= 0 { wanted = plain ? BackdropCards.gap - top : 0 }
+        } else {
+            wanted = 0
+        }
+        guard abs(wanted - lifted) > 0.5 else { return }
+        let before = list.adjustedContentInset.top
+        let resting = abs(list.contentOffset.y + before) < 1
+        list.contentInset.top += wanted - lifted
+        lifted = wanted
+        if resting { list.contentOffset.y = -list.adjustedContentInset.top }
+    }
+
     /// One section near the screen: its cards, and its title and note when it has them.
-    private struct Section { var cards: CGRect?; var title: CGRect?; var note: CGRect? }
+    private struct Section {
+        var cards: CGRect?; var title: CGRect?; var note: CGRect?
+        /// What it starts with and where; what it ends with and where.
+        var first: (End, CGFloat) { title.map { (.title, $0.minY) } ?? cards.map { (.rows, $0.minY) } ?? (.note, note?.minY ?? 0) }
+        var last: (End, CGFloat) { note.map { (.note, $0.maxY) } ?? cards.map { (.rows, $0.maxY) } ?? (.title, title?.maxY ?? 0) }
+    }
+
+    /// What stands at a card's top or foot.
+    enum End { case rows, title, note }
+
+    /// How much more room an end's own frame holds past its words than a row's does (a title stands lower in its
+    /// frame than a row's words; a note's words end closer to its frame's foot). Measured at UI Scale 85, 100, 115 %
+    /// and at the iPhone's XXL text size.
+    static func slack(_ end: End) -> CGFloat {
+        switch end {
+        case .rows: 0
+        // (UI Scale and the iPhone's own text size each move a title in its frame by their own amount.)
+        case .title: 3 + BackdropCards.grown(20) + 6 * (BackdropCards.textSize - 1)
+        case .note: -3 + BackdropCards.grown(12)
+        }
+    }
+
+    /// Where each section's card starts and ends. Owner 2026-11-13: "Stuff is just not consistent." The cards stood 13,
+    /// 16 or 19 pt apart on one page, by whether one ended in a note or the next began with a title (each end kept its
+    /// own fixed room, and the list's spacing is one number). Now two neighbours always stand `BackdropCards.gap`
+    /// apart, and what is left of the space between them is shared so the words over the gap and the words under it
+    /// stand equally far from their cards' edges. The page's first and last cards mirror their other end.
+    /// `sections`: each one's first and last frame edge and what stands there, top to bottom.
+    static func edges(of sections: [(first: (End, CGFloat), last: (End, CGFloat))], noteExtra: CGFloat = 0) -> [(top: CGFloat, bottom: CGFloat)] {
+        func plain(_ end: End) -> CGFloat { max(0, rim - slack(end)) }
+        // Alone, each end keeps the room that puts its words a row's distance in.
+        var reach = sections.map { (top: plain($0.first.0), bottom: plain($0.last.0) + ($0.last.0 == .note ? noteExtra : 0)) }
+        var shared = Array(repeating: (top: false, bottom: false), count: sections.count)
+        for index in sections.indices.dropLast() {
+            let above = sections[index].last, below = sections[index + 1].first
+            let extra = above.0 == .note ? noteExtra : 0
+            let room = below.1 - above.1 - BackdropCards.gap - extra
+            guard room >= 4 else { continue }   // too close to part them: each keeps its own
+            let bottom = min(max((room + slack(below.0) - slack(above.0)) / 2, 1), room - 1)
+            reach[index].bottom = bottom + extra
+            reach[index + 1].top = room - bottom
+            shared[index].bottom = true
+            shared[index + 1].top = true
+        }
+        // An end with no neighbour stands as far from its words as the card's other end does.
+        for index in sections.indices {
+            let first = sections[index].first.0, last = sections[index].last.0
+            let extra = last == .note ? noteExtra : 0
+            if !shared[index].top, shared[index].bottom { reach[index].top = max(0, reach[index].bottom - extra + slack(last) - slack(first)) }
+            if !shared[index].bottom, shared[index].top { reach[index].bottom = max(0, reach[index].top + slack(first) - slack(last)) + extra }
+        }
+        // A card between two different neighbours (rows over it, a title under it) gets a little more at one end than
+        // the other. Past `lean` the longer end gives the rest back, and that gap is the wider for it (it only comes
+        // to that at a large UI Scale, where a title's own room grows).
+        for index in sections.indices where shared[index].top && shared[index].bottom {
+            let first = sections[index].first.0, last = sections[index].last.0
+            let extra = last == .note ? noteExtra : 0
+            let over = (reach[index].top + slack(first)) - (reach[index].bottom - extra + slack(last))
+            guard abs(over) > lean else { continue }
+            if over > 0 { reach[index].top = max(0, reach[index].top - (over - lean)) }
+            else { reach[index].bottom = max(extra, reach[index].bottom - (-over - lean)) }
+        }
+        return sections.indices.map { (top: sections[$0].first.1 - reach[$0].top, bottom: sections[$0].last.1 + reach[$0].bottom) }
+    }
+    /// How much further one end of a card may stand from its words than the other.
+    static let lean: CGFloat = 1.5
 
     /// Each section near the screen, from its title's top to its note's foot.
     private func sections(of list: UIScrollView, near rect: CGRect) -> [Section] {

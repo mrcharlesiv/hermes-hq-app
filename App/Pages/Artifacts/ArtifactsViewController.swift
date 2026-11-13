@@ -191,7 +191,10 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         let backdrop = PageBackdrop.install(in: self, clearing: [collectionView])   // [backdrop] Theme › App Background
         // [soft-cards] The days' headings lose their band on a card, and get it back off one.
         backdrop.onCardsChange = { [weak self] in
-            guard let self, let dataSource = self.dataSource else { return }
+            guard let self else { return }
+            // [soft-cards] The Tiles page's first card one gap under the bar, as on every page (it began at the bar's edge).
+            BackdropCards.setTopRoom(self.pinnedOnly && BackdropCards.on(self) ? BackdropCards.gap : 0, of: self.collectionView)
+            guard let dataSource = self.dataSource else { return }
             var snapshot = dataSource.snapshot()
             snapshot.reloadSections(snapshot.sectionIdentifiers)
             dataSource.apply(snapshot, animatingDifferences: false)
@@ -441,7 +444,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
     // MARK: Layout
 
     private func makeLayout() -> UICollectionViewLayout {
-        let cards = UICollectionViewCompositionalLayout { [weak self] index, environment in
+        let cards = BackdropCardLayout { [weak self] index, environment in   // [soft-cards] one card behind joined sections
             guard let self, let section = self.dataSource?.sectionIdentifier(for: index) else { return nil }
             switch section {
             case .pinned:
@@ -473,7 +476,9 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
                     // On All the grid is one part of the page: an "Images" header and the 20 pt gutter its header and
                     // rows have (19 + the tile's 1), rounded tiles (UX study #88). The Images filter keeps the
                     // Photos-style edge-to-edge grid.
-                    s.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 19, bottom: 4, trailing: 19)
+                    // [soft-cards] On a card the 4 pt under the pictures is the card's own (below), and the next card one
+                    // gap on, as every card (it stood 14 pt off).
+                    s.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 19, bottom: BackdropCards.on(self) ? 0 : 4, trailing: 19)
                     let header = NSCollectionLayoutBoundarySupplementaryItem(
                         layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .estimated(36)),
                         elementKind: UICollectionView.elementKindSectionHeader, alignment: .top)
@@ -547,6 +552,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
             }
         }
         BackdropCards.register(in: cards)   // [backdrop-cards]
+        cards.placesCards = true            // [soft-cards] the Tiles shelf scrolls sideways
         return cards
     }
 
@@ -963,11 +969,13 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
             // top as the last row's words stand over its foot (17 pt).
             if BackdropCards.on(self) {
                 switch self.dataSource.sectionIdentifier(for: path.section) {
-                case .day?: content.directionalLayoutMargins.top = 14
+                // A day's name starts where its rows' pictures do (it stood 3 pt left of them).
+                case .day?: content.directionalLayoutMargins.top = 14; content.directionalLayoutMargins.leading = 20 + BackdropCards.side
                 case .images?: content.directionalLayoutMargins.top = 11
                 // "Tiles" over the shelf, "6 Items" over the Tiles page's list and grid (its cards stand alone: the
                 // count is a line of its own there).
-                case .pinned? where !(self.pinnedOnly && ArtifactPins.view == .cards): content.directionalLayoutMargins.top = 14
+                // (The shelf's foot, See All, keeps 19 pt under its words: 1 pt more over "Tiles" there.)
+                case .pinned? where !(self.pinnedOnly && ArtifactPins.view == .cards): content.directionalLayoutMargins.top = self.pinnedOnly ? 14 : 15
                 default: break
                 }
             }
@@ -985,7 +993,10 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
                 // in); on the shelf its glyph ends where the cards do (20 pt in).
                 let trailing: CGFloat = ArtifactPins.showsList ? 6 : (self.pinnedOnly && ArtifactPins.view == .cards ? 12 : 8)
                 header.preservesSuperviewLayoutMargins = false
-                header.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 0, leading: 20, bottom: 0, trailing: trailing)
+                // [soft-cards] Over rows on a card the name starts where their pictures do; over tiles, where the tiles do.
+                let leading: CGFloat = ArtifactPins.showsList && BackdropCards.on(self) ? 20 + BackdropCards.side : 20
+                if leading > 20 { content.directionalLayoutMargins.leading = leading; header.contentConfiguration = content.hqMacSectionHeader() }
+                header.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 0, leading: leading, bottom: 0, trailing: trailing)
                 // [dashboard] On the Dashboard, ＋ (New Tile) before it.
                 let tiles = self.pinnedOnly && !self.editingTiles && self.services != nil
                 var view: UIView = tiles ? self.newTileAndViewButtons() : self.pinsHeaderButton(openAll: !self.pinnedOnly)

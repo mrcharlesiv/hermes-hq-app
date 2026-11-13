@@ -38,7 +38,10 @@ enum ProjectCardSlice {
     /// The face column: 40 pt from the list's edge plus 20 pt in, as Pinned's rows, so faces line up with Pinned's.
     static var column: CGFloat { Theme.isDesktop ? DesktopRows.face : Density.ios(40, 32) }   // [density] the chat rows' column too
     static var columnGap: CGFloat { Theme.isDesktop ? DesktopRows.gap : Density.ios(12, 10) }
-    static let lead: CGFloat = 20
+    /// [soft-cards] Owner 2026-11-13 (a screenshot of Sessions): on a soft card the chats stand `side` in from the list's
+    /// edge and the projects did not, so a project's folder stood 10 pt left of the faces over and under it. On a card
+    /// the projects, and the chats inside an open one, keep the same column as every other chat.
+    static var lead: CGFloat { soft ? 20 + BackdropCards.side : 20 }
     /// The line's centre: the middle of the face column.
     static var lineX: CGFloat { lead + column / 2 }
     static let lineWidth: CGFloat = 2
@@ -195,7 +198,7 @@ final class ProjectCardSliceView: UIView {
 /// The Sessions list's layout, with a piece of card under each chat in an open project. A swipe moves the whole cell,
 /// its own piece of card included, and lays its buttons on whatever is under it (owner 2026-11-01: "Sliding session
 /// over moves the background with it"). This piece stays, so the card does.
-final class SessionsListLayout: UICollectionViewCompositionalLayout {
+final class SessionsListLayout: BackdropCardLayout {   // [soft-cards] one card behind the projects
     static let cardUnderRow = "sessions.cardUnderRow"
     /// Whether the item at a path is a chat in an open project's card.
     var cardRow: (IndexPath) -> Bool = { _ in false }

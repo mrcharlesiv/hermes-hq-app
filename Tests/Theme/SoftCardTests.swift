@@ -92,9 +92,99 @@ import UIKit
         #expect(insets(extraBottom: -BackdropCards.pad, join: .above).bottom == BackdropCards.gap)
     }
 
-    @MainActor @Test func aTablesSectionsStandOneGapApartOnCards() {
-        // Rows alone: a card takes `rim` past its rows at both ends. After a note the card takes `notePad` past it.
-        #expect(BackdropPlates.tableGap(afterNote: false) == BackdropPlates.sectionSpacing)
-        #expect(BackdropPlates.tableGap(afterNote: true) - BackdropPlates.notePad == BackdropPlates.tableGap(afterNote: false) - BackdropPlates.rim)
+    // Owner 2026-11-13: "Stuff is just not consistent." Cards on a grouped page stood 13, 16 or 19 pt apart by what
+    // each ended and began with. Two neighbours are always one gap apart, and the words each side of the gap stand
+    // equally far from their cards' edges.
+    @MainActor @Test func groupedCardsStandOneGapApart() {
+        typealias End = BackdropPlates.End
+        let space = BackdropPlates.sectionSpacing
+        #expect(BackdropPlates.tableGap(afterNote: true) == space)
+        // Four sections, the list's one spacing between each: rows; a title and rows; a title, rows and a note; rows.
+        var y: CGFloat = 100
+        var sections: [(first: (End, CGFloat), last: (End, CGFloat))] = []
+        for (first, last) in [(End.rows, End.rows), (.title, .rows), (.title, .note), (.rows, .rows)] {
+            sections.append(((first, y), (last, y + 200)))
+            y += 200 + space
+        }
+        let edges = BackdropPlates.edges(of: sections)
+        /// How far a card's words stand under its top, less how far they stand over its foot (as rows would).
+        func leans(_ index: Int) -> CGFloat {
+            (sections[index].first.1 - edges[index].top + BackdropPlates.slack(sections[index].first.0))
+                - (edges[index].bottom - sections[index].last.1 + BackdropPlates.slack(sections[index].last.0))
+        }
+        for index in edges.indices.dropLast() {
+            // One gap apart; a card between two unlike neighbours may give up to `lean` back to the gap.
+            let gap = edges[index + 1].top - edges[index].bottom
+            #expect(gap > BackdropCards.gap - 0.01 && gap < BackdropCards.gap + BackdropPlates.lean + 0.01, "cards \(index) and \(index + 1): \(gap)")
+        }
+        for index in edges.indices { #expect(abs(leans(index)) < BackdropPlates.lean + 0.01, "card \(index) leans \(leans(index))") }
+        // The page's first and last cards mirror their other end.
+        #expect(abs(leans(0)) < 0.01 && abs(leans(3)) < 0.01)
+        // A page of like cards (each a title over rows): exactly one gap apart, each card even.
+        let like = BackdropPlates.edges(of: (0..<3).map { index in
+            let top = CGFloat(index) * (200 + space)
+            return ((End.title, top), (End.rows, top + 200))
+        })
+        #expect(abs(like[1].top - like[0].bottom - BackdropCards.gap) < 0.01 && abs(like[2].top - like[1].bottom - BackdropCards.gap) < 0.01)
+        #expect(abs((0 - like[0].top) - (like[0].bottom - 200) + BackdropPlates.slack(.title)) < 0.01)
+        // A card alone keeps a row's rim.
+        let alone = BackdropPlates.edges(of: [((.rows, 50), (.rows, 150))])
+        #expect(alone[0].top == 50 - BackdropPlates.rim && alone[0].bottom == 150 + BackdropPlates.rim)
+        // Sections too close to part keep their own rooms and never cross... each still starts over its first frame.
+        let tight = BackdropPlates.edges(of: [((.rows, 0), (.rows, 100)), ((.rows, 106), (.rows, 200))])
+        #expect(tight[0].top < 0 && tight[1].bottom > 200)
+    }
+
+    // Owner 2026-11-13 (a screenshot of Sessions on build 974): three projects on one card showed as three bands, one
+    // piece of frosted glass per section. A run of joined sections has one card behind all of it.
+    @MainActor @Test func joinedSectionsShareOneCard() throws {
+        final class Rows: NSObject, UICollectionViewDataSource {
+            func numberOfSections(in collectionView: UICollectionView) -> Int { 4 }
+            func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int { 3 }
+            func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
+                collectionView.dequeueReusableCell(withReuseIdentifier: "row", for: indexPath)
+            }
+        }
+        // Sections 0, 1 and 2 are joined (top, middle, foot); section 3 is a card of its own.
+        let layout = BackdropCardLayout { index, _ in
+            let size = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1), heightDimension: .absolute(50))
+            let section = NSCollectionLayoutSection(group: .vertical(layoutSize: size, subitems: [NSCollectionLayoutItem(layoutSize: size)]))
+            var join: BackdropCards.Join = []
+            if index == 1 || index == 2 { join.insert(.above) }
+            if index == 0 || index == 1 { join.insert(.below) }
+            BackdropCards.card(section, on: true, join: join)
+            return section
+        }
+        BackdropCards.register(in: layout)
+        let rows = Rows()
+        let list = UICollectionView(frame: CGRect(x: 0, y: 0, width: 390, height: 800), collectionViewLayout: layout)
+        list.register(UICollectionViewCell.self, forCellWithReuseIdentifier: "row")
+        list.dataSource = rows
+        list.layoutIfNeeded()
+
+        func cards(in rect: CGRect) -> (runs: [UICollectionViewLayoutAttributes], pieces: [UICollectionViewLayoutAttributes], alone: [UICollectionViewLayoutAttributes]) {
+            let decorations = (layout.layoutAttributesForElements(in: rect) ?? []).filter { $0.representedElementCategory == .decorationView }
+            return (decorations.filter { $0.representedElementKind == BackdropCards.runKind },
+                    decorations.filter { ($0.representedElementKind ?? "").hasPrefix(BackdropCards.kind + ".") && $0.representedElementKind != BackdropCards.runKind },
+                    decorations.filter { $0.representedElementKind == BackdropCards.kind })
+        }
+        let all = cards(in: list.bounds)
+        #expect(all.pieces.count == 3)
+        #expect(all.alone.count == 1)
+        let run = try #require(all.runs.first)
+        #expect(all.runs.count == 1)
+        #expect(run.indexPath.section == 0)
+        #expect(run.frame == all.pieces.reduce(CGRect.null) { $0.union($1.frame) })
+        // The card ends where the run does: the next section's own card starts a gap further down.
+        #expect(run.frame.maxY + BackdropCards.gap == all.alone.first?.frame.minY)
+
+        // With only the run's foot on the screen the card is still the whole run's (its other pieces are read from
+        // above), and asking for the card by its place gives the same one.
+        let foot = try #require(all.pieces.max { $0.frame.minY < $1.frame.minY })
+        let part = cards(in: foot.frame.insetBy(dx: 0, dy: 4))
+        #expect(part.pieces.count == 1)
+        #expect(part.runs.first?.frame == run.frame)
+        #expect(layout.layoutAttributesForDecorationView(ofKind: BackdropCards.runKind, at: run.indexPath)?.frame == run.frame)
+        #expect(layout.layoutAttributesForDecorationView(ofKind: BackdropCards.runKind, at: IndexPath(item: 0, section: 1)) == nil)
     }
 }

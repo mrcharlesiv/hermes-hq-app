@@ -98,7 +98,11 @@ final class JobsViewController: UIViewController, UICollectionViewDelegate, UISe
         view.addSubview(collectionView)
         ListBarAppearance.pinTitle(in: self, softEdgeAround: collectionView)   // owner 2026-11-01: every tab's top
         // [backdrop] Theme › App Background. [soft-cards] A group's title draws with a card's room on one: again as that flips.
-        PageBackdrop.install(in: self, clearing: [collectionView]).onCardsChange = { [weak self] in BackdropCards.redraw(self?.dataSource) }
+        PageBackdrop.install(in: self, clearing: [collectionView]).onCardsChange = { [weak self] in
+            BackdropCards.redraw(self?.dataSource)
+            // [soft-cards] The first card one gap under the bar, as on every page (it began right at the bar's edge).
+            if let self { BackdropCards.setTopRoom(BackdropCards.on(self) ? BackdropCards.gap : 0, of: self.collectionView) }
+        }
         notices = PageNoticeHost(in: view)
         let refresh = UIRefreshControl()
         refresh.addAction(UIAction { [weak self] _ in self?.pulledToRefresh() }, for: .valueChanged)

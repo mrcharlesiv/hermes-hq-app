@@ -24,6 +24,9 @@ final class MoreViewController: UIViewController, UICollectionViewDelegate {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
+    /// [soft-cards] Over the first group's rows on Soft Cards.
+    private static let firstTop: CGFloat = 22
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = HQPalette.groupedPage
@@ -34,10 +37,22 @@ final class MoreViewController: UIViewController, UICollectionViewDelegate {
         config.backgroundColor = .clear
         // [compact] iOS's own list, with the section gaps closer (as the SwiftUI pages' compact section spacing).
         let layout = UICollectionViewCompositionalLayout { [weak self] index, environment in
+            // [soft-cards] Owner 2026-11-13: "Stuff is just not consistent." On Soft Cards the groups stood 22, 5 and 5 pt
+            // apart: a group's name is set over its top inset, so a named group's card began right under the one
+            // above, and an unnamed group kept an empty header's room. On cards every group is one `sectionSpacing`
+            // under the last, a name stands straight over its rows, and a group with no name has no header at all.
+            let onCards = BackdropCards.on(self)
+            func named(_ at: Int) -> Bool { self.map { at >= 0 && at < $0.current.count && $0.current[at].section.header != nil } ?? false }
+            var config = config
+            if onCards, !named(index) { config.headerMode = .none }
             let section = NSCollectionLayoutSection.list(using: config, layoutEnvironment: environment)
-            if !Theme.isDesktop {
-                // [backdrop-cards] On Soft Cards the SwiftUI pages' wider gap, so each plate keeps its own room.
-                let gap = BackdropCards.on(self) ? BackdropPlates.sectionSpacing : MoreMetrics.sectionGap
+            if onCards {
+                let space = BackdropPlates.sectionSpacing
+                // The first card starts where Bots' first does under the title.
+                if named(index) { section.contentInsets.top = 0 } else { section.contentInsets.top = index > 0 ? space / 2 : Self.firstTop }
+                section.contentInsets.bottom = named(index + 1) ? space : space / 2
+            } else if !Theme.isDesktop {
+                let gap = MoreMetrics.sectionGap
                 section.contentInsets.top = min(section.contentInsets.top, gap / 2)
                 section.contentInsets.bottom = min(section.contentInsets.bottom, gap / 2)
             }

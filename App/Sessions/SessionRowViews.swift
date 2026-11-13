@@ -692,7 +692,8 @@ struct SessionDateHeaderView: View {
             .animation(HQMotion.reduced ? nil : .snappy(duration: 0.2), value: dropTarget)
             // [project-cards] A card spans the list (its own insets) with a gap above and below it (none under "Projects");
             // closed projects, rows on the page, stand as close as Pinned's.
-            .padding(.leading, summary == nil ? 20 : 0)
+            // [soft-cards] On a card a group's name starts where the rows' column does, as "Projects" does.
+            .padding(.leading, summary == nil ? Self.captionLead : 0)
             .padding(.trailing, summary == nil ? 16 : 0)
             .padding(.top, topGap)
     }
@@ -725,12 +726,15 @@ struct SessionDateHeaderView: View {
     /// "grouped together tightly … your eyes to fall in the right place"). It was 36 pt, centred: the caption stood as
     /// far from its rows as from the group above it.
     static let captionHeight: CGFloat = 24
+    /// Where a caption's words start. [soft-cards] Owner 2026-11-13 (a screenshot of Sessions on build 974): "Projects"
+    /// stood 10 pt further in than "Pinned" and "Recent". On a card all three start where the rows' column does.
+    static var captionLead: CGFloat { ProjectCard.lead }
     /// The break above a caption, between one group's last row and the next group: wide, so each caption reads as its
     /// own rows' (the list's first, under the bar, needs less).
     /// [soft-cards] On a card every caption is its card's first line: the same room over each, sized so the words stand
     /// as far under the card's top as the last row's over its foot.
     static func breakAbove(first: Bool) -> CGFloat {
-        if ProjectCard.soft { return (Density.compact ? 7 : 10) + BackdropCards.grown(12) }
+        if ProjectCard.soft { return (Density.compact ? 7 : 10) + BackdropCards.grownWithText(12) }
         return first ? 6 : Density.compact ? 12 : 20   // [density]
     }
     /// How far a caption's touch reaches up into that break. [ui-sizing 2026-11-09] All of it: with the caption, 44 pt in
@@ -825,8 +829,9 @@ struct SessionDateHeaderView: View {
             }
         }
         .frame(minHeight: Self.captionHeight)
-        // [soft-cards] On a card the name starts where the rows' faces do.
-        .padding(.horizontal, ProjectCard.soft ? 20 + BackdropCards.side : 20)
+        // [soft-cards] On a card the name starts where the rows' column does, as "Pinned" and "Recent" do.
+        .padding(.leading, Self.captionLead)
+        .padding(.trailing, ProjectCard.soft ? 20 + BackdropCards.side : 20)
         .padding(.top, Self.breakAbove(first: first))
     }
 

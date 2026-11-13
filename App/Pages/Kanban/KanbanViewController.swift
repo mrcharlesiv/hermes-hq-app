@@ -269,8 +269,14 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
     /// [mac] The status chips wrap instead of scrolling sideways (a mouse wheel scrolls the page, not the row).
     static let chipsWrap = DeviceWord.isMac
 
+    /// [soft-cards] Under the chips: 14 pt to the first group on the plain page. On a card that room is the card's own
+    /// (`chipsRoom` more than a row's, so the chips stand as far over the card's foot as the board's name under its
+    /// top) and the first group's card one gap on, as every card (it stood 24 pt off).
+    private static func chipsFoot(_ onCards: Bool) -> CGFloat { onCards ? 0 : 14 }
+    private static let chipsRoom: CGFloat = 14
+
     private func makeLayout() -> UICollectionViewLayout {
-        let layout = UICollectionViewCompositionalLayout { [weak self] index, environment in
+        let layout = BackdropCardLayout { [weak self] index, environment in   // [soft-cards] one card behind joined sections
             guard let self, let section = self.dataSource?.sectionIdentifier(for: index) else { return nil }
             switch section {
             case .top, .state:
@@ -278,7 +284,9 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
                 let group = NSCollectionLayoutGroup.vertical(layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .estimated(44)), subitems: [item])
                 let s = NSCollectionLayoutSection(group: group)
                 // [mac] Stress test 2026-10-28 #53: the board button 16 pt under the bar on the Mac (it touched the bar).
-                s.contentInsets = NSDirectionalEdgeInsets(top: section == .top ? MacInset.top(otherwise: 0) : 8, leading: 0, bottom: 0, trailing: 0)
+                // [soft-cards] On Soft Cards the first card stands one gap under the bar, as on every page.
+                let first = BackdropCards.on(self) ? max(BackdropCards.gap, MacInset.top(otherwise: 0)) : MacInset.top(otherwise: 0)
+                s.contentInsets = NSDirectionalEdgeInsets(top: section == .top ? first : 8, leading: 0, bottom: 0, trailing: 0)
                 // [backdrop-cards] The board's button and its status chips are one card on Soft Cards.
                 if section == .top { BackdropCards.card(s, on: BackdropCards.on(self), join: self.dataSource?.sectionIdentifier(for: index + 1) == .chips ? .below : []) }
                 return s
@@ -292,16 +300,16 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
                     line.interItemSpacing = .fixed(8)
                     let s = NSCollectionLayoutSection(group: line)
                     s.interGroupSpacing = 8
-                    s.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 20, bottom: 14, trailing: 20)
-                    BackdropCards.card(s, on: BackdropCards.on(self), keepWidth: true, join: .above)   // [backdrop-cards]
+                    s.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 20, bottom: Self.chipsFoot(BackdropCards.on(self)), trailing: 20)
+                    BackdropCards.card(s, on: BackdropCards.on(self), keepWidth: true, join: .above, extraBottom: Self.chipsRoom)   // [backdrop-cards]
                     return s
                 }
                 let group = NSCollectionLayoutGroup.horizontal(layoutSize: .init(widthDimension: .estimated(90), heightDimension: .absolute(chipHeight)), subitems: [item])
                 let s = NSCollectionLayoutSection(group: group)
                 s.orthogonalScrollingBehavior = .continuous
                 s.interGroupSpacing = 8
-                s.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 20, bottom: 14, trailing: 20)
-                BackdropCards.card(s, on: BackdropCards.on(self), keepWidth: true, join: .above)   // [backdrop-cards]
+                s.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 20, bottom: Self.chipsFoot(BackdropCards.on(self)), trailing: 20)
+                BackdropCards.card(s, on: BackdropCards.on(self), keepWidth: true, join: .above, extraBottom: Self.chipsRoom)   // [backdrop-cards]
                 return s
             case .group:
                 var config = UICollectionLayoutListConfiguration(appearance: .insetGrouped)
@@ -324,9 +332,10 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
                 // [backdrop-cards] On Soft Cards the group's line and its rows are one soft card, in place of the
                 // board's own card, as far in as every page's (`BackdropCards.side`).
                 if BackdropCards.on(self) {
-                    s.contentInsets.leading = 0
-                    s.contentInsets.trailing = 0
-                    BackdropCards.card(s, on: true, header: true)
+                    // 4 pt more than the card's side: the line and the faces start 30 pt in, as every card's rows.
+                    s.contentInsets.leading = BackdropCards.side + 4
+                    s.contentInsets.trailing = BackdropCards.side + 4
+                    BackdropCards.card(s, on: true, header: true, keepWidth: true)
                     return s
                 }
                 // UX study #175: in light the card is the page's white with a hairline edge, not a grey fill; the
@@ -341,6 +350,7 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
         }
         layout.register(KanbanCardBackground.self, forDecorationViewOfKind: KanbanCardBackground.kind)
         BackdropCards.register(in: layout)   // [backdrop-cards]
+        layout.placesCards = true            // [soft-cards] the chips scroll sideways
         return layout
     }
 

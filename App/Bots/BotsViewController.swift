@@ -327,7 +327,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
     // MARK: - Layout
 
     private func makeLayout() -> UICollectionViewLayout {
-        let layout = UICollectionViewCompositionalLayout { [weak self] index, environment in
+        let layout = BackdropCardLayout { [weak self] index, environment in   // [soft-cards] one card behind joined sections
             guard let self, let section = self.dataSource?.sectionIdentifier(for: index) else { return nil }
             let large = environment.traitCollection.preferredContentSizeCategory.isAccessibilityCategory
             // [backdrop-cards] On Soft Cards the pinned faces and the rows right under them are one card.
@@ -398,8 +398,12 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
         // on the screen against the iOS look's ~30); there they open with the iOS look's room in both looks.
         let roomy = !Theme.isDesktop || DeviceWord.isMac
         // [top-bar-gap] The iPhone and iPad's Desktop Look: the look's room under its bar's edge, not 4 pt.
-        let top = first ? (roomy ? Self.openingGap : 4 + DesktopRows.underBar) : 4
-        section.contentInsets = NSDirectionalEdgeInsets(top: top, leading: inset, bottom: 8, trailing: inset)
+        // [soft-cards] On Soft Cards the first card stands one gap under the bar, as on every page.
+        let top = first ? (BackdropCards.on(self) ? BackdropCards.gap : roomy ? Self.openingGap : 4 + DesktopRows.underBar) : 4
+        // [soft-cards] A card of faces alone ends at the names: the room under them is the card's own, and the next card
+        // one gap on (it stood 18 pt off, every other card 10).
+        let alone = BackdropCards.on(self) && !joinBelow
+        section.contentInsets = NSDirectionalEdgeInsets(top: top, leading: inset, bottom: alone ? 0 : 8, trailing: inset)
         // [backdrop-cards] The faces' names too. Joined to the rows under them, the faces stand as far under the card's
         // top as the last row stands over its foot.
         BackdropCards.card(section, on: BackdropCards.on(self), keepWidth: true, join: joinBelow ? .below : [],
@@ -446,7 +450,8 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
             return self.organizer?.trailingActions(for: bot)
         }
         let section = NSCollectionLayoutSection.list(using: config, layoutEnvironment: environment)
-        if first && (!Theme.isDesktop || DeviceWord.isMac) { section.contentInsets.top = Self.openingGap }   // [mac] Round 7: as the tiles
+        if first, BackdropCards.on(self) { section.contentInsets.top = BackdropCards.gap }   // [soft-cards] as the tiles
+        else if first && (!Theme.isDesktop || DeviceWord.isMac) { section.contentInsets.top = Self.openingGap }   // [mac] Round 7: as the tiles
         else if first { section.contentInsets.top += DesktopRows.underBar }   // [top-bar-gap] as the tiles
         if apart { section.contentInsets.top = 24 }
         return section

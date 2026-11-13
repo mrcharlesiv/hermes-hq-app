@@ -184,7 +184,12 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         view.addSubview(collectionView)
         ListBarAppearance.pinTitle(in: self, softEdgeAround: collectionView)
         let backdrop = PageBackdrop.install(in: self, clearing: [collectionView])
-        backdrop.onCardsChange = { [weak self] in BackdropCards.redraw(self?.dataSource) }   // [soft-cards] titles keep a card's room
+        backdrop.onCardsChange = { [weak self] in   // [soft-cards] titles keep a card's room
+            BackdropCards.redraw(self?.dataSource)
+            // The first card one gap under the pills, as the cards are from each other (it stood 8.3 pt under them;
+            // the pills grow with UI Scale inside their band, so the room follows it).
+            if let self { BackdropCards.setTopRoom(BackdropCards.on(self) ? 1.7 + max(0, BackdropCards.grown(17.7)) : 0, of: self.collectionView) }
+        }
         header.install(in: self, list: collectionView, backdrop: backdrop)
         notices = PageNoticeHost(in: view)
         let refresh = UIRefreshControl()
@@ -317,7 +322,8 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
             let onCards = carded && BackdropCards.on(self)
             // A folded group is its heading alone: as much under the name as over it.
             let folded = config.headerMode == .supplementary && (self?.collectionView.numberOfItems(inSection: index) ?? 1) == 0
-            BackdropCards.card(layout, on: onCards, header: config.headerMode == .supplementary, extraBottom: folded ? 4 : 0)
+            BackdropCards.card(layout, on: onCards, header: config.headerMode == .supplementary,
+                               extraBottom: folded ? 4 : onCards ? self?.footRoom(index) ?? 0 : 0)
             return layout
         }
         BackdropCards.register(in: cards)   // [backdrop-cards]
@@ -335,8 +341,9 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     }
 
     private func configureDataSource() {
-        let taskCell = UICollectionView.CellRegistration<SoftCardListCell, String> { [weak self] cell, _, id in
+        let taskCell = UICollectionView.CellRegistration<TaskListCell, String> { [weak self] cell, _, id in
             guard let self, let row = self.rows[id] else { return }
+            cell.onMeasure = { [weak self] height in self?.measured(id, height) }
             cell.contentConfiguration = UIHostingConfiguration {
                 TodoRowView(row: row) { [weak self] in self?.toggleDone(id) }
             }.margins(.all, 0)
@@ -416,6 +423,47 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
             }
         }
         dataSource.supplementaryViewProvider = { cv, _, path in cv.dequeueConfiguredReusableSupplementary(using: header, for: path) }
+    }
+
+    // MARK: [soft-cards] A card's foot under its last task
+
+    /// Owner 2026-11-13 ("Get them all perfect"): a group's name stands 18 pt under its card's top, and its last task
+    /// left 21 pt under it when it was one line (its circle, centred in the row) and 15 pt when its words ran to a
+    /// second line or a note. The card takes 3 pt off under the one and adds 3 pt under the other, by the row's own
+    /// measured height (a one-line row is shorter than any two lines of words can be).
+    private var rowHeights: [String: CGFloat] = [:]
+    private var footPending = false
+
+    /// A one-line row is its circle's 36 pt and 8 pt over and under: 52 pt at every UI Scale. A second line or a note adds a line of words to that (a note under a one-line name: 56 pt).
+    private static func isOneLine(_ height: CGFloat) -> Bool {
+        // The circle grows with the iPhone's text size (22 pt at the standard size), and the row with it.
+        let circle = UIFontMetrics(forTextStyle: .callout).scaledValue(for: 22)
+        return height < 52 + max(0, circle - 22) + 1.5
+    }
+
+    private func lastTask(_ section: Int) -> String? {
+        let count = collectionView.numberOfItems(inSection: section)
+        guard count > 0, case .task(let id)? = dataSource?.itemIdentifier(for: IndexPath(item: count - 1, section: section)) else { return nil }
+        return id
+    }
+
+    fileprivate func footRoom(_ section: Int) -> CGFloat {
+        guard let id = lastTask(section), let height = rowHeights[id] else { return 0 }
+        return Self.isOneLine(height) ? -3 : 3
+    }
+
+    /// A task's row was measured: when that changes what its card's foot should be, the list lays out again.
+    private func measured(_ id: String, _ height: CGFloat) {
+        let before = rowHeights[id]
+        guard before.map({ abs($0 - height) > 0.5 }) ?? true else { return }
+        rowHeights[id] = height
+        guard before.map(Self.isOneLine) != Self.isOneLine(height), !footPending, BackdropCards.on(self) else { return }
+        footPending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.footPending = false
+            self.collectionView.collectionViewLayout.invalidateLayout()
+        }
     }
 
     private func hasHeader(_ section: Section) -> Bool {
@@ -1588,3 +1636,14 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
 #if targetEnvironment(macCatalyst)
 extension TasksViewController: PaneListEmptiness {}   // [mac] #57
 #endif
+
+/// A task's row: tells its page how tall it came out (`TasksViewController.footRoom`).
+private final class TaskListCell: SoftCardListCell {
+    var onMeasure: ((CGFloat) -> Void)?
+
+    override func preferredLayoutAttributesFitting(_ layoutAttributes: UICollectionViewLayoutAttributes) -> UICollectionViewLayoutAttributes {
+        let fitted = super.preferredLayoutAttributesFitting(layoutAttributes)
+        onMeasure?(fitted.size.height)
+        return fitted
+    }
+}

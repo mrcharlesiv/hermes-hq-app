@@ -194,7 +194,10 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
         pageBackdrop = PageBackdrop.install(in: self, clearing: [collectionView])   // [backdrop] Theme › App Background
         // [soft-cards] A project's rows draw their piece of card, or none on a soft card: drawn again as that flips.
         pageBackdrop?.onCardsChange = { [weak self] in
-            guard let self, let dataSource = self.dataSource else { return }
+            guard let self else { return }
+            // The first card one gap under the chips, as the cards are from each other (it stood 8.7 pt under them).
+            BackdropCards.setTopRoom(BackdropCards.on(self) ? 1.3 + BackdropCards.grown(17.7) : 0, of: self.collectionView)
+            guard let dataSource = self.dataSource else { return }
             var snapshot = dataSource.snapshot()
             snapshot.reloadSections(snapshot.sectionIdentifiers)
             dataSource.apply(snapshot, animatingDifferences: false)
@@ -319,8 +322,9 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
     private var debugToggling = false
     private func debugToggleLoop() {
         guard !debugToggling, let key = UserDefaults.standard.string(forKey: "HQDebugSessionsToggle"), !key.isEmpty else { return }
-        let id = groups.contains { $0.id == key } ? key : SessionListPipeline.projectPrefix + key
-        guard groups.contains(where: { $0.id == id }) else { return }
+        // "projects": the Projects caption's own fold (not a group of the list).
+        let id = groups.contains { $0.id == key } || key == SessionListPipeline.projectsId ? key : SessionListPipeline.projectPrefix + key
+        guard key == SessionListPipeline.projectsId || groups.contains(where: { $0.id == id }) else { return }
         debugToggling = true
         let wait = Double(UserDefaults.standard.string(forKey: "HQDebugSessionsToggleWait") ?? "") ?? 6
         let every = Double(UserDefaults.standard.string(forKey: "HQDebugSessionsToggleEvery") ?? "") ?? 2.5
@@ -388,8 +392,12 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
                     if self.isProjectSection(section + 1) { join.insert(.below) }
                 }
                 // A project's row ends closer to its foot than a chat's: 3 pt more under the last, so the card's ends are even.
+                // Owner 2026-11-13 (a screenshot of Sessions, "Recent > 23" folded): "The padding is off on the bottom
+                // one." A folded group is its name alone, which stood 16 pt under the card's top and 12 pt over its foot.
+                let folded = config.headerMode == .supplementary && !self.isProjectSection(section)
+                    && (self.collectionView as UICollectionView?)?.numberOfItems(inSection: section) == 0
                 BackdropCards.card(list, on: BackdropCards.on(self), header: config.headerMode == .supplementary, keepWidth: open, join: join,
-                                   extraBottom: self.isProjectSection(section) && !join.contains(.below) ? 3 : 0)
+                                   extraBottom: folded ? 5 : self.isProjectSection(section) && !join.contains(.below) ? 3 : 0)
             }
             return list
         }

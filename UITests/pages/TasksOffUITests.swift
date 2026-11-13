@@ -55,7 +55,11 @@ extension PagesTests {
         XCTAssertTrue(settingsRow.waitForExistence(timeout: 10))
         settingsRow.tap()
         let toggle = app.switches["settings.tasks"].firstMatch
-        for _ in 0..<6 where !(toggle.exists && toggle.isHittable) { app.swipeUp(velocity: .slow) }
+        // Clear of the floating tab bar: a switch under it counts as hittable, and the tap lands on the bar (Settings
+        // put Tasks at the foot of the first screen, 2026-11-09, and this test tapped More for four days).
+        let bar = app.tabBars.firstMatch
+        let floor = { bar.exists ? bar.frame.minY - 12 : self.app.frame.height * 0.8 }
+        for _ in 0..<6 where !(toggle.exists && toggle.isHittable && toggle.frame.maxY < floor()) { app.swipeUp(velocity: .slow) }
         XCTAssertTrue(toggle.waitForExistence(timeout: 5), "Settings › Tasks")
         return toggle
     }

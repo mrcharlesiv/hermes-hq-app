@@ -81,10 +81,18 @@ import UIKit
     /// `room` more over `list`'s first section (so its first card stands one gap under what is over the list); a list
     /// resting at its top stays at its top.
     static func setTopRoom(_ room: CGFloat, of list: UIScrollView) {
+        let room = onPixel(room, in: list)
         guard abs(list.contentInset.top - room) > 0.1 else { return }
         let resting = abs(list.contentOffset.y + list.adjustedContentInset.top) < 1
         list.contentInset.top = room
         if resting { list.contentOffset.y = -list.adjustedContentInset.top }
+    }
+
+    /// `length` on `view`'s screen's pixels. A list rests on a whole pixel, so room that isn't one leaves it a hair
+    /// past its top, and the bar over it takes that for rows scrolled under (owner 2026-11-13: the line under Tasks' pills).
+    static func onPixel(_ length: CGFloat, in view: UIView) -> CGFloat {
+        let scale = max(view.traitCollection.displayScale, 1)
+        return (length * scale).rounded() / scale
     }
 
     /// Every row and header of `dataSource`'s list drawn again (they draw differently on a card).
@@ -433,9 +441,14 @@ class BackdropCardView: UICollectionReusableView {
             list.observe(\.contentSize, options: [.new]) { [weak self] _, _ in MainActor.assumeIsolated { self?.schedule() } },
             // Never measured in the middle of the list's own work (a table asked for its rows while its page was still
             // loading dequeued cells it had not registered yet): each change is drawn on the next turn of the run loop.
-            list.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in MainActor.assumeIsolated { self?.schedule() } },
+            list.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in MainActor.assumeIsolated { self?.restEdge(); self?.schedule() } },
             list.observe(\.bounds, options: [.new]) { [weak self] _, _ in MainActor.assumeIsolated { self?.schedule() } },
         ]
+        // SwiftUI shows a list's edge again on each of its updates: an edge held for rest stays held.
+        watches.append(list.topEdgeEffect.observe(\.isHidden, options: [.new]) { [weak self] _, change in
+            guard change.newValue == false else { return }
+            MainActor.assumeIsolated { self?.restEdge() }
+        })
         switchWatch = NotificationCenter.default.addObserver(forName: Backdrop.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.schedule() }
         }
@@ -564,7 +577,7 @@ class BackdropCardView: UICollectionReusableView {
         if let top {
             let header = (list as? UITableView)?.tableHeaderView
             let plain = header == nil || (header?.subviews.isEmpty == true && (header?.frame.height ?? 0) <= 44)
-            if list.bounds.minY - 600 <= 0 { wanted = plain ? BackdropCards.gap - top : 0 }
+            if list.bounds.minY - 600 <= 0 { wanted = plain ? BackdropCards.onPixel(BackdropCards.gap - top, in: list) : 0 }
         } else {
             wanted = 0
         }
@@ -574,6 +587,30 @@ class BackdropCardView: UICollectionReusableView {
         list.contentInset.top += wanted - lifted
         lifted = wanted
         if resting { list.contentOffset.y = -list.adjustedContentInset.top }
+        restEdge()
+    }
+
+    /// A list moved up by `lifted` (negative: up), `past` its resting place: nothing is under the bar yet, so no edge.
+    nonisolated static func hidesTopEdge(lifted: CGFloat, past: CGFloat) -> Bool { lifted < -0.5 && past <= 0.5 }
+
+    /// This list's top edge was hidden here, for rest (`restEdge`), and is shown again from here.
+    private var heldEdge = false
+
+    /// Owner 2026-11-13 (a recording, build 975): "Check the glitch on the top bar." A list moved up (`lift`: Settings
+    /// by 18 pt, Files by 12) rests with its start above the bar's foot, and iOS, which goes by the bar and not by the
+    /// list's own start, drew its edge over the bar as if rows had scrolled under: a frosted band with a hard line,
+    /// at rest, with nothing under it. While such a list rests (or is pulled down) its top edge is hidden; it shows
+    /// as soon as rows do go under. A list whose edge someone else hides (a tab's, drawn by its still host) is left be.
+    private func restEdge() {
+        guard let list else { return }
+        let rests = Self.hidesTopEdge(lifted: lifted, past: list.contentOffset.y + list.adjustedContentInset.top)
+        let edge = list.topEdgeEffect
+        if rests {
+            if !edge.isHidden { heldEdge = true; edge.isHidden = true }
+        } else if heldEdge {
+            heldEdge = false
+            if edge.isHidden { edge.isHidden = false }
+        }
     }
 
     /// One section near the screen: its cards, and its title and note when it has them.

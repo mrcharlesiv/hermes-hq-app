@@ -182,6 +182,42 @@ final class SoftCardsTourTests: XCTestCase {
         }
     }
 
+    // MARK: The top bar at rest
+
+    /// Owner 2026-11-13 (a recording of Tasks, build 975): "Check the glitch on the top bar." The bar wore a frosted
+    /// band with a hard line at rest and dropped it the moment the list was pulled. Each page is pulled down twice and
+    /// let go, as in the recording, with a picture at rest before and after each pull; film it with
+    /// `xcrun simctl io <sim> recordVideo` to see the frames between (build/tools/barband.py reads the pictures).
+    @MainActor func testSoft4_PullDown() throws {
+        launch()
+        XCTAssertTrue(open("More"))
+        for row in ["more-row-tasks", "more-row-settings", "more-row-files"] {
+            let cell = app.cells[row]
+            for _ in 0..<4 where !(cell.exists && cell.isHittable) { app.swipeUp(); Thread.sleep(forTimeInterval: 0.6) }
+            guard cell.exists, cell.isHittable else { continue }
+            cell.tap()
+            Thread.sleep(forTimeInterval: 2.0)
+            pullTwice(row.replacingOccurrences(of: "more-row-", with: "pull-"))
+            back()
+            for _ in 0..<3 { app.swipeDown(); Thread.sleep(forTimeInterval: 0.4) }
+        }
+        for name in ["Tasks", "Sessions", "Bots"] where tab(name).exists {
+            _ = open(name)
+            pullTwice("pull-tab-" + name.lowercased())
+        }
+    }
+
+    @MainActor private func pullTwice(_ name: String) {
+        shot(name + "-1-rest")
+        for round in 1...2 {
+            let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45))
+            let to = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.62))
+            from.press(forDuration: 0.1, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.6)
+            Thread.sleep(forTimeInterval: 1.5)
+            shot("\(name)-\(round + 1)-rest")
+        }
+    }
+
     /// One step back: the bar's back button, a sheet's own way out, or a tap off a menu.
     @MainActor private func back() {
         let button = app.navigationBars.buttons.element(boundBy: 0)

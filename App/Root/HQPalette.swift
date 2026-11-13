@@ -331,6 +331,8 @@ private final class EdgeHostScrollView: UIScrollView {
     private weak var list: UIScrollView?
     /// How far past the header the soft edge reaches once rows are under it (none at rest: the first row stays sharp).
     private static let reachBelow: CGFloat = 16
+    /// A list this close to its top is at rest: it settles on a whole pixel, which an inset need not be.
+    private static let restSlack: CGFloat = 0.5
     #if targetEnvironment(macCatalyst)
     private let backing = UIView()
     /// [backdrop] Theme › App Background: the backing is a copy of the picture, lined up with the page's.
@@ -386,7 +388,13 @@ private final class EdgeHostScrollView: UIScrollView {
     private func updateEdge() {
         guard let list else { return }
         let headerBottom = safeAreaInsets.top
-        let scrolledUnder = list.contentOffset.y + list.adjustedContentInset.top
+        // [soft-cards] Owner 2026-11-13 (a recording of Tasks on build 975): "Check the glitch on the top bar." At
+        // rest the bar wore the soft edge's band with a hard line under the pills, and both went the moment the list
+        // was pulled. Soft Cards starts the list a fraction of a point lower (`BackdropCards.setTopRoom`: 1.7 pt on
+        // Tasks), the list rests on a whole pixel (1.667), and that 0.03 pt read as rows under the bar. Under half a
+        // point is rest.
+        let past = list.contentOffset.y + list.adjustedContentInset.top
+        let scrolledUnder = past < Self.restSlack ? min(past, 0) : past
         let below = min(max(scrolledUnder, 0), Self.reachBelow)
         let reachFrame = CGRect(x: frame.minX, y: frame.minY, width: bounds.width, height: headerBottom + below)
         if reach.frame != reachFrame { reach.frame = reachFrame }

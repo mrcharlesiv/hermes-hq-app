@@ -796,7 +796,9 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         if currentList != nil {
             // A list is in your order until you say otherwise.
             let sort = store.settings.sort
-            let sorts: [(String, String, String)] = [("smart", "My Order", "hand.draw"), ("due", "Due Date", "calendar"), ("added", "Date Added", "clock")]
+            var sorts: [(String, String, String)] = [("smart", "My Order", "hand.draw"), ("due", "Due Date", "calendar"), ("added", "Date Added", "clock")]
+            // [tasks-first] By priority, on an add-on that keeps one (0.9.53).
+            if store.fieldsSupported || sort == "priority" { sorts.insert(("priority", "Priority", "flag"), at: 2) }
             organize.append(UIMenu(title: "Sort By", subtitle: sorts.first { $0.0 == sort }?.1, image: UIImage(systemName: "arrow.up.arrow.down"),
                                    options: .singleSelection, children: sorts.map { key, title, symbol in
                 UIAction(title: title, image: UIImage(systemName: symbol), state: sort == key ? .on : .off) { [weak self] _ in
@@ -851,7 +853,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
             self.reload(animated: true)
             // A bot asked to help hears about it now, in the task's own chat on its page, and says what it would take.
             if task.helper != nil {
-                self.openTask(task.id, asking: TodoWords.helpQuestion)
+                self.openTask(task.id, asking: task.whoKind == .bot ? TaskNow.startRequest : TodoWords.helpQuestion)
             } else if self.rows[task.id] != nil {
                 self.notices.show("Added “\(task.title)”")
             } else {
@@ -885,7 +887,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         reveal(id)
         #if targetEnvironment(macCatalyst)
         if (tabBarController as? MainTabController)?.split?.isDouble == true {
-            let page = TodoSheet.page(taskID: id, store: store, context: context)
+            let page = TodoSheet.page(taskID: id, store: store, context: context, beside: true)
             TodoSheet.model(of: page)?.onMarkedDone = { [weak self] task in self?.offerUndoDone(task) }
             TodoSheet.model(of: page)?.onAssigned = { [weak self] words in self?.openTask(id, asking: words) }   // [tasks-first]
             if atReply { (page as? ChatViewController)?.opensAtNewest(); TodoSheet.model(of: page)?.tuck(.alert) }   // the reply first, the task as its bar
@@ -1357,7 +1359,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         if let path = coordinator.destinationIndexPath { coordinator.drop(drop.dragItem, toItemAt: path) }
         Haptics.play(.soft)   // the drop lands; the places crossed on the way ticked
         if store.settings.sort != "smart" {
-            notices.show("Sorted by \(store.settings.sort == "due" ? "Due Date" : "Date Added"). Choose My Order in Sort By to arrange tasks by hand.", seconds: 4)
+            notices.show("Sorted by \(store.settings.sort == "due" ? "Due Date" : (store.settings.sort == "priority" ? "Priority" : "Date Added")). Choose My Order in Sort By to arrange tasks by hand.", seconds: 4)
         }
         Task { if await !store.move([id], to: list, position: position) { PagesHaptics.error() } }
     }

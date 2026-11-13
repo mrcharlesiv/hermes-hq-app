@@ -167,6 +167,11 @@ struct TodoRowView: View {
         if row.words.repeats {
             line = Text("\(line)\(gap)\(Text(Image(systemName: "repeat")).font(small).foregroundStyle(Color.hqLabel3))")
         }
+        // Its tags (a list and Inbox, where the row has the room), each "#word", tied on like the marks.
+        for tag in row.words.tags {
+            let word = "#" + tag.replacingOccurrences(of: " ", with: "\u{00A0}")
+            line = Text("\(line)\(gap)\(Text(word).font(small).foregroundStyle(Color.hqLabel2))")
+        }
         return line
     }
 
@@ -183,9 +188,12 @@ struct TodoRowView: View {
         } else {
             Button(action: toggle) {
                 let size = min(30, circleSize).rounded()
+                // An open task's circle is its priority's colour (red, orange, the accent), a little heavier so the
+                // colour reads.
+                let ink = row.done || row.ticking ? nil : TodoPriorityLook.color(row.words.priority)
                 Image(systemName: row.done || row.ticking ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: size, weight: .light))
-                    .foregroundStyle(row.done || row.ticking ? Color.hqTint : Color.hqLabel3)
+                    .font(.system(size: size, weight: ink == nil ? .light : .regular))
+                    .foregroundStyle(row.done || row.ticking ? Color.hqTint : (ink ?? Color.hqLabel3))
                     .frame(width: size, height: size)
                     .contentShape(Rectangle().inset(by: -10))
             }

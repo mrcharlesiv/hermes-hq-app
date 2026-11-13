@@ -195,6 +195,30 @@ enum TaskPage {
         return chat
     }
 
+    /// [tasks-first] Step 5, the Mac: the task's chat for the pane beside the task's page. The same chat `make`
+    /// builds, without the task laid over it: `sheet.split` says the page stands beside it.
+    static func makeBeside(model sheet: TodoSheetModel) -> ChatViewController? {
+        let store = sheet.store, context = sheet.context
+        guard let task = store.task(sheet.taskID) else { return nil }
+        guard TodoViews.hasTeammate(task) || TaskChatLinks.link(task, account: context.account) != nil else { return nil }
+        guard let chatModel = chatModel(task, store: store, context: context),
+              let chat = context.makeChat(chatModel) as? ChatViewController else { return nil }
+        sheet.split = true
+        sheet.chat = chat
+        sheet.keptChat = chat
+        chat.suppressesTalkTip = true
+        chat.view.accessibilityIdentifier = "task.chat-pane"
+        chat.menus?.isTaskChat = true
+        if let live = chatModel as? LiveChatSession {
+            live.slashHooks.newChat = { [weak chat] _ in
+                chat?.showNotice("A task keeps its one chat. Ask here, or start a new chat from Sessions.", duration: 4, spinner: false)
+                return true
+            }
+        }
+        AppLog.note("tasks", "task page opened beside its chat for \(AppLog.tag(chatModel.profile))")
+        return chat
+    }
+
     /// The task's chat: the one it has, else a new hidden one with the bot that knows the task, made on the first
     /// message. Typed words go out with the task's details the first time (your bubble keeps your words).
     static func chatModel(_ task: TodoTask, store: TasksStore, context: MorePages.Context) -> (any ChatSessionModel)? {

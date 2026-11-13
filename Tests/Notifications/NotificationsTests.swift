@@ -523,7 +523,7 @@ enum UIImageForTests {
 
 @MainActor private final class FakePlugin {
     var status: Int = 200
-    var statusBody: [String: Any] = ["ok": true, "kinds": ["turnDone", "approval"], "seal": true, "replies": "watcher", "ownChats": true, "quietStandIns": true, "desktopOpens": true, "askCards": true, "pagePreviews": true, "warmup": true, "desktopForward": true, "gatewayLogins": true, "namedSites": true, "deviceAccess": true, "deviceAccessKinds": true, "liveSteps": true, "liveEnds": true, "liveQuick": true, "terminal": true, "tasks": true, "draftCards": true, "pluginUpdates": true, "draftCardsShown": true, "pluginVersion": "0.9.47", "delivery": "Relay"]
+    var statusBody: [String: Any] = ["ok": true, "kinds": ["turnDone", "approval"], "seal": true, "replies": "watcher", "ownChats": true, "quietStandIns": true, "desktopOpens": true, "askCards": true, "pagePreviews": true, "warmup": true, "desktopForward": true, "gatewayLogins": true, "namedSites": true, "deviceAccess": true, "deviceAccessKinds": true, "liveSteps": true, "liveEnds": true, "liveQuick": true, "terminal": true, "tasks": true, "draftCards": true, "pluginUpdates": true, "task_fields": true, "draftCardsShown": true, "pluginVersion": "0.9.47", "delivery": "Relay"]
     var legacyStatus: Int = 404
     var calls: [(path: String, method: String, body: [String: Any]?)] = []
     var deviceStatus = 200

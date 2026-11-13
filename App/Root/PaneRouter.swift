@@ -253,6 +253,10 @@ extension MainTabController {
         // [bots-rail] the rail's head [rail-more] or room [chats-under] or a chat listed under its bot
         if split?.isViewLoaded == true { split?.macSidebar.markOpen(bot: double ? bot : nil, room: double ? room : nil, chat: double ? session : nil) }
         split?.inspector.follow(double ? root as? ChatViewController : nil)   // [mac-layout] the inspector shows the chat beside it
+        // [tasks-first] Step 5: beside a task's page the pane is the bot's conversation.
+        let taskModel = double ? (root as? TodoSheetHost)?.model : nil
+        split?.inspector.followTask(taskModel?.split == true ? taskModel?.keptChat : nil,
+                                    name: taskModel?.task.map { taskModel?.botName(taskModel?.chatBot($0)) ?? "" } ?? "")
         #endif
         // The placeholder takes the background of the list beside it, and drops "Choose an item" beside an empty one.
         (root as? DetailPlaceholderViewController)?.follow(list: (selectedViewController as? UINavigationController)?.topViewController)

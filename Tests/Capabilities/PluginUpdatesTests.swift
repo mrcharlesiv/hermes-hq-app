@@ -237,7 +237,7 @@ import Testing
     /// The app asks for the add-on that can (0.9.52): one that doesn't say `pluginUpdates` is offered its update; one
     /// that says false (Hermes on Windows) is current, not offered an update it can never satisfy.
     @Test func theAppAsksForTheAddOnThatAppliesUpdates() {
-        #expect(PushPolicy.wantedVersion == "0.9.52", "the main bot's copy serves it; no bot needs its own for this")
+        #expect(PushPolicy.versionAtLeast(PushPolicy.wantedVersion, "0.9.52"), "the main bot's copy serves it; no bot needs its own for this")
         #expect(!PushPolicy.pluginUpdatesKnown(["draftCards": true]) && !PushPolicy.pluginUpdatesKnown(nil))
         #expect(PushPolicy.pluginUpdatesKnown(["pluginUpdates": true]) && PushPolicy.pluginUpdatesKnown(["pluginUpdates": false]))
         #expect(!PushPolicy.current(["pluginUpdates": true]), "still needs every older flag")

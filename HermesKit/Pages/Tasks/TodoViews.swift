@@ -79,6 +79,10 @@ nonisolated struct TodoRowWords: Hashable, Sendable {
     /// "2/4" with steps.
     var steps: String?
     var repeats = false
+    /// 0 none, 1 high, 2 medium, 3 low: the circle's colour.
+    var priority = 0
+    /// Its tags, where the row has the room for them (a list, Inbox).
+    var tags: [String] = []
     /// The second line, only when a bot has something for you (or, in Bots, what it is on).
     var note: String?
     var tone: TodoTone = .plain
@@ -87,6 +91,7 @@ nonisolated struct TodoRowWords: Hashable, Sendable {
     /// What VoiceOver hears after the title.
     var spoken: String {
         var parts: [String] = []
+        if priority > 0 { parts.append("\(TodoViews.priorityWord(priority)) priority") }
         if let when { parts.append(late ? "due \(when), late" : when) }
         if let steps { parts.append("\(steps.replacingOccurrences(of: "/", with: " of ")) steps") }
         if let note { parts.append(note) }
@@ -126,6 +131,11 @@ nonisolated enum TodoViews {
         let today = calendar.startOfDay(for: now)
         let known = Set(sections.map(\.id))
         func dueDay(_ task: TodoTask) -> Date? { TodoDates.due(task.due, calendar: calendar).map { calendar.startOfDay(for: $0.date) } }
+        // [tasks-first] A start day (0.9.53): until then the task waits under Upcoming on that day; from then on it
+        // is in your day, under Today, until it is due (then by its due date as any task).
+        func startDay(_ task: TodoTask) -> Date? { task.starts.flatMap { TodoDates.day(String($0.prefix(10)), calendar: calendar) } }
+        func waits(_ task: TodoTask) -> Bool { startDay(task).map { $0 > today } ?? false }
+        func started(_ task: TodoTask) -> Bool { startDay(task).map { $0 <= today } ?? false }
         func due(_ task: TodoTask) -> Date { TodoDates.due(task.due, calendar: calendar)?.date ?? .distantFuture }
         func created(_ task: TodoTask) -> Date { TodoDates.moment(task.createdAt) ?? .distantPast }
         func updated(_ task: TodoTask) -> Date { TodoDates.moment(task.updatedAt) ?? created(task) }
@@ -142,8 +152,12 @@ nonisolated enum TodoViews {
         switch view {
         case .today:
             let mine = open.filter(inYourDay)
-            let overdue = mine.filter { dueDay($0).map { $0 < today } ?? false }
-            let todays = mine.filter { dueDay($0) == today }
+            let overdue = mine.filter { !waits($0) && (dueDay($0).map { $0 < today } ?? false) }
+            let todays = mine.filter { task in
+                guard !waits(task) else { return false }
+                if dueDay(task) == today { return true }
+                return started(task) && (dueDay(task).map { $0 > today } ?? true)   // it has started and isn't due yet
+            }
             let dated = Set((overdue + todays).map(\.id))
             add(.overdue, byDue(overdue))
             add(.today, byDue(todays))
@@ -151,11 +165,18 @@ nonisolated enum TodoViews {
             add(.waiting, mine.filter { waitsOnYou($0) && !dated.contains($0.id) }.sorted { (updated($0), $0.id) > (updated($1), $1.id) })
             add(.done, newestDone(done.filter { !botsOwn($0) && calendar.isDate(finished($0), inSameDayAs: now) }))
         case .upcoming:
-            let coming = open.filter { task in inYourDay(task) && (dueDay(task).map { $0 > today } ?? false) }
-            let days = Dictionary(grouping: coming) { dayKey(dueDay($0) ?? today, calendar: calendar) }
+            // Its day: the day it starts while that is still ahead, else the day it's due (one that has started and
+            // isn't due yet is in Today).
+            func day(_ task: TodoTask) -> Date? {
+                if waits(task) { return startDay(task) }
+                if started(task) { return nil }
+                return dueDay(task).flatMap { $0 > today ? $0 : nil }
+            }
+            let coming = open.filter { inYourDay($0) && day($0) != nil }
+            let days = Dictionary(grouping: coming) { dayKey(day($0) ?? today, calendar: calendar) }
             for key in days.keys.sorted() { add(.day(key), byDue(days[key] ?? [])) }
         case .inbox:
-            let loose = open.filter { !botsOwn($0) && $0.due == nil && list($0, known: known) == nil }
+            let loose = open.filter { !botsOwn($0) && $0.due == nil && $0.starts == nil && list($0, known: known) == nil }
             add(.open, loose.filter { !TodoSections.isStale($0, now: now) }.sorted { (created($0), $0.id) > (created($1), $1.id) })
             add(.stale, loose.filter { TodoSections.isStale($0, now: now) }.sorted { (updated($0), $0.id) < (updated($1), $1.id) })
             add(.done, newestDone(done.filter { !botsOwn($0) && list($0, known: known) == nil }))
@@ -242,6 +263,9 @@ nonisolated enum TodoViews {
     static func row(_ task: TodoTask, in kind: TodoGroupKind, now: Date, calendar: Calendar = .current,
                     botName: (String?) -> String) -> TodoRowWords {
         var words = TodoRowWords()
+        words.priority = task.isDone ? 0 : task.priority
+        // Tags where a row has no date heading over it and room to spare: a list and Inbox.
+        if kind == .open, !task.isDone { words.tags = Array(task.tags.prefix(2)) }
         if !task.steps.isEmpty { words.steps = "\(task.steps.filter(\.done).count)/\(task.steps.count)" }
         words.repeats = task.repeatRule != nil
         let name = botName(task.helper)
@@ -255,6 +279,12 @@ nonisolated enum TodoViews {
             let time = due.hasTime ? TodoWords.clock(due.date, calendar: calendar) : nil
             let today = calendar.startOfDay(for: now), day = calendar.startOfDay(for: due.date)
             switch kind {
+            case .today where day > today:
+                // Started, due later: when it's due.
+                words.when = soon(due.date, now: now, calendar: calendar)
+            case .day(let key) where key != dayKey(day, calendar: calendar):
+                // Under the day it starts: when it's due.
+                words.when = "Due " + soon(due.date, now: now, calendar: calendar)
             case .today, .day:
                 words.when = time            // the heading says the day
             case .overdue:
@@ -305,6 +335,36 @@ nonisolated enum TodoViews {
         case .bot(let profile): return (botName(profile), nil)
         case .done: return ("Done", nil)
         }
+    }
+
+    /// "High", "Medium", "Low"; "None" for 0.
+    static func priorityWord(_ priority: Int) -> String {
+        switch priority {
+        case 1: return "High"
+        case 2: return "Medium"
+        case 3: return "Low"
+        default: return "None"
+        }
+    }
+
+    /// "Starts tomorrow", "Starts Mon", "Started Nov 3": a task's start day in words.
+    static func startWords(_ task: TodoTask, now: Date, calendar: Calendar = .current) -> String? {
+        guard let raw = task.starts, let day = TodoDates.day(String(raw.prefix(10)), calendar: calendar) else { return nil }
+        let word = soon(day, now: now, calendar: calendar)
+        let lower = word == "Today" || word == "Tomorrow" || word == "Yesterday" ? word.lowercased() : word
+        return (day > calendar.startOfDay(for: now) ? "Starts " : (calendar.isDate(day, inSameDayAs: now) ? "Starts " : "Started ")) + lower
+    }
+
+    /// Tags as typed in one field ("hiring, q4"): split at commas, a leading # dropped, each once, ten at most.
+    static func tags(from text: String) -> [String] {
+        var out: [String] = [], seen = Set<String>()
+        for part in text.split(whereSeparator: { $0 == "," || $0.isNewline }) {
+            var tag = part.trimmingCharacters(in: .whitespaces)
+            while tag.hasPrefix("#") { tag.removeFirst() }
+            tag = String(tag.trimmingCharacters(in: .whitespaces).prefix(30))
+            if !tag.isEmpty, seen.insert(tag.lowercased()).inserted { out.append(tag) }
+        }
+        return Array(out.prefix(10))
     }
 
     // MARK: The task's page ([tasks-first] step 2: a task is a task; a bot is added to it like a co-worker)

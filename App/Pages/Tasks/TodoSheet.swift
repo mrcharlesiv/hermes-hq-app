@@ -98,6 +98,8 @@ final class TodoSheetModel {
     /// [tasks] An answer you tapped (one of the bot's choices), shown on the task's view until the bot's turn ends and
     /// the task moves on (owner 2026-11-09, mockup 2: your answer, then what the bot did with it).
     var sentAnswer: (words: String, rev: Int)?
+    /// [tasks-first] A file or photo of yours is on its way to the task (TaskFields).
+    var attaching = false
 
     init(taskID: String, store: TasksStore, context: MorePages.Context) {
         self.taskID = taskID
@@ -181,6 +183,13 @@ final class TodoSheetModel {
 
     var gone: Bool { store.hasList && store.task(taskID) == nil }
 
+    /// [tasks-first] Step 5, the Mac: the task's chat is in the pane beside this page (`chat`), not under it.
+    var split = false
+    /// The pane's chat, kept by the page (`chat` is weak: under the task, the chat is the page itself).
+    @ObservationIgnored var keptChat: ChatViewController?
+    /// The page has the task's chat at hand: under it (`embedded`) or beside it (`split`).
+    var chatAtHand: Bool { embedded || split }
+
     func botName(_ profile: String?) -> String { PagesNames.botName(profile ?? "default", bots: context.bots) }
     func head(_ profile: String) -> JSONValue? { PagesNames.head(profile, bots: context.bots) }
 
@@ -242,7 +251,9 @@ final class TodoSheetModel {
         guard task.whoKind != who || task.helper != helper else { return }
         PagesHaptics.selection()
         var fields: [String: JSONValue] = ["who": .string(who.rawValue), "bot": helper.map(JSONValue.string) ?? .null]
-        if who != .me { fields["repeat"] = .null } else { fields["prep"] = .bool(false) }
+        // A bot's own task never repeats (that stays a Job); one you share can, on an add-on that keeps it.
+        if who == .bot || (who == .together && !store.fieldsSupported) { fields["repeat"] = .null }
+        if who == .me { fields["prep"] = .bool(false) }
         if let steps = TodoEdits.stepsForJustMe(who, steps: task.steps) { fields["steps"] = TodoWire.steps(steps) }
         let asks = helper != nil && task.helper != helper && chatLink(task) == nil
         let words = who == .together ? TodoWords.helpQuestion : TaskNow.startRequest
@@ -491,7 +502,7 @@ final class TodoSheetModel {
     /// and the task's view stays (the bot's reply lands on it). Owner 2026-11-09: "too many taps".
     func answer(_ words: String) {
         guard let task else { return }
-        guard let chat, embedded else { openChat(task, question: words); return }
+        guard let chat, chatAtHand else { openChat(task, question: words); return }
         Haptics.play(.light)   // as Send
         sentAnswer = (words, task.rev)
         let out = (chat.session as? LiveChatSession)?.wrapsSend?(words) ?? (text: words, display: words)
@@ -503,7 +514,7 @@ final class TodoSheetModel {
     /// The task's own chat: on the task's page, the words go into it here; standing alone (no bots yet), it is
     /// pushed over this page (the sheet's own navigation, or the Mac's right pane).
     func openChat(_ task: TodoTask, question: String? = nil) {
-        if let chat, embedded {
+        if let chat, chatAtHand {
             let words = question?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if words.isEmpty { chat.focusComposer(); return }
             let out = (chat.session as? LiveChatSession)?.wrapsSend?(words) ?? (text: words, display: words)
@@ -539,9 +550,17 @@ enum TodoSheet {
     }
 
     /// [mac] Two panes: the task opens in the right pane beside the list, as a Kanban task or a job's page does.
-    static func page(taskID: String, store: TasksStore, context: MorePages.Context) -> UIViewController {
+    /// `beside`: the Mac's two panes with room for a third ([tasks-first] step 5, mockup 6-mac: "The task takes the
+    /// centre … the bot's conversation is the right-hand pane"): a task with a bot is the plain task's page, and its
+    /// chat goes in the window's right pane (`MacInspector.followTask`), not under the task.
+    static func page(taskID: String, store: TasksStore, context: MorePages.Context, beside: Bool = false) -> UIViewController {
         let model = TodoSheetModel(taskID: taskID, store: store, context: context)
-        let page: UIViewController = TaskPage.make(model: model) ?? TodoSheetHost(model: model)
+        let page: UIViewController
+        if beside, TaskPage.makeBeside(model: model) != nil {
+            page = TodoSheetHost(model: model)
+        } else {
+            page = TaskPage.make(model: model) ?? TodoSheetHost(model: model)
+        }
         model.close = { [weak page] in
             guard let page else { return }
             if page.navigationController?.presentingViewController != nil {
@@ -585,6 +604,19 @@ final class TodoSheetHost: UIHostingController<HQScaledRoot<TodoSheetView>> {
         more.accessibilityLabel = "More"
         more.accessibilityIdentifier = "task.more"
         navigationItem.rightBarButtonItem = more
+        #if targetEnvironment(macCatalyst)
+        // [tasks-first] Step 5: the bot's conversation is the pane beside the task; ◨ closes it and brings it back,
+        // as beside a chat (⌘I).
+        if model.split {
+            let pane = UIBarButtonItem(image: UIImage(systemName: "sidebar.trailing"), primaryAction: UIAction { [weak self] _ in
+                guard let self else { return }
+                MacInspector.beside(self)?.toggle()
+            })
+            pane.accessibilityLabel = "Conversation"
+            pane.accessibilityIdentifier = "task.pane"
+            navigationItem.rightBarButtonItems = [pane, more]
+        }
+        #endif
     }
 
     @MainActor required dynamic init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
@@ -882,11 +914,13 @@ struct TodoNoteView: View {
 
 enum TodoDatePicker {
     /// `rings`: this phone alerts at the due time (your own task, or one you share with a bot).
-    static func make(date: Date?, hasTime: Bool, rings: Bool = true, done: @escaping (Date, Bool) -> Void) -> UINavigationController {
-        let model = TodoDateModel(date: date ?? Date(), hasTime: hasTime)
-        model.rings = rings
+    /// `dayOnly`: a day with no time and no alert (the day a task starts).
+    static func make(date: Date?, hasTime: Bool, rings: Bool = true, dayOnly: Bool = false, done: @escaping (Date, Bool) -> Void) -> UINavigationController {
+        let model = TodoDateModel(date: date ?? Date(), hasTime: hasTime && !dayOnly)
+        model.rings = rings && !dayOnly
+        model.dayOnly = dayOnly
         let host = TodoDateHost(model: model, done: done)
-        let nav = ChatSheet.wrap(host, title: "Due", detents: [.large()])
+        let nav = ChatSheet.wrap(host, title: dayOnly ? "Starts" : "Due", detents: [.large()])
         let set = UIBarButtonItem(title: "Set", primaryAction: UIAction { [weak host] _ in host?.set() })
         set.style = .prominent
         set.accessibilityIdentifier = "task.due.set"
@@ -935,6 +969,7 @@ final class TodoDateModel {
     var date: Date
     var hasTime: Bool
     var rings = true
+    var dayOnly = false
     init(date: Date, hasTime: Bool) { self.date = date; self.hasTime = hasTime }
 }
 
@@ -946,12 +981,22 @@ struct TodoDateView: View {
                 DatePicker("Day", selection: $model.date, displayedComponents: .date)
                     .datePickerStyle(.graphical)
                     .tint(Color.hqTint)
-                Toggle("Time", isOn: Binding(get: { model.hasTime }, set: { PagesHaptics.selection(); model.hasTime = $0 }))
-                    .tint(Color.hqTint)
-                if model.hasTime {
-                    HQDatePicker("At", selection: $model.date)
+                if !model.dayOnly {
+                    Toggle("Time", isOn: Binding(get: { model.hasTime }, set: { PagesHaptics.selection(); model.hasTime = $0 }))
+                        .tint(Color.hqTint)
+                    if model.hasTime {
+                        HQDatePicker("At", selection: $model.date)
+                    }
                 }
-            } footer: { HQSectionFooter { if model.rings { Text(TodoWords.alertNote(hasTime: model.hasTime)) } } }
+            } footer: {
+                HQSectionFooter {
+                    if model.dayOnly {
+                        Text("The task joins Today on this day and stays there until it’s due.")
+                    } else if model.rings {
+                        Text(TodoWords.alertNote(hasTime: model.hasTime))
+                    }
+                }
+            }
             .hqSheetRows()
         }
         .hqGroupedPage()

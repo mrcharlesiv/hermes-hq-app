@@ -1,7 +1,8 @@
 // [tasks-first] Owner 2026-11-12 ("every task is pure task management first, agent stuff second … THEN agent stuff
 // built along side it so it feels more like you have a teammate in there"; mockups 3-task-your-own and
 // 4-task-with-a-bot, "I love all of this"): the same view for every task. The title, then one line each for when it's
-// due, how it repeats and who has it; notes; steps; files. A task of your own stops there: no bot's name, no message
+// due, how it repeats and who has it (step 3 adds its alert, start day, priority and tags, TaskFields.swift); notes;
+// steps; files. A task of your own stops there: no bot's name, no message
 // box. A bot on the task is named on the who row with what it is doing, its face is on its steps and files, and its
 // conversation is the page's last section with a one-line message box under it. Only a question for you moves up,
 // as one card under the who row with its answers as taps. "Assign" on the who row is the one way a bot comes in.
@@ -30,7 +31,7 @@ struct TaskPlainView: View {
     enum Field: Hashable { case step, notes }
     @Environment(\.dynamicTypeSize) private var typeSize
     /// The page has a bot's conversation (a bot is on the task, or it had one): its section, card and message box show.
-    private var teammate: Bool { model.embedded }
+    private var teammate: Bool { model.chatAtHand }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -39,7 +40,10 @@ struct TaskPlainView: View {
                     titleRow
                     completedRow
                     dueRow
+                    startRow
                     repeatRow
+                    priorityRow
+                    tagsRow
                     whoRow
                     if model.gone {
                         TaskGridRow(last: true, topLine: true) { Image(systemName: "trash") } text: {
@@ -53,7 +57,8 @@ struct TaskPlainView: View {
                     notes
                     steps(proxy)
                     files
-                    if teammate {
+                    // Beside its chat (the Mac's pane) the task needs no copy of the conversation at its foot.
+                    if teammate, !model.split {
                         TimelineView(.periodic(from: .now, by: 1)) { context in TaskTeammate(model: model, task: task, part: .foot, tick: context.date) }
                     }
                 }
@@ -91,7 +96,7 @@ struct TaskPlainView: View {
     }
 
     /// The one-line message box: on a task with a bot's conversation, while no field of the view has the keys.
-    private var showsMessageLine: Bool { teammate && !model.gone && !model.editingBrief }
+    private var showsMessageLine: Bool { model.embedded && !model.gone && !model.editingBrief }
 
     // MARK: Top
 
@@ -101,7 +106,8 @@ struct TaskPlainView: View {
             Button { task.isDone ? model.reopen() : model.markDone() } label: {
                 Image(systemName: task.isDone ? "checkmark.circle.fill" : "circle")
                     .font(Font.hq(.title2).weight(.light))
-                    .foregroundStyle(task.isDone ? Color.hqTint : Color.hqLabel3)
+                    // An open task's circle is its priority's colour.
+                    .foregroundStyle(task.isDone ? Color.hqTint : (TodoPriorityLook.color(task.priority) ?? Color.hqLabel3))
                     .contentShape(Rectangle().inset(by: -10))
             }
             .buttonStyle(.plain)
@@ -147,23 +153,123 @@ struct TaskPlainView: View {
             return Calendar.current.isDate(due.date, inSameDayAs: now) ? Color.hqOrange : Color.hqLabel
         }()
         let words = due == nil ? "No date" : TodoWords.dueTile(task, now: now)
+        // Its alert, when it has one of its own and this phone rings for it (not a bot's own task).
+        let rings = model.hasFields && due != nil && task.whoKind != .bot
+        let alert = rings && !task.isDone ? task.alert.flatMap { $0 > 0 ? TodoReminder.alertWords($0) : nil } : nil
         return Menu {
             Button("Today") { model.setDue(now, hasTime: false) }
             Button("Tomorrow") { model.setDue(Calendar.current.date(byAdding: .day, value: 1, to: now), hasTime: false) }
             Button("Next Week") { model.setDue(Calendar.current.date(byAdding: .day, value: 7, to: now), hasTime: false) }
             Button("Choose Date…") { pickDate() }
+            if rings {
+                Menu("Alert") {
+                    Button { model.setAlert(nil) } label: {
+                        if (task.alert ?? 0) == 0 { Label("At Its Time", systemImage: "checkmark") } else { Text("At Its Time") }
+                    }
+                    ForEach(TodoReminder.alerts.filter { $0 > 0 }, id: \.self) { minutes in
+                        Button { model.setAlert(minutes) } label: {
+                            if task.alert == minutes { Label(TodoReminder.alertWords(minutes), systemImage: "checkmark") } else { Text(TodoReminder.alertWords(minutes)) }
+                        }
+                    }
+                }
+            }
             if due != nil { Button("No Due Date", role: .destructive) { model.setDue(nil, hasTime: false) } }
         } label: {
             TaskGridRow {
                 Image(systemName: "calendar").foregroundStyle(due == nil || color == Color.hqLabel ? Color.hqLabel2 : color)
             } text: {
-                Text(words).foregroundStyle(due == nil ? Color.hqLabel3 : color).lineLimit(1)
+                HStack(spacing: 8) {
+                    Text(words).foregroundStyle(due == nil ? Color.hqLabel3 : color).lineLimit(1)
+                    Spacer(minLength: 4)
+                    if let alert {
+                        HStack(spacing: 4) {
+                            Image(systemName: "bell").imageScale(.small).accessibilityHidden(true)
+                            Text(alert).lineLimit(1)
+                        }
+                        .font(Font.hq(.footnote))
+                        .foregroundStyle(Color.hqLabel2)
+                        .accessibilityIdentifier("task.alert")
+                    }
+                }
             }
         }
         .buttonStyle(.plain)
         .disabled(model.gone)
-        .accessibilityLabel("Due: \(words). Change")
+        .accessibilityLabel("Due: \(words)\(alert.map { ", alert \($0)" } ?? ""). Change")
         .accessibilityIdentifier("task.due")
+    }
+
+    /// The day it starts, once it has one: until then it waits under Upcoming, from then on it is in Today.
+    @ViewBuilder private var startRow: some View {
+        if model.hasFields, let words = TodoViews.startWords(task, now: Date()) {
+            Menu { startChoices } label: {
+                TaskGridRow {
+                    Image(systemName: "calendar.badge.clock").foregroundStyle(Color.hqLabel2)
+                } text: {
+                    Text(words).foregroundStyle(Color.hqLabel).lineLimit(1)
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(model.gone)
+            .accessibilityLabel("\(words). Change")
+            .accessibilityIdentifier("task.start")
+        }
+    }
+
+    @ViewBuilder private var startChoices: some View {
+        let now = Date()
+        Button("Today") { model.setStart(now) }
+        Button("Tomorrow") { model.setStart(Calendar.current.date(byAdding: .day, value: 1, to: now)) }
+        Button("Next Week") { model.setStart(Calendar.current.date(byAdding: .day, value: 7, to: now)) }
+        Button("Choose Date…") { model.pickStart() }
+        if task.starts != nil { Button("No Start Date", role: .destructive) { model.setStart(nil) } }
+    }
+
+    /// Its priority, once it has one: a flag in the circle's colour.
+    @ViewBuilder private var priorityRow: some View {
+        if model.hasFields, task.priority > 0 {
+            let words = "\(TodoViews.priorityWord(task.priority)) priority"
+            Menu { priorityChoices } label: {
+                TaskGridRow {
+                    Image(systemName: "flag.fill").foregroundStyle(TodoPriorityLook.color(task.priority) ?? Color.hqLabel2)
+                } text: {
+                    Text(words).foregroundStyle(Color.hqLabel).lineLimit(1)
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(model.gone)
+            .accessibilityLabel("\(words). Change")
+            .accessibilityIdentifier("task.priority")
+        }
+    }
+
+    @ViewBuilder private var priorityChoices: some View {
+        ForEach([1, 2, 3], id: \.self) { level in
+            Button { model.setPriority(level) } label: {
+                if task.priority == level { Label(TodoViews.priorityWord(level), systemImage: "checkmark") } else { Text(TodoViews.priorityWord(level)) }
+            }
+        }
+        if task.priority > 0 { Button("No Priority", role: .destructive) { model.setPriority(0) } }
+    }
+
+    /// Its tags, once it has any. A tap changes them.
+    @ViewBuilder private var tagsRow: some View {
+        if model.hasFields, !task.tags.isEmpty {
+            Button { model.editTags() } label: {
+                TaskGridRow {
+                    Image(systemName: "tag").foregroundStyle(Color.hqLabel2)
+                } text: {
+                    PagesFlowLayout(spacing: 6, lineSpacing: 4) {
+                        ForEach(task.tags, id: \.self) { tag in TaskTagPill(tag: tag) }
+                    }
+                    .padding(.vertical, 6)
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(model.gone)
+            .accessibilityLabel("Tags: \(task.tags.joined(separator: ", ")). Change")
+            .accessibilityIdentifier("task.tags")
+        }
     }
 
     private func pickDate() {
@@ -269,30 +375,117 @@ struct TaskPlainView: View {
         .accessibilityIdentifier("task.who")
     }
 
-    /// What isn't set yet, as quiet words under the who row: "+ Notes", and "+ Repeat" on a task of your own.
+    /// What isn't set yet, as quiet words under the who row, always one line: "+ Notes  + Repeat  + Priority  + Tags
+    /// + More". As many as fit show as words, in this order; the rest are under "+ More". Each goes once it is set
+    /// (it has its own row then). Two lines of them on a new task read as clutter (2026-11-12).
+    enum Unset: Hashable { case notes, repeats, priority, tags, start, file }
+
+    private var unset: [Unset] {
+        guard !task.isDone, !model.gone else { return [] }
+        var out: [Unset] = []
+        if task.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !model.editingNotes { out.append(.notes) }
+        // Your own task repeats; one you share does on an add-on that keeps it (0.9.53). A bot's own never does.
+        if task.repeatRule == nil, task.whoKind == .me || (task.whoKind == .together && model.hasFields) { out.append(.repeats) }
+        if model.hasFields {
+            if task.priority == 0 { out.append(.priority) }
+            if task.tags.isEmpty { out.append(.tags) }
+            if task.starts == nil { out.append(.start) }
+        }
+        if model.canAttach, TodoWords.shownMade(task).isEmpty { out.append(.file) }
+        return out
+    }
+
     @ViewBuilder private var moreRow: some View {
-        let noNotes = task.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !model.editingNotes
-        let canRepeat = task.whoKind == .me && task.repeatRule == nil
-        if !task.isDone, !model.gone, noNotes || canRepeat {
-            HStack(spacing: 18) {
-                if noNotes {
-                    Button("+ Notes") { model.editNotes() }
-                        .accessibilityLabel("Add Notes")
-                        .accessibilityIdentifier("task.notes.add")
-                }
-                if canRepeat {
-                    Menu { repeatChoices } label: { Text("+ Repeat") }
-                        .accessibilityLabel("Repeat")
-                        .accessibilityIdentifier("task.repeat.add")
-                }
-                Spacer(minLength: 0)
+        let items = unset
+        if !items.isEmpty {
+            // The first line that fits: every word, else one fewer with the rest under "+ More", and so on.
+            ViewThatFits(in: .horizontal) {
+                moreLine(items, shown: 6)
+                moreLine(items, shown: 5)
+                moreLine(items, shown: 4)
+                moreLine(items, shown: 3)
+                moreLine(items, shown: 2)
+                moreLine(items, shown: 1)
             }
-            .font(Font.hq(.footnote))
-            .foregroundStyle(Color.hqLabel2)
             .buttonStyle(.plain)
             .padding(.leading, TaskGrid.text).padding(.trailing, TaskGrid.edge)
-            .frame(minHeight: 36)
+            .padding(.vertical, 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private func moreLine(_ items: [Unset], shown: Int) -> some View {
+        // "+ More" never stands for one thing alone: that one is shown as its own word.
+        let count = items.count - shown == 1 ? items.count : min(shown, items.count)
+        let rest = Array(items.dropFirst(count))
+        return HStack(spacing: 18) {
+            ForEach(items.prefix(count), id: \.self) { item in moreWord(item) }
+            if !rest.isEmpty {
+                Menu {
+                    ForEach(rest, id: \.self) { item in moreEntry(item) }
+                } label: { more("+ More") }
+                    .accessibilityLabel("More to Add")
+                    .accessibilityIdentifier("task.more.add")
+            }
+        }
+        .fixedSize()
+    }
+
+    @ViewBuilder private func moreWord(_ item: Unset) -> some View {
+        switch item {
+        case .notes:
+            Button { model.editNotes() } label: { more("+ Notes") }
+                .accessibilityLabel("Add Notes")
+                .accessibilityIdentifier("task.notes.add")
+        case .repeats:
+            Menu { repeatChoices } label: { more("+ Repeat") }
+                .accessibilityLabel("Repeat")
+                .accessibilityIdentifier("task.repeat.add")
+        case .priority:
+            Menu { priorityChoices } label: { more("+ Priority") }
+                .accessibilityLabel("Priority")
+                .accessibilityIdentifier("task.priority.add")
+        case .tags:
+            Button { model.editTags() } label: { more("+ Tags") }
+                .accessibilityLabel("Add Tags")
+                .accessibilityIdentifier("task.tags.add")
+        case .start:
+            Menu { startChoices } label: { more("+ Start date") }
+                .accessibilityLabel("Start Date")
+                .accessibilityIdentifier("task.start.add")
+        case .file:
+            Menu { fileChoices } label: { more(model.attaching ? "Adding…" : "+ File") }
+                .disabled(model.attaching)
+                .accessibilityLabel("Add a File, Photo or Link")
+                .accessibilityIdentifier("task.file.add")
+        }
+    }
+
+    /// The same thing as a line of the "+ More" menu.
+    @ViewBuilder private func moreEntry(_ item: Unset) -> some View {
+        switch item {
+        case .notes: Button { model.editNotes() } label: { Label("Notes", systemImage: "note.text") }
+        case .repeats: Menu { repeatChoices } label: { Label("Repeat", systemImage: "repeat") }
+        case .priority: Menu { priorityChoices } label: { Label("Priority", systemImage: "flag") }
+        case .tags: Button { model.editTags() } label: { Label("Tags…", systemImage: "tag") }
+        case .start: Menu { startChoices } label: { Label("Start Date", systemImage: "calendar.badge.clock") }
+        case .file: Menu { fileChoices } label: { Label("File, Photo or Link", systemImage: "paperclip") }
+        }
+    }
+
+    private func more(_ words: String) -> some View {
+        Text(words)
+            .font(Font.hq(.footnote))
+            .foregroundStyle(Color.hqLabel2)
+            .lineLimit(1)
+            .frame(minHeight: 32)
+            .contentShape(Rectangle())
+    }
+
+    @ViewBuilder private var fileChoices: some View {
+        Button { model.choosePhoto() } label: { Label("Photo", systemImage: "photo") }
+        Button { model.chooseFile() } label: { Label("File", systemImage: "folder") }
+        Button { model.addLink() } label: { Label("Link", systemImage: "link") }
     }
 
     // MARK: Notes
@@ -453,33 +646,80 @@ struct TaskPlainView: View {
 
     // MARK: Files
 
-    /// What is attached to the task: today, what its bot made for it (a file, a link, a draft), each with the bot's
-    /// face at its end. (Your own files come with the add-on's next fields.)
+    /// What is attached to the task: your own files, photos and links, and what its bot made for it (each of those
+    /// with the bot's face at its end). The last row adds one; with nothing attached the section isn't there, and
+    /// "+ File" waits with the quiet words under the who row.
     @ViewBuilder private var files: some View {
         let made = TodoWords.shownMade(task)
         if !made.isEmpty {
+            let adds = model.canAttach
             TaskBand()
             TaskSectionHead(title: "Files", count: "\(made.count)") { EmptyView() }
             ForEach(Array(made.enumerated()), id: \.element.id) { index, item in
                 Button { model.open(item) } label: {
-                    TaskGridRow(last: index == made.count - 1) {
+                    TaskGridRow(last: index == made.count - 1 && !adds) {
                         Image(systemName: TodoSheetView.madeLook(item).symbol).foregroundStyle(Color.hqLabel2)
                     } text: {
                         HStack(spacing: 8) {
-                            Text(item.title.isEmpty ? item.ref : item.title).foregroundStyle(Color.hqLabel).lineLimit(1)
+                            Text(TaskPlainView.fileName(item)).foregroundStyle(Color.hqLabel).lineLimit(1).truncationMode(.middle)
                             Spacer(minLength: 4)
-                            if let helper = task.helper {
+                            if !item.isYours, let helper = task.helper {
                                 HeadImage(raw: model.head(helper), profile: helper, size: 16).frame(width: 16, height: 16)
-                                    .accessibilityHidden(true)
+                                    .accessibilityLabel("From \(model.botName(helper))")
                             }
                         }
                     }
                 }
                 .buttonStyle(.plain)
-                .contextMenu { Button("Share…", systemImage: "square.and.arrow.up") { model.share(item) } }
+                .contextMenu {
+                    Button("Share…", systemImage: "square.and.arrow.up") { model.share(item) }
+                    if model.store.filesSupported, !model.gone {
+                        Button("Remove", systemImage: "trash", role: .destructive) { model.remove(item) }
+                    }
+                }
                 .accessibilityIdentifier("task.made.\(item.kind)")
             }
+            if adds {
+                Menu { fileChoices } label: {
+                    TaskGridRow(last: true) {
+                        if model.attaching { ProgressView().controlSize(.small) } else { Image(systemName: "plus").foregroundStyle(Color.hqTintText) }
+                    } text: {
+                        Text(model.attaching ? "Adding…" : "Add a file, photo or link").foregroundStyle(model.attaching ? Color.hqLabel2 : Color.hqTintText)
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(model.attaching)
+                .accessibilityLabel("Add a File, Photo or Link")
+                .accessibilityIdentifier("task.files.add")
+            }
         }
+    }
+}
+
+extension TaskPlainView {
+    /// What a file, link or note is called on the page: its title; a link with no name of its own shows its address
+    /// without "https://" ("irs.gov/forms").
+    static func fileName(_ item: TodoMade) -> String {
+        let title = item.title.isEmpty ? item.ref : item.title
+        guard item.kind == "link", title == item.ref else { return title }
+        for scheme in ["https://", "http://"] where title.lowercased().hasPrefix(scheme) {
+            let bare = String(title.dropFirst(scheme.count))
+            return bare.hasSuffix("/") ? String(bare.dropLast()) : bare
+        }
+        return title
+    }
+}
+
+/// [tasks-first] A tag on the task's page: a small soft pill.
+struct TaskTagPill: View {
+    var tag: String
+    var body: some View {
+        Text(tag)
+            .font(Font.hq(.footnote))
+            .foregroundStyle(Color.hqLabel)
+            .lineLimit(1)
+            .padding(.horizontal, 9).padding(.vertical, 3)
+            .background(Capsule().fill(Color(uiColor: TaskPanel.band)))
     }
 }
 

@@ -47,12 +47,39 @@ final class MacInspector: UIViewController {
     private static let tabKey = "HQMacInspectorTab"
     /// Open or closed, kept across launches as the sidebar's fold is.
     static var isShown: Bool {
-        get { UserDefaults.standard.bool(forKey: shownKey) }
-        set { UserDefaults.standard.set(newValue, forKey: shownKey) }
+        get {
+            // [tasks-first] Beside a task the pane is the bot's conversation: open unless it was closed there. Its
+            // own switch, so closing the inspector beside a chat doesn't hide a task's teammate (and the other way).
+            if taskMode { return UserDefaults.standard.object(forKey: taskShownKey) as? Bool ?? true }
+            return UserDefaults.standard.bool(forKey: shownKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: taskMode ? taskShownKey : shownKey) }
     }
 
     private(set) var shownTab: Tab = Tab(rawValue: UserDefaults.standard.integer(forKey: tabKey)) ?? .info
     private weak var chat: ChatViewController?
+    /// [tasks-first] Step 5 (owner 2026-11-12, mockup 6-mac: "The right pane is your teammate: the whole conversation
+    /// … Today that pane shows No Helpers"): beside a task's page the pane holds the task's chat itself, under the
+    /// bot's name, in place of the tabs.
+    private var taskChat: ChatViewController?
+    private static var taskMode = false
+    private static let taskShownKey = "HQMacTaskChatShown"
+    private let taskTitle = UILabel()
+
+    /// The task on show has a bot (or none, or no task is on show): its chat fills the pane.
+    func followTask(_ next: ChatViewController?, name: String) {
+        guard next !== taskChat else { return }
+        let was = Self.isShown
+        clear()
+        taskChat = next
+        Self.taskMode = next != nil
+        taskTitle.text = name
+        if isViewLoaded {
+            followLook()
+            fill()
+        }
+        if was != Self.isShown || next != nil || was { onShownChange?() }
+    }
     private var content: UIViewController?
     private let tabs = UISegmentedControl(items: Tab.allCases.map(\.title))
     /// Mac polish #62: the Desktop Look's outlined strip in the segments' place (UISegmentedControl draws iOS 26's pill
@@ -110,6 +137,15 @@ final class MacInspector: UIViewController {
         tabs.apportionsSegmentWidthsByContent = true
         tabsRow.axis = .vertical
         tabsRow.addArrangedSubview(tabs)
+        taskTitle.font = {
+            let base = HQFont.preferred(.subheadline)
+            return UIFont.systemFont(ofSize: base.pointSize, weight: .semibold)
+        }()
+        taskTitle.textColor = HQPalette.label
+        taskTitle.textAlignment = .center
+        taskTitle.isHidden = true
+        taskTitle.accessibilityIdentifier = "mac.inspector.task-title"
+        tabsRow.addArrangedSubview(taskTitle)
         empty.isHidden = true
         grip.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(dragged(_:))))
         grip.addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:))))
@@ -189,11 +225,12 @@ final class MacInspector: UIViewController {
             host.didMove(toParent: self)
             strip = host
         }
-        tabs.isHidden = desktop
+        tabs.isHidden = desktop || Self.taskMode
+        taskTitle.isHidden = !Self.taskMode
         band.isHidden = !desktop
         band.backgroundColor = HQPalette.page
         bandFrost.color = HQPalette.page
-        strip?.view.isHidden = !desktop
+        strip?.view.isHidden = !desktop || Self.taskMode
     }
 
     // MARK: Its width
@@ -235,7 +272,7 @@ final class MacInspector: UIViewController {
     }
 
     /// A chat is on show beside it (the split gives the panel room only then).
-    var hasChat: Bool { chat != nil }
+    var hasChat: Bool { chat != nil || taskChat != nil }
 
     /// Whether the split gives the panel its room now: none in a window too narrow for it beside the panes (Mac polish
     /// #1), open or not.
@@ -279,6 +316,8 @@ final class MacInspector: UIViewController {
 
     private func clear() {
         guard let content else { return }
+        // The task's chat outlives the pane's stack (the pane closes and opens again around it).
+        if let stack = content as? UINavigationController, let taskChat, stack.viewControllers.contains(taskChat) { stack.viewControllers = [] }
         content.willMove(toParent: nil)
         content.view.removeFromSuperview()
         content.removeFromParent()
@@ -289,13 +328,14 @@ final class MacInspector: UIViewController {
         guard isViewLoaded else { return }
         clear()
         guard Self.isShown else { return }
-        let (made, note) = make(shownTab)
+        var (made, note) = make(shownTab)
+        if let taskChat { made = taskChat }
         empty.set(symbol: note.symbol, title: note.title, hint: note.hint)
         empty.isHidden = made != nil
         guard let made else { return }
         // A stack of its own: Info's rows and a step's page push inside the panel.
         let stack = UINavigationController(rootViewController: made)
-        rootHidesBar = made.navigationItem.title == nil && made.title == nil
+        rootHidesBar = (made.navigationItem.title == nil && made.title == nil) || made === taskChat
         stack.setNavigationBarHidden(rootHidesBar, animated: false)
         stack.delegate = self
         fitPage(made, root: true)

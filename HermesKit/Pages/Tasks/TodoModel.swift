@@ -56,11 +56,20 @@ nonisolated struct TodoTask: Codable, Hashable, Sendable, Identifiable {
     var nextCheck: String?
     /// [tasks] Up to three answers the bot offers with its question, each a tap (hermes-hq-push 0.9.47).
     var choices: [String] = []
+    /// [tasks-first] What a task manager's task has (hermes-hq-push 0.9.53; owner 2026-11-12: "complex enough to
+    /// handle any task or use case"). 0 none, 1 high, 2 medium, 3 low.
+    var priority = 0
+    var tags: [String] = []
+    /// Minutes before it's due that the phone rings (0: at that time); nil: at its due time, as before.
+    var alert: Int?
+    /// The day it joins your day ("2026-11-20"); nil: by its due date alone.
+    var starts: String?
 
     enum CodingKeys: String, CodingKey {
         case id, rev, title, notes, who, bot, status, due, prep, steps, made, source, log, section, position, watch, chat
         case statusNote = "status_note", repeatRule = "repeat", createdAt = "created_at", updatedAt = "updated_at"
         case doneAt = "done_at", createdBy = "created_by", pageAt = "page_at", page, nextCheck = "next_check", choices
+        case priority, tags, alert, starts
         // App-only: kept in the disk cache and edit merges so a reopened list still knows the gateway said "no chat".
         case chatKnown = "chat_known"
     }
@@ -108,6 +117,12 @@ nonisolated struct TodoTask: Codable, Hashable, Sendable, Identifiable {
         nextCheck = (try? c.decodeIfPresent(String.self, forKey: .nextCheck)).flatMap { $0?.isEmpty == true ? nil : $0 }
         choices = ((try? c.decodeIfPresent([String].self, forKey: .choices)) ?? [])
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        let level = (try? c.decodeIfPresent(Int.self, forKey: .priority)) ?? 0
+        priority = (0...3).contains(level) ? level : 0
+        tags = ((try? c.decodeIfPresent([String].self, forKey: .tags)) ?? [])
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        alert = (try? c.decodeIfPresent(Int.self, forKey: .alert)).flatMap { $0 }.flatMap { $0 >= 0 ? $0 : nil }
+        starts = (try? c.decodeIfPresent(String.self, forKey: .starts)).flatMap { $0?.isEmpty == true ? nil : $0 }
     }
 
     /// Where it sits in its section: its position, or when it was added on an older add-on.
@@ -167,10 +182,16 @@ nonisolated struct TodoMade: Codable, Hashable, Sendable, Identifiable {
     /// "file" | "link" | "note".
     var kind: String
     var ref: String
+    /// [tasks-first] Who put it on the task: "you" for your own file or link (hermes-hq-push 0.9.53), else its bot
+    /// (nil from before then: its bot's).
+    var by: String?
 
-    init(id: String = TodoIDs.make(), title: String, kind: String, ref: String) {
-        self.id = id; self.title = title; self.kind = kind; self.ref = ref
+    init(id: String = TodoIDs.make(), title: String, kind: String, ref: String, by: String? = nil) {
+        self.id = id; self.title = title; self.kind = kind; self.ref = ref; self.by = by
     }
+
+    /// You attached it (not something a bot made).
+    var isYours: Bool { by == "you" }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -178,6 +199,7 @@ nonisolated struct TodoMade: Codable, Hashable, Sendable, Identifiable {
         kind = (try? c.decodeIfPresent(String.self, forKey: .kind)) ?? "note"
         ref = (try? c.decodeIfPresent(String.self, forKey: .ref)) ?? ""
         title = (try? c.decodeIfPresent(String.self, forKey: .title)) ?? ""
+        by = (try? c.decodeIfPresent(String.self, forKey: .by)).flatMap { $0?.isEmpty == true ? nil : $0 }
     }
 
     /// A made link's address to open: as written when it has a scheme, else as a web address ("example.com/x" →
@@ -273,7 +295,7 @@ nonisolated struct TodoSettings: Codable, Hashable, Sendable {
     /// "smart" | "sections": how the page grouped its tasks before its views (2026-11-12). Kept as the gateway sends
     /// it, so an older app on the same gateway keeps its choice; this app no longer reads it.
     var group: String = "smart"
-    /// A list's order: "smart" (your drag order) | "due" | "added".
+    /// A list's order: "smart" (your drag order) | "due" | "added" | "priority" (hermes-hq-push 0.9.53).
     var sort: String = "smart"
     /// [task-ideas] Ideas (hermes-hq-push 0.9.39): one bot reads your recent chats each day and suggests a few tasks.
     /// nil from an older add-on, and then never sent back.
@@ -329,8 +351,12 @@ nonisolated struct TodoListAnswer: Decodable, Sendable {
     var pages = false
     /// [task-ideas] New ideas to decide (0 while Ideas is off); nil from an add-on older than 0.9.39, which has none.
     var ideas: Int?
+    /// [tasks-first] The add-on keeps a task's priority, tags, alert and start day, and lets a shared task repeat
+    /// (hermes-hq-push 0.9.53); `files`: it takes your own files and links.
+    var fields = false
+    var files = false
 
-    enum CodingKeys: String, CodingKey { case rev, tasks, settings, sections, unchanged, pages, ideas }
+    enum CodingKeys: String, CodingKey { case rev, tasks, settings, sections, unchanged, pages, ideas, fields, files }
 
     init(rev: Int, tasks: [TodoTask]?, settings: TodoSettings? = nil, sections: [TodoUserSection]? = nil, unchanged: Bool = false) {
         self.rev = rev; self.tasks = tasks; self.settings = settings; self.sections = sections; self.unchanged = unchanged
@@ -356,6 +382,8 @@ nonisolated struct TodoListAnswer: Decodable, Sendable {
         unchanged = (try? c.decodeIfPresent(Bool.self, forKey: .unchanged)) ?? false
         pages = (try? c.decodeIfPresent(Bool.self, forKey: .pages)) ?? false
         ideas = try? c.decodeIfPresent(Int.self, forKey: .ideas)
+        fields = (try? c.decodeIfPresent(Bool.self, forKey: .fields)) ?? false
+        files = (try? c.decodeIfPresent(Bool.self, forKey: .files)) ?? false
     }
 }
 
@@ -527,6 +555,10 @@ nonisolated enum TodoSections {
             return items.sorted { a, b in due(a) != due(b) ? due(a) < due(b) : (a.order, a.id) < (b.order, b.id) }
         case "added":
             return items.sorted { (created($0), $0.id) > (created($1), $1.id) }
+        case "priority":
+            // High, medium, low, then none; your own order inside each.
+            func rank(_ t: TodoTask) -> Int { t.priority == 0 ? 4 : t.priority }
+            return items.sorted { a, b in rank(a) != rank(b) ? rank(a) < rank(b) : (a.order, a.id) < (b.order, b.id) }
         default:
             return items.sorted { ($0.order, $0.id) < ($1.order, $1.id) }
         }
@@ -549,7 +581,9 @@ nonisolated enum TodoSections {
             // [bot-pills] "@me": your own tasks, with no bot helping.
             if scope == "@me" { if task.helper != nil { return false } } else if scope != "all", task.helper != scope { return false }
             guard !words.isEmpty else { return true }
-            let fields = [task.title, task.notes, task.statusNote] + task.steps.map(\.title)
+            let fields = [task.title, task.notes, task.statusNote] + task.steps.map(\.title) + task.tags
+            // "#hiring" finds the tag alone.
+            if words.hasPrefix("#") { return task.tags.contains { $0.lowercased().hasPrefix(String(words.dropFirst())) } }
             return fields.contains { $0.lowercased().contains(words) }
         }
     }
@@ -951,6 +985,19 @@ nonisolated extension TodoCardWords {
 
 nonisolated extension TodoWords {
     /// New Task's footer once a bot is picked: what happens when you tap Add ([mac] Mac polish #138: click on the Mac).
+    /// The quick add's date button: "Today", "Tomorrow 9:00 AM", "Fri 9:00 AM", "Nov 20".
+    static func newTaskDue(_ date: Date, hasTime: Bool, now: Date, calendar: Calendar = .current) -> String {
+        let day = TodoViews.soon(date, now: now, calendar: calendar)
+        guard hasTime else { return day }
+        let format = DateFormatter()
+        format.calendar = calendar
+        format.timeZone = calendar.timeZone
+        format.locale = calendar.locale ?? .current
+        format.timeStyle = .short
+        format.dateStyle = .none
+        return day + " " + format.string(from: date)
+    }
+
     static func newTaskHelpNote(_ bot: String, tap: String = DeviceWord.tap) -> String {
         "When you \(tap) Add, \(bot)’s chat opens and \(bot) reads the task right away, then asks what it should take on."
     }
@@ -1122,10 +1169,28 @@ nonisolated enum TodoReadable {
 nonisolated enum TodoReminder {
     static let dayHour = 9
 
+    /// When the phone rings: at its due time (a day alone: 9:00), or `alert` minutes before that when it has one.
     static func time(_ task: TodoTask, calendar: Calendar = .current) -> Date? {
         guard let due = TodoDates.due(task.due, calendar: calendar) else { return nil }
-        if due.hasTime { return due.date }
-        return calendar.date(bySettingHour: dayHour, minute: 0, second: 0, of: due.date)
+        let at = due.hasTime ? due.date : calendar.date(bySettingHour: dayHour, minute: 0, second: 0, of: due.date)
+        guard let at, let alert = task.alert, alert > 0 else { return at }
+        return at.addingTimeInterval(-Double(alert) * 60)
+    }
+
+    /// The alerts you can choose, in minutes before; nil is "at its time" by default (no alert of its own).
+    static let alerts = [0, 5, 15, 30, 60, 120, 1440]
+
+    /// "At its time", "30 min before", "1 hour before", "1 day before".
+    static func alertWords(_ minutes: Int) -> String {
+        switch minutes {
+        case 0: return "At its time"
+        case 1..<60: return "\(minutes) min before"
+        case 1440: return "1 day before"
+        default:
+            if minutes % 1440 == 0 { return "\(minutes / 1440) days before" }
+            if minutes % 60 == 0 { return minutes == 60 ? "1 hour before" : "\(minutes / 60) hours before" }
+            return "\(minutes) min before"
+        }
     }
 
     /// [13-14] The alert's trigger for `date` (from `time`). A set moment carries its time zone, so it rings at that
@@ -1140,6 +1205,11 @@ nonisolated enum TodoReminder {
     static func body(_ task: TodoTask) -> String {
         let line = task.statusNote.trimmingCharacters(in: .whitespacesAndNewlines)
         if (task.status == "ready" || task.status == "needs_you"), !line.isEmpty { return line }
+        if let alert = task.alert, alert > 0 {
+            // It rings ahead: say how far ("Due in 30 min", "Due in 1 hour", "Due tomorrow").
+            if alert == 1440 { return "Due tomorrow" }
+            return "Due in " + alertWords(alert).replacingOccurrences(of: " before", with: "")
+        }
         return TodoDates.due(task.due)?.hasTime == false ? "Due today" : "Due now"
     }
 }

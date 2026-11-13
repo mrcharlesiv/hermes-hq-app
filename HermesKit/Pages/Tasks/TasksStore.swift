@@ -25,6 +25,19 @@ nonisolated struct TasksAPI: Sendable {
         try Self.task(try await PagesREST.send(client, "POST", Self.base, json: .object(fields)))
     }
 
+    /// [tasks-first] `POST /tasks/{id}/attach` (hermes-hq-push 0.9.53): your own link, or a file as base64. The
+    /// answer is the task with it in `made`.
+    @concurrent
+    func attach(_ id: String, _ body: [String: JSONValue]) async throws -> TodoTask {
+        try Self.task(try await PagesREST.send(client, "POST", path(id) + "/attach", json: .object(body), timeout: 120))
+    }
+
+    /// `DELETE /tasks/{id}/made/{made}`: takes a file, link or note off the task.
+    @concurrent
+    func detach(_ id: String, made: String) async throws -> TodoTask {
+        try Self.task(try await PagesREST.send(client, "DELETE", path(id) + "/made/" + made))
+    }
+
     @concurrent
     func patch(_ id: String, rev: Int, fields: [String: JSONValue]) async throws -> TodoTask {
         var body = fields
@@ -110,6 +123,8 @@ nonisolated struct TodoSnapshot: Codable, Sendable {
     var sections: [TodoUserSection]?
     var pages: Bool?
     var ideas: Int?
+    var fields: Bool?
+    var files: Bool?
 }
 
 @MainActor @Observable
@@ -133,6 +148,11 @@ final class TasksStore {
     private(set) var sectionsSupported = false
     /// The add-on draws Task Pages (0.9.38+): a task a bot works on offers its page.
     private(set) var pagesSupported = false
+    /// [tasks-first] The add-on keeps a task's priority, tags, alert and start day, and a shared task can repeat
+    /// (0.9.53+): the task's page shows those rows only then (an older add-on would drop them on the floor).
+    private(set) var fieldsSupported = false
+    /// The add-on takes your own files and links on a task (0.9.53+).
+    private(set) var filesSupported = false
     /// [task-ideas] New ideas to decide; nil when the add-on has no Ideas (older than 0.9.39), and the page keeps its
     /// Add a task row instead of the To Do | Ideas switch.
     private(set) var ideasCount: Int?
@@ -186,6 +206,8 @@ final class TasksStore {
         sections = cached.value.sections ?? []
         sectionsSupported = cached.value.sections != nil
         pagesSupported = cached.value.pages == true
+        fieldsSupported = cached.value.fields == true
+        filesSupported = cached.value.files == true
         ideasCount = cached.value.ideas
         rev = cached.value.rev
         hasList = true
@@ -196,7 +218,7 @@ final class TasksStore {
         guard !closed, let url = cacheURL else { return }
         let snapshot = TodoSnapshot(rev: rev, tasks: tasks.filter { !TodoIDs.isLocal($0.id) }, settings: settings,
                                     sections: sectionsSupported ? sections.filter { !TodoIDs.isLocal($0.id) } : nil,
-                                    pages: pagesSupported, ideas: ideasCount)
+                                    pages: pagesSupported, ideas: ideasCount, fields: fieldsSupported, files: filesSupported)
         PagesCache.write(PagesCached(at: Date().timeIntervalSince1970, value: snapshot), to: url)
     }
 
@@ -234,6 +256,8 @@ final class TasksStore {
             needsAddOn = false
             error = nil
             pagesSupported = answer.pages
+            fieldsSupported = answer.fields
+            filesSupported = answer.files
             ideasCount = answer.ideas
             if !sectionsWriting {
                 sections = answer.sections ?? []
@@ -411,6 +435,67 @@ final class TasksStore {
         guard let task = task(taskID) else { return false }
         let steps = task.steps.map { s -> TodoStep in var s = s; if s.id == step { s.done = done }; return s }
         return await patch(taskID, ["steps": TodoWire.steps(steps)])
+    }
+
+    // MARK: Your own files and links ([tasks-first], hermes-hq-push 0.9.53)
+
+    /// The largest file a task takes (the add-on's own cap).
+    nonisolated static let fileLimit = 10 * 1024 * 1024
+
+    /// Puts a link on the task. False when the gateway refused it (the notice has said why).
+    @discardableResult
+    func attachLink(_ id: String, url: String, title: String = "") async -> Bool {
+        await attach(id, ["kind": "link", "url": .string(url), "title": .string(title)])
+    }
+
+    /// Puts a file on the task: its bytes are kept on the computer running Hermes, where the task's bot can read them.
+    @discardableResult
+    func attachFile(_ id: String, name: String, data: Data) async -> Bool {
+        guard data.count <= Self.fileLimit else {
+            notice("That file is over 10 MB. A task takes files up to 10 MB.", about: id)
+            return false
+        }
+        return await attach(id, ["kind": "file", "name": .string(name), "data": .string(data.base64EncodedString())])
+    }
+
+    private func attach(_ id: String, _ body: [String: JSONValue]) async -> Bool {
+        guard !refuse(about: id), task(id) != nil else { return false }
+        guard filesSupported else {
+            notice("Files and links on a task need the newest HQ add-on on your computer (0.9.53 or later).", about: id)
+            return false
+        }
+        begin(id)
+        defer { end(id) }
+        do {
+            put(try await api.attach(id, body))
+            save()
+            changed()
+            return true
+        } catch {
+            notice("Couldn’t add it. \(PagesREST.reason(error))", about: id)
+            return false
+        }
+    }
+
+    /// Takes a file, link or note off the task (shown at once; put back if the gateway refuses).
+    @discardableResult
+    func detach(_ id: String, made: String) async -> Bool {
+        guard !refuse(about: id), let before = task(id) else { return false }
+        var shown = before
+        shown.made.removeAll { $0.id == made }
+        put(shown); changed()
+        begin(id)
+        defer { end(id) }
+        do {
+            put(try await api.detach(id, made: made))
+            save()
+            changed()
+            return true
+        } catch {
+            put(before); changed()
+            notice("Couldn’t remove it. \(PagesREST.reason(error))", about: id)
+            return false
+        }
     }
 
     /// Deletes a task (a chat card's Undo too: the task may not be in the list yet).

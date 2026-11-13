@@ -496,7 +496,9 @@ def seed_tasks():
                       'source': source or {'kind': 'app'}, 'created_at': ago(created), 'updated_at': ago(updated if updated is not None else created),
                       'done_at': done_at, 'created_by': 'you' if not source or source.get('kind') != 'chat' else bot or 'default',
                       'log': list(log), 'section': None, 'position': (t0 - datetime.timedelta(minutes=created)).timestamp(),
-                      'watch': '', 'chat': {}}
+                      'watch': '', 'chat': {},
+                      # [tasks-first] hermes-hq-push 0.9.53: 0 none, 1 high, 2 medium, 3 low; minutes before; a day.
+                      'priority': 0, 'tags': [], 'alert': None, 'starts': None}
     chat = lambda profile: {'kind': 'chat', 'profile': profile, 'session_id': 's-tasks' if profile == 'default' else bot_chat_id(profile)}
     task('t_dentist', 'Call the dentist', who='together', bot='default', status='ready', note='Number and a Dec 9 slot',
          due=day(0), prep=True, source=chat('default'), created=95, updated=12,
@@ -551,6 +553,16 @@ def seed_tasks():
                'Support place mismatches; Ops question wording flaw; 1 Design link broken.',
          log=[{'at': ago(100), 'by': 'default', 'text': f'Prep sheet ready: {HOME}/documents/review-sheet.md (9 open, 3 to check first).'},
               {'at': ago(20), 'by': 'default', 'text': 'Due corrected to today 5 PM'}])
+
+    # [tasks-first] What a task manager's task has (0.9.53): a priority (the circle's colour), tags, an alert before
+    # it's due, a file of your own, and a start day (it is in Today from then until it's due).
+    TASKS['t_apps'].update(priority=1, tags=['hiring', 'q4'], alert=30)
+    TASKS['t_apps']['made'].append({'id': 'm_y1', 'title': 'resume-review.pdf', 'kind': 'file',
+                                    'ref': f'{HOME}/task-files/t_apps/resume-review.pdf', 'by': 'you'})
+    TASKS['t_cleaning'].update(priority=2)
+    TASKS['t_porch'].update(priority=3, tags=['home'])
+    task('t_taxes', 'Gather the tax papers', due=day(12), created=2500)
+    TASKS['t_taxes'].update(priority=2, tags=['money'], starts=day(-1))
 
     # [tasks] A task is a workspace (2026-11-04): Inbox watches for a reply and keeps the task's own chat.
     task('t_contract', 'Follow up with Ivy on the contract', who='together', bot='inbox', status='ready',
@@ -723,9 +735,12 @@ def tasks_list(since):
     if since and since.isdigit() and int(since) == rev: return 200, {'rev': rev, 'unchanged': True}
     rows = sorted(TASKS.values(), key=lambda t: t['created_at'], reverse=True)
     answer = {'rev': rev, 'tasks': [tshown(t) for t in rows], 'settings': dict(TSTATE['settings']),
-              'sections': copy.deepcopy(TSTATE['sections']), 'pages': True, 'ideas': len(ideas_new()) if ideas_on() else 0}
+              'sections': copy.deepcopy(TSTATE['sections']), 'pages': True, 'ideas': len(ideas_new()) if ideas_on() else 0,
+              'fields': True, 'files': True}   # [tasks-first] 0.9.53
     if TMODE['older_addon']:
-        answer.pop('ideas')
+        answer.pop('ideas'); answer.pop('fields'); answer.pop('files')
+        hide = ('priority', 'tags', 'alert', 'starts')
+        answer['tasks'] = [{k: v for k, v in t.items() if k not in hide} for t in answer['tasks']]
         answer['settings'] = {k: v for k, v in answer['settings'].items() if not k.startswith('ideas')}
     return 200, answer
 
@@ -741,7 +756,9 @@ def tasks_route(method, path, query, body):
         who = body.get('who') or 'me'
         task = {'id': tid, 'rev': 1, 'title': title, 'notes': body.get('notes') or '', 'who': who,
                 'bot': (body.get('bot') or 'default') if who != 'me' else None, 'status': 'open', 'status_note': '',
-                'due': body.get('due'), 'repeat': body.get('repeat') if who == 'me' else None, 'prep': bool(body.get('prep')),
+                'due': body.get('due'), 'repeat': body.get('repeat') if who != 'bot' else None, 'prep': bool(body.get('prep')),
+                'priority': body.get('priority') if body.get('priority') in (1, 2, 3) else 0,
+                'tags': [str(x)[:30] for x in (body.get('tags') or [])][:10], 'alert': body.get('alert'), 'starts': body.get('starts'),
                 'steps': [dict(s, id=s.get('id') or f's{i + 1}', done=bool(s.get('done'))) for i, s in enumerate(body.get('steps') or [])],
                 'made': [], 'source': body.get('source') or {'kind': 'app'}, 'created_at': stamp, 'updated_at': stamp,
                 'done_at': None, 'created_by': 'you', 'log': [{'at': stamp, 'by': 'you', 'text': 'Added'}],
@@ -778,6 +795,36 @@ def tasks_route(method, path, query, body):
         except ValueError: names = {}
         page = module.render(task, TPAGES.get(task['id']), names if isinstance(names, dict) else {})
         return 200, ('text/html; charset=utf-8', page.encode())
+    # [tasks-first] hermes-hq-push 0.9.53: your own link, or a file as base64 (kept where the file routes find it).
+    if rest.endswith('/attach') and method == 'POST':
+        task = TASKS.get(unquote(rest[:-len('/attach')]))
+        if not task: return 404, {'detail': 'Task not found'}
+        if TMODE['older_addon']: return 404, {'detail': 'Not Found'}
+        mid = 'm_' + hashlib.sha256(f'{len(task["made"])}{now()}'.encode()).hexdigest()[:8]
+        if body.get('kind') == 'link':
+            url = (body.get('url') or '').strip()
+            if not url: return 400, {'detail': 'A link needs its address.'}
+            entry = {'id': mid, 'title': (body.get('title') or '').strip() or url, 'kind': 'link', 'ref': url, 'by': 'you'}
+        elif body.get('kind') == 'file':
+            try: data = base64.b64decode(body.get('data') or '', validate=True)
+            except ValueError: return 400, {'detail': 'The file could not be read.'}
+            if not data: return 400, {'detail': 'The file is empty.'}
+            name = pathlib.PurePosixPath((body.get('name') or 'file').replace('\\', '/')).name or 'file'
+            (FILES / name).write_bytes(data)
+            entry = {'id': mid, 'title': name, 'kind': 'file', 'ref': f'{HOME}/task-files/{task["id"]}/{name}', 'by': 'you'}
+        else:
+            return 400, {'detail': 'Attach a link or a file.'}
+        task['made'].append(entry)
+        task['log'].append({'at': stamp, 'by': 'you', 'text': f"Added {entry['title']}"})
+        task['rev'] += 1; task['updated_at'] = stamp; TSTATE['rev'] += 1
+        return 200, tshown(task)
+    if '/made/' in rest and method == 'DELETE':
+        tid, _, mid = rest.partition('/made/')
+        task = TASKS.get(unquote(tid))
+        if not task: return 404, {'detail': 'Task not found'}
+        task['made'] = [m for m in task['made'] if m.get('id') != unquote(mid)]
+        task['rev'] += 1; task['updated_at'] = stamp; TSTATE['rev'] += 1
+        return 200, tshown(task)
     task = TASKS.get(unquote(rest))
     if not task: return 404, {'detail': 'Task not found'}
     if method == 'DELETE':
@@ -801,7 +848,8 @@ def addon_status():
     body = {flag: True for flag in flags}
     body.update({'replies': 'watcher', 'deviceAccessKinds': ['contacts', 'calendar', 'reminders', 'location', 'photos'],
                  'pluginVersion': '0.9.31' if NO_TASKS else '0.9.44'})
-    if not NO_TASKS: body.update(tasks=True, task_pages=True, task_ideas=not TMODE['older_addon'])
+    if not NO_TASKS: body.update(tasks=True, task_pages=True, task_ideas=not TMODE['older_addon'],
+                                 task_fields=not TMODE['older_addon'], task_files=not TMODE['older_addon'])
     if TMODE['older_addon']: body['pluginVersion'] = '0.9.38'
     return 200, body
 
@@ -960,6 +1008,7 @@ def make_files(port):
     (FILES / 'team-lunch-shortlist.md').write_text('# Friday team lunch\n\n| Place | Drive | Price | Book |\n|---|---|---|---|\n'
                                                   '| Elm & Oak | 5 min | $25 prix fixe | online up to 8 |\n'
                                                   '| Copper Kettle | 5 min | $$ | OpenTable |\n| Bayside Grill | 6 min | $$-$$$ | call 5+ |\n')
+    (FILES / 'resume-review.pdf').write_bytes(pdf_one_page('Resume review'))   # [tasks-first] your own file on a task
     (FILES / 'review-sheet.md').write_text('# Open applications\n\n## Verify first\n- Support date: 2\n- Support place: 1\n')
     (FILES / 'export.csv').write_text('month,invoices,total\nJuly,12,4180\nAugust,14,5020\nSeptember,11,3890\n')
     (FILES / 'release-notes.md').write_text('# Release 2.4\n\n## New\n- Export any chat as Markdown or JSON\n- Sync is about twice as fast\n')

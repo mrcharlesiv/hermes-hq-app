@@ -192,6 +192,13 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
         view.addSubview(collectionView)
         ListBarAppearance.pinTitle(in: self, softEdgeAround: collectionView)   // owner 2026-11-01: every tab's top
         pageBackdrop = PageBackdrop.install(in: self, clearing: [collectionView])   // [backdrop] Theme › App Background
+        // [soft-cards] A project's rows draw their piece of card, or none on a soft card: drawn again as that flips.
+        pageBackdrop?.onCardsChange = { [weak self] in
+            guard let self, let dataSource = self.dataSource else { return }
+            var snapshot = dataSource.snapshot()
+            snapshot.reloadSections(snapshot.sectionIdentifiers)
+            dataSource.apply(snapshot, animatingDifferences: false)
+        }
         installHeader()          // [sessions-m9]
         let refresh = UIRefreshControl()
         refresh.addAction(UIAction { [weak self] _ in self?.pulledToRefresh() }, for: .valueChanged)
@@ -365,12 +372,22 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
             list.boundarySupplementaryItems.forEach { $0.pinToVisibleBounds = false }
             // [project-cards] An open card's rows are as wide as the card, so a swipe moves a chat inside it and its
             // buttons sit inside it. The header (the card's top, "Projects" over the first) keeps the list's width.
-            if self?.isOpenCard(section) == true {
+            let open = self?.isOpenCard(section) == true
+            if open {
                 list.contentInsets.leading = ProjectCard.inset
                 list.contentInsets.trailing = ProjectCard.inset
                 list.supplementaryContentInsetsReference = .none
-            } else if self?.isProjectSection(section) != true {
-                BackdropCards.card(list, on: BackdropCards.on(self))   // [backdrop-cards] (a project's rows are cards already)
+            }
+            if let self {
+                // [backdrop-cards] On Soft Cards a section is a soft card. The projects, which stand one under the other
+                // with "Projects" over the first, share one card, open or closed (an open one draws no card of its own
+                // on it: `ProjectCard.soft`).
+                var join: BackdropCards.Join = []
+                if self.isProjectSection(section) {
+                    if self.isProjectSection(section - 1) { join.insert(.above) }
+                    if self.isProjectSection(section + 1) { join.insert(.below) }
+                }
+                BackdropCards.card(list, on: BackdropCards.on(self), header: config.headerMode == .supplementary, keepWidth: open, join: join)
             }
             return list
         }
@@ -385,7 +402,7 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
 
     /// [project-cards] An open project's card (its rows are set in to the card's edges).
     private func isOpenCard(_ section: Int) -> Bool {
-        !searching && section < groups.count && SessionListPipeline.isProject(groups[section].id) && !groups[section].collapsed
+        !searching && section >= 0 && section < groups.count && SessionListPipeline.isProject(groups[section].id) && !groups[section].collapsed
     }
 
     private func configureDataSource() {
@@ -1838,7 +1855,7 @@ extension SessionsViewController {
 
     /// [backdrop-cards] A project's section: its rows are cards of their own.
     func isProjectSection(_ section: Int) -> Bool {
-        !searching && section < groups.count && SessionListPipeline.isProject(groups[section].id)
+        !searching && section >= 0 && section < groups.count && SessionListPipeline.isProject(groups[section].id)
     }
 
     func drawsHeader(_ section: Int) -> Bool {

@@ -336,13 +336,15 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
                 guard at >= 0, at < snapshot.numberOfSections, case .list(.tiles) = snapshot.sectionIdentifiers[at] else { return false }
                 return true
             }
-            func isRows(_ at: Int) -> Bool {
-                guard at >= 0, at < snapshot.numberOfSections, case .list = snapshot.sectionIdentifiers[at] else { return false }
-                return !isPinned(at)
+            // The bots in no section, which follow the pinned ones with no title between: the two are one card. A
+            // section with a name of its own ("Work") is a card of its own, and the pinned bots then are too.
+            func isLoose(_ at: Int) -> Bool {
+                guard at >= 0, at < snapshot.numberOfSections, case .list(.unassigned) = snapshot.sectionIdentifiers[at] else { return false }
+                return true
             }
             if case .list(.tiles) = section, !large {
                 return self.tileSection(environment, count: snapshot.numberOfItems(inSection: section),
-                                        first: index == 0, joinBelow: isRows(index + 1))
+                                        first: index == 0, joinBelow: isLoose(index + 1))
             }
             // [mac-audit] Owner 2026-11-02 #9: bots in no section after a section's rows (or its folded header) stand
             // apart, as the rail draws a rule before them; with no header they read as the last section's ("Notes"
@@ -355,8 +357,8 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
             let list = self.listSection(environment, first: index == 0, apart: apart)
             // [backdrop-cards] The bots' and group chats' sections; the filter token and the notices stay as they are.
             if case .list = section {
-                var join: BackdropCards.Join = isPinned(index - 1) ? .above : []
-                if isPinned(index), isRows(index + 1) { join.insert(.below) }
+                var join: BackdropCards.Join = isPinned(index - 1) && isLoose(index) ? .above : []
+                if isPinned(index), isLoose(index + 1) { join.insert(.below) }
                 BackdropCards.card(list, on: BackdropCards.on(self), join: join)
             }
             return list
@@ -445,7 +447,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
     // MARK: - Cells
 
     private func configureDataSource() {
-        let rowRegistration = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, id in
+        let rowRegistration = UICollectionView.CellRegistration<SoftCardListCell, String> { [weak self] cell, _, id in
             guard let self, let bot = self.botsByID[id] else { return }
             var actions = self.actions(for: bot)
             actions.moves = self.pinMoveActions(for: bot)   // [a11y] a pinned bot drawn as a row at accessibility sizes
@@ -486,7 +488,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
             #endif
         }
         // [groups] A room's row and its pinned tile (App/Groups/GroupRowView.swift).
-        let roomRegistration = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, id in
+        let roomRegistration = UICollectionView.CellRegistration<SoftCardListCell, String> { [weak self] cell, _, id in
             guard let self, let room = self.roomsByID[id], self.groups != nil else { return }
             cell.contentConfiguration = UIHostingConfiguration {
                 GroupRowView(room: room, time: ListTime.string(room.time))
@@ -515,7 +517,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
             cell.backgroundConfiguration = .clear()
             #endif
         }
-        let headerRegistration = UICollectionView.CellRegistration<UICollectionViewListCell, BotListSectionID> { [weak self] cell, _, id in
+        let headerRegistration = UICollectionView.CellRegistration<SoftCardListCell, BotListSectionID> { [weak self] cell, _, id in
             guard let self, let section = self.sections.first(where: { $0.id == id }) else { return }
             let collapsed = self.collapsed.contains(id)
             if case .user(let sectionId) = id, let organizer = self.organizer {
@@ -567,7 +569,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
             }
             cell.backgroundConfiguration = .clear()
         }
-        let hintRegistration = UICollectionView.CellRegistration<UICollectionViewListCell, String> { cell, _, id in
+        let hintRegistration = UICollectionView.CellRegistration<SoftCardListCell, String> { cell, _, id in
             if id.hasPrefix("group:") {   // [groups] an empty room sub-block while a room is dragged
                 cell.contentConfiguration = UIHostingConfiguration { GroupSectionHintView() }.margins(.all, 0)
                 cell.backgroundConfiguration = .clear()
@@ -583,19 +585,19 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
             cell.contentConfiguration = UIHostingConfiguration { BotSectionHintView() }.margins(.all, 0)
             cell.backgroundConfiguration = .clear()
         }
-        let tokenRegistration = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, text in
+        let tokenRegistration = UICollectionView.CellRegistration<SoftCardListCell, String> { [weak self] cell, _, text in
             cell.contentConfiguration = UIHostingConfiguration {
                 PageFilterToken(text: text) { self?.clearFilters() }
             }
             .margins(.all, 0)
             cell.backgroundConfiguration = .clear()
         }
-        let skeletonRegistration = UICollectionView.CellRegistration<UICollectionViewListCell, Int> { cell, _, _ in
+        let skeletonRegistration = UICollectionView.CellRegistration<SoftCardListCell, Int> { cell, _, _ in
             cell.contentConfiguration = UIHostingConfiguration { BotSkeletonRowView() }.margins(.all, 0)
             cell.backgroundConfiguration = .clear()
         }
         // [offline] §4.1, §4.2: the slow-load and stale-list card.
-        let noticeRegistration = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, kind in
+        let noticeRegistration = UICollectionView.CellRegistration<SoftCardListCell, String> { [weak self] cell, _, kind in
             guard let self else { return }
             let text = self.noticeText(kind), busy = kind == "stale" && self.noticeRetrying
             cell.contentConfiguration = UIHostingConfiguration {
@@ -615,7 +617,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
             background.backgroundColor = state.isHighlighted || state.isSelected ? HQPalette.cellPressed : .clear
             cell.backgroundConfiguration = background
         }
-        let chatRegistration = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, key in
+        let chatRegistration = UICollectionView.CellRegistration<SoftCardListCell, String> { [weak self] cell, _, key in
             guard let self, let row = self.chatRows[key] else { return }
             let tint = Self.chatOwner(.chat(key)).flatMap { self.botsByID[$0] }?.chatsTint ?? .hqStroke
             cell.contentConfiguration = UIHostingConfiguration { BotChatRowView(session: row.session, last: row.last, tint: tint) }
@@ -624,7 +626,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
             cell.accessibilityIdentifier = "bot-chat-\(row.session.id)"
             cell.configurationUpdateHandler = pressed
         }
-        let moreRegistration = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, id in
+        let moreRegistration = UICollectionView.CellRegistration<SoftCardListCell, String> { [weak self] cell, _, id in
             guard let self, let count = self.moreCounts[id] else { return }
             let name = self.botsByID[id]?.name ?? id
             let tint = self.botsByID[id]?.chatsTint ?? .hqStroke

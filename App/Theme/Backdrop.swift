@@ -787,17 +787,24 @@ nonisolated(unsafe) private var pageBackdropKey: UInt8 = 0
 
     private var carded: Bool?
     private var switchWatch: NSObjectProtocol?
+    /// [soft-cards] Called after the page's lists went on cards or came off them (a page whose rows draw differently
+    /// on a card redraws them).
+    var onCardsChange: (() -> Void)?
 
     private func apply() {
         let shows = view.showsPicture
         for page in cleared { page.view.value?.backgroundColor = shows ? .clear : page.colour }
         // [backdrop-cards] The lists lay their sections out again, on cards or off them.
         let cards = shows && Backdrop.app.cards
-        if carded != nil, carded != cards {
-            for page in cleared { (page.view.value as? UICollectionView)?.collectionViewLayout.invalidateLayout() }
-        }
+        let flipped = carded != nil && carded != cards
         carded = cards
-        for page in cleared { BackdropPlates.refresh(page.view.value as? UIScrollView) }
+        for page in cleared {
+            guard let list = page.view.value as? UIScrollView else { continue }
+            BackdropCards.mark(list, carded: cards && !Theme.isDesktop)
+            BackdropPlates.refresh(list)
+            if flipped { (list as? UICollectionView)?.collectionViewLayout.invalidateLayout() }
+        }
+        if flipped { onCardsChange?() }
         // The page's own view says (the band's may hear of the picture a moment later: it draws the same).
         if let controller, band != nil {
             ListBarAppearance.setPictureBand(shows, on: controller.navigationItem)

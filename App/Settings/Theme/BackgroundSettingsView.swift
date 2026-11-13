@@ -33,7 +33,7 @@ enum BackdropWords {
     static var appNote: String { "Behind Sessions, Bots, Jobs, More, Settings and the pages they open. Dim covers it with the page colour, so the rows on it stay easy to read. \(DeviceWord.onlyHere)" }
     static var chatNote: String { "Behind every chat. Dim covers it with the page colour, so the grey lines between messages stay easy to read. \(DeviceWord.onlyHere)" }
     /// [backdrop-cards]
-    static let cardsNote = "Soft Cards puts each list’s rows and titles on a soft card, so they stay easy to read on a busy picture."
+    static let cardsNote = "Soft Cards lays a soft backing in your theme’s colour behind each list, only as strong as this picture needs, so words stay easy to read."
     static let sameNote = "Chats show the app’s picture, with their own Dim and Blur."
     /// Added under the preview while the Desktop Look is on, which keeps its plain pages.
     static let desktopNote = "The Desktop Look is on, so it shows once you turn that off."
@@ -492,7 +492,16 @@ private struct BackdropPreview: View {
         // were cut off. The picture fills whatever that is.
         Group {
             if place == .app {
-                AppRowsPreview()
+                // [soft-cards] The sample rows on their soft card while Soft Cards is on, as the lists draw them.
+                if backdrop.cards, image != nil {
+                    AppRowsPreview()
+                        .padding(.vertical, BackdropCards.pad)
+                        .background(SoftCardBackground())
+                        .padding(.horizontal, BackdropCards.side)
+                        .padding(.vertical, 12)
+                } else {
+                    AppRowsPreview()
+                }
             } else {
                 VStack(spacing: 10) {
                     // On its frosted pill, as a chat on a background draws a day (`ChatBaseCell.placeBacking`).

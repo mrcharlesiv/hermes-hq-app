@@ -54,9 +54,13 @@ import UIKit
         // taken for ours, the way back below gave it its own colour of nil, which a cell draws as the tint, so a held bot
         // lifted as a solid blue row before its menu's card (owner 2026-11-04, "weird glitch when you hold down on a bot").
         let taken = objc_getAssociatedObject(cell, ownKey) != nil
-        let ours = taken && (config.backgroundColor === HQPalette.card || config.backgroundColor === HQPalette.cellPressed)
+        let ours = taken && (config.backgroundColor === HQPalette.card || config.backgroundColor === HQPalette.cellPressed
+                             || config.backgroundColor === SoftCard.rowClear || config.backgroundColor === SoftCard.rowPressed)
         let traits = cell.traitCollection
-        guard skinned(traits) else {
+        // [soft-cards] A row of a list that stands on soft cards (Theme › App Background › Soft Cards) draws no card of
+        // its own, in any skin: the section's one soft card is behind it.
+        let soft = BackdropPlates.softRows(for: cell)
+        guard soft || skinned(traits) else {
             // The skin went back to iOS's own look: give the row back its own iOS colour. Not nil: to a SwiftUI row nil
             // means the tint, so after Rosé Pine › Nous the Theme page's rows turned solid blue (owner 2026-11-02, 662).
             guard ours else { return nil }
@@ -74,7 +78,7 @@ import UIKit
                 objc_setAssociatedObject(cell, ownKey, NSNull(), .OBJC_ASSOCIATION_RETAIN)
             }
         }
-        let wanted = pressed ? HQPalette.cellPressed : HQPalette.card
+        let wanted = soft ? (pressed ? SoftCard.rowPressed : SoftCard.rowClear) : (pressed ? HQPalette.cellPressed : HQPalette.card)
         guard config.backgroundColor !== wanted else { return nil }
         config.backgroundColor = wanted
         return config

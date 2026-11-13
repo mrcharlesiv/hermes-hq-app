@@ -100,7 +100,7 @@ final class OtherAppsViewController: UIViewController, UICollectionViewDelegate 
             }
             let section = NSCollectionLayoutSection.list(using: config, layoutEnvironment: environment)
             section.boundarySupplementaryItems.forEach { $0.pinToVisibleBounds = false }
-            BackdropCards.card(section, on: BackdropCards.on(self))   // [backdrop-cards]
+            BackdropCards.card(section, on: BackdropCards.on(self), header: true)   // [backdrop-cards]
             return section
         }
         BackdropCards.register(in: cards)   // [backdrop-cards]
@@ -113,7 +113,7 @@ final class OtherAppsViewController: UIViewController, UICollectionViewDelegate 
     }
 
     private func configureDataSource() {
-        let rowRegistration = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, id in
+        let rowRegistration = UICollectionView.CellRegistration<SoftCardListCell, String> { [weak self] cell, _, id in
             guard let self, let list = self.list, let session = self.sessionsByID[id] else { return }
             let owner = list.owner(of: session)
             let busy = list.isBusy(id)

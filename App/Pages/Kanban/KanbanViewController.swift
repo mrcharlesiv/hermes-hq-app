@@ -294,8 +294,7 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
                     s.interGroupSpacing = 8
                     s.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 20, bottom: 14, trailing: 20)
                     BackdropCards.card(s, on: BackdropCards.on(self), keepWidth: true, join: .above)   // [backdrop-cards]
-                    BackdropCards.card(s, on: BackdropCards.on(self), keepWidth: true, join: .above)   // [backdrop-cards]
-                return s
+                    return s
                 }
                 let group = NSCollectionLayoutGroup.horizontal(layoutSize: .init(widthDimension: .estimated(90), heightDimension: .absolute(chipHeight)), subitems: [item])
                 let s = NSCollectionLayoutSection(group: group)
@@ -320,13 +319,20 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
                 let s = NSCollectionLayoutSection.list(using: config, layoutEnvironment: environment)
                 s.contentInsets.leading = 20
                 s.contentInsets.trailing = 20
-                BackdropCards.plate(s, on: BackdropCards.on(self))   // [backdrop-cards] the group's line and card on a plate
+                // [backdrop-cards] On Soft Cards the group's line and its rows are one soft card, in place of the
+                // board's own card, as far in as every page's (`BackdropCards.side`).
+                if BackdropCards.on(self) {
+                    s.contentInsets.leading = 0
+                    s.contentInsets.trailing = 0
+                    BackdropCards.card(s, on: true, header: true)
+                    return s
+                }
                 // UX study #175: in light the card is the page's white with a hairline edge, not a grey fill; the
                 // decoration draws it behind the rows (dark keeps the grey card). Reverse: drop this and the clear rows.
                 if !Theme.isDesktop {
                     let card = NSCollectionLayoutDecorationItem.background(elementKind: KanbanCardBackground.kind)
                     card.contentInsets = s.contentInsets
-                    s.decorationItems.append(card)   // [backdrop-cards] after the plate, if there is one
+                    s.decorationItems = [card]
                 }
                 return s
             }
@@ -350,7 +356,7 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
                 .margins(.all, 0)
             cell.accessibilityIdentifier = "kanban.chip.\(status)"
         }
-        let taskCell = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, id in
+        let taskCell = UICollectionView.CellRegistration<SoftCardListCell, String> { [weak self] cell, _, id in
             guard let self, let row = self.rowModels[id] else { return }
             cell.contentConfiguration = UIHostingConfiguration { KanbanRowView(row: row) }.margins(.all, 0)
             cell.accessibilityIdentifier = "kanban-task-\(id)"

@@ -198,9 +198,7 @@ final class JobsViewController: UIViewController, UICollectionViewDelegate, UISe
             // [backdrop-cards] The jobs' groups and the blueprints; the count line and the notes stay on the picture.
             let carded: Bool = switch section { case .group?, .blueprints?: true; default: false }
             let onCards = carded && BackdropCards.on(self)
-            // The first card stands clear of the bar's buttons, as Bots' first card does (its header sat right under).
-            if onCards && index == 0 { layout.contentInsets.top += BackdropCards.gap }
-            BackdropCards.card(layout, on: onCards)
+            BackdropCards.card(layout, on: onCards, header: config.headerMode == .supplementary)
             return layout
         }
         BackdropCards.register(in: cards)   // [backdrop-cards]
@@ -208,7 +206,7 @@ final class JobsViewController: UIViewController, UICollectionViewDelegate, UISe
     }
 
     private func configureDataSource() {
-        let jobCell = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, key in
+        let jobCell = UICollectionView.CellRegistration<SoftCardListCell, String> { [weak self] cell, _, key in
             guard let self, let row = self.rows[key] else { return }
             cell.contentConfiguration = UIHostingConfiguration { JobRowView(row: row) }
             .margins(.all, 0)
@@ -223,20 +221,20 @@ final class JobsViewController: UIViewController, UICollectionViewDelegate, UISe
                 cell.backgroundConfiguration = background
             }
         }
-        let completedCell = UICollectionView.CellRegistration<UICollectionViewListCell, Int> { cell, _, count in
+        let completedCell = UICollectionView.CellRegistration<SoftCardListCell, Int> { cell, _, count in
             cell.contentConfiguration = UIHostingConfiguration { ShowCompletedRowView(count: count) }.margins(.all, 0)
             cell.accessibilityIdentifier = "jobs.show-completed"
             cell.backgroundConfiguration = .clear()
         }
-        let countCell = UICollectionView.CellRegistration<UICollectionViewListCell, String> { cell, _, text in
+        let countCell = UICollectionView.CellRegistration<SoftCardListCell, String> { cell, _, text in
             cell.contentConfiguration = UIHostingConfiguration { PageCountView(text: text) }.margins(.all, 0)
             cell.backgroundConfiguration = .clear()
         }
-        let skeletonCell = UICollectionView.CellRegistration<UICollectionViewListCell, Int> { cell, _, _ in
+        let skeletonCell = UICollectionView.CellRegistration<SoftCardListCell, Int> { cell, _, _ in
             cell.contentConfiguration = UIHostingConfiguration { PageSkeletonRow() }.margins(.all, 0)
             cell.backgroundConfiguration = .clear()
         }
-        let slowCell = UICollectionView.CellRegistration<UICollectionViewListCell, Item> { [weak self] cell, _, _ in
+        let slowCell = UICollectionView.CellRegistration<SoftCardListCell, Item> { [weak self] cell, _, _ in
             cell.contentConfiguration = UIHostingConfiguration {
                 PageSlowNote(retry: { [weak self] in
                     guard let self else { return }
@@ -247,12 +245,12 @@ final class JobsViewController: UIViewController, UICollectionViewDelegate, UISe
             }.margins(.all, 0)
             cell.backgroundConfiguration = .clear()
         }
-        let emptyCell = UICollectionView.CellRegistration<UICollectionViewListCell, String> { cell, _, text in
+        let emptyCell = UICollectionView.CellRegistration<SoftCardListCell, String> { cell, _, text in
             cell.contentConfiguration = UIHostingConfiguration { JobsEmptyNoteView(text: text) }.margins(.all, 0)
             cell.accessibilityIdentifier = "jobs.empty"
             cell.backgroundConfiguration = .clear()
         }
-        let blueprintCell = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, key in
+        let blueprintCell = UICollectionView.CellRegistration<SoftCardListCell, String> { [weak self] cell, _, key in
             guard let self, let blueprint = self.blueprintRows[key] else { return }
             cell.contentConfiguration = UIHostingConfiguration { BlueprintRowView(blueprint: blueprint) }.margins(.all, 0)
             cell.accessibilityIdentifier = "blueprint-row-\(key)"

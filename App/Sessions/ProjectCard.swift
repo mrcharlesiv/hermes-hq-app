@@ -61,7 +61,11 @@ enum ProjectCardSlice {
     /// The line stops this far short of a face, so it reads as passing behind it.
     static let lineClearance: CGFloat = 3
 
-    static var fill: UIColor { HQPalette.groupedCard }
+    /// [soft-cards] Sessions stands on soft cards (Theme › App Background › Soft Cards, the app's picture showing): the
+    /// projects share one soft card, and an open project draws no card of its own on it (its line holds its chats).
+    static var soft: Bool { Backdrop.app.cards && Backdrop.app.shows }
+    static var fill: UIColor { soft ? SoftCard.rowClear : HQPalette.groupedCard }
+    static var pressedFill: UIColor { soft ? SoftCard.rowPressed : HQPalette.cellPressed }
     /// The folder's box on the card: the page colour in light, a raised grey in dark.
     static let box: UIColor = {
         let raised = HQPalette.fill3, page = HQPalette.page     // read here: the provider resolves off the main thread
@@ -69,8 +73,8 @@ enum ProjectCardSlice {
             traits.userInterfaceStyle == .dark ? raised.resolvedColor(with: traits) : page.resolvedColor(with: traits)
         }
     }()
-    /// The folder's box on the page (a closed project): a small piece of card.
-    static var boxOnPage: UIColor { fill }
+    /// The folder's box on the page (a closed project): a small piece of card. On a soft card, a shade of the ink.
+    static var boxOnPage: UIColor { soft ? SoftCard.rowPressed : fill }
     static var line: UIColor { HQPalette.separator }
     /// The Desktop Look outlines its cards (it has no glass and no shadows); the iOS look's card is fill alone.
     static var edge: UIColor? { Theme.isDesktop ? HQPalette.stroke : nil }
@@ -93,7 +97,7 @@ enum ProjectCardSlice {
             pressed = false
         }
         #endif
-        view.fillColor = pressed ? HQPalette.cellPressed : fill
+        view.fillColor = pressed ? pressedFill : fill
         background.customView = view
         return background
     }
@@ -357,7 +361,7 @@ final class ProjectCardUnderRow: UICollectionReusableView {
 /// stands inside the card anyway.
 final class SessionListCell: UICollectionViewListCell {
     var clipsToCard = false { didSet { fitMask() } }
-    private static let cardPiece = 0x48514350
+    private static let cardPiece = 0x48514350, softPiece = 0x48515343
 
     override var mask: UIView? { didSet { fitMask(); fitPiece() } }
 
@@ -414,8 +418,11 @@ final class SessionListCell: UICollectionViewListCell {
                 piece.removeFromSuperview()
                 mask.backgroundColor = .black
             }
+            // [soft-cards] A chat on a soft card slides inside that card.
+            BackdropCards.fit(mask, of: self, tag: Self.softPiece)
             return
         }
+        mask.viewWithTag(Self.softPiece)?.removeFromSuperview()
         guard piece == nil else { return }
         // The mask is the list's bounds; the card stands `inset` in from its sides, and inside its edges if it has them.
         let card = UIView(frame: mask.bounds.insetBy(dx: ProjectCard.inset + (ProjectCard.edge == nil ? 0 : ProjectCard.edgeWidth), dy: 0))
@@ -740,7 +747,7 @@ struct ProjectCardHeader: View {
             .foregroundStyle(Color.hqLabel2)
             .frame(width: boxSize, height: boxSize)
             .background(RoundedRectangle(cornerRadius: desk ? 6 : 8, style: .continuous)
-                .fill(Color(uiColor: carded ? ProjectCard.box : ProjectCard.boxOnPage)))
+                .fill(Color(uiColor: carded && !ProjectCard.soft ? ProjectCard.box : ProjectCard.boxOnPage)))
             .overlay {
                 // The Desktop Look's page and card are close in light: its outline keeps the box.
                 if let edge = ProjectCard.edge {

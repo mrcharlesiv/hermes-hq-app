@@ -314,9 +314,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
             // [backdrop-cards] The tasks' groups and the ideas; the week and an empty view's line stay as they are.
             let carded: Bool = switch self?.dataSource?.sectionIdentifier(for: index) { case .group?, .ideas?: true; default: false }
             let onCards = carded && BackdropCards.on(self)
-            // The first card stands clear of the bar's buttons, as Bots' first card does (its header sat right under).
-            if onCards && index == 0 { layout.contentInsets.top += BackdropCards.gap }
-            BackdropCards.card(layout, on: onCards)
+            BackdropCards.card(layout, on: onCards, header: config.headerMode == .supplementary)
             return layout
         }
         BackdropCards.register(in: cards)   // [backdrop-cards]
@@ -334,7 +332,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     }
 
     private func configureDataSource() {
-        let taskCell = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, id in
+        let taskCell = UICollectionView.CellRegistration<SoftCardListCell, String> { [weak self] cell, _, id in
             guard let self, let row = self.rows[id] else { return }
             cell.contentConfiguration = UIHostingConfiguration {
                 TodoRowView(row: row) { [weak self] in self?.toggleDone(id) }
@@ -344,7 +342,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
             cell.accessibilityTraits = row.picked ? [.button, .selected] : .button
             cell.configurationUpdateHandler = { cell, state in Self.rowBackground(cell as! UICollectionViewListCell, state) }
         }
-        let ideaRowCell = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, id in
+        let ideaRowCell = UICollectionView.CellRegistration<SoftCardListCell, String> { [weak self] cell, _, id in
             guard let self, let card = self.ideaCards[id] else { return }
             let enabled = !self.store.readOnlyGateway
             // One view for both states: it opens and closes by itself (`ideaOpen`), with the cell's height.
@@ -364,7 +362,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
                 (cell as! UICollectionViewListCell).backgroundConfiguration = background
             }
         }
-        let ideaHeadCell = UICollectionView.CellRegistration<UICollectionViewListCell, Item> { [weak self] cell, _, _ in
+        let ideaHeadCell = UICollectionView.CellRegistration<SoftCardListCell, Item> { [weak self] cell, _, _ in
             guard let self, let page = self.ideas.page else { return }
             let enabled = !self.store.readOnlyGateway
             cell.contentConfiguration = UIHostingConfiguration {
@@ -374,7 +372,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
             }.margins(.all, 0)
             cell.backgroundConfiguration = .clear()
         }
-        let ideaNoteCell = UICollectionView.CellRegistration<UICollectionViewListCell, TaskIdeasNote> { [weak self] cell, _, note in
+        let ideaNoteCell = UICollectionView.CellRegistration<SoftCardListCell, TaskIdeasNote> { [weak self] cell, _, note in
             let enabled = !(self?.store.readOnlyGateway ?? true)
             cell.contentConfiguration = UIHostingConfiguration {
                 TaskIdeasNoteView(note: note, enabled: enabled,
@@ -383,18 +381,18 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
             }.margins(.all, 0)
             cell.backgroundConfiguration = .clear()
         }
-        let weekCell = UICollectionView.CellRegistration<UICollectionViewListCell, Item> { [weak self] cell, _, _ in
+        let weekCell = UICollectionView.CellRegistration<SoftCardListCell, Item> { [weak self] cell, _, _ in
             guard let self else { return }
             cell.contentConfiguration = UIHostingConfiguration {
                 TodoWeekStrip(days: self.week) { [weak self] key in self?.goToDay(key) }
             }.margins(.all, 0)
             cell.backgroundConfiguration = .clear()
         }
-        let emptyCell = UICollectionView.CellRegistration<UICollectionViewListCell, String> { cell, _, text in
+        let emptyCell = UICollectionView.CellRegistration<SoftCardListCell, String> { cell, _, text in
             cell.contentConfiguration = UIHostingConfiguration { TodoViewEmptyRow(text: text) }.margins(.all, 0)
             cell.backgroundConfiguration = .clear()
         }
-        let skeletonCell = UICollectionView.CellRegistration<UICollectionViewListCell, Int> { cell, _, _ in
+        let skeletonCell = UICollectionView.CellRegistration<SoftCardListCell, Int> { cell, _, _ in
             cell.contentConfiguration = UIHostingConfiguration { PageSkeletonRow() }.margins(.all, 0)
             cell.backgroundConfiguration = .clear()
         }

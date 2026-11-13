@@ -1,11 +1,15 @@
 // [backdrop-cards] Owner 2026-11-11: "Some things need a background of sorts behind them when you use a wallpaper for
-// the app." Bots, Sessions, Jobs and the other plain lists put their rows, names, times and section titles straight on
-// the picture, where a busy one (the doodles) ran through the words. While a page's picture shows, each section of its
-// list (its title and its rows) stands on one soft card: the page's card colour over a light blur, the corners of the
-// grouped pages' cards, inset 10 pt from the edges, so the list reads as the grouped pages (Gateway, Settings) do on
-// the same picture. With no picture, in a sheet, or in the Desktop Look (which draws no picture) nothing changes.
-// Owner 2026-11-12: a switch, off until turned on: Theme › Backgrounds › App Background › Soft Cards
-// (`Backdrop.cards`, `hqn.appBackground.cards`).
+// the app." Owner 2026-11-12: a switch, off until turned on: Theme › Backgrounds › App Background › Soft Cards
+// (`Backdrop.cards`, `hqn.appBackground.cards`); then, after the first build, "make it ALL right".
+//
+// While a page's picture shows and Soft Cards is on, every section of every list stands on ONE soft card
+// (`SoftCardSurface`, App/Theme/SoftCard.swift): its title, its rows and its note. Nothing nests.
+// - Plain lists (Bots, Sessions, Jobs, Tasks, Other Apps, Artifacts' days, Kanban): a section background
+//   (`BackdropCards.card`), `side` from the page's edges.
+// - Grouped pages (SwiftUI lists on `hqGroupedPage`, More, table pages): `BackdropPlates` draws the card behind each
+//   section, and the rows give up iOS's own card on it (`SkinListCards`, which asks `BackdropPlates.softRows`).
+// - What stands alone (a count, a note, an empty or error state): `hqPictureBacking`, `BackdropStateConfiguration`.
+// With no picture, in a sheet, in the Desktop Look (which draws no picture) or with the switch off, nothing changes.
 
 import SwiftUI
 import UIKit
@@ -34,24 +38,20 @@ import UIKit
         layout.register(BackdropCardTopView.self, forDecorationViewOfKind: kind(.below))
         layout.register(BackdropCardFootView.self, forDecorationViewOfKind: kind(.above))
         layout.register(BackdropCardMiddleView.self, forDecorationViewOfKind: kind([.above, .below]))
-        layout.register(BackdropPlateView.self, forDecorationViewOfKind: plateKind)
     }
 
-    static let plateKind = "hqn.backdropPlate"
+    private static let cardedKey = malloc(1)!
 
-    /// [backdrop-cards] A section that draws its own card (Kanban's groups): a plate behind its title and card, as the
-    /// grouped pages' (`BackdropPlates`), `BackdropPlates.rim` past the card. `cards` is the card's own inset in the
-    /// section; call before the section's card is made, as a gap is added under it.
-    static func plate(_ section: NSCollectionLayoutSection, on: Bool) {
-        guard on else { return }
-        section.contentInsets.bottom += gap
-        let insets = section.contentInsets, rim = BackdropPlates.rim
-        let plate = NSCollectionLayoutDecorationItem.background(elementKind: plateKind)
-        // At most `side` from the page's edges, as every other page's cards and plates (Kanban's card is 20 pt in).
-        plate.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: min(side, max(0, insets.leading - rim)),
-                                                      bottom: max(0, insets.bottom - rim), trailing: min(side, max(0, insets.trailing - rim)))
-        plate.zIndex = -2
-        section.decorationItems.append(plate)
+    /// `list`'s sections stand on cards just now (`PageBackdrop` says, as the picture and the switch come and go).
+    static func mark(_ list: UIScrollView, carded: Bool) {
+        guard (objc_getAssociatedObject(list, cardedKey) != nil) != carded else { return }
+        objc_setAssociatedObject(list, cardedKey, carded ? true : nil, .OBJC_ASSOCIATION_RETAIN)
+        (list as? UICollectionView)?.visibleCells.forEach { $0.setNeedsLayout() }
+    }
+
+    /// Whether `list` is one whose sections stand on cards just now.
+    static func isCarded(_ list: UIView?) -> Bool {
+        list.map { objc_getAssociatedObject($0, cardedKey) != nil } ?? false
     }
 
     /// Whether `controller`'s lists draw cards just now: its picture shows (`PageBackdrop`).
@@ -59,22 +59,25 @@ import UIKit
         !Theme.isDesktop && Backdrop.app.cards && PageBackdrop.showsPicture(on: controller)
     }
 
-    /// Puts `section` on a card when `on`: its rows move in `side` from the edges, and the card hugs its rows and header.
-    /// `keepWidth`: a section that lays out its own width (the Bots faces, centred in three columns) keeps it; the card
-    /// stands `side` from the page's edges behind it. `join`: the card runs on into the section above or below.
-    static func card(_ section: NSCollectionLayoutSection, on: Bool, keepWidth: Bool = false, join: Join = []) {
+    /// Puts `section` on a card when `on`: its rows move in `side` from the edges, and the card hugs its header and rows.
+    /// - `header`: the section has a header of its own above its rows (a list's supplementary header). A section's top
+    ///   inset falls between that header and the rows, so the card adds no room there: the header brings its own.
+    /// - `keepWidth`: a section that lays out its own width (the Bots faces, centred in three columns) keeps it; the
+    ///   card stands `side` from the page's edges behind it.
+    /// - `join`: the card runs on into the section above or below.
+    static func card(_ section: NSCollectionLayoutSection, on: Bool, header: Bool = false, keepWidth: Bool = false, join: Join = []) {
         guard on else { return }
         var insets = section.contentInsets
         if !keepWidth {
             insets.leading += side
             insets.trailing += side
         }
-        let top = join.contains(.above) ? 0 : pad, bottom = join.contains(.below) ? 0 : pad
+        let top = join.contains(.above) || header ? 0 : pad, bottom = join.contains(.below) ? 0 : pad
         insets.top += top
         insets.bottom += join.contains(.below) ? 0 : pad + gap
         section.contentInsets = insets
         let card = NSCollectionLayoutDecorationItem.background(elementKind: kind(join))
-        card.contentInsets = NSDirectionalEdgeInsets(top: join.contains(.above) ? 0 : max(0, insets.top - top),
+        card.contentInsets = NSDirectionalEdgeInsets(top: join.contains(.above) || header ? 0 : max(0, insets.top - top),
                                                      leading: keepWidth ? side : insets.leading,
                                                      bottom: join.contains(.below) ? 0 : max(0, insets.bottom - bottom),
                                                      trailing: keepWidth ? side : insets.trailing)
@@ -83,78 +86,99 @@ import UIKit
     }
 }
 
-/// The grouped pages' lighter plate, as a section background (`BackdropCards.plate`).
-final class BackdropPlateView: BackdropCardView {
-    override init(frame: CGRect) { super.init(frame: frame); cornerRadius = 26; tintAlpha = 0.5 }
-    @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
-}
-
 /// A card joined to the one below: round only at the top.
 final class BackdropCardTopView: BackdropCardView {
-    override init(frame: CGRect) { super.init(frame: frame); layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner] }
+    override init(frame: CGRect) { super.init(frame: frame); surface.open = .bottom }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 }
 
 /// A card joined to the one above: round only at the foot.
 final class BackdropCardFootView: BackdropCardView {
-    override init(frame: CGRect) { super.init(frame: frame); layer.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner] }
+    override init(frame: CGRect) { super.init(frame: frame); surface.open = .top }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 }
 
 /// A card joined both ways: square.
 final class BackdropCardMiddleView: BackdropCardView {
-    override init(frame: CGRect) { super.init(frame: frame); layer.maskedCorners = [] }
+    override init(frame: CGRect) { super.init(frame: frame); surface.open = [.top, .bottom] }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 }
 
-/// The card: the page's card colour, a little see-through, over a light blur of the picture.
+/// A row of a list that can stand on soft cards. A swipe moves the whole row, and its words slid out over the picture
+/// past the card's edge. While a row swipes, UIKit masks it to the list with a view it moves against the row in step
+/// with the slide; on a card that mask's opaque part is narrowed to the card (as `SessionListCell` does for a
+/// project's card), so the row slides inside its card. Off cards the mask is left as UIKit made it.
+class SoftCardListCell: UICollectionViewListCell {
+    private static let cardPiece = 0x48515343
+
+    override var mask: UIView? { didSet { BackdropCards.fit(mask, of: self, tag: Self.cardPiece) } }
+}
+
+extension BackdropCards {
+    /// Narrows a swiping row's mask to its card, `side` in from the list's edges; puts it back off cards.
+    static func fit(_ mask: UIView?, of row: UIView, tag: Int) {
+        guard let mask else { return }
+        let piece = mask.viewWithTag(tag)
+        guard isCarded(row.superview) else {
+            if let piece {
+                piece.removeFromSuperview()
+                mask.backgroundColor = .black
+            }
+            return
+        }
+        guard piece == nil else { return }
+        let card = UIView(frame: mask.bounds.insetBy(dx: side, dy: 0))
+        card.tag = tag
+        card.backgroundColor = .black
+        card.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        mask.backgroundColor = .clear
+        mask.addSubview(card)
+    }
+}
+
+/// A section's card, as a section background.
 class BackdropCardView: UICollectionReusableView {
-    private let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
-    private let tint = UIView()
-    var cornerRadius: CGFloat = 22 { didSet { layer.cornerRadius = cornerRadius } }
-    /// How much of the card colour lies over the blur (a grouped page's plate is lighter: its rows' cards stand out on it).
-    var tintAlpha: CGFloat = 0.78 { didSet { tint.backgroundColor = HQPalette.card.withAlphaComponent(tintAlpha) } }
+    let surface = SoftCardSurface()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
-        layer.cornerRadius = cornerRadius
-        layer.cornerCurve = .continuous
-        clipsToBounds = true
-        for view in [blur, tint] as [UIView] {
-            view.frame = bounds
-            view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            addSubview(view)
-        }
-        tint.backgroundColor = HQPalette.card.withAlphaComponent(tintAlpha)
+        surface.frame = bounds
+        surface.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        addSubview(surface)
     }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 }
 
-/// [backdrop-cards] The grouped pages (SwiftUI lists on `hqGroupedPage`, and table pages): their rows already stand on
-/// cards, but a section's title over them and its note under them sat on the picture. While the picture shows, each
-/// section (title, card and note) stands on a frosted plate `BackdropCards.side` from the page's edges, the same
-/// backing the plain lists' sections get, so every page reads alike on a picture. Drawn in the list behind its rows and
-/// moved with it; only the sections near the screen get one.
+/// [backdrop-cards] The grouped pages (SwiftUI lists on `hqGroupedPage`, More, table pages). While the picture shows
+/// and Soft Cards is on, each section is one soft card from its title's top to its note's foot, `BackdropCards.side`
+/// from the page's edges, as the plain lists' sections are; its rows give up iOS's own card (`softRows`), so there is
+/// one surface, not a card on a plate. Drawn in the list behind its rows and moved with it; only the sections near the
+/// screen get one.
 @MainActor final class BackdropPlates: NSObject {
     private weak var list: UIScrollView?
     private let shows: () -> Bool
-    private var plates: [BackdropCardView] = []
+    private var plates: [SoftCardSurface] = []
     private var watches: [NSKeyValueObservation] = []
     private var scheduled = false
     private var switchWatch: NSObjectProtocol?
+    /// Soft cards are drawn just now (the rows are clear on them).
+    private(set) var active = false
+    /// Supplementary kinds that are not a section's title or note (More's links under its last group).
+    private let loose: Set<String>
     private static let key = malloc(1)!
     /// Room under a note's words past the room it comes with.
     static let notePad: CGFloat = 6
-    /// The space between sections while plates show (iOS's compact spacing left the plates touching).
+    /// The space between sections while cards show (iOS's compact spacing left them touching).
     static let sectionSpacing: CGFloat = 28
-    /// How far a plate reaches past its section's cards at the sides.
+    /// How far a card reaches past its section's rows.
     static let rim: CGFloat = 6
 
-    private init(list: UIScrollView, shows: @escaping () -> Bool) {
+    private init(list: UIScrollView, loose: Set<String>, shows: @escaping () -> Bool) {
         self.list = list
         self.shows = shows
+        self.loose = loose
         super.init()
         watches = [
             list.observe(\.contentSize, options: [.new]) { [weak self] _, _ in MainActor.assumeIsolated { self?.schedule() } },
@@ -171,10 +195,10 @@ class BackdropCardView: UICollectionReusableView {
     isolated deinit { switchWatch.map(NotificationCenter.default.removeObserver) }
 
     /// Attaches (once) to a table or a SwiftUI list; again later only redraws.
-    static func attach(to list: UIScrollView, shows: @escaping () -> Bool) {
+    static func attach(to list: UIScrollView, loose: Set<String> = [], shows: @escaping () -> Bool) {
         guard list is UITableView || list is UICollectionView else { return }
         if let existing = objc_getAssociatedObject(list, key) as? BackdropPlates { existing.schedule(); return }
-        let plates = BackdropPlates(list: list, shows: shows)
+        let plates = BackdropPlates(list: list, loose: loose, shows: shows)
         objc_setAssociatedObject(list, key, plates, .OBJC_ASSOCIATION_RETAIN)
         plates.schedule()
     }
@@ -182,6 +206,19 @@ class BackdropCardView: UICollectionReusableView {
     static func refresh(_ list: UIScrollView?) {
         guard let list, let plates = objc_getAssociatedObject(list, key) as? BackdropPlates else { return }
         plates.schedule()
+    }
+
+    /// Whether `row` (a list or table cell) stands on a soft card just now, so it draws no card of its own.
+    static func softRows(for row: UIView) -> Bool {
+        var view = row.superview
+        for _ in 0..<3 {
+            guard let current = view else { return false }
+            if current is UICollectionView || current is UITableView {
+                return (objc_getAssociatedObject(current, key) as? BackdropPlates)?.active == true
+            }
+            view = current.superview
+        }
+        return false
     }
 
     func schedule() {
@@ -198,17 +235,22 @@ class BackdropCardView: UICollectionReusableView {
     private func update() {
         guard let list else { return }
         guard list.window != nil else { return }   // off screen (still loading): drawn when it shows
-        let boxes = shows() && Backdrop.app.cards && !Theme.isDesktop ? sections(of: list, near: list.bounds.insetBy(dx: 0, dy: -600)) : []
+        let on = shows() && Backdrop.app.cards && !Theme.isDesktop
+        if on != active {
+            active = on
+            // The rows take iOS's card back, or give it up.
+            if let table = list as? UITableView { table.visibleCells.forEach { $0.setNeedsUpdateConfiguration() } }
+            if let grid = list as? UICollectionView { grid.visibleCells.forEach { $0.setNeedsUpdateConfiguration() } }
+        }
+        let boxes = on ? sections(of: list, near: list.bounds.insetBy(dx: 0, dy: -600)) : []
         while plates.count < boxes.count {
-            let plate = BackdropCardView(frame: .zero)
+            let plate = SoftCardSurface()
             plate.layer.zPosition = -100
-            plate.cornerRadius = 26
-            plate.tintAlpha = 0.5
             list.insertSubview(plate, at: 0)
             plates.append(plate)
         }
         let width = list.bounds.width
-        // A table's picture is its background view, which a plate must stand on; a SwiftUI list's is behind the list.
+        // A table's picture is its background view, which a card must stand on; a SwiftUI list's is behind the list.
         let picture = (list as? UITableView)?.backgroundView
         for (index, plate) in plates.enumerated() {
             guard index < boxes.count else { plate.isHidden = true; continue }
@@ -218,13 +260,13 @@ class BackdropCardView: UICollectionReusableView {
                 plate.layer.zPosition = picture.layer.zPosition
                 list.insertSubview(plate, aboveSubview: picture)
             }
-            // Owner 2026-11-12: a note sat tight on the plate's foot. Each edge is set by what is there: a title or a
-            // note keeps the room it comes with and `notePad` more under a note; bare cards get `rim` all round.
+            // Each edge is set by what is there: a title or a note keeps the room it comes with and `notePad` more
+            // under a note (owner 2026-11-12: a note sat tight on the foot); bare rows get `rim` all round.
             let all = [section.cards, section.title, section.note].compactMap { $0 }.reduce(CGRect.null) { $0.union($1) }
             let top = section.title?.minY ?? ((section.cards?.minY ?? all.minY) - Self.rim)
             let bottom = section.note.map { $0.maxY + Self.notePad } ?? ((section.cards?.maxY ?? all.maxY) + Self.rim)
-            // `rim` past the section's cards (10 pt from an iPhone's edges, as the plain lists' cards; on an iPad, whose
-            // cards stand further in, still just round them). A table's section is as wide as the table: `side` in.
+            // `rim` past the section's rows (10 pt from an iPhone's edges, as the plain lists' cards; on an iPad, whose
+            // rows stand further in, still just round them). A table's section is as wide as the table: `side` in.
             let edge = section.cards ?? all
             let inset = edge.minX > 1
             let left = inset ? max(0, edge.minX - Self.rim) : BackdropCards.side
@@ -244,7 +286,7 @@ class BackdropCardView: UICollectionReusableView {
     private func sections(of list: UIScrollView, near rect: CGRect) -> [Section] {
         var found: [Int: Section] = [:]
         /// A title or note with words in it (an empty one is only the list's spacing).
-        func words(_ frame: CGRect) -> Bool { frame.height > 12 }
+        func words(_ frame: CGRect) -> Bool { frame.height > 24 }   // a blank one is 18–20 pt, one line of words 30–40
         if let table = list as? UITableView {
             for index in 0..<table.numberOfSections where table.rect(forSection: index).intersects(rect) {
                 // The section's rect and its title's and note's (not each row's: that has the table make its cells).
@@ -264,7 +306,8 @@ class BackdropCardView: UICollectionReusableView {
             for item in items where item.representedElementCategory == .cell {
                 found[item.indexPath.section, default: Section()].cards = found[item.indexPath.section]?.cards.map { $0.union(item.frame) } ?? item.frame
             }
-            for item in items where item.representedElementCategory == .supplementaryView && words(item.frame) {
+            for item in items where item.representedElementCategory == .supplementaryView && words(item.frame)
+                && !(item.representedElementKind.map(loose.contains) ?? false) {
                 var section = found[item.indexPath.section, default: Section()]
                 // Above the section's cards it is the title; below them, the note (by place: kinds differ by list).
                 if let cards = section.cards, item.frame.midY > cards.midY { section.note = section.note.map { $0.union(item.frame) } ?? item.frame }
@@ -287,13 +330,8 @@ private struct BackdropLineBacking: ViewModifier {
         if Backdrop.app.cards && Backdrop.app.shows {
             content
                 .padding(.horizontal, capsule ? 12 : 16)
-                .padding(.vertical, capsule ? 5 : 12)
-                .background {
-                    let fill = Color(uiColor: HQPalette.card).opacity(0.78)
-                    if capsule { Capsule().fill(.ultraThinMaterial).overlay(Capsule().fill(fill)) }
-                    else { RoundedRectangle(cornerRadius: 22, style: .continuous).fill(.ultraThinMaterial)
-                        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(fill)) }
-                }
+                .padding(.vertical, capsule ? 5 : 14)
+                .background(SoftCardBackground(capsule: capsule))
         } else {
             content
         }
@@ -337,7 +375,7 @@ enum BackdropState {
 
 final class BackdropStateView: UIView, UIContentView {
     private let state: UIContentUnavailableView
-    private let card = BackdropCardView(frame: .zero)
+    private let card = SoftCardSurface()
     private var watches: [NSObjectProtocol] = []
 
     var configuration: any UIContentConfiguration {

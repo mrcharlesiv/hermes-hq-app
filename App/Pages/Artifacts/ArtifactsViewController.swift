@@ -188,7 +188,14 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         view.addSubview(collectionView)
         if tabRoot || toolRoot { ListBarAppearance.pinTitle(in: self, softEdgeAround: collectionView) }   // owner 2026-11-01: every tab's top
         if toolRoot { ListBarAppearance.dropLookTitle(navigationItem) }   // `pinTitle` set the tab's label
-        PageBackdrop.install(in: self, clearing: [collectionView])   // [backdrop] Theme › App Background
+        let backdrop = PageBackdrop.install(in: self, clearing: [collectionView])   // [backdrop] Theme › App Background
+        // [soft-cards] The days' headings lose their band on a card, and get it back off one.
+        backdrop.onCardsChange = { [weak self] in
+            guard let self, let dataSource = self.dataSource else { return }
+            var snapshot = dataSource.snapshot()
+            snapshot.reloadSections(snapshot.sectionIdentifiers)
+            dataSource.apply(snapshot, animatingDifferences: false)
+        }
         notices = PageNoticeHost(in: view)
         let refresh = UIRefreshControl()
         refresh.addAction(UIAction { [weak self] _ in self?.pulled() }, for: .valueChanged)
@@ -438,7 +445,18 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
             guard let self, let section = self.dataSource?.sectionIdentifier(for: index) else { return nil }
             switch section {
             case .pinned:
-                return self.pinnedLayout(environment)
+                let pinned = self.pinnedLayout(environment)
+                // [soft-cards] The shelf on Artifacts ("Tiles" over a row of pins) stands on a card. The Tiles page is
+                // tiles alone, each a card of its own: none there.
+                // "See All" under the shelf is the card's foot. The Tiles page's list is rows on a card, as any list.
+                let next = self.dataSource?.sectionIdentifier(for: index + 1)
+                if !self.pinnedOnly {
+                    BackdropCards.card(pinned, on: BackdropCards.on(self), header: true, keepWidth: true, join: next == .allPins ? .below : [])
+                } else if ArtifactPins.view != .cards {
+                    // The grid's names stand under its tiles, on the page: a card behind it too (it keeps its own width).
+                    BackdropCards.card(pinned, on: BackdropCards.on(self), header: true, keepWidth: ArtifactPins.view == .grid)
+                }
+                return pinned
             case .images where self.isGrid:
                 return self.gridImagesLayout(environment)
             case .day where self.isGrid:
@@ -459,6 +477,9 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
                         elementKind: UICollectionView.elementKindSectionHeader, alignment: .top)
                     s.boundarySupplementaryItems = [header]
                     s.supplementaryContentInsetsReference = .none   // the header spans the width, as the day headers do
+                    // [soft-cards] "Images" and its pictures on a card, with Show All Images as its foot.
+                    BackdropCards.card(s, on: BackdropCards.on(self), header: true, keepWidth: true,
+                                       join: self.dataSource?.sectionIdentifier(for: index + 1) == .showAllImages ? .below : [])
                 } else {
                     s.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0)
                 }
@@ -467,10 +488,14 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
                 var config = UICollectionLayoutListConfiguration(appearance: .plain)
                 config.backgroundColor = .clear
                 config.separatorConfiguration.color = HQPalette.separator
-                config.itemSeparatorHandler = { _, separator in
+                config.itemSeparatorHandler = { [weak self] path, separator in
                     var s = separator
                     s.topSeparatorVisibility = .hidden
                     s.bottomSeparatorInsets = NSDirectionalEdgeInsets(top: 0, leading: 76, bottom: 0, trailing: 20)   // as Bots and Jobs
+                    // [soft-cards] No rule under a card's last row.
+                    if let self, BackdropCards.on(self), path.item == self.collectionView.numberOfItems(inSection: path.section) - 1 {
+                        s.bottomSeparatorVisibility = .hidden
+                    }
                     return s
                 }
                 // [mac-ten] The Unavailable heading has no line under it, as no heading has (see `toggleCell`).
@@ -502,7 +527,17 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
                     // [backdrop-cards] On a picture each day is a card, its date at the card's top (not pinned over others).
                     let cards = BackdropCards.on(self)
                     s.boundarySupplementaryItems.forEach { $0.pinToVisibleBounds = !cards }
-                    BackdropCards.card(s, on: cards)
+                    BackdropCards.card(s, on: cards, header: true)
+                }
+                // [soft-cards] "See All" is the foot of the shelf's card above it, Show All Images of the pictures'. What is
+                // listed but can't be opened, and Show More, are cards of their own.
+                let above = index > 0 ? self.dataSource?.sectionIdentifier(for: index - 1) : nil
+                switch section {
+                case .allPins where above == .pinned, .showAllImages where above == .images:
+                    BackdropCards.card(s, on: BackdropCards.on(self), join: .above)
+                case .more, .unavailable:
+                    BackdropCards.card(s, on: BackdropCards.on(self))
+                default: break
                 }
                 return s
             }
@@ -811,7 +846,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
 
     private func configureDataSource() {
         // [dashboard] The Dashboard's pages, under its title.
-        let pagesCell = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, _ in
+        let pagesCell = UICollectionView.CellRegistration<SoftCardListCell, String> { [weak self] cell, _, _ in
             guard let self else { return }
             let bar = (cell.contentView.subviews.first as? DashboardPagesBar) ?? self.makePagesBar(in: cell)
             self.showPages(bar)
@@ -823,7 +858,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
             guard let maker = TileMaker.active.first(where: { $0.id == id }) else { return }
             cell.show(what: maker.rowTitle, detail: "\(maker.bot.name) · \(maker.stepWords)", changing: maker.changing != nil)
         }
-        let filterCell = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, _ in
+        let filterCell = UICollectionView.CellRegistration<SoftCardListCell, String> { [weak self] cell, _, _ in
             guard let self else { return }
             let bar = (cell.contentView.subviews.first as? ArtifactFilterBar) ?? self.makeFilterBar(in: cell)
             bar.select([nil, .image, .file, .link].firstIndex(of: self.filter) ?? 0)
@@ -833,7 +868,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
             guard let self, let record = self.records[id] else { return }
             self.configureTile(cell, record)
         }
-        let showAllCell = UICollectionView.CellRegistration<UICollectionViewListCell, Int> { cell, _, count in
+        let showAllCell = UICollectionView.CellRegistration<SoftCardListCell, Int> { cell, _, count in
             var content = UIListContentConfiguration.cell().hqScaled()
             content.text = "Show All \(count) Images"
             content.textProperties.color = HQPalette.tint
@@ -842,15 +877,15 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
             cell.accessibilityIdentifier = "artifacts.show-all-images"
             cell.backgroundConfiguration = .clear()
         }
-        let rowCell = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, id in
+        let rowCell = UICollectionView.CellRegistration<SoftCardListCell, String> { [weak self] cell, _, id in
             guard let self, let record = self.records[id] else { return }
             self.configureRow(cell, record, missing: false)
         }
-        let missingCell = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, id in
+        let missingCell = UICollectionView.CellRegistration<SoftCardListCell, String> { [weak self] cell, _, id in
             guard let self, let record = self.records[id] else { return }
             self.configureRow(cell, record, missing: true)
         }
-        let toggleCell = UICollectionView.CellRegistration<UICollectionViewListCell, Int> { [weak self] cell, _, count in
+        let toggleCell = UICollectionView.CellRegistration<SoftCardListCell, Int> { [weak self] cell, _, count in
             var content = UIListContentConfiguration.cell().hqScaled()
             content.text = "Unavailable (\(count))"
             content.textProperties.color = HQPalette.label2
@@ -869,16 +904,16 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
             cell.accessibilityValue = (self?.unavailableOpen ?? false) ? "open" : "closed"
             cell.backgroundConfiguration = .clear()
         }
-        let moreCell = UICollectionView.CellRegistration<UICollectionViewListCell, String> { cell, _, _ in
+        let moreCell = UICollectionView.CellRegistration<SoftCardListCell, String> { cell, _, _ in
             cell.contentConfiguration = UIHostingConfiguration { ProgressView().frame(maxWidth: .infinity).padding(.vertical, 12) }
             cell.backgroundConfiguration = .clear()
         }
-        let stateCell = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, _ in
+        let stateCell = UICollectionView.CellRegistration<SoftCardListCell, String> { [weak self] cell, _, _ in
             guard let self else { return }
             cell.contentConfiguration = BackdropState.wrap(self.stateConfiguration())   // [backdrop-cards]
             cell.backgroundConfiguration = .clear()
         }
-        let countCell = UICollectionView.CellRegistration<UICollectionViewListCell, String> { cell, _, text in
+        let countCell = UICollectionView.CellRegistration<SoftCardListCell, String> { cell, _, text in
             cell.contentConfiguration = UIHostingConfiguration { PageCountView(text: text) }.margins(.all, 0)
             cell.backgroundConfiguration = .clear()
         }
@@ -886,11 +921,11 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
             guard let self, let pin = self.pinsShown[id] else { return }
             self.configurePin(cell, pin)
         }
-        let pinRowCell = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, id in
+        let pinRowCell = UICollectionView.CellRegistration<SoftCardListCell, String> { [weak self] cell, _, id in
             guard let self, let pin = self.pinsShown[id] else { return }
             self.configurePinRow(cell, pin)
         }
-        let allPinsCell = UICollectionView.CellRegistration<UICollectionViewListCell, Int> { cell, _, count in
+        let allPinsCell = UICollectionView.CellRegistration<SoftCardListCell, Int> { cell, _, count in
             var content = UIListContentConfiguration.cell().hqScaled()
             content.text = "See All \(count)"
             content.textProperties.color = HQPalette.tint
@@ -899,7 +934,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
             cell.accessibilityIdentifier = "artifacts.all-pins"
             cell.backgroundConfiguration = .clear()
         }
-        let skeletonCell = UICollectionView.CellRegistration<UICollectionViewListCell, Int> { cell, _, _ in
+        let skeletonCell = UICollectionView.CellRegistration<SoftCardListCell, Int> { cell, _, _ in
             cell.contentConfiguration = UIHostingConfiguration { PageSkeletonRow(tile: true) }.margins(.all, 0)
             cell.backgroundConfiguration = .clear()
         }
@@ -941,7 +976,14 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
                 header.accessories = []
             }
             var background = UIBackgroundConfiguration.clear()
-            background.backgroundColor = HQPalette.page
+            // [soft-cards] On a soft card the date is the card's first line: no band of the page colour across it.
+            background.backgroundColor = BackdropCards.on(self) ? .clear : HQPalette.page
+            // The Tiles page as cards is tiles alone, each its own card: only its count line needs a backing.
+            if BackdropCards.on(self), self.pinnedOnly, ArtifactPins.view == .cards,
+               case .pinned? = self.dataSource.sectionIdentifier(for: path.section) {
+                background.customView = SoftCardSurface()
+                background.backgroundInsets = NSDirectionalEdgeInsets(top: 2, leading: BackdropCards.side, bottom: 4, trailing: BackdropCards.side)
+            }
             header.backgroundConfiguration = background
         }
         dataSource = UICollectionViewDiffableDataSource<Section, Item>(collectionView: collectionView) { cv, path, item in

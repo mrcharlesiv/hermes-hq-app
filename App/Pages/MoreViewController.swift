@@ -57,7 +57,7 @@ final class MoreViewController: UIViewController, UICollectionViewDelegate {
         view.addSubview(collectionView)
         ListBarAppearance.pinTitle(in: self, grouped: true, softEdgeAround: collectionView)   // owner 2026-11-01: every tab's top
         PageBackdrop.install(in: self, clearing: [collectionView])   // [backdrop] Theme › App Background
-        BackdropPlates.attach(to: collectionView) { [weak self] in PageBackdrop.showsPicture(on: self) }   // [backdrop-cards]
+        BackdropPlates.attach(to: collectionView, loose: [MoreLinksFooter.kind]) { [weak self] in PageBackdrop.showsPicture(on: self) }   // [backdrop-cards]
         #if targetEnvironment(macCatalyst)
         typealias RowCell = MacCardCell   // [mac] Stress test 2026-10-28 round 8: keeps the Desktop Look's card corners
         #else

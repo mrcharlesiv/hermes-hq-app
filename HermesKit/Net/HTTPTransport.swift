@@ -14,8 +14,12 @@ nonisolated final class HTTPTransport: Sendable {
     private let invalidated = Mutex(false)
 
     /// `cookies: false` makes a cookieless client (probe, Nous token exchange, Nous accounts).
-    init(cookies: Bool = true) {
+    /// [cf-access] `headers`: sent on every request of both pools, sockets and transfers included (the gateway's
+    /// Cloudflare Access token, `StoredAccount.accessHeaders`). These sessions only ever talk to the gateway's own
+    /// address and never follow a redirect, so the headers go nowhere else.
+    init(cookies: Bool = true, headers: [String: String] = [:]) {
         let config = URLSessionConfiguration.ephemeral
+        if !headers.isEmpty { config.httpAdditionalHeaders = headers }
         config.timeoutIntervalForRequest = 30
         config.urlCache = nil
         config.requestCachePolicy = .reloadIgnoringLocalCacheData

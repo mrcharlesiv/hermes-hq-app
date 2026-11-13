@@ -199,7 +199,13 @@ final class OnboardingNavigationController: UINavigationController {
             return OnboardingStepController(step: step) { WelcomeView(go: go) }
         case .start:
             let fill: (String) -> Void = { [weak self] address in self?.showForm(address: address) }
-            return OnboardingStepController(step: step) { StartView(go: go, fill: fill, cloud: cloud) }
+            // [cf-access] The form, with the Cloudflare Access token's fields already open under the address.
+            let access: () -> Void = { [weak self] in
+                guard let self, !self.isBusy else { return }
+                self.formModel.accessOpen = true
+                self.go(.connect)
+            }
+            return OnboardingStepController(step: step) { StartView(go: go, fill: fill, cloud: cloud, access: access) }
         case .getHermes:
             return OnboardingStepController(step: step) { GetHermesView(actions: actions, go: go, cloud: cloud) }
         case .hermes:

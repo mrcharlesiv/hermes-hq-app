@@ -31,11 +31,21 @@ enum SignInScreen {
 @Observable
 final class SignInModel {
     enum Busy: Equatable { case nous, password }
-    enum Field: Hashable { case address, username, password, name }
+    enum Field: Hashable { case address, username, password, name, accessId, accessSecret }
 
     var address: String { didSet { if address != oldValue { addressChanged() } } }
     var username = ""
     var password = "" { didSet { if password != oldValue { passwordInvalid = false } } }
+    // [cf-access] The address's Cloudflare Access service token (public issue #37): its two fields show once asked
+    // for ("Behind Cloudflare Access?"), when the address answers with Access's own sign-in, or when a gateway saved
+    // at this address already has one.
+    var accessOpen = false
+    var accessId = "" { didSet { if accessId != oldValue { accessChanged() } } }
+    var accessSecret = "" { didSet { if accessSecret != oldValue { accessChanged() } } }
+    /// The address answered with Cloudflare Access's sign-in (no token yet, or one it did not take).
+    private(set) var behindAccess = false
+    var access: CloudflareAccess? { CloudflareAccess(clientId: accessId, clientSecret: accessSecret) }
+    @ObservationIgnored private var fillingAccess = false
     /// nil until the address has been asked about (only the field shows).
     private(set) var ways: SignInWays?
     /// [own-login] The browser button's words when this Hermes signs in with its own login provider (self-hosted
@@ -128,12 +138,27 @@ final class SignInModel {
         ways != nil && !checking && asked == address.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// [cf-access] The token changed: the next probe and sign-in carry it, and the address is asked about again
+    /// (after the same pause as typing an address), since what it offers shows only with the right token.
+    private func accessChanged() {
+        guard !fillingAccess else { return }
+        driver.useAccess(access)
+        guard !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, busy == nil else { return }
+        debounce?.cancel()
+        debounce = Task { [weak self, delay] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, let self else { return }
+            self.asked = ""
+            self.ask()
+        }
+    }
+
     private func addressChanged() {
         addressInvalid = false
         debounce?.cancel()
         let text = address.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.isEmpty {
-            asked = ""; ways = nil; ownLoginTitle = nil; note = nil; checking = false
+            asked = ""; ways = nil; ownLoginTitle = nil; note = nil; checking = false; behindAccess = false
             return
         }
         // [mac] A pasted setup link (hermes://connect?url=…, what the setup's QR code holds) becomes the address in it.
@@ -156,11 +181,18 @@ final class SignInModel {
         guard !text.isEmpty, text != asked else { return }
         asked = text
         guard SignInAddress.looksLikeAddress(text) else {
-            ways = .both; ownLoginTitle = nil; note = nil; checking = false
+            ways = .both; ownLoginTitle = nil; note = nil; checking = false; behindAccess = false
             return
         }
         checking = true
         let normalized = SignInAddress.normalize(text)
+        // [cf-access] A gateway saved at this address already has a token: the form starts from it.
+        if accessId.isEmpty, accessSecret.isEmpty, let saved = driver.savedAccess(for: normalized) {
+            fillingAccess = true
+            accessId = saved.clientId; accessSecret = saved.clientSecret; accessOpen = true
+            fillingAccess = false
+        }
+        driver.useAccess(access)
         probeTask = Task { [weak self, driver] in
             let options = await driver.probe(normalized)
             // A newer ask is in flight: it owns `checking`.
@@ -174,7 +206,12 @@ final class SignInModel {
             self.checking = false
             self.ways = SignInWays(options)
             self.ownLoginTitle = options.reachable && !options.offersNous ? options.ownLoginTitle : nil
-            self.note = options.reachable ? nil : (options.message ?? SignInCopy.unreachableNote)
+            // [cf-access] Cloudflare Access answered instead of Hermes: the token's fields open and the note says why.
+            self.behindAccess = options.behindAccess
+            if options.behindAccess { self.accessOpen = true }
+            self.note = options.reachable ? nil : options.behindAccess
+                ? (self.access == nil ? SignInCopy.Access.needed : SignInCopy.Access.refused)
+                : (options.message ?? SignInCopy.unreachableNote)
             AppLog.trace("signin", "address probe settled: reachable=\(options.reachable)")
         }
     }
@@ -284,10 +321,15 @@ struct SignInView: View {
                             .accessibilityIdentifier("sign-in-note")
                             .transition(.opacity)
                     }
-                    if let ways = model.ways {
+                    if model.accessOpen {
+                        accessFields
+                            .transition(.hqMotion(.opacity.combined(with: .move(edge: .top))))
+                    }
+                    // [cf-access] Until Cloudflare Access lets the address through there is nothing to sign in to yet.
+                    if let ways = model.ways, !model.behindAccess {
                         options(ways)
                             .transition(.hqMotion(.opacity.combined(with: .move(edge: .top))))
-                    } else {
+                    } else if model.ways == nil {
                         continueButton
                     }
                     if let notice = model.notice, !notice.isEmpty {
@@ -310,12 +352,21 @@ struct SignInView: View {
                             .accessibilityIdentifier("sign-in-error")
                             .transition(.opacity)
                     }
-                    if model.ways != nil {
+                    if model.ways != nil, !model.behindAccess {
                         Text(model.footnote)
                             .font(Font.hq(.footnote))
                             .foregroundStyle(Color.hqLabel2)
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.top, 4)
+                    }
+                    if model.ways != nil, !model.accessOpen {
+                        // [cf-access] Quiet, and only once there is an address: most gateways have no Access in front.
+                        Button(SignInCopy.Access.open) { model.accessOpen = true; focus = .accessId }
+                            .font(Font.hq(.subheadline))
+                            .foregroundStyle(Color.hqTintText)
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .disabled(model.busy != nil)
+                            .accessibilityIdentifier("sign-in-access-open")
                     }
                     if let help = model.onHelp {
                         // [onboarding] §5.12: always there, also before the address has been asked about.
@@ -333,6 +384,7 @@ struct SignInView: View {
             .padding(.bottom, 32)
             .frame(maxWidth: .infinity)
             .animation(HQMotion.swiftUI(.smooth(duration: 0.3), fades: true), value: model.ways)
+            .animation(HQMotion.swiftUI(.smooth(duration: 0.3), fades: true), value: model.accessOpen)
             .animation(HQMotion.swiftUI(.smooth(duration: 0.2), fades: true), value: model.error)
             .animation(HQMotion.swiftUI(.smooth(duration: 0.2), fades: true), value: model.note)
             .animation(HQMotion.swiftUI(.smooth(duration: 0.2), fades: true), value: model.notice)
@@ -416,6 +468,39 @@ struct SignInView: View {
                 }
             }
             .fieldStyle(height: fieldHeight, invalid: model.addressInvalid)
+        }
+        .disabled(model.busy != nil)
+    }
+
+    /// [cf-access] The Cloudflare Access service token for this address, right under it (public issue #37).
+    private var accessFields: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("\(SignInCopy.Access.title) \(SignInCopy.Access.clientId)").font(Font.hq(.footnote).weight(.medium)).foregroundStyle(Color.hqLabel2)
+                TextField(SignInCopy.Access.clientId, text: $model.accessId)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.next)
+                    .focused($focus, equals: .accessId)
+                    .onSubmit { focus = .accessSecret }
+                    .fieldStyle(height: fieldHeight, invalid: false)
+                    .accessibilityIdentifier("sign-in-access-id")
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text(SignInCopy.Access.clientSecret).font(Font.hq(.footnote).weight(.medium)).foregroundStyle(Color.hqLabel2)
+                SecureField(SignInCopy.Access.clientSecret, text: $model.accessSecret)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.done)
+                    .focused($focus, equals: .accessSecret)
+                    .onSubmit { focus = nil }
+                    .fieldStyle(height: fieldHeight, invalid: false)
+                    .accessibilityIdentifier("sign-in-access-secret")
+            }
+            Text(SignInCopy.Access.footnote)
+                .font(Font.hq(.footnote))
+                .foregroundStyle(Color.hqLabel2)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .disabled(model.busy != nil)
     }

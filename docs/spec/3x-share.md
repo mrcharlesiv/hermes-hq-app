@@ -373,6 +373,7 @@ checked against the contracts: `SessionParams` (`common.py:224`: `session_id`, `
 |---|---|---|---|---|
 | 0 | Local checks: bot can receive; ≤ 10 photos and ≤ 10 files; something to send; each file > 0 bytes and ≤ limit; Keychain account matches the roster; tailnet rule | — | — | `noChat` · `refused("Share at most 10 photos and 10 files at a time.")` · `nothingToSend` · `unreadable(name)` · `tooLarge(name)` · the blocked failures of §7.8 · `tailscaleOff` |
 | 0n | Nous only, when the pair needs renewal: `POST /auth/native/refresh` (§7.9) | 15 s | 200 + rotated pair | `sessionEnded` for 200/400/401/403 without a usable pair, else `gateway(status)` |
+| | **[kept-session]** In every row here a 400/401/403 counts as a refusal only when Hermes wrote it (`GatewayRefusal.isHermes`, spec 01 §14); otherwise it is `gateway(status)` and nothing is renewed against it. | | | |
 | 1 | `GET /api/auth/me` | 15 s | 2xx | 401/403: one retry (cookies: with the Keychain's copy if it differs; Nous: after one forced renewal), then `sessionEnded`. Other status → `gateway(status)` |
 | 2 | `GET /api/files?profile=<p>` (only with attachments) | 30 s | `path` non-empty | `refused("Your gateway has no folder for uploads.")` |
 | 3 | per attachment: `POST /api/files/upload-stream?profile=<p>` | 120 s | 2xx + `path` | 401/403 `sessionEnded` · 413 `tooLarge(name)` · other `gateway(status)` · no `path` → `refused("Your gateway didn’t store “<name>”.")` |

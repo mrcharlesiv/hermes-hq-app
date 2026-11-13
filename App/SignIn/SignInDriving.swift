@@ -19,6 +19,13 @@ protocol SignInDriving: AnyObject {
     func signInWithNous(address: String, label: String?) async throws
     /// After a sign-in succeeded: is this Hermes new enough (§5.14)? One read of its status; `.unknown` never blocks.
     func compatibility() async -> GatewayCompatibility
+
+    // [cf-access] Also with defaults (public issue #37).
+    /// The Cloudflare Access token the form holds (nil: none): every later probe and sign-in carries it, and a
+    /// sign-in saves it with the gateway.
+    func useAccess(_ access: CloudflareAccess?)
+    /// The token already saved with a gateway at this address, for the form to start from.
+    func savedAccess(for address: String) -> CloudflareAccess?
 }
 
 extension SignInDriving {
@@ -27,6 +34,8 @@ extension SignInDriving {
     }
     func signInWithNous(address: String, label: String?) async throws { try await signInWithNous(address: address) }
     func compatibility() async -> GatewayCompatibility { .compatible }
+    func useAccess(_ access: CloudflareAccess?) {}
+    func savedAccess(for address: String) -> CloudflareAccess? { nil }
 }
 
 nonisolated struct SignInOptions: Sendable, Equatable {
@@ -38,10 +47,14 @@ nonisolated struct SignInOptions: Sendable, Equatable {
     /// [own-login] The browser button's words when the gateway signs in with its own login provider rather than Nous
     /// ("Sign in with Single Sign-On"); nil for Nous. The browser way in is then this one.
     var ownLoginTitle: String?
+    /// [cf-access] The address answered with Cloudflare Access's own sign-in: it needs a service token, or did not
+    /// take the one the form holds.
+    var behindAccess = false
 
-    init(reachable: Bool, offersNous: Bool, offersPassword: Bool, message: String? = nil, ownLoginTitle: String? = nil) {
+    init(reachable: Bool, offersNous: Bool, offersPassword: Bool, message: String? = nil, ownLoginTitle: String? = nil,
+         behindAccess: Bool = false) {
         self.reachable = reachable; self.offersNous = offersNous; self.offersPassword = offersPassword; self.message = message
-        self.ownLoginTitle = ownLoginTitle
+        self.ownLoginTitle = ownLoginTitle; self.behindAccess = behindAccess
     }
 
     /// Some sign-in in the browser sheet: Nous, or the gateway's own login.
@@ -95,6 +108,16 @@ nonisolated enum SignInCopy {
         "nous-failed": "Nous sign-in didn’t finish. Try again.",
         "not-owner": "This Nous account isn’t allowed in. \(DeviceWord.Tap) Use Another Nous Account and sign in with the one this Hermes was set up with.",
     ]
+
+    /// [cf-access] The form's Cloudflare Access part (public issue #37).
+    enum Access {
+        static let open = "Behind Cloudflare Access?"
+        static let title = "Cloudflare Access"
+        static let clientId = "Client ID", clientSecret = "Client Secret"
+        static var footnote: String { "A service token from Cloudflare Zero Trust. It stays in this \(device)’s Keychain and goes only to this address." }
+        static let needed = "This address is behind Cloudflare Access. Enter a service token’s Client ID and Client Secret to reach it."
+        static let refused = "Cloudflare Access didn’t take this service token. Check the Client ID and Client Secret, and that the token is allowed for this address."
+    }
 
     /// Under the address when the probe couldn't reach it (UX study #130); the full form stays, as the probe can be wrong.
     static let unreachableNote = "Can’t reach this address right now. Check that it’s typed right, or sign in anyway."

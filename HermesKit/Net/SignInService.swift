@@ -37,14 +37,35 @@ import UIKit
     // MARK: Probe
 
     /// Which sign-in buttons to show for the typed address (spec 01 §4.1). Never sends credentials.
-    func probe(_ address: String) async -> ProbeResult {
-        await SignInFlows.probe(address)
+    /// [cf-access] `access`: the address's Cloudflare Access token, when the form holds one.
+    func probe(_ address: String, access: CloudflareAccess? = nil) async -> ProbeResult {
+        await SignInFlows.probe(address, access: access)
+    }
+
+    /// [cf-access] The Cloudflare Access token saved with a gateway at this address, for the form to start from
+    /// (an ended session's form, "Sign In Again", another account on the same Hermes).
+    func savedAccess(for address: String) -> CloudflareAccess? {
+        guard let base = try? GatewayAddress.validated(GatewayAddress.normalizeTyped(address)) else { return nil }
+        return store.accounts.lazy.compactMap { self.store.stored($0) }
+            .first { $0.access != nil && URL(string: $0.url)?.absoluteString == base.absoluteString }?.access
+    }
+
+    /// [cf-access] Sets or clears a saved gateway's token (Settings › Gateway). The gateway in use connects again
+    /// with it: its client is ended here and the caller asks `client(for:)` for the new one.
+    func setAccess(_ access: CloudflareAccess?, for account: GatewayAccount) throws -> Bool {
+        guard try store.setAccess(access, for: account) else { return false }
+        if let activeClient, activeClient.account.id == account.id {
+            activeClient.shutdown()
+            self.activeClient = nil
+        }
+        return true
     }
 
     // MARK: Sign in
 
     /// Typed password sign-in: one attempt per call (never retried). Saves the account and makes it current.
-    func signInWithPassword(address: String, username: String, password: String, label: String? = nil) async throws -> GatewayAccount {
+    func signInWithPassword(address: String, username: String, password: String, label: String? = nil,
+                            access: CloudflareAccess? = nil) async throws -> GatewayAccount {
         let user = username.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !user.isEmpty, !password.isEmpty else {
             throw GatewayFailure.missingFields
@@ -53,11 +74,11 @@ import UIKit
         guard GatewayAddress.reachable(base) else { throw GatewayFailure.tailscaleOff }
         try beginSignIn()
         defer { signingIn = false }
-        let transport = HTTPTransport()
+        let transport = HTTPTransport(headers: access?.headers ?? [:])
         do {
             let (provider, cookies) = try await SignInFlows.passwordSignIn(base: base, username: user, password: password, transport: transport)
             let stored = StoredAccount(url: base.absoluteString, username: user, cookies: cookies, provider: provider,
-                                       label: Self.accountLabel(label))   // [onboarding] the optional Name, kept on this phone only
+                                       label: Self.accountLabel(label), access: access)   // [onboarding] the optional Name, kept on this phone only
             try await store.saveOffMain(stored)
             return adopt(store.storedCurrent ?? stored, transport: transport, verified: true)
         } catch {
@@ -67,18 +88,22 @@ import UIKit
     }
 
     /// Sign in with Nous in the system sheet, presented over `anchor`.
-    func signInWithNous(address: String, anchor: UIWindow?, label: String? = nil) async throws -> GatewayAccount {
-        try await signInWithNous(address: address, browser: WebAuthBrowser(anchor: anchor, isPrivate: NousSheetLogin.isPrivate), label: label)
+    func signInWithNous(address: String, anchor: UIWindow?, label: String? = nil, access: CloudflareAccess? = nil) async throws -> GatewayAccount {
+        // [cf-access] The sheet's first page is the gateway's own: it carries the token too (`WebAuthBrowser.headers`).
+        try await signInWithNous(address: address,
+                                 browser: WebAuthBrowser(anchor: anchor, isPrivate: NousSheetLogin.isPrivate, headers: access?.headers ?? [:]),
+                                 label: label, access: access)
     }
 
     /// Sign in with Nous with any browser (tests drive the fixture's pages with URLSession).
-    func signInWithNous(address: String, browser: NousBrowser, relay: LoopbackRelay = .shared, label: String? = nil) async throws -> GatewayAccount {
+    func signInWithNous(address: String, browser: NousBrowser, relay: LoopbackRelay = .shared, label: String? = nil,
+                        access: CloudflareAccess? = nil) async throws -> GatewayAccount {
         guard !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw GatewayFailure.missingFields }
         let base = try GatewayAddress.validated(GatewayAddress.normalizeTyped(address))
         guard GatewayAddress.reachable(base) else { throw GatewayFailure.tailscaleOff }
         try beginSignIn()
         defer { signingIn = false }
-        let transport = HTTPTransport(cookies: false)
+        let transport = HTTPTransport(cookies: false, headers: access?.headers ?? [:])
         do {
             // [own-login] "nous", or the gateway's own login provider (self-hosted OIDC) when it has no Nous one.
             let provider = try await SignInFlows.nousStatus(base: base, transport: transport)
@@ -86,7 +111,7 @@ import UIKit
             let tokens = try await SignInFlows.redeemNous(base: base, code: outcome.code, verifier: outcome.verifier,
                                                           provider: provider, transport: transport)
             let candidate = StoredAccount(url: base.absoluteString, username: StoredAccount.nousUsername(userId: tokens.userId),
-                                          label: Self.accountLabel(label), nous: tokens)   // [onboarding] the optional Name
+                                          label: Self.accountLabel(label), nous: tokens, access: access)   // [onboarding] the optional Name
             // Check the bearer (renewing first if it is already due), then save the pair the gateway now honours.
             // `persisted: false`: a refused check must not touch a saved session of the same Nous account.
             let check = GatewayAuth(stored: candidate, base: base, transport: transport, vault: store.vault, verified: false,
@@ -172,7 +197,8 @@ import UIKit
         activeClient?.shutdown()
         let stored = store.stored(account)
             ?? StoredAccount(url: account.baseURL.absoluteString, username: account.username ?? "", label: account.label)
-        let client = LiveGatewayClient(stored: stored, transport: HTTPTransport(cookies: !stored.isNous), vault: store.vault, verified: false)
+        let client = LiveGatewayClient(stored: stored, transport: HTTPTransport(cookies: !stored.isNous, headers: stored.accessHeaders),
+                                       vault: store.vault, verified: false)
         activeClient = client
         return client
     }
@@ -203,7 +229,7 @@ import UIKit
         if let leaving, let stored, leaving.kind == .password {
             let transport: HTTPTransport
             if let client { transport = client.httpTransport } else {
-                transport = HTTPTransport()
+                transport = HTTPTransport(headers: stored.accessHeaders)
                 transport.installCookies(stored.cookies ?? [])
             }
             let base = leaving.baseURL
@@ -232,7 +258,7 @@ import UIKit
         guard account.id != store.current?.id else { throw GatewayFailure.accountCurrent }
         guard let stored = store.stored(account) else { throw GatewayFailure.accountMissing }
         if account.kind == .password, let cookies = stored.cookies, !cookies.isEmpty {
-            let transport = HTTPTransport()
+            let transport = HTTPTransport(headers: stored.accessHeaders)
             transport.installCookies(cookies)
             _ = await withSignOutBudget { await SignInFlows.logout(base: account.baseURL, transport: transport) }
             transport.invalidate()

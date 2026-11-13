@@ -55,6 +55,9 @@ nonisolated enum OfflineCopy {
                                 recovery: "Hermes no longer accepts connections at the saved address. On the computer running Hermes, check HERMES_DASHBOARD_PUBLIC_URL in ~/.hermes/.env; Hermes HQ keeps trying."),
         "not-hermes": Screen(title: "Can’t Reach Hermes",
                              recovery: "The saved address answered, but not as Hermes. Hermes HQ keeps trying; check \(HostWord.phrase), or sign in with its current address."),
+        // [kept-session] A proxy, Cloudflare or the network answered for Hermes with a refusal of its own.
+        "blocked": Screen(title: "Something Is Blocking Hermes",
+                          recovery: "The saved address answered, but something in front of Hermes turned \(DeviceWord.subject) away: a proxy, a firewall or the network you’re on. You’re still signed in, and Hermes HQ keeps trying."),
         keychainLocked: Screen(title: "Unlock Your \(DeviceWord.name)",
                                recovery: "Your saved sign-in is protected until \(DeviceWord.subject) is unlocked. Hermes HQ reconnects as soon as it is."),
         keychainUnavailable: Screen(title: "Can’t Open Your Saved Sign-In",

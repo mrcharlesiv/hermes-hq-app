@@ -14,7 +14,7 @@ nonisolated final class AccountProbe: Sendable {
         let base = URL(string: stored.url) ?? URL(string: "https://invalid.invalid")!
         account = stored.gatewayAccount ?? GatewayAccount(id: stored.url + "|" + stored.username, baseURL: base,
                                                           kind: stored.isNous ? .nous : .password, username: nil, label: stored.url)
-        let transport = HTTPTransport(cookies: !stored.isNous)
+        let transport = HTTPTransport(cookies: !stored.isNous, headers: stored.accessHeaders)
         if !stored.isNous { transport.installCookies(stored.cookies ?? []) }
         self.transport = transport
         // Verified: the saved session is the one this phone signed in with; a renewal it causes is written back.
@@ -47,6 +47,8 @@ nonisolated final class AccountProbe: Sendable {
                 AppLog.trace("net", "probe \(AppLog.tag(id)): \(parsed == nil ? "unreadable" : "ok"), \(AppLog.ms(since: began))ms")
                 return parsed.map(Answer.session) ?? .missing
             case 401, 403:
+                // [kept-session] Not Hermes's own refusal: the chat is neither refused nor gone, the gateway is blocked.
+                guard GatewayRefusal.isHermes(data) else { throw GatewayFailure.blocked }
                 AppLog.note("net", "probe \(AppLog.tag(id)): refused, \(AppLog.ms(since: began))ms")
                 return .refused
             default:

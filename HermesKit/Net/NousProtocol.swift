@@ -121,8 +121,11 @@ nonisolated enum NousGatewayProtocol {
             let expires = (object["expires_at"] as? NSNumber)?.doubleValue ?? 0
             return .tokens(NousTokens(accessToken: access, refreshToken: refresh, expiresAt: expires, userId: user, obtainedAt: now,
                                       provider: provider == nous ? nil : provider))
-        case 400, 401: return .refused((object?["error"] as? String) ?? "session_expired")
-        case 403: return .refused((object?["error"] as? String) ?? "not_authorized")
+        case 400, 401, 403:
+            // [kept-session] A refusal counts only when Hermes (or the Nous edge) wrote it. A proxy's or Cloudflare's
+            // page with the same status says nothing about the pair, which was never spent: keep the session.
+            guard GatewayRefusal.isHermes(body) else { return .unavailable(status) }
+            return .refused((object?["error"] as? String) ?? (status == 403 ? "not_authorized" : "session_expired"))
         default: return .unavailable(status)
         }
     }

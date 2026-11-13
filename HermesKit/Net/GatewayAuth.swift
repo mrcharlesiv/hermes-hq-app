@@ -118,7 +118,9 @@ actor GatewayAuth {
                                                         ceiling: GatewayAddress.responseLimit(path: route))
         if closed { throw GatewayFailure.connectionChanged }
         noteCookies(response)
-        if response.statusCode == 401, retryOn401, route.contains("/api/") {
+        // [kept-session] Only a 401 Hermes wrote is worth a refresh: one from whatever stands in front of it says nothing
+        // about this session, and the refresh would go to the same wall.
+        if response.statusCode == 401, retryOn401, route.contains("/api/"), GatewayRefusal.isHermes(data) {
             try await refresh(sentAccess: sentAccess, trigger: "401")
             var again = request
             if let left = try budgetLeft() { again.timeoutInterval = min(request.timeoutInterval, left) }
@@ -231,7 +233,8 @@ actor GatewayAuth {
     /// `after`: the gateway's `Retry-After` (1 to 60 s), which takes the place of the ladder's step.
     private func noteRefresh(_ failure: GatewayFailure?, pair: NousTokens?, after: TimeInterval? = nil) {
         guard kind == .nous else { return }
-        guard let failure, let pair, [.unavailable, .timeout, .rateLimited].contains(failure) else { refreshRest = nil; return }
+        // [kept-session] `.blocked` spent nothing, but asking again on every request would only meet the same wall.
+        guard let failure, let pair, [.unavailable, .timeout, .rateLimited, .blocked].contains(failure) else { refreshRest = nil; return }
         let misses = (refreshRest?.pair.samePair(pair) == true ? refreshRest?.misses ?? 0 : 0) + 1
         let wait = after.map { Duration.milliseconds(Int(min(max($0, 1), 60) * 1000)) }
             ?? Self.refreshRests[min(misses, Self.refreshRests.count) - 1]
@@ -366,7 +369,10 @@ actor GatewayAuth {
                 AppLog.note("net", "auth refresh refused; another process saved a newer pair meanwhile: using it")
                 if !kept.needsRenewal() { return "adopted the pair another process saved after a refusal" }
             case .unavailable(let status, let after):
-                let failure = status == 429 ? GatewayFailure.rateLimited : GatewayFailure.from(status: status, body: nil)
+                // [kept-session] A 400/401/403 lands here only when Hermes did not write it (`NousGatewayProtocol.answer`).
+                let failure: GatewayFailure = status == 429 ? .rateLimited
+                    : [400, 401, 403].contains(status) ? .blocked : .from(status: status, body: nil)
+                if failure == .blocked { AppLog.note("auth", "refresh answered \(status), not by Hermes: session kept") }
                 if let after { throw RetryLater(failure: failure, after: after) }
                 throw failure
             case .failed(let failure): throw failure
@@ -414,7 +420,7 @@ actor GatewayAuth {
         let (data, response) = try await send(request, retryOn401: retry)
         switch response.statusCode {
         case 200..<300: try Self.requireObject(data)
-        case 401, 403: throw GatewayFailure.sessionEnded
+        case 401, 403: throw refusal(response.statusCode, data, on: "session check")
         case 429:
             // [offline] §3.6: a busy gateway's `Retry-After` is kept (as the ticket request keeps it), so the offline
             // screen's countdown never promises a dial the gateway asked us not to make.
@@ -432,6 +438,14 @@ actor GatewayAuth {
             throw failure
         default: throw GatewayFailure.from(status: response.statusCode, body: String(decoding: data.prefix(512), as: UTF8.self))
         }
+    }
+
+    /// [kept-session] What a 401/403 means: the session ended when Hermes wrote it; otherwise something in front of
+    /// Hermes answered (`GatewayRefusal`), which ends nothing.
+    private func refusal(_ status: Int, _ body: Data, on what: String) -> GatewayFailure {
+        if GatewayRefusal.isHermes(body) { return .sessionEnded }
+        AppLog.note("auth", "\(what) answered \(status), not by Hermes: session kept")
+        return .blocked
     }
 
     /// [offline] §3.5: what a 404 on the session check means, from the address's `/api/status` answer (nil = none).
@@ -521,8 +535,9 @@ actor GatewayAuth {
             }
             return ticket
         case 401, 403:
-            reject(.sessionEnded)
-            throw GatewayFailure.sessionEnded
+            let failure = refusal(response.statusCode, data, on: "ticket")
+            if failure.isRejection { reject(.sessionEnded) }
+            throw failure
         case 404, 405:
             // [connect-fast] The address answers but has no ticket route: not Hermes, or a Hermes from before gateway
             // sign-in (the same `/api/status` probe the session check made, `missingSessionCheck`).
@@ -536,6 +551,12 @@ actor GatewayAuth {
             guard let wait = RetryLater.parse(response.value(forHTTPHeaderField: "Retry-After")) else { throw GatewayFailure.rateLimited }
             throw RetryLater(failure: .rateLimited, after: wait)
         default:
+            // [cf-access] Cloudflare Access's sign-in redirect (no token, or one it stopped taking): blocked, not an error
+            // of Hermes's. The session is kept either way.
+            if CloudflareAccess.asksForSignIn(status: response.statusCode, location: response.value(forHTTPHeaderField: "Location")) {
+                AppLog.note("auth", "ticket answered by Cloudflare Access's sign-in: session kept")
+                throw GatewayFailure.blocked
+            }
             throw GatewayFailure.from(status: response.statusCode, body: String(decoding: data.prefix(512), as: UTF8.self))
         }
     }

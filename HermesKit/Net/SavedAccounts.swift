@@ -124,12 +124,17 @@ nonisolated struct StoredAccount: Codable, Sendable, Hashable {
     var provider: String? = nil
     var label: String? = nil
     var nous: NousTokens? = nil
+    /// [cf-access] The gateway's Cloudflare Access service token, when it stands behind one (`CloudflareAccess`).
+    var access: CloudflareAccess? = nil
 
     init(url: String, username: String, cookies: [SavedCookie]? = nil, provider: String? = nil, label: String? = nil,
-         nous: NousTokens? = nil) {
+         nous: NousTokens? = nil, access: CloudflareAccess? = nil) {
         self.url = url; self.username = username; self.cookies = cookies; self.provider = provider
-        self.label = label; self.nous = nous
+        self.label = label; self.nous = nous; self.access = access
     }
+
+    /// [cf-access] The headers every request to this gateway carries besides its session.
+    var accessHeaders: [String: String] { access?.headers ?? [:] }
 
     var key: String { GatewayAddress.accountKey(url: url, username: username) }
     /// A browser sign-in (a bearer pair): Nous, or [own-login] the gateway's own login provider.
@@ -149,7 +154,7 @@ nonisolated struct StoredAccount: Codable, Sendable, Hashable {
 
     /// What a refused session leaves behind: the prefilled sign-in form's address and username.
     var withoutSession: StoredAccount {
-        StoredAccount(url: url, username: username, provider: provider, label: label)
+        StoredAccount(url: url, username: username, provider: provider, label: label, access: access)   // [cf-access] kept
     }
 
     static func nousUsername(userId: String) -> String { "nous:" + userId }

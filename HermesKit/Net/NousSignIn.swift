@@ -26,10 +26,15 @@ import UIKit
     private let provider: WebAuthAnchorProvider
     /// [nous-different-account] Starts with none of Safari's saved logins (`NousSheetLogin`).
     private let isPrivate: Bool
+    /// [cf-access] The gateway's Cloudflare Access token: the sheet's first page is the gateway's own
+    /// `/auth/native/authorize`, which Access would otherwise answer with its own sign-in. Access then keeps the
+    /// sheet's later visits to the gateway signed in with the cookie it sets on that first answer.
+    private let headers: [String: String]
 
-    init(anchor: UIWindow?, isPrivate: Bool = false) {
+    init(anchor: UIWindow?, isPrivate: Bool = false, headers: [String: String] = [:]) {
         provider = WebAuthAnchorProvider(anchor: anchor)
         self.isPrivate = isPrivate
+        self.headers = headers
         super.init()
     }
 
@@ -45,6 +50,9 @@ import UIKit
         // Safari's cookies are shared, so a phone already signed in to Nous Portal isn't asked again. A private sheet
         // keeps none, so Nous asks who you are.
         session.setValue(isPrivate, forKey: "prefersEphemeralWebBrowserSession")
+        if !headers.isEmpty, session.responds(to: NSSelectorFromString("setAdditionalHeaderFields:")) {
+            session.setValue(headers, forKey: "additionalHeaderFields")
+        }
         AppLog.trace("auth", "sign-in sheet opened (\(isPrivate ? "private" : "shared"))")
         self.session = session
         return WebAuthRuntime.start(session)

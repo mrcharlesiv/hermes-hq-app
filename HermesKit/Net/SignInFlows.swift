@@ -12,6 +12,9 @@ nonisolated struct ProbeResult: Sendable, Equatable {
     /// [own-login] The gateway's own browser login (self-hosted OIDC), offered when it has no Nous one. With it the
     /// browser way in is this login, not Nous.
     var ownLogin: BrowserLogin? = nil
+    /// [cf-access] The address answered with Cloudflare Access's sign-in redirect: it needs a service token (or the
+    /// one given was not taken).
+    var behindAccess = false
 
     static let unknown = ProbeResult(known: false, nous: false, password: false)
 
@@ -45,15 +48,22 @@ nonisolated enum SignInFlows {
     // MARK: Probe
 
     /// Unauthenticated `GET /api/status` (no query), 5 s, cookieless, 1 MiB; anything odd is `.unknown` (show both).
-    static func probe(_ address: String) async -> ProbeResult {
+    static func probe(_ address: String, access: CloudflareAccess? = nil) async -> ProbeResult {
         guard let base = try? GatewayAddress.validated(GatewayAddress.normalizeTyped(address)), GatewayAddress.reachable(base),
               let url = try? GatewayAddress.endpoint(base: base, path: "/api/status") else { return .unknown }
-        let plain = HTTPTransport(cookies: false)
+        let plain = HTTPTransport(cookies: false, headers: access?.headers ?? [:])
         defer { plain.invalidate() }
         var request = URLRequest(url: url, timeoutInterval: 5)
         request.httpShouldHandleCookies = false
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        guard let (data, response) = try? await plain.data(for: request, pool: .bulk, ceiling: 1 << 20), response.statusCode == 200,
+        guard let (data, response) = try? await plain.data(for: request, pool: .bulk, ceiling: 1 << 20) else { return .unknown }
+        // [cf-access] Cloudflare Access in front, and no token it takes: the form asks for one.
+        if CloudflareAccess.asksForSignIn(status: response.statusCode, location: response.value(forHTTPHeaderField: "Location")) {
+            var result = ProbeResult.unknown
+            result.behindAccess = true
+            return result
+        }
+        guard response.statusCode == 200,
               let status = try? JSONValue.parseFast(data), let providers = status["auth_providers"]?.array?.compactMap(\.string)
         else { return .unknown }
         var result = ProbeResult(known: true, nous: NousGatewayProtocol.offersNous(status: status), password: providers.contains("basic"))
@@ -137,7 +147,9 @@ nonisolated enum SignInFlows {
             if let lifetime = tokens.lifetime { AppLog.note("auth", "nous access token lifetime \(Int(lifetime)) s (sign-in)") }
             return tokens
         case .refused(let reason): throw reason == "not_authorized" ? GatewayFailure.notOwner : GatewayFailure.nousFailed
-        case .unavailable(let code): throw code == 429 ? GatewayFailure.rateLimited : GatewayFailure.gatewayError("token HTTP \(code)")
+        case .unavailable(let code):
+            if [400, 401, 403].contains(code) { throw GatewayFailure.blocked }      // [kept-session] not Hermes's answer
+            throw code == 429 ? GatewayFailure.rateLimited : GatewayFailure.gatewayError("token HTTP \(code)")
         }
     }
 
@@ -164,7 +176,7 @@ nonisolated enum SignInFlows {
         guard !(200..<300).contains(status) else { return }
         let text = String(decoding: body.prefix(512), as: UTF8.self)
         switch status {
-        case 401, 403: throw refusal
+        case 401, 403: throw GatewayRefusal.isHermes(body) ? refusal : GatewayFailure.blocked      // [kept-session]
         case 429: throw GatewayFailure.rateLimited
         case 400 where text.contains("Invalid Host header"): throw GatewayFailure.hostRejected
         default: throw GatewayFailure.from(status: status, body: text)

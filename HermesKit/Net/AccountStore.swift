@@ -103,4 +103,13 @@ import Foundation
         guard let stored = currentStored, !stored.hasSession else { return nil }
         return (stored.url, stored.isNous ? nil : stored.username)
     }
+
+    /// [cf-access] Sets or clears a saved gateway's Cloudflare Access token. False when it isn't saved. The gateway's
+    /// client must be made again to use it (`SignInService.reconnect`).
+    func setAccess(_ access: CloudflareAccess?, for account: GatewayAccount) throws(GatewayFailure) -> Bool {
+        guard let stored = storedByID[account.id] else { return false }
+        let done = try vault.update(stored.key) { $0.access = access }
+        try reload()
+        return done
+    }
 }

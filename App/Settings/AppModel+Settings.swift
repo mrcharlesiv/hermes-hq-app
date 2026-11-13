@@ -375,6 +375,16 @@ extension AppModel: SettingsServices {
 
     func makeSignInDriver() -> SignInServiceDriver { SignInServiceDriver(service: signIn) }
 
+    /// [cf-access] The gateway in use: its Cloudflare Access service token (public issue #37).
+    var cloudflareAccess: CloudflareAccess? { account.flatMap { signIn.store.stored($0)?.access } }
+
+    /// [cf-access] Saves or clears it, then connects again so every request carries it (or no longer does).
+    func setCloudflareAccess(_ access: CloudflareAccess?) throws {
+        guard let account, try signIn.setAccess(access, for: account) else { return }
+        activateSwitched(account)
+        settingsHub.accountsChanged()
+    }
+
     func markUnread(_ bot: Bot) { botStore?.markUnread(bot) }
 
     /// §8.2 step 7: 400 ms after the chat is on screen, the intro goes through the normal send path; without a model

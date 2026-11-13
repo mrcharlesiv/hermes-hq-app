@@ -52,6 +52,8 @@ nonisolated struct ShareAccount: @unchecked Sendable {
     /// `SavedCookie` JSON entries, untouched (immutable once read, which is what makes this type safe to send).
     let cookies: [[String: Any]]
     var nous: ShareNous? = nil
+    /// [cf-access] The gateway's Cloudflare Access service token, when it has one: on every request of the share.
+    var access: CloudflareAccess? = nil
 }
 
 /// Sign in with Nous: `NousTokens` as the Keychain item stores it, the same JSON keys. Portal rotates the refresh token
@@ -146,7 +148,7 @@ nonisolated enum ShareAccounts {
         guard let entry, let url = entry["url"] as? String, let username = entry["username"] as? String else { return nil }
         let cookies = (entry["cookies"] as? [[String: Any]]) ?? []
         return ShareAccount(key: ShareRules.accountKey(url: url, username: username), url: url, username: username,
-                            cookies: cookies, nous: ShareNous(entry["nous"]))
+                            cookies: cookies, nous: ShareNous(entry["nous"]), access: CloudflareAccess(entry: entry))
     }
 
     /// A build-89 item: one account with a password and no list. The app migrates it; the extension never touches it.

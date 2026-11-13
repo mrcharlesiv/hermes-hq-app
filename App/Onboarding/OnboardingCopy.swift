@@ -150,6 +150,12 @@ nonisolated enum OnboardingCopy {
         /// [mac] A Hermes on this same Mac: `hermes serve` listens on 127.0.0.1:9119 (the setup's own default). Not
         /// "localhost": Hermes turns away a Host it isn't bound to.
         static let localAddress = "http://127.0.0.1:9119"
+        /// [cf-access] A Hermes of your own behind Cloudflare Access (public issue #37; owner 2026-11-13: "needs to be
+        /// an option to pick from on onboarding"): straight to the form, with the service token's two fields open.
+        static let accessID = "cloudflare"
+        static let accessSymbol = "lock.shield"
+        static let accessTitle = "Behind Cloudflare Access"
+        static let accessText = "Sign in with its address and a Cloudflare service token."
         /// The last row: someone with no Hermes gets a way on, not a footnote.
         static let noneID = "none"
         static let noneSymbol = "questionmark.circle"

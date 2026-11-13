@@ -8,13 +8,19 @@ final class SignInServiceDriver: SignInDriving {
     /// The account the last successful sign-in saved and made current.
     private(set) var signedIn: GatewayAccount?
 
+    /// [cf-access] The form's Cloudflare Access token, if any.
+    private var access: CloudflareAccess?
+
     init(service: SignInService) { self.service = service }
 
+    func useAccess(_ access: CloudflareAccess?) { self.access = access }
+    func savedAccess(for address: String) -> CloudflareAccess? { service.savedAccess(for: address) }
+
     func probe(_ address: String) async -> SignInOptions {
-        let result = await service.probe(address)
+        let result = await service.probe(address, access: access)
         // `.unknown` (unreachable, not Hermes, odd answer) shows both ways in; the attempt itself says what is wrong.
         return SignInOptions(reachable: result.known, offersNous: result.nous, offersPassword: result.password,
-                             ownLoginTitle: result.ownLogin?.buttonTitle)
+                             ownLoginTitle: result.ownLogin?.buttonTitle, behindAccess: result.behindAccess)
     }
 
     func signInWithPassword(address: String, username: String, password: String) async throws {
@@ -26,7 +32,8 @@ final class SignInServiceDriver: SignInDriving {
     // [onboarding] The optional Name becomes the account's label on this phone (never sent to the gateway).
     func signInWithPassword(address: String, username: String, password: String, label: String?) async throws {
         do {
-            signedIn = try await service.signInWithPassword(address: address, username: username, password: password, label: label)
+            signedIn = try await service.signInWithPassword(address: address, username: username, password: password, label: label,
+                                                               access: access)
         } catch {
             throw Self.signInError(error)
         }
@@ -34,7 +41,7 @@ final class SignInServiceDriver: SignInDriving {
 
     func signInWithNous(address: String, label: String?) async throws {
         do {
-            signedIn = try await service.signInWithNous(address: address, anchor: Self.keyWindow, label: label)
+            signedIn = try await service.signInWithNous(address: address, anchor: Self.keyWindow, label: label, access: access)
         } catch {
             throw Self.signInError(error)
         }

@@ -472,7 +472,7 @@ import Testing
         #expect(NousGatewayProtocol.answer(status: 200, body: Data(#"{"access_token":"a","refresh_token":"r","provider":"basic","user_id":"u"}"#.utf8)) == .unavailable(502))
         #expect(NousGatewayProtocol.answer(status: 400, body: Data(#"{"detail":"Invalid or expired authorization code."}"#.utf8)) == .refused("session_expired"))
         #expect(NousGatewayProtocol.answer(status: 403, body: Data(#"{"error":"not_authorized"}"#.utf8)) == .refused("not_authorized"))
-        #expect(NousGatewayProtocol.answer(status: 403, body: Data()) == .refused("not_authorized"))
+        #expect(NousGatewayProtocol.answer(status: 403, body: Data()) == .unavailable(403))     // [kept-session] not Hermes's answer
         #expect(NousGatewayProtocol.answer(status: 429, body: Data(#"{"error":"rate_limited"}"#.utf8)) == .unavailable(429))
     }
 

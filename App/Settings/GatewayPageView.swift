@@ -196,6 +196,52 @@ final class GatewayPageModel {
         }
     }
 
+    // MARK: [cf-access] Cloudflare Access (public issue #37)
+
+    /// Whether the gateway in use has a Cloudflare Access service token saved.
+    var hasAccess: Bool { (services as? AppModel)?.cloudflareAccess != nil }
+
+    /// The token's two fields in a prompt: Save connects again with it; Remove (when one is saved) without it.
+    func editAccess() {
+        guard let app = services as? AppModel, let presenter = FailureAlert.topmost(router.presenter) else { return }
+        let saved = app.cloudflareAccess
+        let alert = UIAlertController(title: "Cloudflare Access",
+                                      message: "A service token from Cloudflare Zero Trust, for a Hermes behind Cloudflare Access. It stays in this \(DeviceWord.name)’s Keychain and goes only to \(host).",
+                                      preferredStyle: .alert)
+        alert.addTextField { field in
+            field.placeholder = "Client ID"; field.text = saved?.clientId
+            field.autocapitalizationType = .none; field.autocorrectionType = .no
+            field.accessibilityIdentifier = "gateway.access.id"
+        }
+        alert.addTextField { field in
+            field.placeholder = "Client Secret"; field.text = saved?.clientSecret
+            field.isSecureTextEntry = true
+            field.accessibilityIdentifier = "gateway.access.secret"
+        }
+        let apply: (CloudflareAccess?) -> Void = { [weak self] access in
+            guard let self, access != saved else { return }
+            do {
+                try app.setCloudflareAccess(access)
+                Haptics.play(.success)
+                self.failure = nil
+            } catch {
+                Haptics.play(.error)
+                self.failure = "Couldn’t save the Cloudflare Access token. Try again."
+            }
+            self.refresh()
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        if saved != nil { alert.addAction(UIAlertAction(title: "Remove", style: .destructive) { _ in apply(nil) }) }
+        let save = UIAlertAction(title: "Save", style: .default) { [weak alert] _ in
+            // Half a token opens nothing: both fields, or it is left as it was.
+            guard let access = CloudflareAccess(clientId: alert?.textFields?.first?.text, clientSecret: alert?.textFields?.last?.text) else { return }
+            apply(access)
+        }
+        alert.addAction(save)
+        alert.preferredAction = save
+        presenter.present(alert, animated: true)
+    }
+
     func remove(_ row: GatewayAccountRow) {
         guard !row.isCurrent else { return }
         TextPrompt.confirm(title: "Remove \(row.title)?",
@@ -475,6 +521,18 @@ struct GatewayPageView: View {
                 // Stress test 2026-10-28 #85 (both): every value in one colour (the system's secondary grey differed
                 // from Name's).
                 LabeledContent { Text(model.accountName).foregroundStyle(Color.hqLabel2) } label: { Text("Account").foregroundStyle(Color.hqLabel) }
+                // [cf-access] A Hermes of your own may stand behind Cloudflare Access; one Nous hosts never does.
+                if model.current != nil, model.currentCloudURL == nil {
+                    Button { model.editAccess() } label: {
+                        LabeledContent {
+                            Text(model.hasAccess ? "On" : "Off").foregroundStyle(Color.hqLabel2)
+                        } label: {
+                            Text("Cloudflare Access").foregroundStyle(Color.hqLabel)
+                        }
+                    }
+                    .accessibilityIdentifier("gateway.access")
+                    .accessibilityHint("Sets a Cloudflare Access service token for this gateway")
+                }
                 LabeledContent {
                     Text(model.rows.first(where: \.isCurrent)?.hasSession == false ? "None" : "\(DeviceWord.system) Keychain").foregroundStyle(Color.hqLabel2)
                 } label: { Text("Saved Sign-In").foregroundStyle(Color.hqLabel) }

@@ -89,6 +89,9 @@ nonisolated final class ShareSender: NSObject, URLSessionTaskDelegate, @unchecke
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.httpCookieAcceptPolicy = .always
         configuration.httpShouldSetCookies = true
+        // [cf-access] The gateway's Cloudflare Access token on every request, the socket's handshake included. The
+        // account is read before the first request, and this session only ever asks its gateway (`endpoint`).
+        if let headers = account?.access?.headers { configuration.httpAdditionalHeaders = headers }
         if !protocols.isEmpty { configuration.protocolClasses = protocols + (configuration.protocolClasses ?? []) }
         let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
         made = session
@@ -373,9 +376,11 @@ nonisolated final class ShareSender: NSObject, URLSessionTaskDelegate, @unchecke
     private func verifySession() async throws {
         var request = URLRequest(url: try endpoint("/api/auth/me"))
         request.timeoutInterval = 15
-        let (_, response) = try await data(request)
+        let (first, response) = try await data(request)
         if (200..<300).contains(response.statusCode) { return }
-        guard [401, 403].contains(response.statusCode) else { throw ShareFailure.gateway(response.statusCode) }
+        // [kept-session] Only Hermes's own refusal is about the session (`GatewayRefusal`): a proxy's or Cloudflare's
+        // 401/403 is the gateway being out of reach, and nothing is renewed against it.
+        guard [401, 403].contains(response.statusCode), GatewayRefusal.isHermes(first) else { throw ShareFailure.gateway(response.statusCode) }
         try live()
         if nous != nil {
             try await renewNous(force: true)
@@ -386,9 +391,9 @@ nonisolated final class ShareSender: NSObject, URLSessionTaskDelegate, @unchecke
             persisted = saved.cookies
             install(saved.cookies)
         }
-        let (_, again) = try await self.data(request)
+        let (second, again) = try await self.data(request)
         guard (200..<300).contains(again.statusCode) else {
-            throw [401, 403].contains(again.statusCode) ? ShareFailure.sessionEnded : ShareFailure.gateway(again.statusCode)
+            throw [401, 403].contains(again.statusCode) && GatewayRefusal.isHermes(second) ? ShareFailure.sessionEnded : ShareFailure.gateway(again.statusCode)
         }
     }
 
@@ -434,14 +439,16 @@ nonisolated final class ShareSender: NSObject, URLSessionTaskDelegate, @unchecke
             // [reliability] B16: refused because the app spent this pair a moment earlier (outside the lease: an older
             // app, or the lease couldn't be written)? Its successor is then in the Keychain: use it, as the app does
             // after a refusal (`GatewayAuth.refreshNous`).
-            if [400, 401, 403].contains(response.statusCode), let kept = Self.newerPair(than: sent, account: account.key, keychain: keychain) {
+            // [kept-session] A 400/401/403 Hermes did not write spent nothing and ends nothing.
+            let refused = response.statusCode == 200 || ([400, 401, 403].contains(response.statusCode) && GatewayRefusal.isHermes(body))
+            if refused, response.statusCode != 200, let kept = Self.newerPair(than: sent, account: account.key, keychain: keychain) {
                 nous = kept
                 renewedNous = true
                 ShareAuthTrail.record("had its pair refused (\(response.statusCode)); the app had rotated it meanwhile, used the app's pair")
                 return
             }
             ShareAuthTrail.record("had its pair refused (\(response.statusCode))")
-            throw [200, 400, 401, 403].contains(response.statusCode) ? ShareFailure.sessionEnded : ShareFailure.gateway(response.statusCode)
+            throw refused ? ShareFailure.sessionEnded : ShareFailure.gateway(response.statusCode)
         }
         nous = rotated
         renewedNous = true
@@ -476,7 +483,7 @@ nonisolated final class ShareSender: NSObject, URLSessionTaskDelegate, @unchecke
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         let (data, response) = try await self.data(request)
         guard (200..<300).contains(response.statusCode) else {
-            if [401, 403].contains(response.statusCode) { throw ShareFailure.sessionEnded }
+            if [401, 403].contains(response.statusCode), GatewayRefusal.isHermes(data) { throw ShareFailure.sessionEnded }
             if response.statusCode == 413 { throw ShareFailure.refused("Your gateway refused a file this large.") }
             throw ShareFailure.gateway(response.statusCode)
         }
@@ -520,7 +527,7 @@ nonisolated final class ShareSender: NSObject, URLSessionTaskDelegate, @unchecke
             throw ShareFailure.transport(error)
         }
         guard (200..<300).contains(response.statusCode) else {
-            if [401, 403].contains(response.statusCode) { throw ShareFailure.sessionEnded }
+            if [401, 403].contains(response.statusCode), GatewayRefusal.isHermes(data) { throw ShareFailure.sessionEnded }
             if response.statusCode == 413 { throw ShareFailure.tooLarge(item.name) }
             throw ShareFailure.gateway(response.statusCode)
         }

@@ -9,7 +9,7 @@ nonisolated enum AccountREST {
     static func call(_ stored: StoredAccount, vault: AccountVault = .app, method: String, path: String, body: Data?,
                      timeout: TimeInterval = 15, persisted: Bool = true) async -> (status: Int, data: Data?) {
         guard let base = URL(string: stored.url), let url = try? GatewayAddress.endpoint(base: base, path: path, query: []) else { return (0, nil) }
-        let transport = HTTPTransport(cookies: !stored.isNous)
+        let transport = HTTPTransport(cookies: !stored.isNous, headers: stored.accessHeaders)
         let auth = GatewayAuth(stored: stored, base: base, transport: transport, vault: vault, verified: false, persisted: persisted)
         var request = URLRequest(url: url, timeoutInterval: timeout)
         request.httpMethod = method

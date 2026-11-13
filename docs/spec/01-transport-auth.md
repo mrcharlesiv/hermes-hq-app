@@ -233,6 +233,24 @@ other provider is refused. A login that hands out no refresh token (no `offline_
 providers only: nothing renews, and the session ends with its access token (`NousTokens.canRenew`). With Nous also on
 offer, Nous stays the browser way in. Not run against a real IdP here (unit tests only).
 
+**[cf-access] Cloudflare Access service tokens** (public issue #37). A Hermes published through a Cloudflare Tunnel
+with an Access policy in front answers only requests that carry a service token's two headers, `CF-Access-Client-Id`
+and `CF-Access-Client-Secret` (`CloudflareAccess`, `ShareKit/CloudflareAccess.swift`). The pair is saved with the
+gateway in the sign-in's Keychain item (`StoredAccount.access`), kept when a session ends (`withoutSession`) and gone
+when the gateway is removed or signed out. It is sent on every request to that gateway and nowhere else: each
+`HTTPTransport` is made with `StoredAccount.accessHeaders` as its sessions' `httpAdditionalHeaders`, which covers REST,
+uploads, downloads and every socket's handshake (the sessions never follow a redirect); the Share extension does the
+same from the same item; the sign-in sheet's first page (`/auth/native/authorize`) carries them through
+`ASWebAuthenticationSession.additionalHeaderFields`, after which Access's own cookie covers the sheet's later visits.
+The form: the probe reads Access's redirect to its login page (`CloudflareAccess.asksForSignIn`, a 3xx to
+`*.cloudflareaccess.com` or `/cdn-cgi/access/`) as `ProbeResult.behindAccess`; the two fields then open under the
+address by themselves, the sign-in buttons wait until the address answers as Hermes, and the fields can also be opened
+by hand ("Behind Cloudflare Access?"). On a first run, "Where is your Hermes?" has the row "Behind Cloudflare
+Access" (owner 2026-11-13), which opens the form with the fields showing. A gateway already saved at the address fills them in. Settings › Gateway ›
+Connection › Cloudflare Access edits or removes the token and connects again. At the ticket, Access's redirect is
+`blocked` (§14): the sign-in is kept. Not covered: web pages the app opens outside its own sessions (a link or picture
+on the gateway's own host). Not run against a real Access policy here (a loopback stand-in and unit tests only).
+
 **[own-vpn]** Plain `http://` is also allowed for names under `.home.arpa`, `.internal` and `.lan`
 (`GatewayAddress.privateNameSuffixes`): a WireGuard or home network's own DNS. Its 10.x / 172.16–31.x / 192.168.x /
 `fd…` addresses were always allowed; only Tailscale addresses wait for Tailscale to be on (2.5).
@@ -1122,6 +1140,17 @@ While not ready, cached reads trigger at most one restore per **1.5 s**; writes 
 | WS upgrade refused (HTTP 403 from Hermes, 401 from edge) | — | — | handshake error → close 1006 → normal back-off (each retry mints a new ticket); not treated as sign-out |
 | Edge 403 `not_authorized` on token/refresh | — | refused → `not-owner` / session ended | sign in with an owner account |
 | 503 / network | — | — | **keep** the session; offline/reconnect handling |
+| **[kept-session]** any row above, when Hermes did not write the answer | `blocked` | `blocked` | **keep** the session; offline/reconnect handling; a 401 runs no refresh |
+
+**[kept-session] Who wrote the refusal (public issue #39).** A 400, 401 or 403 is a refusal of the session only when
+Hermes wrote it: its body is a JSON object with an `error` word (the session gate, the native refresh, the Nous edge)
+or a `detail` (every other route), and no `cloudflare_error` (`GatewayRefusal.isHermes`, `ShareKit/GatewayRefusal.swift`,
+used by the app and the Share extension). Hermes never refuses with a page, plain text or an empty body. The same
+status from whatever stands in front of Hermes at the saved address (a reverse proxy, Cloudflare's Access page, bot
+challenge or firewall rule, a filter on the network the phone is on) says nothing about the session: the ticket, the
+session check and the sign-in calls throw `blocked`; `/auth/native/refresh` reads as *unavailable* (the pair was never
+spent, and rests like any unfinished refresh); nothing is removed from Keychain and the ladder keeps dialing. Before
+this, such an answer signed the phone out each time the gateway was out of reach behind its proxy.
 
 Sources: `HermesNative.swift:1621-1671,1726-1796,1977-2003,2536-2566`; `W:src/bridge/socket.ts:86-91`;
 `W:src/main.ts:474-490`; `W:src/native-runtime.ts:60-72`.
@@ -1212,7 +1241,7 @@ Listens on loopback only (default `127.0.0.1:9139`), forwards to Hermes's local 
 ## 18. Error code vocabulary (stable codes the UI maps to copy)
 
 `auth-rejected`, `no-password`, `signed-out`, `session-ended`, `insecure-url`, `tailscale-ip`, `invalid-url`,
-`missing-fields`, `unreachable`, `timeout`, `tls`, `not-hermes`, `rate-limited`, `keychain-locked`,
+`missing-fields`, `unreachable`, `timeout`, `tls`, `not-hermes`, `blocked` ([kept-session], §14), `rate-limited`, `keychain-locked`,
 `keychain-unreadable`, `keychain-unavailable`, `gateway-error`, `tailscale-off`, `gateway-outdated`, `host-rejected`,
 Nous: `nous-unavailable`, `nous-cancelled`, `nous-failed`, `not-owner`; socket-only: `paused`, `socket-dead`,
 `response-too-large`, `account-missing`, `account-current`, `keychain-clear-failed`.

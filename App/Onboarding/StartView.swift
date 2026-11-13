@@ -10,9 +10,12 @@ struct StartView: View {
     let fill: (String) -> Void
     /// Hermes Cloud: opens its sheet; nil hides the row (the flow has nowhere to open it).
     let cloud: (() -> Void)?
+    /// [cf-access] Behind Cloudflare Access: the form with the token's fields open; nil hides the row.
+    let access: (() -> Void)?
 
-    init(go: @escaping (OnboardingStep) -> Void, fill: @escaping (String) -> Void = { _ in }, cloud: (() -> Void)? = nil) {
-        self.go = go; self.fill = fill; self.cloud = cloud
+    init(go: @escaping (OnboardingStep) -> Void, fill: @escaping (String) -> Void = { _ in }, cloud: (() -> Void)? = nil,
+         access: (() -> Void)? = nil) {
+        self.go = go; self.fill = fill; self.cloud = cloud; self.access = access
     }
 
     var body: some View {
@@ -29,6 +32,10 @@ struct StartView: View {
                     let cloudCopy = OnboardingCopy.Cloud.self
                     GuideChoiceRow(symbol: cloudCopy.symbol, title: cloudCopy.title, text: cloudCopy.text,
                                    id: "onboarding.start." + cloudCopy.id, action: cloud)
+                }
+                if let access {
+                    GuideChoiceRow(symbol: copy.accessSymbol, title: copy.accessTitle, text: copy.accessText,
+                                   id: "onboarding.start." + copy.accessID, action: access)
                 }
                 GuideChoiceRow(symbol: copy.noneSymbol, title: copy.noneTitle, text: copy.noneText, id: "onboarding.start." + copy.noneID) {
                     go(.getHermes)

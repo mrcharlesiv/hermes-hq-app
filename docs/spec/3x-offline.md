@@ -431,6 +431,7 @@ What it shows comes from `OfflineCopy.screen(reason:hasAddress:)`:
 | `rate-limited` | `Hermes Is Busy` | `It is limiting sign-ins right now. Hermes HQ will try again shortly.` |
 | `host-rejected` | `Hermes Isn’t Accepting This Address` | `Hermes no longer accepts connections at the saved address. On the computer running Hermes, check HERMES_DASHBOARD_PUBLIC_URL in ~/.hermes/.env; Hermes HQ keeps trying.` |
 | `not-hermes` | `Can’t Reach Hermes` | `The saved address answered, but not as Hermes. Hermes HQ keeps trying; check the computer running Hermes, or sign in with its current address.` |
+| `blocked` ([kept-session], spec 01 §14: a 401/403 Hermes did not write) | `Something Is Blocking Hermes` | `The saved address answered, but something in front of Hermes turned iPhone away: a proxy, a firewall or the network you’re on. You’re still signed in, and Hermes HQ keeps trying.` |
 | `keychain-locked` | `Unlock Your iPhone` | `Your saved sign-in is protected until iPhone is unlocked. Hermes HQ reconnects as soon as it is.` |
 | `keychain-unavailable` | `Can’t Open Your Saved Sign-In` | `iPhone couldn’t open it just now. Hermes HQ keeps trying. Your local drafts are being kept.` |
 | `keychain-unreadable` | `Can’t Read Your Saved Sign-In` | `Sign in again to continue. Drafts on this iPhone are kept aside, not moved to the account you sign in with.` |

@@ -25,6 +25,9 @@ nonisolated enum GatewayFailure: Error, Sendable, Hashable, CustomStringConverti
     case offline                 // this phone has no network path
     case rateLimited
     case unavailable             // 502/503/504 from the gateway or the edge: Hermes isn't answering right now
+    /// [kept-session] A 400/401/403 that Hermes did not write (`GatewayRefusal`): a proxy, Cloudflare or the network in
+    /// front of it turned the request away. Not a refusal of the session: the sign-in is kept and the ladder keeps trying.
+    case blocked
     case gatewayError(String?)   // anything else (detail is a short, secret-free hint for logs)
     // Keychain
     case keychainLocked
@@ -69,6 +72,7 @@ nonisolated enum GatewayFailure: Error, Sendable, Hashable, CustomStringConverti
         case .offline: "network"
         case .rateLimited: "rate-limited"
         case .unavailable: "unavailable"
+        case .blocked: "blocked"
         case .gatewayError: "gateway-error"
         case .keychainLocked: "keychain-locked"
         case .keychainUnreadable: "keychain-unreadable"
@@ -109,6 +113,7 @@ nonisolated enum GatewayFailure: Error, Sendable, Hashable, CustomStringConverti
         case .offline: "You’re offline. Hermes HQ reconnects when the network is back."
         case .rateLimited: "Your gateway is busy right now. Wait a minute, then try again."
         case .unavailable: "Hermes isn’t answering right now. It may be restarting — try again in a moment."
+        case .blocked: "Something in front of Hermes turned this \(DeviceWord.name) away, such as a proxy or a firewall. You’re still signed in, and Hermes HQ keeps trying."
         case .gatewayError: "Your gateway couldn’t complete that. Try again."
         case .keychainLocked: "Unlock your \(DeviceWord.name), then try again."
         case .keychainUnreadable: "Your saved sign-in couldn’t be read. Sign in again."
@@ -151,7 +156,7 @@ nonisolated enum GatewayFailure: Error, Sendable, Hashable, CustomStringConverti
     private static let codeTable: [String: GatewayFailure] = {
         let all: [GatewayFailure] = [.authRejected, .sessionEnded, .noPassword, .signedOut, .invalidURL, .insecureURL,
             .missingFields, .notHermes, .hostRejected, .gatewayOutdated, .unreachable, .timeout, .tls, .tailscaleOff,
-            .offline, .rateLimited, .unavailable, .gatewayError(nil), .keychainLocked, .keychainUnreadable, .keychainUnavailable,
+            .offline, .rateLimited, .unavailable, .blocked, .gatewayError(nil), .keychainLocked, .keychainUnreadable, .keychainUnavailable,
             .keychainClearFailed, .nousUnavailable, .nousCancelled, .nousFailed, .notOwner, .paused, .socketDead,
             .responseTooLarge, .connectionChanged, .accountMissing, .accountCurrent]
         return Dictionary(all.map { ($0.code, $0) }, uniquingKeysWith: { a, _ in a })

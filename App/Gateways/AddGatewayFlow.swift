@@ -107,4 +107,6 @@ final class SheetSignInDriver: SignInDriving {
     }
 
     func compatibility() async -> GatewayCompatibility { await base.compatibility() }
+    func useAccess(_ access: CloudflareAccess?) { base.useAccess(access) }                                  // [cf-access]
+    func savedAccess(for address: String) -> CloudflareAccess? { base.savedAccess(for: address) }
 }

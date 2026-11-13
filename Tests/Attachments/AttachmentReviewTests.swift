@@ -587,7 +587,11 @@ struct AttachmentReviewHistoryTests {
 
 /// A tiny HTTP/1.1 server on 127.0.0.1 (an OS-assigned port, this process only) that records every request.
 nonisolated final class LoopbackHTTP: @unchecked Sendable {
-    struct Request: Sendable { var method: String; var path: String; var body: Data; var authorization: String? = nil }
+    struct Request: Sendable {
+        var method: String; var path: String; var body: Data; var authorization: String? = nil
+        /// Every request header, names lower-cased.
+        var headers: [String: String] = [:]
+    }
     typealias Responder = @Sendable (Request) -> (status: Int, body: Data)
 
     private let listener: NWListener
@@ -687,8 +691,10 @@ nonisolated final class LoopbackHTTP: @unchecked Sendable {
         guard first.count >= 2 else { return nil }
         var length = 0
         var authorization: String?
+        var headers: [String: String] = [:]
         for line in lines.dropFirst() {
             let pair = line.split(separator: ":", maxSplits: 1)
+            if pair.count == 2 { headers[pair[0].lowercased()] = pair[1].trimmingCharacters(in: .whitespaces) }
             if pair.count == 2, pair[0].lowercased() == "content-length" { length = Int(pair[1].trimmingCharacters(in: .whitespaces)) ?? 0 }
             if pair.count == 2, pair[0].lowercased() == "authorization" { authorization = pair[1].trimmingCharacters(in: .whitespaces) }
         }
@@ -697,7 +703,7 @@ nonisolated final class LoopbackHTTP: @unchecked Sendable {
         let target = String(first[1])
         let path = String(target.split(separator: "?", maxSplits: 1).first ?? Substring(target))
         return (Request(method: String(first[0]), path: path, body: Data(bytes[bodyStart..<(bodyStart + length)]),
-                        authorization: authorization), bodyStart + length)
+                        authorization: authorization, headers: headers), bodyStart + length)
     }
 }
 

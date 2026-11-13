@@ -40,6 +40,8 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     private var query = ""
     private var doneOpen = false
     private var ticking: Set<String> = []
+    /// [task-check-off] Rows whose picture is in the air as dust: their cells stay empty until the list has moved them.
+    private var dusted: Set<String> = []
     private var notices: PageNoticeHost!
     /// Where a held task would land (section and index): a tick each time it moves to a new place.
     private var dropPlace: String?
@@ -337,6 +339,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
             cell.contentConfiguration = UIHostingConfiguration {
                 TodoRowView(row: row) { [weak self] in self?.toggleDone(id) }
             }.margins(.all, 0)
+            cell.contentView.alpha = self.dusted.contains(id) ? 0 : 1   // [task-check-off]
             cell.accessibilityIdentifier = "task-row-\(row.title)"
             cell.accessibilityTraits = row.picked ? [.button, .selected] : .button
             cell.configurationUpdateHandler = { cell, state in Self.rowBackground(cell as! UICollectionViewListCell, state) }
@@ -827,19 +830,43 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
             Task { if await !store.setDone(id, false) { PagesHaptics.error() } }
             return
         }
-        // The circle fills, the title strikes through; a moment later the task moves to Done.
+        // [task-check-off] The circle fills and the row turns to dust at once; the list closes behind it as the task
+        // moves to Done.
         PagesHaptics.success()
         ticking.insert(id)
         reload(animated: false)
         HQAnnounce.say("Done: \(task.title)")
-        DispatchQueue.main.asyncAfter(deadline: .now() + (HQMotion.reduced ? 0.1 : 0.6)) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + (HQMotion.reduced ? 0.1 : TaskCheckOff.tick)) { [weak self] in
             guard let self else { return }
+            let blown = self.blowAway(id)
             Task {
+                // The save moves the row at once (the store shows it before the gateway answers), so it waits until
+                // the dust's front is most of the way across: the list closes behind the dust, not under what stands.
+                if blown { try? await Task.sleep(for: .seconds(TaskCheckOff.sweep * 0.8)) }
                 if await !self.store.setDone(id, true) { PagesHaptics.error() }   // the notice says why
                 self.ticking.remove(id)
                 self.reload(animated: true)
+                guard blown else { return }
+                // Where the row went (Done on show, its next date, or back where it was when the save was refused)
+                // it comes back in once the list has settled.
+                try? await Task.sleep(for: .seconds(0.35))
+                self.dusted.remove(id)
+                if let path = self.dataSource.indexPath(for: .task(id)), let cell = self.collectionView.cellForItem(at: path) {
+                    UIView.animate(withDuration: 0.25) { cell.contentView.alpha = 1 }
+                }
             }
         }
+    }
+
+    /// The row's picture goes up as dust and its cell is left empty. False when the row isn't on screen, or under
+    /// Reduce Motion.
+    private func blowAway(_ id: String) -> Bool {
+        guard !HQMotion.reduced, view.window != nil, let path = dataSource.indexPath(for: .task(id)),
+              let cell = collectionView.cellForItem(at: path),
+              TaskDust.play(over: cell.contentView, in: collectionView) else { return false }
+        dusted.insert(id)
+        cell.contentView.alpha = 0
+        return true
     }
 
     /// A new task starts where you are: in the list on show, due today on Today.

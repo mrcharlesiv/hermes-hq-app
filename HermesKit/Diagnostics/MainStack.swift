@@ -21,7 +21,7 @@ nonisolated enum MainStack {
 
     /// The main thread's return addresses, innermost first (the first is where it is now). Nil before `install`, on the
     /// main thread itself, or when the thread can't be stopped or read.
-    static func sample() -> [UInt]? {
+    static func sample(limit: Int = MainStack.limit) -> [UInt]? {
         let thread = main
         guard thread != 0, !Thread.isMainThread else { return nil }
         var addresses = [UInt](repeating: 0, count: limit)

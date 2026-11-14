@@ -64,7 +64,7 @@ nonisolated final class HangWatch: Sendable {
     private let record: @Sendable (HangJudge.Report) -> Void
     private let sample: @Sendable () -> [UInt]?
 
-    static let shared = HangWatch(record: HangWatch.log, sample: MainStack.sample)
+    static let shared = HangWatch(record: HangWatch.log, sample: { MainStack.sample() })
 
     /// `sample` reads the main thread's stack (MainStack.sample in the app; none by default, so tests never stop it).
     init(record: @escaping @Sendable (HangJudge.Report) -> Void = HangWatch.log, sample: @escaping @Sendable () -> [UInt]? = { nil }) {

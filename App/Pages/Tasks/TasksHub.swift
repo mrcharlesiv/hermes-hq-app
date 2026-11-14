@@ -92,9 +92,10 @@ enum TasksHub {
     static func showPage() -> TasksViewController? {
         guard let root = MainTabController.current else { return nil }
         if let tab = root.placedTab(tagged: TabChoice.page("tasks").tag) {
-            root.show(tab)
             #if targetEnvironment(macCatalyst)
-            root.split?.followSelectedTab()
+            if let split = root.split { split.switchPlace(to: tab) { root.show(tab) } } else { root.show(tab) }
+            #else
+            root.show(tab)
             #endif
             guard let stack = tab as? UINavigationController else { return nil }
             stack.popToRootViewController(animated: false)

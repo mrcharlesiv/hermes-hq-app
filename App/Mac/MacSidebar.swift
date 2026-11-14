@@ -577,8 +577,9 @@ final class MacSidebar: UIView {
             row.isTool = tabs.pages?.isTool(controller) ?? false   // [sidebar-tidy] quieter than the bots and places
             row.addAction(UIAction { [weak self, weak row, weak controller] _ in
                 guard let self, let tabs = self.tabs, let controller else { return }
-                tabs.pick(controller)
-                tabs.split?.followSelectedTab()   // [mac] stress test #62: the right pane follows the tab
+                // [mac] stress test #62: the right pane follows the tab; a chat left over its list goes straight there
+                // (`switchPlace`, tester 2026-11-14: one laid out in the hidden list column froze the app)
+                if let split = tabs.split { split.switchPlace(to: controller) { tabs.pick(controller) } } else { tabs.pick(controller) }
                 MacSelection.focus(on: .sidebar)   // [mac] Stress test 2026-10-28 #54
                 self.selectionChanged()
                 row?.playMotion()             // [tabmotion] after the select, in the colour it turns
@@ -991,8 +992,7 @@ final class MacSidebar: UIView {
     private func showBots(marking key: String) {
         guard let tabs, let bots = tabs.controller(for: .bots) else { return }
         if tabs.selectedViewController !== bots {
-            tabs.pick(bots)
-            tabs.split?.followSelectedTab()
+            if let split = tabs.split { split.switchPlace(to: bots) { tabs.pick(bots) } } else { tabs.pick(bots) }
         }
         MacSelection.focus(on: .sidebar)
         openHead = key

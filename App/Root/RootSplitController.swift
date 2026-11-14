@@ -768,8 +768,9 @@ final class RootSplitController: UIViewController {
     /// What was open goes back over the list it came from, the same objects a collapse to one pane moves (draft, scroll
     /// and stream kept), and comes back to the right pane when that tab is picked again; a tab with nothing of its own
     /// shows the placeholder. Only a person's tab switch: code that selects a tab and then opens something keeps D7.
-    func followSelectedTab() {
-        guard isDouble else { return }
+    /// `parked`: what `switchPlace` took off the picked tab's stack before the switch, for the right pane.
+    func followSelectedTab(parked: ParkedScreens? = nil) {
+        guard isDouble else { parked.map(putBack); return }
         fadePanes()   // [mac-feel] a place cross-fades as a chat picked from a list does (`show`), instead of cutting
         let stacks = tabs.placedTabs.compactMap { $0 as? UINavigationController }
         let selected = tabs.selectedViewController as? UINavigationController
@@ -783,22 +784,76 @@ final class RootSplitController: UIViewController {
             PaneNavigationController.passThrough { origin.setViewControllers(origin.viewControllers + moved, animated: false) }
             moved.forEach { ($0 as? PaneNavigationFollowing)?.paneNavigationChanged(origin) }
         }
+        var parkedLeft = parked
         if detailIsEmpty, let selected {
-            let screens = selected.viewControllers
-            if let index = screens.indices.dropFirst().first(where: { !(screens[$0] is ListPaneContent) }) {
-                let moved = Array(screens[index...])
-                moved.forEach { ($0 as? ChatViewController)?.movingBetweenPanes = true }
-                PaneNavigationController.passThrough { selected.setViewControllers(Array(screens[..<index]), animated: false) }
-                moved.first?.hidesBottomBarWhenPushed = false
+            if let parked, parked.stack === selected {
+                parkedLeft = nil
+                AppLog.trace("nav", "tab switch: \(parked.screens.count) screen(s) left over its list go to the right pane")
+                parked.screens.first?.hidesBottomBarWhenPushed = false
                 origin = selected
-                detail.setViewControllers(moved, animated: false)
-                moved.forEach { ($0 as? PaneNavigationFollowing)?.paneNavigationChanged(detail) }
+                detail.setViewControllers(parked.screens, animated: false)
+                parked.screens.forEach { ($0 as? PaneNavigationFollowing)?.paneNavigationChanged(detail) }
+            } else {
+                let screens = selected.viewControllers
+                if let index = screens.indices.dropFirst().first(where: { !(screens[$0] is ListPaneContent) }) {
+                    let moved = Array(screens[index...])
+                    moved.forEach { ($0 as? ChatViewController)?.movingBetweenPanes = true }
+                    PaneNavigationController.passThrough { selected.setViewControllers(Array(screens[..<index]), animated: false) }
+                    moved.first?.hidesBottomBarWhenPushed = false
+                    origin = selected
+                    detail.setViewControllers(moved, animated: false)
+                    moved.forEach { ($0 as? PaneNavigationFollowing)?.paneNavigationChanged(detail) }
+                }
             }
         }
+        parkedLeft.map(putBack)   // the switch landed elsewhere, or the right pane kept its own: back where they were
         detailChanged()
         // Mac polish #85: the list folds away (or comes back) in this same pass, once the screens have followed the tab,
         // so the chat that just came to the right pane never lays out beside a list that is going (as Bots' did).
         applyListFold(animated: true)
+    }
+
+    /// Screens taken off a tab's stack, over its list, for the right pane (`switchPlace`).
+    struct ParkedScreens {
+        let stack: UINavigationController
+        let screens: [UIViewController]
+    }
+
+    /// [mac] Tester 2026-11-14 (kwojt, Mac 970): clicking Sessions in the sidebar froze the app for good, and macOS
+    /// paused it at 111 GB ("Your system has run out of application memory"). A chat opened from Sessions had gone
+    /// back over the Sessions list at midnight, when a bot was picked, and stayed there out of the window for 14 hours
+    /// while its turn and 85 redraws went on. The click made the tab controller put that stack in the window first, in
+    /// the list's column (hidden, just off the window's edge while Bots folds into the sidebar), and UIKit's layout of
+    /// it there never finished (MetricKit: 90 s of CPU in 132 s, all in UIKit's layout under the tab switch, inside
+    /// `MainTabController.pick`); `followSelectedTab` would only have moved the chat to the right pane after that.
+    /// Not reproduced on a stand-in gateway, so the exact loop is not known.
+    ///
+    /// A place the person picks (a sidebar row, ⌘1…⌘9, Open Quickly, a bot's head): `select` makes it the tab on show
+    /// and the right pane follows (`followSelectedTab`). Screens left over the picked tab's list come off its stack
+    /// first, while the stack is still out of the window, and go straight to the right pane, at the width they are
+    /// shown at: the tab controller never lays them out in the list's column. If the switch lands elsewhere, they go
+    /// back where they were.
+    func switchPlace(to target: UIViewController?, _ select: () -> Void) {
+        let parked = target.flatMap(takeParked)
+        select()
+        followSelectedTab(parked: parked)
+    }
+
+    private func takeParked(_ target: UIViewController) -> ParkedScreens? {
+        guard isDouble, let stack = target as? UINavigationController, stack !== tabs.selectedViewController,
+              stack.viewIfLoaded?.window == nil else { return nil }
+        let screens = stack.viewControllers
+        guard let index = screens.indices.dropFirst().first(where: { !(screens[$0] is ListPaneContent) }) else { return nil }
+        let moved = Array(screens[index...])
+        moved.forEach { ($0 as? ChatViewController)?.movingBetweenPanes = true }
+        PaneNavigationController.passThrough { stack.setViewControllers(Array(screens[..<index]), animated: false) }
+        return ParkedScreens(stack: stack, screens: moved)
+    }
+
+    private func putBack(_ parked: ParkedScreens) {
+        let stack = parked.stack
+        PaneNavigationController.passThrough { stack.setViewControllers(stack.viewControllers + parked.screens, animated: false) }
+        parked.screens.forEach { ($0 as? PaneNavigationFollowing)?.paneNavigationChanged(stack) }
     }
     #endif
 

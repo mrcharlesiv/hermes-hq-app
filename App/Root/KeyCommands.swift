@@ -574,9 +574,10 @@ extension MoreViewController: KeySearchable {}
     /// becomes the tab on show when it is one), then the caret in its message field, as ⌘L puts it there.
     static func openBotChat(_ id: String, root: MainTabController) {
         if let bots = root.controller(for: .bots), root.selectedViewController !== bots {
-            root.pick(bots)
             #if targetEnvironment(macCatalyst)
-            root.split?.followSelectedTab()
+            if let split = root.split { split.switchPlace(to: bots) { root.pick(bots) } } else { root.pick(bots) }
+            #else
+            root.pick(bots)
             #endif
         }
         root.botsViewController.open(id)
@@ -1113,14 +1114,14 @@ extension AppDelegate {
         }
         #endif
         AppLog.note("keys", "search sessions")
-        if root.shownTab != .sessions { root.select(.sessions) }
-        #if !targetEnvironment(macCatalyst)
-        root.split?.setListHidden(false)   // [ipad-polish] the search is in the list
-        #endif
         #if targetEnvironment(macCatalyst)
         // [mac] Stress test 2026-10-28 #14: a Bots tab chat left on the right beside the Sessions search (no row of
-        // its own to mark there) goes back over the Bots list, as a tab click does.
-        root.split?.followSelectedTab()
+        // its own to mark there) goes back over the Bots list, as a tab click does (`switchPlace`).
+        let pick = { if root.shownTab != .sessions { root.select(.sessions) } }
+        if let split = root.split { split.switchPlace(to: root.controller(for: .sessions), pick) } else { pick() }
+        #else
+        if root.shownTab != .sessions { root.select(.sessions) }
+        root.split?.setListHidden(false)   // [ipad-polish] the search is in the list
         #endif
         root.sessionsViewController.navigationController?.popToRootViewController(animated: false)
         root.sessionsViewController.loadViewIfNeeded()
@@ -1140,16 +1141,17 @@ extension AppDelegate {
             MacOpenQuickly.present(from: host, search: search, ownTab: { kind, item in
                 MacOpenQuickly.openOnOwnTab(root, kind, item)
             }) {
-                root.selectedIndex = index
-                root.split?.followSelectedTab()
+                if let split = root.split { split.switchPlace(to: stack) { root.selectedIndex = index } } else { root.selectedIndex = index }
                 stack.popToRootViewController(animated: false)
             }
             return
         }
         #endif
-        root.selectedIndex = index
         #if targetEnvironment(macCatalyst)
-        root.split?.followSelectedTab()   // [mac] stress test #14 / #62: as a tab click
+        // [mac] stress test #14 / #62: as a tab click
+        if let split = root.split { split.switchPlace(to: stack) { root.selectedIndex = index } } else { root.selectedIndex = index }
+        #else
+        root.selectedIndex = index
         #endif
         stack.popToRootViewController(animated: false)
         more.loadViewIfNeeded()
@@ -1194,13 +1196,13 @@ extension AppDelegate {
         whenUncovered { root in
             let places = root.placedTabs   // [mac-sidebar] every sidebar place, ⌘9 the last of more than nine
             guard let place = KeyCommands.tabIndex(forShortcut: index, among: places.map { $0.tabBarItem.tag }) else { return }
-            root.show(places[place])
-            #if !targetEnvironment(macCatalyst)
-            root.split?.setListHidden(false)   // [ipad-polish] a tab picked by key is its list: put away, it comes back
-            #endif
             #if targetEnvironment(macCatalyst)
-            root.split?.followSelectedTab()   // [mac] stress test #62: the right pane follows the tab, as a click does
+            // [mac] stress test #62: the right pane follows the tab, as a click does (`switchPlace`)
+            if let split = root.split { split.switchPlace(to: places[place]) { root.show(places[place]) } } else { root.show(places[place]) }
             MacSelection.focus(on: .sidebar)   // [mac] Stress test 2026-10-28 #54: its mark is the accent, as after a click
+            #else
+            root.show(places[place])
+            root.split?.setListHidden(false)   // [ipad-polish] a tab picked by key is its list: put away, it comes back
             #endif
         }
     }

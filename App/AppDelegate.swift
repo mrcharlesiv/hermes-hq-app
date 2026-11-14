@@ -52,6 +52,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         LogUploader.shared.collectCrashRecords()       // …sent to the owner's computer once a gateway is there (LogUploader.swift)
         MemoryTrim.install()                           // [diagnostics] one path for giving memory back (warning, background)
         HangWatch.install()                            // [diagnostics] the performance log's stall source
+        RunawayGuard.install()                         // [diagnostics] Mac: a stuck main thread eating memory stops the app
         PowerLog.start()                               // [diagnostics] one `power` log event per real change
         FrameMeter.install()                           // [diagnostics] `frames` records: hitches while things move
         DesktopBars.hookBars()                         // 2026-10-30: a count's Back is fitted in the iOS look too
@@ -77,6 +78,12 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         if ProcessInfo.processInfo.arguments.contains("-HQHangTest") {
             let delay = max(1, UserDefaults.standard.double(forKey: "HQCrashTestDelay"))
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { DiagnosticsDebug.busyMainThread(for: 1.5) }
+        }
+        // [diagnostics] `-HQRunawayTest`: the main thread in a loop that never ends and keeps taking memory (kwojt's
+        // 111 GB freeze, 2026-11-14), for the Mac's RunawayGuard to stop.
+        if ProcessInfo.processInfo.arguments.contains("-HQRunawayTest") {
+            let delay = max(1, UserDefaults.standard.double(forKey: "HQCrashTestDelay"))
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { DiagnosticsDebug.runawayMainThread() }
         }
         #endif
         // Launch timing (`-HQLaunchTime`): the wall clock when app code first runs, to measure the time before it.

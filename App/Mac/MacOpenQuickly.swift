@@ -396,8 +396,7 @@ extension MacOpenQuickly {
     static func openOnOwnTab(_ root: MainTabController, _ kind: MoreSearch.Kind, _ item: MoreSearch.Item) -> Bool {
         func pick(_ tab: UIViewController) {
             guard root.selectedViewController !== tab else { return }
-            root.pick(tab)
-            root.split?.followSelectedTab()
+            if let split = root.split { split.switchPlace(to: tab) { root.pick(tab) } } else { root.pick(tab) }
         }
         switch kind {
         case .sessions:

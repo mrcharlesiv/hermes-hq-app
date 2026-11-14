@@ -195,10 +195,11 @@ import UIKit
                 return
             }
             #endif
-            root.select(.sessions)
             #if targetEnvironment(macCatalyst)
             // K2: the right pane follows, as a sidebar click on Sessions does (a Bots chat stayed beside the search).
-            root.split?.followSelectedTab()
+            if let split = root.split { split.switchPlace(to: root.controller(for: .sessions)) { root.select(.sessions) } } else { root.select(.sessions) }
+            #else
+            root.select(.sessions)
             #endif
             let sessions = root.sessionsViewController
             sessions.navigationController?.popToRootViewController(animated: false)

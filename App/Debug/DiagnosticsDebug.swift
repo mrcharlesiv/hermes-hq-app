@@ -34,6 +34,18 @@ enum DiagnosticsDebug {
         AppLog.note("debug", "hang test done (\(spin > 0 ? "spun" : "idle"))")
     }
 
+    /// `-HQRunawayTest`: never returns; takes about 100 MB a second and touches it, so the footprint grows.
+    @inline(never) static func runawayMainThread() {
+        AppLog.note("debug", "runaway test started")
+        var kept: [UnsafeMutableRawPointer] = []
+        while true {
+            let block = UnsafeMutableRawPointer.allocate(byteCount: 10 << 20, alignment: 16)
+            block.initializeMemory(as: UInt8.self, repeating: 1, count: 10 << 20)
+            kept.append(block)
+            usleep(100_000)
+        }
+    }
+
     static func applyAtLaunch() {
         let defaults = UserDefaults.standard
         if ProcessInfo.processInfo.arguments.contains("-HQPrintLogs") {

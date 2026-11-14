@@ -279,9 +279,10 @@ final class MainTabController: UITabBarController, UITabBarControllerDelegate {
     /// then has no Settings row to open), otherwise More's Settings row.
     func showSettings() {
         if let tab = placedTab(tagged: TabChoice.page("settings").tag) {
-            show(tab)
             #if targetEnvironment(macCatalyst)
-            split?.followSelectedTab()   // as a click on its sidebar row
+            if let split { split.switchPlace(to: tab) { show(tab) } } else { show(tab) }   // as a click on its sidebar row
+            #else
+            show(tab)
             #endif
             _ = (tab as? UINavigationController)?.popToRootViewController(animated: false)
             return

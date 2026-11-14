@@ -67,7 +67,16 @@ nonisolated enum PushPolicy {
             && namedSites(body) && deviceAccess(body) && deviceAccessKinds(body) && liveSteps(body) && liveEnds(body)
             && liveQuick(body) && terminalKnown(body) && tasks(body) && cronMedia(body) && namedTabs(body)
             && ideasRun(body) && draftCardsKnown(body) && pluginUpdatesKnown(body) && taskFields(body)
+            && helperAlerts(body)
     }
+    /// [helper-alerts] hermes-hq-push 0.9.54+ sends a helper's approval or question alert for the chat that started the
+    /// helper, where the card waits (tester 2026-11-14: "notifications about required approval redirect me to some
+    /// subsession … an empty session"; Hermes hands the add-on the helper's own working session). The alert goes from
+    /// each bot's own copy. No flag of its own: the add-on says its version.
+    static func helperAlerts(_ body: [String: Any]?) -> Bool {
+        (body?["pluginVersion"] as? String).map { versionAtLeast($0, helperAlertsVersion) } ?? false
+    }
+    static let helperAlertsVersion = "0.9.54"
     /// [tasks-first] hermes-hq-push 0.9.53+ keeps what a task manager's task has: priority, tags, an alert, a start
     /// day, repeat on a task you share with a bot, and your own files and links on it (`task_fields`, `task_files`;
     /// owner 2026-11-12: "complex enough to handle any task or use case"). The main bot's copy serves the list; no bot
@@ -154,8 +163,9 @@ nonisolated enum PushPolicy {
     /// the first that gives that bot `draft_message` (`draftCards`: each bot's own copy registers the tool and its guard);
     /// 0.9.50 the first whose dashboard-tile skill draws a tile from the bot's data with a kit (`tileFit`: a bot reads
     /// the skill from its own copy, so a bot with an older one still writes the page itself; a tester's status boards
-    /// came out cut off and crowded, 2026-11-11).
-    static let everyBotVersion = "0.9.50"
+    /// came out cut off and crowded, 2026-11-11); 0.9.54 the first whose alert for a helper's approval or question opens
+    /// the chat that started the helper (`helperAlerts`: the alert goes from each bot's own copy).
+    static let everyBotVersion = "0.9.54"
 
     /// [addon-reminder] The add-on version whose flags `current` checks: raise it with every flag added there. The
     /// launch alert offers an update once per `offerLevel`; after Not Now the app only reminds quietly (AddOnReminder)
@@ -165,7 +175,8 @@ nonisolated enum PushPolicy {
     /// Task ideas run saves its ideas again). 0.9.47: `draftCards` (a bot's draft for review as a card). 0.9.52:
     /// `pluginUpdates` (the main bot's copy serves it, so a plugin update that adds Python packages finishes in the app;
     /// no bot needs its own for that). 0.9.53: `task_fields` (a task's priority, tags, alert, start day and files).
-    static let wantedVersion = "0.9.53"
+    /// 0.9.54: `helperAlerts` (a helper's approval alert opens the chat with the card).
+    static let wantedVersion = "0.9.54"
     static let offerLevel = "\(wantedVersion)/\(everyBotVersion)"
     static let pluginName = "hermes-hq-push"
 

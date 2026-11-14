@@ -31,8 +31,11 @@ enum MacBotsRail {
     /// (13 pt titles in 28 pt rows, what the places below use). Before: 13 pt names, and chat titles at 11.5 pt with
     /// 9.6 pt times, under the Mac's own body size. Compact keeps a step under each.
     static var rowFace: CGFloat { ((MacSidebar.tidy ? (Density.compact ? 28 : 34) : (Density.compact ? 22 : 28)) * MacSidebar.chrome).rounded() }
+    /// [sidebar-feel] 43.5, not 44: with the 2 pt between rows a bot row then takes 45.5 pt, which is a whole 35 px on
+    /// the screen (the Mac draws this app at 77 %). At 46 pt the rows fell 35.4 px apart, so each row's face and name
+    /// landed on a different part of a pixel and no two were drawn quite alike (`MacSidebar.openRowHeight`).
     static var sidebarRowHeight: CGFloat {
-        MacSidebar.tidy ? ((Density.compact ? 38 : 44) * MacSidebar.chrome).rounded() : ((Density.compact ? 32 : 40) * MacSidebar.chrome).rounded()
+        MacSidebar.tidy ? MacSidebar.half((Density.compact ? 38 : 43.5) * MacSidebar.chrome) : ((Density.compact ? 32 : 40) * MacSidebar.chrome).rounded()
     }
     static var nameSize: CGFloat { MacSidebar.tidy ? (Density.compact ? 18 : 19.5) : (Density.compact ? 15.5 : 17) }
     /// Where a bot's name and its chats' titles start: clear of the bigger face (which stays centred on the places'
@@ -380,6 +383,11 @@ final class MacRailHead: UIControl {
 /// The + after the last head: New Bot (and Section or Group Chat), the Bots bar's + menu.
 final class MacRailAdd: UIButton {
     private let titled: Bool
+    /// [sidebar-feel] The open sidebar's row: the + on the icon column and "New Bot" in the name column, as every row
+    /// above it (they sat 3 px right and 3 px left of those), with the rows' own hover and press (it had neither).
+    private let plus = UIImageView()
+    private let words = UILabel()
+    private var pointerOver = false
 
     /// `titled`: the open sidebar's "+ New Bot" row, leading like the bot rows; else the rail's centred +.
     /// [bots-plus] `label`: the Bots bar's + words (`BotsViewController.createLabel`), so the two +s say the same; it
@@ -394,23 +402,55 @@ final class MacRailAdd: UIButton {
         showsMenuAsPrimaryAction = true
         self.menu = UIMenu(children: [UIDeferredMenuElement.uncached { done in done(menu()) }])
         heightAnchor.constraint(equalToConstant: titled ? MacSidebar.openRowHeight : MacBotsRail.rowHeight).isActive = true   // [sidebar-size] New Bot keeps the places' height
-        if titled { contentHorizontalAlignment = .leading }
+        if titled {
+            layer.cornerCurve = .continuous
+            plus.contentMode = .center
+            words.text = "New Bot"
+            words.lineBreakMode = .byTruncatingTail
+            for view in [plus, words] as [UIView] {
+                view.translatesAutoresizingMaskIntoConstraints = false
+                view.isUserInteractionEnabled = false
+                addSubview(view)
+            }
+            NSLayoutConstraint.activate([
+                plus.centerXAnchor.constraint(equalTo: leadingAnchor, constant: MacSidebar.iconLeading + MacSidebar.iconColumn / 2),
+                plus.centerYAnchor.constraint(equalTo: centerYAnchor),
+                words.leadingAnchor.constraint(equalTo: leadingAnchor, constant: MacBotsRail.nameLeading),
+                words.centerYAnchor.constraint(equalTo: centerYAnchor),
+                words.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -MacSidebar.edgeInset),
+            ])
+            addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hover(_:))))
+        }
         recolor()
+    }
+
+    @objc private func hover(_ recognizer: UIHoverGestureRecognizer) {
+        pointerOver = recognizer.state == .began || recognizer.state == .changed
+        fill()
+    }
+
+    override var isHighlighted: Bool { didSet { if titled { fill() } } }
+
+    /// The rows' own marks: the sidebar's grey under a press (and while its menu is open), the faint fill under the pointer.
+    private func fill() {
+        backgroundColor = isHighlighted ? MacSelection.grey : pointerOver ? MacSidebar.rowHover : .clear
+        layer.cornerRadius = MacSelection.radius
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
     func recolor() {
-        var config = UIButton.Configuration.plain()
-        config.image = UIImage(systemName: "plus", withConfiguration: UIImage.SymbolConfiguration(pointSize: (titled ? 14 : 17) * MacSidebar.chrome, weight: .regular))
-        config.baseForegroundColor = HQPalette.label2
         if titled {
-            var words = AttributedString("New Bot")
+            plus.image = UIImage(systemName: "plus", withConfiguration: UIImage.SymbolConfiguration(pointSize: 14 * MacSidebar.chrome, weight: .regular))
+            plus.tintColor = HQPalette.label2
             words.font = MacSidebar.font(MacSidebar.placeSize)
-            config.attributedTitle = words
-            config.imagePadding = 12
-            config.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 14, bottom: 0, trailing: 8)
+            words.textColor = HQPalette.label2
+            fill()
+            return
         }
+        var config = UIButton.Configuration.plain()
+        config.image = UIImage(systemName: "plus", withConfiguration: UIImage.SymbolConfiguration(pointSize: 17 * MacSidebar.chrome, weight: .regular))
+        config.baseForegroundColor = HQPalette.label2
         configuration = config
     }
 }
@@ -556,11 +596,14 @@ final class MacRailLine: UIView {
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: 9),
             line.centerYAnchor.constraint(equalTo: centerYAnchor),
-            line.centerXAnchor.constraint(equalTo: centerXAnchor),
             line.heightAnchor.constraint(equalToConstant: 1),
-            wide ? line.widthAnchor.constraint(equalTo: widthAnchor, constant: -20)
-                : line.widthAnchor.constraint(equalToConstant: (28 * MacSidebar.chrome).rounded()),
         ])
+        // [sidebar-feel] Wide: from the faces' left edge to where the chevrons end, the lines the headings keep.
+        NSLayoutConstraint.activate(wide
+            ? [line.leadingAnchor.constraint(equalTo: leadingAnchor, constant: MacSidebar.contentLeading),
+               line.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -MacSidebar.edgeInset)]
+            : [line.centerXAnchor.constraint(equalTo: centerXAnchor),
+               line.widthAnchor.constraint(equalToConstant: (28 * MacSidebar.chrome).rounded())])
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
@@ -601,6 +644,7 @@ final class MacSidebarHeading: UIControl {
     var sectionId: String?
     private let label = UILabel()
     private let chevron = UIImageView()
+    private var hovered = false
     var isFolded: Bool { Self.folded.contains(key) }
 
     init(title: String, key: String, toggled: @escaping () -> Void) {
@@ -617,12 +661,20 @@ final class MacSidebarHeading: UIControl {
         chevron.contentMode = .center
         for view in [label, chevron] { view.isUserInteractionEnabled = false; addSubview(view) }
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: (30 * MacSidebar.chrome).rounded()),
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -5),
-            chevron.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            heightAnchor.constraint(equalToConstant: MacSidebar.headingHeight),
+            // [sidebar-feel] On the faces' left edge: at 10 the name started 2 px in from the faces under it.
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: MacSidebar.contentLeading),
+            // 3 under it where it was 5: the name sat exactly midway between the group above and its own (9 px
+            // each way); it now leans to its own.
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -3),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: chevron.leadingAnchor, constant: -6),
+            chevron.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -MacSidebar.edgeInset),
             chevron.centerYAnchor.constraint(equalTo: label.centerYAnchor),
         ])
+        chevron.setContentCompressionResistancePriority(.required, for: .horizontal)
+        // [sidebar-feel] It is a button and said nothing: the name and chevron brighten under the pointer and dim
+        // under a press.
+        addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hover(_:))))
         addAction(UIAction { [weak self] _ in
             guard let self else { return }
             var set = Self.folded
@@ -646,14 +698,42 @@ final class MacSidebarHeading: UIControl {
         if legacy.isEmpty { defaults.removeObject(forKey: legacyFoldedKey) } else { defaults.set(legacy, forKey: legacyFoldedKey) }
     }
 
+    @objc private func hover(_ recognizer: UIHoverGestureRecognizer) {
+        hovered = recognizer.state == .began || recognizer.state == .changed
+        tint()
+    }
+
+    override var isHighlighted: Bool { didSet { tint() } }
+
+    private func tint() {
+        label.textColor = hovered ? HQPalette.label : HQPalette.label2
+        chevron.tintColor = hovered ? HQPalette.label2 : HQPalette.label3
+        let dim: CGFloat = isHighlighted ? 0.55 : 1
+        label.alpha = dim
+        chevron.alpha = dim
+    }
+
     func recolor() {
         label.font = MacSidebar.font(MacSidebar.sized(13.5, 14.5), weight: .semibold)
-        label.textColor = HQPalette.label2
-        chevron.image = UIImage(systemName: isFolded ? "chevron.right" : "chevron.down",
+        // One drawing, turned: down while the group is open, to the side folded (`showFold` turns it in a click).
+        chevron.image = UIImage(systemName: "chevron.down",
                                 withConfiguration: UIImage.SymbolConfiguration(pointSize: 10 * MacSidebar.chrome, weight: .semibold))
-        chevron.tintColor = HQPalette.label3
+        tint()
+        showFold(animated: false)
         accessibilityLabel = title
-        accessibilityValue = isFolded ? "Folded" : "Open"
+    }
+
+    /// The chevron and the spoken state follow the fold; `animated` turns the chevron (a click on the heading).
+    func showFold(animated: Bool) {
+        let folded = isFolded
+        accessibilityValue = folded ? "Folded" : "Open"
+        let rightToLeft = effectiveUserInterfaceLayoutDirection == .rightToLeft
+        let turn: CGAffineTransform = folded ? CGAffineTransform(rotationAngle: rightToLeft ? .pi / 2 : -.pi / 2) : .identity
+        guard chevron.transform != turn else { return }
+        guard animated, window != nil, !HQMotion.reduced else { chevron.transform = turn; return }
+        UIView.animate(withDuration: MacSidebar.glide, delay: 0, options: [.curveEaseOut, .beginFromCurrentState, .allowUserInteraction]) {
+            self.chevron.transform = turn
+        }
     }
 }
 
@@ -684,6 +764,12 @@ final class MacSidebarTools: UIView {
             button.translatesAutoresizingMaskIntoConstraints = false
             button.isPointerInteractionEnabled = true
             addSubview(button)
+            // [sidebar-feel] Open, each is a well, and the well lightens under the pointer (Search was too wide for the
+            // app's own hover and showed nothing; New Chat got a disc inside its rounded square).
+            if !folded {
+                MacHover.drawsOwnHover(button)
+                button.addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hover(_:))))
+            }
         }
         let side = ((folded ? 38 : 34) * MacSidebar.chrome).rounded()
         if folded, named {
@@ -719,8 +805,17 @@ final class MacSidebarTools: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
+    private static let well = UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 1, alpha: 0.08) : UIColor(white: 0, alpha: 0.06) }
+    private static let wellHover = UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 1, alpha: 0.13) : UIColor(white: 0, alpha: 0.1) }
+
+    @objc private func hover(_ recognizer: UIHoverGestureRecognizer) {
+        guard let button = recognizer.view as? UIButton else { return }
+        let over = recognizer.state == .began || recognizer.state == .changed
+        button.configuration?.background.backgroundColor = over ? Self.wellHover : Self.well
+    }
+
     func recolor() {
-        let well = UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 1, alpha: 0.08) : UIColor(white: 0, alpha: 0.06) }
+        let well = Self.well
         var find = UIButton.Configuration.plain()
         find.image = UIImage(systemName: "magnifyingglass", withConfiguration: UIImage.SymbolConfiguration(pointSize: (folded ? 17 : 13) * MacSidebar.chrome, weight: .medium))
         find.baseForegroundColor = HQPalette.label2
@@ -945,8 +1040,8 @@ final class MacSidebarEmptyHint: UIView {
         NSLayoutConstraint.activate([
             label.topAnchor.constraint(equalTo: topAnchor, constant: 2),
             label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: MacSidebar.contentLeading),   // [sidebar-feel] under its heading
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -MacSidebar.edgeInset),
         ])
         recolor()
     }

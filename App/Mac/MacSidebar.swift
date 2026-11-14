@@ -98,7 +98,10 @@ final class MacSidebar: UIView {
     /// [sidebar-tidy] Owner 2026-11-10 liked the tidied sidebar (shorter rows): 40 → 36, and Theme › Density › Compact
     /// reaches the places and Tools too (32, the bots' compact rows): it had stopped at the bots, so in Compact the
     /// bots' rows were 32 and every row under them 40.
-    static var openRowHeight: CGFloat { ((Density.compact ? 32 : tidy ? 36 : 40) * chrome).rounded() }
+    /// [sidebar-feel] 37, not 36: with the 2 pt between rows a row takes 39 pt, a whole 30 px on the screen (the Mac
+    /// draws this app at 77 %). At 38 pt the rows fell 29.26 px apart, so each row's icon and name landed on a
+    /// different part of a pixel: names 12 px tall in one row and 13 in the next, gaps of 29, 30 and 30.5.
+    static var openRowHeight: CGFloat { ((Density.compact ? 32 : tidy ? 37 : 40) * chrome).rounded() }
     /// [sidebar-size] Owner 2026-11-10 ("just get it all sized properly"): one of the sidebar's sizes, `was` before
     /// and `now`. The pages beside it and the Settings window's own sidebar draw their text at 15 pt on the screen;
     /// here the places' names were 13, the group headings 10.4 and Search 12. Now the places' and New Bot's names are
@@ -125,6 +128,31 @@ final class MacSidebar: UIView {
     static let iconLeading: CGFloat = 10
     static var iconColumn: CGFloat { (iconSize(folded: false) * 1.5).rounded() }
     static var labelLeading: CGFloat { iconLeading + iconColumn + 10 }
+    /// [sidebar-feel] Owner 2026-11-13: the sidebar "feels off … I can't put my finger on it". Measured on the screen,
+    /// its left edges nearly lined up and didn't: faces at 13 px, group headings at 15, the places' icons at 16 to 19,
+    /// New Bot's + at 20; names at 47 (bots) and 44 (places, New Bot). Now there are four lines and everything sits on
+    /// one: the rows' own edge (Search, a row's mark), `contentLeading` (the faces' left edge: headings, the foot's
+    /// line, an empty section's hint), the icon column's centre (faces, icons, New Bot's +) and the name column
+    /// (`MacBotsRail.nameLeading`). At the trailing end, chevrons, counts and "Working…" end `edgeInset` in.
+    static var contentLeading: CGFloat { iconLeading + iconColumn / 2 - MacBotsRail.rowFace / 2 }
+    static let edgeInset: CGFloat = 10
+    /// The nearest half point, the finest step UIKit lays out on here.
+    static func half(_ value: CGFloat) -> CGFloat { (value * 2).rounded() / 2 }
+    /// The faint fill under the pointer, on every row of the sidebar.
+    static let rowHover = UIColor { traits in UIColor.label.resolvedColor(with: traits).withAlphaComponent(0.05) }
+    /// [sidebar-feel] How long the sidebar's own moves take: a group's rows closing up, Tools folding, the list
+    /// scrolling to the open row. They all snapped.
+    static let glide: TimeInterval = 0.22
+    static var headingHeight: CGFloat { (30 * chrome).rounded() }
+    /// 5 px on the screen (the Mac draws this app at 77 %): rows whose tops are a whole number of these apart are
+    /// drawn exactly alike. A place row and its gap take six (39 pt, 30 px), a bot row seven (45.5 pt, 35 px).
+    static let gridStep: CGFloat = 6.5
+    /// [sidebar-feel] The gap over a group's heading: the least that puts the heading and the gap under it on whole
+    /// steps (2.5 pt), so the rows after a heading are drawn as the rows before it. It was 2 over a group of bots
+    /// and 10 over Tools, so from a group's last row to the next heading measured 31, 32 or 35 px down the one
+    /// sidebar; now every heading sits the same way, and the room Tools gives up pays for the place rows' extra
+    /// point each (`openRowHeight`): the sidebar is no taller than it was.
+    static var aboveHeading: CGFloat { ((headingHeight + 2) / gridStep).rounded(.up) * gridStep - headingHeight }
 
     /// [icon-study] Owner 2026-11-03: "between the sessions icon, the jobs icon, and the Kanban, they don't feel like they're
     /// sized properly". Measured drawn alone (`-HQDebugIconInk`), folded at 22 pt: Sessions' two bubbles filled 31 × 25 of
@@ -174,6 +202,12 @@ final class MacSidebar: UIView {
     /// on the rail, rows with names and group headings open. Its own stack, so a roster change redraws only it.
     private let botsStack = UIStackView()
     private var botsSignature = ""
+    /// [sidebar-feel] The groups' headings by their fold key, kept between roster changes as the heads are: a click
+    /// turns the heading's own chevron, and the rows under it glide from where they were.
+    private var headings: [String: MacSidebarHeading] = [:]
+    private weak var toolsHeading: MacSidebarHeading?
+    /// When the sidebar came on show: its lists glide to a row only once it has been up a moment (`glidesScroll`).
+    private var shownAt: CFTimeInterval = .greatestFiniteMagnitude
     private var tools: MacSidebarTools?
     /// The head whose chat is on show beside the rail, by `MacBotsRail.Item.key` (`MainTabController.paneSelectionChanged`).
     private var openHead: String?
@@ -229,6 +263,7 @@ final class MacSidebar: UIView {
     private let gatewayDot = UIView()
     private let gatewayName = UILabel()
     private let gatewayTip = UIToolTipInteraction()
+    private var gatewayLeading: NSLayoutConstraint!
     static let connectionChanged = Notification.Name("HQMacSidebarConnectionChanged")
     private var connectionToken: NSObjectProtocol?
     private var settingsSize: [NSLayoutConstraint] = []
@@ -317,11 +352,15 @@ final class MacSidebar: UIView {
         addSubview(edge)
         toggle.translatesAutoresizingMaskIntoConstraints = false
         toggle.isPointerInteractionEnabled = true
+        // [sidebar-feel] The foot's three buttons showed nothing under the pointer: their own pointer interaction
+        // (which draws nothing on the Mac) kept the app's hover off them (`PointerEffects.button`).
+        MacHover.button(toggle)
         toggle.accessibilityIdentifier = "mac-sidebar.toggle"
         toggle.addAction(UIAction { [weak self] _ in self?.toggleCollapsed() }, for: .touchUpInside)
         addSubview(toggle)
         addButton.translatesAutoresizingMaskIntoConstraints = false
         addButton.isPointerInteractionEnabled = true
+        MacHover.button(addButton)
         addButton.accessibilityIdentifier = "mac-sidebar.add"
         addButton.accessibilityLabel = "Add to Sidebar"
         addButton.toolTip = "Add to Sidebar"
@@ -330,6 +369,7 @@ final class MacSidebar: UIView {
         addSubview(addButton)
         settingsButton.translatesAutoresizingMaskIntoConstraints = false
         settingsButton.isPointerInteractionEnabled = true
+        MacHover.button(settingsButton)
         settingsButton.accessibilityIdentifier = "mac-sidebar.settings"
         settingsButton.accessibilityLabel = "Settings"
         settingsButton.toolTip = "Settings (⌘,)"
@@ -345,11 +385,15 @@ final class MacSidebar: UIView {
         gatewayName.addInteraction(gatewayTip)
         addSubview(gatewayDot)
         addSubview(gatewayName)
+        // [sidebar-feel] The gateway's name in the name column, under the bots' and places' names (it started 2 pt
+        // right of them), its dot before it. Short of required: folded, the name is hidden and has no room.
+        gatewayLeading = gatewayName.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.contentInset + MacBotsRail.nameLeading)
+        gatewayLeading.priority = .required - 1
         NSLayoutConstraint.activate([
             gatewayDot.widthAnchor.constraint(equalToConstant: 7), gatewayDot.heightAnchor.constraint(equalToConstant: 7),
-            gatewayDot.leadingAnchor.constraint(equalTo: toggle.trailingAnchor, constant: 8),
+            gatewayDot.trailingAnchor.constraint(equalTo: gatewayName.leadingAnchor, constant: -6),
             gatewayDot.centerYAnchor.constraint(equalTo: toggle.centerYAnchor),
-            gatewayName.leadingAnchor.constraint(equalTo: gatewayDot.trailingAnchor, constant: 6),
+            gatewayLeading,
             gatewayName.centerYAnchor.constraint(equalTo: toggle.centerYAnchor),
             gatewayName.trailingAnchor.constraint(lessThanOrEqualTo: settingsButton.leadingAnchor, constant: -6),
         ])
@@ -451,7 +495,25 @@ final class MacSidebar: UIView {
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
+        shownAt = window == nil ? .greatestFiniteMagnitude : CACurrentMediaTime()
         if window != nil { followNeighbourSoon() }
+        #if DEBUG
+        // `-HQDebugSlowMotion 0.1`: the window's animations at a tenth of their speed, to photograph one part-way.
+        let slow = UserDefaults.standard.double(forKey: "HQDebugSlowMotion")
+        if slow > 0, let window { window.layer.speed = Float(slow) }
+        #endif
+    }
+
+    /// Lays the sidebar out now, in two passes. The sidebar's own pass reads the bots' rows' height to give their list
+    /// its least height (`layoutSubviews`), and it runs before the lists lay their rows out: the first pass places the
+    /// rows, the second reads their new height and moves the lists. One pass left the lists to a later one, outside
+    /// the animation, so the places jumped while the bots' rows glided.
+    private func settleLayout() {
+        for _ in 0..<2 {
+            setNeedsLayout()
+            layoutIfNeeded()
+        }
+        layoutIfNeeded()
     }
 
     isolated deinit {
@@ -519,7 +581,9 @@ final class MacSidebar: UIView {
             // [mac-layout] More dissolved: its pages are Tools and the Settings window's; it stays a place out of
             // sight (⌘K's results open from its stack), with no row.
             if isTool { toolRows.append(row) } else if item.tag != HQTab.bots.rawValue, item.tag != HQTab.more.rawValue { placeRows.append(row) }
-            row.heightAnchor.constraint(equalToConstant: named ? Self.namedRowHeight : Self.rowHeight).isActive = true
+            let height = row.heightAnchor.constraint(equalToConstant: named ? Self.namedRowHeight : Self.rowHeight)
+            height.priority = .required - 1   // [sidebar-feel] a hidden Tools row has no height in its stack (`foldTools`)
+            height.isActive = true
             badgeWatch.append(item.observe(\.badgeValue, options: [.new]) { [weak row] item, _ in
                 MainActor.assumeIsolated { row?.badge = item.badgeValue }
             })
@@ -555,8 +619,11 @@ final class MacSidebar: UIView {
                 line.leadingAnchor.constraint(equalTo: footEdge.leadingAnchor),
                 line.trailingAnchor.constraint(equalTo: footEdge.trailingAnchor),
             ])
-            footEdgeHeight.constant = 9 + foot.spacing   // MacRailLine's own height and the gap it had in the foot
+            // MacRailLine's own height and the gap it had in the foot. [sidebar-feel] Open, the line had 10 pt over
+            // it and 6 under (8 px and 4.5 on the screen): 5 and 5 now.
+            footEdgeHeight.constant = folded ? 9 + foot.spacing : 10
         }
+        scroll.contentInset.bottom = showsBots && !folded ? 1 : 6
         placeRows.forEach { nav.addArrangedSubview($0) }
         addTools(toolRows, folded: folded, into: nav)
         if showsBots { botsChanged() }
@@ -603,12 +670,41 @@ final class MacSidebar: UIView {
             foldedTools = row
             return
         }
-        let gap = UIView()
-        gap.heightAnchor.constraint(equalToConstant: 6).isActive = true
-        stack.addArrangedSubview(gap)
-        let heading = MacSidebarHeading(title: "Tools", key: "tools") { [weak self] in self?.rebuild() }
+        if let last = stack.arrangedSubviews.last { stack.setCustomSpacing(Self.aboveHeading, after: last) }   // as over the bots' headings
+        let heading = MacSidebarHeading(title: "Tools", key: "tools") { [weak self] in self?.foldTools() }
+        toolsHeading = heading
         stack.addArrangedSubview(heading)
         toolRows.forEach { $0.isHidden = heading.isFolded; stack.addArrangedSubview($0) }
+    }
+
+    /// [sidebar-feel] Tools' heading clicked: the places' list slides down over its rows like a drawer closing (or up
+    /// off them), and the bots' list takes or gives the room in the same glide. The whole sidebar used to be made
+    /// again, so every row snapped. The rows keep their height on the way: closing them up row by row ran their names
+    /// into each other.
+    private func foldTools() {
+        guard let heading = toolsHeading else { return rebuild() }
+        let hide = heading.isFolded
+        let tools = rows.filter { $0.isTool && $0.superview != nil }
+        heading.showFold(animated: true)
+        let glides = window != nil && !HQMotion.reduced
+        let boxes = glides ? glideBoxes.map(\.frame) : []
+        var leaving: [UIView] = []
+        if glides, hide {
+            // A picture of each row stays where the row was until the list has slid over it.
+            for row in tools where !row.isHidden {
+                guard let ghost = row.snapshotView(afterScreenUpdates: false) else { continue }
+                ghost.frame = row.frame
+                ghost.isUserInteractionEnabled = false
+                leaving.append(ghost)
+            }
+        }
+        for row in tools where row.isHidden != hide { row.isHidden = hide }
+        if glides {
+            glideRows([], from: [:], leaving: leaving, boxes: boxes, in: tools.first?.superview, fades: false)
+        } else {
+            UIView.performWithoutAnimation { settleLayout() }
+        }
+        selectionChanged()   // the open Tool, if one of them, scrolls into view
     }
 
     /// [mac-layout] The bots are in the sidebar while Bots is one of the places (Settings › Tabs keeps Bots or Sessions).
@@ -631,6 +727,7 @@ final class MacSidebar: UIView {
         let chats = open ? bots.railChats(for: groups.flatMap { $0.items.compactMap { $0.item.bot?.id } }) : [:]
         let style = BotChatsStyle.saved
         var nextChats: [String: MacSidebarChat] = [:]
+        var nextHeadings: [String: MacSidebarHeading] = [:]
         var next: [String: MacRailHead] = [:]
         var arranged: [UIView] = []
         var signature: [String] = []
@@ -641,14 +738,22 @@ final class MacSidebar: UIView {
                 if index > 0 { arranged.append(MacRailLine(wide: true)); signature.append("|") }
             } else if open {
                 // [mac-layout] Open: each group under its heading (Pinned, a section, Bots), which folds it away.
-                let heading = MacSidebarHeading(title: group.title, key: MacSidebarHeading.key(for: group.block)) { [weak self] in
-                    self?.botsSignature = ""; self?.botsChanged()
+                let key = MacSidebarHeading.key(for: group.block)
+                let heading: MacSidebarHeading
+                if let kept = headings[key], kept.title == group.title, nextHeadings[key] == nil {
+                    heading = kept
+                    heading.showFold(animated: true)
+                } else {
+                    heading = MacSidebarHeading(title: group.title, key: key) { [weak self] in
+                        self?.botsSignature = ""; self?.botsChanged()
+                    }
+                    if case .user(let id) = group.block {
+                        // [mac] A section's heading has the list's section menu on its right click (Rename…, Move, Delete).
+                        heading.sectionId = id
+                        heading.addInteraction(UIContextMenuInteraction(delegate: self))
+                    }
                 }
-                if case .user(let id) = group.block {
-                    // [mac] A section's heading has the list's section menu on its right click (Rename…, Move, Delete).
-                    heading.sectionId = id
-                    heading.addInteraction(UIContextMenuInteraction(delegate: self))
-                }
+                if nextHeadings[key] == nil { nextHeadings[key] = heading }
                 arranged.append(heading)
                 signature.append("#\(heading.key)\(group.title)\(heading.isFolded ? "-" : "+")")
                 if heading.isFolded { continue }
@@ -694,14 +799,37 @@ final class MacSidebar: UIView {
         let joined = signature.joined(separator: " ")
         if joined != botsSignature {
             botsSignature = joined
-            botsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+            // [sidebar-feel] A group folded or opened, a chat listed under its bot, a bot added or moved: the rows that
+            // stay glide to their new places, new ones fade in and the ones that go fade out. They all jumped.
+            let was = botsStack.arrangedSubviews
+            let glides = window != nil && !was.isEmpty && !HQMotion.reduced
+            var from: [ObjectIdentifier: CGFloat] = [:]
+            var leaving: [UIView] = []
+            let boxes = glides ? glideBoxes.map(\.frame) : []
+            if glides {
+                let staying = Set(arranged.map { ObjectIdentifier($0) })
+                for view in was where !view.isHidden {
+                    let top = (view.layer.presentation() ?? view.layer).frame.minY
+                    if staying.contains(ObjectIdentifier(view)) {
+                        from[ObjectIdentifier(view)] = top
+                    } else if let ghost = view.snapshotView(afterScreenUpdates: false) {
+                        ghost.frame = CGRect(x: view.frame.minX, y: top, width: view.bounds.width, height: view.bounds.height)
+                        ghost.isUserInteractionEnabled = false
+                        leaving.append(ghost)
+                    }
+                }
+            }
+            was.forEach { $0.removeFromSuperview() }
             arranged.forEach { botsStack.addArrangedSubview($0) }
             // [chats-under] No gap above a chat row: the line down a bot's chats is drawn a row at a time, and the
             // stack's 2 pt between rows broke it at every chat (owner 2026-11-09: "it's not a continuous line").
             for (view, below) in zip(arranged, arranged.dropFirst()) {
-                botsStack.setCustomSpacing(below is MacSidebarChat ? 0 : botsStack.spacing, after: view)
+                botsStack.setCustomSpacing(below is MacSidebarChat ? 0 : below is MacSidebarHeading ? Self.aboveHeading : botsStack.spacing,
+                                           after: view)
             }
+            if glides { glideRows(arranged, from: from, leaving: leaving, boxes: boxes) }
         }
+        headings = nextHeadings
         for (key, head) in heads where next[key] == nil { head.removeFromSuperview() }
         heads = next
         for (key, row) in chatRows where nextChats[key] == nil { row.removeFromSuperview() }
@@ -709,6 +837,70 @@ final class MacSidebar: UIView {
         markHeads()
         setNeedsLayout()   // `placeFade` measures the rows again (a heading left last)
     }
+
+    /// [sidebar-feel] The bots' rows after a change: each row that stayed starts where it was drawn (`from`, its old
+    /// top in the bots' stack) and glides to its new place; a new row fades in once there is room for it; a picture of
+    /// each row that went (`leaving`) fades out where it was. The bots' list, the line under it and the places' list
+    /// (`boxes`, their frames before the change) take or give the room in the same glide: the places jumped while the
+    /// bots' rows were still on their way.
+    private func glideRows(_ arranged: [UIView], from: [ObjectIdentifier: CGFloat], leaving: [UIView], boxes: [CGRect],
+                           in list: UIView? = nil, fades: Bool = true) {
+        UIView.performWithoutAnimation { settleLayout() }
+        var moved: [UIView] = []
+        var fresh: [(view: UIView, alpha: CGFloat)] = []
+        for view in arranged where !view.isHidden {
+            if let top = from[ObjectIdentifier(view)] {
+                let offset = top - view.frame.minY
+                guard abs(offset) > 0.5 else { continue }
+                view.transform = CGAffineTransform(translationX: 0, y: offset)
+                moved.append(view)
+            } else if fades {
+                fresh.append((view, view.alpha))
+                view.alpha = 0
+            }
+        }
+        leaving.forEach { (list ?? botsStack).insertSubview($0, at: 0) }
+        let resized = zip(glideBoxes, boxes).map { (box: $0, start: $1, end: $0.frame) }.filter { $0.start != $0.end }
+        guard !moved.isEmpty || !fresh.isEmpty || !leaving.isEmpty || !resized.isEmpty else { return }
+        resized.forEach { Self.shrinkFade(of: $0.box, from: $0.start) }
+        UIView.performWithoutAnimation { resized.forEach { $0.box.frame = $0.start } }
+        let options: UIView.AnimationOptions = [.curveEaseOut, .beginFromCurrentState, .allowUserInteraction]
+        HQMotion.animate(Self.glide, options: options, changes: {
+            moved.forEach { $0.transform = .identity }
+            resized.forEach { $0.box.frame = $0.end }   // where the layout has them: the next pass changes nothing
+        }, completion: { _ in
+            if !fades { leaving.forEach { $0.removeFromSuperview() } }   // Tools' rows: the list has slid over them
+        })
+        guard fades else { return }
+        HQMotion.animate(Self.glide * 0.35, options: options, changes: { leaving.forEach { $0.alpha = 0 } },
+                         completion: { _ in leaving.forEach { $0.removeFromSuperview() } })
+        // Key frames, not a delay: the new rows wait for the rows below to be most of the way out of their place.
+        UIView.animateKeyframes(withDuration: Self.glide, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {   // motion-ok: opacity only
+            UIView.addKeyframe(withRelativeStartTime: 0.45, relativeDuration: 0.55) { fresh.forEach { $0.view.alpha = $0.alpha } }
+        }
+    }
+
+    /// A list that gives up room in a glide (`box`, laid out at its new size, `start` its frame before): its foot fade
+    /// is already the size the list ends at, which cut the rows under it off at once and left a gap that closed as the
+    /// list slid. The fade starts at the list's old foot and shrinks with it.
+    private static func shrinkFade(of box: UIView, from start: CGRect) {
+        let extra = start.height - box.frame.height
+        guard let mask = box.layer.mask, extra > 0.5 else { return }
+        let height = CABasicAnimation(keyPath: "bounds.size.height")   // motion-ok: `glideRows` runs with Reduce Motion off only
+        height.fromValue = mask.bounds.height + extra
+        height.toValue = mask.bounds.height
+        let place = CABasicAnimation(keyPath: "position.y")   // motion-ok: as the line above
+        place.fromValue = mask.position.y + extra * mask.anchorPoint.y
+        place.toValue = mask.position.y
+        for animation in [height, place] {
+            animation.duration = glide
+            animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            mask.add(animation, forKey: animation.keyPath)
+        }
+    }
+
+    /// The three boxes that share the sidebar's height: the bots' list, the line under it, the places and Tools.
+    private var glideBoxes: [UIView] { [scroll, footEdge, footScroll] }
 
     private func makeHead(_ item: MacBotsRail.Item) -> MacRailHead {
         let head = MacRailHead(item: item, named: Self.railNamed, inRow: !Self.isCollapsed)
@@ -750,6 +942,7 @@ final class MacSidebar: UIView {
         botsSignature = ""
         heads = [:]
         chatRows = [:]
+        headings = [:]
         railAdd = nil
     }
 
@@ -832,7 +1025,16 @@ final class MacSidebar: UIView {
             return
         }
         target = min(max(target, least), most)
-        if abs(target - top) > 0.5 { list.setContentOffset(CGPoint(x: 0, y: target), animated: false) }
+        if abs(target - top) > 0.5 { glide(list, to: target) }
+    }
+
+    /// [sidebar-feel] A list moved to show a row (a place picked with ⌘9, a chat opened from a link): it glides there.
+    /// It jumped, so the rows changed under the eye with nothing to say which way. At launch (the first moments on
+    /// show) and under Reduce Motion it is simply there.
+    private func glide(_ list: UIScrollView, to y: CGFloat) {
+        let place = { list.contentOffset = CGPoint(x: 0, y: y) }
+        guard window != nil, CACurrentMediaTime() - shownAt > 2 else { return place() }
+        HQMotion.animate(Self.glide, options: [.curveEaseOut, .beginFromCurrentState, .allowUserInteraction], changes: place)
     }
 
     /// The rows on show in `list` (its content's points, top to bottom): a bot's or group's rows, the places and Tools;
@@ -847,7 +1049,7 @@ final class MacSidebar: UIView {
     /// of its lower rows: a low Tool picked once left the places scrolled away under New Bot from then on.
     private func footBackToTop() {
         guard footScroll.contentOffset.y > -footScroll.contentInset.top + 0.5 else { return }
-        footScroll.setContentOffset(CGPoint(x: 0, y: -footScroll.contentInset.top), animated: false)
+        glide(footScroll, to: -footScroll.contentInset.top)
     }
 
     /// Mac polish #5: the least the bots' list keeps in a short window (Search and New Chat, a heading and two bots;
@@ -915,6 +1117,7 @@ final class MacSidebar: UIView {
         let rows = tabs.botsViewController.gatewaySwitcher?.gateways.accounts ?? []
         let title = rows.first(where: \.isCurrent)?.title ?? tabs.services.account?.baseURL.host() ?? ""
         let state = tabs.services.connection
+        gatewayLeading.constant = Self.contentInset + MacBotsRail.nameLeading   // UI Scale moves the column
         gatewayName.text = title
         gatewayName.font = Self.font(14)
         gatewayName.textColor = HQPalette.label.withAlphaComponent(0.74)
@@ -1111,9 +1314,24 @@ final class MacSidebar: UIView {
             UserDefaults.standard.set(true, forKey: Self.collapsedKey)
         }
         AppLog.note("mac", Self.isCollapsed ? "sidebar folded" : "sidebar opened")
+        // [sidebar-feel] The rows turned into icons (or back) at once and then the strip glided. Now a picture of the
+        // sidebar as it was fades out over the new rows while the strip glides: one move.
+        let ghost = window != nil && !HQMotion.reduced ? snapshotView(afterScreenUpdates: false) : nil
         rebuild()
         window?.windowScene?.sizeRestrictions?.minimumSize = MacWindow.minimumSize
         guard let host = superview else { return }
+        if let ghost {
+            let clip = UIView(frame: bounds)   // cut to the strip as it narrows
+            clip.clipsToBounds = true
+            clip.isUserInteractionEnabled = false
+            clip.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            ghost.frame = clip.bounds
+            ghost.autoresizingMask = effectiveUserInterfaceLayoutDirection == .rightToLeft ? .flexibleLeftMargin : .flexibleRightMargin
+            clip.addSubview(ghost)
+            addSubview(clip)
+            UIView.performWithoutAnimation { settleLayout() }   // the new rows start in place, not from nowhere
+            HQMotion.animate(0.15, options: [.curveEaseOut], changes: { ghost.alpha = 0 }, completion: { _ in clip.removeFromSuperview() })
+        }
         HQMotion.animate(0.22, options: [.curveEaseInOut, .beginFromCurrentState], changes: { host.layoutIfNeeded() })
     }
 
@@ -1840,9 +2058,13 @@ private final class Row: UIControl {
                 label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
             ])
         }
+        // [sidebar-feel] One name column down the sidebar: a place's name starts where the bots' names do
+        // (`MacBotsRail.nameLeading`), not 4 pt short of them (the bots' faces are wider than these icons, so their
+        // names had moved over and the places' had not). The count ends on the edge the headings' chevrons and a
+        // bot's "Working…" end on.
         if !folded { NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 10), label.centerYAnchor.constraint(equalTo: centerYAnchor),
-            count.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12), count.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: MacBotsRail.nameLeading), label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            count.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -MacSidebar.edgeInset), count.centerYAnchor.constraint(equalTo: centerYAnchor),
         ]) }
         // [mac-sidebar] Without a count the name may run to the row's end: a page's longer name ("Status & Maintenance")
         // fit the glass panel's narrower rows only cut short.

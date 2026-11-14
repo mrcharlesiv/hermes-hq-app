@@ -132,6 +132,12 @@ private final class ButtonPointer: NSObject, UIPointerInteractionDelegate {
         init(_ changed: @escaping @MainActor (Bool) -> Void) { self.changed = changed }
     }
 
+    /// A control that draws its own hover (the Mac sidebar's Search and New Chat wells): it gets no disc.
+    static func drawsOwnHover(_ control: UIControl) {
+        guard objc_getAssociatedObject(control, &key) == nil else { return }
+        objc_setAssociatedObject(control, &key, NSNull(), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+    }
+
     static func button(_ control: UIControl) {
         guard objc_getAssociatedObject(control, &key) == nil else { return }
         let hover = ButtonHover(control)

@@ -1279,6 +1279,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
             return
         }
         pendingOpen = nil
+        ChatViewController.dropHeldPush()   // [mac-feel] the Mac opens the newest pick; a chat still held gives way
         guard let navigation = navigationController, !opening else { return }
         if paneKeepsSelection, onShowKey == id { return }   // [m9/ipad] already on show beside the list: nothing is built
         // [botslist] Asked while another tab shows (and this page was perhaps never built): the chat opens where it can
@@ -1390,6 +1391,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
 
     /// Pushes a chat for `model` over the list (Bot Info's recent chats and New Chat).
     func push(_ model: any ChatSessionModel) {
+        ChatViewController.dropHeldPush()   // [mac-feel]
         guard let navigation = navigationController, !opening else { return }
         Haptics.play(.soft)
         let chat = makeChat(model)

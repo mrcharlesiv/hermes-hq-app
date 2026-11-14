@@ -308,11 +308,16 @@ final class MacInspector: UIViewController {
         if isVisible {
             Self.isShown = false
             onShownChange?()
-            clear()
+            if !slidingOut { clear() }   // [mac-feel] sliding out keeps its content until it is off the window
         } else {
             show(shownTab)
         }
     }
+
+    /// [mac-feel] The split is sliding the panel off the window: it stays drawn, with its content, until the slide ends
+    /// (`RootSplitController.slideInspector`), then `clearIfHidden` empties it.
+    var slidingOut = false
+    func clearIfHidden() { if !Self.isShown { clear() } }
 
     private func clear() {
         guard let content else { return }

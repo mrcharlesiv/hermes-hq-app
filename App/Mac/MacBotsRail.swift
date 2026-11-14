@@ -817,35 +817,51 @@ final class MacSidebarTools: UIView {
     func recolor() {
         let well = Self.well
         var find = UIButton.Configuration.plain()
-        find.image = UIImage(systemName: "magnifyingglass", withConfiguration: UIImage.SymbolConfiguration(pointSize: (folded ? 17 : 13) * MacSidebar.chrome, weight: .medium))
+        let glassIcon = UIImage(systemName: "magnifyingglass", withConfiguration: UIImage.SymbolConfiguration(pointSize: (folded ? 17 : 13) * MacSidebar.chrome, weight: .medium))
         find.baseForegroundColor = HQPalette.label2
         if !folded {
-            var words = AttributedString("Search")
-            words.font = MacSidebar.font(MacSidebar.sized(15.5, 17))
-            find.attributedTitle = words
-            var key = AttributedString("⌘K")
-            key.font = MacSidebar.font(MacSidebar.sized(13, 14.5))
-            find.attributedSubtitle = nil
-            find.imagePadding = 6
-            find.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 10, bottom: 0, trailing: 10)
+            // [sidebar-intent] The glass and "Search" are views of this box's own, on the sidebar's two columns: the
+            // glass in the icon column, the word where every name under it starts. As the button's own image and
+            // title they sat 3 px and 10 px short of them, a third and a fourth left edge down the one sidebar.
             find.background.backgroundColor = well
             find.background.cornerRadius = 9
-            find.titleAlignment = .leading
-            search.contentHorizontalAlignment = .leading
             search.configuration = find
+            // At the size the button drew its own image (a button's symbols are a scale up).
+            glass.image = glassIcon?.applyingSymbolConfiguration(UIImage.SymbolConfiguration(scale: .large))
+            glass.tintColor = HQPalette.label2
+            glass.contentMode = .center
+            word.text = "Search"
+            word.font = MacSidebar.font(MacSidebar.sized(15.5, 17))
+            word.textColor = HQPalette.label2
             shortcut.text = "⌘K"
             shortcut.font = MacSidebar.font(MacSidebar.sized(13, 14.5))
             shortcut.textColor = HQPalette.label3
             if shortcut.superview == nil {
-                shortcut.translatesAutoresizingMaskIntoConstraints = false
-                shortcut.isUserInteractionEnabled = false
-                search.addSubview(shortcut)
+                for view in [glass, word, shortcut] as [UIView] {
+                    view.translatesAutoresizingMaskIntoConstraints = false
+                    view.isUserInteractionEnabled = false
+                    search.addSubview(view)
+                }
+                wordLeading = word.leadingAnchor.constraint(equalTo: search.leadingAnchor)
                 NSLayoutConstraint.activate([
+                    glass.centerXAnchor.constraint(equalTo: search.leadingAnchor, constant: MacSidebar.iconLeading + MacSidebar.iconColumn / 2),
+                    glass.centerYAnchor.constraint(equalTo: search.centerYAnchor),
+                    wordLeading!, word.centerYAnchor.constraint(equalTo: search.centerYAnchor),
+                    shortcut.leadingAnchor.constraint(greaterThanOrEqualTo: word.trailingAnchor, constant: 6),
                     shortcut.trailingAnchor.constraint(equalTo: search.trailingAnchor, constant: -10),
                     shortcut.centerYAnchor.constraint(equalTo: search.centerYAnchor),
                 ])
+                shortcut.setContentCompressionResistancePriority(.required, for: .horizontal)
+                // A press dims them, as it dimmed the button's own image and title.
+                search.configurationUpdateHandler = { [weak self] button in
+                    let ink: CGFloat = button.isHighlighted ? 0.5 : 1
+                    self?.glass.alpha = ink
+                    self?.word.alpha = ink
+                }
             }
+            wordLeading?.constant = MacBotsRail.nameLeading   // UI Scale moves the column
         } else {
+            find.image = glassIcon
             search.configuration = find
         }
         var write = UIButton.Configuration.plain()
@@ -856,6 +872,9 @@ final class MacSidebarTools: UIView {
     }
 
     private let shortcut = UILabel()
+    private let glass = UIImageView()
+    private let word = UILabel()
+    private var wordLeading: NSLayoutConstraint?
 }
 /// [chats-under] [mac] One of a bot's chats under its row in the open sidebar (Filter › Chats Under Bots, which the Mac
 /// offers on the sidebar's right click, or the bot's own choice), or the "N more" after them, which opens Sessions with

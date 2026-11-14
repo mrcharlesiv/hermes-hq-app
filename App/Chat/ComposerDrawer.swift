@@ -345,6 +345,11 @@ final class ComposerDrawerController: NSObject, UITableViewDataSource, UITableVi
         }
         if opening {
             panel.isHidden = false
+            #if targetEnvironment(macCatalyst)
+            // [mac-feel] The drawer came in one frame over the chat: a short fade of its own. Opacity only, and the
+            // rows take keys and clicks from the first frame, so typing is never held up. It still closes at once.
+            panel.hqFadeIn()
+            #endif
             panel.superview?.bringSubviewToFront(panel)
             // VoiceOver stays in the field; the count is said once per opening, never per keystroke.
             let count = Set(sections.flatMap(\.rows).filter(\.tappable).map(\.action)).count   // Favorites lists some twice

@@ -86,6 +86,10 @@ import UIKit
     /// The marked row (↑/↓, the pointer); nil until either moves it or a search marks its first result.
     private var marked: IndexPath?
     private var picked = false
+    /// [mac-feel] Fading out after Esc or a click outside (`hqHidePanel`).
+    private var closing = false
+    /// [mac-feel] The fade-in played (once: not again when a sheet over the panel goes, Show Details).
+    private var fadedIn = false
 
     private static weak var shown: MacPickPanel?
     static var isShown: Bool { shown != nil }
@@ -110,12 +114,16 @@ import UIKit
     /// Presents over `host` (the top of its stack). A panel already up takes the caret back instead (a second ⌘ press).
     static func present(_ panel: MacPickPanel, from host: UIViewController) -> Bool {
         if let shown, shown.presentingViewController != nil, !shown.isBeingDismissed {
-            shown.field.becomeFirstResponder()
-            panel.driver = nil   // the driver and its panel hold each other until the panel goes
-            return false
+            if shown.closing {
+                shown.dismiss(animated: false)   // [mac-feel] fading out after Esc: gone now, the new panel takes its place
+            } else {
+                shown.field.becomeFirstResponder()
+                panel.driver = nil   // the driver and its panel hold each other until the panel goes
+                return false
+            }
         }
         shown = panel
-        host.present(panel, animated: true)
+        host.hqShowPanel(panel)
         return true
     }
 
@@ -237,6 +245,7 @@ import UIKit
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         if fieldBox.isHidden { becomeFirstResponder() } else { field.becomeFirstResponder() }
+        if !fadedIn { fadedIn = true; hqPanelAppeared() }   // [mac-feel]
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -683,14 +692,15 @@ import UIKit
         picked = true
         let pick = onPick
         let keep = driver   // its pick runs after the panel has gone
-        dismiss(animated: true) { pick?(row); _ = keep }
+        dismiss(animated: false) { pick?(row); _ = keep }   // [mac-feel] at once: the pick no longer waits for a fade-out
     }
 
     @objc func close() {
-        guard !isBeingDismissed else { return }
+        guard !isBeingDismissed, !closing else { return }
+        closing = true
         let cancel = picked ? nil : onCancel
         let keep = driver
-        dismiss(animated: true) { cancel?(); _ = keep }
+        hqHidePanel { cancel?(); _ = keep }
     }
 
     @objc private func tappedOutside(_ recognizer: UITapGestureRecognizer) {

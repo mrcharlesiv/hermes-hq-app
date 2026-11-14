@@ -540,17 +540,21 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     /// [perf] On a cold cache, uncached text past `initialMeasureBudget` stops it as soon as the screen itself is
     /// covered (a chat whose newest replies are big code dumps would measure all of them before the push); the fill
     /// measures the rest off the main thread after the push.
-    private func layoutInitialScreen(height: CGFloat) {
+    /// [mac-feel] `whole`: every row the model already shows is laid out too (a relayout that keeps the reading place
+    /// built the rows down to it: `relayoutEverything`).
+    private func layoutInitialScreen(height: CGFloat, whole: Bool = false) {
         var total: CGFloat = 0
         var made: [RowLayout] = []
         var uncachedCost = 0
         let all = model.allRows
         let budget = height * 1.5
-        while made.count < all.count && (total < budget || (made.count < 12 && uncachedCost < Self.initialMeasureBudget)) {
+        let floor = whole ? model.shownCount : 0
+        while made.count < all.count
+                && (made.count < floor || total < budget || (made.count < 12 && uncachedCost < Self.initialMeasureBudget)) {
             let row = all[made.count]
             if TextLayout.cached(row, width: layoutWidth, style: style) == nil {
                 uncachedCost += Self.measureCost(row)
-                if !made.isEmpty && total >= height && uncachedCost > Self.initialMeasureBudget { break }
+                if made.count >= floor && !made.isEmpty && total >= height && uncachedCost > Self.initialMeasureBudget { break }
             }
             let l = TextLayout.layout(row, width: layoutWidth, style: style, keep: true)
             made.append(l)
@@ -973,6 +977,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
                      done: @escaping () -> Void) {
         // [m9/ipad] Next / Previous Chat in the phone layout: the new chat takes the place of the one on show in one
         // step (the list never flashes between them).
+        dropHeldPush()   // [mac-feel] a chat still held for its rows gives way to this newer pick
         let replace = replacesTopOnNextPush
         replacesTopOnNextPush = false
         let place: (UINavigationController, UIViewController) -> Void = { navigation, screen in
@@ -991,14 +996,34 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         let go: () -> Void = { [chat, weak navigation] in
             guard chat.readyWaiter != nil else { return }
             chat.readyWaiter = nil
+            if held?.chat === chat { held = nil }
             ChatPerf.mark("chat.push rows=\(chat.rows.count)")
             if let navigation { place(navigation, chat) }
             done()
         }
         chat.readyWaiter = go
+        #if targetEnvironment(macCatalyst)
+        held = (chat, done)
+        #endif
         chat.loadViewIfNeeded()
         if !chat.rows.isEmpty || chat.openPhase != .opening { go(); return }
         DispatchQueue.main.asyncAfter(deadline: .now() + limit) { go() }
+    }
+
+    /// [mac-feel] The chat whose push is being held for its first rows, and its `done` (Mac only; nil elsewhere).
+    private static var held: (chat: ChatViewController, done: () -> Void)?
+
+    /// [mac-feel] On the Mac the newest click wins. A chat with nothing to paint is held up to 0.35 s (`push`), and a
+    /// click on another chat in that time was dropped: the first chat opened, the one just clicked did not. The held
+    /// chat is let go instead (never shown; its `done` still runs, so the list that asked takes clicks again) and the
+    /// new one opens. Lists call this before their own "a push is waiting" check. Does nothing off the Mac.
+    static func dropHeldPush() {
+        guard let (chat, done) = held else { return }
+        held = nil
+        guard chat.readyWaiter != nil else { return }
+        chat.readyWaiter = nil
+        AppLog.trace("nav", "held chat push dropped for a newer pick")
+        done()
     }
 
     /// Nothing shows yet, but rows are on their way: the open runs, or messages are in and their rows are still being
@@ -3102,18 +3127,76 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         #endif
         let span = MainTrail.begin("chat.relayout")       // [diagnostics] build 292
         defer { MainTrail.end(span) }
+        let place = readingPlace()   // [mac-feel] before anything moves
         endLift()
         fillGeneration += 1
         let height = view.bounds.height > 0 ? view.bounds.height : 874
         TextLayout.screenHeight = view.window?.bounds.height ?? TextLayout.screenHeight   // [m9/ipad] the window's, not the screen's
-        model.rebuildAll(input(), syncMessages: Self.syncBuildMessages, oldestShown: nil)
-        layoutInitialScreen(height: height)
+        model.rebuildAll(input(), syncMessages: Self.syncBuildMessages, oldestShown: place?.messageId)
+        layoutInitialScreen(height: height, whole: place != nil)
         UIView.performWithoutAnimation { tableView.reloadData(); tableView.layoutIfNeeded() }
-        following = true
-        tableView.contentOffset.y = minOffset
+        let kept = place.map(restore) ?? false
+        if !kept {
+            following = true
+            tableView.contentOffset.y = minOffset
+        }
         fillDoneLogged = false
-        AppLog.trace("chatui", "apply \(logTag): full reload (\(reason)), not animated, \(rows.count) rows")
+        AppLog.trace("chatui", "apply \(logTag): full reload (\(reason)), not animated, \(rows.count) rows\(kept ? ", reading place kept" : "")")
         startFill()
+    }
+
+    /// [mac-feel] Where the reader is, for a relayout to put back: the row under the top of the room (just below the
+    /// bar) and how far up that row the line is (0 its bottom edge, 1 its top).
+    private struct ReadingPlace {
+        let rowId: String
+        let messageId: String
+        let fraction: CGFloat
+    }
+
+    /// Rows and text a relayout lays out at once to keep the reading place; deeper in than this it goes to the newest
+    /// message as before (laying out more would stall the window).
+    private static let readingPlaceRows = 800
+    private static let readingPlaceCost = 400_000
+
+    /// [mac-feel] On the Mac a width change kept nothing: the inspector opening, the sidebar folding or the window
+    /// resized sent a reader who had scrolled up back to the newest message. Nil at the newest end (the chat follows
+    /// it, as before), off the Mac, and too deep in to lay out at once.
+    private func readingPlace() -> ReadingPlace? {
+        #if targetEnvironment(macCatalyst)
+        guard !following, !isAtBottom, isViewLoaded, tableView.window != nil, tableView.bounds.height > 0, !rows.isEmpty else { return nil }
+        // The table is inverted: its far end is the top of the screen.
+        let line = tableView.contentOffset.y + tableView.bounds.height - topInset
+        let under = tableView.indexPathForRow(at: CGPoint(x: tableView.bounds.midX, y: line - 1))
+        guard let path = under ?? tableView.indexPathsForVisibleRows?.max(), path.row < rows.count,
+              path.row < Self.readingPlaceRows else { return nil }
+        var cost = 0
+        for row in rows[...path.row] {
+            cost += Self.measureCost(row)
+            if cost > Self.readingPlaceCost { return nil }
+        }
+        let rect = tableView.rectForRow(at: path)
+        let fraction = rect.height > 0 ? min(1, max(0, (line - rect.minY) / rect.height)) : 1
+        return ReadingPlace(rowId: rows[path.row].id, messageId: rows[path.row].messageId, fraction: fraction)
+        #else
+        return nil
+        #endif
+    }
+
+    /// Puts the same line of the same row back under the top of the room. False when the row is gone or the place
+    /// comes out at the newest end: the caller follows the newest message.
+    private func restore(_ place: ReadingPlace) -> Bool {
+        guard let index = rows.firstIndex(where: { $0.id == place.rowId }) else { return false }
+        let rect = tableView.rectForRow(at: IndexPath(row: index, section: 0))
+        let target = rect.minY + place.fraction * rect.height - tableView.bounds.height + topInset
+        let maxOffset = max(minOffset, tableView.contentSize.height + topInset - tableView.bounds.height)
+        guard target > minOffset + 2 else { return false }
+        following = false
+        tableView.contentOffset.y = min(maxOffset, target)
+        tableView.layoutIfNeeded()
+        updateJumpButton()
+        updateBottomEdge()
+        revealIfNeeded()
+        return true
     }
 
     // MARK: Scrolling

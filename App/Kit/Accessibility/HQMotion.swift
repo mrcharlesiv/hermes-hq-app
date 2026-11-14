@@ -11,6 +11,11 @@ enum HQMotion {
 
     nonisolated static let fade: TimeInterval = 0.2
 
+    /// [mac-feel] The shared scale for new motion: `quick` for a thing that swaps in place or fades (a place, a panel
+    /// over the window), `pane` for an edge that travels (the inspector, a list folding away).
+    nonisolated static let quick: TimeInterval = 0.12
+    nonisolated static let pane: TimeInterval = 0.22
+
     /// [settings] Decorative loops (skeleton shimmer and pulse, idle heads) stop under Reduce Motion and while the
     /// phone saves power: Low Power Mode or heat (docs/spec/3x-settings.md §3; the web's `power-saver.css`).
     /// Transitions, typing dots, spinners and voice surfaces are not decoration: they keep asking `reduced`.
@@ -63,4 +68,36 @@ enum HQMotion {
 extension AnyTransition {
     /// A transition that moves or scales, replaced by a plain fade under Reduce Motion.
     static func hqMotion(_ moving: AnyTransition) -> AnyTransition { HQMotion.reduced ? .opacity : moving }
+}
+
+extension UIView {
+    /// [mac-feel] A short fade-in of the view's own, for a thing that is put on screen in one step (a panel presented
+    /// without the system's transition, the composer's drawer). Drawn on the layer, so it plays where UIKit has view
+    /// animations switched off (during key input), and the view itself is at full alpha from the start: nothing waits
+    /// for the fade and nothing can be left half shown. Opacity only; nothing under Reduce Motion.
+    func hqFadeIn(_ duration: TimeInterval = HQMotion.quick) {
+        guard !HQMotion.reduced else { return }
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0
+        fade.toValue = layer.opacity
+        fade.duration = duration
+        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        layer.add(fade, forKey: "hqFade")
+    }
+
+    /// [mac-feel] The matching fade-out; `done` runs when it ends (at once under Reduce Motion). The view is left at
+    /// alpha 0: for a view that is about to be dismissed or removed.
+    func hqFadeOut(_ duration: TimeInterval = HQMotion.quick, then done: @escaping () -> Void) {
+        guard !HQMotion.reduced else { alpha = 0; return done() }
+        CATransaction.begin()
+        CATransaction.setCompletionBlock(done)
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = layer.presentation()?.opacity ?? layer.opacity
+        fade.toValue = 0
+        fade.duration = duration
+        fade.timingFunction = CAMediaTimingFunction(name: .easeIn)
+        layer.add(fade, forKey: "hqFade")
+        UIView.performWithoutAnimation { alpha = 0 }
+        CATransaction.commit()
+    }
 }

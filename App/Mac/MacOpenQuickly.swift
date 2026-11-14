@@ -47,10 +47,13 @@ import UIKit
     /// Opens the panel over the window (once: ⌘K again while it's up puts the caret back in its field).
     static func present(from host: UIViewController, search: MoreSearchUI,
                         ownTab: @escaping (MoreSearch.Kind, MoreSearch.Item) -> Bool, showMore: @escaping () -> Void) {
-        if let shown { shown.field.becomeFirstResponder(); return }
+        if let shown {
+            guard shown.closing else { shown.field.becomeFirstResponder(); return }
+            shown.dismiss(animated: false)   // [mac-feel] fading out after Esc: gone now, a fresh panel takes its place
+        }
         let panel = MacOpenQuickly(search: search, ownTab: ownTab, showMore: showMore)
         shown = panel
-        host.present(panel, animated: true)
+        host.hqShowPanel(panel)
     }
 
     private init(search: MoreSearchUI, ownTab: @escaping (MoreSearch.Kind, MoreSearch.Item) -> Bool, showMore: @escaping () -> Void) {
@@ -177,6 +180,7 @@ import UIKit
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         field.becomeFirstResponder()
+        if !fadedIn { fadedIn = true; hqPanelAppeared() }
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -355,7 +359,7 @@ import UIKit
         let kind = groups[marked.section].kind
         let item = groups[marked.section].rows[marked.row]
         AppLog.note("keys", "open quickly: \(kind.rawValue)")
-        dismiss(animated: true) { [search, showMore, ownTab] in
+        dismiss(animated: false) { [search, showMore, ownTab] in   // [mac-feel] at once: Return no longer waits for a fade-out
             if ownTab(kind, item) { return }
             showMore()
             search.open(kind, item)
@@ -367,7 +371,16 @@ import UIKit
     static func debugOpenMarked() { shown?.openMarked() }
     #endif
 
-    @objc private func close() { dismiss(animated: true) }
+    /// [mac-feel] Fading out after Esc or a click outside (`hqHidePanel`).
+    private var closing = false
+    /// [mac-feel] The fade-in played (once: not again when a sheet over the panel goes).
+    private var fadedIn = false
+
+    @objc private func close() {
+        guard !closing else { return }
+        closing = true
+        hqHidePanel()
+    }
 
     @objc private func tappedOutside(_ recognizer: UITapGestureRecognizer) {
         if !panel.bounds.contains(recognizer.location(in: panel)) { close() }
@@ -487,6 +500,33 @@ extension MacOpenQuickly {
             return MacSettingsWindow.open(category: .about) { SettingsNavigator.openRoot("about", router: $0) }
         default:
             return false
+        }
+    }
+}
+#endif
+
+#if targetEnvironment(macCatalyst)
+extension UIViewController {
+    /// [mac-feel] Shows a Mac panel over the window (⌘K, Commands, Models). It is presented at once, so its field has
+    /// the caret from the first frame and a key typed straight after the shortcut lands in it; the panel fades in on
+    /// its own once it is on screen (`hqPanelAppeared`). The system's cross-dissolve gave the caret only when it ended and dropped the keys typed before then.
+    func hqShowPanel(_ panel: UIViewController) {
+        present(panel, animated: false)
+    }
+
+    /// [mac-feel] From the panel's `viewDidAppear`: its short fade-in. On what the panel holds, where the layers are in
+    /// the window (a fade added before that never played) and UIKit's own end of the presentation leaves them alone.
+    func hqPanelAppeared() {
+        view.subviews.forEach { $0.hqFadeIn() }
+    }
+
+    /// [mac-feel] The panel on show goes without a pick (Esc, a click outside): a short fade of its own, taking no more
+    /// clicks. A pick does not come here: it dismisses at once, so what was picked opens without waiting for a fade.
+    func hqHidePanel(then done: (() -> Void)? = nil) {
+        view.isUserInteractionEnabled = false
+        view.hqFadeOut {
+            guard self.presentingViewController != nil, !self.isBeingDismissed else { done?(); return }
+            self.dismiss(animated: false, completion: done)
         }
     }
 }

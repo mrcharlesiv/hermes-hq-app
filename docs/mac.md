@@ -148,6 +148,14 @@ Mac window, scaled to Mac size. No separate code base; every iPhone and iPad cha
     `.hqPointerFill`), a press deepens the fill instead of dimming the view (`press` / `dim`), a row inside a card
     spans the card and keeps its corners (`fit`), lists answer on mouse down (`delaysContentTouches` off), links in
     replies show the pointing hand, and the ⌘K mark follows the pointer;
+  - **motion** (981): the inspector slides shut as it slides open and the chat beside it cross-fades to its new
+    width; a place switch and a list fold cross-fade the panes; Open Quickly and the pick panels fade in and out and
+    act on a pick at once; a chat keeps its reading place through a pane change; durations are `HQMotion.quick` /
+    `HQMotion.pane` and every one of them respects Reduce Motion;
+  - **sidebar grid** (978, 981): everything sits on `MacSidebar.gridStep` (5 px on screen) and on three columns
+    (row edge, icon centre, name); Search's glass and word are the box's own views on the icon and name columns;
+    headings and the foot bar get `MacSidebar.sectionBreak` above them; the accent mark is the accent only in the
+    pane the last click landed in while the window is key (`MacSelection.emphasized`), grey otherwise;
   - **stall log**: HangWatch pauses while the app's windows are hidden and drops a wait the watch's own timer was
     held back through (App Nap); a resize is a `window.resize` span.
 - **Add-ons**: the Hermes HQ identity embeds its notification extension (sealed alerts, bot faces) and its Share

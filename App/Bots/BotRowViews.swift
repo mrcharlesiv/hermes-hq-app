@@ -435,7 +435,7 @@ struct PinnedTileView: View {
         let mark = marks && state.isSelected && !state.isHighlighted
         if mark != marked { marked = mark }
         #if targetEnvironment(macCatalyst)
-        let accent = MacSelection.focus == .list
+        let accent = MacSelection.emphasized(.list)
         if accent != focused { focused = accent }
         #endif
     }
@@ -444,7 +444,7 @@ struct PinnedTileView: View {
 
     #if targetEnvironment(macCatalyst)
     /// [mac] Stress test 2026-10-28 #54: the list has the focus, so the mark is the accent (`MacSelection`).
-    private(set) var focused = MacSelection.focus == .list
+    private(set) var focused = MacSelection.emphasized(.list)
     #endif
 }
 

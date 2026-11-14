@@ -152,7 +152,13 @@ final class MacSidebar: UIView {
     /// and 10 over Tools, so from a group's last row to the next heading measured 31, 32 or 35 px down the one
     /// sidebar; now every heading sits the same way, and the room Tools gives up pays for the place rows' extra
     /// point each (`openRowHeight`): the sidebar is no taller than it was.
-    static var aboveHeading: CGFloat { ((headingHeight + 2) / gridStep).rounded(.up) * gridStep - headingHeight }
+    /// [sidebar-intent] And one step more (5 px): a heading sat as far from the group above it as two rows sit from
+    /// each other, so "Tools" read as one more row of the places, not as the name of what follows.
+    static var aboveHeading: CGFloat { ((headingHeight + 2) / gridStep).rounded(.up) * gridStep - headingHeight + sectionBreak }
+    /// [sidebar-intent] Owner 2026-11-13: "make it all feel more intentional". What a break between two parts of the
+    /// sidebar adds over the gap between two rows, the same everywhere: over a group's heading, and over the bar at
+    /// the foot (the gateway's name sat a row's pitch under the last Tool, as if it were one).
+    static let sectionBreak: CGFloat = gridStep
 
     /// [icon-study] Owner 2026-11-03: "between the sessions icon, the jobs icon, and the Kanban, they don't feel like they're
     /// sized properly". Measured drawn alone (`-HQDebugIconInk`), folded at 22 pt: Sessions' two bubbles filled 31 × 25 of
@@ -488,7 +494,15 @@ final class MacSidebar: UIView {
         registerForTraitChanges([UITraitDisplayScale.self]) { (bar: MacSidebar, _) in
             bar.edgeWidth.constant = 1 / max(1, bar.traitCollection.displayScale)
         }
+        // [sidebar-intent] The window went behind another (or another app came in front), or came back: its accent
+        // mark goes grey and comes back (`MacSelection.windowActive`).
+        registerForTraitChanges([UITraitActiveAppearance.self]) { (bar: MacSidebar, _) in bar.windowActiveChanged() }
         rebuild()
+    }
+
+    private func windowActiveChanged() {
+        guard window != nil else { return }
+        MacSelection.windowActive(traitCollection.activeAppearance != .inactive)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
@@ -497,6 +511,7 @@ final class MacSidebar: UIView {
         super.didMoveToWindow()
         shownAt = window == nil ? .greatestFiniteMagnitude : CACurrentMediaTime()
         if window != nil { followNeighbourSoon() }
+        windowActiveChanged()
         #if DEBUG
         // `-HQDebugSlowMotion 0.1`: the window's animations at a tenth of their speed, to photograph one part-way.
         let slow = UserDefaults.standard.double(forKey: "HQDebugSlowMotion")
@@ -629,7 +644,9 @@ final class MacSidebar: UIView {
         if showsBots { botsChanged() }
         placeRailGateway()
         showGateway()
-        footBottom.constant = -6   // a gap above the button, rows at the foot or not
+        // A gap above the button, rows at the foot or not. [sidebar-intent] Open, a section's break more: the bar is
+        // not one of the rows above it.
+        footBottom.constant = -6 - (folded ? 0 : Self.sectionBreak)
         botsRoom.constant = showsBots ? Self.botsMinHeight : 0   // Mac polish #5
         placeToggle()
         recolor()

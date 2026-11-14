@@ -148,7 +148,7 @@ final class RootSplitController: UIViewController {
             // Mac polish #1: a chat a layout moved never forces another from inside it; the next pass places the panel.
             guard !self.applyingLayout else { return }
             guard self.view.window != nil, !HQMotion.reduced else { self.view.layoutIfNeeded(); return }
-            HQMotion.animate(0.22, options: [.curveEaseInOut, .beginFromCurrentState], changes: { self.view.layoutIfNeeded() })
+            self.slideInspector()
         }
         #endif
         detail.view.accessibilityIdentifier = "pane.detail"
@@ -366,7 +366,7 @@ final class RootSplitController: UIViewController {
                                                    : (room > 0 ? window.maxX - room : window.maxX),
                                     y: window.minY, width: panel, height: window.height)
         if inspector.view.frame != inspectorFrame { inspector.view.frame = inspectorFrame }
-        inspector.view.isHidden = room == 0 && !MacInspector.isShown
+        inspector.view.isHidden = room == 0 && !MacInspector.isShown && !inspector.slidingOut
         // [mac-ui-issues] Its Desktop Look band ends where the chat's bar does.
         let bar = detail.navigationBar
         inspector.bandBottom = bar.isHidden || bar.window == nil ? 0 : max(0, bar.convert(bar.bounds, to: view).maxY - inspectorFrame.minY)
@@ -689,6 +689,58 @@ final class RootSplitController: UIViewController {
     }
     private var placedBoardPanel = false
 
+    #if targetEnvironment(macCatalyst)
+    /// [mac-feel] The picture of the panes as they were, fading out over what they have become (`fadePanes`).
+    private weak var panesGhost: UIView?
+
+    /// [mac-feel] Call before a change that swaps or resizes the panes in one step (a place picked, the list folding
+    /// away, the inspector coming or going): the panes' last drawn picture stays over them and fades out, so the change
+    /// is one short cross-fade. A chat lays its rows out at a new width in one step, so gliding its edge showed them
+    /// cut off by an edge that had not arrived yet, and a place switch cut hard where a chat picked from a list fades.
+    /// The picture sits under the sidebar and the inspector and takes no clicks. Nothing under Reduce Motion.
+    private func fadePanes() {
+        guard panesGhost == nil, isViewLoaded, view.window != nil, !HQMotion.reduced else { return }
+        var rect = split(windowRect).panes
+        // Not the inspector's own picture: the panel slides, and a still copy of it fading in place would blur that.
+        let panel = inspector.view.isHidden ? .null : inspector.view.frame.intersection(rect)
+        if !panel.isNull, panel.width > 0 {
+            if panel.maxX >= rect.maxX - 0.5 { rect.size.width = panel.minX - rect.minX }
+            else if panel.minX <= rect.minX + 0.5 { rect = CGRect(x: panel.maxX, y: rect.minY, width: rect.maxX - panel.maxX, height: rect.height) }
+        }
+        guard rect.width > 1, rect.height > 1,
+              let old = view.resizableSnapshotView(from: rect, afterScreenUpdates: false, withCapInsets: .zero) else { return }
+        old.frame = rect
+        old.isUserInteractionEnabled = false
+        old.accessibilityElementsHidden = true
+        view.insertSubview(old, belowSubview: macSidebar)
+        panesGhost = old
+        HQMotion.animate(HQMotion.quick, options: [.curveEaseOut, .allowUserInteraction], changes: { old.alpha = 0 },   // motion-ok: opacity only
+                         completion: { _ in old.removeFromSuperview() })
+    }
+
+    /// [mac-feel] The inspector came or went: the panes take their new widths at once under `fadePanes`, and the panel
+    /// slides over them. It used to pop out of sight (hidden in the same layout pass) where it had slid in.
+    private func slideInspector() {
+        let from = inspector.view.layer.presentation()?.frame ?? inspector.view.frame
+        if !MacInspector.isShown, !inspector.view.isHidden { inspector.slidingOut = true }
+        fadePanes()
+        UIView.performWithoutAnimation { view.layoutIfNeeded() }
+        let to = inspector.view.frame
+        guard from != to else { settleInspector(); return }
+        UIView.performWithoutAnimation { inspector.view.frame = from }
+        HQMotion.animate(HQMotion.pane, options: [.curveEaseInOut, .beginFromCurrentState, .allowUserInteraction],
+                         changes: { self.inspector.view.frame = to }, completion: { _ in self.settleInspector() })
+    }
+
+    /// The slide ended (or another began): a panel that left is hidden and emptied, unless it was asked for again.
+    private func settleInspector() {
+        guard inspector.slidingOut else { return }
+        inspector.slidingOut = false
+        inspector.clearIfHidden()
+        view.setNeedsLayout()
+    }
+    #endif
+
     /// [bots-rail] The tab on show or the sidebar's fold changed: the list folds away or comes back, sliding. On the
     /// next turn of the run loop: a tab picked in the sidebar first has its screens follow it (`followSelectedTab`),
     /// so a narrow window's change to one pane moves the new tab's own chat, never pulls the old one back over Bots.
@@ -703,7 +755,12 @@ final class RootSplitController: UIViewController {
         if listWide != placedWide { AppLog.note("mac", listWide ? "page takes the whole width" : "list pane back beside the right pane") }
         view.setNeedsLayout()
         guard animated, view.window != nil, !HQMotion.reduced else { view.layoutIfNeeded(); return }
+        #if targetEnvironment(macCatalyst)
+        fadePanes()   // [mac-feel] one cross-fade: the list no longer pops out while the chat's edge glides over cut-off rows
+        UIView.performWithoutAnimation { view.layoutIfNeeded() }
+        #else
         HQMotion.animate(0.22, options: [.curveEaseInOut, .beginFromCurrentState], changes: { self.view.layoutIfNeeded() })
+        #endif
     }
 
     /// [mac] Stress test 2026-10-28 #62: the right pane follows the tab picked in the sidebar (or with ⌘1…⌘5), as a Mac
@@ -713,6 +770,7 @@ final class RootSplitController: UIViewController {
     /// shows the placeholder. Only a person's tab switch: code that selects a tab and then opens something keeps D7.
     func followSelectedTab() {
         guard isDouble else { return }
+        fadePanes()   // [mac-feel] a place cross-fades as a chat picked from a list does (`show`), instead of cutting
         let stacks = tabs.placedTabs.compactMap { $0 as? UINavigationController }
         let selected = tabs.selectedViewController as? UINavigationController
         if !detailIsEmpty, let origin, origin !== selected, stacks.contains(where: { $0 === origin }) {

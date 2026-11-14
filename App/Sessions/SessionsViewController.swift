@@ -1671,6 +1671,7 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
 
     /// Pushes the chat screen for `model` (a listed chat's, or a new chat's that makes its session as it opens).
     func openChat(model: any ChatSessionModel, fresh: Bool = false) {
+        ChatViewController.dropHeldPush()   // [mac-feel] the Mac opens the newest pick; a chat still held gives way
         guard let navigation = navigationController, !opening else { return }
         Haptics.play(.soft)
         bringListToFront(navigation, always: fresh)

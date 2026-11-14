@@ -29,9 +29,25 @@ import UIKit
     static var insets: NSDirectionalEdgeInsets { DesktopRows.pressInset }
     static var radius: CGFloat { Theme.isDesktop ? DesktopRows.radius : 8 }
 
+    /// [sidebar-intent] Whether the window is the one in front. Behind another window (or another app) its one accent
+    /// mark stayed as bright as in front, the loudest thing on a screen it no longer had; a Mac's source lists go
+    /// grey there. The sidebar hears the change (`MacSidebar`, the window's active-appearance trait) and says so here.
+    private(set) static var windowActive = true
+
+    static func windowActive(_ active: Bool) {
+        guard active != windowActive else { return }
+        windowActive = active
+        guard let split = KeyCommands.root?.split, split.isViewLoaded else { return }
+        split.macSidebar.focusChanged()
+        refresh(split.tabs.view)
+    }
+
+    /// The pane whose mark is the accent: the one the last click landed in, while the window is in front.
+    static func emphasized(_ pane: Pane) -> Bool { windowActive && focus == pane }
+
     /// The fill for a row: nil at rest.
     static func fill(selected: Bool, pressed: Bool, in pane: Pane) -> UIColor? {
-        if selected { return focus == pane ? accent : grey }
+        if selected { return emphasized(pane) ? accent : grey }
         return pressed ? grey : nil
     }
 
@@ -91,7 +107,7 @@ import UIKit
         var background = cell.defaultBackgroundConfiguration()
         guard let fill else { return background }
         // [mac] Stress test 2026-10-28 round 7: selected without the focus, the card is the Mac's unemphasized grey.
-        if state.isSelected, focus != .list {
+        if state.isSelected, !emphasized(.list) {
             background.backgroundColor = unemphasized
             return background
         }

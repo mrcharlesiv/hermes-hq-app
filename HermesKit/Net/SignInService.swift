@@ -89,7 +89,7 @@ import UIKit
 
     /// Sign in with Nous in the system sheet, presented over `anchor`.
     func signInWithNous(address: String, anchor: UIWindow?, label: String? = nil, access: CloudflareAccess? = nil) async throws -> GatewayAccount {
-        // [cf-access] The sheet's first page is the gateway's own: it carries the token too (`WebAuthBrowser.headers`).
+        // [cf-access] A saved service token opens the access web view, which sends it on every visit to the gateway.
         try await signInWithNous(address: address,
                                  browser: WebAuthBrowser(anchor: anchor, isPrivate: NousSheetLogin.isPrivate, headers: access?.headers ?? [:]),
                                  label: label, access: access)

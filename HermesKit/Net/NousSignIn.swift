@@ -23,15 +23,17 @@ import UIKit
 /// at 1.72 s).
 @MainActor final class WebAuthBrowser: NSObject, NousBrowser {
     private var session: NSObject?
+    private var cloudflare: CloudflareSignInController?
+    private weak var window: UIWindow?
     private let provider: WebAuthAnchorProvider
     /// [nous-different-account] Starts with none of Safari's saved logins (`NousSheetLogin`).
     private let isPrivate: Bool
-    /// [cf-access] The gateway's Cloudflare Access token: the sheet's first page is the gateway's own
-    /// `/auth/native/authorize`, which Access would otherwise answer with its own sign-in. Access then keeps the
-    /// sheet's later visits to the gateway signed in with the cookie it sets on that first answer.
+    /// [cf-access] The gateway's Cloudflare Access service token, sent on every visit to that gateway (`CloudflareSignIn`).
+    /// Empty for an ordinary sign-in, which stays in the system sheet.
     private let headers: [String: String]
 
     init(anchor: UIWindow?, isPrivate: Bool = false, headers: [String: String] = [:]) {
+        window = anchor
         provider = WebAuthAnchorProvider(anchor: anchor)
         self.isPrivate = isPrivate
         self.headers = headers
@@ -39,6 +41,7 @@ import UIKit
     }
 
     func open(_ url: URL, userCancelled: @escaping @MainActor () -> Void) -> Bool {
+        if CloudflareSignIn.needsWebView(headers) { return openCloudflare(url, userCancelled: userCancelled) }
         // Explicitly @Sendable (not main-actor): AuthenticationServices doesn't say which queue runs the handler, so a
         // main-actor closure would trip Swift 6's isolation check when it runs elsewhere. It hops to the main actor.
         let handler: @convention(block) @Sendable (NSURL?, NSError?) -> Void = { _, error in
@@ -50,17 +53,32 @@ import UIKit
         // Safari's cookies are shared, so a phone already signed in to Nous Portal isn't asked again. A private sheet
         // keeps none, so Nous asks who you are.
         session.setValue(isPrivate, forKey: "prefersEphemeralWebBrowserSession")
-        if !headers.isEmpty, session.responds(to: NSSelectorFromString("setAdditionalHeaderFields:")) {
-            session.setValue(headers, forKey: "additionalHeaderFields")
-        }
         AppLog.trace("auth", "sign-in sheet opened (\(isPrivate ? "private" : "shared"))")
         self.session = session
         return WebAuthRuntime.start(session)
     }
 
+    /// [cf-access] The system sheet cannot carry a service token past its first request. Fail closed when there is
+    /// nowhere to present the view: falling through to that sheet is what Access answers with 401.
+    private func openCloudflare(_ url: URL, userCancelled: @escaping @MainActor () -> Void) -> Bool {
+        guard let root = window?.rootViewController else { return false }
+        var top = root
+        while let next = top.presentedViewController, !next.isBeingDismissed { top = next }
+        let sheet = CloudflareSignInController(start: url, headers: headers, isPrivate: isPrivate, onCancel: userCancelled)
+        let nav = UINavigationController(rootViewController: sheet)
+        nav.modalPresentationStyle = .fullScreen
+        nav.isModalInPresentation = true
+        cloudflare = sheet
+        top.present(nav, animated: true)
+        AppLog.trace("auth", "access sign-in sheet opened (\(isPrivate ? "private" : "shared"))")
+        return true
+    }
+
     func close() {
         if let session { WebAuthRuntime.cancel(session) }
         session = nil
+        cloudflare?.close()
+        cloudflare = nil
     }
 }
 

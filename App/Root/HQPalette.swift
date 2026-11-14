@@ -172,10 +172,20 @@ enum ListBarAppearance {
             // list's were solid, so the two pane headers never matched. Owner 2026-11-01: the phone's tabs too, so a
             // tab's bar and a pushed page's are the same in the look.
             for bar in [rest, scrolled] { DesktopFrost.barAppearance(bar, color: grouped ? HQPalette.groupedPage : HQPalette.page) }
+            #if targetEnvironment(macCatalyst)
+            // [Mac UI check 2026-11-13] V17, owner: "Unify". On the Mac a list column's title (Sessions, Jobs, More) is
+            // a page title like every other place's, bold at the left (`MacType.pageTitle`, the look's own face), not
+            // the small capital label. Before the appearances are set: the item keeps copies.
+            macTitle(rest, scrolled)
+            #endif
             item.scrollEdgeAppearance = rest
             item.standardAppearance = scrolled
             item.compactAppearance = scrolled
             item.compactScrollEdgeAppearance = rest
+            #if targetEnvironment(macCatalyst)
+            dropLookTitle(item)   // V17: the plain title, not BOTS, SESSIONS
+            return
+            #else
             // [desktoplook2] A tab root's title as the desktop's label: BOTS, SESSIONS (phone-ui-desktop.css:174-178).
             // The plain title is kept beside the label: clearing the label later wipes `title` too (owner, build 306:
             // Desktop Look off and on again left the tab with no title at all).
@@ -185,6 +195,7 @@ enum ListBarAppearance {
                 objc_setAssociatedObject(item, &lookTitleKey, title, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
             }
             return
+            #endif
         }
         // [desktoplook2] Only a title the look set is cleared: the getter answers non-nil for a plain title, and nil-ing it wipes the title.
         if let plain = objc_getAssociatedObject(item, &lookTitleKey) as? String {
@@ -269,6 +280,9 @@ enum ListBarAppearance {
         for appearance in appearances {
             appearance.titleTextAttributes[.font] = MacType.pageTitle   // [mac] Stress test 2026-10-28 #52
             appearance.largeTitleTextAttributes[.font] = MacType.pageTitle
+            // [Mac UI check 2026-11-13] The label colour, as `MacPlaceTitle`'s titles (the look's own ink).
+            appearance.titleTextAttributes[.foregroundColor] = HQPalette.label
+            appearance.largeTitleTextAttributes[.foregroundColor] = HQPalette.label
         }
         #endif
     }

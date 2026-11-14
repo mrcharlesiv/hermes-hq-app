@@ -313,6 +313,8 @@ import UIKit
     }
 
     func layout() {
+        // [Mac UI check 2026-11-13] L8: the jump button stands above the strip while it shows (it sat on "Reading aloud").
+        screen?.activity.jumpLift = strip.isHidden ? 0 : ReadAloudStrip.height + 8
         guard let screen, !strip.isHidden else { return }
         let width = min(screen.view.bounds.width - 32, strip.fittingWidth)
         strip.frame = CGRect(x: ((screen.view.bounds.width - width) / 2).rounded(), y: stripBase - ReadAloudStrip.height - 4,

@@ -15,6 +15,8 @@ import UIKit
     struct Section: Equatable {
         var title: String
         var rows: [Row]
+        /// A line under the section (the Terminal's: what View's text size keys do while it is in front).
+        var footer: String? = nil
     }
 
     /// The menus' key commands as they read now; a command `validate` hides (a ⌘6 with no sixth place) is left out.
@@ -38,10 +40,15 @@ import UIKit
         for (title, elements) in menus {
             var section = Section(title: title, rows: [])
             for command in collect(elements) {
+                let original = command.title
                 delegate?.validate(command)
-                guard !command.attributes.contains(.hidden), let input = command.input else { continue }
+                // [keys] Mac UI check 2026-11-13 (K8): ⌘W and ⇧⌘W are listed under their own names whatever is on show;
+                // `validate` hides ⇧⌘W while ⌘W itself reads Close Window (always so in the Settings window), and the
+                // list opened there lost the row.
+                let closing = command.action == KeyCommands.closeChat || command.action == KeyCommands.closeWindow
+                guard closing || !command.attributes.contains(.hidden), let input = command.input else { continue }
                 // Escape's item is named for what it would do this moment (with this sheet up, "Close"); here, all of it.
-                let name = command.action == KeyCommands.escape ? "Stop Reply, Close or Go Back" : command.title
+                let name = command.action == KeyCommands.escape ? "Stop Reply, Close or Go Back" : closing ? original : command.title
                 // One action under one name (the tabs share theirs, told apart by their place).
                 if command.propertyList == nil, let action = command.action { place[action] = (out.count, section.rows.count) }
                 section.rows.append(Row(title: name, keys: [keyName(input, command.modifierFlags)]))
@@ -53,8 +60,20 @@ import UIKit
             guard let action = command.action, let at = place[action], let input = command.input else { continue }
             out[at.section].rows[at.row].keys.append(keyName(input, command.modifierFlags))
         }
+        // Only while this gateway has a Terminal (the sidebar's Tool).
+        if KeyCommands.root?.placedTabs.contains(where: { $0.tabBarItem.accessibilityIdentifier == "tab-page-terminal" }) == true {
+            out.append(terminal)
+        }
         return out
     }
+
+    /// [keys] Mac UI check 2026-11-13 (K7): the Terminal's own keys (`TerminalViewController.tabCommands`, offered
+    /// while it is in front, so in no menu), and what View's text size keys do there.
+    static let terminal = Section(title: "Terminal", rows: [
+        Row(title: "New Tab", keys: [keyName("t", .command)]),
+        Row(title: "Show Next Tab", keys: [keyName("]", [.command, .shift])]),
+        Row(title: "Show Previous Tab", keys: [keyName("[", [.command, .shift])]),
+    ], footer: "While the Terminal is in front, Make Text Bigger, Actual Size and Make Text Smaller (⌘+ ⌘0 ⌘-) size its text, not the app’s.")
 
     /// A key as the menu bar draws it: ⌃⌥⇧⌘ then the key ("⇧⌘F", "⌘↩", "⎋").
     static func keyName(_ input: String, _ flags: UIKeyModifierFlags) -> String {
@@ -131,6 +150,18 @@ private final class KeyShortcutsList: UITableViewController {
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { sections[section].rows.count }
 
     override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? { sections[section].title }
+
+    override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? { sections[section].footer }
+
+    /// The footer in the look's secondary words, as the sheets' other notes.
+    override func tableView(_ tableView: UITableView, willDisplayFooterView view: UIView, forSection section: Int) {
+        guard let footer = view as? UITableViewHeaderFooterView, let text = sections[section].footer else { return }
+        var content = UIListContentConfiguration.footer().hqScaled()
+        content.text = text
+        content.textProperties.font = HQFont.preferred(.footnote)
+        content.textProperties.color = HQPalette.label2
+        footer.contentConfiguration = content
+    }
 
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "key", for: indexPath)

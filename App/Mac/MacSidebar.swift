@@ -143,12 +143,10 @@ final class MacSidebar: UIView {
     static let inset: CGFloat = 10
     /// Clear of the window's close, minimise and zoom buttons, which sit over the top-left corner.
     static let topRoom: CGFloat = 60
-    /// [rail-top] Where the rows' scroll view starts: just inside the glass panel's top, with the rest of `topRoom` as
-    /// its content inset. Both from the sidebar's own top, not its safe area: the Mac's safe area starts 41 pt down (the
-    /// window's title strip), so the rows were clipped 49 pt under the panel's top, an empty dark band above the top head
-    /// (owner 2026-11-03: "there is black bar that prevents it"). 8 pt in, the rows clear the panel's round corners.
-    static let scrollTopEdge: CGFloat = glassTop + 8
-    static var scrollTopInset: CGFloat { topRoom - scrollTopEdge }
+    /// [rail-top] Search and New Chat start `topRoom` down from the sidebar's own top, not its safe area: the Mac's safe
+    /// area starts 41 pt down (the window's title strip), which left an empty dark band above the top head (owner
+    /// 2026-11-03: "there is black bar that prevents it"). [Mac UI check 2026-11-13] They no longer scroll: the rows'
+    /// list starts under them (`toolsTop`).
 
     private weak var tabs: MainTabController?
     /// [mac-sidebar] The rows scroll once there are more than the window's height holds.
@@ -162,6 +160,10 @@ final class MacSidebar: UIView {
     /// rows were drawn over each other.
     private let footScroll = UIScrollView()
     private var botsRoom: NSLayoutConstraint!
+    /// The foot's line, fixed between the two lists: the foot's rows scroll under it, not the line with them (a
+    /// sliver of Sessions showed under New Bot with no line once the foot had scrolled).
+    private let footEdge = UIView()
+    private var footEdgeHeight: NSLayoutConstraint!
     private var footBottom: NSLayoutConstraint!
     private var heads: [String: MacRailHead] = [:]
     /// [chats-under] The chats under the bot rows (and their "N more"), by bot id + U+001F + session id (or "more").
@@ -178,7 +180,8 @@ final class MacSidebar: UIView {
     /// [rail-more] The gateway switcher at the rail's top (more than one gateway), and its watch on the gateways.
     private var railGateway: MacRailGateway?
     private var gatewayWatch: (token: UUID, gateways: any GatewayAccounts)?
-    private var scrollTop: NSLayoutConstraint!
+    /// Where Search and New Chat sit: `topRoom` down, or under the rail's gateway switcher (`placeRailGateway`).
+    private var toolsTop: NSLayoutConstraint?
     private var badgeWatch: [NSKeyValueObservation] = []
     /// [sidebar-light] The watch on the panes beside the strip (`neighbourMayChange`).
     private var neighbourToken: NSObjectProtocol?
@@ -266,8 +269,6 @@ final class MacSidebar: UIView {
         scroll.showsVerticalScrollIndicator = false
         scroll.alwaysBounceVertical = false
         scroll.contentInsetAdjustmentBehavior = .never
-        scroll.contentInset.top = Self.scrollTopInset   // [rail-top]
-        scroll.contentOffset.y = -Self.scrollTopInset
         // [rail-top] No scroll edge effect: on the Mac's dark glass its fade read as a black band over the top row.
         scroll.topEdgeEffect.isHidden = true
         scroll.bottomEdgeEffect.isHidden = true
@@ -307,6 +308,10 @@ final class MacSidebar: UIView {
         addSubview(glass)
         addSubview(scroll)
         addSubview(footScroll)
+        footEdge.translatesAutoresizingMaskIntoConstraints = false
+        footEdge.isUserInteractionEnabled = false
+        footEdge.clipsToBounds = true
+        addSubview(footEdge)
         edge.isUserInteractionEnabled = false
         edge.translatesAutoresizingMaskIntoConstraints = false
         addSubview(edge)
@@ -367,7 +372,6 @@ final class MacSidebar: UIView {
         // [mac-audit #12] Owner 2026-11-02: one pixel of the window's own display (traitCollection), not the main
         // screen's: a Mac window on a 1x external display next to a 2x built-in one drew a blurred two-pixel line.
         edgeWidth = edge.widthAnchor.constraint(equalToConstant: 1 / max(1, traitCollection.displayScale))
-        scrollTop = scroll.topAnchor.constraint(equalTo: topAnchor, constant: Self.scrollTopEdge)
         footBottom = footScroll.bottomAnchor.constraint(equalTo: toggle.topAnchor, constant: -6)
         // The gear: beside the + open, centred above the toggle folded (the foot's rows then end above the gear).
         settingsBesideAdd = [settingsButton.trailingAnchor.constraint(equalTo: addButton.leadingAnchor, constant: -2),
@@ -381,12 +385,15 @@ final class MacSidebar: UIView {
         footWhole.priority = .defaultHigh
         botsRoom = scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 0)
         botsRoom.priority = .required - 1
+        footEdgeHeight = footEdge.heightAnchor.constraint(equalToConstant: 0)
         NSLayoutConstraint.activate([
-            footBottom,
+            footBottom, footEdgeHeight,
             toggleBottom, stackLeading, stackTrailing, addTrailing,
             addButton.centerYAnchor.constraint(equalTo: toggle.centerYAnchor),
-            scrollTop,
-            scroll.bottomAnchor.constraint(equalTo: footScroll.topAnchor),
+            scroll.bottomAnchor.constraint(equalTo: footEdge.topAnchor),
+            footEdge.bottomAnchor.constraint(equalTo: footScroll.topAnchor),
+            footEdge.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
+            footEdge.trailingAnchor.constraint(equalTo: scroll.trailingAnchor),
             footScroll.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
             footScroll.trailingAnchor.constraint(equalTo: scroll.trailingAnchor),
             footScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 0),
@@ -469,9 +476,18 @@ final class MacSidebar: UIView {
         // [mac-layout] Owner 2026-11-03 (the layout study): Search and New Chat first, then the places, then the bots, in
         // both widths: nothing that matters at the bottom corner (Apple: "avoid putting critical information or actions
         // at the bottom of a sidebar").
+        // [Mac UI check 2026-11-13] Search and New Chat stay put over the bots' list, not as its first row: revealing a
+        // low bot or group chat scrolled them half off the top (Mac polish #27 only kept the foot's offset off this list).
+        self.tools?.removeFromSuperview()
         let tools = MacSidebarTools(folded: folded, named: named)
+        tools.translatesAutoresizingMaskIntoConstraints = false
         self.tools = tools
-        stack.addArrangedSubview(tools)
+        addSubview(tools)
+        NSLayoutConstraint.activate([
+            tools.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
+            tools.trailingAnchor.constraint(equalTo: scroll.trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: tools.bottomAnchor, constant: stack.spacing),
+        ])
         var placeRows: [Row] = []
         var toolRows: [Row] = []
         let places = tabs.placedTabs   // [mac-sidebar] every place, the ones the tab controller doesn't hold now too
@@ -522,13 +538,24 @@ final class MacSidebar: UIView {
         // Bot). Owner: "Won't that kind of feel chaotic?" It did: the places moved with every bot added, group folded
         // or chat listed, and scrolled out of sight under a long roster. They stay pinned at the foot.
         let nav = showsBots ? foot : stack
+        footEdge.subviews.forEach { $0.removeFromSuperview() }
+        footEdgeHeight.constant = 0
         if showsBots {
             let gap = UIView()
             gap.heightAnchor.constraint(equalToConstant: folded ? 4 : 6).isActive = true
             stack.addArrangedSubview(gap)
             stack.addArrangedSubview(botsStack)
-            // A faint line, so the fixed foot reads apart from the list that scrolls above it.
-            foot.addArrangedSubview(MacRailLine(wide: !folded))
+            // A faint line, so the fixed foot reads apart from the list that scrolls above it. [Mac UI check
+            // 2026-11-13] Fixed between the lists (`footEdge`), so the foot's rows scroll under it.
+            let line = MacRailLine(wide: !folded)
+            line.translatesAutoresizingMaskIntoConstraints = false
+            footEdge.addSubview(line)
+            NSLayoutConstraint.activate([
+                line.topAnchor.constraint(equalTo: footEdge.topAnchor),
+                line.leadingAnchor.constraint(equalTo: footEdge.leadingAnchor),
+                line.trailingAnchor.constraint(equalTo: footEdge.trailingAnchor),
+            ])
+            footEdgeHeight.constant = 9 + foot.spacing   // MacRailLine's own height and the gap it had in the foot
         }
         placeRows.forEach { nav.addArrangedSubview($0) }
         addTools(toolRows, folded: folded, into: nav)
@@ -579,7 +606,7 @@ final class MacSidebar: UIView {
         let gap = UIView()
         gap.heightAnchor.constraint(equalToConstant: 6).isActive = true
         stack.addArrangedSubview(gap)
-        let heading = MacSidebarHeading(title: "Tools") { [weak self] in self?.rebuild() }
+        let heading = MacSidebarHeading(title: "Tools", key: "tools") { [weak self] in self?.rebuild() }
         stack.addArrangedSubview(heading)
         toolRows.forEach { $0.isHidden = heading.isFolded; stack.addArrangedSubview($0) }
     }
@@ -599,7 +626,6 @@ final class MacSidebar: UIView {
         // [mac] Show Hidden Bots (the right click): a Hidden group last, open sidebar or rail.
         let groups = MacBotsRail.titledGroups(bots.railSections(), showHidden: bots.railShowsHidden)
             .filter { open || !$0.items.isEmpty }   // the rail draws no empty section (no heading to carry it)
-        let folded = MacSidebarHeading.folded
         // [chats-under] Open, each bot's chats under its row, as Filter › Chats Under Bots lists them in the Bots list
         // (the rail's heads have no room for them).
         let chats = open ? bots.railChats(for: groups.flatMap { $0.items.compactMap { $0.item.bot?.id } }) : [:]
@@ -615,14 +641,16 @@ final class MacSidebar: UIView {
                 if index > 0 { arranged.append(MacRailLine(wide: true)); signature.append("|") }
             } else if open {
                 // [mac-layout] Open: each group under its heading (Pinned, a section, Bots), which folds it away.
-                let heading = MacSidebarHeading(title: group.title) { [weak self] in self?.botsSignature = ""; self?.botsChanged() }
+                let heading = MacSidebarHeading(title: group.title, key: MacSidebarHeading.key(for: group.block)) { [weak self] in
+                    self?.botsSignature = ""; self?.botsChanged()
+                }
                 if case .user(let id) = group.block {
                     // [mac] A section's heading has the list's section menu on its right click (Rename…, Move, Delete).
                     heading.sectionId = id
                     heading.addInteraction(UIContextMenuInteraction(delegate: self))
                 }
                 arranged.append(heading)
-                signature.append("#\(group.title)\(heading.isFolded ? "-" : "+")")
+                signature.append("#\(heading.key)\(group.title)\(heading.isFolded ? "-" : "+")")
                 if heading.isFolded { continue }
                 if group.items.isEmpty, case .user(let id) = group.block {
                     // [mac] An empty section stays, with the list's hint, and takes a dragged bot (`railLanding`).
@@ -712,6 +740,8 @@ final class MacSidebar: UIView {
                 tabs.botsViewController.openAllChats(of: row.bot)
             }
         }, for: .touchUpInside)
+        // [Mac UI check 2026-11-13] Its own right click: the chat's menu as Sessions has it (`contextMenuInteraction`).
+        row.addInteraction(UIContextMenuInteraction(delegate: self))
         return row
     }
 
@@ -777,12 +807,47 @@ final class MacSidebar: UIView {
     /// Scrolls the list that holds `view` (the bots' or the foot's) so it shows clear of the list's fading edges.
     /// Mac polish #27: a place in the foot was measured in the foot and scrolled the bots' list by its offset there,
     /// pushing Search half off the top.
+    /// [Mac UI check 2026-11-13] It stops on whole rows: the row past `view` shows whole (faded, as more to scroll to),
+    /// not cut in half on the list's edge ("+ New Bot" struck through by the foot's line, a sliver of Jobs under it).
     private func reveal(_ view: UIView) {
         let lists: [UIScrollView] = [scroll, footScroll]
         guard !view.isHidden, let list = lists.first(where: { view.isDescendant(of: $0) }),
               list.contentSize.height > list.bounds.height + 1 else { return }
         list.layoutIfNeeded()
-        list.scrollRectToVisible(view.convert(view.bounds, to: list).insetBy(dx: 0, dy: -Self.fadeHeight), animated: false)
+        let frame = view.convert(view.bounds, to: list)
+        let top = list.contentOffset.y, height = list.bounds.height
+        let least = -list.contentInset.top
+        let most = max(least, list.contentSize.height + list.contentInset.bottom - height)
+        let rows = rowFrames(in: list)
+        var target: CGFloat
+        if frame.minY - Self.fadeHeight < top {
+            // Above: the row before it shows whole at the top (the list's own top when that is the first row).
+            let before = rows.last { $0.maxY <= frame.minY + 0.5 }
+            target = before.map { before in before.minY <= rows.first!.minY + 0.5 ? least : before.minY } ?? least
+        } else if frame.maxY + Self.fadeHeight > top + height {
+            // Below: the row after it ends on the list's foot (the list's own end when that is the last row).
+            let after = rows.first { $0.minY >= frame.maxY - 0.5 }
+            target = after.map { after in after.maxY >= rows.last!.maxY - 0.5 ? most : after.maxY - height } ?? most
+        } else {
+            return
+        }
+        target = min(max(target, least), most)
+        if abs(target - top) > 0.5 { list.setContentOffset(CGPoint(x: 0, y: target), animated: false) }
+    }
+
+    /// The rows on show in `list` (its content's points, top to bottom): a bot's or group's rows, the places and Tools;
+    /// not the thin gaps between them.
+    private func rowFrames(in list: UIScrollView) -> [CGRect] {
+        let container: UIStackView = list === footScroll ? foot : stack
+        let views = container.arrangedSubviews.flatMap { $0 === botsStack ? botsStack.arrangedSubviews : [$0] }
+        return views.filter { !$0.isHidden && $0.bounds.height >= 12 }.map { $0.convert($0.bounds, to: list) }
+    }
+
+    /// [Mac UI check 2026-11-13] The foot back at its top (Sessions and Jobs in view) once what is on show isn't one
+    /// of its lower rows: a low Tool picked once left the places scrolled away under New Bot from then on.
+    private func footBackToTop() {
+        guard footScroll.contentOffset.y > -footScroll.contentInset.top + 0.5 else { return }
+        footScroll.setContentOffset(CGPoint(x: 0, y: -footScroll.contentInset.top), animated: false)
     }
 
     /// Mac polish #5: the least the bots' list keeps in a short window (Search and New Chat, a heading and two bots;
@@ -814,15 +879,12 @@ final class MacSidebar: UIView {
             ])
             railGateway = button
         }
-        scrollTop.isActive = false
-        scrollTop = railGateway.map { scroll.topAnchor.constraint(equalTo: $0.bottomAnchor, constant: 4) }
-            ?? scroll.topAnchor.constraint(equalTo: topAnchor, constant: Self.scrollTopEdge)
-        scrollTop.isActive = true
-        // [rail-top] Under the gateway switcher the rows start right under it; else the inset keeps them at `topRoom`.
-        let inset = railGateway == nil ? Self.scrollTopInset : 0
-        if scroll.contentInset.top != inset {
-            scroll.contentInset.top = inset
-            if scroll.contentOffset.y <= 0 { scroll.contentOffset.y = -inset }   // at the top, it stays at the top
+        // [rail-top] Search and New Chat (and the rows under them) start right under the switcher; else at `topRoom`.
+        toolsTop?.isActive = false
+        if let tools {
+            toolsTop = railGateway.map { tools.topAnchor.constraint(equalTo: $0.bottomAnchor, constant: 4) }
+                ?? tools.topAnchor.constraint(equalTo: topAnchor, constant: Self.topRoom)
+            toolsTop?.isActive = true
         }
         gatewaysChanged()
     }
@@ -1119,8 +1181,10 @@ final class MacSidebar: UIView {
         markHeads()   // [bots-rail] a head is marked only while Bots is on show
         // [mac-sidebar] A place picked by ⌘9 or a link, below the fold of a long list, scrolls into view (in its own list:
         // Mac polish #27). A Tool on the folded rail is its Tools button.
-        if let marked = rows.first(where: { $0.isMarked && !$0.isHidden }) ?? foldedTools.flatMap({ $0.isMarked ? $0 : nil }) {
-            reveal(marked)
+        let marked = rows.first(where: { $0.isMarked && !$0.isHidden }) ?? foldedTools.flatMap({ $0.isMarked ? $0 : nil })
+        if let marked, marked.isDescendant(of: footScroll) { reveal(marked) } else {
+            footBackToTop()   // [Mac UI check 2026-11-13] V27
+            if let marked { reveal(marked) }
         }
     }
 
@@ -1147,7 +1211,13 @@ final class MacSidebar: UIView {
         // half the sidebar; the places and Tools scroll in what is left.
         if showsBots {
             let content = stack.bounds.height + scroll.contentInset.top + scroll.contentInset.bottom
-            let room = max(Self.botsMinHeight, min(content, (bounds.height * 0.5).rounded()))
+            // [Mac UI check 2026-11-13] The least and the half were measured with Search and New Chat inside the list,
+            // which started just under the panel's top (or the gateway switcher). Now that they sit above it, the
+            // list takes that much less, so the foot keeps the room it had (the folded rail in a short window lost
+            // its Tools button to the bots' list, and "+" showed where it hadn't).
+            let startedAt = railGateway.map { $0.frame.maxY + 4 } ?? Self.glassTop + 8
+            let lead = max(0, (tools?.frame.maxY ?? startedAt) + stack.spacing - startedAt)
+            let room = max(Self.botsMinHeight - lead, min(content, (bounds.height * 0.5).rounded() - lead))
             if abs(botsRoom.constant - room) > 0.5 { botsRoom.constant = room }
         }
         placeFade()
@@ -1252,7 +1322,7 @@ final class MacSidebar: UIView {
         heads.values.forEach { $0.recolor() }   // [bots-rail]
         chatRows.values.forEach { $0.recolor() }   // [chats-under]
         railAdd?.recolor()
-        (stack.arrangedSubviews + botsStack.arrangedSubviews + foot.arrangedSubviews).compactMap { $0 as? MacRailLine }.forEach { $0.recolor() }
+        (stack.arrangedSubviews + botsStack.arrangedSubviews + foot.arrangedSubviews + footEdge.subviews).compactMap { $0 as? MacRailLine }.forEach { $0.recolor() }
         botsStack.arrangedSubviews.compactMap { $0 as? MacSidebarHeading }.forEach { $0.recolor() }
         botsStack.arrangedSubviews.compactMap { $0 as? MacSidebarEmptyHint }.forEach { $0.recolor() }
         tools?.recolor()
@@ -1364,6 +1434,15 @@ extension MacSidebar: UIContextMenuInteractionDelegate, UIDragInteractionDelegat
         if let heading = interaction.view as? MacSidebarHeading, let id = heading.sectionId {
             return tabs?.botsViewController.organizer?.sectionContextMenu(id)
         }
+        // [Mac UI check 2026-11-13] A chat under its bot: that chat's own actions (Pin, Rename…, Move to Project,
+        // Archive, Delete…), the same menu its row in Sessions has. "N more" keeps the sidebar's menu.
+        if let chat = interaction.view as? MacSidebarChat, let session = chat.session {
+            guard let organizer = tabs?.sessionsViewController.organizer else { return nil }
+            return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak organizer, weak chat] _ in
+                guard let organizer, let chat else { return nil }
+                return organizer.uiMenu(for: session, anchor: chat)
+            }
+        }
         if let head = interaction.view as? MacRailHead {
             switch head.item {
             case .bot(let bot): return tabs?.botsViewController.organizer?.contextMenu(for: bot)
@@ -1465,13 +1544,24 @@ extension MacSidebar: UIContextMenuInteractionDelegate, UIDragInteractionDelegat
             return
         }
         guard let box = session.localDragSession?.items.first?.localObject as? SidebarEditing.DragBox, let gap = dropGap(session) else { return }
-        let placed = rows.compactMap { $0.controller.flatMap { TabChoice(tag: $0.tabBarItem.tag) } }
+        let placed = dropRows.compactMap { $0.controller.flatMap { TabChoice(tag: $0.tabBarItem.tag) } }
         SidebarEditing.move(box.choice, before: gap < placed.count ? placed[gap] : nil)
+    }
+
+    /// The place rows a dragged place can land between: the ones on show that Settings › Tabs orders. Bots' row is
+    /// built but never shown here and the Tools keep their own order, so neither counts (with Bots first in the list,
+    /// its missing superview cancelled every drop).
+    private var dropRows: [Row] {
+        let order = TabOrder.tabs
+        return rows.filter { row in
+            guard row.superview != nil, !row.isTool, let choice = row.controller.flatMap({ TabChoice(tag: $0.tabBarItem.tag) }) else { return false }
+            return order.contains(choice)
+        }
     }
 
     /// The gap between Settings › Tabs places (More stays last) nearest the pointer: 0 above the first, n below the last.
     private func dropGap(_ session: UIDropSession) -> Int? {
-        let placed = rows.filter { $0.controller.flatMap { TabChoice(tag: $0.tabBarItem.tag) } != nil }
+        let placed = dropRows
         guard !placed.isEmpty else { return nil }
         guard let host = placed[0].superview else { return nil }
         let y = session.location(in: host).y   // the foot's stack, or the scrolling one
@@ -1479,7 +1569,7 @@ extension MacSidebar: UIContextMenuInteractionDelegate, UIDragInteractionDelegat
     }
 
     private func showDropLine(at gap: Int) {
-        let placed = rows.filter { $0.controller.flatMap { TabChoice(tag: $0.tabBarItem.tag) } != nil }
+        let placed = dropRows
         guard !placed.isEmpty else { return }
         guard let host = placed[0].superview as? UIStackView else { return }
         let y = gap < placed.count ? placed[gap].frame.minY - host.spacing / 2 : placed[placed.count - 1].frame.maxY + host.spacing / 2

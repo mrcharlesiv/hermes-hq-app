@@ -29,8 +29,8 @@ import UIKit
     }
 
     @Test func keyCounts() {
-        #expect(PasswordsLayout.setCount([]) == "None Set")
-        #expect(PasswordsLayout.setCount([EnvVarInfo(key: "A", isSet: true), EnvVarInfo(key: "B"), EnvVarInfo(key: "C", isSet: true)]) == "2 Set")
+        #expect(PasswordsLayout.setCount([]) == "None saved")
+        #expect(PasswordsLayout.setCount([EnvVarInfo(key: "A", isSet: true), EnvVarInfo(key: "B"), EnvVarInfo(key: "C", isSet: true)]) == "2 saved")
     }
 
     @Test func everyKindHasARealSymbolAndTheRowCanBeATab() {

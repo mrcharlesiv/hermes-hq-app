@@ -229,6 +229,9 @@ final class PluginCatalogEntryController: UIHostingController<HQScaledRoot<Plugi
 
     @MainActor required dynamic init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
+    /// [Mac UI check 2026-11-13] Beside the store front: its Install To is the one shown.
+    func installToBeside() { page.installToBeside = true }
+
     private var page: PluginCatalogEntryModel!
     private var router: SettingsRouter!
     private var installOnAppear = false
@@ -251,6 +254,9 @@ final class PluginCatalogEntryModel {
     let entry: PluginCatalogEntry
     /// [marketplace] The bot in Install To (the page's own picker changes it).
     var profile: String { parent.profile }
+    /// [Mac UI check 2026-11-13] Shown beside the Mac's store front, whose own Install To pop-up is in sight: the page
+    /// doesn't offer a second one.
+    var installToBeside = false
     var installing = false
     var error: String?
     var uncertain = false
@@ -494,7 +500,7 @@ struct PluginCatalogEntryView: View {
     // [marketplace] Install To stands in its own card: in the same section as the clear button row, the card ended
     // half-drawn with Desktop Look off.
     @ViewBuilder private var installSection: some View {
-        if page.parent.bots.count > 1 {
+        if page.parent.bots.count > 1, !page.installToBeside {
             Section { MarketplaceInstallTo(model: page.parent).disabled(page.installing) }
         }
         Section {

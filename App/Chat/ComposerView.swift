@@ -887,6 +887,9 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboa
     }
 
     func textViewDidBeginEditing(_ textView: UITextView) {
+        #if targetEnvironment(macCatalyst)
+        ChatTextSelector.putAwayActive()   // [Mac UI check 2026-11-13] V21: one selection at a time
+        #endif
         if Self.oneBox { setNeedsLayout() }   // [desktoplook2] focus ring
         refitAtAccessibilitySizes()
         if expanded { refreshModelChip() }   // the catalog may have named the model better since
@@ -1052,7 +1055,13 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboa
     // MARK: Text
 
     func textViewDidChange(_ textView: UITextView) { textChanged() }
-    func textViewDidChangeSelection(_ textView: UITextView) { onDrawerInput?() }   // [composer-drawers]
+    func textViewDidChangeSelection(_ textView: UITextView) {
+        #if targetEnvironment(macCatalyst)
+        // [Mac UI check 2026-11-13] V21: a click that moves the caret in a focused box puts a bubble's selection away too.
+        if textView.isFirstResponder { ChatTextSelector.putAwayActive() }
+        #endif
+        onDrawerInput?()   // [composer-drawers]
+    }
 
     private func textChanged() {
         // [m9/composer] A field holding nothing but leftover line breaks is blank again: the placeholder shows and Send

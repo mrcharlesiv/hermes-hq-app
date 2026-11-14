@@ -64,12 +64,13 @@ enum NewTileSheet {
         let host = NewTileHostController(model: model)
         let nav = ChatSheet.wrap(host, title: "New Tile")
         host.installClose()
+        SheetEditGuard.install(on: nav)   // [Mac UI check 2026-11-13] typed words ask before Cancel, Escape or ⌘W drop them
         nav.sheetPresentationController?.selectedDetentIdentifier = .large
         return nav
     }
 }
 
-final class NewTileHostController: UIHostingController<HQScaledRoot<NewTileView>> {
+final class NewTileHostController: UIHostingController<HQScaledRoot<NewTileView>>, EditingPage {
     let model: NewTileModel
     private var makeItem: UIBarButtonItem!
 
@@ -91,8 +92,18 @@ final class NewTileHostController: UIHostingController<HQScaledRoot<NewTileView>
     override var canBecomeFirstResponder: Bool { true }
     @objc private func makeFromKeyboard() { model.make() }
 
+    /// [Mac UI check 2026-11-13] Words of your own ask before they go; an idea picked as it stands doesn't.
+    var hasChanges: Bool {
+        let what = model.what.pgTrim
+        return !what.isEmpty && !NewTileModel.ideas.contains { $0.words == what }
+    }
+
     func installClose() {
-        let close = UIBarButtonItem.hqClose(DeviceWord.isMac ? .cancel : .close, action: UIAction { [weak self] _ in self?.dismiss(animated: true) })
+        let close = UIBarButtonItem.hqClose(DeviceWord.isMac ? .cancel : .close, action: UIAction { [weak self] _ in
+            guard let self else { return }
+            self.view.endEditing(true)
+            self.confirmLeaving { [weak self] in self?.dismiss(animated: true) }
+        })
         close.accessibilityIdentifier = "sheet.close"
         navigationItem.hqPlaceFormClose(close)
     }
@@ -112,7 +123,10 @@ final class NewTileHostController: UIHostingController<HQScaledRoot<NewTileView>
         }
     }
 
-    private func updateMake() { makeItem.setProminentEnabled(model.canMake) }
+    private func updateMake() {
+        makeItem.setProminentEnabled(model.canMake)
+        if let navigation = navigationController { EditingGuard.refreshLock(navigation) }
+    }
 }
 
 struct NewTileView: View {

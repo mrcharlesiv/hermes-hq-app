@@ -55,6 +55,10 @@ enum KanbanTabOverride: String, CaseIterable, Identifiable {
     weak var navigation: UINavigationController?
     /// [mac] A chooser presented as a sheet (`openChooser`), while it is up.
     weak var chooserSheet: UINavigationController?
+    /// [Mac UI check 2026-11-13] Settings in two columns (`SettingsRootController`): a page of this category is about to
+    /// open from elsewhere (search, a deep link, a link on another page); the column marks it and the pane goes back to
+    /// its page first when another category was on show. Nil in one column.
+    var jump: ((SettingsCategory) -> Void)?
     let services: any AppServices
     var settings: (any SettingsServices)? { services as? SettingsServices }
 

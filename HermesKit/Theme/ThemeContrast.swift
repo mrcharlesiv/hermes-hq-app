@@ -16,7 +16,7 @@ nonisolated enum ThemeContrast {
     #else
     static let systemNote = "On while Increase Contrast is on in iOS Settings › Accessibility › Display & Text Size."
     #endif
-    static let skinNote = "This theme keeps its own colours when Increase Contrast is on in \(DeviceWord.settingsApp)."
+    static let skinNote = "This theme keeps its own colors when Increase Contrast is on in \(DeviceWord.settingsApp)."
 
     /// What the High Contrast switch's note adds: why it is on, when iOS turned it on.
     static func switchNote(_ state: ThemeState, increaseContrast: Bool) -> String? {

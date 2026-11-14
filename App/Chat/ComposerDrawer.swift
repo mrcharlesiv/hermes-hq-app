@@ -290,7 +290,8 @@ final class ComposerDrawerController: NSObject, UITableViewDataSource, UITableVi
             return ComposerDrawerModel.slashSections(text: text, catalog: catalog,
                                                      catalogLoading: catalog == nil && !catalogFailed, catalogFailed: catalogFailed,
                                                      isBotChat: host.isBotChat(),
-                                                     remote: remote, recent: host.recentChats(), favorites: host.favoriteCommands())
+                                                     remote: remote, recent: host.recentChats(), favorites: host.favoriteCommands(),
+                                                     starredOnce: DeviceWord.isMac)   // [Mac UI check 2026-11-13] V22
         case .skill(let word, let range):
             ensureCatalog()
             return ComposerDrawerModel.skillSections(word: word, range: range, catalog: catalog, isBotChat: host.isBotChat())
@@ -639,6 +640,13 @@ final class ComposerDrawerPanel: UIView, KeepsKeyboardOnTap {
     override init(frame: CGRect) {
         super.init(frame: frame)
         accessibilityIdentifier = "composer.drawer"
+        #if targetEnvironment(macCatalyst)
+        // [Mac UI check 2026-11-13] L9: a backing under the glass, so the chat's words don't read through the rows (the
+        // Desktop Look's flat box covers it).
+        backgroundColor = ChatPalette.popupVeil
+        layer.cornerRadius = 18
+        layer.cornerCurve = .continuous
+        #endif
         addSubview(glass)
         glass.translatesAutoresizingMaskIntoConstraints = false
         table.translatesAutoresizingMaskIntoConstraints = false

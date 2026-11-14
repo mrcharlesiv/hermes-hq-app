@@ -625,3 +625,8 @@ struct InstallNoticeRow: View {
         .accessibilityIdentifier("skill-install-progress-\(notice.name)")
     }
 }
+
+/// [Mac UI check 2026-11-13] ⌘R refreshes the list, as its pull and ⋯ › Refresh do (the Mac has no pull).
+extension CapabilitiesViewController: KeyRefreshing {
+    var keyRefresh: (() -> Void)? { { [weak self] in Task { await self?.model.refresh() } } }
+}

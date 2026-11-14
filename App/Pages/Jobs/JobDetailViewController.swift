@@ -619,3 +619,16 @@ private struct PromptBlock: View {
         return NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: HQPalette.label])
     }
 }
+
+/// [Mac UI check 2026-11-13] ⌘R reads the job and its runs again, as the pull does (the Mac has no pull).
+extension JobDetailViewController: KeyRefreshing {
+    var keyRefresh: (() -> Void)? {
+        { [weak self] in
+            guard let model = self?.model, let job = model.job else { return }
+            Task {
+                _ = await model.store.reload(job)
+                await model.loadRuns()
+            }
+        }
+    }
+}

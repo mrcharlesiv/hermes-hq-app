@@ -225,6 +225,17 @@ final class JumpButton: UIView {
 /// name, added at integration through `accessory`) and the name in 17 semibold (capped at 22).
 final class ChatTitleView: UIView {
     var onTap: (() -> Void)?
+    /// [Mac UI check 2026-11-13] V24: what a click on the title opens, shown when the pointer rests on it (the Mac's
+    /// sidebar buttons say theirs). Its words keep the window's own tip from naming it.
+    var tip: String? {
+        didSet {
+            guard tip != oldValue else { return }
+            if let tipInteraction { removeInteraction(tipInteraction) }
+            tipInteraction = tip.map { UIToolTipInteraction(defaultToolTip: $0) }
+            if let tipInteraction { addInteraction(tipInteraction) }
+        }
+    }
+    private var tipInteraction: UIToolTipInteraction?
     private let glass: UIVisualEffectView = {
         let effect = UIGlassEffect(style: .regular)
         effect.isInteractive = true

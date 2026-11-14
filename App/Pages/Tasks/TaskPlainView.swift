@@ -307,7 +307,7 @@ struct TaskPlainView: View {
         if task.repeatRule != nil { Button("Don’t Repeat", role: .destructive) { model.setRepeat(nil) } }
     }
 
-    /// Who has it: "Me", "Me & Hermes", "Finance", with the bot's face, and at the row's end what the bot is doing
+    /// Who has it: "You", "You & Hermes", "Finance", with the bot's face, and at the row's end what the bot is doing
     /// ("Working", "Has a question", "Finished its part"); on a task of your own, "Assign". A menu: Just Me, a bot
     /// with you, a bot by itself.
     private var whoRow: some View {
@@ -338,12 +338,13 @@ struct TaskPlainView: View {
                 Image(systemName: task.whoKind == .together ? "person.2" : "person").foregroundStyle(Color.hqLabel2)
             } text: {
                 HStack(spacing: 6) {
-                    if task.whoKind == .together { Text("Me &").foregroundStyle(Color.hqLabel) }
+                    // [Mac UI check 2026-11-13] "You", as the list and the Task Page say it (the pane said "Me").
+                    if task.whoKind == .together { Text("You &").foregroundStyle(Color.hqLabel) }
                     if let helper = task.helper {
                         HeadImage(raw: model.head(helper), profile: helper, size: 18).frame(width: 18, height: 18).accessibilityHidden(true)
                         Text(model.botName(helper)).foregroundStyle(Color.hqLabel).lineLimit(1)
                     } else {
-                        Text("Me").foregroundStyle(Color.hqLabel)
+                        Text("You").foregroundStyle(Color.hqLabel)
                     }
                     Spacer(minLength: 8)
                     if task.helper != nil {
@@ -549,7 +550,7 @@ struct TaskPlainView: View {
     @ViewBuilder private func steps(_ proxy: ScrollViewProxy) -> some View {
         if !(task.isDone && task.steps.isEmpty) {
             let open = task.steps.filter { !$0.done }, done = task.steps.filter(\.done)
-            // Your next open step on a task you share: its "Me" in the accent.
+            // Your next open step on a task you share: its "You" in the accent.
             let yours = task.whoKind == .me ? nil : open.first { $0.who != "bot" }?.id
             TaskBand()
             TaskSectionHead(title: "Steps", count: task.steps.isEmpty ? nil : "\(done.count)/\(task.steps.count)") { EmptyView() }
@@ -612,14 +613,14 @@ struct TaskPlainView: View {
                     .contentShape(Rectangle())
                     .onTapGesture { if long { HQMotion.withAnimation(.snappy) { model.toggleOpen(step) } } }
                     .accessibilityIdentifier("task.step.title")
-                // Whose it is, on a task you share: the bot's face on its steps, "Me" on yours.
+                // Whose it is, on a task you share: the bot's face on its steps, "You" on yours.
                 if shared {
                     if bot, let helper = task.helper {
                         HeadImage(raw: model.head(helper), profile: helper, size: 16).frame(width: 16, height: 16)
                             .opacity(step.done ? 0.6 : 1)
                             .accessibilityLabel("\(model.botName(helper))’s")
                     } else {
-                        Text("Me")
+                        Text("You")
                             .font(Font.hq(.footnote).weight(yours ? .semibold : .regular))
                             .foregroundStyle(yours ? Color.hqTintText : Color.hqLabel2)
                             .lineLimit(1)

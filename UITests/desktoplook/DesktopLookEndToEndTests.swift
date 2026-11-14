@@ -679,8 +679,8 @@ final class DesktopLookEndToEndTests: XCTestCase {
     }
 
     static let notHermesWords = "Something answered, but it wasn’t Hermes. Check the address of the computer running Hermes in Settings › Gateway, then try again."
-    static let lookNote = "Draws Hermes HQ like the Hermes desktop app: your theme’s own colours on every screen, square corners and solid bars instead of glass. Set on this iPhone only."
-    static let contrastNote = "Sets your messages, boxes, lines and secondary text further apart from the page, in your theme’s own colours. For themes that look flat."
+    static let lookNote = "Draws Hermes HQ like the Hermes desktop app: your theme’s own colors on every screen, square corners and solid bars instead of glass. Set on this iPhone only."
+    static let contrastNote = "Sets your messages, boxes, lines and secondary text further apart from the page, in your theme’s own colors. For themes that look flat."
     static let scaleNote = "Makes text, faces and rows larger or smaller, in both looks, on top of the text size set in iOS Settings. Set on this iPhone only."   // DeviceWord.onlyHere on the iPhone
 
     func calls(_ route: String) -> [[String: Any]] {

@@ -283,24 +283,58 @@ final class MarketplaceController: SearchPageHost<HQScaledRoot<MarketplaceView>>
         super.init(rootView: HQScaledRoot(MarketplaceView(model: model, state: state, router: router)))
         title = "Marketplace"
         navigationItem.largeTitleDisplayMode = .never
+        model.presenter = model.presenter ?? self
+        if DeviceWord.isMac {
+            installMacSearch(query: query)
+            return
+        }
         let search = UISearchController(searchResultsController: nil)
         search.obscuresBackgroundDuringPresentation = false
         search.searchResultsUpdater = self
-        // [mac] Mac polish #102: words that fit the bar's field ("Search skills, plugins an…" was cut off).
-        search.searchBar.placeholder = DeviceWord.isMac ? "Search Marketplace" : "Search skills, plugins and authors"
+        search.searchBar.placeholder = "Search skills, plugins and authors"
         search.searchBar.text = query
         state.typeQuery = { [weak search] words in search?.searchBar.text = words }
         search.searchBar.searchTextField.accessibilityIdentifier = "marketplace.search"
         navigationItem.searchController = search
         PageSearchField.shownUntilIn(navigationItem)
-        model.presenter = model.presenter ?? self
-        // [mac-tools] The Mac's store front has Sort By at the top of each section, and its search in the bar's own row.
-        if DeviceWord.isMac {
-            navigationItem.preferredSearchBarPlacement = .integrated
-        } else {
-            installSortMenu()
-        }
+        installSortMenu()
     }
+
+    /// [mac-tools] The Mac's store front has Sort By at the top of each section, and its search in the bar's own row.
+    /// [Mac UI check 2026-11-13] As the bar's integrated field its pill ran to the bar's edge, ~10 pt from the window's,
+    /// where the cards below end 24 pt in; the bar's margins, a fixed space, a spacer item (at least 56 pt) and the
+    /// field's own offsets didn't put it there. A search field of the page's own, in the bar's row, ends where the
+    /// cards do. Words typed narrow the store as before; ⌘F puts the caret in it (`KeySearchable`).
+    private func installMacSearch(query: String) {
+        let bar = UISearchBar()
+        bar.searchBarStyle = .minimal
+        // Mac polish #102: words that fit the field ("Search skills, plugins an…" was cut off).
+        bar.placeholder = "Search Marketplace"
+        bar.text = query
+        bar.delegate = self
+        bar.searchTextField.accessibilityIdentifier = "marketplace.search"
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        let box = UIView()
+        box.addSubview(bar)
+        // The minimal bar keeps a few points round its field: the box's end less those meets the cards' edge.
+        let trailing = Self.searchEndInset
+        NSLayoutConstraint.activate([
+            bar.leadingAnchor.constraint(equalTo: box.leadingAnchor),
+            bar.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -trailing),
+            bar.centerYAnchor.constraint(equalTo: box.centerYAnchor),
+            box.widthAnchor.constraint(equalToConstant: 250 + trailing),
+            box.heightAnchor.constraint(equalToConstant: 44),
+        ])
+        macSearch = bar
+        state.typeQuery = { [weak bar] words in bar?.text = words }
+        let item = UIBarButtonItem(customView: box)
+        item.hidesSharedBackground = true
+        navigationItem.rightBarButtonItems = [item]
+    }
+
+    /// How far in from the bar item's end the field's bar stops (measured in the tour pictures).
+    private static let searchEndInset: CGFloat = 15
+    private var macSearch: UISearchBar?
 
     @MainActor required dynamic init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
@@ -319,6 +353,17 @@ final class MarketplaceController: SearchPageHost<HQScaledRoot<MarketplaceView>>
         item.accessibilityIdentifier = "marketplace.sort"
         navigationItem.rightBarButtonItem = item
     }
+
+    #if DEBUG
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self, let field = (self.macSearch ?? self.navigationItem.searchController?.searchBar)?.searchTextField,
+                  let window = self.view.window else { return }
+            AppLog.note("pages", "marketplace search field ends at \(field.convert(field.bounds, to: window).maxX) of \(window.bounds.width)")
+        }
+    }
+    #endif
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
@@ -614,6 +659,9 @@ struct MarketplaceView: View {
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                 }
                                 .padding(10)
+                                // [Mac UI check 2026-11-13] Three to the hero's height exactly: a few points more each cut
+                                // the third off at the bottom, which read as clipped rather than more to scroll to.
+                                .frame(height: Self.sidePickHeight)
                                 .background(Color(uiColor: HQPalette.card), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                                 .overlay { cardEdge(12) }
                                 .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -627,9 +675,13 @@ struct MarketplaceView: View {
                 .frame(width: 400)
             }
         }
-        .frame(height: 344)
+        .frame(height: Self.heroHeight)
         .accessibilityIdentifier("marketplace.featured")
     }
+
+    private static let heroHeight: CGFloat = 344
+    /// Three picks and their two 10 pt gaps fill the hero's height.
+    private static let sidePickHeight: CGFloat = (heroHeight - 20) / 3
 
     /// Where the card is the page's colour (the Desktop Look, the light iOS look) an outline is its edge.
     @ViewBuilder private func cardEdge(_ radius: CGFloat) -> some View {
@@ -989,15 +1041,19 @@ struct MarketplaceView: View {
     }
 
     /// `page` is about to show beside the grid: it gets a ✕ that closes it (the grid takes the window back).
-    private func beside(_ page: UIViewController) {
+    /// True when the page shows beside the store front (the Mac's two panes).
+    @discardableResult private func beside(_ page: UIViewController) -> Bool {
         #if targetEnvironment(macCatalyst)
-        guard let split = MainTabController.current?.split, split.isDouble else { return }
+        guard let split = MainTabController.current?.split, split.isDouble else { return false }
         let close = UIBarButtonItem(image: UIImage(systemName: "xmark"), primaryAction: UIAction { _ in
             MainTabController.current?.split?.closeDetail(animated: true)
         })
         close.accessibilityLabel = "Close"
         close.accessibilityIdentifier = "marketplace.detail.close"
         page.navigationItem.leftBarButtonItem = close
+        return true
+        #else
+        return false
         #endif
     }
 
@@ -1321,7 +1377,7 @@ struct MarketplaceView: View {
 
     private func openPlugin(_ entry: PluginCatalogEntry, install: Bool = false) {
         let page = PluginCatalogEntryController(model: model, entry: entry, router: router)
-        beside(page)
+        if beside(page) { page.installToBeside() }   // [Mac UI check 2026-11-13] one Install To in sight, the store front's
         // Before the push: beside the Mac's store front the page is shown at once, and would have appeared already.
         if install { page.installWhenShown(router: router) }
         router.push(page)
@@ -1329,7 +1385,7 @@ struct MarketplaceView: View {
 
     private func openSkill(_ entry: MarketSkill) {
         let page = SkillCatalogEntryController(model: model, entry: entry, router: router)
-        beside(page)
+        if beside(page) { page.installToBeside() }   // [Mac UI check 2026-11-13] one Install To in sight, the store front's
         router.push(page)
     }
 }
@@ -1607,6 +1663,7 @@ struct MarketplaceHero: View {
     var installed: Bool
     let open: (_ install: Bool) -> Void
     @State private var image: UIImage?
+    @Environment(\.colorScheme) private var colorScheme
 
     /// A card's outline where the card is the page's colour (the Desktop Look, the light iOS look).
     static let edge = UIColor { traits in
@@ -1663,7 +1720,9 @@ struct MarketplaceHero: View {
         .background {
             ZStack {
                 Color(uiColor: HQPalette.card)
-                if let image { Image(uiImage: image).resizable().scaledToFill().blur(radius: 40).opacity(0.38) }
+                // [Mac UI check 2026-11-13] In light, a dark picture blurred at this strength made the card a muddy grey
+                // slab under grey words: a lighter wash keeps the card light and its words and chip readable.
+                if let image { Image(uiImage: image).resizable().scaledToFill().blur(radius: 40).opacity(colorScheme == .dark ? 0.38 : 0.12) }
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -2043,6 +2102,33 @@ struct MarketplaceConnectors: View {
             } footer: { HQSectionFooter {
                 Text("What \(model.botName) has connected, apps through a Nous account, and adding a connector by web address or command.")
             } }
+        }
+    }
+}
+
+/// [Mac UI check 2026-11-13] The Mac's own search field (`installMacSearch`): its words narrow the store, ⌘F focuses it.
+extension MarketplaceController: UISearchBarDelegate, KeySearchable {
+    func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
+        guard searchText != state.query else { return }
+        state.query = searchText
+        state.resetPaging()
+    }
+
+    func searchBarSearchButtonClicked(_ searchBar: UISearchBar) { searchBar.resignFirstResponder() }
+
+    func openSearchFromKeyboard() { macSearch?.becomeFirstResponder() }
+}
+
+/// [Mac UI check 2026-11-13] ⌘R reads the store again, as its pull does (the Mac has no pull, and the key found no
+/// refresh control in a SwiftUI page).
+extension MarketplaceController: KeyRefreshing {
+    var keyRefresh: (() -> Void)? {
+        {
+            Task {
+                async let p: Void = PluginCatalogStore.shared.load(force: true)
+                async let s: Void = SkillCatalogStore.shared.load(force: true)
+                _ = await (p, s)
+            }
         }
     }
 }

@@ -25,16 +25,33 @@ import UIKit
 
     /// Opens `url` in a window of its own, or brings forward the one already showing it. False when the window can't
     /// be asked for (the caller then shows the file as before).
+    /// [Mac UI check 2026-11-13] It no longer fails without a word: a file gone from the cache, or a window the Mac
+    /// refuses, says so over the main window.
     @discardableResult static func open(_ url: URL) -> Bool {
         let path = url.standardizedFileURL.path
+        guard FileManager.default.fileExists(atPath: path) else {
+            AppLog.note("mac", "file window: the file isn't there")
+            couldNotOpen(url.lastPathComponent, gone: true)
+            return true
+        }
         let open = scenes.first { ($0.delegate as? FileSceneDelegate)?.url?.standardizedFileURL.path == path }
         let activity = NSUserActivity(activityType: activityType)
         activity.userInfo = [pathKey: path]
         AppLog.note("mac", open == nil ? "file window: open" : "file window: to the front")
+        let name = url.lastPathComponent
         UIApplication.shared.requestSceneSessionActivation(open?.session, userActivity: activity, options: nil) { error in
             AppLog.note("mac", "file window: couldn't open (\(error.localizedDescription))")
+            DispatchQueue.main.async { MainActor.assumeIsolated { couldNotOpen(name) } }
         }
         return true
+    }
+
+    /// "Couldn't Open File" over the main window, for a file window that didn't come. `gone`: the downloaded copy
+    /// was cleared from the cache.
+    static func couldNotOpen(_ name: String, gone: Bool = false) {
+        guard let top = FailureAlert.topmost(MainTabController.current) else { return }
+        FilePreviewPresenter.alert(gone ? "“\(name)” is no longer on this Mac. Click it again to download it."
+                                        : "“\(name)” didn’t open in a window of its own. Click it again to try once more.", on: top)
     }
 
     static func close(_ scene: UIWindowScene) {
@@ -246,7 +263,10 @@ final class FileSceneDelegate: UIResponder, UIWindowSceneDelegate {
         session.userInfo = (session.userInfo ?? [:]).merging(["HQFileWindow": true]) { $1 }
         guard let windowScene = scene as? UIWindowScene, let url = MacFileWindow.url(in: connectionOptions),
               FileManager.default.fileExists(atPath: url.path) else {
+            // [Mac UI check 2026-11-13] The file went from the cache between the click and the window: say so.
+            let name = MacFileWindow.url(in: connectionOptions)?.lastPathComponent
             UIApplication.shared.requestSceneSessionDestruction(session, options: nil)
+            if let name { DispatchQueue.main.async { MainActor.assumeIsolated { MacFileWindow.couldNotOpen(name, gone: true) } } }
             return
         }
         self.url = url

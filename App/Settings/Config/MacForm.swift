@@ -45,6 +45,12 @@ import UIKit
         return (260 * CGFloat(state.uiScalePercent) / 100 * CGFloat(ThemeState.macBase(desktopLook: true))).rounded()
     }
     static let columnGap: CGFloat = 16
+    /// [Mac UI check 2026-11-13] The slot a number field's unit stands in, as wide as the longest unit word: with the
+    /// controls at the row's trailing edge, the fields of a card share one right edge whatever their unit ("%",
+    /// "characters") or none.
+    static var unitWidth: CGFloat {
+        ceil(("characters" as NSString).size(withAttributes: [.font: HQFont.preferred(.body)]).width) + 2
+    }
     /// [mac] Stress test 2026-10-28 round 7: the one gap between a radio and its title on every page (Voice Model's rows
     /// had 16 against the others' 8, so their titles started 7 px further right).
     static let radioGap: CGFloat = 8
@@ -358,7 +364,10 @@ struct MacFormRow<Control: View>: View {
                     .frame(width: labelWidth, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
                 control
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    // [Mac UI check 2026-11-13] At the row's trailing edge, as the switches and values beside it and the
+                    // Settings root's own pop-ups are: pop-ups and number fields started mid-row, a second column.
+                    // Controls that take the room (a text field, a summary and its Edit…) still fill it.
+                    .frame(maxWidth: .infinity, alignment: .trailing)
                     // [mac] Stress test 2026-10-28 round 9: with help under it, the control (a pop-up, a field, an Edit…
                     // button, each `MacForm.controlHeight`) takes no more height than the label's line, so the row is
                     // its lines and the list's room, as a switch row or a row that opens a page with the same lines is
@@ -520,7 +529,9 @@ struct MacConfigFieldRow: View {
                     .foregroundStyle(Color.hqLabel2)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    // [Mac UI check 2026-11-13] Beside its button at the row's end, as the controls now are; leading,
+                    // it stood in a column of its own mid-row.
+                    .frame(maxWidth: .infinity, alignment: .trailing)
                 Button(Self.editTitle(field.control)) { ConfigScreens.openField(field.key, store: store, router: router) }
                     .buttonStyle(MacPushButtonStyle())   // [mac] Stress test 2026-10-28 #55 (round 6): the Mac's push button
                     .accessibilityIdentifier("config-field.\(field.key).edit")
@@ -572,9 +583,10 @@ struct MacNumberField: View {
                     .focused($focused)
                     .onSubmit(save)
                     .accessibilityLabel(label)
-                if let unit = ConfigUnits.unitWord(key: key, value: ConfigUnits.value(key: key, text: text)?.double ?? value?.double) {
-                    Text(unit).foregroundStyle(Color.hqLabel2)
-                }
+                Text(ConfigUnits.unitWord(key: key, value: ConfigUnits.value(key: key, text: text)?.double ?? value?.double) ?? "")
+                    .foregroundStyle(Color.hqLabel2)
+                    .frame(minWidth: MacForm.unitWidth, alignment: .leading)   // [Mac UI check 2026-11-13] `unitWidth`
+                    .accessibilityHidden(ConfigUnits.unitWord(key: key, value: value?.double) == nil)
             }
             if let problem {
                 Text(problem).font(MacType.footnoteFont).foregroundStyle(Color.hqRed)
@@ -655,6 +667,9 @@ enum MacPushKind { case plain, prominent, destructive }
 @MainActor enum MacPush {
     /// About 6 pt on the screen (the Mac draws the app at 77 %).
     static let radius: CGFloat = 7.5
+    /// [Mac UI check 2026-11-13] The corner the button draws now: the Desktop Look's flat `radius`; in the iOS look a
+    /// capsule, as its soft rounded cards' other controls are (square grey bezels sat hard inside them).
+    static var shapeRadius: CGFloat { Theme.isDesktop ? radius : (MacForm.controlHeight / 2).rounded(.up) }
     static let insets = NSDirectionalEdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12)
 
     /// The control fill: the card colour in the iOS look's light mode (white, as a Mac's push button), the look's
@@ -671,7 +686,8 @@ enum MacPushKind { case plain, prominent, destructive }
         let label3 = ThemedColor.make(\.label3)
         return UIColor { @Sendable traits in
             let desktop = ThemeTable.withSet(generation: traits[ThemeGenerationTrait.self]) { $0.state.desktopLook }
-            return label3.resolvedColor(with: traits).withAlphaComponent(desktop ? 0.55 : 0.4)
+            // [Mac UI check 2026-11-13] Softer in the iOS look (0.4 read as a hard bezel on its white cards).
+            return label3.resolvedColor(with: traits).withAlphaComponent(desktop ? 0.55 : 0.28)
         }
     }()
     static var fillColor: Color { Color(uiColor: fill) }
@@ -680,7 +696,7 @@ enum MacPushKind { case plain, prominent, destructive }
     /// UIKit's face of the same button (empty states, viewers, Try Again cards).
     static func configuration(_ kind: MacPushKind = .plain) -> UIButton.Configuration {
         var config = UIButton.Configuration.plain()
-        config.cornerStyle = .fixed
+        config.cornerStyle = Theme.isDesktop ? .fixed : .capsule   // [Mac UI check 2026-11-13] `shapeRadius`
         config.background.cornerRadius = radius
         config.contentInsets = insets
         config.titleLineBreakMode = .byTruncatingTail
@@ -710,7 +726,7 @@ struct MacPushButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         let _ = Theme.touch()
-        let shape = RoundedRectangle(cornerRadius: MacPush.radius, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: MacPush.shapeRadius, style: .continuous)
         let destructive = kind == .destructive || configuration.role == .destructive
         let prominent = kind == .prominent && !destructive
         configuration.label
@@ -760,7 +776,8 @@ struct MacAddRemoveButtons: View {
         // [mac] Stress test 2026-10-28 round 8: one size in both looks (`MacForm.fixed`). `HQFont.scaled(22)` took the
         // look's own Mac base, so the pair was 58 × 28 in the Desktop Look and 52 × 26 in the iOS look.
         let side = MacForm.fixed(22)
-        let shape = RoundedRectangle(cornerRadius: MacField.radius, style: .continuous)
+        // [Mac UI check 2026-11-13] A pill in the iOS look, as the push buttons are (`MacPush.shapeRadius`).
+        let shape = RoundedRectangle(cornerRadius: Theme.isDesktop ? MacField.radius : side / 2, style: .continuous)
         HStack(spacing: 0) {
             cell("plus", enabled: true, side: side, action: add)
                 .help(addHelp)
@@ -1095,6 +1112,7 @@ struct MacIntField: View {
                 .onSubmit(save)
                 .accessibilityLabel(label)
             Text(unit).foregroundStyle(Color.hqLabel2)
+                .frame(minWidth: MacForm.unitWidth, alignment: .leading)   // [Mac UI check 2026-11-13] `unitWidth`
         }
         .onAppear { text = String(value) }
         .onChange(of: value) { _, now in if !focused { text = String(now) } }

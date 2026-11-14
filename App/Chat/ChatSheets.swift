@@ -301,8 +301,9 @@ enum ChatInfoSheet {
     /// bot's name for a profile id.
     static func make(model: any ChatSessionModel, account: GatewayAccount?, modelName: String?, store: SessionStore? = nil,
                      profileName: ((String) -> String)? = nil) -> UIViewController {
-        ChatSheet.wrap(makeContent(model: model, account: account, modelName: modelName, store: store, profileName: profileName),
-                       title: "Chat Info")
+        let content = makeContent(model: model, account: account, modelName: modelName, store: store, profileName: profileName)
+        (content as? ChatInfoList)?.inSheet = true
+        return ChatSheet.wrap(content, title: "Chat Info")
     }
 
     /// [mac-layout] The rows alone, for the Mac's inspector (no sheet, no Done).
@@ -325,6 +326,10 @@ private final class ChatInfoList: UITableViewController {
     /// in a narrow column on the left, the value beside it, a hairline between rows, at the panel's own margins, which
     /// Steps, Files and Helpers share (`InspectorLook`). The Chat Info sheet keeps its card.
     private let panel: Bool
+    /// [Mac UI check 2026-11-13] A1: the Mac's Chat Info sheet borrows the inspector's rows (`panel`), whose table is
+    /// clear to show the panel behind it; in a sheet nothing is behind it, and the dark Desktop Look drew its light
+    /// words on a blank pale sheet. In a sheet the table keeps the sheet's page.
+    var inSheet = false
     private var rows: [SessionInfoRow]
     private var ticker: Timer?
     /// The chat's running background commands (`process.list`), asked every 3 s while the sheet shows; the section is
@@ -355,7 +360,10 @@ private final class ChatInfoList: UITableViewController {
         tableView.register(ChatInfoNoteCell.self, forCellReuseIdentifier: ChatInfoNoteCell.reuse)
         tableView.register(ChatInfoFormCell.self, forCellReuseIdentifier: ChatInfoFormCell.reuse)
         tableView.accessibilityIdentifier = "info.list"
-        if panel { InspectorLook.dress(tableView) }
+        if panel {
+            InspectorLook.dress(tableView)
+            if inSheet { tableView.backgroundColor = HQPalette.sheetPage }
+        }
         // [mac] Stress test 2026-10-28 #72: a short header row (the face and the name side by side) instead of the
         // phone's contact card, and Copy Chat Info as a button under the rows instead of a full-width row.
         if DeviceWord.isMac {
@@ -922,7 +930,9 @@ private final class ChatInfoFormCell: UITableViewCell {
             }
             label.font = InspectorLook.labelFont
             label.textAlignment = .natural
-            let column = min(max(widestLabel(), 64), max(64, (width * 0.4).rounded()))
+            // [Mac UI check 2026-11-13] L20: the widest label plus a gap of its own, so "Messages" no longer runs up to
+            // its value (the column's 12 pt spacing alone read as touching).
+            let column = min(max(widestLabel() + 8, 64), max(64, (width * 0.4).rounded()))
             if labelWidth.constant != column { labelWidth.constant = column }
             return
         }

@@ -44,6 +44,7 @@ enum MessagingPages {
         search.capsule = capsule
         if DeviceWord.isMac { hideSearchWhileUnavailable(model, capsule) }
         page.retained = [model, search, capsule]
+        page.keyRefresh = { [weak model] in Task { await model?.refresh() } }   // [Mac UI check 2026-11-13] ⌘R, as a pull (the Mac has no pull)
         page.onAppear = { [weak model] in model?.front = nil; model?.appear() }
         page.onDisappear = { [weak model, weak page] in
             // Still on the stack under a platform's page: keep following the link.
@@ -68,6 +69,7 @@ enum MessagingPages {
         guard let navigation = model.host?.navigationController else { return }
         let page = MorePageController(title: platform.name, identifier: "messaging.platform.page",
                                       MessagingPlatformView(model: model, platformId: platform.id))
+        page.keyRefresh = { [weak model] in Task { await model?.refresh() } }   // [Mac UI check 2026-11-13] ⌘R, as a pull (the Mac has no pull)
         page.onAppear = { [weak model, weak page] in model?.front = page }
         navigation.pushViewController(page, animated: true)
     }

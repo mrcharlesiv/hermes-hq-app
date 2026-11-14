@@ -19,20 +19,23 @@ enum PromptsSheet {
         let edit = UIBarButtonItem(title: "Edit", primaryAction: UIAction(title: "Edit") { [weak model] _ in model?.editing.toggle() })
         edit.accessibilityIdentifier = "prompts.edit"
         page.navigationItem.rightBarButtonItems = [add, edit]
-        followEdit(edit, model: model)
+        followEdit(edit, add: add, model: model)
         return ChatSheet.wrap(page, title: "Prompts")
     }
 
     /// Edit shows only while there is something to edit, and reads Done (prominent) while editing; emptying the list in
     /// Edit ends it. Kept up to date for as long as the button and model live.
-    static func followEdit(_ edit: UIBarButtonItem, model: PromptsPageModel) {
+    static func followEdit(_ edit: UIBarButtonItem, add: UIBarButtonItem? = nil, model: PromptsPageModel) {
         withObservationTracking {
             model.endEditingIfEmpty()
             look(edit, model: model)
-        } onChange: { [weak edit, weak model] in
+            // [Mac UI check 2026-11-13] V25: on the Mac the empty page's New Prompt… is the one way in while there are no
+            // prompts; the bar's + comes with the first one (one place per action).
+            if DeviceWord.isMac { add?.isHidden = model.prompts.isEmpty }
+        } onChange: { [weak edit, weak add, weak model] in
             Task { @MainActor in
                 guard let edit, let model else { return }
-                followEdit(edit, model: model)
+                followEdit(edit, add: add, model: model)
             }
         }
     }
@@ -281,7 +284,9 @@ final class PromptEditorViewController: UIViewController, UITextViewDelegate {
         let cancel = UIBarButtonItem.hqClose(.cancel, action: UIAction { [weak self] _ in self?.cancel() })
         cancel.accessibilityIdentifier = "prompt.cancel"
         navigationItem.leftBarButtonItem = cancel
-        let save = UIBarButtonItem(systemItem: .save, primaryAction: UIAction { [weak self] _ in self?.commit() })
+        // [Mac UI check 2026-11-13] L5: a titled Save, so the bar's disabled stand-in can say "Save" as Edit Bot's does
+        // (`setProminentEnabled`); the system's disabled prominent Save was white on pale grey in the light look.
+        let save = UIBarButtonItem(title: "Save", primaryAction: UIAction(title: "Save") { [weak self] _ in self?.commit() })
         save.style = .prominent
         save.accessibilityIdentifier = "prompt.save"
         navigationItem.rightBarButtonItem = save
@@ -394,7 +399,7 @@ final class PromptEditorViewController: UIViewController, UITextViewDelegate {
     private func textChanged() {
         let empty = textView.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         placeholder.isHidden = !textView.text.isEmpty
-        save?.isEnabled = !empty
+        save?.setProminentEnabled(!empty)   // [Mac UI check 2026-11-13] L5: disabled reads as Edit Bot's Save does
         navigationController?.isModalInPresentation = edited
     }
 

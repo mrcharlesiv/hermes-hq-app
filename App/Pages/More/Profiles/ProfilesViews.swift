@@ -22,6 +22,7 @@ extension MorePages {
             search.searchResultsUpdater = updater
             capsule.install()
             page.retained = [model, capsule, updater]
+            page.keyRefresh = { [weak model] in Task { await model?.refresh() } }   // [Mac UI check 2026-11-13] ⌘R, as a pull (the Mac has no pull)
             page.onAppear = { [weak model] in model?.pageAppeared() }
             page.onDisappear = { [weak model] in model?.pageDisappeared() }
             model.load()
@@ -85,6 +86,11 @@ struct ProfilesListView: View {
                         }
                         if let stale = model.staleReason {
                             Text("Couldn’t refresh. \(stale)").accessibilityIdentifier("profiles.stale")
+                            // [Mac UI check 2026-11-13] The Mac has no pull: the failed refresh offers its own retry.
+                            Button("Try Again") { model.load() }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(Color.hqTintText)
+                                .accessibilityIdentifier("profiles.stale.retry")
                         }
                     }
                     .font(Font.hq(.footnote))

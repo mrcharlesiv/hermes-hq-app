@@ -367,6 +367,16 @@ import UIKit
             },
             item("Reply", "arrowshape.turn.up.left", id: "reply") { [weak self] in self?.reply(to: entry) },
         ]
+        // [Mac UI check 2026-11-13] Share… and Select Text, as a bot chat's bubble menu offers them (C3).
+        if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let menus = chat.menus {
+            children.append(item("Share…", "square.and.arrow.up", id: "share") { [weak menus, weak source] in
+                menus?.shareMessage(text, from: source)
+            })
+            children.append(item("Select Text", "text.cursor", id: "select") { [weak chat] in
+                guard let chat, let top = MenusSheet.top(chat) else { return }
+                top.present(SelectTextViewController.make(text: ChatTranscript.readableText(text)), animated: true)
+            })
+        }
         if let tag = room.mentionTag(for: messageId) {
             children.append(item("Mention", "at", id: "mention") { [weak self] in self?.insertMention(tag, replacingQuery: false) })
         }

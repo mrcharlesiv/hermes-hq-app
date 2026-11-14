@@ -33,6 +33,23 @@ enum MacPlaceTitle {
         lead(page, afterBack: stack.viewControllers.first !== page)
     }
 
+    /// [Mac UI check 2026-11-13] V17, owner: "Unify". Every page of the main window leads its bar with its title, as
+    /// the places and the Settings window do: a page opened in the right pane (Capabilities, Gateway, Passwords…) at
+    /// the left, and a page pushed over another after Back ("‹ Capabilities  Skills"), not centred. A chat keeps its
+    /// own centred header (the bot and its model), and a page with a title view or leading buttons of its own keeps them.
+    static func leadPage(_ page: UIViewController, in stack: UINavigationController) {
+        guard !(stack.parent is SettingsRootController), !(page is ChatViewController),
+              !(page is DetailPlaceholderViewController) else { return }
+        let root = stack.viewControllers.first === page
+        if root {
+            // A tab's first page leads by its own inline title or `mark`; the right pane's first page leads here.
+            guard stack is DetailNavigationController else { return }
+            lead(page)
+        } else {
+            lead(page, afterBack: true)
+        }
+    }
+
     private static func lead(_ page: UIViewController, afterBack: Bool = false) {
         guard objc_getAssociatedObject(page, &watchKey) == nil else { return }
         page.loadViewIfNeeded()

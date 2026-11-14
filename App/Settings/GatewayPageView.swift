@@ -239,6 +239,12 @@ final class GatewayPageModel {
         }
         alert.addAction(save)
         alert.preferredAction = save
+        // [Mac UI check 2026-11-13] Save with a field empty closed the prompt and saved nothing, silently: it waits for both.
+        let check = { [weak alert, weak save] in
+            save?.isEnabled = CloudflareAccess(clientId: alert?.textFields?.first?.text, clientSecret: alert?.textFields?.last?.text) != nil
+        }
+        for field in alert.textFields ?? [] { field.addAction(UIAction { _ in check() }, for: .editingChanged) }
+        check()
         presenter.present(alert, animated: true)
     }
 

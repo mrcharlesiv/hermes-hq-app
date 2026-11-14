@@ -30,10 +30,10 @@ enum BackdropWords {
     }
 
     static var rowsNote: String { "A picture behind the app’s pages, and one behind chats, or the same for both. The Desktop Look keeps its plain pages. \(DeviceWord.onlyHere)" }
-    static var appNote: String { "Behind Sessions, Bots, Jobs, More, Settings and the pages they open. Dim covers it with the page colour, so the rows on it stay easy to read. \(DeviceWord.onlyHere)" }
-    static var chatNote: String { "Behind every chat. Dim covers it with the page colour, so the grey lines between messages stay easy to read. \(DeviceWord.onlyHere)" }
+    static var appNote: String { "Behind Sessions, Bots, Jobs, More, Settings and the pages they open. Dim covers it with the page color, so the rows on it stay easy to read. \(DeviceWord.onlyHere)" }
+    static var chatNote: String { "Behind every chat. Dim covers it with the page color, so the grey lines between messages stay easy to read. \(DeviceWord.onlyHere)" }
     /// [backdrop-cards]
-    static let cardsNote = "Soft Cards lays a soft backing in your theme’s colour behind each list, only as strong as this picture needs, so words stay easy to read."
+    static let cardsNote = "Soft Cards lays a soft backing in your theme’s color behind each list, only as strong as this picture needs, so words stay easy to read."
     static let sameNote = "Chats show the app’s picture, with their own Dim and Blur."
     /// Added under the preview while the Desktop Look is on, which keeps its plain pages.
     static let desktopNote = "The Desktop Look is on, so it shows once you turn that off."

@@ -36,6 +36,8 @@ final class TaskViewsModel {
     var picked: TodoView = .today
     /// Lists can be made and changed (not on a read-only gateway, or an add-on too old to keep them).
     var editsLists = true
+    /// [Mac UI check 2026-11-13] A sheet is up over the page (UIKit has dimmed its tint).
+    var dimmed = false
 }
 
 private struct TaskViewsBand: View {
@@ -56,31 +58,65 @@ private struct TaskViewsBand: View {
         model.pills.compactMap { if case .list(let id) = $0.view { return id } else { return nil } }
     }
 
-    private var rail: some View {
+    @ViewBuilder private var pills: some View {
+        ForEach(model.pills) { pill in
+            let picked = model.picked == pill.view
+            // [Mac UI check 2026-11-13] Under a sheet the system greys the picked pill's tinted glass and
+            // its white words read faintly on the grey: the pick is then drawn as a plain pill in the
+            // label's ink with a ring, readable on the dimmed fill, and tinted again when the sheet goes.
+            let quiet = picked && model.dimmed && !Theme.isDesktop
+            SessionPill(caption: pill.title, name: spoken(pill), picked: picked && !quiet,
+                        identifier: pill.identifier, detail: pill.count.flatMap { $0 > 0 ? "\($0)" : nil }) {
+                onPick(pill.view)
+            } face: {
+                EmptyView()
+            }
+            .overlay {
+                if quiet {
+                    Capsule().strokeBorder(Color.hqLabel2, lineWidth: 1.5)
+                        .frame(height: HQFont.scaled(34))   // the pill's own height (`SessionPill`), not its 44 pt touch
+                        .allowsHitTesting(false)
+                }
+            }
+            .accessibilityAddTraits(quiet ? .isSelected : [])
+            .contextMenu { menu(for: pill) }
+            .id(pill.id)
+        }
+        if model.editsLists {
+            SessionPill(caption: "", name: "New List", picked: false, identifier: "tasks.view.new-list", hasFace: true, lead: 10) {
+                actions.newList()
+            } face: {
+                Image(systemName: "plus")
+                    .font(Font.hq(Theme.isDesktop ? .caption : .footnote).weight(.semibold))
+                    .foregroundStyle(Color.hqLabel2)
+                    .padding(.trailing, -8)
+            }
+        }
+    }
+
+    @ViewBuilder private var rail: some View {
+        if DeviceWord.isMac {
+            // [Mac UI check 2026-11-13] Every view in sight: the pills wrap to a second line in a narrow pane ("Bots 2"
+            // stood cut at the pane's edge, a scroll a Mac gives no cue for).
+            PagesFlowLayout(spacing: 8, lineSpacing: 0) { pills }
+                .padding(.horizontal, Theme.isDesktop ? DesktopRows.gutter : 16)
+                .padding(.top, DesktopRows.underBar)
+                .padding(.bottom, Theme.isDesktop ? 2 : 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .hqPickGlassRow()
+                .hqFlatPicks()   // [Mac UI check 2026-11-13] no glass to carry the picked pill's blue onto its neighbours
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Views")
+                .accessibilityIdentifier("tasks.views")
+        } else {
+            scrollingRail
+        }
+    }
+
+    private var scrollingRail: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal) {
-                HStack(spacing: 8) {
-                    ForEach(model.pills) { pill in
-                        SessionPill(caption: pill.title, name: spoken(pill), picked: model.picked == pill.view,
-                                    identifier: pill.identifier, detail: pill.count.flatMap { $0 > 0 ? "\($0)" : nil }) {
-                            onPick(pill.view)
-                        } face: {
-                            EmptyView()
-                        }
-                        .contextMenu { menu(for: pill) }
-                        .id(pill.id)
-                    }
-                    if model.editsLists {
-                        SessionPill(caption: "", name: "New List", picked: false, identifier: "tasks.view.new-list", hasFace: true, lead: 10) {
-                            actions.newList()
-                        } face: {
-                            Image(systemName: "plus")
-                                .font(Font.hq(Theme.isDesktop ? .caption : .footnote).weight(.semibold))
-                                .foregroundStyle(Color.hqLabel2)
-                                .padding(.trailing, -8)
-                        }
-                    }
-                }
+                HStack(spacing: 8) { pills }
                 .padding(.horizontal, Theme.isDesktop ? DesktopRows.gutter : 16)
                 .padding(.top, DesktopRows.underBar)
                 .padding(.bottom, Theme.isDesktop ? 2 : 4)
@@ -118,6 +154,15 @@ private struct TaskViewsBand: View {
             Divider()
             Button(role: .destructive) { actions.delete(id) } label: { Label("Delete List…", systemImage: "trash") }
         }
+    }
+}
+
+/// An empty view that says when its tint is dimmed (a sheet over the page) and when it isn't again.
+private final class TintDimProbe: UIView {
+    var changed: ((Bool) -> Void)?
+    override func tintColorDidChange() {
+        super.tintColorDidChange()
+        changed?(tintAdjustmentMode == .dimmed)
     }
 }
 
@@ -167,6 +212,14 @@ final class TaskViewsHeader {
         ])
         host.didMove(toParent: controller)
         host.view.clipsToBounds = true
+        // [Mac UI check 2026-11-13] Told when a sheet dims the page's tint (the band itself keeps `.normal`).
+        let probe = TintDimProbe()
+        probe.isUserInteractionEnabled = false
+        probe.changed = { [weak self] dimmed in
+            guard let self, self.model.dimmed != dimmed else { return }
+            self.model.dimmed = dimmed
+        }
+        controller.view.addSubview(probe)
         self.host = host
         self.height = height
     }

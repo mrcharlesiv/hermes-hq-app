@@ -181,6 +181,23 @@ struct ComposerDrawerSlashTests {
         #expect(t == ["/reasoning", "/new", "/release-notes"])   // /new is answered here (3x-composer §8.2)
     }
 
+    /// Mac UI check 2026-11-13 (V22): on the Mac a starred command is listed once, under Favorites.
+    @Test func starredOnceListsAStarredCommandOnce() {
+        let s = M.slashSections(text: "/", catalog: catalog, catalogLoading: false, isBotChat: false, remote: nil, recent: [],
+                                favorites: ["/status"], starredOnce: true)
+        #expect(s?.first?.title == SlashCatalog.favoritesTitle)
+        #expect(titles(s).filter { $0 == "/status" }.count == 1)
+    }
+
+    /// Mac UI check 2026-11-13 (V2): an empty gateway answer falls back to the catalog's own commands.
+    @Test func emptyRemoteAnswerFallsBackToTheCatalog() {
+        let empty = M.answer(["items": []], asked: "/sta")
+        let local = titles(M.slashSections(text: "/sta", catalog: catalog, catalogLoading: false, isBotChat: false, remote: nil, recent: []))
+        let fallback = titles(M.slashSections(text: "/sta", catalog: catalog, catalogLoading: false, isBotChat: false, remote: empty, recent: []))
+        #expect(local.contains("/status"))
+        #expect(fallback == local)
+    }
+
     @Test func optionsUseReplaceFrom() {
         let answer = M.answer(["items": [["text": "high", "display": "high", "meta": ""], ["text": "hide", "meta": ""]], "replace_from": 11],
                               asked: "/reasoning h")

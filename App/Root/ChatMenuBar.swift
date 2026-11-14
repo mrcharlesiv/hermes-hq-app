@@ -68,7 +68,8 @@ import UIKit
         ]
         // [mac-audit K] Owner 2026-11-02: one name per action. "Delete Chat", as the ⋯ and the Sessions menus say it
         // (the kit puts no ellipsis on a destructive row).
-        let danger: [UIMenuElement] = [item("Delete Chat", chatRow, row: .delete, attributes: .destructive)]
+        // [keys] Mac UI check 2026-11-13 (V29): on the Mac it asks first, so it reads as File's "Delete Chat…" (⌘⌫).
+        let danger: [UIMenuElement] = [item(Self.deleteTitle, chatRow, row: .delete, attributes: .destructive)]
         #if targetEnvironment(macCatalyst)
         // [mac-audit K] Go to Message Field, Send and Message Actions act on this chat: first here, not in Edit.
         let groups = [KeyCommands.chatItems() as [UIMenuElement], compose, talking, chat, tools, more, danger]
@@ -79,6 +80,9 @@ import UIKit
             UIMenu(title: "", options: .displayInline, children: $0)
         })
     }
+
+    /// The Chat menu's Delete: a Mac menu item that asks before acting ends in "…", as File's does.
+    static var deleteTitle: String { DeviceWord.isMac ? "Delete Chat…" : "Delete Chat" }
 
     static var chat: ChatViewController? {
         #if targetEnvironment(macCatalyst)
@@ -127,7 +131,7 @@ extension AppDelegate {
                 switch id {
                 case .info: if !DeviceWord.isMac { command.title = "Chat Info" }
                 case .export: command.title = "Export Chat…"
-                case .delete: command.title = "Delete Chat"
+                case .delete: command.title = ChatMenuBar.deleteTitle
                 default: command.title = row.title
                 }
             }

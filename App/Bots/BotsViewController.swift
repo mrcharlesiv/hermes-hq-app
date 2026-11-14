@@ -944,10 +944,10 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
             for (index, session) in picked.shown.enumerated() {
                 let key = id + "\u{1F}" + session.id
                 guard chatRows[key] == nil else { continue }
-                chatRows[key] = (session, index == picked.shown.count - 1 && picked.more == 0)
+                chatRows[key] = (session, index == picked.shown.count - 1 && (picked.more == 0 || !Self.sessionsListed))
                 out.append(.chat(key))
             }
-            if picked.more > 0 {
+            if picked.more > 0, Self.sessionsListed {
                 moreCounts[id] = picked.more
                 out.append(.more(id))
             }
@@ -983,7 +983,8 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
         let byBot = Dictionary(grouping: services.sessions, by: \.profile)
         var out: [String: (shown: [SessionSummary], more: Int)] = [:]
         for id in bots {
-            let picked = BotChatsUnder.pick(byBot[id] ?? [], bot: id, choice: BotChatsPrefs.choice(for: id))
+            var picked = BotChatsUnder.pick(byBot[id] ?? [], bot: id, choice: BotChatsPrefs.choice(for: id))
+            if !Self.sessionsListed { picked.more = 0 }   // [Mac UI check 2026-11-13] no Sessions for "N more" to open
             if !picked.shown.isEmpty { out[id] = picked }
         }
         return out
@@ -1629,9 +1630,14 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
         reload(animated: true)
     }
 
+    /// [Mac UI check 2026-11-13] Whether Sessions is one of the places (Settings › Tabs, or the Mac sidebar's Remove
+    /// from Sidebar). Without it "N more", View Sessions and Bot Info's All Chats are left out: `select(.sessions)`
+    /// landed on Bots and the bot's chip was picked in a Sessions list nobody could see (it stayed picked there).
+    static var sessionsListed: Bool { MainTabController.current.map { $0.controller(for: .sessions) != nil } ?? true }
+
     /// [chats-under] "N more": Sessions lists the bot's chats, its chip picked (as Bot Info's All Chats does).
     func openAllChats(of id: String) {
-        guard let root = MainTabController.current else { return }
+        guard let root = MainTabController.current, Self.sessionsListed else { return }
         Haptics.play(.soft)
         root.select(.sessions)
         let list = root.sessionsViewController

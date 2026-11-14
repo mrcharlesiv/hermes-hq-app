@@ -74,7 +74,7 @@ private let allStates: [ThemeState] = SkinCatalog.all.flatMap { skin in
                                                "midnight", "ember", "mono", "slate", "cyberpunk", "ios"])
         #expect(SkinCatalog.skin("midnight")?.description == "Deep blue-violet with cool accents")
         #expect(SkinCatalog.skin("ios")?.label == "iOS System")
-        #expect(SkinCatalog.skin("ios")?.description == "iOS colours, true black in dark, system blue")
+        #expect(SkinCatalog.skin("ios")?.description == "iOS colors, true black in dark, system blue")
         #expect(SkinCatalog.skin("cyberpunk")?.sansFamily == "Courier New")
         #expect(SkinCatalog.all.filter(\.hasOneLook).map(\.id) == ["midnight", "ember", "mono", "slate", "cyberpunk"])
         // Stress test 2026-10-28 #88: one-palette skins say which mode they are; the others have no tag.
@@ -1364,7 +1364,7 @@ private let allStates: [ThemeState] = SkinCatalog.all.flatMap { skin in
 
     @Test func searchFindsIt() {
         let row = SettingsSearch.appRows.first { $0.id == "app:message-colour" }
-        #expect(row?.label == "Message Colour" && row?.target == .root("chat-bubbles"))
+        #expect(row?.label == "Message Color" && row?.target == .root("chat-bubbles"))
         #expect(row?.keywords.contains("color") == true)
     }
 

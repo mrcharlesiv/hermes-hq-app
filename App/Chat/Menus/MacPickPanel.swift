@@ -268,7 +268,8 @@ import UIKit
         glassBack.isHidden = desktop
         let radius = desktop ? HQShape.desktopRadius(.sheet) : Self.glassRadius
         glassBack.cornerConfiguration = .corners(radius: .fixed(radius))
-        panel.backgroundColor = desktop ? ChatPalette.elevated : .clear
+        // [Mac UI check 2026-11-13] L2, L9: the glass alone let the chat's words show through as ghost text.
+        panel.backgroundColor = desktop ? ChatPalette.elevated : ChatPalette.popupVeil
         panel.layer.cornerRadius = radius
         panel.layer.borderWidth = desktop ? 1 : 0
         panel.layer.borderColor = ChatPalette.strokePrimary.resolvedColor(with: traitCollection).cgColor
@@ -294,8 +295,11 @@ import UIKit
     private func ring() {
         let on = field.isFirstResponder
         let colour = on ? HQPalette.tint : (isDesktop ? ChatPalette.strokeSecondary : HQPalette.paneLine)
-        fieldBox.layer.borderColor = colour.resolvedColor(with: traitCollection).cgColor
-        fieldBox.layer.borderWidth = on ? 2 : 1
+        // [Mac UI check 2026-11-13] L2: on the iOS look's glass card a solid 2 pt blue ring read hard; there it is the
+        // accent at 1.5 pt and 60 %. The Desktop Look keeps its flat 2 pt ring.
+        let soft = on && !isDesktop
+        fieldBox.layer.borderColor = colour.resolvedColor(with: traitCollection).withAlphaComponent(soft ? 0.6 : 1).cgColor
+        fieldBox.layer.borderWidth = on ? (soft ? 1.5 : 2) : 1
     }
 
     // MARK: Layout
@@ -392,7 +396,9 @@ import UIKit
         table.frame = CGRect(x: 6, y: listTop + 4, width: w - 12, height: max(0, listH - 4 - foot))
         table.isScrollEnabled = table.contentSize.height > table.bounds.height + 1 || listH >= maxList
         let h = listTop + listH
-        var x = anchorFrame.minX - pad
+        // [Mac UI check 2026-11-13] V22: a button in the window's trailing half (the box's model pill) has the panel's
+        // trailing edge at its own, so the panel hangs off it rather than off the far side of the box.
+        var x = anchorFrame.midX > bounds.midX ? anchorFrame.maxX + pad - w : anchorFrame.minX - pad
         x = min(max(pad, x), bounds.width - pad - w)
         let top = above ? edges.minY - gap - h : edges.maxY + gap
         panel.frame = CGRect(x: x, y: max(view.safeAreaInsets.top + pad, top), width: w, height: h)

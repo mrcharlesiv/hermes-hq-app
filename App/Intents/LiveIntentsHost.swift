@@ -187,7 +187,19 @@ import UIKit
         guard let root else { return }
         let open = { [weak self] in
             guard let self, let root = self.root else { return }
+            #if targetEnvironment(macCatalyst)
+            // [keys] Mac UI check 2026-11-13 (K1, K2): the Dock's Search Sessions does what Edit › Search Sessions (⇧⌘F)
+            // does: with no Sessions place in the sidebar, Open Quickly (which finds the sessions too).
+            if root.controller(for: .sessions) == nil {
+                (UIApplication.shared.delegate as? AppDelegate)?.hqOpenQuickly(nil)
+                return
+            }
+            #endif
             root.select(.sessions)
+            #if targetEnvironment(macCatalyst)
+            // K2: the right pane follows, as a sidebar click on Sessions does (a Bots chat stayed beside the search).
+            root.split?.followSelectedTab()
+            #endif
             let sessions = root.sessionsViewController
             sessions.navigationController?.popToRootViewController(animated: false)
             sessions.search("")                              // the field open and empty (§9.5)

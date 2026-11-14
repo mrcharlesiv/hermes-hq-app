@@ -75,7 +75,7 @@ nonisolated enum SkinCatalog {
         ("cyberpunk", "Cyberpunk", "Neon green on black — matrix terminal", "Courier New"),
         // [mac] Stress test 2026-10-28 #27: on a Mac the same colours are the Mac's own system colours too.
         ("ios", DeviceWord.isMac ? "Apple System" : "iOS System",
-         DeviceWord.isMac ? "Apple’s system colours, true black in dark, system blue" : "iOS colours, true black in dark, system blue", nil),
+         DeviceWord.isMac ? "Apple’s system colors, true black in dark, system blue" : "iOS colors, true black in dark, system blue", nil),
     ]
 
     static let all: [Skin] = meta.compactMap { id, label, description, sans in

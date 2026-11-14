@@ -27,6 +27,7 @@ enum CommandCenter {
         let page = MorePageController(title: CommandCenterNames.page, identifier: "command-center.page", CommandCenterView(model: model))
         model.host = page
         page.retained = [model]
+        page.keyRefresh = { [weak model] in Task { await model?.refresh() } }   // [Mac UI check 2026-11-13] ⌘R, as a pull (the Mac has no pull)
         page.onAppear = { [weak model] in model?.appear() }
         page.onDisappear = { [weak model] in model?.disappear() }
         return page

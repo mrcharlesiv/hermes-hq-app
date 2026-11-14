@@ -462,6 +462,18 @@ nonisolated enum SlashCatalog {
         return rows.isEmpty ? nil : Section(title: favoritesTitle, rows: rows)
     }
 
+    /// [Mac UI check 2026-11-13] V22: `shown` led by Favorites, the starred commands taken out of their own sections
+    /// below (a section left empty goes), so a starred command is listed once, not twice in a row ("/status" under
+    /// Favorites and again under Session). A search still finds it in its own section. `shown` unchanged when none is
+    /// starred or listed. The Mac's lists (its Commands panel and slash drawer); the iPhone's and iPad's keep both.
+    static func favoritesLeading(_ shown: [Section], all: [Section], favorites: [String]) -> [Section] {
+        guard let starred = favoritesSection(all, favorites: favorites) else { return shown }
+        let names = Set(starred.rows.map { normalize($0.command) })
+        let rest = shown.map { Section(title: $0.title, rows: $0.rows.filter { !names.contains(normalize($0.command)) }) }
+            .filter { !$0.rows.isEmpty }
+        return [starred] + rest
+    }
+
     /// Rows whose command or description holds every typed word (a leading "/" ignored).
     static func filter(_ sections: [Section], query: String) -> [Section] {
         var q = query.lowercased()

@@ -50,7 +50,15 @@ enum FailureAlert {
 
     static func topmost(_ controller: UIViewController?) -> UIViewController? {
         // A list under a pushed page (Sessions under Other Apps) is out of the window: its stack's window still is.
-        var top = (controller?.view.window ?? controller?.navigationController?.view.window)?.rootViewController ?? controller
+        #if targetEnvironment(macCatalyst)
+        // [Mac UI check 2026-11-13] A list not on show at all (Sessions while the Mac sidebar's chat menu acts for it):
+        // the main window's.
+        let window = controller?.view.window ?? controller?.navigationController?.view.window
+            ?? (controller == nil ? nil : MainTabController.current?.view.window)
+        #else
+        let window = controller?.view.window ?? controller?.navigationController?.view.window
+        #endif
+        var top = window?.rootViewController ?? controller
         while let presented = top?.presentedViewController, !presented.isBeingDismissed { top = presented }
         return top
     }

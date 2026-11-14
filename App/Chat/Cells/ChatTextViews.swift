@@ -581,7 +581,10 @@ final class BlockView: UIView, UIScrollViewDelegate {
         }
         let width = max(1, scroll.bounds.width)
         let x = scroll.contentOffset.x
-        let fade = min(28, width / 4) / width
+        // [Mac UI check 2026-11-13] V9: code's fade is longer than a table's (a cut column already reads as going on);
+        // over 28 pt a long line still read as simply cut at the card's edge.
+        let reach: CGFloat = { if case .code? = block { return 48 } else { return 28 } }()
+        let fade = min(reach, width / 4) / width
         let before: CGFloat = x > 0.5 ? 1 : 0
         let after: CGFloat = x < scroll.contentSize.width - scroll.bounds.width - 0.5 ? 1 : 0
         let solid = UIColor.black.cgColor

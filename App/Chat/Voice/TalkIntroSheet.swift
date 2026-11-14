@@ -81,6 +81,9 @@ final class TalkIntroSheet: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.accessibilityIdentifier = form == .intro ? "talk.intro" : "talk.info"
+        // [Mac UI check 2026-11-13] A1: the sheet had no page colour of its own, so the dark Desktop Look's light words sat
+        // on a blank pale sheet; the sheets' page (clear on Liquid Glass, as before), and the title in the theme's ink.
+        view.backgroundColor = HQPalette.sheetPage
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.alwaysBounceVertical = false
         view.addSubview(scroll)
@@ -92,6 +95,7 @@ final class TalkIntroSheet: UIViewController {
         let title = UILabel()
         title.text = form == .intro ? "Talk with \(name)" : "How Voice Works"
         title.font = UIFontMetrics(forTextStyle: .title2).scaledFont(for: HQFont.system(ofSize: 22, weight: .bold))
+        title.textColor = HQPalette.label
         title.adjustsFontForContentSizeCategory = true
         title.numberOfLines = 0
         title.textAlignment = .center
@@ -214,6 +218,7 @@ final class TalkIntroSheet: UIViewController {
         title.text = row.title
         title.font = HQFont.preferred(.headline)
         title.adjustsFontForContentSizeCategory = true
+        title.textColor = ChatPalette.label
         title.numberOfLines = 0
         let body = UILabel()
         body.text = row.body

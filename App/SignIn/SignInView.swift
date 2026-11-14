@@ -491,9 +491,10 @@ struct SignInView: View {
                 SecureField(SignInCopy.Access.clientSecret, text: $model.accessSecret)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
-                    .submitLabel(.done)
+                    .submitLabel(.next)
                     .focused($focus, equals: .accessSecret)
-                    .onSubmit { focus = nil }
+                    // [Mac UI check 2026-11-13] Return goes on, as Return in the address does (it only left the field).
+                    .onSubmit(addressSubmitted)
                     .fieldStyle(height: fieldHeight, invalid: false)
                     .accessibilityIdentifier("sign-in-access-secret")
             }

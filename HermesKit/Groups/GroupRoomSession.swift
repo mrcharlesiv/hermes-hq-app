@@ -521,8 +521,11 @@ import Foundation
 
 /// A sender's colour before the contrast step: its head's accent (the colour the row's face uses).
 nonisolated enum ChatSenderColors {
-    static func hex(head raw: JSONValue?, profile: String) -> String {
+    /// [Mac UI check 2026-11-13] A name follows its own face (V13): a white/black face (ink, paper) has no colour of its
+    /// own, so its name is the label colour, not the ink tone's teal accent, which read as another teal bot's.
+    static func hex(head raw: JSONValue?, profile: String) -> String? {
         let head = Head.resolve(raw, profile: profile)
+        if head.color == .ink || head.color == .paper { return nil }
         return HeadTones.accent(head.color).description
     }
 }

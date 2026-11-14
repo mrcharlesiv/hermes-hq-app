@@ -87,7 +87,7 @@ nonisolated enum SignInCopy {
         "no-password": "No password sign-in here: try Sign in with Nous, or add HERMES_DASHBOARD_BASIC_AUTH_USERNAME and HERMES_DASHBOARD_BASIC_AUTH_PASSWORD to ~/.hermes/.env on the computer running Hermes and restart the Hermes dashboard.",
         "signed-out": "Sign in to Hermes to continue.",
         "session-ended": "Your session on this Hermes ended. Enter your password to sign in again.",
-        "insecure-url": "Use an https:// address. Plain http:// works only for private addresses: your local network, a VPN such as Tailscale or WireGuard, and .local names.",
+        "insecure-url": "Use an https:// address. Plain http:// works only for private addresses: your local network, a VPN such as Tailscale or WireGuard, and names ending in .local, .lan, .internal or .home.arpa.",
         "tailscale-ip": "\(device) allows plain http:// to a Tailscale machine only by its name. Use the Tailscale name of the computer running Hermes (in the Tailscale app, like mac-mini.tailnet-name.ts.net) instead of its 100.x address, or use https://.",
         "invalid-url": "Enter the full address, like https://my-mac.tail1234.ts.net.",
         "missing-fields": "Enter the address, username and password.",

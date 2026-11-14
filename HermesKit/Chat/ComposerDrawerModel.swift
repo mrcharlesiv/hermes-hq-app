@@ -224,8 +224,10 @@ nonisolated enum ComposerDrawerModel {
     /// `catalogFailed`: the catalog's load failed, said in one line (the next "/" tries again).
     /// `favorites`: starred commands ("/name", in starred order): a bare "/" opens on them, and typed, the ones the
     /// words start lead (§9.7).
+    /// `starredOnce`: a bare "/" lists a starred command under Favorites only, not again in its own section (the Mac).
     static func slashSections(text: String, catalog: CommandsCatalog?, catalogLoading: Bool, catalogFailed: Bool = false,
-                              isBotChat: Bool, remote: Answer?, recent: [RecentChat], favorites: [String] = []) -> [Section]? {
+                              isBotChat: Bool, remote: Answer?, recent: [RecentChat], favorites: [String] = [],
+                              starredOnce: Bool = false) -> [Section]? {
         let afterSlash = String(text.dropFirst())
         if let space = afterSlash.firstIndex(where: { $0.isWhitespace }) {
             let name = afterSlash[..<space].lowercased()
@@ -246,17 +248,27 @@ nonisolated enum ComposerDrawerModel {
         let query = afterSlash.lowercased()
         if query.isEmpty {
             var shown = all.map { Section(title: $0.title, rows: $0.rows.map(commandRow)) }.filter { !$0.rows.isEmpty }
-            if let starred = SlashCatalog.favoritesSection(all, favorites: favorites) {
+            if starredOnce {
+                // [Mac UI check 2026-11-13] V22: a starred command is listed once, under Favorites (`favoritesLeading`).
+                let hasStarred = SlashCatalog.favoritesSection(all, favorites: favorites) != nil
+                let led = SlashCatalog.favoritesLeading(all, all: all, favorites: favorites)
+                shown = led.enumerated().map { index, section in
+                    let starred = hasStarred && index == 0
+                    return Section(title: section.title, rows: section.rows.map { starred ? favoriteRow(commandRow($0)) : commandRow($0) })
+                }.filter { !$0.rows.isEmpty }
+            } else if let starred = SlashCatalog.favoritesSection(all, favorites: favorites) {
                 shown.insert(Section(title: starred.title, rows: starred.rows.map { favoriteRow(commandRow($0)) }), at: 0)
             }
             return shown.isEmpty ? (noneListed ? noCommandsNote() : note(noMatches)) : shown
         }
-        var sections: [Section]
+        var sections: [Section] = []
         if let remote {
             sections = remoteCommandSections(remote, catalog: catalog, isBotChat: isBotChat)
-        } else {
-            let rows = all.flatMap(\.rows)
-            sections = grouped(rank(rows, query: query))
+        }
+        // [Mac UI check 2026-11-13] V2: a gateway answer with nothing usable (no items, or only ones the filters drop)
+        // said "No matches." for "/s" while the catalog held /status and /stop; the commands already held are ranked.
+        if sections.isEmpty {
+            sections = grouped(rank(all.flatMap(\.rows), query: query))
         }
         sections = favoritesFirst(sections, query: query, favorites: favorites)
         return sections.isEmpty ? (noneListed ? noCommandsNote() : note(noMatches)) : sections

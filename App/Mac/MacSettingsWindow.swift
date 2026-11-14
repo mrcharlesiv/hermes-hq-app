@@ -31,7 +31,11 @@ import UIKit
     /// `category`: the one marked in the column while that page shows (Sidebar is Appearance's, Providers is Hermes').
     @discardableResult static func open(category: SettingsCategory? = nil, then: @escaping (SettingsRouter) -> Void) -> Bool {
         openWindow { router in
-            if let category { root?.model.category = category }
+            // [Mac UI check 2026-11-13] Through the router's jump (the column marked, the pane on that category's page,
+            // Back named for it): a window still opening has no `root` yet, so Add Provider… left General marked.
+            if let category {
+                if let jump = router.jump { jump(category) } else { root?.model.category = category }
+            }
             then(router)
         }
     }
@@ -138,6 +142,7 @@ import UIKit
             guard let page = UserDefaults.standard.string(forKey: "HQDebugSettingsWindowPage"), !page.isEmpty else { open(); return }
             open { router in
                 let preset = ProviderPreset.all.first(where: { $0.id == page })
+                router.jump?(.gateway)   // [Mac UI check 2026-11-13] Providers is Hermes'
                 router.push("Providers", ProvidersPageView(router: router, startAdding: page == "add"))
                 guard let preset else { return }
                 let api = router.gatewaySettings?.settingsAPI

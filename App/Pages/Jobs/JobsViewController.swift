@@ -143,6 +143,7 @@ final class JobsViewController: UIViewController, UICollectionViewDelegate, UISe
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        installBarItemTips()   // [Mac UI check 2026-11-13] the bar's icon buttons name themselves under the pointer
         searchCapsule?.restoreIfTyped()   // [morepages]
         claimStore()
         if !observing { observing = true; store.noteAppear() }
@@ -393,10 +394,13 @@ final class JobsViewController: UIViewController, UICollectionViewDelegate, UISe
         scopeItem.update(scope: scope, bots: services?.bots ?? [], on: navigationItem, extra: [addItem], search: searchCapsule?.searchItem)
         updateEmptyState(visibleCount: visible.count + blueprints.count)
         // [mac-audit G] Owner 2026-11-02 (Mac audit #18): no jobs at all and nothing narrowing the list (no search, All
-        // Bots): All Bots and Search have nothing to act on and leave the bar; + stays beside the state's New Job….
+        // Bots): All Bots and Search have nothing to act on and leave the bar. [Mac UI check 2026-11-13] Owner: one place
+        // per action: while the state offers its New Job… button, + leaves the bar too; it comes back with the first job.
         if DeviceWord.isMac, emptyConfiguration != nil, query.pgTrim.isEmpty, scope.effective(bots: services?.bots ?? []) == PagesScope.all,
-           searchCapsule?.isSearchShown != true, navigationItem.rightBarButtonItems ?? [] != [addItem] {
-            navigationItem.rightBarButtonItems = [addItem]
+           searchCapsule?.isSearchShown != true {
+            let offersButton = (emptyConfiguration as? UIContentUnavailableConfiguration)?.button != nil
+            let items = offersButton ? [] : [addItem]
+            if navigationItem.rightBarButtonItems ?? [] != items { navigationItem.rightBarButtonItems = items }
         }
         scheduleSkeleton()
         if let started = refreshStarted, !store.loading {

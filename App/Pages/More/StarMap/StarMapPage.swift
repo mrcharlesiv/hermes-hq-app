@@ -12,6 +12,7 @@ extension MorePages {
             let stage = StarMapStage()
             let page = MorePageController(title: "Star Map", identifier: "starmap.page", StarMapPage(model: model, stage: stage))
             page.retained = [model, stage]
+            page.keyRefresh = { [weak model] in Task { await model?.refresh() } }   // [Mac UI check 2026-11-13] ⌘R, as a pull (the Mac has no pull)
             page.onAppear = { model.start() }
             #if DEBUG
             stage.onFramed = { [weak stage] in if let stage { StarMapProbe.startIfWanted(stage) } }

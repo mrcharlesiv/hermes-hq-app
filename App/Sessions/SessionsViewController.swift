@@ -286,6 +286,7 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        installBarItemTips()   // [Mac UI check 2026-11-13] the bar's icon buttons name themselves under the pointer
         otherAppsOnTop = false           // Back inside a chat pushed from here says the unread count again
         schedulePeek()
         #if DEBUG

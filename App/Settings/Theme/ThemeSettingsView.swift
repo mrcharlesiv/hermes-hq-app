@@ -52,8 +52,8 @@ struct ThemeSettingsView: View {
     private static let chatsRow = "theme.desktopChats"
     private static let densityRow = "theme.densityRow"
 
-    static var lookNote: String { "Draws Hermes HQ like the Hermes desktop app: your theme’s own colours on every screen, square corners and solid bars instead of glass. \(DeviceWord.onlyHere)" }
-    static let contrastNote = "Sets your messages, boxes, lines and secondary text further apart from the page, in your theme’s own colours. For themes that look flat."
+    static var lookNote: String { "Draws Hermes HQ like the Hermes desktop app: your theme’s own colors on every screen, square corners and solid bars instead of glass. \(DeviceWord.onlyHere)" }
+    static let contrastNote = "Sets your messages, boxes, lines and secondary text further apart from the page, in your theme’s own colors. For themes that look flat."
     /// [density] Both looks on the iPhone and iPad too (it was the Desktop Look's only, the iOS look staying at 100 %).
     static var scaleNote: String { DeviceWord.isMac ? macScaleNote : "Makes text, faces and rows larger or smaller, in both looks, on top of the text size set in \(DeviceWord.settingsApp). \(DeviceWord.onlyHere)" }
     /// [density] The iOS look's Density and UI Scale share one group, so its footer names each.
@@ -343,17 +343,17 @@ struct ChatBubblesSettingsView: View {
 
     static var note: String {
         GlassBubbles.offered
-            ? "How round the corners of messages in chats are, and how they’re filled: Solid, Liquid Glass in your theme’s colours, or Tinted with the colours of your Chat Background. 12 pt is the standard. With Reduce Transparency on, messages stay solid. The Desktop Look has its own Corners, in Theme. \(DeviceWord.onlyHere)"
-            : "How round the corners of messages in chats are, and whether they’re Tinted with the colours of your Chat Background. 12 pt is the standard. With Reduce Transparency on, messages stay solid. The Desktop Look has its own Corners, in Theme. \(DeviceWord.onlyHere)"
+            ? "How round the corners of messages in chats are, and how they’re filled: Solid, Liquid Glass in your theme’s colors, or Tinted with the colors of your Chat Background. 12 pt is the standard. With Reduce Transparency on, messages stay solid. The Desktop Look has its own Corners, in Theme. \(DeviceWord.onlyHere)"
+            : "How round the corners of messages in chats are, and whether they’re Tinted with the colors of your Chat Background. 12 pt is the standard. With Reduce Transparency on, messages stay solid. The Desktop Look has its own Corners, in Theme. \(DeviceWord.onlyHere)"
     }
     /// [bubbles-note] Owner 2026-11-10 (design pick 23): where the three styles are offered, the note follows the
     /// choice: one line about the style picked, then the rest in three short sentences (it explained all three at
     /// once, in seven lines).
     static func styleLine(_ style: BubbleStyle) -> String {
         switch style {
-        case .glass: "Glass: Liquid Glass in your theme’s colours."
-        case .tinted: "Tinted: the colours of your Chat Background."
-        default: "Solid: filled with your theme’s colours."
+        case .glass: "Glass: Liquid Glass in your theme’s colors."
+        case .tinted: "Tinted: the colors of your Chat Background."
+        default: "Solid: filled with your theme’s colors."
         }
     }
     static var shortNote: String {
@@ -363,14 +363,14 @@ struct ChatBubblesSettingsView: View {
     /// [message-colour] What Colour changes, and what Theme means in its row.
     static var colourNote: String {
         // [bot-colour] The face choice, and where a bot's own colour is.
-        let faces = "Bot’s Face gives each bot’s chat the colour of its face. A bot can have its own colour in Bot Info › Settings."
+        let faces = "Bot’s Face gives each bot’s chat the color of its face. A bot can have its own color in Bot Info › Settings."
         return DeviceWord.isMac
-            ? "Colour is for your own messages and the row chosen in the sidebar. Theme keeps your theme’s colour. \(faces)"
-            : "Colour is for your own messages. Theme keeps your theme’s colour. \(faces)"
+            ? "Color is for your own messages and the row chosen in the sidebar. Theme keeps your theme’s color. \(faces)"
+            : "Color is for your own messages. Theme keeps your theme’s color. \(faces)"
     }
 
     /// [tinted-bubbles] Tinted picked with no Chat Background: it has no colours to take.
-    static let tintedNeedsBackground = "Tinted takes its colours from your Chat Background. Choose one in Settings › Backgrounds; until then, messages are solid."
+    static let tintedNeedsBackground = "Tinted takes its colors from your Chat Background. Choose one in Settings › Backgrounds; until then, messages are solid."
 
     var body: some View {
         let state = theme.state
@@ -381,7 +381,7 @@ struct ChatBubblesSettingsView: View {
                     .hqRowPadding(4)
                 bubbleStylePicker(state)
                 // [message-colour] Owner 2026-11-11: your own messages in a colour of your choosing.
-                ColourSwatchRow(title: "Colour", value: state.messageColour.title, state: state,
+                ColourSwatchRow(title: "Color", value: state.messageColour.title, state: state,
                                 swatches: MessageColour.offered.map { ColourSwatch($0) },
                                 picked: state.messageColour.swatchID, custom: state.messageColour.customHex,
                                 identifier: "theme.messageColour") { swatch in
@@ -435,7 +435,7 @@ struct ChatBubblesSettingsView: View {
                 Text("Style").foregroundStyle(Color.hqLabel).fixedSize()   // [ui-sizing] whole beside its segments (it wrapped "Styl / e" at 150 %)
                 Spacer(minLength: 8)
                 HQSegmentedPicker("Style", options: BubbleStyles.offered.map { ($0.title, $0) },
-                                  selection: Binding(get: { style }, set: { pick($0) }), ticks: false)
+                                  selection: Binding(get: { style }, set: { pick($0) }), ticks: false, wholeLabels: true)   // [Mac UI check 2026-11-13]
                 .labelsHidden()
                 .fixedSize()
             }

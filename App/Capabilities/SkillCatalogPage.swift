@@ -17,6 +17,9 @@ final class SkillCatalogEntryController: UIHostingController<HQScaledRoot<SkillC
         page.host = self
     }
 
+    /// [Mac UI check 2026-11-13] Beside the store front: its Install To is the one shown.
+    func installToBeside() { page.installToBeside = true }
+
     @MainActor required dynamic init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
     /// An install link's confirm sheet asks as soon as the page is up.
@@ -37,6 +40,8 @@ final class SkillCatalogEntryModel {
     let parent: CapabilitiesModel
     let entry: MarketSkill
     var installOnAppear = false
+    /// [Mac UI check 2026-11-13] Shown beside the Mac's store front, whose own Install To pop-up is in sight.
+    var installToBeside = false
     @ObservationIgnored weak var host: UIViewController?
 
     init(parent: CapabilitiesModel, entry: MarketSkill) {
@@ -161,7 +166,7 @@ struct SkillCatalogEntryView: View {
     // [marketplace] Install To stands in its own card: in the same section as the clear button row, the card ended
     // half-drawn with Desktop Look off.
     @ViewBuilder private var installSection: some View {
-        if page.parent.bots.count > 1 {
+        if page.parent.bots.count > 1, !page.installToBeside {
             Section { MarketplaceInstallTo(model: page.parent).disabled(page.installing) }
         }
         Section {

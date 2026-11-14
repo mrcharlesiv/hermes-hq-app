@@ -95,7 +95,7 @@ import UIKit
                                    .action("Change Face", "face.smiling") { [weak self] in self?.openInfo(bot, start: .face) }]
         if let item = BotMenuHooks.item(.newChat, bot, host) { info.append(item) }
         // [chats-under] Sessions with this bot's chip picked (tester, 2026-11-08). A hidden bot has no chip.
-        if !bot.hidden {
+        if !bot.hidden, BotsViewController.sessionsListed {   // [Mac UI check 2026-11-13] not while Sessions is hidden
             var view = BotMenuNode.action("View Sessions", "bubble.left.and.bubble.right") { [weak self] in self?.host?.openAllChats(of: bot.id) }
             view.identifier = "bot-menu.view-sessions"
             info.append(view)

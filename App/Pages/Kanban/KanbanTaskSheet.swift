@@ -572,6 +572,8 @@ struct KanbanTaskView: View {
                         Text(model.estimate ?? (model.busy.contains("estimate") ? "Estimating…" : "Estimate Effort"))
                             .foregroundStyle(model.estimate == nil ? Color.hqTint : Color.hqLabel)
                     } icon: { Image(systemName: "gauge.with.dots.needle.33percent").foregroundStyle(Color.hqTint) }
+                    // [Mac UI check 2026-11-13] In the panel (a plain list, no section gap) it sat tight under Task ID.
+                    .padding(.top, panel ? 8 : 0)
                 }
                 .disabled(model.busy.contains("estimate") || model.estimate != nil)
                 .id(Self.estimateId)
@@ -1248,6 +1250,9 @@ private struct TaskListLook: ViewModifier {
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)
                 .background(Color.hqPage)
+                // [Mac UI check 2026-11-13] No outline round its sections in the Desktop Look either (as in the iOS look):
+                // the look's boxes followed the plain list's full-width rows and ran edge to edge past the inset controls.
+                .background { if Theme.isDesktop { TaskPanelNoBoxes() } }
                 .font(Font.inspectorText)
                 .labeledContentStyle(TaskPanelFact())
                 .environment(\.defaultMinListRowHeight, 30)
@@ -1275,6 +1280,46 @@ private struct TaskPanelRows: ViewModifier {
     }
 }
 
+/// Finds the panel's list and tells the Desktop Look's outliner to box none of its sections (its rows are already
+/// parted by hairlines on the page, as in the iOS look).
+private struct TaskPanelNoBoxes: UIViewRepresentable {
+    func makeUIView(context: Context) -> Probe { Probe() }
+    func updateUIView(_ view: Probe, context: Context) { view.find() }
+
+    final class Probe: UIView {
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            find()
+        }
+
+        func find() {
+            guard window != nil else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.window != nil else { return }
+                var ancestor = self.superview
+                for _ in 0..<6 {
+                    guard let current = ancestor else { return }
+                    if let list = Self.firstList(in: current, depth: 6) {
+                        if let outliner = DesktopListOutliner.attach(to: list) {
+                            outliner.boxes = { _ in false }
+                            outliner.update()
+                        }
+                        return
+                    }
+                    ancestor = current.superview
+                }
+            }
+        }
+
+        private static func firstList(in view: UIView, depth: Int) -> UICollectionView? {
+            if let list = view as? UICollectionView { return list }
+            guard depth > 0 else { return nil }
+            for child in view.subviews { if let found = firstList(in: child, depth: depth - 1) { return found } }
+            return nil
+        }
+    }
+}
+
 private struct TaskPanelFact: LabeledContentStyle {
     func makeBody(configuration: Configuration) -> some View {
         HStack(alignment: .firstTextBaseline) {
@@ -1290,11 +1335,13 @@ private struct TaskPanelField: ViewModifier {
     var panel: Bool
     func body(content: Content) -> some View {
         if panel {
+            // [Mac UI check 2026-11-13] The iOS look's controls round it (the segments, the pop-ups): its 5 pt box read square there.
+            let radius = Theme.isDesktop ? MacField.radius : 8
             content
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
-                .background(RoundedRectangle(cornerRadius: MacField.radius, style: .continuous).fill(MacField.fill))
-                .overlay(RoundedRectangle(cornerRadius: MacField.radius, style: .continuous).strokeBorder(MacField.stroke, lineWidth: 1))
+                .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(MacField.fill))
+                .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(MacField.stroke, lineWidth: 1))
         } else {
             content
         }
@@ -1432,4 +1479,9 @@ struct FoldedMarkdown: View {
             }
         }
     }
+}
+
+/// [Mac UI check 2026-11-13] ⌘R reads the task again, as its pull does (the Mac has no pull).
+extension KanbanTaskHostController: KeyRefreshing {
+    var keyRefresh: (() -> Void)? { { [weak self] in guard let model = self?.model else { return }; Task { await model.read() } } }
 }

@@ -113,6 +113,19 @@ enum DesktopLookTourHooks {
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { MainActor.assumeIsolated { work() } }
     }
 
+    /// [Mac UI check 2026-11-13] Settings' router, once Settings is up: on the Mac its own window's (two columns: the
+    /// window's stack holds no Settings root to find, so `settings-providers`, `-providers-add` and `settings-model`
+    /// opened nothing there), elsewhere the sheet's root.
+    private static func withSettings(from root: MainTabController, _ body: @escaping (SettingsRouter) -> Void) {
+        #if targetEnvironment(macCatalyst)
+        if MacSettingsWindow.open(then: body) { return }
+        #endif
+        SettingsScreens.presentSettings(from: root, services: root.services) { navigation in
+            guard let router = (navigation.viewControllers.first as? SettingsRootController)?.router else { return }
+            body(router)
+        }
+    }
+
     private static func go(_ screen: String, bot wanted: String?, root: MainTabController, attempts: Int) {
         let services = root.services
         func retry() { if attempts > 0 { after(0.25) { go(screen, bot: wanted, root: root, attempts: attempts - 1) } } }
@@ -282,9 +295,8 @@ enum DesktopLookTourHooks {
                 after(1.0) { SettingsNavigator.openRoot(item, router: router) }
             }
         case "settings-model", "settings-context":   // [context-window] Settings › Model, and its Context Window page
-            SettingsScreens.presentSettings(from: root, services: services) { navigation in
-                guard let router = (navigation.viewControllers.first as? SettingsRootController)?.router,
-                      let section = ConfigCatalog.section("model") else { return }
+            withSettings(from: root) { router in
+                guard let section = ConfigCatalog.section("model") else { return }
                 after(1.0) {
                     ConfigScreens.open(section: section, router: router)
                     guard screen == "settings-context", let page = ConfigCatalog.page("model.context") else { return }
@@ -292,8 +304,7 @@ enum DesktopLookTourHooks {
                 }
             }
         case "settings-providers", "settings-provider":   // [custom-providers] Settings › Providers, and a provider's page
-            SettingsScreens.presentSettings(from: root, services: services) { navigation in
-                guard let router = (navigation.viewControllers.first as? SettingsRootController)?.router else { return }
+            withSettings(from: root) { router in
                 after(1.0) {
                     SettingsNavigator.openRoot("providers", router: router)
                     guard screen == "settings-provider" else { return }
@@ -323,9 +334,9 @@ enum DesktopLookTourHooks {
                 }
             }
         case "settings-providers-add":   // [provider-add] the chooser over Providers, or a preset's page
-            SettingsScreens.presentSettings(from: root, services: services) { navigation in
-                guard let router = (navigation.viewControllers.first as? SettingsRootController)?.router else { return }
+            withSettings(from: root) { router in
                 after(1.0) {
+                    router.jump?(.gateway)   // [Mac UI check 2026-11-13] as Add Provider… does (`MacSettingsWindow.open(category:)`)
                     router.push("Providers", ProvidersPageView(router: router, startAdding: true))
                     guard let id = UserDefaults.standard.string(forKey: "HQDebugTourItem"),
                           let preset = ProviderPreset.all.first(where: { $0.id == id }) else { return }

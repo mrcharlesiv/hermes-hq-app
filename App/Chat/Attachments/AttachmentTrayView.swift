@@ -168,8 +168,19 @@ final class AttachmentTrayView: UIView {
         // tray left its first tile at 67 pt, lined up with nothing, or cut at the screen's edge at accessibility sizes).
         // [glass-phone] Inside the glass card the margin is the card's padding, and the field's edge is measured from
         // the card's.
-        let margin = desktop ? ChatMetrics.composerSideDown : Self.glassPad
-        let lineUp = leadingInset - panel.frame.minX
+        var margin = desktop ? ChatMetrics.composerSideDown : Self.glassPad
+        var lineUp = leadingInset - panel.frame.minX
+        /// The room kept past the last tile (the scroll to the newest one must not push the first one off).
+        var trailing = margin
+        // [Mac UI check 2026-11-13] V35: over the look's one box the tiles start at the box's own leading edge; lined up
+        // with the field (after ☰ and +) they sat off the box's edge, belonging to neither. The box's edge is measured in
+        // the panel's own space, and the first tile's hairline sits just inside it, never on the scroll's clipped edge.
+        if desktop, let composer = superview as? ComposerView {
+            let edge = composer.convert(CGPoint(x: composer.currentSideInset - composer.boxOutset, y: 0), to: panel).x
+            lineUp = max(2, edge.rounded() + 1)
+            margin = lineUp
+            trailing = max(trailing, lineUp)
+        }
         let width = panel.bounds.width
         let tilesWidth = order.compactMap { tiles[$0]?.preferredWidth }.reduce(0) { $0 + $1 + 8 } - 8
         var x = max(lineUp, margin)
@@ -189,7 +200,9 @@ final class AttachmentTrayView: UIView {
         }
         // Integration: the end keeps the screen's side margin, not the field's leading edge (with ☰ and + before the
         // field that was 118 pt of empty room, and the scroll to the newest tile cut the first one at the left edge).
-        scroll.contentSize = CGSize(width: x - 8 + margin, height: panel.bounds.height)
+        scroll.contentSize = CGSize(width: x - 8 + trailing, height: panel.bounds.height)
+        // All of it fits: nothing is scrolled, so the first tile is never cut at the strip's leading edge.
+        if scroll.contentSize.width <= scroll.bounds.width + 0.5, scroll.contentOffset.x != 0 { scroll.contentOffset.x = 0 }
     }
 }
 
@@ -421,7 +434,11 @@ final class TrayTileView: UIView {
         failedBadge.frame = attachment?.kind != .image ? iconBox.frame : card.bounds
         tapControl.frame = bounds
         // 22 pt glyph at the top-trailing corner, offset (−6, −6) outward; a 44 pt target.
-        removeButton.frame = CGRect(x: bounds.width - 22 + 6 - 11, y: -6 - 11, width: 44, height: 44)
+        // [Mac UI check 2026-11-13] V35: over the Mac's one box the ✕ sits inside the tile's corner (4 pt in), where a
+        // pointer finds it; outside the corner it hung over the strip's edge.
+        let inside = ComposerView.oneBox
+        removeButton.frame = inside ? CGRect(x: bounds.width - 22 - 4 - 11, y: 4 - 11, width: 44, height: 44)
+            : CGRect(x: bounds.width - 22 + 6 - 11, y: -6 - 11, width: 44, height: 44)
         removeDisc.frame = CGRect(x: 11, y: 11, width: 22, height: 22)
         removeDisc.layer.cornerRadius = 11
         removeButton.sendSubviewToBack(removeDisc)

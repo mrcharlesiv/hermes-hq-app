@@ -58,6 +58,7 @@ final class PushedPageTitles: NSObject, UINavigationControllerDelegate {
         #endif
         #if targetEnvironment(macCatalyst)
         MacPlaceTitle.leadInSettingsPane(viewController, in: navigationController)   // [mac-ui-issues]
+        MacPlaceTitle.leadPage(viewController, in: navigationController)   // [Mac UI check 2026-11-13] V17
         #endif
         guard viewController !== navigationController.viewControllers.first else {
             #if targetEnvironment(macCatalyst)
@@ -514,5 +515,51 @@ nonisolated extension UIFont {
     func pagesWeight(_ weight: UIFont.Weight) -> UIFont {
         let descriptor = fontDescriptor.addingAttributes([.traits: [UIFontDescriptor.TraitKey.weight: weight]])
         return UIFont(descriptor: descriptor, size: pointSize)
+    }
+}
+
+// MARK: - The bar's tips
+
+#if targetEnvironment(macCatalyst)
+/// [Mac UI check 2026-11-13] An icon-only bar button names itself when the pointer rests on it ("New Job", "Search
+/// Sessions"), as the sidebar's buttons do. The window's tip (`MacToolTips`) reads the label off the view under the
+/// pointer, and a plain bar item's view doesn't carry its item's label, so the tip found nothing over the bars' "+",
+/// magnifiers and ⋯. One tip on each place's bar finds the item under the pointer by its frame and says its label.
+@MainActor final class BarItemTips: NSObject, UIToolTipInteractionDelegate {
+    static let shared = BarItemTips()
+
+    static func install(on bar: UINavigationBar?) {
+        guard let bar, !bar.interactions.contains(where: { ($0 as? UIToolTipInteraction)?.delegate === shared }) else { return }
+        let interaction = UIToolTipInteraction()
+        interaction.delegate = shared
+        bar.addInteraction(interaction)
+    }
+
+    func toolTipInteraction(_ interaction: UIToolTipInteraction, configurationAt point: CGPoint) -> UIToolTipConfiguration? {
+        guard let bar = interaction.view as? UINavigationBar, let top = bar.topItem else { return nil }
+        for item in (top.leftBarButtonItems ?? []) + (top.rightBarButtonItems ?? []) {
+            // Words of its own (Edit, Done) or its own view (a pop-up with its title) need no tip.
+            guard item.customView == nil, !item.isHidden, item.image != nil, (item.title ?? "").isEmpty,
+                  let label = item.accessibilityLabel?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty,
+                  let frame = item.frame(in: bar), frame.contains(point) else { continue }
+            return UIToolTipConfiguration(toolTip: label, in: frame)
+        }
+        // Anything else on the bar (a pop-up, a button of the page's own) keeps the window's tip.
+        var view = bar.hitTest(point, with: nil)
+        while let current = view, current !== bar {
+            if let tip = MacToolTips.tip(for: current) { return UIToolTipConfiguration(toolTip: tip, in: current.convert(current.bounds, to: bar)) }
+            view = current.superview
+        }
+        return nil
+    }
+}
+#endif
+
+extension UIViewController {
+    /// [Mac UI check 2026-11-13] The tips for this page's bar buttons (`BarItemTips`); nothing off the Mac.
+    func installBarItemTips() {
+        #if targetEnvironment(macCatalyst)
+        BarItemTips.install(on: navigationController?.navigationBar)
+        #endif
     }
 }

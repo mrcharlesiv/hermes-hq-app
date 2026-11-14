@@ -115,6 +115,8 @@ nonisolated enum AttachmentDrop {
     var onDrop: ([NSItemProvider]) -> Void = { _ in }
     /// The view the overlay covers (the chat screen's).
     weak var host: UIView?
+    /// The part of `host` the overlay covers (nil: all of it).
+    var area: () -> CGRect? = { nil }
     private var overlay: AttachmentDropOverlay?
 
     private func providers(_ session: UIDropSession) -> [NSItemProvider] {
@@ -153,8 +155,9 @@ nonisolated enum AttachmentDrop {
     private func showOverlay(count: Int) {
         guard let host, count > 0 else { return hideOverlay() }
         let shown = overlay ?? AttachmentDropOverlay()
+        let frame = area() ?? host.bounds
+        if shown.frame != frame { shown.frame = frame }
         if shown.superview !== host {
-            shown.frame = host.bounds
             shown.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             host.addSubview(shown)
             shown.alpha = 0

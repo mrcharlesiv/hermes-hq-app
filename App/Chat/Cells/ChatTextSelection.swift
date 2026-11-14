@@ -99,6 +99,13 @@ final class ChatTextSelector: NSObject, UIGestureRecognizerDelegate {
     var hasSelection: Bool { selection.map { !$0.isEmpty } ?? false }
     var isActive: Bool { Self.active === self }
 
+    /// [Mac UI check 2026-11-13] V21: a click into the message box puts a bubble's selection away, as a click anywhere
+    /// else does; two highlighted selections read as two places ⌘C could copy from. The keyboard stays where it is.
+    static func putAwayActive() {
+        guard let active, active.hasSelection else { return }
+        active.clear(resign: false)
+    }
+
     /// The selection's words as plain text (nil when nothing is selected).
     var selectedText: String? {
         guard let selection, hasSelection else { return nil }

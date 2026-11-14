@@ -11,6 +11,10 @@ import UniformTypeIdentifiers
 enum SettingsNavigator {
     static func open(_ target: SettingsSearchEntry.Target, router: SettingsRouter, actions: SettingsFileActions) {
         switch target {
+        case .field: router.jump?(.gateway)   // [Mac UI check 2026-11-13] config pages are Hermes' (ConfigScreens.open does so too)
+        default: break
+        }
+        switch target {
         case .root(let id): openRoot(id, router: router)
         case .page(let key): if let page = ConfigCatalog.page(key) { ConfigScreens.open(page: page, router: router) }
         case .field(let pageKey, let key):
@@ -35,8 +39,29 @@ enum SettingsNavigator {
         }
     }
 
+    /// [Mac UI check 2026-11-13] The category column's section a root page belongs to (the rows that open it are in
+    /// that section of `SettingsRootView`); nil for a page with no one section (the gateway card heads the column).
+    static func category(of id: String) -> SettingsCategory? {
+        if id.hasPrefix("config:") || id.hasPrefix("background:") { return id.hasPrefix("config:") ? .gateway : .appearance }
+        switch id {
+        case "theme", "chat-bubbles", "backgrounds", "tab-order", SettingsSearch.kanbanTabTarget, "app-icon": return .appearance
+        case "notifications": return .general
+        case "tool-calls": return .chat
+        case "attachment-limit": return DeviceWord.isMac ? .gateway : .chat   // a row of Chat Behavior on the Mac (below)
+        case "sound-picker": return .sounds
+        case "vault", "sessions", "providers", "keys", "billing", "auxiliary-models": return .gateway
+        case "capabilities", "skills", "connectors", "tools", "plugins", ComposioRow.id: return .tools
+        case "about", "diagnostics": return .about
+        default: return nil
+        }
+    }
+
     static func openRoot(_ id: String, router: SettingsRouter) {
         let services = router.services
+        // [Mac UI check 2026-11-13] In two columns a page of another section (Settings search, a deep link, a link on
+        // another page) marks its own section in the column and opens over that section's page, so the mark and Back
+        // say where it is; it stayed on General with Back naming whatever page showed before.
+        if let category = category(of: id) { router.jump?(category) }
         if id.hasPrefix("config:"), let section = ConfigCatalog.section(String(id.dropFirst("config:".count))) {
             ConfigScreens.open(section: section, router: router)
             return
@@ -109,6 +134,10 @@ final class SettingsFileActions: NSObject, UIDocumentPickerDelegate {
 
     init(router: SettingsRouter) { self.router = router }
 
+    /// [Mac UI check 2026-11-13] The Export Settings… button's frame in window coordinates, where the share sheet points
+    /// on the Mac and iPad (it opened at the window's top-left corner).
+    var exportAnchor: CGRect = .zero
+
     private var store: GatewayConfigStore? { router.gatewaySettings?.configStore }
 
     private var profileName: String { "Hermes" }
@@ -125,7 +154,16 @@ final class SettingsFileActions: NSObject, UIDocumentPickerDelegate {
                 AppLog.note("settings", "settings exported")
                 let sheet = UIActivityViewController(activityItems: [url], applicationActivities: nil)
                 if let presenter = router.presenter {
-                    sheet.popoverPresentationController?.sourceView = presenter.view
+                    if let popover = sheet.popoverPresentationController, let view = presenter.view {
+                        popover.sourceView = view
+                        let button = exportAnchor.isEmpty ? .null : view.convert(exportAnchor, from: nil)
+                        if button.isNull || !view.bounds.intersects(button) {
+                            popover.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 0, height: 0)
+                            popover.permittedArrowDirections = []
+                        } else {
+                            popover.sourceRect = button
+                        }
+                    }
                     presenter.present(sheet, animated: true)
                 }
             } catch {

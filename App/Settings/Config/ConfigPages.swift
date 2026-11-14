@@ -10,6 +10,7 @@ import UIKit
 enum ConfigScreens {
     /// A section's page list (or its only page).
     @MainActor static func open(section: ConfigSection, router: SettingsRouter) {
+        router.jump?(.gateway)   // [Mac UI check 2026-11-13] Hermes' in the Mac's category column (`SettingsRouter.jump`)
         // [talk] Voice has rows of this iPhone's own, so it opens with or without the gateway's settings.
         if section.id == "voice" { VoiceSettingsScreens.openSection(router: router); return }
         guard let store = router.gatewaySettings?.configStore else { return }
@@ -28,6 +29,7 @@ enum ConfigScreens {
     }
 
     @MainActor static func open(page: ConfigPage, router: SettingsRouter) {
+        router.jump?(.gateway)   // [Mac UI check 2026-11-13]
         if let controller = makePage(page, router: router) { router.push(controller) }
     }
 
@@ -139,6 +141,15 @@ struct ConfigSectionView: View {
 
     // UX study #24: where these are kept, as HostWord says it (never "your gateway"). Model names whose they are
     // (tester batch 3: "The models your bots use" read as every bot's).
+    /// [Mac UI check 2026-11-13] The last part of `footer`, alone: where a flattened section's settings are kept, under
+    /// the card that ends it on its own page.
+    static func savedNote(_ id: String) -> String {
+        switch id {
+        case "chat" where DeviceWord.isMac: "Saved on \(HostWord.phrase), except Largest Attachment, which is set on this Mac."
+        default: "Saved on \(HostWord.phrase)."
+        }
+    }
+
     static func footer(_ id: String, defaultBot: String? = nil, otherBots: Bool = false) -> String {
         let saved = "Saved on \(HostWord.phrase)."
         return switch id {
@@ -246,8 +257,9 @@ struct ConfigFieldsContent: View {
                         Section {
                             macRows(fields, limitRow: limitRow)
                         } footer: { HQSectionFooter {
-                            Text(ConfigSectionView.footer(section.id, defaultBot: router.services.bots.first { $0.id == "default" }?.name,
-                                                          otherBots: ((router.services as? SettingsServices)?.rosterCount ?? 0) > 1))
+                            // [Mac UI check 2026-11-13] Only where these are kept: the sentence about the whole section
+                            // repeated its page's footer on the page under it.
+                            Text(ConfigSectionView.savedNote(section.id))
                                 .accessibilityIdentifier("config-section.\(section.id).footer")
                         } }
                     } else {

@@ -84,6 +84,14 @@ nonisolated(unsafe) private var pageBarKey: UInt8 = 0
         builder.remove(menu: .format)
         builder.remove(menu: .toolbar)
         builder.remove(menu: .sidebar)
+        // [keys] Mac UI check 2026-11-13 (V29): groups that hold nothing in a Mac's menu bar (printing, and
+        // the text menu's Replace, Share, Look Up and Learn, which only a right-click on text shows) left
+        // a lone line: File ended in a separator and Edit had two in a row under Select All. The right-click menu on
+        // text is built apart (`UIMenuSystem.context`) and keeps them.
+        for menu: UIMenu.Identifier in [.print, .replace, .share, .lookup, .learn] { builder.remove(menu: menu) }
+        for menu: UIMenu.Identifier in [.file, .edit] {
+            builder.replaceChildren(ofMenu: menu) { children in children.filter { ($0 as? UIMenu)?.children.isEmpty != true } }
+        }
         builder.replaceChildren(ofMenu: .help) { _ in [UICommand(title: "Hermes HQ Support", action: support)] }
     }
 

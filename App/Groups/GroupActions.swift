@@ -149,7 +149,10 @@ import UIKit
     static func confirmDelete(_ key: String, services: any GroupServices, from host: UIViewController, source: UIView?,
                               sourceItem: UIBarButtonItem? = nil, done: (() -> Void)? = nil) {
         guard let room = services.groupStore?.room(key) else { return }
-        let sheet = UIAlertController(title: deleteTitle(room.name), message: deleteMessage, preferredStyle: .actionSheet)
+        // [Mac UI check 2026-11-13] With nothing to point at (Group Info's row is SwiftUI's), a popover hung off the middle
+        // of the sheet: on the Mac and the iPad that question is a centred alert instead (C3). The iPhone keeps its sheet.
+        let unanchored = source == nil && sourceItem == nil && (DeviceWord.isMac || host.traitCollection.horizontalSizeClass == .regular)
+        let sheet = UIAlertController(title: deleteTitle(room.name), message: deleteMessage, preferredStyle: unanchored ? .alert : .actionSheet)
         sheet.addAction(UIAlertAction(title: "Delete Group Chat", style: .destructive) { [weak host] _ in
             delete(key, name: room.name, services: services, from: host, done: done)
         })

@@ -140,7 +140,7 @@ extension GroupsEndToEndTests {
     @MainActor func testC5_AddOrRemoveBots() throws {
         let app = launchSignedIn()
         openGroupInfo(app, "c5-info")
-        let edit = any(app, "group-info.members-edit")
+        let edit = any(app, "group-info.tile.add")
         scrollTo(app, edit, in: app.collectionViews["group-info.list"])
         edit.tap()
         let save = app.buttons["group-picker.save"]
@@ -208,15 +208,15 @@ extension GroupsEndToEndTests {
         XCTAssertFalse(any(app, "group-info.delete").isEnabled, "Delete Group Chat waits")
         shot(app, "group-info-offline")
         let list = app.collectionViews["group-info.list"]
-        let edit = any(app, "group-info.members-edit")
+        let edit = any(app, "group-info.tile.add")
         scrollTo(app, edit, in: list)
         check(edit.exists && !edit.isEnabled, app, "c6-members", "so does Edit Bots…")
         let namePhoto = any(app, "group-info.name-photo")
         scrollTo(app, namePhoto, in: list)
         check(namePhoto.exists && !namePhoto.isEnabled, app, "c6-name", "and Name & Photo")
-        let activity = any(app, "group-info.activity")
+        let activity = any(app, "group-info.tile.activity")
         scrollTo(app, activity, in: list)
-        check(activity.exists && activity.isEnabled, app, "c6-activity-row", "Activity still reads")
+        check(activity.exists && activity.isEnabled, app, "c6-activity-tile", "Activity still reads")
         activity.tap()
         XCTAssertTrue(appears(any(app, "group-activity.list"), app, "c6-activity", timeout: 6), "the Activity page")
         XCTAssertTrue(text(app, "No activity in this turn yet.").exists, "nothing has run in this launch")

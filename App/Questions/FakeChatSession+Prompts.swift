@@ -57,7 +57,7 @@ extension FakeChatSession: ChatPrompting {
                     ClarifyQuestion(qid: "q2", question: "What should the release be called?", choices: nil, multiSelect: false),
                 ])
             case "asklong":
-                let reason = "This option keeps the current layout and only changes the colours, so nothing moves on screen. "
+                let reason = "This option keeps the current layout and only changes the colors, so nothing moves on screen. "
                     + "It is the safest choice when the release is close and the screenshots are already approved."
                 out.clarify = ClarifyPrompt(id: "demo-asklong", questions: (0..<5).map { i in
                     ClarifyQuestion(qid: "q\(i)", question: "Question \(i + 1) of 5: how should step \(i + 1) work? The release is close and "

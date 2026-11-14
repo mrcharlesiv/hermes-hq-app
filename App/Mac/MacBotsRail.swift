@@ -229,7 +229,9 @@ final class MacRailHead: UIControl {
         let size = MacBotsRail.face
         NSLayoutConstraint.activate([
             face.centerXAnchor.constraint(equalTo: centerXAnchor),
-            named ? face.topAnchor.constraint(equalTo: topAnchor, constant: 4) : face.centerYAnchor.constraint(equalTo: centerYAnchor),
+            // [Mac UI check 2026-11-13] 3 pt above the tile, so the name below it gets room and the head's space to
+            // the lines above and below it comes out even.
+            named ? face.topAnchor.constraint(equalTo: topAnchor, constant: 3) : face.centerYAnchor.constraint(equalTo: centerYAnchor),
             face.widthAnchor.constraint(equalToConstant: size + 8), face.heightAnchor.constraint(equalToConstant: size + 8),
             tile.centerXAnchor.constraint(equalTo: face.centerXAnchor), tile.centerYAnchor.constraint(equalTo: face.centerYAnchor),
             tile.widthAnchor.constraint(equalToConstant: MacBotsRail.tileSide), tile.heightAnchor.constraint(equalToConstant: MacBotsRail.tileSide),
@@ -243,8 +245,9 @@ final class MacRailHead: UIControl {
             name.adjustsFontSizeToFitWidth = true   // a longer name shrinks a little before it is cut short (`recolor`)
             addSubview(name)
             NSLayoutConstraint.activate([
-                // [rail-tile] 2 pt under the tile (the face's box), not across its edge.
-                name.topAnchor.constraint(equalTo: face.bottomAnchor, constant: 2),
+                // [rail-tile] Under the tile (the face's box), not across its edge. [Mac UI check 2026-11-13] 5 pt: at 2
+                // the marked head's tile nearly touched its name.
+                name.topAnchor.constraint(equalTo: face.bottomAnchor, constant: 5),
                 name.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
                 name.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
             ])
@@ -567,22 +570,44 @@ final class MacRailLine: UIView {
 /// [mac-layout] A heading over a group of bots in the open sidebar (Pinned, a section's name, Bots): small and grey,
 /// as Mail's and Slack's are; a click folds the group away or opens it (kept on this device).
 final class MacSidebarHeading: UIControl {
-    static let foldedKey = "HQMacSidebarFoldedGroups"
+    /// [Mac UI check 2026-11-13] The folded groups by a key that stays (`key(for:)`, "tools"), not by the heading's
+    /// words: a renamed section opened again, and a section named "Pinned" or "Tools" folded with the built-in one.
+    static let foldedKey = "HQMacSidebarFoldedGroupKeys"
+    /// The old store, by title: each heading takes its fold from it once (`carryOver`).
+    static let legacyFoldedKey = "HQMacSidebarFoldedGroups"
     static var folded: Set<String> {
         get { Set(UserDefaults.standard.stringArray(forKey: foldedKey) ?? []) }
         set { UserDefaults.standard.set(Array(newValue).sorted(), forKey: foldedKey) }
     }
 
+    /// A bots' group's lasting key: its block (a user section by its id).
+    static func key(for block: BotListSectionID) -> String {
+        switch block {
+        case .tiles, .pinned: "pinned"
+        case .user(let id): "section:" + id
+        case .unassigned: "unassigned"
+        case .hidden: "hidden"
+        case .results: "results"
+        case .groups: "groups"
+        case .groupSection(let id): "group-section:" + id
+        case .everything: "everything"
+        }
+    }
+
     let title: String
+    /// The fold's key (`foldedKey`).
+    let key: String
     /// [mac] A user section's id: its heading has the list's section menu (Rename…, Move Up, Move Down, Delete Section).
     var sectionId: String?
     private let label = UILabel()
     private let chevron = UIImageView()
-    var isFolded: Bool { Self.folded.contains(title) }
+    var isFolded: Bool { Self.folded.contains(key) }
 
-    init(title: String, toggled: @escaping () -> Void) {
+    init(title: String, key: String, toggled: @escaping () -> Void) {
         self.title = title
+        self.key = key
         super.init(frame: .zero)
+        Self.carryOver(title: title, key: key)
         accessibilityIdentifier = "mac-sidebar.heading.\(title)"
         isAccessibilityElement = true
         accessibilityTraits = [.header, .button]
@@ -601,15 +626,25 @@ final class MacSidebarHeading: UIControl {
         addAction(UIAction { [weak self] _ in
             guard let self else { return }
             var set = Self.folded
-            if set.contains(self.title) { set.remove(self.title) } else { set.insert(self.title) }
+            if set.contains(self.key) { set.remove(self.key) } else { set.insert(self.key) }
             Self.folded = set
-            AppLog.note("mac", "sidebar group \(self.title) \(set.contains(self.title) ? "folded" : "opened")")
+            AppLog.note("mac", "sidebar group \(self.key) \(set.contains(self.key) ? "folded" : "opened")")
             toggled()
         }, for: .touchUpInside)
         recolor()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    /// A heading folded under the old store (by its title) stays folded under its key; the title is then dropped
+    /// from the old store, so it is carried over once.
+    private static func carryOver(title: String, key: String) {
+        let defaults = UserDefaults.standard
+        guard var legacy = defaults.stringArray(forKey: legacyFoldedKey), let at = legacy.firstIndex(of: title) else { return }
+        folded = folded.union([key])
+        legacy.remove(at: at)
+        if legacy.isEmpty { defaults.removeObject(forKey: legacyFoldedKey) } else { defaults.set(legacy, forKey: legacyFoldedKey) }
+    }
 
     func recolor() {
         label.font = MacSidebar.font(MacSidebar.sized(13.5, 14.5), weight: .semibold)

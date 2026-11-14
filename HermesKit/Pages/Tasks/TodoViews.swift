@@ -372,11 +372,12 @@ nonisolated enum TodoViews {
     /// The task has a bot on it: its page carries the bot's conversation. A task of your own has none.
     static func hasTeammate(_ task: TodoTask) -> Bool { task.helper != nil }
 
-    /// The who row's words: "Me", "Me & Hermes", "Finance".
+    /// The who row's words: "You", "You & Hermes", "Finance" ([Mac UI check 2026-11-13] as the list and the Task Page
+    /// say it; the pane said "Me").
     static func who(_ task: TodoTask, botName: (String?) -> String) -> String {
         switch task.whoKind {
-        case .me: return "Me"
-        case .together: return "Me & \(botName(task.helper))"
+        case .me: return "You"
+        case .together: return "You & \(botName(task.helper))"
         case .bot: return botName(task.helper)
         }
     }

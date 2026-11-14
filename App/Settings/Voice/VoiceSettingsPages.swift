@@ -7,7 +7,10 @@ import SwiftUI
 import UIKit
 
 @MainActor enum VoiceSettingsScreens {
-    static func openSection(router: SettingsRouter) { router.push(makeSection(router: router)) }
+    static func openSection(router: SettingsRouter) {
+        router.jump?(.gateway)   // [Mac UI check 2026-11-13] Voice is a row of Hermes in the Mac's category column
+        router.push(makeSection(router: router))
+    }
 
     /// The Voice page list (also where "Voice Settings…" lands).
     static func makeSection(router: SettingsRouter) -> UIViewController {
@@ -75,7 +78,7 @@ struct VoiceSectionView: View {
     var body: some View {
         List { Group {
             Section {
-                ForEach(VoiceSettingsCatalog.section.pages) { page in
+                ForEach(VoiceSettingsCatalog.section.pages.filter { !Self.empty($0, store: router.gatewaySettings?.configStore) }) { page in
                     ValueRow(title: page.title, value: nil, systemImage: page.symbol) { ConfigScreens.open(page: page, router: router) }
                         .accessibilityIdentifier("config-page.\(page.key)")
                 }
@@ -89,6 +92,14 @@ struct VoiceSectionView: View {
         .contentMargins(.top, MacInset.top(otherwise: 0), for: .scrollContent)
         .task { await router.gatewaySettings?.configStore?.load() }
         .accessibilityIdentifier("config-section.voice")
+    }
+
+    /// [Mac UI check 2026-11-13] Speech to Text holds only the gateway's fields: once they're read and there are none,
+    /// its row goes, rather than leading to "Nothing to Change".
+    static func empty(_ page: ConfigPage, store: GatewayConfigStore?) -> Bool {
+        guard page.id == "transcription", let store, store.config != nil else { return false }
+        let hidden = VoiceSettingsCatalog.hiddenNow(on: page, config: store.config)
+        return store.fields(page).allSatisfy { hidden.contains($0.key) }
     }
 }
 

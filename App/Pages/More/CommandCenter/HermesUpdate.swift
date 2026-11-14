@@ -867,6 +867,7 @@ final class HermesUpdateController: UIHostingController<HQScaledRoot<HermesUpdat
     /// the sheet animating once a second, and taps on Update were lost mid-animation.
     private func refit(shrink: Bool = false) {
         let cap = view.window?.bounds.height ?? .greatestFiniteMagnitude
+        UpdateSheetFit.macFit(self, measured: measuredHeight())   // [Mac UI check 2026-11-13] the Mac ignores detents
         guard let sheet = sheetPresentationController, let measured = measuredHeight() else { return }
         let height = min(measured, cap)
         guard abs(height - fitted) > 1, shrink || height > fitted else { return }
@@ -930,6 +931,7 @@ struct HermesUpdateView: View {
                 if update.showsWhatsNew { whatsNew }
             }
             .hqUpdateSheetFit()   // [sheet-fit]
+            .hqUpdateSheetClearOfButtons()   // [Mac UI check 2026-11-13]
             .hqGroupedPage()
             // The buttons stay pinned under the list: Update is on screen however long What's New is, and clear of
             // the sheet's bottom edge (a button flush with it in the list didn't take taps).
@@ -1006,8 +1008,8 @@ struct HermesUpdateView: View {
         }
         .frame(maxWidth: .infinity)
         // [mac] Owner 2026-11-07 ("crammed, like we completely forgot to figure out the padding"): room above and below.
-        .padding(.top, DeviceWord.isMac ? 16 : 6)
-        .padding(.bottom, DeviceWord.isMac ? 12 : 6)
+        .padding(.top, DeviceWord.isMac && !UpdateSheetFit.on ? 16 : 6)   // [Mac UI check 2026-11-13] less in a short window
+        .padding(.bottom, DeviceWord.isMac && !UpdateSheetFit.on ? 12 : 6)
         .contentTransition(.opacity)
     }
 
@@ -1073,13 +1075,13 @@ struct HermesUpdateView: View {
             // Audit 863 (08d-8): Try Again here, not only by closing the sheet and starting over.
             if update.canTryAgain { action("Try Again", id: "hermes-update.retry") { update.tryAgain() } }
             if update.action?.lines.isEmpty == false {
-                action("Update Output", id: "hermes-update.output", prominent: false) { update.openOutput() }
+                action("Show Update Output", id: "hermes-update.output", prominent: false) { update.openOutput() }
             }
             action("Copy Details", id: "hermes-update.copy", prominent: !update.canTryAgain) { update.copyDetails() }
         case .ended(.updated), .ended(.unchanged), .ended(.unconfirmed):
             // What Hermes printed stays reachable after any finished run.
             if update.action?.lines.isEmpty == false {
-                action("Update Output", id: "hermes-update.output", prominent: false) { update.openOutput() }
+                action("Show Update Output", id: "hermes-update.output", prominent: false) { update.openOutput() }
             }
         default:
             EmptyView()
@@ -1089,11 +1091,14 @@ struct HermesUpdateView: View {
     private func action(_ title: String, id: String, prominent: Bool = true, perform: @escaping () -> Void) -> some View {
         Group {
             Group {
+                // [Mac UI check 2026-11-13] On the Mac one width for every button of the stack (Show Update Output
+                // over Copy Details were two sizes), so they read as one set under the steps.
+                let minWidth: CGFloat? = DeviceWord.isMac ? 200 : nil
                 if prominent {
-                    Button(action: perform) { Text(title).frame(maxWidth: GlassSheetKit.designed ? .infinity : nil) }
+                    Button(action: perform) { Text(title).frame(minWidth: minWidth).frame(maxWidth: GlassSheetKit.designed ? .infinity : nil) }
                         .hqProminentButtonStyle()
                 } else {
-                    Button(action: perform) { Text(title).frame(maxWidth: GlassSheetKit.designed ? .infinity : nil) }
+                    Button(action: perform) { Text(title).frame(minWidth: minWidth).frame(maxWidth: GlassSheetKit.designed ? .infinity : nil) }
                         .hqBorderedButtonStyle()
                 }
             }

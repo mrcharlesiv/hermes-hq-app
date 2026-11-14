@@ -62,7 +62,11 @@ final class SettingsRootModel {
     var thinkingBarShown: Bool { Self.thinkingBarShown }
     /// [mac] Whether a search entry's row is on its page now: Settings' own search, Open Quickly and More's search
     /// all ask, so none of them offers the hidden Thinking Bar (Mac polish #37).
-    static func searchRowShown(_ entry: SettingsSearchEntry) -> Bool { entry.id != "app:thinking-drive" || thinkingBarShown }
+    /// [Mac UI check 2026-11-13] Nor ⌘N Project while ⌘N opens a bot's own chat, where the row isn't drawn.
+    static func searchRowShown(_ entry: SettingsSearchEntry) -> Bool {
+        (entry.id != "app:thinking-drive" || thinkingBarShown)
+            && (entry.id != "app:new-chat-project" || NewChatKeyBot.mode == .session)
+    }
     var introSplash = IntroSplash.isOn
     /// [app-icons] The icon the app wears (Appearance › App Icon's value).
     var appIconTitle = AppIcons.wornTitle
@@ -158,6 +162,8 @@ final class SettingsRootModel {
         // A search never leads to a row a page doesn't show (Kanban Tab, on Tabs, only shows once the board is known).
         let index = SettingsSearch.index(schema: configStore?.schema ?? [:]).filter {
             ($0.target != .root(SettingsSearch.kanbanTabTarget) || kanbanTabShown) && Self.searchRowShown($0)
+                // [Mac UI check 2026-11-13] ⌘N Project is drawn only once there is a project to pick.
+                && ($0.id != "app:new-chat-project" || newChatKeyProjects.count > 1)
         }
         return SettingsSearch.results(query, in: index)
     }
@@ -406,6 +412,7 @@ final class SettingsRootController: UIHostingController<HQScaledRoot<SettingsRoo
                 paneStack = stack
                 paneRoot = page
                 model.columnChanged = { [weak self] in self?.columnChanged() }
+                router.jump = { [weak self] category in self?.jump(to: category) }
                 namePane()
                 MacWindow.pageBar(page)
             }
@@ -420,6 +427,7 @@ final class SettingsRootController: UIHostingController<HQScaledRoot<SettingsRoo
             stack.removeFromParent()
             paneStack = nil
             model.columnChanged = nil
+            router.jump = nil
             router.navigation = navigationController
             navigationController?.setNavigationBarHidden(false, animated: false)
         }
@@ -436,10 +444,22 @@ final class SettingsRootController: UIHostingController<HQScaledRoot<SettingsRoo
     private func namePane() {
         let searching = !model.query.trimmingCharacters(in: .whitespaces).isEmpty
         paneRoot?.title = searching ? "Search" : (model.category?.title ?? "Settings")
+        // [Mac UI check 2026-11-13] `MacBackTitle` names Back once and keeps it: a later category's pages said
+        // "‹ General" (the first category shown) under Hermes or About. Cleared, the next push names it afresh.
+        paneRoot?.navigationItem.backButtonTitle = nil
     }
 
     /// Settings asked for again while it is on show (⌘, the gear): back to the category's own page.
     func backToIndex() { columnChanged() }
+
+    /// [Mac UI check 2026-11-13] A page of `category` opening from elsewhere (`SettingsRouter.jump`): the column marks
+    /// it, and a page of another category leaves first, so Back names the category's page, not the page shown before.
+    private func jump(to category: SettingsCategory) {
+        guard model.category != category else { return }
+        model.query = ""
+        model.category = category
+        columnChanged()
+    }
 
     private func columnChanged() {
         namePane()
@@ -591,7 +611,10 @@ struct SettingsRootView: View {
             // UX study 2026-10-21 #108: a row on this list is scrolled to and marked, not left for the person to find.
             if case .root(let id) = target, id.hasPrefix("row:") { model.reveal(id) }
             // [mac] Stress test 2026-10-28 #51 (review): the search result lands on the root's field, not a page.
-            else if DeviceWord.isMac, target == .root("attachment-limit") { model.reveal("row:attachment-limit") } else {
+            else if DeviceWord.isMac, target == .root("attachment-limit") { model.reveal("row:attachment-limit") }
+            // [Mac UI check 2026-11-13] Sound is a pop-up in its row on the Mac, not the iPhone's page (the switch
+            // above it when the sound is off and the row isn't drawn).
+            else if DeviceWord.isMac, target == .root("sound-picker") { model.reveal(model.completionSound ? "row:sound" : "row:completion-sound") } else {
                 SettingsNavigator.open(target, router: router, actions: actions)
             }
         }
@@ -787,8 +810,8 @@ struct SettingsRootView: View {
                 SettingsNavigator.openRoot("tab-order", router: router)
             }
                 .accessibilityIdentifier("settings.tab-order")
-            // [app-icons] The icon on the Home Screen: the feather or one of the app's own faces. A Mac app can't
-            // change its icon, so the row isn't there.
+            // [app-icons] The icon on the Home Screen (the Dock's on the Mac, `MacDockIcon`): the feather or one of the
+            // app's own faces. Only an iPhone or iPad that can't change its icon goes without the row.
             if AppIcons.canChange {
                 NavRow(title: "App Icon", systemImage: "app.badge", value: model.appIconTitle) { SettingsNavigator.openRoot("app-icon", router: router) }
                     .accessibilityIdentifier("settings.app-icon")
@@ -1094,6 +1117,7 @@ struct SettingsRootView: View {
                                 .accessibilityIdentifier("settings.sound")
                                 .hqMacSettingsControl()
                         }
+                        .revealRow("row:sound", model.revealed)   // [Mac UI check 2026-11-13] Settings search lands here
                     } else {
                     NavRow(title: "Sound", systemImage: "music.note", value: model.soundName) { router.push("Sound", CompletionSoundPicker()) }
                         .accessibilityIdentifier("settings.sound")
@@ -1261,6 +1285,7 @@ struct SettingsRootView: View {
                         Spacer(minLength: 0)
                         Button("Export Settings…") { actions.export() }
                             .accessibilityIdentifier("settings.export")
+                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { actions.exportAnchor = $0 }   // [Mac UI check 2026-11-13]
                         Button("Import Settings…") { actions.pickImport() }
                             .accessibilityIdentifier("settings.import")
                         Button("Clear Model Favorites…") { actions.confirmClearModels() }
@@ -1273,6 +1298,7 @@ struct SettingsRootView: View {
                 } else {
                 Button("Export Settings…") { actions.export() }
                     .accessibilityIdentifier("settings.export")
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { actions.exportAnchor = $0 }   // [Mac UI check 2026-11-13]
                 Button("Import Settings…") { actions.pickImport() }
                     .accessibilityIdentifier("settings.import")
                 // [stale-stars] Tester 2026-11-09: above Reset, where he looked for it.

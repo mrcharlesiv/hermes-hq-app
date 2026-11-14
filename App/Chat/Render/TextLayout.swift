@@ -1026,7 +1026,9 @@ nonisolated enum TextLayout {
         // [wide-tables] A reply's table may be as wide as the column (`tableReplyWidth`); the words stay at `maxText`.
         let maxTable = b.mine ? maxText : max(maxText, tableReplyWidth(width) - 2 * padH)
         // [desktoplook] Your own message carries no time in the look: no room is kept for one (HQShape.showsTime).
-        let timeText = HQShape.showsTime(mine: b.mine) ? b.time.map(ChatRowBuilder.clock) : nil
+        // [Mac UI check 2026-11-13] V10: a reply still streaming carries no time yet; it rode the newest line and moved
+        // with every delta. It comes once the reply has finished, where a settled reply's sits.
+        let timeText = HQShape.showsTime(mine: b.mine) && !b.streaming ? b.time.map(ChatRowBuilder.clock) : nil
         let timeAttr: NSAttributedString? = timeText.map {
             NSAttributedString(string: $0, attributes: [.font: style.time, .foregroundColor: b.mine ? ChatPalette.meTime : ChatPalette.label2])
         }

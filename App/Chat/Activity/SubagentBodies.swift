@@ -604,6 +604,9 @@ final class SubagentDetailView: UIView {
         stopLook.image = SubagentLook.image("stop.fill", size: 9, weight: .bold)
         stopLook.imagePadding = 5
         stopLook.title = "Stop"
+        // One line always: a configuration's title wraps to the width the button has, so a first pass at a narrow
+        // width left "Stop" one letter to a line in a tall thin box (Mac UI check 2026-11-13).
+        stopLook.titleLineBreakMode = .byClipping
         stopLook.cornerStyle = .capsule
         stopLook.contentInsets = NSDirectionalEdgeInsets(top: 5, leading: 10, bottom: 5, trailing: 11)
         stopLook.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { a in

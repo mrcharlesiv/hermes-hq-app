@@ -83,7 +83,7 @@ nonisolated enum HeadDescribe {
         (JSRegex(#"\b(visor)\b"#), ["visor": "band"], "visor"),
         (JSRegex(#"\b(chrome|metal\w*|silver|steel)\b"#), ["shell": "chrome"], "chrome"),
         (JSRegex(#"\b(two.?tone|duo)\b"#), ["shell": "duo"], "two-tone"),
-        (JSRegex(#"\b(colou?red|colou?rful|bright|painted)\b"#), ["shell": "color"], "coloured"),
+        (JSRegex(#"\b(colou?red|colou?rful|bright|painted)\b"#), ["shell": "color"], "colored"),
         (JSRegex(#"\b(twin antenna\w*|two antenna\w*|antennae)\b"#), ["antenna": "twin"], "twin antennae"),
         (JSRegex(#"\b(bolt|lightning|electric)\b"#), ["antenna": "bolt"], "bolt"),
         (JSRegex(#"\b(halo|angel\w*)\b"#), ["antenna": "ring"], "halo"),

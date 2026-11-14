@@ -409,7 +409,31 @@ extension View {
     /// A row of `hqPickGlass` picks in one glass container: glass can't sample glass, so without it a pick lenses its
     /// tinted neighbour into a smear along its edge. Spacing 0: the picks never melt into each other.
     @ViewBuilder func hqPickGlassRow() -> some View {
-        if Theme.isDesktop { self } else { GlassEffectContainer(spacing: 0) { self } }
+        modifier(PickGlassRow())
+    }
+
+    /// [Mac UI check 2026-11-13] Opt-in, for a row of chips on the Mac (Tasks' views, New Job's chips): its picks are
+    /// drawn as solid pills (the chosen one the tint, the others the card's colour with a hairline) instead of live
+    /// glass. Owner: "What is this bleed over from Today to Bots?": in one glass container the unchosen chips' glass
+    /// took the chosen chip's solid blue into its rim (a blue "(" on Upcoming, an arc along Bots' top once the row
+    /// wrapped). Pills that aren't glass can't lens a neighbour.
+    func hqFlatPicks(_ flat: Bool = true) -> some View { environment(\.hqFlatPicks, flat) }
+}
+
+private struct FlatPicksKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues {
+    /// `hqFlatPicks`.
+    var hqFlatPicks: Bool {
+        get { self[FlatPicksKey.self] }
+        set { self[FlatPicksKey.self] = newValue }
+    }
+}
+
+/// `hqPickGlassRow`'s container (none in the Desktop Look, or with flat picks).
+private struct PickGlassRow: ViewModifier {
+    @Environment(\.hqFlatPicks) private var flat
+    @ViewBuilder func body(content: Content) -> some View {
+        if Theme.isDesktop || flat { content } else { GlassEffectContainer(spacing: 0) { content } }
     }
 }
 
@@ -421,12 +445,16 @@ struct HQSegmentedPicker<Value: Hashable>: View {
     @Binding var selection: Value
     /// A tick on a new pick, whichever of the three controls draws it. False where the binding plays its own.
     var ticks: Bool
+    /// [Mac UI check 2026-11-13] The desktop strip's segments each as wide as their whole label with room beside it:
+    /// set where the picker is `fixedSize()` beside a row's name (it drew its labels touching, with no padding).
+    var wholeLabels: Bool
 
-    init(_ label: String, options: [(title: String, value: Value)], selection: Binding<Value>, ticks: Bool = true) {
+    init(_ label: String, options: [(title: String, value: Value)], selection: Binding<Value>, ticks: Bool = true, wholeLabels: Bool = false) {
         self.label = label
         self.options = options
         _selection = selection
         self.ticks = ticks
+        self.wholeLabels = wholeLabels
     }
 
     /// The system segments' binding, with the tick the other two controls play themselves.
@@ -440,7 +468,7 @@ struct HQSegmentedPicker<Value: Hashable>: View {
     var body: some View {
         let _ = Theme.touch()         // follows a live toggle of the look
         if Theme.isDesktop {
-            DesktopSegmentStrip(options: options, selection: $selection, ticks: ticks)
+            DesktopSegmentStrip(options: options, selection: $selection, wholeLabels: wholeLabels, ticks: ticks)
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel(label)
         } else if HQFont.scale != 1 {
@@ -467,10 +495,19 @@ private struct PickGlass<S: InsettableShape>: ViewModifier {
     var shape: S
     var prominent: Bool
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.hqFlatPicks) private var flat
 
     @ViewBuilder func body(content: Content) -> some View {
         if Theme.isDesktop {
             content
+        } else if flat {
+            // `hqFlatPicks`: the same pill, drawn solid.
+            let ink = prominent && scheme == .dark ? Color.hqTint.mix(with: .black, by: 0.3) : Color.hqTint
+            let fill: Color = selected ? (prominent ? ink : Color.hqTint.opacity(0.16)) : Color(uiColor: HQPalette.card)
+            content
+                .background(shape.fill(fill))
+                .overlay(shape.strokeBorder(selected ? (prominent ? Color.clear : Color.hqTint) : Color.hqStroke,
+                                            lineWidth: selected ? (prominent ? 0 : 2) : 1))
         } else {
             // In the dark the glass lifts the tint, and white words on a chosen chip read 3.3:1; a third darker, 7.5:1.
             let ink = prominent && scheme == .dark ? Color.hqTint.mix(with: .black, by: 0.3) : Color.hqTint

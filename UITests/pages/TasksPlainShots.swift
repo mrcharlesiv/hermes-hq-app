@@ -20,7 +20,7 @@ extension PagesTests {
         XCTAssertTrue(app.descendants(matching: .any)["task.next-check"].firstMatch.exists, "when Inbox looks again shows")
         // [tasks-first] The bot is on the who row, with what it is doing; the bar names the task's list, not the bot.
         let who = app.descendants(matching: .any)["task.who"].firstMatch
-        XCTAssertTrue(who.exists && who.label.contains("Me & Inbox") && who.label.contains("Finished its part"), "the who row: \(who.label)")
+        XCTAssertTrue(who.exists && who.label.contains("You & Inbox") && who.label.contains("Finished its part"), "the who row: \(who.label)")
         XCTAssertFalse(app.buttons["task.standing"].exists, "no state row of the bot's above the task's own")
         XCTAssertTrue(app.descendants(matching: .any)["task.ask"].firstMatch.exists, "its question is one card under the who row")
         XCTAssertFalse(app.buttons["task.share-draft"].firstMatch.exists, "no move buttons")

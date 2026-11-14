@@ -90,12 +90,13 @@ enum NewTaskSheet {
         // Verify round 2: the one sheet bar every other sheet has (✕ leading, inline title, no grabber, opaque page).
         let nav = ChatSheet.wrap(host, title: "New Task")
         host.installClose()
+        SheetEditGuard.install(on: nav)   // [Mac UI check 2026-11-13] typed words ask before Cancel, Escape or ⌘W drop them
         nav.sheetPresentationController?.selectedDetentIdentifier = .large
         return nav
     }
 }
 
-final class NewTaskHostController: UIHostingController<HQScaledRoot<NewTaskView>> {
+final class NewTaskHostController: UIHostingController<HQScaledRoot<NewTaskView>>, EditingPage {
     let model: NewTaskModel
     private var addItem: UIBarButtonItem!
     private var observation: Task<Void, Never>?
@@ -118,12 +119,17 @@ final class NewTaskHostController: UIHostingController<HQScaledRoot<NewTaskView>
     override var canBecomeFirstResponder: Bool { true }
     @objc private func addFromKeyboard() { model.add() }
 
-    /// ✕ (after `ChatSheet.wrap`): closes, except while the task is being saved.
+    /// [Mac UI check 2026-11-13] Words typed in (the task, its details, skills) are asked about before they go.
+    var hasChanges: Bool { !(model.title + model.details + model.skills).pgTrim.isEmpty }
+    var isSaving: Bool { model.saving }
+
+    /// ✕ (after `ChatSheet.wrap`): closes, except while the task is being saved; typed words ask first.
     func installClose() {
         // [mac] Stress test 2026-10-28 #55: a form beside Add closes with Cancel on the leading edge on the Mac.
         let close = UIBarButtonItem.hqClose(DeviceWord.isMac ? .cancel : .close, action: UIAction { [weak self] _ in
             guard let self, !self.model.saving else { return }
-            self.dismiss(animated: true)
+            self.view.endEditing(true)
+            self.confirmLeaving { [weak self] in self?.dismiss(animated: true) }
         })
         close.accessibilityIdentifier = "sheet.close"
         navigationItem.hqPlaceFormClose(close)
@@ -139,6 +145,8 @@ final class NewTaskHostController: UIHostingController<HQScaledRoot<NewTaskView>
     private func observe() {
         withObservationTracking {
             _ = model.title
+            _ = model.details
+            _ = model.skills
             _ = model.saving
         } onChange: { [weak self] in
             DispatchQueue.main.async { self?.updateAdd(); self?.observe() }
@@ -154,6 +162,7 @@ final class NewTaskHostController: UIHostingController<HQScaledRoot<NewTaskView>
             navigationItem.rightBarButtonItem = addItem
             addItem.setProminentEnabled(!model.title.pgTrim.isEmpty)
         }
+        if let navigation = navigationController { EditingGuard.refreshLock(navigation) }
     }
 }
 

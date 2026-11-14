@@ -277,6 +277,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     override func viewWillAppear(_ animated: Bool) {
         settleTitle()
         super.viewWillAppear(animated)
+        installBarItemTips()   // [Mac UI check 2026-11-13] the bar's icon buttons name themselves under the pointer
         Self.onScreen = true
         searchCapsule?.restoreIfTyped()
         claimStore()
@@ -1039,8 +1040,17 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
 
     // MARK: Ideas ([task-ideas], at Inbox's foot)
 
-    /// Inbox opens (`-HQPagesTasksIdeas`, PagesDebug).
-    func showIdeas() { show(.inbox) }
+    /// Inbox opens (`-HQPagesTasksIdeas`, PagesDebug), scrolled to its foot where the ideas are ([Mac UI check
+    /// 2026-11-13]: the tour's picture showed Inbox's tasks, the ideas out of sight below them).
+    func showIdeas() {
+        show(.inbox)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let list = self?.collectionView else { return }
+            list.layoutIfNeeded()
+            let bottom = list.contentSize.height + list.adjustedContentInset.bottom - list.bounds.height
+            list.setContentOffset(CGPoint(x: list.contentOffset.x, y: max(-list.adjustedContentInset.top, bottom)), animated: false)
+        }
+    }
 
     private func readIdeas() {
         ideas.prepare()

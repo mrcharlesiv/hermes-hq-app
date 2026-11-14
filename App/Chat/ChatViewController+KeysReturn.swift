@@ -27,7 +27,9 @@ extension ChatViewController {
     func noteKeys(for controller: UIViewController) {
         let owed = keysOwedAt.map { CACurrentMediaTime() - $0 < 2 } ?? false
         keysOwedAt = nil
-        guard !DeviceWord.isMac, owed || composer.textView.isFirstResponder else { return }
+        // The Mac too (Mac UI check 2026-11-13): Prompts, Usage & Limits and Model Prices are plain sheets there, and
+        // closing one left the message field without its caret. Its ☰ and Models panels still give it back themselves.
+        guard owed || composer.textView.isFirstResponder else { return }
         // An alert gives the field back itself.
         guard !(controller is UIAlertController) else { return }
         KeysReturnProbe.watch(controller) { [weak self] in self?.returnKeys() }

@@ -59,8 +59,13 @@ import UIKit
 
     /// The places in the sidebar's order as it shows them (a page this gateway lacks is in `TabOrder.tabs` but not
     /// here: moves step over it).
+    /// Only rows a move can land beside: Bots has no row here (the bots themselves stand for it) and the Tools sit
+    /// under the places in an order of their own, outside `TabOrder.tabs`. With them counted, Move Down on the last
+    /// place and a drop at the end did nothing, and Move Up on the first place swapped it with the unseen Bots.
     private static var shown: [TabChoice] {
-        MainTabController.current?.placedTabs.compactMap { TabChoice(tag: $0.tabBarItem.tag) } ?? TabOrder.tabs
+        let order = TabOrder.tabs
+        let placed = MainTabController.current?.placedTabs.compactMap { TabChoice(tag: $0.tabBarItem.tag) } ?? order
+        return placed.filter { $0 != .main(.bots) && order.contains($0) }
     }
 
     /// `choice` one row up (-1) or down (+1); false when it is already at that end.

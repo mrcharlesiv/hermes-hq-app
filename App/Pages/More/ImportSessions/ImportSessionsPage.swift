@@ -40,6 +40,7 @@ enum ImportSessionsScreens {
         capsule.install()
         coordinator.capsule = capsule
         page.retained = [store, coordinator, capsule]
+        page.keyRefresh = { [weak store] in store?.reload(keeping: true) }   // [Mac UI check 2026-11-13] ⌘R, as a pull (the Mac has no pull)
         store.reload()
         return page
     }

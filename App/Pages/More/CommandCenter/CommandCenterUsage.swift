@@ -22,6 +22,7 @@ enum UsagePage {
         let model = UsagePageModel(api: CommandCenterAPI(client: context.client))
         let page = MorePageController(title: CommandCenterNames.usage, identifier: "more-usage.page", UsagePageView(model: model))
         page.retained = [model]
+        page.keyRefresh = { [weak model] in Task { await model?.read() } }   // [Mac UI check 2026-11-13] ⌘R, as a pull (the Mac has no pull)
         page.onAppear = { [weak model] in model?.appear() }
         return page
     }

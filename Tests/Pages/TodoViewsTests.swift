@@ -243,10 +243,10 @@ struct TodoViewsTests {
 
     // MARK: The task's page (step 2)
 
-    /// The who row names the bot like a co-worker, and says what it is doing; a task of your own says "Me".
+    /// The who row names the bot like a co-worker, and says what it is doing; a task of your own says "You".
     @Test func theWhoRowNamesTheBotAndWhatItIsDoing() {
-        #expect(TodoViews.who(task("a"), botName: name) == "Me")
-        #expect(TodoViews.who(task("a", who: "together", bot: "default"), botName: name) == "Me & Hermes")
+        #expect(TodoViews.who(task("a"), botName: name) == "You")
+        #expect(TodoViews.who(task("a", who: "together", bot: "default"), botName: name) == "You & Hermes")
         #expect(TodoViews.who(task("a", who: "bot", bot: "finance"), botName: name) == "Finance")
         #expect(TodoViews.botState(task("a")) == nil, "a task of your own has no bot's state")
         #expect(TodoViews.botState(task("a", who: "together", bot: "default")) == nil, "a bot that hasn't started says nothing")

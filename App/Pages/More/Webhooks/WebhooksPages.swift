@@ -242,6 +242,7 @@ enum WebhooksPages {
             capsule?.searchItem?.isHidden = (model?.routes.isEmpty ?? true)
         }
         page.retained = [model, search, capsule]
+        page.keyRefresh = { [weak model] in Task { await model?.refresh() } }   // [Mac UI check 2026-11-13] ⌘R, as a pull (the Mac has no pull)
         page.onAppear = { [weak model] in model?.front = nil; model?.appear() }
         page.onDisappear = { [weak model, weak page] in
             if page?.navigationController == nil { model?.disappear() }
@@ -252,6 +253,7 @@ enum WebhooksPages {
     static func open(_ route: WebhookRoute, model: WebhooksModel) {
         guard let navigation = model.host?.navigationController else { return }
         let page = MorePageController(title: route.name, identifier: "webhooks.detail.page", WebhookDetailView(model: model, name: route.name))
+        page.keyRefresh = { [weak model] in Task { await model?.refresh() } }   // [Mac UI check 2026-11-13] ⌘R, as a pull (the Mac has no pull)
         page.onAppear = { [weak model, weak page] in model?.front = page }
         navigation.pushViewController(page, animated: true)
     }

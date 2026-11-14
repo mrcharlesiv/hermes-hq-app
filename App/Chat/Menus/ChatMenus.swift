@@ -625,7 +625,10 @@ final class ChatMenus: NSObject, ModelSwitchUI {
         #if targetEnvironment(macCatalyst)
         // [mac-popups] A pop-over hung off the composer's ☰, not a window-tall form sheet; the caret goes back to the
         // field when it closes, whichever way.
-        let panel = MacModelsPanel(anchor: Self.composerAnchor(screen), clearOf: screen.composer, context: context, query: query, bot: bot, onPick: { [weak screen] model in
+        // [Mac UI check 2026-11-13] V22: off the box's model pill when it shows (the model is what it picks), else the ☰.
+        let chip = screen.composer.modelChip
+        let anchor = chip.window != nil && !chip.isHidden && chip.alpha > 0.01 ? chip : Self.composerAnchor(screen)
+        let panel = MacModelsPanel(anchor: anchor, clearOf: screen.composer, context: context, query: query, bot: bot, onPick: { [weak screen] model in
             Task { await switcher.switchModel(model) }
             screen?.focusComposer()
         }, onCancel: { [weak screen] in screen?.focusComposer() })

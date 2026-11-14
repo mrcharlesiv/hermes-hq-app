@@ -648,6 +648,9 @@ extension AppDelegate {
         guard let root = KeyCommands.root else {
             if Self.ownActions.contains(command.action) { command.attributes = .disabled }
             #if targetEnvironment(macCatalyst)
+            // [keys] Mac UI check 2026-11-13 (A9): before the main page is up there are no places to name, so the
+            // numbers past the four lists (their default names "More", "Tab 6"…) are hidden, never shown dimmed.
+            if command.action == KeyCommands.selectTab, (command.propertyList as? Int ?? 0) >= 4 { command.attributes = .hidden }
             // [mac] Mac polish #21: before the main page is up (the sign-in form, reaching the gateway) ⌘W closes the
             // window, as the red button does, and says so; a sheet over the form still holds it.
             if command.action == KeyCommands.closeChat {
@@ -712,6 +715,9 @@ extension AppDelegate {
             enabled = covered ? KeyCommands.sheetSearchPage(root) != nil
                 : root.chatOnShow != nil || KeyCommands.canSearch(KeyCommands.findTarget(root))
         case KeyCommands.searchSessions:
+            #if targetEnvironment(macCatalyst)
+            if root.controller(for: .sessions) == nil { enabled = enabled && root.pages?.more != nil }   // K1: Open Quickly's
+            #endif
             break
         case KeyCommands.nextChat, KeyCommands.previousChat:
             enabled = enabled && KeyCommands.walkTarget(root, forward: command.action == KeyCommands.nextChat) != nil
@@ -924,9 +930,12 @@ extension AppDelegate {
         return (screen as? KeyRefreshing)?.keyRefresh
     }
 
-    /// What ⌘R pulls: the right pane's page when it refreshes, else the list on show.
+    /// What ⌘R pulls: the right pane's page when one is on show, else the list on show.
     private static func refreshTarget(_ root: MainTabController) -> (() -> Void)? {
-        KeyCommands.pageOnShow(root).flatMap(refreshAction) ?? KeyCommands.listOnShow(root).flatMap(refreshAction)
+        // [keys] Mac UI check 2026-11-13 (K9): a page with no refresh of its own leaves ⌘R off; it no longer pulled the
+        // list behind it, which the page hides.
+        if let page = KeyCommands.pageOnShow(root) { return refreshAction(page) }
+        return KeyCommands.listOnShow(root).flatMap(refreshAction)
     }
 
     override var keyCommands: [UIKeyCommand]? {
@@ -1094,6 +1103,15 @@ extension AppDelegate {
 
     @objc func hqSearchSessions(_ sender: Any?) {
         guard let root = uncovered else { return }
+        #if targetEnvironment(macCatalyst)
+        // [keys] Mac UI check 2026-11-13 (K1): with Sessions taken out of the sidebar its search had nowhere to show (the
+        // Bots list it fell back to is folded into the sidebar): Open Quickly, which finds the sessions too, opens.
+        if root.controller(for: .sessions) == nil {
+            AppLog.note("keys", "search sessions: no Sessions place, open quickly")
+            hqOpenQuickly(sender)
+            return
+        }
+        #endif
         AppLog.note("keys", "search sessions")
         if root.shownTab != .sessions { root.select(.sessions) }
         #if !targetEnvironment(macCatalyst)

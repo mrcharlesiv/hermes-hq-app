@@ -306,6 +306,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        installBarItemTips()   // [Mac UI check 2026-11-13] the bar's icon buttons name themselves under the pointer
         searchCapsule?.restoreIfTyped()   // [morepages]
         if !pinnedOnly { claimStore() }
         store.setScope(currentScope)
@@ -1538,6 +1539,19 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         return action
     }
 
+    #if DEBUG
+    /// `-HQPagesTileVersions` (PagesDebug): Versions of the first page tile.
+    func debugShowVersions(tries: Int = 3) {
+        guard let pin = pins.pins.first(where: { $0.isPage && $0.gatewayPath != nil }) else {
+            // None pinned yet (a tour starts clean): the first page artifact is pinned, then its Versions open.
+            if let page = records.values.first(where: { ["html", "htm"].contains(ArtifactFiles.fileExtension($0.value)) }) { debugPin([page.label]) }
+            if tries > 0 { DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.debugShowVersions(tries: tries - 1) } }
+            return
+        }
+        showVersions(pin)
+    }
+    #endif
+
     private func showVersions(_ kept: ArtifactPin) {
         let pin = pins.pins.first { $0.id == kept.id } ?? kept
         guard pin.gatewayPath != nil else { return }
@@ -1665,7 +1679,8 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
                 background.strokeColor = Self.cardEdge
                 background.strokeWidth = 1
                 if let mark = MacSelection.fill(selected: state.isSelected, pressed: state.isHighlighted, in: .list) {
-                    if state.isSelected { background.strokeColor = HQPalette.tint; background.strokeWidth = 1.5 }
+                    // [Mac UI check 2026-11-13] The open file's card is the list's soft mark on its own edge: the tint
+                    // ring it also wore read heavy beside every other selection.
                     background.backgroundColor = state.isSelected ? mark : HQPalette.cellPressed
                 }
                 cell.backgroundConfiguration = background
@@ -2856,24 +2871,25 @@ struct ArtifactRowView: View {
                     if edged, let when = edge?.when, !when.isEmpty {
                         Text(when).font(Font.hq(.footnote)).monospacedDigit().foregroundStyle(Color.hqLabel2).lineLimit(1).fixedSize()
                     }
+                    if card, let badge = record.repeatBadge { badgeText(badge) }
                 }
                 let second = edged ? (edge?.chat ?? "") : subtitle
-                if !second.isEmpty {
-                    Text(second)
-                        .font(Font.hq(.footnote))
-                        .foregroundStyle(Color.hqLabel2)
-                        .lineLimit(large ? 3 : 1)
+                if card, !large, let chat = edge?.chat, !chat.isEmpty, chat != second {
+                    // [Mac UI check 2026-11-13] A card in the Mac's narrow grid: the line under the name has the card's
+                    // whole width (the count rides the name's line), and when the chat and its time don't both fit the
+                    // time goes first ("Project notes · 10…" said neither).
+                    ViewThatFits(in: .horizontal) {
+                        secondLine(second, large: large)
+                        secondLine(chat, large: large)
+                    }
+                } else if !second.isEmpty {
+                    secondLine(second, large: large)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             // [morepages] "×3": this chat named the file or link three times (3x-morepages §2).
-            if let badge = record.repeatBadge {
-                Text(badge)
-                    .font(Font.hq(.footnote).monospacedDigit())
-                    .foregroundStyle(Color.hqLabel2)
-                    .fixedSize()
-                    .accessibilityLabel(record.repeatSpoken ?? badge)
-                    .accessibilityIdentifier("artifact-repeats")
+            if !card, let badge = record.repeatBadge {
+                badgeText(badge)
             }
             // Mac polish #117: the pin after the count, beside ⋯, so the pins stand in one column whether a row has a
             // count or not.
@@ -2892,6 +2908,22 @@ struct ArtifactRowView: View {
         .padding(.vertical, large ? 12 : card ? 10 : Density.compact ? 6 : 10)
         .frame(minHeight: large || card ? 64 : Density.ios(56, 46))
         .contentShape(Rectangle())
+    }
+
+    private func secondLine(_ words: String, large: Bool) -> some View {
+        Text(words)
+            .font(Font.hq(.footnote))
+            .foregroundStyle(Color.hqLabel2)
+            .lineLimit(large ? 3 : 1)
+    }
+
+    private func badgeText(_ badge: String) -> some View {
+        Text(badge)
+            .font(Font.hq(.footnote).monospacedDigit())
+            .foregroundStyle(Color.hqLabel2)
+            .fixedSize()
+            .accessibilityLabel(record.repeatSpoken ?? badge)
+            .accessibilityIdentifier("artifact-repeats")
     }
 }
 

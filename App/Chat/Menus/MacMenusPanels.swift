@@ -82,8 +82,8 @@ import UIKit
         let query = panel.query
         // Mac polish #23: the best match first, as the slash drawer ranks it, so Return picks what was typed.
         var shown = SlashCatalog.ranked(SlashCatalog.filter(all, query: query), query: query, favorites: favorites?.commands ?? [])
-        if query.isEmpty, !shown.isEmpty, let starred = SlashCatalog.favoritesSection(all, favorites: favorites?.commands ?? []) {
-            shown.insert(starred, at: 0)
+        if query.isEmpty, !shown.isEmpty {
+            shown = SlashCatalog.favoritesLeading(shown, all: all, favorites: favorites?.commands ?? [])   // [Mac UI check 2026-11-13] V22
         }
         if all.isEmpty {
             let retry = UIAction(title: "Check Again") { [weak self] _ in self?.load(fresh: true) }

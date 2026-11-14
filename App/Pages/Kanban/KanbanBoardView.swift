@@ -340,9 +340,16 @@ struct KanbanCardView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
-        .background(shape.fill(desktop ? Color.hqFill3 : Color(uiColor: HQPalette.card)))
-        .overlay(shape.strokeBorder(selected ? Color.hqTint : Color(uiColor: desktop ? UIColor(Color.hqStroke) : HQPalette.cardEdge),
-                                    lineWidth: selected ? 2 : 1))
+        // [Mac UI check 2026-11-13] The chosen card is a soft tint with a 1 pt edge, as other selections are (a heavy
+        // 2 pt blue ring stood out).
+        .background {
+            ZStack {
+                shape.fill(desktop ? Color.hqFill3 : Color(uiColor: HQPalette.card))
+                if selected { shape.fill(Color.hqTint.opacity(0.14)) }
+            }
+        }
+        .overlay(shape.strokeBorder(selected ? Color.hqTint.opacity(0.6) : Color(uiColor: desktop ? UIColor(Color.hqStroke) : HQPalette.cardEdge),
+                                    lineWidth: 1))
         .contentShape(shape)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(row.title). \(row.bits.map(\.text).joined(separator: ", "))")
@@ -365,7 +372,9 @@ struct KanbanCardView: View {
         var line = Text("")
         for (index, bit) in row.bits.enumerated() {
             line = line + Text(bit.text).fontWeight(bit.alert ? .semibold : .regular).foregroundColor(bit.alert ? Color.hqRed : Color.hqLabel2)
-            if index < row.bits.count - 1 { line = line + Text(" · ").foregroundColor(Color.hqLabel2) }
+            // [Mac UI check 2026-11-13] A no-break space before the dot keeps it with the bit before it: a wrapped line
+            // started "· 3h · 2 comments".
+            if index < row.bits.count - 1 { line = line + Text("\u{00A0}· ").foregroundColor(Color.hqLabel2) }
         }
         return line
             .font(Font.hq(.footnote))

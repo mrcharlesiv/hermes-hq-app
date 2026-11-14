@@ -904,6 +904,15 @@ import UIKit
 
     /// The jump button changed size (it became the wider "Approval needed" capsule, or the arrow again): it is placed
     /// again, above the shelf if it would now come near a folded chip.
+    /// [Mac UI check 2026-11-13] L8: how far the jump button stands above its place for things docked over the
+    /// composer that are laid out by hand (the Read Aloud strip, `ChatReadAloudHost`): it sat on the strip's words.
+    var jumpLift: CGFloat = 0 {
+        didSet {
+            guard abs(jumpLift - oldValue) > 0.25, installed else { return }
+            updateJumpButton(shelfHeight: shelfHeight?.constant ?? 0)
+        }
+    }
+
     func jumpWidthChanged(_ width: CGFloat) {
         guard abs(width - jumpWidth) > 0.25 else { return }
         jumpWidth = width
@@ -918,11 +927,11 @@ import UIKit
         guard let jumpBottom else { return }
         let view = chat.view!
         let queueShown = !(queueCard?.isHidden ?? true)
-        // [mac] The arrow is centred there, where the chips are too: any chip sends it above the shelf.
-        let jumpLeading = DeviceWord.isMac ? (view.bounds.width - jumpWidth) / 2 : view.bounds.width - ChatMetrics.jumpTrailing - jumpWidth
+        // [Mac UI check 2026-11-13] V8: the Mac's arrow sits over the message box's right end now, as the iPhone's does.
+        let jumpLeading = view.bounds.width - (DeviceWord.isMac ? ChatMetrics.composerSideDown : ChatMetrics.jumpTrailing) - jumpWidth
         let crowded = shelf.chipsTrailingEdge(in: view) > jumpLeading - 8 || estimatedChipsCrowd(jumpLeading: jumpLeading)
         let above = shelfHeight > 0 && (shelf.hasOpenCard || queueShown || ShelfText.isLarge || crowded)
-        jumpBottom.constant = -ChatMetrics.jumpAboveComposer - (above ? shelfHeight + ActivityShelfView.gap : 0)
+        jumpBottom.constant = -ChatMetrics.jumpAboveComposer - (above ? shelfHeight + ActivityShelfView.gap : 0) - jumpLift
     }
 
     /// Before the pieces are laid out: the widest chip's estimated trailing edge.

@@ -165,6 +165,17 @@ final class SheetEditGuard: NSObject, UIAdaptivePresentationControllerDelegate {
     weak var navigation: UINavigationController?
     init(navigation: UINavigationController) { self.navigation = navigation }
 
+    nonisolated(unsafe) private static var key: UInt8 = 0
+
+    /// [Mac UI check 2026-11-13] A form sheet whose page is an `EditingPage` asks before a pull down, Escape or ⌘W
+    /// throws its typing away (New Task, New Tile, Change Tile), as the Job editor does. The page calls
+    /// `EditingGuard.refreshLock` as its form changes.
+    @MainActor static func install(on navigation: UINavigationController) {
+        let guardian = SheetEditGuard(navigation: navigation)
+        navigation.presentationController?.delegate = guardian
+        objc_setAssociatedObject(navigation, &key, guardian, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+    }
+
     /// A swipe down held by a dirty page anywhere on the stack: asked on the page showing, closed only on Discard.
     /// While a page is saving the swipe does nothing at all: the page holds until the gateway answers.
     func presentationControllerDidAttemptToDismiss(_ presentationController: UIPresentationController) {
@@ -1070,7 +1081,7 @@ struct BotInfoConversations: View {
             }
             // Three is all the sheet reads: with a full three there may be more, which Sessions lists with this bot's
             // chip picked (UX study #191). A hidden bot has no chip, so Sessions would drop the filter: no row.
-            if model.recent.count >= 3 && !model.bot.hidden {
+            if model.recent.count >= 3 && !model.bot.hidden && BotsViewController.sessionsListed {   // [Mac UI check 2026-11-13]
                 action("All Chats with \(bot.name)", detail: BotInfoWords.allChatsSubtitle, id: "bot-info.all-chats") {
                     model.openAllChats()
                 }

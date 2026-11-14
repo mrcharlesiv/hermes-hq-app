@@ -84,6 +84,9 @@ nonisolated enum ChatPalette {
     // [desktoplook] Surfaces and lines only the Desktop Look draws.
     static let editor = ThemedColor.make(\.editor)
     static let elevated = ThemedColor.make(\.elevated)
+    /// [Mac UI check 2026-11-13] L2, L9: the backing under a pop-up's glass on the Mac (Commands, Models, the slash
+    /// drawer): the page at 86 %, so the chat behind tints the card but never reads through it as words.
+    static let popupVeil = UIColor { @Sendable traits in page.resolvedColor(with: traits).withAlphaComponent(0.94) }
     static let sidebar = ThemedColor.make(\.sidebar)
     static let strokePrimary = ThemedColor.make(\.strokePrimary)
     static let strokeSecondary = ThemedColor.make(\.strokeSecondary)
@@ -151,7 +154,8 @@ nonisolated enum ChatMetrics {
     static let codeStrip: CGFloat = 40
     static let codePadH: CGFloat = 12
     static let codePadV: CGFloat = 10
-    static let codeCompactTrailing: CGFloat = 52
+    /// [Mac UI check 2026-11-13] V9: 52 left a long one-line box's faded end against the copy glyph; 64 clears it.
+    static let codeCompactTrailing: CGFloat = 64
     static let codeCompactMinHeight: CGFloat = 44
     static let tableCellPadH: CGFloat = 10
     /// [transcript] A narrow table's card is at least this wide (its footer's Expand at the largest text).

@@ -140,12 +140,13 @@ final class MoreViewController: UIViewController, UICollectionViewDelegate {
             if row.dimmed {
                 // [mac-audit] Owner 2026-11-02 (#21): a page this Hermes doesn't have reads as greyed out, its
                 // "Update Hermes" as quiet as its title; the row still opens the page, which says why.
-                content.textProperties.color = HQPalette.label3
-                content.secondaryTextProperties.color = HQPalette.label3
-                content.imageProperties.tintColor = HQPalette.label3
+                content.textProperties.color = Self.dimmedInk
+                content.secondaryTextProperties.color = Self.dimmedInk
+                content.imageProperties.tintColor = HQPalette.label3   // the glyph (and the faded tile) say it's unavailable
                 if let image = content.image, image.renderingMode != .alwaysTemplate, !image.isSymbolImage {
+                    let alpha: CGFloat = Theme.isDesktop ? 0.4 : 0.55
                     content.image = UIGraphicsImageRenderer(size: image.size).image { _ in
-                        image.draw(at: .zero, blendMode: .normal, alpha: 0.4)
+                        image.draw(at: .zero, blendMode: .normal, alpha: alpha)
                     }
                 }
             }
@@ -249,6 +250,7 @@ final class MoreViewController: UIViewController, UICollectionViewDelegate {
     /// `-HQDebugScrollMoreEnd YES`: More opens scrolled to its foot (screenshots of the website and GitHub buttons).
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        installBarItemTips()   // [Mac UI check 2026-11-13] the bar's icon buttons name themselves under the pointer
         guard UserDefaults.standard.bool(forKey: "HQDebugScrollMoreEnd") else { return }
         for delay in [1.0, 1.5, 2.0] {   // again once the footer has sized itself
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
@@ -285,6 +287,11 @@ final class MoreViewController: UIViewController, UICollectionViewDelegate {
         guard parts.count == 2 else { return nil }
         return current.first { $0.section.id == parts[0] }?.rows.first { $0.id == parts[1] }
     }
+
+    /// [Mac UI check 2026-11-13] A page this Hermes doesn't have: its name and "Update Hermes" in the secondary label,
+    /// grey beside the other rows' full ink but comfortably readable (about 6:1 on the light card; the third label was
+    /// about 2.2:1 there, and the label at 55 % still only about 3.7:1). Its faded tile or glyph says it's unavailable.
+    static var dimmedInk: UIColor { HQPalette.label2 }
 
     /// A 29 pt rounded square in the row's colour with its white glyph.
     static func tile(_ row: MoreRow, side: CGFloat = 29) -> UIImage {

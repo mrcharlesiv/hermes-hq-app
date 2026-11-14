@@ -25,7 +25,11 @@ import UIKit
             case .status: (0.16, 84, 190)
             case .lines: (0.12, 72, 130)
             }
-            return min(HQFont.scaled(most), max(HQFont.scaled(least), table * share)).rounded()
+            let width = min(HQFont.scaled(most), max(HQFont.scaled(least), table * share))
+            // [Mac UI check 2026-11-13] In a narrow list (a file open beside it) Kind kept its least width and squeezed
+            // Name to a few letters: the kind gives way first (a long one is cut at its end), never past a third.
+            if self == .kind { return min(width, table / 3).rounded() }
+            return width.rounded()
         }
     }
 

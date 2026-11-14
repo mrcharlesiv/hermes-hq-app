@@ -262,16 +262,9 @@ struct GroupInfoView: View {
             .listSectionSpacing(.compact)
 
             Section {
+                // [Mac UI check 2026-11-13] Edit Bots and Activity are the tiles above; their rows here were a second way
+                // to each (V12, the owner's one place per action).
                 ForEach(seats, id: \.key) { seat in memberRow(seat) }
-                Button { model.editMembers() } label: {
-                    HStack {
-                        Text(model.floor ? "Add Bots…" : "Edit Bots…").foregroundStyle(model.online ? Color.hqLabel : Color.hqLabel3)
-                        Spacer(minLength: 0)
-                        chevron
-                    }
-                }
-                .disabled(!model.online)
-                .accessibilityIdentifier("group-info.members-edit")
             } header: { HQSectionLabel {
                 Text("Members")
             } } footer: { HQSectionFooter {
@@ -290,14 +283,6 @@ struct GroupInfoView: View {
                 }
                 .disabled(!model.online)
                 .accessibilityIdentifier("group-info.name-photo")
-                Button { model.activity() } label: {
-                    HStack {
-                        Text("Activity").foregroundStyle(Color.hqLabel)
-                        Spacer(minLength: 0)
-                        chevron
-                    }
-                }
-                .accessibilityIdentifier("group-info.activity")
                 Button(model.unread ? "Mark as Read" : "Mark as Unread") { model.toggleUnread() }
                     .accessibilityIdentifier("group-info.unread")
             } header: { HQSectionLabel { Text("Group Chat") } }

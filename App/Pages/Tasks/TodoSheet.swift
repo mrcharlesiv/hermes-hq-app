@@ -1002,3 +1002,8 @@ struct TodoDateView: View {
         .hqGroupedPage()
     }
 }
+
+/// [Mac UI check 2026-11-13] ⌘R reads the tasks again, as the task page's pull does (the Mac has no pull).
+extension TodoSheetHost: KeyRefreshing {
+    var keyRefresh: (() -> Void)? { { [weak self] in guard let store = self?.model.store else { return }; Task { await store.refresh(force: true) } } }
+}

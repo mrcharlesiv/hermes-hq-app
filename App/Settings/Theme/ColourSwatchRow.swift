@@ -82,6 +82,9 @@ struct ColourSwatchRow: View {
         guard let colour else { return (Color.hqBotBubble, Color.hqLabel) }
         var probe = state
         probe.messageColour = colour
+        // [Mac UI check 2026-11-13] The Desktop Look keeps its own box whatever the colour (`appliedMessageColour`), so
+        // there all nine swatches came out its one near-black fill: each is drawn as the iOS look paints it instead.
+        probe.desktopLook = false
         let tokens = ThemeResolver.resolve(probe).tokens(dark: scheme == .dark)
         return (Color(uiColor: tokens.meBubble.uiColor), Color(uiColor: tokens.meText.uiColor))
     }
@@ -119,7 +122,7 @@ struct ColourSwatchRow: View {
     private var well: some View {
         let on = picked == "custom"
         let shown = draft ?? custom.map { Color(uiColor: RGBA(hex: $0).uiColor) } ?? look(swatches.first { $0.id == picked }?.colour ?? .theme).fill
-        return ColorPicker("Custom Colour", selection: Binding(get: { shown }, set: { next in
+        return ColorPicker("Custom Color", selection: Binding(get: { shown }, set: { next in
             draft = next
             var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
             guard UIColor(next).getRed(&r, green: &g, blue: &b, alpha: &a) else { return }
@@ -190,13 +193,13 @@ struct BotColourSection: View {
 
     private var account: String? { DefaultProjectFolder.activeAccount }
 
-    static let note = "The colour of your own messages in this bot’s chat. The first choice follows Settings › Chat Bubbles; the second is the colour of this bot’s face."
+    static let note = "The color of your own messages in this bot’s chat. The first choice follows Settings › Chat Bubbles; the second is the color of this bot’s face."
 
     var body: some View {
         let state = Theme.shared.state
         if !state.desktopLook {
             Section {
-                ColourSwatchRow(title: "Colour", value: Self.title(choice), state: state, swatches: swatches(state),
+                ColourSwatchRow(title: "Color", value: Self.title(choice), state: state, swatches: swatches(state),
                                 picked: Self.swatchID(choice), custom: Self.customHex(choice), identifier: "bot-info.colour") { swatch in
                     set(BotMessageColour.Choice(stored: swatch.id))
                 } pickCustom: { hex in

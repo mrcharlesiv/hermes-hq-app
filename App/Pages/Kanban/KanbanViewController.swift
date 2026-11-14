@@ -120,6 +120,7 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
         let add = UIBarButtonItem(image: UIImage(systemName: "plus"), primaryAction: UIAction { [weak self] _ in self?.newTask() })
         add.accessibilityLabel = "New Task"
         add.accessibilityIdentifier = "kanban.new"
+        addItem = add
         // Trailing edge inward: New Task · Search · How Kanban Works.
         navigationItem.rightBarButtonItems = [add, capsule.searchItem, about].compactMap { $0 }
         configureDataSource()
@@ -156,6 +157,7 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        installBarItemTips()   // [Mac UI check 2026-11-13] the bar's icon buttons name themselves under the pointer
         searchCapsule?.restoreIfTyped()   // [morepages]
         claimStore()
         if !observing { observing = true; store.setVisible(true) }
@@ -772,17 +774,28 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
     private func searchShownWhileEmpty(_ boardEmpty: Bool) {
         guard DeviceWord.isMac, let search = searchCapsule?.searchItem, searchCapsule?.isSearchShown != true else { return }
         var items = navigationItem.rightBarButtonItems ?? []
+        let before = items
         let at = items.firstIndex { $0 === search }
         if boardEmpty, let at {
             items.remove(at: at)
         } else if !boardEmpty, at == nil {
             // Back in its place: the edge-most item (`DesktopBars.searchToEdge` keeps it there).
             items.insert(search, at: 0)
-        } else {
-            return
         }
-        navigationItem.rightBarButtonItems = items
+        // [Mac UI check 2026-11-13] Owner: one place per action. While the empty board offers its New Task… button,
+        // + leaves the bar too; it comes back (beside Search) with the first task. The menu and Open Quickly still add.
+        if let add = addItem {
+            let addAt = items.firstIndex { $0 === add }
+            if boardEmpty, let addAt {
+                items.remove(at: addAt)
+            } else if !boardEmpty, addAt == nil {
+                items.insert(add, at: (items.firstIndex { $0 === search }).map { $0 + 1 } ?? 0)
+            }
+        }
+        if items != before { navigationItem.rightBarButtonItems = items }
     }
+    /// The bar's + (New Task), kept while the empty board takes it off the bar.
+    private var addItem: UIBarButtonItem?
 
     /// [mac] Mac polish #57: no task on show (an empty board or status, a search with no match, loading or can't load):
     /// the right pane beside it stays blank, not "No Task Selected – Choose a task" beside the board's own "No Tasks Yet".

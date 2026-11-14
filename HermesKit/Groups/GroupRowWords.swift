@@ -155,13 +155,13 @@ nonisolated enum NameColor {
         return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
     }
 
-    /// The colour mixed toward `toward` in steps of 5% until it holds 4.5:1 on `surface`.
-    static func readable(_ color: RGB, surface: RGB, toward: RGB) -> RGB {
+    /// The colour mixed toward `toward` in steps of 5% until it holds `ratio` (4.5:1) on `surface`.
+    static func readable(_ color: RGB, surface: RGB, toward: RGB, ratio: Double = 4.5) -> RGB {
         for step in 0...20 {
             let amount = Double(step) / 20
             let candidate = RGB((color.r + (toward.r - color.r) * amount).rounded(), (color.g + (toward.g - color.g) * amount).rounded(),
                                 (color.b + (toward.b - color.b) * amount).rounded())
-            if contrast(candidate, surface) >= 4.5 { return candidate }
+            if contrast(candidate, surface) >= ratio { return candidate }
         }
         return toward
     }

@@ -162,9 +162,10 @@ enum NewTodoSheet {
 
 /// The quick add: a sheet as tall as its content, over the keyboard, with the list dimmed behind it. A tap outside (or
 /// a pull down, or Escape) closes it.
-final class NewTodoHost: UIHostingController<HQScaledRoot<NewTodoView>> {
+final class NewTodoHost: UIHostingController<HQScaledRoot<NewTodoView>>, EditingPage {
     let model: NewTodoModel
     private var fitted: CGFloat = 150
+    private lazy var guardian = NewTodoCloseGuard(host: self)
 
     init(model: NewTodoModel) {
         self.model = model
@@ -182,9 +183,46 @@ final class NewTodoHost: UIHostingController<HQScaledRoot<NewTodoView>> {
             sheet.prefersEdgeAttachedInCompactHeight = true
             sheet.preferredCornerRadius = Theme.isDesktop ? DesktopRows.radius + 6 : nil
         }
+        presentationController?.delegate = guardian
     }
 
     @MainActor required dynamic init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        observeForm()
+    }
+
+    // [Mac UI check 2026-11-13] A quick add is thrown away freely: only more than a title's worth of words (notes, or a
+    // long line) asks Discard Changes / Keep Editing before a tap outside, Escape, ⌘W or ✕ closes the sheet.
+    var hasChanges: Bool {
+        !model.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || model.title.trimmingCharacters(in: .whitespacesAndNewlines).count > Self.titleWorth
+    }
+    var isSaving: Bool { model.saving }
+    static let titleWorth = 60
+
+    private func observeForm() {
+        withObservationTracking {
+            _ = model.title
+            _ = model.notes
+            _ = model.saving
+        } onChange: { [weak self] in
+            DispatchQueue.main.async { self?.refreshLock(); self?.observeForm() }
+        }
+        refreshLock()
+    }
+
+    private func refreshLock() {
+        isModalInPresentation = hasChanges || isSaving
+        if isSaving { EditingGuard.dropQuestion() }
+    }
+
+    /// ✕, Escape: closes, asking first when there is something to lose.
+    func closeAsking() {
+        view.endEditing(true)
+        confirmLeaving { [weak self] in self?.dismiss(animated: true) }
+    }
 
     /// The content's height changed (a second line of notes, the bot's note): the sheet follows.
     private func fit(_ height: CGFloat) {
@@ -210,7 +248,17 @@ final class NewTodoHost: UIHostingController<HQScaledRoot<NewTodoView>> {
     }
     override var canBecomeFirstResponder: Bool { true }
     @objc private func addFromKeyboard() { model.add() }
-    @objc private func closeFromKeyboard() { if !model.saving { dismiss(animated: true) } }
+    @objc private func closeFromKeyboard() { closeAsking() }
+}
+
+/// [Mac UI check 2026-11-13] A tap outside or a pull down on a quick add with words to lose asks first.
+final class NewTodoCloseGuard: NSObject, UIAdaptivePresentationControllerDelegate {
+    weak var host: NewTodoHost?
+    init(host: NewTodoHost) { self.host = host }
+
+    func presentationControllerDidAttemptToDismiss(_ presentationController: UIPresentationController) {
+        host?.closeAsking()
+    }
 }
 
 struct NewTodoView: View {
@@ -236,7 +284,9 @@ struct NewTodoView: View {
                     }
                     .accessibilityIdentifier("tasks.new.title")
                 if DeviceWord.isMac {
-                    Button { model.controller?.dismiss(animated: true) } label: {
+                    Button {
+                        if let host = model.controller as? NewTodoHost { host.closeAsking() } else { model.controller?.dismiss(animated: true) }
+                    } label: {
                         Image(systemName: "xmark").font(Font.hq(.footnote).weight(.semibold)).foregroundStyle(Color.hqLabel2)
                             .frame(width: 24, height: 24).contentShape(Rectangle())
                     }
@@ -391,7 +441,8 @@ struct NewTodoView: View {
     }
 
     private var whoChip: some View {
-        let words = model.helper.map { model.alone ? model.botName($0) : "Me & \(model.botName($0))" } ?? "Me"
+        // [Mac UI check 2026-11-13] "You", as the list and the task's page say it.
+        let words = model.helper.map { model.alone ? model.botName($0) : "You & \(model.botName($0))" } ?? "You"
         return Menu {
             Button { model.setWho(nil, alone: false) } label: {
                 if model.helper == nil { Label("Just Me", systemImage: "checkmark") } else { Text("Just Me") }

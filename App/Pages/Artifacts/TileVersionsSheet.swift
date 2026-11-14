@@ -98,8 +98,18 @@ final class TileVersionsModel {
         self.writable = writable
     }
 
+    #if DEBUG
+    /// `-HQPagesTileVersions` (PagesDebug): versions to list in place of the gateway's, and Roll Back's question asked
+    /// on the oldest once it shows (`-HQPagesTileRollBack`), for the tour's pictures.
+    static var debugList: TileVersionList?
+    static var debugAsk = false
+    #endif
+
     func load() {
         problem = nil
+        #if DEBUG
+        if let list = Self.debugList { self.list = list; return }
+        #endif
         Task { [weak self, pin, context, writable] in
             // Opening Versions looks at the tile: an edit asked in a chat since is kept now.
             let result = writable
@@ -128,7 +138,37 @@ final class TileVersionsModel {
     }
 
     /// "Roll Back" to an earlier version; a later one than shows is put back with "Restore".
-    func verb(_ version: TileVersion) -> String { version.number < (list?.current ?? 0) ? "Roll Back" : "Restore" }
+    func verb(_ version: TileVersion) -> String { asksFirst(version) ? "Roll Back" : "Restore" }
+
+    /// [Mac UI check 2026-11-13] Owner: Roll Back asks first; Restore (which undoes a roll back) doesn't.
+    func asksFirst(_ version: TileVersion) -> Bool { version.number < (list?.current ?? 0) }
+    static let rollBackQuestion = "Roll Back to This Version?"
+    /// What a roll back does, in one plain sentence.
+    func rollBackWords(_ version: TileVersion) -> String {
+        "\(name) goes back to how \(version.title) looked. The newer versions stay here, so you can restore them."
+    }
+
+    /// Roll Back's question, pointing at `anchor` (the row's button); an alert where there is no button left to point
+    /// at (the version's full-size page closed). Restore puts the version back at once.
+    func askRollBack(_ version: TileVersion, from anchor: UIView? = nil) {
+        guard asksFirst(version) else { rollBack(version); return }
+        guard let controller else { return }
+        let pointed = anchor?.window != nil
+        #if DEBUG
+        AppLog.note("pages", "tile versions: Roll Back asks (\(pointed ? "at its button" : "as an alert"))")
+        #endif
+        let alert = UIAlertController(title: Self.rollBackQuestion, message: rollBackWords(version),
+                                      preferredStyle: pointed ? .actionSheet : .alert)
+        let roll = UIAlertAction(title: "Roll Back", style: .default) { [weak self] _ in self?.rollBack(version) }
+        alert.addAction(roll)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.preferredAction = roll
+        if pointed, let anchor, let popover = alert.popoverPresentationController {
+            popover.sourceView = anchor
+            popover.sourceRect = anchor.bounds
+        }
+        controller.present(alert, animated: true)
+    }
 
     /// The version full size, as the tile opens; its Roll Back is in the bar.
     func open(_ version: TileVersion) {
@@ -138,7 +178,7 @@ final class TileVersionsModel {
         var tile = HTMLPageSheet.Tile(name: version.title, fileName: name,
                                       status: { nil }, menu: { _ in UIMenu(children: []) })
         tile.version = .init(verb: current || !writable ? nil : verb(version)) { [weak self] host in
-            host.dismiss(animated: true) { self?.rollBack(version) }
+            host.dismiss(animated: true) { self?.askRollBack(version) }
         }
         FilePreviewPresenter.shared.open(path: path, name: version.file, context: context, from: controller, row: nil, tile: tile)
     }
@@ -226,7 +266,7 @@ struct TileVersionsView: View {
     private func footer(_ list: TileVersionList) -> String {
         var words = list.versions.count == 1
             ? "This is the only version so far. Each change makes a new one, and the ones before stay here."
-            : "Tap a version to see it full size. Rolling back puts that version on the tile; the others stay here."
+            : "\(DeviceWord.isMac ? "Click" : "Tap") a version to see it full size. Rolling back puts that version on the tile; the others stay here."
         if model.writable, list.versions.count > 1, let bot = model.botName {
             words += " If a job keeps this tile up to date, \(bot) makes sure it keeps the version you chose."
         }
@@ -240,6 +280,8 @@ private struct TileVersionRow: View {
     var model: TileVersionsModel
     var version: TileVersion
     var current: Bool
+    /// [Mac UI check 2026-11-13] The Roll Back button's place, for its question to point at.
+    @State private var anchor = TileVersionAnchor()
 
     var body: some View {
         let width = HQFont.scaled(88), height = HQFont.scaled(66)
@@ -298,7 +340,7 @@ private struct TileVersionRow: View {
                 if model.rolling == version.number {
                     ProgressView().controlSize(.small).frame(minWidth: HQFont.scaled(64))
                 } else {
-                    Button(model.verb(version)) { model.rollBack(version) }
+                    Button(model.verb(version)) { model.askRollBack(version, from: anchor.view) }
                         .buttonStyle(.bordered)
                         .buttonBorderShape(.capsule)
                         .controlSize(.small)
@@ -306,9 +348,35 @@ private struct TileVersionRow: View {
                         .disabled(model.rolling != nil)
                         .accessibilityLabel("\(model.verb(version)) to \(version.title)")
                         .accessibilityIdentifier("tile.version.rollback.\(version.number)")
+                        .background(TileVersionAnchorView(anchor: anchor))
                 }
             }
         }
-        .onAppear { model.askPicture(version) }
+        .onAppear {
+            model.askPicture(version)
+            #if DEBUG
+            if TileVersionsModel.debugAsk, model.asksFirst(version), version.number == 1 {
+                TileVersionsModel.debugAsk = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [anchor] in model.askRollBack(version, from: anchor.view) }
+            }
+            #endif
+        }
     }
+}
+
+/// [Mac UI check 2026-11-13] Where a row's Roll Back button sits, for its question to point at.
+final class TileVersionAnchor {
+    weak var view: UIView?
+}
+
+private struct TileVersionAnchorView: UIViewRepresentable {
+    let anchor: TileVersionAnchor
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        view.backgroundColor = .clear
+        anchor.view = view
+        return view
+    }
+    func updateUIView(_ view: UIView, context: Context) { anchor.view = view }
 }

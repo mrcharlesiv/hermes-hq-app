@@ -741,7 +741,9 @@ final class AddOnUpdateController: UIHostingController<HQScaledRoot<AddOnUpdateV
     private func refit(settled: Bool = false) {
         // [addon-sheet-button] Not while it goes: the list's insets change as the sheet slides down, and a refit then
         // took the sheet back up (✕ didn't close it).
-        guard let sheet = sheetPresentationController, !isBeingDismissed, presentedViewController == nil else { return }
+        guard !isBeingDismissed, presentedViewController == nil else { return }
+        UpdateSheetFit.macFit(self, measured: measuredHeight(), fills: update.fillsHeight)   // [Mac UI check 2026-11-13]
+        guard let sheet = sheetPresentationController else { return }
         let height = update.fillsHeight ? .greatestFiniteMagnitude : measuredHeight() ?? Self.fitHeight(update)
         guard settled || abs(height - fitted) > 1 else { return }
         fitted = height
@@ -802,6 +804,7 @@ struct AddOnUpdateView: View {
                 }
             }
             .hqUpdateSheetFit()
+            .hqUpdateSheetClearOfButtons()   // [Mac UI check 2026-11-13]
             .hqGroupedPage()
             // [addon-sheet-button] Owner 2026-11-06: a long "what's new" pushed Update below the fold (and a List row
             // off screen isn't even there to tap). The action sits under the list, always in view; the list scrolls.
@@ -859,8 +862,8 @@ struct AddOnUpdateView: View {
         }
         .frame(maxWidth: .infinity)
         // [mac] Owner 2026-11-07 ("crammed, like we completely forgot to figure out the padding"): room above and below.
-        .padding(.top, DeviceWord.isMac ? 16 : 6)
-        .padding(.bottom, DeviceWord.isMac ? 12 : 6)
+        .padding(.top, DeviceWord.isMac && !UpdateSheetFit.on ? 16 : 6)   // [Mac UI check 2026-11-13] less in a short window
+        .padding(.bottom, DeviceWord.isMac && !UpdateSheetFit.on ? 12 : 6)
         .contentTransition(.opacity)
     }
 
@@ -993,16 +996,47 @@ struct UpdateSheetButtonBar<Buttons: View>: View {
 /// padded 8 pt, the cards 10 pt apart, the margin gone, Update Hermes lists two of what's new (then "And 4 more."), and
 /// anything still under the buttons fades out rather than stopping hard. The Mac's sheets have the room and keep theirs.
 enum UpdateSheetFit {
-    static var on: Bool { Theme.isDesktop && !DeviceWord.isMac }
+    /// [Mac UI check 2026-11-13] And on the Mac in a window too short for the sheet's whole list (the usual 800 pt
+    /// one): the asking states ran What's New and the last step under the pinned Update, a line half faded behind it.
+    @MainActor static var on: Bool { Theme.isDesktop && !DeviceWord.isMac || macShort }
+
+    /// [Mac UI check 2026-11-13] The Mac's main window is shorter than the update sheets' full list needs.
+    @MainActor static var macShort: Bool {
+        DeviceWord.isMac && (MainTabController.current?.viewIfLoaded?.window?.bounds.height ?? .greatestFiniteMagnitude) < 960
+    }
 
     /// How many of Hermes's new commits Update Hermes lists.
-    static var whatsNewLines: Int { on ? 2 : 5 }
+    @MainActor static var whatsNewLines: Int { on ? 2 : 5 }
 
     /// The fade above the buttons.
-    static var fade: CGFloat { on ? 32 : 16 }
+    @MainActor static var fade: CGFloat { on ? 32 : 16 }
+}
+
+extension UpdateSheetFit {
+    /// [Mac UI check 2026-11-13] The Mac's update sheets were the fixed tall form sheet (`SheetStyle.macTall`): a short
+    /// run (a failure) left ~100 pt of empty sheet over its buttons, a long one faded What's New under Update. The Mac
+    /// ignores detents, so the sheet's own size follows its list there: `measured` (the list with its bar and buttons),
+    /// between 320 pt and the window's room; `fills` takes the window's room. Nothing off the Mac.
+    @MainActor static func macFit(_ controller: UIViewController, measured: CGFloat?, fills: Bool = false) {
+        #if targetEnvironment(macCatalyst)
+        guard controller.modalPresentationStyle == .formSheet, !controller.isBeingDismissed,
+              let window = controller.presentingViewController?.viewIfLoaded?.window else { return }
+        let room = max(320, min(window.bounds.height - 80, 1100))
+        guard let wanted = fills ? room : measured else { return }
+        let height = min(room, max(320, wanted.rounded(.up)))
+        guard abs(controller.preferredContentSize.height - height) > 1 else { return }
+        controller.preferredContentSize = CGSize(width: controller.preferredContentSize.width, height: height)
+        #endif
+    }
 }
 
 extension View {
+    /// [Mac UI check 2026-11-13] On the Mac the list ends a fade's height above the pinned buttons, so its last line
+    /// (What's New, a step) clears the fade when scrolled to the end instead of resting half under it.
+    @ViewBuilder func hqUpdateSheetClearOfButtons() -> some View {
+        if DeviceWord.isMac { contentMargins(.bottom, UpdateSheetFit.fade, for: .scrollContent) } else { self }
+    }
+
     /// On the List, before `hqGroupedPage` (so its section spacing gives way to this one).
     @ViewBuilder func hqUpdateSheetFit() -> some View {
         if UpdateSheetFit.on {

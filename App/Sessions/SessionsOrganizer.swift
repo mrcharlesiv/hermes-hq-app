@@ -135,8 +135,27 @@ extension AppModel: SessionsServices {}
 
     func contextMenu(for session: SessionSummary, key: String) -> UIContextMenuConfiguration {
         UIContextMenuConfiguration(identifier: key as NSString, previewProvider: nil) { [weak self] _ in
-            self?.uiMenu(for: session)
+            self?.lentAnchor = nil
+            return self?.uiMenu(for: session)
         }
+    }
+
+    /// [Mac UI check 2026-11-13] A chat's menu shown away from this list (the Mac sidebar's chat under its bot): the
+    /// same actions, and a sheet one of them opens (Share…) points at `anchor` while the list's own row isn't on screen.
+    func uiMenu(for session: SessionSummary, anchor: UIView) -> UIMenu {
+        lentAnchor = anchor
+        return uiMenu(for: session)
+    }
+
+    /// The row a menu shown elsewhere came from (`uiMenu(for:anchor:)`).
+    private weak var lentAnchor: UIView?
+
+    /// Where a sheet for row `key` points: its cell while on screen, else the lent row, else the page.
+    private func anchor(forKey key: String) -> UIView? {
+        guard let host else { return nil }
+        if let cell = host.cell(forKey: key), cell.window != nil { return cell }
+        if let lentAnchor, lentAnchor.window != nil { return lentAnchor }
+        return (surface ?? host).view
     }
 
     static func uiColor(_ index: Int) -> UIColor {
@@ -256,7 +275,7 @@ extension AppModel: SessionsServices {}
         let bots = services.bots.filter { !$0.hidden || $0.id == "default" || $0.id == picked }
         let ordered = bots.filter { $0.id == "default" } + bots.filter { $0.id != "default" }
         guard let host, !ordered.isEmpty else { newChat(profile: picked ?? "default"); return }
-        final class Box { weak var sheet: UINavigationController?; var delivered = false }
+        final class Box { weak var sheet: UINavigationController?; var delivered = false; var bot = "" }
         let box = Box()
         let start: (String, String?) -> Void = { [weak self] bot, project in
             guard !box.delivered else { return }
@@ -288,16 +307,22 @@ extension AppModel: SessionsServices {}
         let showAll: (String) -> Void = { bot in
             guard let sheet = box.sheet else { return }
             let name = ordered.first { $0.id == bot }?.name ?? "this bot"
-            let all = UIHostingController(rootView: HQScaledRoot(NewChatAllProjectsView(projects: projects, botName: name,
-                                                                                       last: NewChatLast.project(for: bot)) { pick(bot, $0) }))
+            let all = NewChatKeysPage(rootView: AnyView(HQScaledRoot(NewChatAllProjectsView(projects: projects, botName: name,
+                                                                                           last: NewChatLast.project(for: bot)) { pick(bot, $0) })))
+            // [Mac UI check 2026-11-13] C2: Escape here goes back one step to the sheet's first page, not out of the sheet.
+            all.onEscape = { [weak all] in all?.navigationController?.popViewController(animated: true) }
             all.view.backgroundColor = HQPalette.sheetPage
             all.title = "All Projects"
             all.navigationItem.largeTitleDisplayMode = .never
             sheet.sheetPresentationController?.animateChanges { sheet.sheetPresentationController?.selectedDetentIdentifier = .large }
             sheet.pushViewController(all, animated: true)
         }
-        let view = NewChatSheetView(bots: ordered, projects: projects, bot: opensOn, recent: recent, start: pick, showAll: showAll)
-        let page = UIHostingController(rootView: HQScaledRoot(view))
+        box.bot = opensOn
+        let view = NewChatSheetView(bots: ordered, projects: projects, bot: opensOn, recent: recent, start: pick, showAll: showAll,
+                                    onBot: { box.bot = $0 })
+        let page = NewChatKeysPage(rootView: AnyView(HQScaledRoot(view)))
+        // [Mac UI check 2026-11-13] C2: Return starts the chat with the lit bot, as the Start Chat button at the foot does.
+        page.onReturn = { pick(box.bot, nil) }
         page.view.backgroundColor = HQPalette.sheetPage   // [glass] the glass shows around the rows
         // The sheet is as tall as its rows (New Project…, the last one, is on show without a scroll) up to the full
         // height: the title bar, the pills, Start Chat and the heading, then the projects, All Projects and New Project….
@@ -764,7 +789,7 @@ extension AppModel: SessionsServices {}
         guard let host, let top = FailureAlert.topmost(host) else { return }
         let sheet = UIActivityViewController(activityItems: items, applicationActivities: nil)
         if let popover = sheet.popoverPresentationController {
-            popover.sourceView = host.cell(forKey: key) ?? (surface ?? host).view
+            popover.sourceView = anchor(forKey: key)
         }
         top.present(sheet, animated: true)
     }
@@ -834,6 +859,8 @@ struct NewChatSheetView: View {
     /// `project`: nil (no project), a project's key, or `newProjectTag`.
     var start: (_ bot: String, _ project: String?) -> Void
     var showAll: (_ bot: String) -> Void = { _ in }
+    /// The lit bot changed (the sheet's Return starts the chat with it).
+    var onBot: (_ bot: String) -> Void = { _ in }
 
     private var faceSize: CGFloat { Theme.isDesktop ? HQFont.scaled(20) : HQFont.scaled(24) }
     private static let rowInsets = EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16)
@@ -915,6 +942,7 @@ struct NewChatSheetView: View {
         .listStyle(.insetGrouped)
         .environment(\.defaultMinListRowHeight, HQFont.scaled(44))
         .listSectionSpacing(.compact)
+        .onChange(of: bot) { _, now in onBot(now) }
         // Start Chat stays at the foot of the sheet, under the thumb, however long the list is (owner 2026-11-11).
         .safeAreaInset(edge: .bottom, spacing: 0) {
             Button { start(bot, nil) } label: {
@@ -1009,5 +1037,47 @@ struct NewChatAllProjectsView: View {
         .listStyle(.insetGrouped)
         .environment(\.defaultMinListRowHeight, HQFont.scaled(40))
         .listSectionSpacing(.compact)
+    }
+}
+
+/// [Mac UI check 2026-11-13] C2: a New Chat sheet page that takes the keyboard: Return starts the chat (`onReturn`), and
+/// on a pushed page Escape goes back one step (`onEscape`) instead of the app's Escape closing the whole sheet. It
+/// takes the keyboard as it shows, so its keys reach it with nothing focused in the sheet.
+final class NewChatKeysPage: UIHostingController<AnyView> {
+    var onReturn: (() -> Void)?
+    var onEscape: (() -> Void)?
+
+    override var canBecomeFirstResponder: Bool { true }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        if presentedViewController == nil { becomeFirstResponder() }
+    }
+
+    override var keyCommands: [UIKeyCommand]? {
+        var commands = super.keyCommands ?? []
+        if onReturn != nil {
+            let start = UIKeyCommand(title: "Start Chat", action: #selector(returnPressed), input: "\r")
+            start.wantsPriorityOverSystemBehavior = true
+            commands.append(start)
+        }
+        if onEscape != nil {
+            let back = UIKeyCommand(title: "Back", action: #selector(hqEscape(_:)), input: UIKeyCommand.inputEscape)
+            back.wantsPriorityOverSystemBehavior = true
+            commands.append(back)
+        }
+        return commands
+    }
+
+    @objc private func returnPressed() { onReturn?() }
+
+    /// The app's Escape (`KeyCommands.escape`) stops here first while this page is in the responder chain.
+    @objc func hqEscape(_ sender: Any?) {
+        onEscape?()
+    }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(hqEscape(_:)) { return onEscape != nil && presentedViewController == nil }
+        return super.canPerformAction(action, withSender: sender)
     }
 }

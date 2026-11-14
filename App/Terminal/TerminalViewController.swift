@@ -292,6 +292,7 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        installBarItemTips()   // [Mac UI check 2026-11-13] the bar's icon buttons name themselves under the pointer
         if !started {
             started = true
             Task { await open() }

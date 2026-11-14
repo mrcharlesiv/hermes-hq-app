@@ -67,6 +67,8 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     private(set) var drawer: ComposerDrawerController?
     private let jumpButton = JumpButton()
     private lazy var jumpWidth = jumpButton.widthAnchor.constraint(equalToConstant: ChatMetrics.jumpSize)
+    /// [Mac UI check 2026-11-13] V8: the Mac's arrow, from the composer's trailing edge to the box's (`placeMacJump`).
+    private lazy var macJumpTrailing = jumpButton.trailingAnchor.constraint(equalTo: composer.trailingAnchor, constant: -26)
     private lazy var statusPillTop = statusPill.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor,
                                                                      constant: ChatMetrics.statusPillTop)
     private lazy var jumpHeight = jumpButton.heightAnchor.constraint(equalToConstant: ChatMetrics.jumpSize)
@@ -838,9 +840,10 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
             followKeys,
             jumpWidth,
             jumpHeight,
-            // [mac] In a wide window the arrow at the trailing edge sat on the end of the owner's own bubbles (they
-            // hug that edge); a Mac chat puts it in the middle, over the message box.
-            DeviceWord.isMac ? jumpButton.centerXAnchor.constraint(equalTo: columnGuide.centerXAnchor)
+            // [Mac UI check 2026-11-13] V8, owner ("Put it on the right … remove the background behind it"): on the Mac
+            // the arrow floats just above the message box's top-right corner, its edge on the box's right edge
+            // (`placeMacJump` sets the distance each layout pass); the iPhone keeps the column's trailing margin.
+            DeviceWord.isMac ? macJumpTrailing
                 : jumpButton.trailingAnchor.constraint(equalTo: columnGuide.trailingAnchor, constant: -ChatMetrics.jumpTrailing),
             queueGap, queueCollapsed,
             // VOICE: the memo notice card sits on top of the dock; the jump button above it.
@@ -1195,6 +1198,10 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         followDockSide()
         clipUnderMacBox()
         if edgeHost.contentSize != edgeHost.bounds.size { edgeHost.contentSize = edgeHost.bounds.size }
+        #if targetEnvironment(macCatalyst)
+        keepHeaderTips()   // [Mac UI check 2026-11-13] V24
+        placeMacJump()     // [Mac UI check 2026-11-13] V8
+        #endif
         updateBarBacking()
         // The table always covers the whole view: an inverted table pins its content to its frame's bottom, so a
         // frame that shrank with the keyboard would carry everything up with it. The keyboard only changes the
@@ -1356,6 +1363,9 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         // whatever is still glass now that it's done.
         if Theme.isDesktop { ThemeChrome.restyleGlass(in: view) }
         if movingBetweenPanes { movingBetweenPanes = false; attach(); reclaimTitle() }   // [m9/ipad] landed in the other pane
+        #if targetEnvironment(macCatalyst)
+        tipHeader()   // [Mac UI check 2026-11-13] V24: the bar's buttons exist now
+        #endif
         promptsUI?.chatAppeared()   // [questions] a waiting password sheet shows now (Q14)
         #if DEBUG
         LinkDebugHook.runIfAsked(from: self)   // [transcript] -HQNDebugOpenLink
@@ -1517,6 +1527,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
             #if targetEnvironment(macCatalyst)
             readAloudButtonShown = showsReadAloudButton
             navigationItem.rightBarButtonItems = [makeInspectorButton()] + items + (readAloudButtonShown ? [makeReadAloudButton()] : [])
+            tipHeader()
             #else
             navigationItem.rightBarButtonItems = items
             #endif
@@ -1530,6 +1541,85 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     }
 
     #if targetEnvironment(macCatalyst)
+    // MARK: [Mac UI check 2026-11-13] Tool tips in the header (V24)
+
+    /// The header's title, speaker, ⋯, Files and inspector buttons say what they do when the pointer rests on them, as
+    /// the sidebar's do. A bar button item has no tool tip of its own and its view carries no name for the window's
+    /// tip (`MacToolTips`), so once the bar has laid its buttons out each takes its item's name: the bar's trailing
+    /// buttons, from the edge in, are the trailing items in order.
+    private func tipHeader(tries: Int = 6) {
+        titleView.tip = titleMenu != nil ? nil
+            : session is ChatRoomSurface ? "Group Info"
+            : (session as? LiveChatSession)?.isBotChat == true ? "Bot Info" : "Chat Info"
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            guard self.applyHeaderTips() else {
+                // The bar may not have laid the new buttons out yet (the speaker joining left all three without a
+                // tip): look again shortly, a few times, then leave a bar laid out some other way as it was.
+                if tries > 0 { DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in self?.tipHeader(tries: tries - 1) } }
+                return
+            }
+        }
+    }
+
+    /// [Mac UI check 2026-11-13] V8: the arrow's visible right edge on the message box's right edge (the Desktop Look's
+    /// 36 pt circle sits inside its 44 pt tap area; the glass circle fills it).
+    private func placeMacJump() {
+        guard DeviceWord.isMac else { return }
+        let boxRight = composer.macBoxFrame?.maxX ?? (composer.bounds.width - composer.currentSideInset)
+        let inset = jumpButton.desktop && !jumpButton.approvalMode ? (ChatMetrics.jumpSize - JumpButton.desktopDiameter) / 2 : 0
+        let constant = (boxRight - composer.bounds.width + inset).rounded()
+        if abs(macJumpTrailing.constant - constant) > 0.5 { macJumpTrailing.constant = constant }
+    }
+
+    /// The bar's trailing buttons, from the edge in (the bar's own private button views).
+    private func headerButtons() -> [UIControl]? {
+        guard let bar = navigationController?.navigationBar, bar.window != nil else { return nil }
+        var buttons: [UIControl] = []
+        func walk(_ view: UIView) {
+            for sub in view.subviews where !sub.isHidden {
+                if let control = sub as? UIControl, NSStringFromClass(type(of: control)) == "_UIButtonBarButton" {
+                    buttons.append(control)
+                } else {
+                    walk(sub)
+                }
+            }
+        }
+        walk(bar)
+        let middle = titleView.window != nil ? titleView.convert(titleView.bounds, to: bar).maxX : bar.bounds.midX
+        return buttons.map { ($0, $0.convert($0.bounds, to: bar).midX) }.filter { $0.1 > middle }
+            .sorted { $0.1 > $1.1 }.map(\.0)
+    }
+
+    /// Gives each trailing button its item's name; false when the buttons don't match the items (yet).
+    @discardableResult
+    private func applyHeaderTips() -> Bool {
+        guard let items = navigationItem.rightBarButtonItems, !items.isEmpty, let trailing = headerButtons(),
+              trailing.count == items.count else { return false }
+        for (button, item) in zip(trailing, items) {
+            guard let name = item.accessibilityLabel, !name.isEmpty else { continue }
+            if button.toolTip != name { button.toolTip = name }
+            if button.accessibilityLabel != name { button.accessibilityLabel = name }
+        }
+        return true
+    }
+
+    /// [Mac UI check 2026-11-13] V24, round 3: the bar makes its button views again when the window or the panes change
+    /// (one pane and back to two: the base tour's Kanban detour), with no new items, so `updateMoreButton` never ran and
+    /// the new views had no tip. Each layout pass checks the views cheaply and names any that lost their tip.
+    private var headerRetipQueued = false
+    private func keepHeaderTips() {
+        guard !headerRetipQueued, navigationItem.rightBarButtonItems?.isEmpty == false else { return }
+        headerRetipQueued = true
+        // After this pass, once the bar has laid its own buttons out.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.headerRetipQueued = false
+            guard let buttons = self.headerButtons(), buttons.contains(where: { ($0.toolTip ?? "").isEmpty }) else { return }
+            self.tipHeader(tries: 4)
+        }
+    }
+
     // MARK: [mac-audit] Read Replies Aloud in the bar
 
     // Owner 2026-11-02 (Mac audit #26): once its notice had gone, nothing said Read Replies Aloud was on, and a reply
@@ -3033,7 +3123,9 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         #if targetEnvironment(macCatalyst)
         guard barBacking.superview != nil else { return }
         let barBottom = view.safeAreaInsets.top
-        let height = barBottom + 16
+        // [Mac UI check 2026-11-13] L14: in the iOS look your blue bubble came out from under the bar cut hard where the
+        // grey ones faded: over 16 pt a saturated fill can't fade. The page's fade under the bar is twice as long there.
+        let height = barBottom + (Theme.isDesktop ? 16 : 32)
         let frame = CGRect(x: 0, y: 0, width: view.bounds.width, height: height)
         if barBacking.frame != frame {
             CATransaction.begin(); CATransaction.setDisableActions(true)

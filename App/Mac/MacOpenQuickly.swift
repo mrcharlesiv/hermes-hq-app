@@ -4,8 +4,9 @@
 // searches what More's search finds (sessions, pages, bots, Settings, actions). ↑ and ↓ move the mark, Return opens the
 // marked row, Esc or a click outside closes. A result opens as it does from More's search (`MoreSearchUI.open`).
 // [mac-audit G] Owner 2026-11-02 (Mac audit #15): the panel leaves the tab on show alone until a result is picked, and a
-// chat, a bot or a tab result opens on its own tab (`openOnOwnTab`), not on More; pages, Settings and actions still
-// open from More's stack. The panel stands near the window's top, a palette over the whole window.
+// chat, a bot or a tab result opens on its own tab (`openOnOwnTab`), not on More. The panel stands near the window's
+// top, a palette over the whole window. [keys] Mac UI check 2026-11-13 (K4): pages open as their Tool, settings in the
+// Settings window, actions where their own key or button runs them; only what has no such home opens on More's stack.
 
 import UIKit
 
@@ -20,6 +21,9 @@ import UIKit
     /// [glass-mac] Owner 2026-10-30 "more Liquid Glass": in the iOS look the panel is glass, as Spotlight's is; the
     /// Desktop Look keeps its solid editor panel (`applyLook`).
     private let glassBack = UIVisualEffectView()
+    /// [keys] Mac UI check 2026-11-13 (L13): a veil of the page's colour over the glass, as the app's pop-overs have
+    /// (`SheetStyle`): glass alone let the page's words show through the card and the marked row.
+    private let veil = UIView()
     private let fieldBox = UIView()
     private let field = UITextField()
     private let table = UITableView(frame: .zero, style: .plain)
@@ -77,6 +81,11 @@ import UIKit
         glassBack.translatesAutoresizingMaskIntoConstraints = false
         DesktopLayout.keepOwnLook(glassBack)   // the look's panel is `panel`'s own solid fill (`applyLook`)
         panel.addSubview(glassBack)
+        veil.isUserInteractionEnabled = false
+        veil.layer.cornerRadius = Self.glassRadius
+        veil.layer.cornerCurve = .continuous
+        veil.translatesAutoresizingMaskIntoConstraints = false
+        panel.addSubview(veil)
         panel.accessibilityIdentifier = "open-quickly"
         panel.accessibilityViewIsModal = true
         view.addSubview(panel)
@@ -139,6 +148,8 @@ import UIKit
             panel.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, constant: -80),
             glassBack.topAnchor.constraint(equalTo: panel.topAnchor), glassBack.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
             glassBack.leadingAnchor.constraint(equalTo: panel.leadingAnchor), glassBack.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
+            veil.topAnchor.constraint(equalTo: panel.topAnchor), veil.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
+            veil.leadingAnchor.constraint(equalTo: panel.leadingAnchor), veil.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
             fieldBox.topAnchor.constraint(equalTo: panel.topAnchor, constant: 12),
             fieldBox.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: 12),
             fieldBox.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -12),
@@ -175,7 +186,8 @@ import UIKit
     /// The panel's corners in the iOS look: the field's 8 pt box 12 pt inside it, concentric.
     private static let glassRadius: CGFloat = 20
 
-    /// The iOS look: a glass panel (the system's own shadow and edge) with the field a faint well on it. The Desktop
+    /// The iOS look: a glass panel (the system's own shadow and edge) under the page-coloured veil, with the field a
+    /// faint well on it. The Desktop
     /// Look: the solid editor panel with its line and drawn shadow, as before.
     private func applyLook() {
         let desktop = Theme.isDesktop
@@ -183,6 +195,8 @@ import UIKit
             glassBack.effect = UIGlassEffect(style: .regular)
         }
         glassBack.isHidden = desktop
+        veil.isHidden = desktop   // L13: the Desktop Look's panel is solid already
+        veil.backgroundColor = HQPalette.page.withAlphaComponent(0.94)
         // [mac] Stress test 2026-10-31: the Desktop Look's panel is the raised surface with the stronger line, over a
         // shadow dark enough to read on a dark page. In the editor colour with the pane line it was the page's own
         // colour, so the panel had no edge over the page behind it.
@@ -202,11 +216,13 @@ import UIKit
         UIColor.label.resolvedColor(with: traits).withAlphaComponent(traits.userInterfaceStyle == .dark ? 0.1 : 0.05)
     }
 
-    /// The field's focus ring: the accent while it has the caret, the panel's line otherwise.
+    /// The field's edge, as the app's other search fields draw theirs (`DesktopSearch`): the Desktop Look's 1 pt line,
+    /// and in the iOS look the well alone. [keys] Mac UI check 2026-11-13 (V35, L13): the 2 pt accent ring while it
+    /// had the caret (always, while the panel is up) was the hardest line on the window; the caret says where typing goes.
     private func ring() {
-        let colour = field.isFirstResponder ? HQPalette.tint : HQPalette.paneLine
-        fieldBox.layer.borderColor = colour.resolvedColor(with: traitCollection).cgColor
-        fieldBox.layer.borderWidth = field.isFirstResponder ? 2 : 1
+        let desktop = Theme.isDesktop
+        fieldBox.layer.borderColor = ChatPalette.strokeSecondary.resolvedColor(with: traitCollection).cgColor
+        fieldBox.layer.borderWidth = desktop ? 1 : 0
     }
 
     // MARK: Results
@@ -370,10 +386,93 @@ extension MacOpenQuickly {
             root.botsViewController.open(item.id)
             return true
         case .goTo:
-            guard item.id.hasPrefix("tab-"), let index = Int(item.id.dropFirst(4)), root.placedTabs.indices.contains(index) else { return false }
-            pick(root.placedTabs[index])
+            if item.id.hasPrefix("tab-"), let index = Int(item.id.dropFirst(4)), root.placedTabs.indices.contains(index) {
+                pick(root.placedTabs[index])
+                return true
+            }
+            // [keys] Mac UI check 2026-11-13 (K4): More is out of sight on the Mac, so a page opened on its stack showed
+            // with no sidebar row marked. A page that is a Tool (or a place) opens as its sidebar row's click opens it; a
+            // page that lives in the Settings window opens there, as its row in that window does.
+            if let tab = toolTab(root, item.id) {
+                pick(tab)
+                (tab as? UINavigationController)?.popToRootViewController(animated: false)
+                return true
+            }
+            guard let page = settingsWindowPage(root, item.id) else { return false }
+            if let category = page.category { return MacSettingsWindow.open(category: category, then: page.open) }
+            return MacSettingsWindow.open()
+        case .settings:
+            // K4: a setting opens in the Settings window (⌘,'s), as that window's own search opens it: a row on its
+            // first page is scrolled to and marked, any other setting's page goes beside the categories.
+            guard let entry = SettingsSearch.index().first(where: { $0.id == item.id }) else { return false }
+            return MacSettingsWindow.open { router in
+                // As the window's search: on the Mac Attachment Limit is a row of Chat Behavior, marked in place.
+                let target: SettingsSearchEntry.Target = entry.target == .root("attachment-limit") ? .root("row:attachment-limit") : entry.target
+                if case .root(let id) = target, id.hasPrefix("row:") {
+                    MacSettingsWindow.root?.reveal(id)
+                } else {
+                    SettingsNavigator.open(target, router: router, actions: SettingsFileActions(router: router))
+                }
+            }
+        case .actions:
+            return runAction(root, item.id, pick: pick)
+        }
+    }
+
+    /// The Tool (or place) showing More page `id`, as the sidebar lists it (`PagesTabs.pageTabs`).
+    private static func toolTab(_ root: MainTabController, _ id: String) -> UIViewController? {
+        root.placedTabs.first { $0.tabBarItem.accessibilityIdentifier == "tab-page-\(id)" }
+    }
+
+    /// A More page that is the Settings window's on the Mac: its category there and how it opens (`movedFromMore`,
+    /// Settings › Hermes' and Bots & Tools' rows). Nil for any other page.
+    private static func settingsWindowPage(_ root: MainTabController, _ id: String)
+        -> (category: SettingsCategory?, open: (SettingsRouter) -> Void)? {
+        switch id {
+        case PagesTabs.settingsRowID:
+            return (nil, { _ in })
+        case "passwords":
+            return (.gateway, { SettingsNavigator.openRoot("vault", router: $0) })
+        case "capabilities", "connectors", ComposioRow.id:
+            return (.tools, { SettingsNavigator.openRoot(id, router: $0) })
+        case "profiles", "messaging", "webhooks", "import-sessions":
+            guard let row = root.pages?.moreSections().flatMap({ $0.rows() }).first(where: { $0.id == id }) else { return nil }
+            return (.tools, { router in if let page = row.make() { router.push(page) } })
+        default:
+            return nil
+        }
+    }
+
+    /// K3, K4: an action result run where its own key, button or sidebar row runs it, not from More's hidden stack.
+    /// False: More's own (`MoreSearchUI.run`).
+    private static func runAction(_ root: MainTabController, _ id: String, pick: (UIViewController) -> Void) -> Bool {
+        switch id {
+        case "new-chat":
+            // File › New Chat (⌘N): its bot and project, the right pane following (the result used the first bot).
+            guard let app = UIApplication.shared.delegate as? AppDelegate else { return false }
+            app.hqNewChat(nil)
             return true
-        case .settings, .actions:
+        case "new-bot":
+            // The sidebar's + New Bot.
+            guard let organizer = root.botsViewController.organizer else { return false }
+            organizer.newBot()
+            return true
+        case "new-task":
+            guard let tab = root.placedTabs.first(where: { ($0 as? UINavigationController)?.viewControllers.first is KanbanViewController }),
+                  let stack = tab as? UINavigationController, let board = stack.viewControllers.first as? KanbanViewController else { return false }
+            pick(tab)
+            stack.popToRootViewController(animated: false)
+            DispatchQueue.main.async { board.newTask() }
+            return true
+        case "restart-gateway", "update-hermes":
+            // Status & Maintenance, the sidebar's Tool, where both are.
+            guard let tab = toolTab(root, "command-center") else { return false }
+            pick(tab)
+            (tab as? UINavigationController)?.popToRootViewController(animated: false)
+            return true
+        case "perf-logs":
+            return MacSettingsWindow.open(category: .about) { SettingsNavigator.openRoot("about", router: $0) }
+        default:
             return false
         }
     }

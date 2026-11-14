@@ -71,7 +71,7 @@ final class ModelPanelView: UIView {
 
     private let dim = UIView()
     private let blur = UIVisualEffectView(effect: nil)
-    private let card = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+    private let card = BackedGlassCard(effect: UIGlassEffect(style: .regular))
     private let scroll = PanelScrollView()
     /// Holds the list; its mask fades the bottom edge while more is below (a row never just stops at the card's edge).
     private let clip = UIView()
@@ -104,7 +104,7 @@ final class ModelPanelView: UIView {
     // [ui-sizing 2026-11-09] 16 pt in from the edge and 12 between blocks (were 20 and 16): the bulkiest card in the chat.
     private static let pad: CGFloat = 16
     private static let blockGap: CGFloat = 12
-    private static let radius: CGFloat = 34
+    static let radius: CGFloat = 34
 
     // MARK: Presenting
 
@@ -162,7 +162,13 @@ final class ModelPanelView: UIView {
         super.init(frame: .zero)
         accessibilityViewIsModal = true
 
-        dim.backgroundColor = UIColor { $0.userInterfaceStyle == .dark ? UIColor.black.withAlphaComponent(0.45) : UIColor.black.withAlphaComponent(0.22) }
+        // [Mac UI check 2026-11-13] L10: on the Mac the chat stays readable behind the card: a light dim and no blur
+        // (the blur smeared your blue bubbles at the column's edge, and the dim and blur together read as a grey slab).
+        let mac = DeviceWord.isMac
+        dim.backgroundColor = UIColor { traits in
+            traits.userInterfaceStyle == .dark ? UIColor.black.withAlphaComponent(mac ? 0.3 : 0.45)
+                : UIColor.black.withAlphaComponent(mac ? 0.1 : 0.22)
+        }
         dim.alpha = 0
         addSubview(blur)
         addSubview(dim)
@@ -633,7 +639,7 @@ final class ModelPanelView: UIView {
         }, completion: { [weak self] _ in self?.updateFade() })
         HQMotion.animate(0.3) { [self] in
             dim.alpha = 1
-            blur.effect = UIBlurEffect(style: .systemUltraThinMaterial)
+            if !DeviceWord.isMac { blur.effect = UIBlurEffect(style: .systemUltraThinMaterial) }   // [Mac UI check 2026-11-13] L10
         }
         for (i, block) in blocks.enumerated() {
             HQMotion.spring(duration: 0.55, damping: 0.86, delay: 0.08 + Double(i) * 0.045) {
@@ -2276,5 +2282,50 @@ final class PanelGroup: UIView {
             if i > 0 { lines[i - 1].frame = CGRect(x: 14 + 26 + 12, y: y - hair / 2, width: bounds.width - 52, height: hair) }
             y += h
         }
+    }
+}
+
+/// [Mac UI check 2026-11-13] L10, round 3: the model card's glass bent the person's blue bubbles behind its edge into a
+/// blue smear (the light iOS look). On the Mac a backing of the page (the pop-ups' veil) sits right under the glass,
+/// moving, sizing, fading and rounding with it, so the glass only ever has the backing behind it. The iPhone keeps
+/// its clear glass.
+final class BackedGlassCard: UIVisualEffectView {
+    private let backing = UIView()
+
+    override init(effect: UIVisualEffect?) {
+        super.init(effect: effect)
+        backing.isUserInteractionEnabled = false
+        backing.backgroundColor = ChatPalette.popupVeil
+        backing.layer.cornerCurve = .continuous
+        backing.isHidden = !DeviceWord.isMac
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func didMoveToSuperview() {
+        super.didMoveToSuperview()
+        backing.removeFromSuperview()
+        superview?.insertSubview(backing, belowSubview: self)
+        syncBacking()
+    }
+
+    override func removeFromSuperview() {
+        backing.removeFromSuperview()
+        super.removeFromSuperview()
+    }
+
+    override var frame: CGRect { didSet { syncBacking() } }
+    override var bounds: CGRect { didSet { syncBacking() } }
+    override var center: CGPoint { didSet { backing.center = center } }
+    override var transform: CGAffineTransform { didSet { backing.transform = transform } }
+    override var alpha: CGFloat { didSet { backing.alpha = alpha } }
+    override var isHidden: Bool { didSet { backing.isHidden = isHidden || !DeviceWord.isMac } }
+
+    /// Inside the glass's edge by a point, so no corner of the backing shows past the glass's own rounding.
+    private func syncBacking() {
+        guard backing.superview != nil else { return }
+        backing.bounds = CGRect(origin: .zero, size: CGSize(width: max(0, bounds.width - 2), height: max(0, bounds.height - 2)))
+        backing.center = center
+        backing.layer.cornerRadius = max(0, min(ModelPanelView.radius, bounds.height / 2) - 1)
     }
 }

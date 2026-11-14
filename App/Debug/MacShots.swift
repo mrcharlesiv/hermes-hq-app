@@ -574,6 +574,29 @@ enum MacShots {
                     await dismissAll()
                 }
             }
+            // [Mac UI check 2026-11-13] `-HQDebugMacShotsPushed YES`: a page pushed over a More page (Capabilities ›
+            // Skills, as its row opens it), at the tour's width and at 1000 and 760, so its "‹ Back  Title" shows.
+            if UserDefaults.standard.bool(forKey: "HQDebugMacShotsPushed"), let more = nav.viewControllers.first as? MoreViewController {
+                nav.popToRootViewController(animated: false)
+                more.open(rowId: "capabilities")
+                try? await Task.sleep(for: .seconds(1.6))
+                let hub = KeyCommands.root?.split?.detailScreens.last ?? nav.topViewController
+                if let stack = hub?.navigationController {
+                    stack.pushViewController(CapabilitiesPages.page(.skills, services: tabs.services), animated: false)
+                    try? await Task.sleep(for: .seconds(2))
+                    snap("more capabilities pushed skills")
+                    let start = window.windowScene?.effectiveGeometry.systemFrame ?? .zero
+                    for width in [1000.0, 760.0] {
+                        window.windowScene?.requestGeometryUpdate(.Mac(systemFrame: CGRect(x: start.minX, y: start.minY, width: width, height: 800))) { _ in }
+                        try? await Task.sleep(for: .seconds(2))
+                        snap("more capabilities pushed skills \(Int(width))")
+                    }
+                    window.windowScene?.requestGeometryUpdate(.Mac(systemFrame: start)) { _ in }
+                    try? await Task.sleep(for: .seconds(1.5))
+                } else {
+                    log += "pushed: Capabilities didn't open\n"
+                }
+            }
             nav.popToRootViewController(animated: false)
         }
         // A bot chat's ⋯, item by item.
@@ -705,6 +728,8 @@ enum MacShots {
             }
             for (label, open) in targets {
                 stack.popToViewController(root, animated: false)
+                // Two columns: the pages are on the pane's own stack; unpopped, each Back named the tour's last page.
+                root.paneStack?.popToRootViewController(animated: false)
                 try? await Task.sleep(for: .seconds(0.4))
                 open()
                 try? await Task.sleep(for: .seconds(1.8))
@@ -1221,6 +1246,15 @@ enum MacShots {
     }
 
     /// Every button on screen that draws no words of its own, and the tip the pointer would get over its middle.
+    /// A tip the view (or a view it holds, a few levels down) carries of its own.
+    private static func ownToolTip(_ view: UIView, depth: Int) -> String? {
+        if let control = view as? UIControl, let tip = control.toolTip, !tip.isEmpty { return tip }
+        if let tip = view.interactions.compactMap({ ($0 as? UIToolTipInteraction)?.defaultToolTip }).first(where: { !$0.isEmpty }) { return tip }
+        guard depth < 3 else { return nil }
+        for sub in view.subviews where !sub.isHidden { if let tip = ownToolTip(sub, depth: depth + 1) { return tip } }
+        return nil
+    }
+
     private static func toolTips(_ window: UIWindow) -> String {
         var lines: [String] = []
         let interaction = window.interactions.compactMap { $0 as? UIToolTipInteraction }.first
@@ -1230,7 +1264,22 @@ enum MacShots {
                 let frame = view.convert(view.bounds, to: window)
                 if frame.width > 4, window.bounds.intersects(frame) {
                     let centre = CGPoint(x: frame.midX, y: frame.midY)
-                    let tip = interaction.flatMap { MacToolTips.shared.toolTipInteraction($0, configurationAt: centre)?.toolTip }
+                    // [Mac UI check 2026-11-13] The pointer gets the nearest tip interaction above the button: a page's bar
+                    // has its own (`BarItemTips`, the icon bar items), the window's covers the rest.
+                    var tip: String?
+                    var up: UIView? = view
+                    while let current = up, tip == nil {
+                        if let bar = current as? UINavigationBar,
+                           let barTips = bar.interactions.first(where: { ($0 as? UIToolTipInteraction)?.delegate === BarItemTips.shared }) as? UIToolTipInteraction {
+                            tip = BarItemTips.shared.toolTipInteraction(barTips, configurationAt: window.convert(centre, to: bar))?.toolTip
+                            break
+                        }
+                        up = current.superview
+                    }
+                    if tip == nil { tip = interaction.flatMap { MacToolTips.shared.toolTipInteraction($0, configurationAt: centre)?.toolTip } }
+                    // [Mac UI check 2026-11-13] A view's own tip counts too (a control's `toolTip`, a tip interaction on it or
+                    // on what it holds, as the chat title's): the window's tip finds only names it reads itself.
+                    if tip == nil { tip = ownToolTip(view, depth: 0) }
                     lines.append("  \(tip == nil ? "NONE" : "ok  ") \(tip ?? "-") · \(type(of: view)) \(view.accessibilityIdentifier ?? "") \(Int(frame.minX)),\(Int(frame.minY))")
                 }
             }
@@ -1892,12 +1941,14 @@ enum MacShots {
         }
         // A drop as a drag ends it: Files above the first row, then below the last (More stays last); the line a drag
         // over the third gap draws.
-        SidebarEditing.move(.page("files"), before: tabs.placedTabs.first.flatMap { TabChoice(tag: $0.tabBarItem.tag) })
+        // (Files is a Tool now and no longer drags: Jobs, a place, stands in. Mac UI check 2026-11-13.)
+        SidebarEditing.move(.main(.jobs), before: .main(.sessions))
         try? await Task.sleep(for: .seconds(0.6))
-        log += state("dropped Files at the top")
-        SidebarEditing.move(.page("files"), before: nil)
+        log += state("dropped Jobs above Sessions")
+        SidebarEditing.move(.main(.jobs), before: nil)
         try? await Task.sleep(for: .seconds(0.6))
-        log += state("dropped Files at the end")
+        log += state("dropped Jobs at the end")
+        log += "can move: Jobs up \(SidebarEditing.canMove(.main(.jobs), by: -1)) down \(SidebarEditing.canMove(.main(.jobs), by: 1)); Sessions up \(SidebarEditing.canMove(.main(.sessions), by: -1))\n"
         bar.debugDropLine(2)
         try? await Task.sleep(for: .seconds(0.3))
         shoot(window, to: folder.appending(path: "\(name)-3-dropline.png"))

@@ -17,6 +17,8 @@
 // - `-HQPagesFilter <kind>`      …and pick that Artifacts segment (image, file, link)
 // - `-HQPagesMore <row id>`      …and open that More row
 // - `-HQPagesOpenArtifact <label>` …and open that artifact (Artifacts, wherever it lives)
+// - `-HQPagesTileVersions YES`   …and open Versions of the first page tile, with three made-up versions (Tiles)
+// - `-HQPagesTileRollBack YES`   …and ask Roll Back's question on Version 1
 // - `-HQPagesReadOnly YES`       refuse every page write, as a read-only gateway does (PagesTabs)
 // - `-HQPagesOpenSession <id>`   open that stored chat as a tapped alert does (NotificationHub.open), 4 s after the tabs show
 
@@ -45,6 +47,17 @@ enum PagesDebug {
     private static func showTab(_ tab: Int, host: UITabBarController, tries: Int) {
         guard let main = host as? MainTabController else { return }
         guard let place = main.placedTab(tagged: tab) else {
+            // [Mac UI check 2026-11-13] A More page that isn't a place of its own here (Messaging, Webhooks,
+            // Connectors, Import Sessions are More's rows on the Mac): opened from More, as a click on its row does.
+            if (TabChoice.firstPageTag..<1000).contains(tab), let more = main.placedTab(tagged: HQTab.more.rawValue),
+               TabChoice.pageIDs.indices.contains(tab - TabChoice.firstPageTag) {
+                let row = TabChoice.pageIDs[tab - TabChoice.firstPageTag]
+                main.show(more)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    ((more as? UINavigationController)?.viewControllers.first as? MoreViewController)?.open(rowId: row)
+                }
+                return
+            }
             if tries > 0 { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { showTab(tab, host: host, tries: tries - 1) } }
             return
         }
@@ -106,6 +119,17 @@ enum PagesDebug {
         }
         if let artifacts = top as? ArtifactsViewController {
             if let kind = defaults.string(forKey: "HQPagesFilter") { artifacts.select(filter: ArtifactRecord.Kind(rawValue: kind)) }
+            if defaults.bool(forKey: "HQPagesTileVersions") {
+                // Three versions, the newest showing (a stand-in keeps none): Roll Back on the two older ones.
+                let now = Date().timeIntervalSince1970
+                TileVersionsModel.debugList = TileVersionList(current: 3, versions: [
+                    TileVersion(number: 1, at: now - 3 * 86_400, kind: .made, what: "Revenue this week, with a chart by day", file: "v1.html", design: "a"),
+                    TileVersion(number: 2, at: now - 86_400, kind: .changed, what: "Make it a bar chart", file: "v2.html", design: "b"),
+                    TileVersion(number: 3, at: now - 3_600, kind: .outside, what: nil, file: "v3.html", design: "c"),
+                ])
+                TileVersionsModel.debugAsk = defaults.bool(forKey: "HQPagesTileRollBack")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { artifacts.debugShowVersions() }
+            }
             if let label = defaults.string(forKey: "HQPagesOpenArtifact") {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                     if let record = artifacts.store.artifacts.first(where: { $0.label == label }) { artifacts.open(record) }

@@ -101,6 +101,15 @@ private extension AttachmentPrepareError {
         dropTarget.canAccept = { [weak self] in (self?.count ?? AttachmentStaging.maxPerMessage) < AttachmentStaging.maxPerMessage }
         dropTarget.onDrop = { [weak self] providers in self?.drop(providers) }
         dropTarget.host = screen?.view
+        // [Mac UI check 2026-11-13] V35: the wash covers the transcript only, under the bar and above the message box,
+        // which takes a drag of its own; the header's buttons and the box stay as they are.
+        dropTarget.area = { [weak self] in
+            guard let screen = self?.screen, let view = screen.view else { return nil }
+            let top = view.safeAreaInsets.top
+            let bottom = screen.composer.frame.minY
+            guard bottom > top + 80 else { return nil }
+            return CGRect(x: 0, y: top, width: view.bounds.width, height: bottom - top)
+        }
         screen?.view.addInteraction(UIDropInteraction(delegate: dropTarget))
         composer.onTextChange = { [weak self] text in
             guard let self, !self.syncingText else { return }

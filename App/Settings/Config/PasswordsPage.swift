@@ -57,10 +57,10 @@ nonisolated enum PasswordsLayout {
         return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
     }
 
-    /// "3 Set", or "None Set".
+    /// "3 saved", or "None saved". [Mac UI check 2026-11-13] Plain words: "2 Set ›" read oddly.
     static func setCount(_ vars: [EnvVarInfo]) -> String {
         let count = vars.filter(\.isSet).count
-        return count == 0 ? "None Set" : "\(count) Set"
+        return count == 0 ? "None saved" : "\(count) saved"
     }
 }
 

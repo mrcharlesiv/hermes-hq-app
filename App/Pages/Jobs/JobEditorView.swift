@@ -322,32 +322,52 @@ struct JobEditorView: View {
     /// Whether the phone keeps the gateway's clock (then "times follow the computer's clock" says nothing).
     private var sameClockAsHost: Bool { model.hostClock() == .shared }
 
-    private var frequencyStrip: some View {
-        ScrollViewReader { strip in
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(JobFrequency.allCases) { frequency in
-                        JobChip(title: Self.chipTitle(frequency), selected: model.form.frequency == frequency,
-                                identifier: "job.editor.frequency.\(frequency.rawValue)") {
-                            guard model.form.frequency != frequency else { return }
-                            PagesHaptics.selection()
-                            focus = frequency == .custom ? .custom : nil
-                            HQMotion.withAnimation(.snappy) { model.setFrequency(frequency) }
-                        }
-                        .id(frequency)
-                    }
-                }
-                .hqPickGlassRow()
-                .jobStripRoom()
+    @ViewBuilder private var frequencyChips: some View {
+        ForEach(JobFrequency.allCases) { frequency in
+            JobChip(title: Self.chipTitle(frequency), selected: model.form.frequency == frequency,
+                    identifier: "job.editor.frequency.\(frequency.rawValue)") {
+                guard model.form.frequency != frequency else { return }
+                PagesHaptics.selection()
+                focus = frequency == .custom ? .custom : nil
+                HQMotion.withAnimation(.snappy) { model.setFrequency(frequency) }
             }
-            .contentMargins(.horizontal, gutter, for: .scrollContent)
-            .jobStripRoomOutside()
-            .onAppear { strip.scrollTo(model.form.frequency, anchor: .center) }
+            .id(frequency)
         }
-        .jobStripRow()
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Frequency")
-        .accessibilityIdentifier("job.editor.frequency")
+    }
+
+    @ViewBuilder private var frequencyStrip: some View {
+        if DeviceWord.isMac {
+            // [Mac UI check 2026-11-13] Every choice in sight: the chips wrap to a second line where the sheet is too
+            // narrow for them all ("Every 15 Min" stood cut flat at the sheet's edge, a scroll a Mac gives no cue for).
+            PagesFlowLayout(spacing: 8, lineSpacing: 8) { frequencyChips }
+                .hqPickGlassRow()
+                // [Mac UI check 2026-11-13] Solid pills, as Tasks' views: wrapped, "Every 15 Min" sat under the chosen
+                // chip and its glass took the chosen chip's blue into its rim.
+                .hqFlatPicks()
+                .padding(.horizontal, gutter)
+                .padding(.top, 2)
+                .padding(.bottom, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .jobStripRow()
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Frequency")
+                .accessibilityIdentifier("job.editor.frequency")
+        } else {
+            ScrollViewReader { strip in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) { frequencyChips }
+                        .hqPickGlassRow()
+                        .jobStripRoom()
+                }
+                .contentMargins(.horizontal, gutter, for: .scrollContent)
+                .jobStripRoomOutside()
+                .onAppear { strip.scrollTo(model.form.frequency, anchor: .center) }
+            }
+            .jobStripRow()
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Frequency")
+            .accessibilityIdentifier("job.editor.frequency")
+        }
     }
 
     /// The frequency chips on the glass, edge to edge, under the Schedule header; the card with the time follows.

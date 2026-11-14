@@ -18,6 +18,23 @@ extension MacShots {
         } else {
             log += "menu bar: none\n"
         }
+        // [keys] Mac UI check 2026-11-13 (A9): the tree above is AppKit's copy before any item was validated (⌘5 "More",
+        // "Tab 6"…). The View menu as it reads when opened: each item through `validate`, as UIKit asks just before
+        // AppKit draws the menu (a hidden item left out, a dimmed one marked).
+        if let delegate = UIApplication.shared.delegate as? AppDelegate {
+            log += "view menu as opened:\n"
+            func walk(_ elements: [UIMenuElement]) {
+                for element in elements {
+                    if let menu = element as? UIMenu { walk(menu.children); continue }
+                    guard let command = element as? UICommand else { continue }
+                    delegate.validate(command)
+                    guard !command.attributes.contains(.hidden) else { continue }
+                    let key = (command as? UIKeyCommand).flatMap { key in key.input.map { " [" + KeyShortcutsSheet.keyName($0, key.modifierFlags) + "]" } } ?? ""
+                    log += "  \(command.title)\(key)\(command.attributes.contains(.disabled) ? " (off)" : "")\n"
+                }
+            }
+            walk(KeyCommands.viewItems())
+        }
         log += "dock menu: " + MacDockMenu.shared.titles().map { $0 ?? "—" }.joined(separator: " | ") + "\n"
 
         func sheetShot(_ label: String) {

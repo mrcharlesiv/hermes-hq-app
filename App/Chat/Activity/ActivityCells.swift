@@ -530,13 +530,14 @@ final class ChangedFilesCell: ChatBaseCell {
             chevron.tintColor = ChatPalette.tintText
             chevron.contentMode = .center
             for v: UIView in [title, review, chevron] { v.isUserInteractionEnabled = false; addSubview(v) }
+            PointerEffects.surface(self)   // [mac] Feel list B: lit under the pointer, deeper while pressed
             isAccessibilityElement = true
             accessibilityTraits = .button
         }
 
         required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-        override var isHighlighted: Bool { didSet { alpha = isHighlighted ? 0.5 : 1 } }   // motion-ok: colour only
+        override var isHighlighted: Bool { didSet { alpha = PointerEffects.dim(isHighlighted, to: 0.5) } }   // motion-ok: colour only
     }
 
     /// One changed file: a row of the card under a hairline rule (as an opened One Line card's step), its own tap and
@@ -557,13 +558,14 @@ final class ChangedFilesCell: ChatBaseCell {
             name.textColor = ChatPalette.label
             stats.textAlignment = .right
             for v: UIView in [rule, glyph, name, stats] { v.isUserInteractionEnabled = false; addSubview(v) }
+            PointerEffects.surface(self)   // [mac] Feel list B: lit under the pointer, deeper while pressed
             isAccessibilityElement = true
             accessibilityTraits = .button
         }
 
         required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-        override var isHighlighted: Bool { didSet { alpha = isHighlighted ? 0.5 : 1 } }   // motion-ok: colour only
+        override var isHighlighted: Bool { didSet { alpha = PointerEffects.dim(isHighlighted, to: 0.5) } }   // motion-ok: colour only
     }
 
     private let card = UIView()
@@ -587,6 +589,7 @@ final class ChangedFilesCell: ChatBaseCell {
         showAllLabel.isUserInteractionEnabled = false
         showAll.addSubview(showAllLabel)
         showAll.addTarget(self, action: #selector(showAllTapped), for: .touchUpInside)
+        PointerEffects.surface(showAll)   // [mac] Feel list B: lit under the pointer, as the file rows above it
         showAll.isAccessibilityElement = true
         showAll.accessibilityTraits = .button
         showAllLabel.textColor = ChatPalette.tintText
@@ -606,6 +609,7 @@ final class ChangedFilesCell: ChatBaseCell {
         card.backgroundColor = Self.contentCardFill   // [backdrop]
         let hairline = 1 / max(traitCollection.displayScale, 1)
         header.frame = c.headerFrame
+        PointerEffects.fit(header, card: c.cardFrame, radius: ChatMetrics.insetCardRadius)
         header.title.font = c.font
         header.title.text = c.headerTitle
         // The title's own size (already scaled), held at 20 pt × UI Scale: `scaled` put the scale and the text size on
@@ -631,6 +635,7 @@ final class ChangedFilesCell: ChatBaseCell {
             let r = c.rows[i]
             v.isHidden = false
             v.frame = r.frame
+            PointerEffects.fit(v, card: c.cardFrame, radius: ChatMetrics.insetCardRadius)
             v.rule.frame = CGRect(x: 12, y: 0, width: max(0, r.frame.width - 24), height: hairline)
             v.path = r.path
             let origin = r.frame.origin
@@ -647,6 +652,7 @@ final class ChangedFilesCell: ChatBaseCell {
         if let frame = c.showAllFrame, let title = c.showAllTitle {
             showAll.isHidden = false
             showAll.frame = frame
+            PointerEffects.fit(showAll, card: c.cardFrame, radius: ChatMetrics.insetCardRadius)
             showAllLabel.font = c.font
             showAllLabel.text = title
             showAllLabel.textAlignment = .natural
@@ -1064,13 +1070,14 @@ final class TasksAddedCell: ChatBaseCell {
             detail.lineBreakMode = .byTruncatingTail
             more.textColor = ChatPalette.label2
             for v: UIView in [rule, circle, title, detail, more] { v.isUserInteractionEnabled = false; addSubview(v) }
+            PointerEffects.surface(self)   // [mac] Feel list B: lit under the pointer, deeper while pressed
             isAccessibilityElement = true
             accessibilityTraits = .button
         }
 
         required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-        override var isHighlighted: Bool { didSet { alpha = isHighlighted ? 0.5 : 1 } }   // motion-ok: colour only
+        override var isHighlighted: Bool { didSet { alpha = PointerEffects.dim(isHighlighted, to: 0.5) } }   // motion-ok: colour only
     }
 
     private let card = UIView()
@@ -1159,6 +1166,7 @@ final class TasksAddedCell: ChatBaseCell {
             let line = t.lines[i]
             v.isHidden = false
             v.frame = line.frame
+            PointerEffects.fit(v, card: t.cardFrame, radius: ChatMetrics.insetCardRadius)
             v.taskId = line.id
             let origin = line.frame.origin
             v.rule.frame = CGRect(x: 14, y: 0, width: max(0, line.frame.width - 28), height: hairline)

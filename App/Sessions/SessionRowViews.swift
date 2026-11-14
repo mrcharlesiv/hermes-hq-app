@@ -578,6 +578,11 @@ struct SessionDateHeaderView: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     private var large: Bool { typeSize.isAccessibilitySize }
     private var desk: Bool { Theme.isDesktop && !large }
+    /// [mac] Feel list B (2026-11-13): a heading that folds its group brightens under the pointer, as the sidebar's
+    /// section names do (it had no answer at all). The Mac only.
+    @State private var over = false
+    @State private var overCaption = false
+    private func ink(_ lit: Bool) -> Color { lit && DeviceWord.isMac ? .hqLabel : .hqLabel2 }
     /// A group's + (never a project's: [project-cards] New Chat is the foot of its card, and stays in its hold menu).
     private var showsNewChat: Bool { onNewChat != nil && summary == nil }
     /// [header-menus] A header with a hold menu shows a ⋯ with the same menu (owner 2026-11-03).
@@ -625,6 +630,7 @@ struct SessionDateHeaderView: View {
             // A caption's tap reaches up into the break above it (the row below has its own); taps only, so VoiceOver's
             // frame stays the caption's.
             .contentShape(.interaction, RaisedHitShape(above: summary == nil ? Self.hitAbove : 0))
+            .onHover { over = $0 }
             .onTapGesture { fold?.toggle() }
             .accessibilityElement(children: .combine)
             .accessibilityLabel(spokenLabel)
@@ -750,8 +756,8 @@ struct SessionDateHeaderView: View {
             Group {
                 if Theme.isDesktop { Text(title) } else { Text(title).font(Font.hq(.subheadline).weight(.semibold)) }
             }
-            .foregroundStyle(dropTarget ? Color.hqTint : Color.hqLabel2)
-            .hqDesktopLabel(color: dropTarget ? .hqTint : .hqLabel2)   // [desktoplook2] EARLIER TODAY, as the desktop's group label
+            .foregroundStyle(dropTarget ? Color.hqTint : ink(over && fold != nil))
+            .hqDesktopLabel(color: dropTarget ? .hqTint : ink(over && fold != nil))   // [desktoplook2] EARLIER TODAY, as the desktop's group label
             .layoutPriority(1)
             if let badge, badge > 0 { countBadge(badge) }   // [sessions-layout] New for You's count
             star
@@ -797,8 +803,8 @@ struct SessionDateHeaderView: View {
                 Group {
                     if Theme.isDesktop { Text(caption) } else { Text(caption).font(Font.hq(.subheadline).weight(.semibold)) }
                 }
-                .foregroundStyle(Color.hqLabel2)
-                .hqDesktopLabel(color: .hqLabel2)
+                .foregroundStyle(ink(overCaption && onFoldCaption != nil))
+                .hqDesktopLabel(color: ink(overCaption && onFoldCaption != nil))
                 if onFoldCaption != nil {
                     Image(systemName: "chevron.down")
                         .font(Font.hq(.caption).weight(.semibold))
@@ -808,6 +814,7 @@ struct SessionDateHeaderView: View {
             }
             .frame(minHeight: Self.captionHeight)
             .contentShape(.interaction, RaisedHitShape(above: onFoldCaption == nil ? 0 : Self.hitAbove))
+            .onHover { overCaption = $0 }
             .onTapGesture { onFoldCaption?() }
             .accessibilityElement(children: .combine)
             .accessibilityLabel(caption)

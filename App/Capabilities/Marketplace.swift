@@ -582,6 +582,7 @@ struct MarketplaceView: View {
         }
         .buttonStyle(.plain)
         .hoverEffect(.highlight)
+        .hqPointerFill(8, on: !on)   // [mac] Feel list B
         .accessibilityLabel(count.map { "\(title), \($0)" } ?? title)
         .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("marketplace.side.\(id)")
@@ -668,6 +669,7 @@ struct MarketplaceView: View {
                             }
                             .buttonStyle(.plain)
                             .hoverEffect(.highlight)
+                            .hqPointerFill(12)   // [mac] Feel list B
                             .accessibilityIdentifier("marketplace.featured.pick-\(entry.name)")
                         }
                     }
@@ -756,6 +758,7 @@ struct MarketplaceView: View {
             .overlay { cardEdge(12) }
             .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .hoverEffect(.highlight)
+            .hqPointerFill(12)   // [mac] Feel list B: `.hoverEffect` draws nothing on the Mac
     }
 
     @ViewBuilder private func itemCard(_ item: MarketplaceItem) -> some View {

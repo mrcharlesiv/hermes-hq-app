@@ -484,6 +484,10 @@ final class ChatBubbleCell: ChatBaseCell, UIContextMenuInteractionDelegate {
     private let bubble = SpokenLabelView()
     private let shape = BubbleShapeView()
     private var blockViews: [BlockView] = []
+    #if targetEnvironment(macCatalyst)
+    /// [mac] Feel list B: the pointer is over a link in this message, so it is the pointing hand.
+    private var pointerOnLink = false
+    #endif
     fileprivate var blockViewsOnShow: [BlockView] { blockViews.filter { !$0.isHidden } }
     private let timeLabel = UILabel()
     /// Where the layout put the time (`mediaView.timeOffset` moves it onto a stack's top card).
@@ -585,6 +589,7 @@ final class ChatBubbleCell: ChatBaseCell, UIContextMenuInteractionDelegate {
                                         color: { [weak self] in self?.selectionColor ?? .clear })
         textSelector?.canReceive = { [weak self] touch in self?.replyShouldReceive(touch) ?? false }
         bubble.addInteraction(UIPointerInteraction(delegate: self))
+        bubble.addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(linkHover(_:))))
         bubble.addInteraction(UIDragInteraction(delegate: self))   // [mac] #19: a selection, or the message, drags out
         #endif
     }
@@ -1291,13 +1296,42 @@ extension ChatBubbleCell: UIPointerInteractionDelegate {
     func pointerInteraction(_ interaction: UIPointerInteraction, regionFor request: UIPointerRegionRequest,
                             defaultRegion: UIPointerRegion) -> UIPointerRegion? {
         guard let view = interaction.view else { return nil }
+        if hasLink(at: request.location, in: view) { return nil }   // the hand, from `linkHover`
+        return hasText(at: request.location, in: view).map { UIPointerRegion(rect: $0, identifier: "text") }
+    }
+
+    /// The frame of the piece of text under a point of `view`.
+    private func hasText(at point: CGPoint, in view: UIView) -> CGRect? {
         for block in blockViewsOnShow {
             for piece in block.drawnPieces {
                 let frame = piece.convert(piece.bounds, to: view)
-                if frame.contains(request.location) { return UIPointerRegion(rect: frame, identifier: "text") }
+                if frame.contains(point) { return frame }
             }
         }
         return nil
+    }
+
+    private func hasLink(at point: CGPoint, in view: UIView) -> Bool {
+        blockViewsOnShow.contains { block in
+            let p = view.convert(point, to: block)
+            return block.bounds.contains(p) && block.link(at: p) != nil
+        }
+    }
+
+    /// Feel list B (2026-11-13): a link in a reply showed the I-beam of the text round it, so nothing said it could be
+    /// clicked. Over a link the pointer is the Mac's pointing hand (UIKit has no shape for it: AppKit's cursor, as the
+    /// splitters set theirs); off it, the I-beam over text and the arrow elsewhere again.
+    @objc fileprivate func linkHover(_ recognizer: UIHoverGestureRecognizer) {
+        guard let view = recognizer.view else { return }
+        let point = recognizer.location(in: view)
+        let inside = recognizer.state == .began || recognizer.state == .changed
+        let onLink = inside && hasLink(at: point, in: view)
+        if onLink {
+            MacWindow.cursor("pointingHandCursor")
+        } else if pointerOnLink {
+            MacWindow.cursor(inside && hasText(at: point, in: view) != nil ? "IBeamCursor" : "arrowCursor")
+        }
+        pointerOnLink = onLink
     }
 
     func pointerInteraction(_ interaction: UIPointerInteraction, styleFor region: UIPointerRegion) -> UIPointerStyle? {

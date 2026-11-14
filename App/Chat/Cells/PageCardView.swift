@@ -71,6 +71,7 @@ final class PageCardView: UIControl {
         accessibilityHint = "Opens the page"
         accessibilityIdentifier = "chat.page-card"
         addTarget(self, action: #selector(tapped), for: .touchUpInside)
+        PointerEffects.surface(self)   // [mac] Feel list B: lit under the pointer, deeper while pressed
         NotificationCenter.default.addObserver(self, selector: #selector(turnEnded(_:)), name: PageSnapshots.turnEnded, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(pinsChanged), name: ArtifactPins.didChange, object: nil)
     }
@@ -91,7 +92,7 @@ final class PageCardView: UIControl {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    override var isHighlighted: Bool { didSet { alpha = isHighlighted ? 0.6 : 1 } }
+    override var isHighlighted: Bool { didSet { alpha = PointerEffects.dim(isHighlighted, to: 0.6) } }
 
     func configure(_ ref: MediaRef, context: MediaContext?, style: ChatStyle) {
         layer.cornerRadius = HQShape.radius(12, .card)

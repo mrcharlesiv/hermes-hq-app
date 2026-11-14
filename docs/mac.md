@@ -143,7 +143,11 @@ Mac window, scaled to Mac size. No separate code base; every iPhone and iPad cha
     when none is, File › Close Window ⇧⌘W always (owner's call);
   - **selecting part of a message** (Mac audit #11, Nov 2): see "Selecting part of a message" below;
   - **hover**: the Mac draws no pointer effect, so rows get a faint fill of their own under the pointer and small
-    round controls a faint round one (`MacHover` in `PointerEffects.swift`);
+    round controls a faint round one (`MacHover` in `PointerEffects.swift`). Since 979 every control in the chat,
+    the model card, Marketplace, the Settings window and the tab strips has one (`PointerEffects.surface`, SwiftUI
+    `.hqPointerFill`), a press deepens the fill instead of dimming the view (`press` / `dim`), a row inside a card
+    spans the card and keeps its corners (`fit`), lists answer on mouse down (`delaysContentTouches` off), links in
+    replies show the pointing hand, and the ⌘K mark follows the pointer;
   - **stall log**: HangWatch pauses while the app's windows are hidden and drops a wait the watch's own timer was
     held back through (App Nap); a resize is a `window.resize` span.
 - **Add-ons**: the Hermes HQ identity embeds its notification extension (sealed alerts, bot faces) and its Share

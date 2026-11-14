@@ -35,6 +35,8 @@ final class DesktopFrostView: UIView {
 
     let effectView = UIVisualEffectView(effect: DesktopFrost.blur())
     private let tintView = UIView()
+    /// The frost's own two layers end here: what a control on the frost draws goes over this (the jump pill's hover).
+    var backing: UIView { tintView }
     private let fadeMask = CAGradientLayer()
     var fade: Fade = .none { didSet { setNeedsLayout() } }
     var fadeLength: CGFloat = 50 { didSet { setNeedsLayout() } }

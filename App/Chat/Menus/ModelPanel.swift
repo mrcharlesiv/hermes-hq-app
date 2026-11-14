@@ -224,7 +224,7 @@ final class ModelPanelView: UIView {
         switchButton.pressed = { [weak self] down in
             guard let self else { return }
             HQMotion.animate(down ? 0.08 : 0.25) {
-                for view in [self.nameLabel, self.tagPill, self.makerLabel, self.switchChevrons] as [UIView] { view.alpha = down ? 0.5 : 1 }
+                for view in [self.nameLabel, self.tagPill, self.makerLabel, self.switchChevrons] as [UIView] { view.alpha = PointerEffects.dim(down, to: 0.5) }
             }
         }
         switchChevrons.contentMode = .center
@@ -2035,6 +2035,14 @@ final class FactColumn: UIControl {
 /// while a switch is under way. It draws nothing itself: the panel's labels sit under it and dim with its press.
 final class TitleSwitch: UIButton {
     var pressed: (Bool) -> Void = { _ in }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        PointerEffects.surface(self, radius: 8)   // [mac] Feel list B: lit under the pointer, deeper while pressed
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
     override var isHighlighted: Bool { didSet { if isHighlighted != oldValue { pressed(isHighlighted) } } }
     /// Its traits are set once ([.button, .header]); "dimmed" follows `isEnabled` (offline).
     override var accessibilityTraits: UIAccessibilityTraits {
@@ -2092,6 +2100,7 @@ final class PanelRow: UIButton {
         chevrons = end == .menu ? UIImageView(image: UIImage(systemName: "chevron.up.chevron.down")) : nil
         toggle = end == .toggle ? UISwitch() : nil
         super.init(frame: .zero)
+        PointerEffects.surface(self)   // [mac] Feel list B: lit under the pointer, deeper while pressed
         icon.contentMode = .center
         nameWords.text = name
         nameWords.maxLines = 2
@@ -2140,6 +2149,7 @@ final class PanelRow: UIButton {
     override var isHighlighted: Bool {
         didSet {
             guard isHighlighted != oldValue else { return }
+            if DeviceWord.isMac { return }   // [mac] the press is the hover's fill, deeper (`PointerEffects.surface`)
             HQMotion.animate(isHighlighted ? 0.08 : 0.25) {
                 self.backgroundColor = self.isHighlighted ? ChatPalette.label.withAlphaComponent(0.08) : .clear
             }

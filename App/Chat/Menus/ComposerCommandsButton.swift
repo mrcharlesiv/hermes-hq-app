@@ -67,6 +67,11 @@ final class ComposerGlassButton: UIVisualEffectView {
         contentView.addSubview(disc)
         contentView.addSubview(pressedCircle)
         contentView.addSubview(glyph)
+        #if targetEnvironment(macCatalyst)
+        // [mac] Feel list B (2026-11-13): ☰ answers the pointer as the + beside it does (it is not a control, so the
+        // app's hover never found it): the same disc, deeper while it is down.
+        MacHover.surface(self, shape: .button, above: disc, host: contentView)
+        #endif
         isAccessibilityElement = true
         accessibilityTraits = .button
         accessibilityLabel = label
@@ -116,6 +121,8 @@ final class ComposerGlassButton: UIVisualEffectView {
     /// On its disc the glass sinks; a bare glyph shows the soft circle.
     private func press(_ down: Bool) {
         if showsDisc { disc.press(down) } else { Self.showPress(pressedCircle, down) }
+        // [mac] The Desktop Look's box shows no circle (`showPress`): there the press is the hover's disc, deeper.
+        if ComposerView.oneBox { PointerEffects.press(self, down) }
     }
 
     private func recolor() {

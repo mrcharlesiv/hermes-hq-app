@@ -43,6 +43,7 @@ final class FileRowView: UIControl {
         detail.isUserInteractionEnabled = false
         addSubview(detail)
         addTarget(self, action: #selector(tapped), for: .touchUpInside)
+        PointerEffects.surface(self, radius: 8)   // [mac] Feel list B: lit under the pointer, deeper while pressed
         isContextMenuInteractionEnabled = true
         isAccessibilityElement = true
         accessibilityTraits = .button
@@ -52,7 +53,7 @@ final class FileRowView: UIControl {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
     override var isHighlighted: Bool {
-        didSet { UIView.animate(withDuration: isHighlighted ? 0 : 0.15) { /* motion-ok: opacity only */ self.alpha = self.isHighlighted ? 0.55 : 1 } }
+        didSet { UIView.animate(withDuration: isHighlighted ? 0 : 0.15) { /* motion-ok: opacity only */ self.alpha = PointerEffects.dim(self.isHighlighted, to: 0.55) } }
     }
 
     func configure(_ row: FileRowLayout, style: ChatStyle, frame: CGRect) {

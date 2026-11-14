@@ -128,6 +128,10 @@ import UIKit
         table.estimatedRowHeight = 52
         table.accessibilityIdentifier = "open-quickly.results"
         table.register(UITableViewCell.self, forCellReuseIdentifier: "row")
+        // Feel list B (2026-11-13): the pointer moves the mark, as in Commands and Models. It drew a grey bar of its
+        // own while the blue mark stayed where the keys left it: two rows marked at once.
+        MacHover.drawsOwnHover(table)
+        table.addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:))))
         table.translatesAutoresizingMaskIntoConstraints = false
         panel.addSubview(table)
 
@@ -321,6 +325,15 @@ import UIKit
         ]
         commands.forEach { $0.wantsPriorityOverSystemBehavior = true }   // before the field's own caret moves
         return commands
+    }
+
+    /// Only a pointer that moved: the panel opening under a resting pointer leaves the first result marked.
+    @objc private func hovered(_ recognizer: UIHoverGestureRecognizer) {
+        guard recognizer.state == .changed, let path = table.indexPathForRow(at: recognizer.location(in: table)),
+              path != marked else { return }
+        let old = marked
+        marked = path
+        for p in [old, path] { table.cellForRow(at: p)?.backgroundConfiguration = rowBackground(p == path) }
     }
 
     @objc private func moveUp() { move(by: -1) }

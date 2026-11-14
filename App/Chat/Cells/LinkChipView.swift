@@ -41,11 +41,12 @@ final class LinkChipView: UIControl {
         accessibilityTraits = .link
         accessibilityIdentifier = "chat.link-chip"
         addTarget(self, action: #selector(tapped), for: .touchUpInside)
+        PointerEffects.surface(self)   // [mac] Feel list B: lit under the pointer, deeper while pressed
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    override var isHighlighted: Bool { didSet { alpha = isHighlighted ? 0.6 : 1 } }
+    override var isHighlighted: Bool { didSet { alpha = PointerEffects.dim(isHighlighted, to: 0.6) } }
 
     func configure(_ url: URL, style: ChatStyle) {
         titleLabel.font = style.body

@@ -276,6 +276,10 @@ struct DesktopSegmentStrip<Value: Hashable>: View {
                         .background(selection == option.value ? Color(uiColor: HQPalette.cellPressed) : Color.clear,
                                     in: UnevenRoundedRectangle(topLeadingRadius: first ? radius : 0, bottomLeadingRadius: first ? radius : 0,
                                                                bottomTrailingRadius: last ? radius : 0, topTrailingRadius: last ? radius : 0))
+                        // [mac] Feel list B: a segment that isn't the chosen one lights under the pointer.
+                        .hqPointerFill(UnevenRoundedRectangle(topLeadingRadius: first ? radius : 0, bottomLeadingRadius: first ? radius : 0,
+                                                              bottomTrailingRadius: last ? radius : 0, topTrailingRadius: last ? radius : 0),
+                                       on: selection != option.value)
                         // UX #160: drawn 32 pt tall, touched over 44 pt.
                         .padding(.vertical, 6)
                         .contentShape(Rectangle())

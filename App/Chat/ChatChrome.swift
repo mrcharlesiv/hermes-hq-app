@@ -122,6 +122,9 @@ final class JumpButton: UIView {
         addSubview(countLabel)
         let tap = UITapGestureRecognizer(target: self, action: #selector(tapped))
         glass.addGestureRecognizer(tap)
+        // [mac] Feel list B: the jump button lights under the pointer, in either look.
+        PointerEffects.surface(glass, capsule: true, host: glass.contentView)
+        PointerEffects.surface(flat, capsule: true, above: circle.backing, host: circle)
         flat.isHidden = true
         circle.isUserInteractionEnabled = false
         circle.layer.masksToBounds = true
@@ -359,6 +362,7 @@ final class ChatTitleView: UIView {
         accessibilityTraits = .header
         accessibilityIdentifier = "chat.title"
         DesktopLayout.keepOwnLook(glass)          // [desktoplook2] the look draws this as the desktop's open tab
+        PointerEffects.surface(self, radius: 6)   // [mac] Feel list B: the title is a button; it lights under the pointer
         layer.addSublayer(rule)
         updateFont()
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (view: ChatTitleView, _) in
@@ -509,8 +513,14 @@ final class ChatTitleView: UIView {
     }
 
     @objc private func tapped() {
-        UIView.animate(withDuration: 0.1, animations: { self.alpha = 0.6 }) { _ in   // motion-ok: opacity only
-            UIView.animate(withDuration: 0.15) { self.alpha = 1 }
+        if DeviceWord.isMac {
+            // [mac] The click is the hover's fill, deeper for a moment (`PointerEffects.surface`): no dimming.
+            PointerEffects.press(self, true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in self.map { PointerEffects.press($0, false) } }
+        } else {
+            UIView.animate(withDuration: 0.1, animations: { self.alpha = 0.6 }) { _ in   // motion-ok: opacity only
+                UIView.animate(withDuration: 0.15) { self.alpha = 1 }
+            }
         }
         onTap?()
     }

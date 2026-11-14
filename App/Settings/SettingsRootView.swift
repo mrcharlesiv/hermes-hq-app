@@ -1425,6 +1425,7 @@ struct SettingsCategoryColumn: View {
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
+                    .hqPointerFill(Self.markRadius)   // [mac] Feel list B: the column's rows light under the pointer
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -1447,6 +1448,7 @@ struct SettingsCategoryColumn: View {
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
                         .background(on ? Self.mark : Color.clear, in: RoundedRectangle(cornerRadius: Self.markRadius, style: .continuous))
+                        .hqPointerFill(Self.markRadius, on: !on)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)

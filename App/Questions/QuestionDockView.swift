@@ -917,6 +917,7 @@ final class ChoiceRow: UIControl {
         let recommended = choice.map(ClarifyText.isRecommended) ?? false
         layer.cornerRadius = 10          // the pressed fill is a soft block, not a bar across the card
         layer.cornerCurve = .continuous
+        PointerEffects.surface(self)     // [mac] Feel list B: the same block under the pointer; its press is that fill, deeper
         var trailing = textStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2)
         if recommended {
             recommendedTag.translatesAutoresizingMaskIntoConstraints = false
@@ -955,7 +956,7 @@ final class ChoiceRow: UIControl {
     }
 
     override var isHighlighted: Bool {
-        didSet { backgroundColor = isHighlighted ? ChatPalette.fill3 : .clear }
+        didSet { backgroundColor = isHighlighted && !DeviceWord.isMac ? ChatPalette.fill3 : .clear }
     }
 
     override func accessibilityActivate() -> Bool {

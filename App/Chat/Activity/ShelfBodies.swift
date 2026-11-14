@@ -47,8 +47,15 @@ struct ShelfRevision {
 
 /// A row that highlights on press (fill-4) inside an opened card.
 class ShelfRowControl: UIControl {
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        PointerEffects.surface(self)   // [mac] Feel list B: lit under the pointer; its press is that fill, deeper
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
     override var isHighlighted: Bool {
-        didSet { backgroundColor = isHighlighted ? ChatPalette.fill4 : .clear }
+        didSet { backgroundColor = isHighlighted && !DeviceWord.isMac ? ChatPalette.fill4 : .clear }
     }
 }
 

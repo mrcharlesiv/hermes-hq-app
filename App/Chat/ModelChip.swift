@@ -59,6 +59,8 @@ final class ModelChip: UIControl {
         showsLargeContentViewer = true
         addInteraction(UILargeContentViewerInteraction())
         addTarget(self, action: #selector(tapped), for: .touchUpInside)
+        // [mac] Feel list B: the bubble is wider than the app's hover reaches (72 pt); its own capsule, lit.
+        PointerEffects.surface(self, capsule: true, above: fill)
         registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (chip: ModelChip, _) in chip.relabel() }
     }
 
@@ -67,7 +69,7 @@ final class ModelChip: UIControl {
     override var isHighlighted: Bool {
         didSet {
             guard isHighlighted != oldValue else { return }
-            if plain { plainFill.alpha = isHighlighted ? 0.6 : 1; return }
+            if plain { plainFill.alpha = PointerEffects.dim(isHighlighted, to: 0.6); return }
             fill.press(isHighlighted)
         }
     }

@@ -6,6 +6,7 @@
 // once, out in 60 ms, as the Desktop Look's hover), and a small round control a faint one of its shape behind it. Installed once per screen as
 // it shows (`PushedPageTitles.didShow`, the right pane's stack included), so no list or cell has to opt in.
 
+import SwiftUI
 import UIKit
 
 @MainActor enum PointerEffects {
@@ -35,6 +36,43 @@ import UIKit
         list.addInteraction(UIPointerInteraction(delegate: RowPointer.shared))
         #if targetEnvironment(macCatalyst)
         MacHover.rows(list)
+        #endif
+    }
+
+    /// [mac] Feel list B (2026-11-13): a card, a chip or a wide control (a file card, a link chip, the model bubble, the
+    /// chat's title) answers the pointer too: a faint fill of its own shape under the pointer, a little deeper while
+    /// the mouse button is down. `above`: the view's own backing, which the fill goes over (else it goes under
+    /// everything); `host`: the view the fill is drawn in and takes its size from, when that is not the view itself (a
+    /// glass view's content view, the circle inside a larger tap area).
+    /// Nothing on the iPhone and the iPad, which draw the system's effect.
+    static func surface(_ view: UIView, radius: CGFloat? = nil, capsule: Bool = false, above: UIView? = nil, host: UIView? = nil) {
+        #if targetEnvironment(macCatalyst)
+        MacHover.surface(view, shape: capsule ? .capsule : radius.map { .rounded($0) } ?? .own, above: above, host: host)
+        #endif
+    }
+
+    /// The press of a `surface` that is not a `UIControl` (a control's is read from `isHighlighted`).
+    static func press(_ view: UIView, _ down: Bool) {
+        #if targetEnvironment(macCatalyst)
+        MacHover.press(view, down)
+        #endif
+    }
+
+    /// A `surface` that is a row of a rounded card which does not clip its rows: its fill spans the card and takes the
+    /// card's corners where the row is the first or the last. `card` is in the row's superview.
+    static func fit(_ row: UIView, card: CGRect, radius: CGFloat) {
+        #if targetEnvironment(macCatalyst)
+        MacHover.fit(row, card: card, radius: radius)
+        #endif
+    }
+
+    /// The opacity a pressed card or chip dims to. The Mac's press is the deeper fill (`surface`), so nothing dims there:
+    /// a card that lit up under the pointer and then went dark under the click read as two different answers.
+    static func dim(_ pressed: Bool, to alpha: CGFloat) -> CGFloat {
+        #if targetEnvironment(macCatalyst)
+        return 1
+        #else
+        return pressed ? alpha : 1
         #endif
     }
 
@@ -101,7 +139,14 @@ private final class ButtonPointer: NSObject, UIPointerInteractionDelegate {
     /// Faint enough that a row's text and the selected row's own colour read through it, light and dark.
     static let rowFill = UIColor.label.withAlphaComponent(0.05)
     static let buttonFill = UIColor.label.withAlphaComponent(0.08)
+    /// While the mouse button is down: the same fill, deeper (a row's, a card's; a small button's).
+    static let rowPressFill = UIColor.label.withAlphaComponent(0.1)
+    static let buttonPressFill = UIColor.label.withAlphaComponent(0.14)
     private static var key = 0
+
+    /// What a control's fill is cut to: a disc round an icon button (a capsule when it is clearly wider than tall), the
+    /// view's own corners, a capsule, or corners of a given radius.
+    enum Shape { case button, own, capsule, rounded(CGFloat) }
 
     private weak var list: UIScrollView?
     private weak var hovered: UIView?
@@ -132,21 +177,45 @@ private final class ButtonPointer: NSObject, UIPointerInteractionDelegate {
         init(_ changed: @escaping @MainActor (Bool) -> Void) { self.changed = changed }
     }
 
-    /// A control that draws its own hover (the Mac sidebar's Search and New Chat wells): it gets no disc.
-    static func drawsOwnHover(_ control: UIControl) {
-        guard objc_getAssociatedObject(control, &key) == nil else { return }
-        objc_setAssociatedObject(control, &key, NSNull(), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+    /// A control that draws its own hover (the Mac sidebar's Search and New Chat wells): it gets no disc. A list whose
+    /// pointer moves its own mark (Open Quickly): its rows get no fill.
+    static func drawsOwnHover(_ view: UIView) {
+        guard objc_getAssociatedObject(view, &key) == nil else { return }
+        objc_setAssociatedObject(view, &key, NSNull(), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
 
     static func button(_ control: UIControl) {
         guard objc_getAssociatedObject(control, &key) == nil else { return }
-        let hover = ButtonHover(control)
+        let hover = ButtonHover(control, shape: .button)
         objc_setAssociatedObject(control, &key, hover, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+    }
+
+    /// A view that is not a small control (`PointerEffects.surface`), or a button that is not a `UIControl` (the
+    /// composer's ☰, on glass): the fill in `shape`, over `above`, inside `host`.
+    static func surface(_ view: UIView, shape: Shape, above: UIView? = nil, host: UIView? = nil) {
+        guard objc_getAssociatedObject(view, &key) == nil else { return }
+        let hover = ButtonHover(view, shape: shape, above: above, host: host)
+        objc_setAssociatedObject(view, &key, hover, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+    }
+
+    /// The press of a view that is not a `UIControl` (a control's is read from `isHighlighted`).
+    static func press(_ view: UIView, _ down: Bool) {
+        (objc_getAssociatedObject(view, &key) as? ButtonHover)?.press(down)
+    }
+
+    /// A row of a rounded card that does not clip its rows (the chat's changed-files and tasks cards): the row's fill
+    /// spans the card and takes the card's corners where the row is its first or last. `card` is in the row's superview.
+    static func fit(_ row: UIView, card: CGRect, radius: CGFloat) {
+        (objc_getAssociatedObject(row, &key) as? ButtonHover)?.card = (card, radius)
     }
 
     private init(list: UIScrollView) {
         self.list = list
         super.init()
+        // Feel list B (2026-11-13): a click marks its row as the button goes down, as the sidebar's and the chat's do.
+        // The scroll view held every touch back for a moment in case it was the start of a scroll, so a quick click
+        // showed nothing until it was let go; on the Mac a scroll is the wheel or the trackpad, never a press.
+        list.delaysContentTouches = false
         fill.isUserInteractionEnabled = false
         fill.backgroundColor = Self.rowFill
         fill.accessibilityElementsHidden = true
@@ -263,30 +332,70 @@ private final class ButtonPointer: NSObject, UIPointerInteractionDelegate {
     }
 }
 
-/// [mac] A small round control's hover: a faint fill of its own shape behind it.
+/// [mac] A control's hover and press: a faint fill of its own shape behind it, deeper while the mouse button is down.
 @MainActor private final class ButtonHover: NSObject {
-    private weak var control: UIControl?
+    private weak var view: UIView?
+    private weak var above: UIView?
+    private weak var host: UIView?
+    private let shape: MacHover.Shape
     private let fill = UIView()
+    private var over = false
+    private var pressed = false
+    private var highlight: NSKeyValueObservation?
 
-    init(_ control: UIControl) {
-        self.control = control
+    init(_ view: UIView, shape: MacHover.Shape, above: UIView? = nil, host: UIView? = nil) {
+        self.view = view
+        self.shape = shape
+        self.above = above
+        self.host = host
         super.init()
         fill.isUserInteractionEnabled = false
-        fill.backgroundColor = MacHover.buttonFill
+        fill.accessibilityElementsHidden = true
         fill.alpha = 0
+        fill.layer.cornerCurve = .continuous
         let recognizer = UIHoverGestureRecognizer(target: self, action: #selector(moved(_:)))
-        control.addGestureRecognizer(recognizer)
+        recognizer.cancelsTouchesInView = false
+        view.addGestureRecognizer(recognizer)
+        // The press: a control says so itself (a menu button stays down while its menu is open).
+        if let control = view as? UIControl {
+            highlight = control.observe(\.isHighlighted) { [weak self] _, _ in
+                MainActor.assumeIsolated { self?.show() }
+            }
+        }
     }
 
+    func press(_ down: Bool) {
+        guard pressed != down else { return }
+        pressed = down
+        show()
+    }
+
+    /// The card this row sits in (its frame in the row's superview) and the card's rounding.
+    var card: (frame: CGRect, radius: CGFloat)?
+
     @objc private func moved(_ recognizer: UIHoverGestureRecognizer) {
-        guard let control else { return }
-        switch recognizer.state {
-        case .began, .changed:
-            guard control.isEnabled, !control.isHidden else { return }
+        over = recognizer.state == .began || recognizer.state == .changed
+        show()
+    }
+
+    private func show() {
+        guard let view else { return }
+        let control = view as? UIControl
+        let down = pressed || control?.isHighlighted == true
+        guard over || down, control?.isEnabled != false, !view.isHidden, view.isUserInteractionEnabled else {
+            guard fill.alpha > 0 else { return }
+            UIView.animate(withDuration: 0.06, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) { self.fill.alpha = 0 }   // motion-ok: hover fill fades opacity only
+            return
+        }
+        let holder = host ?? view
+        let box = holder.bounds
+        let small: Bool
+        switch shape {
+        case .button:
+            small = true
             // A disc round an icon button; a capsule (the control's own shape) for one clearly wider than it is tall.
             // Owner 2026-11-03: a circle as wide as the composer's model bubble stuck out above and below it ("looks
             // really weird").
-            let box = control.bounds
             if box.width > box.height * 1.25 {
                 fill.frame = box
                 fill.layer.cornerRadius = box.height / 2
@@ -295,12 +404,75 @@ private final class ButtonPointer: NSObject, UIPointerInteractionDelegate {
                 fill.frame = CGRect(x: box.midX - side / 2, y: box.midY - side / 2, width: side, height: side)
                 fill.layer.cornerRadius = side / 2
             }
-            if fill.superview !== control { control.insertSubview(fill, at: 0) }
-            fill.layer.removeAllAnimations()
-            fill.alpha = 1
-        default:
-            UIView.animate(withDuration: 0.06, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) { self.fill.alpha = 0 }   // motion-ok: hover fill fades opacity only
+        case .own:
+            small = false
+            if let card {
+                // A row of a card: the card's width, and the card's corners where the row meets them.
+                fill.frame = CGRect(x: card.frame.minX - view.frame.minX, y: 0, width: card.frame.width, height: box.height)
+                var corners: CACornerMask = []
+                if abs(view.frame.minY - card.frame.minY) < 1 { corners.formUnion([.layerMinXMinYCorner, .layerMaxXMinYCorner]) }
+                if abs(view.frame.maxY - card.frame.maxY) < 1 { corners.formUnion([.layerMinXMaxYCorner, .layerMaxXMaxYCorner]) }
+                fill.layer.cornerRadius = corners.isEmpty ? 0 : card.radius
+                fill.layer.maskedCorners = corners
+            } else {
+                fill.frame = box
+                fill.layer.cornerRadius = holder.layer.cornerRadius
+                fill.layer.maskedCorners = holder.layer.maskedCorners
+            }
+        case .capsule:
+            small = true   // a pill beside the icon buttons (the composer's model bubble) answers as strongly as they do
+            fill.frame = box
+            fill.layer.cornerRadius = box.height / 2
+        case .rounded(let radius):
+            small = false
+            fill.frame = box
+            fill.layer.cornerRadius = radius
         }
+        fill.backgroundColor = small ? (down ? MacHover.buttonPressFill : MacHover.buttonFill)
+                                     : (down ? MacHover.rowPressFill : MacHover.rowFill)
+        if let above, above.superview === holder {
+            let subviews = holder.subviews
+            if fill.superview !== holder || subviews.firstIndex(of: fill) != subviews.firstIndex(of: above).map({ $0 + 1 }) {
+                holder.insertSubview(fill, aboveSubview: above)
+            }
+        } else if fill.superview !== holder {
+            holder.insertSubview(fill, at: 0)
+        }
+        fill.layer.removeAllAnimations()
+        fill.alpha = 1
+    }
+}
+#endif
+
+// MARK: - SwiftUI
+
+extension View {
+    /// [mac] Feel list B (2026-11-13): a SwiftUI button, card or row lit under the pointer, as the app's lists are
+    /// (`.hoverEffect` only shapes the iPad's pointer; the Mac draws nothing for it). `on` false: no fill (the chosen
+    /// row of a column, which has its own mark). Nothing on the iPhone and the iPad.
+    func hqPointerFill(_ radius: CGFloat = 8, on: Bool = true) -> some View {
+        hqPointerFill(RoundedRectangle(cornerRadius: radius, style: .continuous), on: on)
+    }
+
+    @ViewBuilder func hqPointerFill<Outline: Shape>(_ shape: Outline, on: Bool = true) -> some View {
+        #if targetEnvironment(macCatalyst)
+        modifier(MacPointerFill(shape: shape, on: on))
+        #else
+        self
+        #endif
+    }
+}
+
+#if targetEnvironment(macCatalyst)
+private struct MacPointerFill<Outline: Shape>: ViewModifier {
+    let shape: Outline
+    let on: Bool
+    @State private var over = false
+
+    func body(content: Content) -> some View {
+        content
+            .overlay { shape.fill(Color(uiColor: MacHover.rowFill)).opacity(over && on ? 1 : 0).allowsHitTesting(false) }
+            .onHover { over = $0 }
     }
 }
 #endif

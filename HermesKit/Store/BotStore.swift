@@ -204,6 +204,9 @@ final class BotStore {
     @ObservationIgnored var botSaidDirty = 0
     /// [botsaid] Bots whose chat is read again whatever the roster says of it (`rereadBotSaid`).
     @ObservationIgnored var botSaidStale: Set<String> = []
+    /// [botunread] When each bot began waiting for a read of its chat (`BotUnreadState.pending`): only a read asked
+    /// for after that has seen the rows that moved it.
+    @ObservationIgnored var unreadHeldAt: [String: ContinuousClock.Instant] = [:]
 
     // Lifecycle and cadence.
     @ObservationIgnored private var started = false
@@ -904,10 +907,18 @@ final class BotStore {
     /// Marks the bots whose chat moved past what this device has seen (the chat on screen is acknowledged instead).
     func reconcileUnread(_ rows: [RosterProfile]) {
         let focus = self.focus, active = appActive
-        device.unread.reconcile(rows) { profile in
+        // [botunread] Where the chat's tail can be read, a bot whose chat moved waits for that read: its dot is for
+        // something written to you, not for two bots talking (`settleUnread`, BotStore+BotSaid.swift).
+        let reads = !stopped && timing.readsBotSaid
+        let waiting = Set(device.unread.pending?.keys.map { $0 } ?? [])
+        device.unread.reconcile(rows, isVisible: { profile in
             guard active, let focus, focus.profile == profile.name else { return false }
             return profile.canonicalIds.contains(focus.sessionId)
-        }
+        }, holds: { profile in
+            guard reads, let canonical = profile.canonicalSession, !canonical.id.isEmpty else { return false }
+            return RosterRules.holdsMessages(canonical)
+        })
+        for name in device.unread.pending?.keys.map({ $0 }) ?? [] where !waiting.contains(name) { unreadHeldAt[name] = .now }
     }
 
     private func applyFull(_ snapshot: RosterSnapshot, issuedAt: Date = .distantPast) {

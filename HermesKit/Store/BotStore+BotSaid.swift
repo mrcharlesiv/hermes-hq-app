@@ -134,7 +134,10 @@ extension BotStore {
         for profile in profiles {
             guard let canonical = profile.canonicalSession, !canonical.id.isEmpty, RosterRules.holdsMessages(canonical) else { continue }
             let at = canonical.lastActive ?? 0, mark = botSaidMarks[profile.name] ?? BotSaidRules.mark(canonical)
-            let stale = botSaidStale.contains(profile.name)
+            // [botunread] A bot waiting for its dot with no read out or queued is owed one, moved or not.
+            let owed = device.unread.held(profile.name) != nil && botSaidOut[profile.name] == nil
+                && !botSaidQueue.contains { $0.profile == profile.name }
+            let stale = botSaidStale.contains(profile.name) || owed
             if !stale, let entry = said[profile.name], entry.session == canonical.openId, entry.mark == mark,
                entry.rule == BotSaidRules.rule { continue }
             // A read already out or waiting for this very state covers it; one for an older state is followed by another.
@@ -182,6 +185,9 @@ extension BotStore {
             let client = self.client
             let seats = DeliveryRoster.seats
             let own = seats.first { $0.profile == item.profile } ?? DeliveryMessages.Seat(profile: item.profile, name: item.profile, head: nil)
+            // [botunread] What the rows are judged from: the baseline a waiting bot passed, else the one this read may
+            // find the chat's newest row past (`chatActivityRead`).
+            let since = device.unread.held(item.profile) ?? device.unread.baselines[item.profile]
             Task { [weak self] in
                 let path = "/api/sessions/\(HistoryRequest.encodePathSegment(item.session))/messages"
                 func tail(_ limit: Int, images: Bool) async -> [JSONValue]? {
@@ -201,17 +207,74 @@ extension BotStore {
                     rows = deep
                     shown = BotSaidRules.shown(rows: deep, own: own, seats: seats)
                 }
-                self?.botSaidRead(item, rows: rows, text: shown?.text)
+                // [botunread] Every row read is newer than the baseline (a long turn): the rows behind them are read
+                // too, once, so a reply to you under a long talk between bots isn't missed.
+                var asked = rows.map { $0.count > BotSaidRules.tail ? BotSaidRules.deepTail : BotSaidRules.tail } ?? BotSaidRules.tail
+                if let since, let short = rows, asked == BotSaidRules.tail, short.count >= asked,
+                   !short.contains(where: { ($0["timestamp"]?.double ?? .infinity) <= since }),
+                   let deep = await tail(BotSaidRules.deepTail, images: false), deep.count > short.count {
+                    rows = deep
+                    shown = BotSaidRules.shown(rows: deep, own: own, seats: seats)
+                    asked = BotSaidRules.deepTail
+                }
+                var whole = (rows?.count ?? 0) < asked
+                var news = since.flatMap { since in
+                    rows.map { BotSaidRules.newsForYou(rows: $0, since: since, own: own, seats: seats, whole: whole) }
+                }
+                // "Nothing for you" from a short tail of a longer chat is checked against more of it, once: whether a
+                // reply was written to another bot hangs on what this bot asked that bot earlier, which a tail that
+                // starts inside a long turn doesn't hold (the reply then read as that bot's own request answered).
+                if let since, news == false, let short = rows, asked == BotSaidRules.tail, short.count >= asked,
+                   let deep = await tail(BotSaidRules.deepTail, images: false), deep.count > short.count {
+                    rows = deep
+                    shown = BotSaidRules.shown(rows: deep, own: own, seats: seats)
+                    whole = deep.count < BotSaidRules.deepTail
+                    news = BotSaidRules.newsForYou(rows: deep, since: since, own: own, seats: seats, whole: whole)
+                }
+                self?.botSaidRead(item, rows: rows, text: shown?.text,
+                                  news: since.map { (since: $0, forYou: news ?? true, whole: whole, own: own, seats: seats) })
             }
         }
     }
 
-    private func botSaidRead(_ item: (profile: String, session: String, at: Double, mark: String), rows: [JSONValue]?, text: String?) {
+    /// [botunread] What a tail read found for the dot: the baseline it judged from and whether anything past it is for you.
+    typealias BotNews = (since: Double, forYou: Bool, whole: Bool, own: DeliveryMessages.Seat, seats: [DeliveryMessages.Seat])
+
+    /// [botunread] A waiting bot's chat was read (`rows`; nil: the read failed): it gets its dot when something past its
+    /// baseline is for you. A read asked for before the bot began waiting hasn't seen the rows that moved it and
+    /// settles nothing (`born`: the wait began inside this read, from its own rows).
+    private func settleUnread(_ name: String, rows: [JSONValue]?, news: BotNews?, asked: ContinuousClock.Instant?, born: Bool) {
+        guard let since = device.unread.held(name), let profile = profile(named: name) else { return }
+        if !born, let held = unreadHeldAt[name], let asked, asked < held { return }
+        var forYou = true
+        if let rows {
+            if let news, news.since == since {
+                forYou = news.forYou
+            } else {
+                let seats = news?.seats ?? DeliveryRoster.seats
+                let own = news?.own ?? seats.first { $0.profile == name } ?? DeliveryMessages.Seat(profile: name, name: name, head: nil)
+                forYou = BotSaidRules.newsForYou(rows: rows, since: since, own: own, seats: seats, whole: news?.whole ?? false)
+            }
+        }
+        unreadHeldAt[name] = nil
+        device.unread.settle(profile, forYou: forYou)
+        AppLog.trace("bots", "unread \(name): \(rows == nil ? "read failed, marked" : forYou ? "something for you, marked" : "only bot talk, no dot")")
+        botSaidDirty += 1
+    }
+
+    private func botSaidRead(_ item: (profile: String, session: String, at: Double, mark: String), rows: [JSONValue]?, text: String?,
+                             news: BotNews? = nil) {
         let asked = botSaidOut.removeValue(forKey: item.profile)?.asked
         defer { pumpBotSaid() }
         guard !stopped else { return }
         guard let rows else {
             AppLog.trace("bots", "bot said \(item.profile): read failed, the next roster tries again")
+            settleUnread(item.profile, rows: nil, news: nil, asked: asked, born: false)
+            if botSaidDirty > 0, botSaidQueue.isEmpty, botSaidOut.isEmpty {
+                botSaidDirty = 0
+                persistState()
+                rebuild()
+            }
             return
         }
         // Words this device saw arrive after the read was asked for are newer than what it read: they stay, and the next
@@ -227,9 +290,11 @@ extension BotStore {
         let old = device.botSaid?[item.profile].flatMap { $0.session == item.session ? $0 : nil }
         if entry.text == nil, let old, old.rule == BotSaidRules.rule { entry.text = old.text }
         entry.newest = [HistoryPage.newestTimestamp(rows), old?.newest].compactMap { $0 }.max()
+        let waited = device.unread.held(item.profile) != nil
         if let newest = entry.newest {
             chatActivityRead(item.profile, session: item.session, newest: newest, first: device.botSaid?[item.profile]?.newest == nil)
         }
+        settleUnread(item.profile, rows: rows, news: news, asked: asked, born: !waited)   // [botunread]
         if device.botSaid?[item.profile] != entry {
             device.botSaid = (device.botSaid ?? [:]).merging([item.profile: entry]) { $1 }
             botSaidDirty += 1

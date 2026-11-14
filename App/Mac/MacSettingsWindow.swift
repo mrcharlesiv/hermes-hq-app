@@ -76,6 +76,8 @@ import UIKit
         session.configuration.name == configurationName || session.userInfo?[userInfoKey] as? Bool == true
     }
     static let userInfoKey = "HQSettingsWindow"
+    /// [mac-feel D29] The Settings window's frame as it was left (`WindowFit.encode`, the screen's own points).
+    static let frameKey = "HQMacSettingsWindowFrame"
 
     /// The scene configuration for a Settings window being connected (a request from `open`, or one restored).
     static func configuration(for session: UISceneSession, options: UIScene.ConnectionOptions) -> UISceneConfiguration? {
@@ -204,12 +206,21 @@ final class SettingsSceneDelegate: UIResponder, UIWindowSceneDelegate {
         // beside it, as System Settings), where the main window is.
         // Mac polish #101: a system frame is in the screen's own points, not the app's (780 × 830 opened that big), and
         // the window is kept inside the screen's visible part (its foot went under the Dock on a laptop).
+        // [mac-feel D29] Where and how big it was left, as System Settings and every Mac app's own windows are: it no
+        // longer came back at its first size beside the main window each time. Kept inside the screen it is on now (a
+        // second screen unplugged, a Dock that grew).
+        let kept = WindowFit.decode(UserDefaults.standard.string(forKey: MacSettingsWindow.frameKey), minimum: CGSize(width: 320, height: 240))
         if let main = MainTabController.current?.view.window?.windowScene?.effectiveGeometry.systemFrame {
-            let visible = MacSettingsWindow.visibleScreen(around: main)
-            let frame = WindowFit.inside(CGRect(x: main.minX + 60, y: main.minY + 40, width: 860, height: 640), visible: visible)
-            AppLog.note("mac", "settings window: \(Int(frame.width))×\(Int(frame.height)) at \(Int(frame.minX)),\(Int(frame.minY)) in \(visible.map { "\(Int($0.width))×\(Int($0.height)) at \(Int($0.minX)),\(Int($0.minY))" } ?? "an unknown screen")")
+            let asked = kept ?? CGRect(x: main.minX + 60, y: main.minY + 40, width: 860, height: 640)
+            let visible = MacSettingsWindow.visibleScreen(around: asked)
+            let frame = WindowFit.inside(asked, visible: visible)
+            AppLog.note("mac", "settings window: \(kept == nil ? "" : "as left, ")\(Int(frame.width))×\(Int(frame.height)) at \(Int(frame.minX)),\(Int(frame.minY)) in \(visible.map { "\(Int($0.width))×\(Int($0.height)) at \(Int($0.minX)),\(Int($0.minY))" } ?? "an unknown screen")")
+            opening = frame
             windowScene.requestGeometryUpdate(.Mac(systemFrame: frame)) { _ in }
         }
+        // The frames the window passes through while it opens (the system's own first, then the one asked for) are not
+        // a place the owner chose: kept from the first frame that is the one asked for, or 1.5 s on.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.opening = nil; self?.keeps = true }
         let window = UIWindow(windowScene: windowScene)
         MacToolTips.install(on: window)
         AppearanceSetting.apply(to: window)
@@ -264,6 +275,25 @@ final class SettingsSceneDelegate: UIResponder, UIWindowSceneDelegate {
         #endif
     }
 
+
+    /// The frame asked for while the window opens (nil once it has it), and whether its frame is being kept yet.
+    private var opening: CGRect?
+    private var keeps = false
+
+    // [mac-feel D29] Every move and resize: where the window is now is where it opens next time. The previous
+    // geometry is not read (UIKit passes nil for the first one, which the Swift signature cannot say).
+    func windowScene(_ windowScene: UIWindowScene, didUpdateEffectiveGeometry previousEffectiveGeometry: UIWindowScene.Geometry) {
+        let frame = windowScene.effectiveGeometry.systemFrame
+        if let opening, abs(frame.minX - opening.minX) < 2, abs(frame.minY - opening.minY) < 2,
+           abs(frame.width - opening.width) < 2, abs(frame.height - opening.height) < 2 {
+            self.opening = nil
+            keeps = true
+            return
+        }
+        // Full screen is a state of the window, not a size to come back at.
+        guard keeps, !windowScene.isFullScreen, !frame.isEmpty else { return }
+        UserDefaults.standard.set(WindowFit.encode(frame), forKey: MacSettingsWindow.frameKey)
+    }
 
     func sceneDidDisconnect(_ scene: UIScene) {
         AppLog.note("mac", "settings window: closed")

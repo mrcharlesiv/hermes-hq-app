@@ -162,6 +162,34 @@ extension MoreViewController: KeySearchable {}
     static let textSmaller = #selector(AppDelegate.hqTextSmaller(_:))
     static let toggleSidebar = #selector(AppDelegate.hqToggleSidebar(_:))
     static let keyboardShortcuts = #selector(AppDelegate.hqKeyboardShortcuts(_:))
+    /// [mac-feel D30] Page Up, Page Down, Home and End scroll the chat on show (`ChatViewController.keyScroll`).
+    static let scrollChat = #selector(AppDelegate.hqScrollChat(_:))
+    private static let scrollInputs = [UIKeyCommand.inputPageUp, UIKeyCommand.inputPageDown, UIKeyCommand.inputHome, UIKeyCommand.inputEnd]
+    /// With no field taking them (a text field's own use, and a focused list's, come first).
+    static let scrollKeys: [UIKeyCommand] = scrollInputs.map { UIKeyCommand(action: scrollChat, input: $0, modifierFlags: []) }
+
+    /// Which way a scroll key goes, by the key itself: the message field's way in (`ComposerTextView.pressesBegan`),
+    /// since no key command matches these four while the caret is in a field on the Mac.
+    static func scrollKey(pressed: UIKeyboardHIDUsage) -> ChatViewController.KeyScroll? {
+        switch pressed {
+        case .keyboardPageUp: return .pageUp
+        case .keyboardPageDown: return .pageDown
+        case .keyboardHome: return .home
+        case .keyboardEnd: return .end
+        default: return nil
+        }
+    }
+
+    /// Which way a scroll key command goes, by its input.
+    static func scrollKey(input: String?) -> ChatViewController.KeyScroll? {
+        switch input {
+        case UIKeyCommand.inputPageUp: return .pageUp
+        case UIKeyCommand.inputPageDown: return .pageDown
+        case UIKeyCommand.inputHome: return .home
+        case UIKeyCommand.inputEnd: return .end
+        default: return nil
+        }
+    }
     #else
     static let toggleList = #selector(AppDelegate.hqToggleList(_:))
     #endif
@@ -188,7 +216,7 @@ extension MoreViewController: KeySearchable {}
         up.repeatBehavior = .nonRepeatable
         let field = UIKeyCommand(action: messageField, input: "\r", modifierFlags: [])
         // [mac] ⌘= is ⌘+ without Shift, as in every Mac app that zooms.
-        return [next, previous, stop, down, up, field, UIKeyCommand(action: textBigger, input: "=", modifierFlags: .command)]
+        return [next, previous, stop, down, up, field, UIKeyCommand(action: textBigger, input: "=", modifierFlags: .command)] + scrollKeys
         #else
         return [next, previous, stop]
         #endif
@@ -756,6 +784,10 @@ extension AppDelegate {
             enabled = enabled && root.pages?.more != nil
         case KeyCommands.messageField:
             enabled = enabled && root.chatOnShow.map { !$0.composer.textView.isFirstResponder } == true
+        #if targetEnvironment(macCatalyst)
+        case KeyCommands.scrollChat:   // [mac-feel D30]
+            enabled = enabled && root.chatOnShow != nil
+        #endif
         case KeyCommands.archiveChat:
             let menus = root.chatOnShow?.menus
             enabled = enabled && menus?.canArchive == true
@@ -797,6 +829,8 @@ extension AppDelegate {
         ]
         #if !targetEnvironment(macCatalyst)
         actions.insert(KeyCommands.toggleList)   // [ipad-polish]
+        #else
+        actions.insert(KeyCommands.scrollChat)   // [mac-feel D30]
         #endif
         return actions
     }()
@@ -1157,6 +1191,22 @@ extension AppDelegate {
         more.loadViewIfNeeded()
         more.openSearchFromKeyboard()
     }
+
+    #if targetEnvironment(macCatalyst)
+    /// [mac-feel D30] Page Up, Page Down, Home, End: the chat on show scrolls (which key: `KeyCommands.scrollKey`).
+    @objc func hqScrollChat(_ sender: Any?) {
+        guard let key = KeyCommands.scrollKey(input: (sender as? UIKeyCommand)?.input) else { return }
+        scrollChat(key)
+    }
+
+    /// True when a chat is on show to scroll (false: under a sheet, or no chat open, and the key passes on).
+    @discardableResult
+    func scrollChat(_ key: ChatViewController.KeyScroll) -> Bool {
+        guard let chat = uncovered?.chatOnShow else { return false }
+        chat.keyScroll(key)
+        return true
+    }
+    #endif
 
     @objc func hqMessageField(_ sender: Any?) {
         guard let chat = uncovered?.chatOnShow else { return }

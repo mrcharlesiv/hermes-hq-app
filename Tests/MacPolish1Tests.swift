@@ -82,4 +82,53 @@ import Testing
         // A second screen above the main one.
         #expect(WindowFit.flipped(CGRect(x: 0, y: 956, width: 1920, height: 1080), main: main) == CGRect(x: 0, y: -1080, width: 1920, height: 1080))
     }
+
+    // MARK: Mac feel list, section D #29: a remembered Settings window, file windows that fan out
+
+    @Test func aWindowFrameSurvivesBeingKept() {
+        let frame = CGRect(x: 412.4, y: 96.6, width: 900, height: 700)
+        #expect(WindowFit.encode(frame) == "412,97,900,700")
+        #expect(WindowFit.decode(WindowFit.encode(frame), minimum: CGSize(width: 320, height: 240)) == CGRect(x: 412, y: 97, width: 900, height: 700))
+        // A second screen to the left or above: negative corners are kept.
+        #expect(WindowFit.decode("-1500,-200,860,640", minimum: CGSize(width: 320, height: 240)) == CGRect(x: -1500, y: -200, width: 860, height: 640))
+    }
+
+    @Test func nothingKeptOrADamagedFrameIsNoFrame() {
+        let minimum = CGSize(width: 320, height: 240)
+        #expect(WindowFit.decode(nil, minimum: minimum) == nil)
+        #expect(WindowFit.decode("", minimum: minimum) == nil)
+        #expect(WindowFit.decode("10,20,860", minimum: minimum) == nil)
+        #expect(WindowFit.decode("10,20,860,tall", minimum: minimum) == nil)
+        #expect(WindowFit.decode("10,20,100,640", minimum: minimum) == nil)   // narrower than a window can be
+        #expect(WindowFit.decode("10,20,860,0", minimum: minimum) == nil)
+    }
+
+    @Test func theFirstFileWindowOpensWhereAsked() {
+        let asked = CGRect(x: 120, y: 110, width: 700, height: 500)
+        #expect(WindowFit.cascaded(asked, taken: [], visible: laptop) == asked)
+        // One sitting somewhere else is not in the way.
+        #expect(WindowFit.cascaded(asked, taken: [CGPoint(x: 400, y: 300)], visible: laptop) == asked)
+    }
+
+    @Test func eachFurtherFileWindowOpensAStepDownAndRight() {
+        let asked = CGRect(x: 120, y: 110, width: 700, height: 500)
+        #expect(WindowFit.cascaded(asked, taken: [CGPoint(x: 120, y: 110)], visible: laptop) == asked.offsetBy(dx: 28, dy: 28))
+        #expect(WindowFit.cascaded(asked, taken: [CGPoint(x: 120, y: 110), CGPoint(x: 148, y: 138)], visible: laptop)
+                == asked.offsetBy(dx: 56, dy: 56))
+        // The first one was closed or moved away: its place is free again.
+        #expect(WindowFit.cascaded(asked, taken: [CGPoint(x: 148, y: 138)], visible: laptop) == asked)
+        // No screen known: still a step apart.
+        #expect(WindowFit.cascaded(asked, taken: [CGPoint(x: 120, y: 110)], visible: nil) == asked.offsetBy(dx: 28, dy: 28))
+    }
+
+    @Test func aFanThatReachesTheScreensFootStartsAgainAtTheTop() {
+        // 849 pt of screen from y 33: a 500 pt window at y 362 has 20 pt under it, less than a step.
+        let asked = CGRect(x: 120, y: 362, width: 700, height: 500)
+        let next = WindowFit.cascaded(asked, taken: [CGPoint(x: 120, y: 362)], visible: laptop)
+        #expect(next == CGRect(x: 28, y: 61, width: 700, height: 500))
+        // And never loops: with the top place taken too it stays on screen.
+        let third = WindowFit.cascaded(asked, taken: [CGPoint(x: 120, y: 362), CGPoint(x: 28, y: 61)], visible: laptop)
+        #expect(laptop.contains(third))
+        #expect(third == CGRect(x: 56, y: 89, width: 700, height: 500))
+    }
 }

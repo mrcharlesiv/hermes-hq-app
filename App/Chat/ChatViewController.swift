@@ -586,6 +586,11 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         view.insertSubview(backdrop, at: 0)
 
         tableView.transform = CGAffineTransform(scaleX: 1, y: -1)
+        #if targetEnvironment(macCatalyst)
+        // [mac-feel D30] The table's own Page Up / Page Down / Home / End (once a click has given it the keys) run the
+        // wrong way round on an upside-down table: Page Down showed older messages. `keyScroll` does them instead.
+        tableView.allowsKeyboardScrolling = false
+        #endif
         tableView.accessibilityIdentifier = "chat.table"
         tableView.backgroundColor = .clear
         tableView.separatorStyle = .none
@@ -3453,6 +3458,56 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         jumpButton.setShown(false)
     }
 
+    // MARK: Keys that scroll (Mac feel list, section D #30)
+
+    enum KeyScroll { case pageUp, pageDown, home, end }
+
+    /// [mac-feel D30] Page Up and Page Down move the transcript a screen (less a line or two, so the eye keeps its
+    /// place), Home goes to the oldest message loaded and End to the newest, as in Messages and every Mac window that
+    /// scrolls. The keys did nothing: a chat could only be scrolled with the pointer.
+    func keyScroll(_ key: KeyScroll) {
+        guard isViewLoaded else { return }
+        let low = minOffset
+        let high = max(low, tableView.contentSize.height + tableView.contentInset.bottom - tableView.bounds.height)
+        let page = max(88, transcriptBottom - topInset - 44)
+        let now = tableView.contentOffset.y
+        // Upside down: a larger offset shows older messages.
+        let target: CGFloat = switch key {
+        case .pageUp: min(high, now + page)
+        case .pageDown: max(low, now - page)
+        case .home: high
+        case .end: low
+        }
+        AppLog.note("keys", "scroll \(key)")
+        if target <= low + 2 {
+            if !isAtBottom || !following { jumpToLatest() }   // the newest end: the jump's own glide, following again
+            return
+        }
+        guard abs(target - now) > 0.5 else { return }
+        leadPinEnded = true   // [tasks] your scroll wins
+        endLift(); stopGlide(); stopStreamGlide()
+        anchorMessageId = nil
+        following = false
+        tableView.setContentOffset(tableView.contentOffset, animated: false)   // a coast stops here
+        // Home from far down a long chat: cut to a screen and a half short of the top, then move the rest (the jump
+        // to the newest end does the same), not every row in between drawn in one blur.
+        let cut = tableView.bounds.height * 1.5
+        if target - tableView.contentOffset.y > cut { tableView.contentOffset.y = target - cut }
+        if HQMotion.reduced {
+            tableView.contentOffset.y = target
+            updateJumpButton()
+            scheduleTrim()
+        } else {
+            tableView.setContentOffset(CGPoint(x: 0, y: target), animated: true)
+        }
+    }
+
+    /// The end of a key's scroll (the table's own animation): what the end of a coast does.
+    func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
+        updateJumpButton()
+        scheduleTrim()
+    }
+
     private static let traceScroll = ProcessInfo.processInfo.arguments.contains("-HQDemoTraceScroll")
 
     /// The visual position of a row on screen (its top, from the screen's top), for traces.
@@ -3606,7 +3661,14 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     private func composerMayFocus() -> Bool {
         if tableView.isDecelerating || CACurrentMediaTime() - lastMomentum < 0.12 {
             tableView.setContentOffset(tableView.contentOffset, animated: false)
+            #if targetEnvironment(macCatalyst)
+            // [mac-feel D31] A click is not a finger catching the list: on the Mac the coast stops and the click still
+            // puts the caret in the field. It was swallowed, so a click made while the transcript was still gliding
+            // after a trackpad flick did nothing and had to be made again.
+            return true
+            #else
             return false
+            #endif
         }
         return true
     }

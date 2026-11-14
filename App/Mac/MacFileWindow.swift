@@ -185,6 +185,33 @@ import UIKit
     }
 
     #if DEBUG
+    /// `-HQDebugOpenFiles <path>,<path>…`: each file in a window of its own, 2 s apart, once the main page is up
+    /// (where a second and a third file window open, without a chat that holds those files).
+    private static var openAsked = false
+    static func openIfAsked() {
+        guard !openAsked, let paths = UserDefaults.standard.string(forKey: "HQDebugOpenFiles"), !paths.isEmpty else { return }
+        openAsked = true
+        Task { @MainActor in
+            for _ in 0..<80 where MainTabController.current?.view.window == nil { try? await Task.sleep(for: .seconds(0.5)) }
+            try? await Task.sleep(for: .seconds(4))
+            // Copies in the app's own temporary folder: Quick Look can't read a file from anywhere else.
+            let folder = FileManager.default.temporaryDirectory.appending(path: "DebugOpen", directoryHint: .isDirectory)
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            for path in paths.split(separator: ",") {
+                let source = URL(fileURLWithPath: String(path)), copy = folder.appending(path: source.lastPathComponent)
+                try? FileManager.default.removeItem(at: copy)
+                try? FileManager.default.copyItem(at: source, to: copy)
+                if !FileManager.default.fileExists(atPath: copy.path) {   // out of the app's reach: a stand-in of that name
+                    let text = source.pathExtension == "csv" ? "Month,Rent,Food,Travel\nJan,1200,410,90\nFeb,1200,385,140\nMar,1200,402,60\nApr,1200,398,210\n"
+                        : "Trip notes\n\nLeave Friday 9:00.\nBring the charger.\nBack Sunday evening.\n"
+                    try? text.write(to: copy, atomically: true, encoding: .utf8)
+                }
+                open(FileManager.default.fileExists(atPath: copy.path) ? copy : source)
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+    }
+
     /// `-HQDebugFileWindowTap <file name>` (with `-HQDebugOpenBot <id>` and `-HQDebugMacShotsPost`): the chat's row for
     /// that file is clicked as a person would (`chatCellOpenFile`), then `-HQDebugFileWindow <name>` photographs the
     /// window that opens; then the main window as `<name>-main.png`; the same row clicked again (one window, brought
@@ -279,7 +306,13 @@ final class FileSceneDelegate: UIResponder, UIWindowSceneDelegate {
         if let main = MainTabController.current?.view.window?.windowScene?.effectiveGeometry.systemFrame {
             let visible = MacSettingsWindow.visibleScreen(around: main)
             let width = min(max(main.width - 80, 900), 1400), height = min(max(main.height - 60, 680), 1000)
-            let frame = WindowFit.inside(CGRect(x: main.minX + 40, y: main.minY + 30, width: width, height: height), visible: visible)
+            // [mac-feel D29] A second file never opens exactly over the first (it hid it whole, as if the click had
+            // swapped the file): each one sits a step down and right of the file windows already there.
+            var taken = MacFileWindow.scenes.filter { $0 !== windowScene }.map(\.effectiveGeometry.systemFrame.origin)
+            #if DEBUG
+            if UserDefaults.standard.bool(forKey: "HQDebugFileWindowsStack") { taken = [] }   // the old placing, for a "before" picture
+            #endif
+            let frame = WindowFit.cascaded(CGRect(x: main.minX + 40, y: main.minY + 30, width: width, height: height), taken: taken, visible: visible)
             windowScene.requestGeometryUpdate(.Mac(systemFrame: frame)) { _ in }
         }
         let window = UIWindow(windowScene: windowScene)

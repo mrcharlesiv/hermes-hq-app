@@ -156,6 +156,13 @@ Mac window, scaled to Mac size. No separate code base; every iPhone and iPad cha
     (row edge, icon centre, name); Search's glass and word are the box's own views on the icon and name columns;
     headings and the foot bar get `MacSidebar.sectionBreak` above them; the accent mark is the accent only in the
     pane the last click landed in while the window is key (`MacSelection.emphasized`), grey otherwise;
+  - **window and keys** (984): the Settings window reopens at the frame it was left at (`WindowFit.encode` /
+    `decode`, key `HQMacSettingsWindowFrame`, fitted to the screen it opens on); file windows fan out 28 pt down and
+    right instead of stacking (`WindowFit.cascaded`); Page Up, Page Down, Home and End scroll the chat
+    (`ChatViewController.keyScroll`), also with the caret in the message box (`ComposerTextView.pressesBegan`: no
+    key command matches those keys in a text view). The chat table is upside down, so its own keyboard scrolling
+    ran them backwards once a click had given it the keys: `allowsKeyboardScrolling` is off on the Mac; a click in
+    the message box while the chat glides is taken (`composerMayFocus`);
   - **stall log**: HangWatch pauses while the app's windows are hidden and drops a wait the watch's own timer was
     held back through (App Nap); a resize is a `window.resize` span.
 - **Add-ons**: the Hermes HQ identity embeds its notification extension (sealed alerts, bot faces) and its Share

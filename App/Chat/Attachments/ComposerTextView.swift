@@ -119,6 +119,9 @@ final class ComposerTextView: UITextView {
         if let key = presses.first?.key, key.keyCode == .keyboardReturnOrEnter || key.keyCode == .keypadEnter,
            hardwareReturn(shift: key.modifierFlags.contains(.shift), option: key.modifierFlags.contains(.alternate),
                           command: key.modifierFlags.contains(.command)) { return }
+        #if targetEnvironment(macCatalyst)
+        if let key = presses.first?.key, scrollsChat(key) { return }
+        #endif
         super.pressesBegan(presses, with: event)
     }
 
@@ -161,6 +164,16 @@ final class ComposerTextView: UITextView {
     private func macReturn(shift: Bool, option: Bool, command: Bool = false) {
         if markedTextRange != nil { unmarkText(); return }   // Return ends an input method's composition, as it does anyway
         if !hardwareReturn(shift: shift, option: option, command: command) { insertText("\n") }
+    }
+
+    /// [mac-feel D30] Page Up, Page Down, Home and End scroll the chat while the draft fits in the field (it has
+    /// nothing of its own to scroll then), as Messages' do; a draft tall enough to scroll keeps them for itself. Read
+    /// from the press: no key command matches these four while the caret is in a field.
+    private func scrollsChat(_ key: UIKey) -> Bool {
+        guard !isScrollEnabled, markedTextRange == nil,
+              key.modifierFlags.isDisjoint(with: [.shift, .control, .alternate, .command]),
+              let scroll = KeyCommands.scrollKey(pressed: key.keyCode) else { return false }
+        return (UIApplication.shared.delegate as? AppDelegate)?.scrollChat(scroll) ?? false
     }
     #else
     private let macKeys: [UIKeyCommand] = []

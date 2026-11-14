@@ -260,6 +260,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate, LaunchHost {
         MacShots.startIfAsked(window)                  // [mac] -HQDebugMacShots, once signed in
         MacSettingsWindow.openIfAsked()                // [provider-add] -HQDebugSettingsWindow, signed in too
         MacFileWindow.tapIfAsked()                     // [mac-files] -HQDebugFileWindowTap
+        MacFileWindow.openIfAsked()                    // [mac-files] -HQDebugOpenFiles
         #endif
         // [restore] A cold launch reopens the last chat, unless a tapped alert or a link launched the app to open another.
         MainTabController.launchRestorePending = connectionOptions.notificationResponse == nil

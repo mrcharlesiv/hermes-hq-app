@@ -722,6 +722,9 @@ nonisolated enum ChatRowBuilder {
         var run: [ToolCall] = []
         var runStart = 0
         var spoke = false
+        /// A real step (one the bot went off to do, drawn, folded or hidden) since the last words: the next words are a
+        /// new message, as on Telegram (kwojt 2026-11-14: a long turn's progress notes read as one long bubble).
+        var workedSinceWords = false
         // [transcript] Every edit call this reply made, however its step draws (or doesn't): the files card reads
         // these once the reply has settled, regardless of Tool Call Style or After Reply › Hide (§12, n20 F10).
         var editCalls: [(call: ToolCall, args: [String: JSONValue], diff: String?)] = []
@@ -784,9 +787,11 @@ nonisolated enum ChatRowBuilder {
                 // Silent: runs chain over it. Words that are only hidden thinking (`<think>…</think>`) draw nothing either.
                 if ReasoningTags.isBlank(text) { continue }
                 flushRun(endingAt: i - 1)
-                // Words with nothing drawn between them (the steps were hidden, folded or silent) are one bubble: the
-                // reply reads as one message, not a stack of fragments.
-                if let last = rows.indices.last, last >= before, rows[last].messageId == m.id,
+                // Words with only silent things between them (a to-do update, hidden thinking) are one bubble: the reply
+                // reads as one message, not a stack of fragments. Words the bot wrote before going back to work (a
+                // progress note, then steps) are their own bubble, in every style, stacked tight with the next.
+                defer { workedSinceWords = false }
+                if !workedSinceWords, let last = rows.indices.last, last >= before, rows[last].messageId == m.id,
                    case .bubble(var joined) = rows[last].kind, !joined.mine, joined.memo == nil,
                    joined.media.isEmpty {                     // a picture card isn't words: they get their own bubble
                     joined.text += "\n\n" + text
@@ -864,6 +869,7 @@ nonisolated enum ChatRowBuilder {
                     continue
                 }
                 if ChatRunSummary.isSilent(call.name) && call.state != .failed { continue }
+                workedSinceWords = true
                 // [questions] A clarify part: the question note while it runs, the settled Q&A once answered.
                 if let prompt = PromptRows.clarifyRow(call, message: m, input: input) {
                     flushRun(endingAt: i - 1)

@@ -41,7 +41,7 @@ struct OneLineRowsTests {
         rows.compactMap { if case .bubble(let b) = $0.kind, !b.mine { return b.text } else { return nil } }
     }
 
-    @Test func oneLineFoldsAReplyIntoOneLineAboveOneBubble() {
+    @Test func oneLineFoldsAReplyIntoOneLineAboveItsWords() {
         let rows = ChatRowBuilder.build(input(reply(split)) { $0.style = .line })
         guard let (run, l) = line(rows) else { Issue.record("no line"); return }
         #expect(l.title == "Worked for 42s · 2 steps")
@@ -49,7 +49,8 @@ struct OneLineRowsTests {
         #expect(l.thought == "plan")
         #expect(run.tools.map(\.id) == ["t1", "t2"])
         #expect(!run.live)
-        #expect(bubbles(rows) == ["Checking.\n\nAll good."])
+        // The note before the steps and the answer after them are two messages (kwojt 2026-11-14).
+        #expect(bubbles(rows) == ["Checking.", "All good."])
         // The line sits above the reply's words.
         let lineAt = rows.firstIndex { $0.id == "a|line" }, bubbleAt = rows.firstIndex { $0.id == "a|b1" }
         #expect(lineAt != nil && bubbleAt != nil && lineAt! < bubbleAt!)
@@ -111,7 +112,7 @@ struct OneLineRowsTests {
     @Test func hideClearsTheLineOnceDone() {
         let rows = ChatRowBuilder.build(input(reply(split)) { $0.style = .line; $0.hideSteps = true })
         #expect(line(rows) == nil)
-        #expect(bubbles(rows) == ["Checking.\n\nAll good."])
+        #expect(bubbles(rows) == ["Checking.", "All good."])
     }
 
     @Test func rowsStillShowStepsBetweenTheWords() {
@@ -124,6 +125,43 @@ struct OneLineRowsTests {
         let parts: [ChatPart] = [.text("One."), .tool(call("s", "todo")), .text("Two.")]
         #expect(ChatRunSummary.isSilent("todo"))
         #expect(bubbles(ChatRowBuilder.build(input(reply(parts)))) == ["One.\n\nTwo."])
+        // A thought between them folds into the line (Rows draws it as its own row, which splits the words there).
+        let thought: [ChatPart] = [.text("One."), .tool(call("s", "todo")), .reasoning("hmm"), .text("Two.")]
+        for style in [ToolCallStyle.line, .bottom, .header] {
+            #expect(bubbles(ChatRowBuilder.build(input(reply(thought)) { $0.style = style })) == ["One.\n\nTwo."], "\(style)")
+        }
+    }
+
+    /// kwojt 2026-11-14 (build 980, "Basal — approver zgód"): a long turn's progress notes, each written before the bot
+    /// went back to work, drew as one long bubble under the steps line. Each note is its own message, as on Telegram,
+    /// stacked tight under the line: one gap, the name once, the tail and time on the last.
+    @Test func progressNotesBetweenStepsAreTheirOwnBubbles() {
+        let parts: [ChatPart] = [
+            .text("First the key."), .tool(call("t1", "write_file", #"{"path":"/a/key.py"}"#)),
+            .text("The secrets check says the key is there."), .tool(call("t2", "terminal", #"{"command":"pytest"}"#)),
+            .tool(call("t3", "read_file", #"{"path":"/a/b.py"}"#)),
+            .text("An important finding."), .tool(call("s", "todo")), .text("The first batch is 220 requests."),
+        ]
+        let notes = ["First the key.", "The secrets check says the key is there.",
+                     "An important finding.\n\nThe first batch is 220 requests."]
+        for style in [ToolCallStyle.line, .bottom, .header, .rows, .bubbles] {
+            #expect(bubbles(ChatRowBuilder.build(input(reply(parts)) { $0.style = style })) == notes, "\(style)")
+        }
+        #expect(bubbles(ChatRowBuilder.build(input(reply(parts)) { $0.style = .line; $0.hideSteps = true })) == notes)
+        let rows = ChatRowBuilder.build(input(reply(parts), fewerTimes: true) { $0.style = .line })
+        let drawn = rows.compactMap { row -> (ChatRow, BubbleRow)? in
+            if case .bubble(let b) = row.kind, !b.mine { return (row, b) } else { return nil }
+        }
+        #expect(drawn.map(\.1.joinsAbove) == [false, true, true])
+        #expect(drawn.map(\.1.joinsBelow) == [true, true, false])
+        #expect(drawn.map(\.1.tail) == [false, false, true])
+        #expect(drawn.map { $0.1.time != nil } == [false, false, true])
+        #expect(drawn.dropFirst().allSatisfy { $0.0.gapAbove == ChatMetrics.runGap })
+        // The steps line stays one, above the first note.
+        #expect(rows.filter { $0.id == "a|line" }.count == 1)
+        let lineAt = rows.firstIndex { $0.id == "a|line" }, firstNote = rows.firstIndex { $0.id == drawn.first?.0.id }
+        #expect(lineAt != nil && firstNote != nil && lineAt! < firstNote!)
+        #expect(line(rows)?.0.tools.map(\.id) == ["t1", "t2", "t3"])
     }
 
     @Test func fewerTimestampsDrawsADayLineOnlyAtADateChange() {

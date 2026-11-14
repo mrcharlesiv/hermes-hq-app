@@ -866,8 +866,12 @@ All three change drawing only; what Hermes sends and stores is untouched.
   steps ("Explored 2 files, ran 3 commands"); thoughts only → the thought title. Glyph: a ticked circle when done.
   Failed steps show "N Failed" in red at the trailing end. Tap opens the thought (when reasoning is shown) above every
   step; a lone step with no thought opens its step sheet directly. After Reply › Hide clears the line with the steps.
-- **Joined words** (every style): a reply's text parts with nothing drawn between them (steps hidden, folded or silent)
-  are one bubble, the parts separated by a blank line. Rows and Bubbles with Keep still split words around steps.
+- **Joined words** (every style): a reply's text parts with only silent things between them (a silent tool such as
+  `todo`, a thought, words that are only hidden thinking) are one bubble, the parts separated by a blank line. Words the
+  bot wrote before going back to work (any other step between them, drawn, folded into the line or hidden) are their own
+  bubble, in every style (owner 2026-11-14, kwojt: a long turn's progress notes read as one long bubble). Adjacent
+  bubbles of one reply stack as a run (2 pt apart, the name on the first, tail and time on the last); the One Line line
+  stays one, above the first.
 - **Fewer Timestamps**: a day line only when the local date changes (no 30-minute-gap lines), and run times only on the
   bot's bubbles, not yours.
 

@@ -240,8 +240,14 @@ gateway in the sign-in's Keychain item (`StoredAccount.access`), kept when a ses
 when the gateway is removed or signed out. It is sent on every request to that gateway and nowhere else: each
 `HTTPTransport` is made with `StoredAccount.accessHeaders` as its sessions' `httpAdditionalHeaders`, which covers REST,
 uploads, downloads and every socket's handshake (the sessions never follow a redirect); the Share extension does the
-same from the same item; the sign-in sheet's first page (`/auth/native/authorize`) carries them through
-`ASWebAuthenticationSession.additionalHeaderFields`, after which Access's own cookie covers the sheet's later visits.
+same from the same item. Sign in with Nous, and a gateway's own browser login, open in a web view rather than
+`ASWebAuthenticationSession` when a token is saved (`CloudflareSignIn`, `HermesKit/Net/CloudflareSignIn.swift`). The
+system sheet's `additionalHeaderFields` go out only with its first request, and strict service-token authentication
+does not set a `CF_Authorization` cookie or accept one later (Cloudflare's default for organizations created on or
+after 2026-10-05), so the identity provider's redirect back to `/auth/callback` was a 401. The view adds the two
+headers to every main-frame request for the gateway's own origin and to nothing else. It does not load the loopback
+redirect (`http://127.0.0.1/callback`); the app fetches that URL so the relay still settles. Password sign-in never
+opens the view.
 The form: the probe reads Access's redirect to its login page (`CloudflareAccess.asksForSignIn`, a 3xx to
 `*.cloudflareaccess.com` or `/cdn-cgi/access/`) as `ProbeResult.behindAccess`; the two fields then open under the
 address by themselves, the sign-in buttons wait until the address answers as Hermes, and the fields can also be opened
@@ -459,7 +465,8 @@ app and the OAuth client to Nous Portal. The app never talks to Portal's token e
    Query built with `URLComponents`; any literal `+` re-encoded as `%2B` (`HermesNousSignIn.swift:58-66`).
    `prefersEphemeralWebBrowserSession = false` (share Safari's Portal cookies); callback `.customScheme("hermes")`
    which never fires — the relay closes the sheet (`HermesNousSignIn.swift:121-132`). HQ Native uses
-   `.customScheme("hermeshq-native")` instead (D5, 2.3).
+   `.customScheme("hermeshq-native")` instead (D5, 2.3). With a Cloudflare Access service token this step opens the
+   access web view instead (§3 [cf-access]): the system sheet cannot carry the token past this first request.
 6. Gateway validates (`HA:hermes_cli/dashboard_auth/routes.py:242-335`): method must be `S256`, challenge non-empty,
    `redirect_uri` must be `http://127.0.0.1[:port]/…` or `http://[::1][:port]/…` in canonical form (no `localhost`,
    userinfo, fragment, backslash, control chars). Registers a pending entry (TTL 600 s, max 8 pending per client IP,

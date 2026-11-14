@@ -190,3 +190,56 @@ struct CloudflareAccessFormTests {
         #expect(driver.probes == 1)              // filling it in did not ask twice
     }
 }
+
+/// The sign-in view's decisions: the service token is added only on the gateway's own origin, and the loopback
+/// redirect is handed to the relay instead of loaded. Strict Access does not set a cookie, so `/auth/callback` has to
+/// take the headers itself (`CloudflareSignIn`).
+@Suite("Cloudflare Access: the sign-in view")
+struct CloudflareSignInNavigationTests {
+    private let gateway = URL(string: "https://hermes.example.com/auth/native/authorize?provider=nous")!
+
+    private func step(_ url: String, mainFrame: Bool = true, carriesToken: Bool = false) -> CloudflareSignIn.Step {
+        CloudflareSignIn.step(url: URL(string: url)!, mainFrame: mainFrame, carriesToken: carriesToken, gateway: gateway)
+    }
+
+    @Test func theCallbackIsStampedUntilItCarriesTheToken() {
+        #expect(step("https://hermes.example.com/auth/callback?code=1&state=s") == .stamp)
+        #expect(step("https://hermes.example.com/auth/callback?code=1&state=s", carriesToken: true) == .allow)
+        #expect(step("https://hermes.example.com:443/auth/callback") == .stamp)
+        // A frame of the gateway page cannot be reloaded in place, and must not go out without the token.
+        #expect(step("https://hermes.example.com/auth/callback", mainFrame: false) == .cancel)
+    }
+
+    @Test func theTokenStaysOffEveryOtherHost() {
+        #expect(step("https://portal.nousresearch.com/oauth/authorize?client_id=1") == .allow)
+        #expect(step("https://auth.hermes.example.com/login") == .allow)
+        #expect(step("https://hermes.example.com:8443/auth/callback") == .allow)
+        #expect(step("http://hermes.example.com/auth/callback") == .allow)
+        #expect(step("about:blank") == .allow)
+    }
+
+    @Test func theLoopbackRedirectIsDeliveredToTheRelay() {
+        #expect(step("http://127.0.0.1:53124/callback?code=abc&state=s") == .loopback)
+        #expect(step("http://[::1]:53124/callback?code=abc") == .loopback)
+        #expect(step("http://127.0.0.1:53124/callback?code=abc", mainFrame: false) == .cancel)
+        // The gateway itself on loopback is still the gateway. The relay is the other port.
+        let local = URL(string: "http://127.0.0.1:9/auth/native/authorize")!
+        #expect(CloudflareSignIn.step(url: local, mainFrame: true, carriesToken: false, gateway: local) == .stamp)
+        let relay = URL(string: "http://127.0.0.1:53124/callback?code=1")!
+        #expect(CloudflareSignIn.step(url: relay, mainFrame: true, carriesToken: false, gateway: local) == .loopback)
+    }
+
+    @Test func theHeadersAreRecognizedWhateverTheirCase() {
+        let headers = CloudflareAccess(clientId: "abc.access", clientSecret: "secret")!.headers
+        var request = URLRequest(url: URL(string: "https://hermes.example.com/auth/callback")!)
+        #expect(!CloudflareSignIn.carries(request, headers: headers))
+        request.setValue("abc.access", forHTTPHeaderField: "cf-access-client-id")
+        request.setValue("secret", forHTTPHeaderField: "cf-access-client-secret")
+        #expect(CloudflareSignIn.carries(request, headers: headers))
+        request.setValue("nope", forHTTPHeaderField: "CF-Access-Client-Secret")
+        #expect(!CloudflareSignIn.carries(request, headers: headers))
+        #expect(CloudflareSignIn.needsWebView(headers))
+        #expect(!CloudflareSignIn.needsWebView([:]))
+        #expect(!CloudflareSignIn.needsWebView(["CF-Access-Client-Id": ""]))
+    }
+}

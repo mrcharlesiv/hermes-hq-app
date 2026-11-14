@@ -52,6 +52,8 @@ nonisolated struct GroupRowModel: Hashable, Sendable, Identifiable {
     private let marksURL: URL
     weak var bots: BotStore?
     var sync: GroupSync?
+    /// [hosted] The rooms Hermes runs on its gateway: their sends, renames and deletes go there.
+    weak var hostedRooms: HostedRooms?
     var isOnline: () -> Bool = { true }
     /// The mute of a room (key `room:<roomKey>`), and its removal / move (App wires `BotMuteCenter`).
     var isMuted: (String) -> Bool = { _ in false }
@@ -135,6 +137,7 @@ nonisolated struct GroupRowModel: Hashable, Sendable, Identifiable {
     /// Who is in a room right now (`groupChatMemberBots`, §3.5): the roster's bots that name it, in roster order;
     /// the saved descriptors while the roster has not loaded; the saved members of another gateway.
     func seated(_ room: GroupRoom) -> [GroupSeat] {
+        if room.isHosted { return hostedSeats(room) }
         var seats: [GroupSeat] = []
         let saved = Dictionary(room.members.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
         let profiles = bots?.profiles ?? []
@@ -170,6 +173,30 @@ nonisolated struct GroupRowModel: Hashable, Sendable, Identifiable {
         return seats
     }
 
+    /// [hosted] A gateway room's seats are its own roster (frozen when it was made), each the roster's bot when it is
+    /// here; a member on another gateway (a peer) is shown, never driven.
+    private func hostedSeats(_ room: GroupRoom) -> [GroupSeat] {
+        let loaded = bots.map { $0.phase != .none } ?? false
+        return room.members.map { member in
+            if member.sourceScoped {
+                return GroupSeat(key: member.key, name: member.name, display: member.title ?? member.name, handle: member.handle ?? member.name,
+                                 title: member.title, remote: true, remoteLabel: member.connectionLabel, descriptor: member)
+            }
+            let handle = member.handle ?? GroupMentions.handle(name: member.name, saved: nil)
+            guard let bots, let profile = bots.profiles.first(where: { $0.name == member.name }) else {
+                return GroupSeat(key: member.key, name: member.name, display: member.title ?? member.name, handle: handle, title: member.title,
+                                 missing: loaded, descriptor: member)
+            }
+            let bot = bots.bot(named: profile.name)
+            let metaTitle = bots.currentMeta(profile.name)["title"]?.string.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 }
+            return GroupSeat(key: member.key, name: profile.name, display: bot?.name ?? metaTitle ?? member.title ?? profile.displayName ?? profile.name,
+                             handle: handle, title: metaTitle ?? profile.displayName,
+                             friendly: [metaTitle, profile.title, profile.displayName, member.title].compactMap { $0 },
+                             previousNames: (profile.raw["previous_names"]?.array ?? []).compactMap(\.string),
+                             head: bot?.head ?? profile.uiMeta["dispatch-head"], descriptor: member)
+        }
+    }
+
     /// Display names by profile name (for previews, the prompt's lines and Activity).
     func labels(_ seats: [GroupSeat]) -> [String: String] {
         var out = Dictionary(seats.map { ($0.name, $0.display) }, uniquingKeysWith: { a, _ in a })
@@ -203,7 +230,7 @@ nonisolated struct GroupRowModel: Hashable, Sendable, Identifiable {
     func rooms(of profile: String) -> [GroupRoom] {
         guard let bots else { return [] }
         let names = Set(GroupKeys.groups(of: bots.currentMeta(profile)))
-        return rooms.filter { names.contains($0.name) }
+        return rooms.filter { $0.isHosted ? $0.members.contains { $0.name == profile && !$0.sourceScoped } : names.contains($0.name) }
     }
 
     func activity(for key: String) -> [GroupActivityEvent] {
@@ -247,7 +274,7 @@ nonisolated struct GroupRowModel: Hashable, Sendable, Identifiable {
         if after != key { moveMarks(from: key, to: after) }
         if now { saveNow(urgent: true) } else { save() }
         notify()
-        if publish { sync?.schedule(changed: after) }
+        if publish, !rooms[index].isHosted { sync?.schedule(changed: after) }   // [hosted] never in the mirror
     }
 
     /// Runtime fields only (running, turn): nothing to save or publish.
@@ -332,7 +359,7 @@ nonisolated struct GroupRowModel: Hashable, Sendable, Identifiable {
         var added = 0
         if names != lastGroupsSignature {
             lastGroupsSignature = names
-            let known = roomNames
+            let known = Set(rooms.filter { !$0.isHosted }.map(\.name))   // [hosted] a gateway room of the same name is another room
             for name in names where !known.contains(name) && !pendingNames.contains(name) && !marks.deletedNames.contains(name) {
                 let clean = GroupKeys.cleanName(name)
                 guard clean == name, !clean.isEmpty, marks.tombstones["name:\(name)"] == nil else { continue }
@@ -423,6 +450,54 @@ nonisolated struct GroupRowModel: Hashable, Sendable, Identifiable {
         if changed { save() }
     }
 
+    // MARK: [hosted] Rooms Hermes runs (HostedRooms)
+
+    /// A gateway room as listed: added, or its name, roster and counters taken in (this device's own fields stay).
+    func upsertHosted(_ incoming: GroupRoom) {
+        guard !isClosed, let ref = incoming.hosted else { return }
+        let key = incoming.key
+        if let index = rooms.firstIndex(where: { $0.key == key }) {
+            let before = rooms[index]
+            rooms[index].name = incoming.name
+            rooms[index].members = incoming.members
+            if var saved = rooms[index].hosted {
+                saved.latest = max(ref.latest, saved.latest)
+                saved.revision = ref.revision
+                rooms[index].hosted = saved
+            }
+            guard rooms[index] != before else { return }
+        } else {
+            rooms.append(incoming)
+            AppLog.trace("groups", "hosted room \(AppLog.tag(key)) found on \(AppLog.tag(ref.owner))")
+        }
+        save()
+        notify()
+    }
+
+    /// The log cursor moved back (a new authority on the gateway): the gateway's entries are read again; your sends
+    /// it never took stay.
+    func setHostedCursor(_ key: String, cursor: Int, epoch: Int?, resetLog: Bool) {
+        update(key, sync: false) { room in
+            room.hosted?.cursor = cursor
+            room.hosted?.epoch = epoch
+            if resetLog {
+                let undelivered = Set(room.undelivered.keys)
+                room.log.removeAll { !undelivered.contains($0.id ?? "") }
+            }
+        }
+    }
+
+    /// A gateway room that is gone (disbanded here or elsewhere): out of the list, its marks with it.
+    func removeHosted(_ key: String) {
+        guard !isClosed, let room = room(key), room.isHosted else { return }
+        rooms.removeAll { $0.key == key }
+        moveMarks(from: key, to: nil)
+        activity[key] = nil
+        saveNow()
+        notify()
+        onRoomRemoved?(room)
+    }
+
     // MARK: Membership writes (§4.3)
 
     private func write(_ profile: String, title: String, _ change: @escaping @Sendable ([String: JSONValue]) -> [String]?) async throws {
@@ -492,6 +567,11 @@ nonisolated struct GroupRowModel: Hashable, Sendable, Identifiable {
         guard let room = room(key) else { return }
         let name = GroupKeys.cleanName(raw)
         guard !name.isEmpty, name != room.name else { return }
+        if room.isHosted {   // [hosted] the gateway keeps the name
+            guard let hostedRooms else { throw BotWriteError(title: "Couldn’t Rename \(room.name)", reason: "Not signed in.") }
+            try await hostedRooms.rename(key, to: name)
+            return
+        }
         var taken = roomNames
         if let bots { for profile in bots.profiles { taken.formUnion(GroupKeys.groups(of: bots.currentMeta(profile.name))) } }
         if taken.contains(name) { throw GroupNameTaken(name: name) }
@@ -529,6 +609,7 @@ nonisolated struct GroupRowModel: Hashable, Sendable, Identifiable {
     /// Add or Remove Bots… (§7.5 edit mode): the `groups` change of each bot added or removed, then the descriptors.
     func setMembers(_ key: String, _ names: [String]) async throws {
         guard let room = room(key) else { return }
+        if room.isHosted { throw Self.hostedMembersFixed(room.name) }   // [hosted]
         let title = "Couldn’t Change \(room.name)’s Bots"
         let current = Set(profilesNaming(room.name))
         let wanted = Set(names)
@@ -557,6 +638,7 @@ nonisolated struct GroupRowModel: Hashable, Sendable, Identifiable {
     /// One bot joins or leaves one room (Add to Group Chat…, §7.7).
     func setMembership(profile: String, room key: String, member: Bool, botName: String) async throws {
         guard let room = room(key) else { return }
+        if room.isHosted { throw Self.hostedMembersFixed(room.name) }   // [hosted]
         let title = "Couldn’t Change \(botName)’s Group Chats"
         let roomName = room.name
         do {
@@ -571,11 +653,17 @@ nonisolated struct GroupRowModel: Hashable, Sendable, Identifiable {
         refreshDescriptors(key, bump: true)
     }
 
+    /// [hosted] A room Hermes runs keeps the bots it was made with (`groups.*` has no member change).
+    static func hostedMembersFixed(_ name: String) -> BotWriteError {
+        BotWriteError(title: "Couldn’t Change \(name)’s Bots",
+                      reason: "This group chat runs in Hermes, which keeps the bots it was made with. Make a new group chat for other bots.")
+    }
+
     /// Delete Bot made here: the bot's saved seat leaves every room it was in, and the rooms are published, as Remove
     /// Bots does (its `groups` went with its profile). Without this the room kept an empty seat and its row read
     /// "1 of 2 available" in orange (audit 05-16). Rooms of another gateway's members are not touched.
     func forgetMember(_ profile: String) {
-        for room in rooms where room.members.contains(where: { $0.name == profile && !$0.sourceScoped }) {
+        for room in rooms where !room.isHosted && room.members.contains(where: { $0.name == profile && !$0.sourceScoped }) {
             AppLog.trace("groups", "forget deleted member in \(AppLog.tag(room.key))")
             update(room.key) { room in
                 room.members.removeAll { $0.name == profile && !$0.sourceScoped }
@@ -596,7 +684,7 @@ nonisolated struct GroupRowModel: Hashable, Sendable, Identifiable {
 
     /// The saved descriptors follow who is seated (after a membership change, and on every send).
     func refreshDescriptors(_ key: String, bump: Bool = false) {
-        guard let room = room(key), let bots, bots.phase != .none else { return }
+        guard let room = room(key), !room.isHosted, let bots, bots.phase != .none else { return }
         let names = profilesNaming(room.name)
         let next = descriptors(names, keeping: room.members)
         guard next != room.members || bump else { return }
@@ -610,6 +698,11 @@ nonisolated struct GroupRowModel: Hashable, Sendable, Identifiable {
     /// Throws `Couldn’t Delete <name>` when a write failed; the room stays gone and `finishDelete` retries the writes.
     func delete(_ key: String) async throws {
         guard let room = room(key) else { return }
+        if room.isHosted {   // [hosted] disbanded on its gateway, then gone here
+            guard let hostedRooms else { throw BotWriteError(title: "Couldn’t Delete \(room.name)", reason: "Not signed in.") }
+            try await hostedRooms.disband(key)
+            return
+        }
         AppLog.trace("groups", "delete \(AppLog.tag(key)): started")
         marks.tombstones[key] = max(room.syncRevision, (sync?.remoteRevision ?? 0) + 1)
         if !marks.deletedNames.contains(room.name) { marks.deletedNames.append(room.name) }

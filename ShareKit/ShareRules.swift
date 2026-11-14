@@ -4,6 +4,16 @@
 import Foundation
 
 nonisolated enum ShareRules {
+    /// [authority] A photo's mime by its name (copy of `AttachmentSender.imageMime`; the share's photos are JPEG or PNG).
+    static func imageMime(name: String) -> String {
+        switch (name as NSString).pathExtension.lowercased() {
+        case "png": return "image/png"
+        case "gif": return "image/gif"
+        case "webp": return "image/webp"
+        default: return "image/jpeg"
+        }
+    }
+
     // MARK: Ids
 
     /// The ids a link, a notification or a route may carry: a stored session id.

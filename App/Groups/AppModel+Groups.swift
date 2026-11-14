@@ -10,6 +10,8 @@ import UIKit
     private(set) var store: GroupStore?
     private(set) var sync: GroupSync?
     private(set) var engine: GroupEngine?
+    /// [hosted] The group chats Hermes runs on its gateway (Hermes Desktop's kind).
+    private(set) var hosted: HostedRooms?
     /// One session per room for as long as a screen holds it.
     private var sessions: [UUID: WeakBox<GroupRoomSession>] = [:]
     /// The member on turn per room (its hidden session is the one whose questions the room shows).
@@ -49,6 +51,11 @@ import UIKit
             self.sessions[uid]?.value?.bind(runtime: runtime, profile: profile, stored: stored)
         }
         engine.onReply = { [weak self] room, entry, seat in self?.replied(room, entry, seat) }
+        let hosted = HostedRooms(store: store, client: client)
+        hosted.isFocused = engine.isFocused
+        hosted.onReply = { [weak self] room, entry, seat in self?.replied(room, entry, seat) }
+        store.hostedRooms = hosted
+        self.hosted = hosted
         store.onRoomRemoved = { [weak self, weak engine] room in
             engine?.roomRemoved(room)
             self?.bound[room.uid.value] = nil
@@ -68,6 +75,8 @@ import UIKit
         observer = nil
         muteObserver = nil
         engine?.shutdown()
+        hosted?.shutdown()
+        hosted = nil
         sync?.shutdown()
         store?.close()          // the last state is queued for the disk; after this the store never writes again
         store?.sync = nil
@@ -83,19 +92,21 @@ import UIKit
 
     func rosterChanged() {
         store?.rosterChanged()
+        hosted?.refresh()   // [hosted] at most once per 20 s
         // Deliveries in ordinary chats name their sender from the same roster (§7.12).
         DeliveryRoster.set((model?.bots ?? []).map { DeliveryMessages.Seat(profile: $0.id, name: $0.name, head: $0.head) })
     }
 
     func connectionChanged(_ state: ConnectionState) {
         for box in sessions.values { box.value?.refreshState() }
-        if state == .ready { engine?.wake() }
+        if state == .ready { engine?.wake(); hosted?.connectionReady() }
         onChange?()
     }
 
     func appActive(_ active: Bool) {
         if active {
             engine?.wake()
+            hosted?.refresh()
         } else {
             store?.saveNow()
             if let sync, sync.hasPending { Task { await sync.flushNow() } }
@@ -120,6 +131,7 @@ import UIKit
 
     private func setFocused(_ uid: UUID, _ on: Bool) {
         if on { focused = uid } else if focused == uid { focused = nil }
+        if let key = store?.key(uid), store?.room(key)?.isHosted == true { hosted?.roomShown(key, on) }   // [hosted] read every 2 s
         // A room on screen is no chat of the notification hub's: its members' replies are told apart here.
         if on { model?.notificationsFocus(runtime: nil, stored: nil) }
     }
@@ -218,6 +230,10 @@ extension AppModel: GroupServices {
         actions.info = { [weak self, weak screen, weak session] in
             guard let self, let screen, let session else { return }
             GroupInfoSheet.present(roomKey: session.roomKey, from: screen, services: self)
+        }
+        actions.fixedMembers = { [weak self, weak session] in
+            guard let self, let session else { return false }
+            return self.groupStore?.room(session.roomKey)?.isHosted == true
         }
         actions.addBots = { [weak self, weak screen, weak session] in
             guard let self, let screen, let session else { return }

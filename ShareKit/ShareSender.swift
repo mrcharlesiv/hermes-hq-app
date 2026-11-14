@@ -159,7 +159,7 @@ nonisolated final class ShareSender: NSObject, URLSessionTaskDelegate, @unchecke
         try await verifySession()
 
         let profile = request.bot.profile
-        let ready: (socket: any ShareRPC, runtime: String, refs: [String])
+        let ready: (socket: any ShareRPC, runtime: String, refs: [String], photos: [[String: Any]])
         do {
             ready = try await prepare(request, profile: profile)
         } catch {
@@ -168,7 +168,7 @@ nonisolated final class ShareSender: NSObject, URLSessionTaskDelegate, @unchecke
             await discardUploads(profile: profile, after: failure)
             throw failure
         }
-        let socket = ready.socket, runtime = ready.runtime, refs = ready.refs
+        let socket = ready.socket, runtime = ready.runtime, refs = ready.refs, photos = ready.photos
         defer { socket.close() }
         let prompt = ShareRules.promptText(message: request.message, shared: request.shared, fileRefs: refs, hasImages: !images.isEmpty)
         // Ask Bot listens before it sends: the reply's first frames may come before prompt.submit's answer.
@@ -177,9 +177,15 @@ nonisolated final class ShareSender: NSObject, URLSessionTaskDelegate, @unchecke
         // queued: a bot in the middle of a turn holds the share for its next turn instead of being redirected by it.
         try live()
         let submitted: [String: Any]
+        var submit: [String: Any] = ["session_id": runtime, "text": prompt, "profile": profile, "queued": true]
+        if socket.sessionAuthority {
+            // [authority] A gateway-hosted Hermes admits a send only with its own request id (and refuses it without one:
+            // invalid_params); the plain chat helper refuses the key, so it goes only here. The photos ride along.
+            submit["submission_id"] = "hq-share-" + UUID().uuidString.lowercased()
+            if !photos.isEmpty { submit["attachments"] = photos }
+        }
         do {
-            submitted = try await socket.call("prompt.submit", ["session_id": runtime, "text": prompt, "profile": profile,
-                                                                "queued": true], timeout: 60)
+            submitted = try await socket.call("prompt.submit", submit, timeout: 60)
         } catch {
             // It went out and its answer never came: the bot may have it. Only the gateway's own refusal, or Cancel,
             // says otherwise, whatever kind of error the socket ended with.
@@ -201,7 +207,8 @@ nonisolated final class ShareSender: NSObject, URLSessionTaskDelegate, @unchecke
 
     /// Everything before the prompt (§6.2 steps 2-9): the uploads, the socket, the chat, the attaches. The socket it
     /// returns is open; when it throws, the socket (if it got that far) is closed.
-    private func prepare(_ request: ShareRequest, profile: String) async throws -> (socket: any ShareRPC, runtime: String, refs: [String]) {
+    private func prepare(_ request: ShareRequest, profile: String) async throws -> (socket: any ShareRPC, runtime: String, refs: [String],
+                                                                                   photos: [[String: Any]]) {
         var staged: [(item: ShareAttachment, path: String, folder: String)] = []
         if !request.attachments.isEmpty {
             try live()
@@ -236,10 +243,24 @@ nonisolated final class ShareSender: NSObject, URLSessionTaskDelegate, @unchecke
                 throw ShareFailure.refused("Your gateway couldn’t open this bot’s chat.")
             }
             var refs: [String] = []
+            var photos: [[String: Any]] = []
             for (item, path, folder) in staged {
                 try live()
                 let unaccepted = "Your gateway didn’t accept “\(item.name)”."
-                if item.kind == .image {
+                if item.kind == .image, socket.sessionAuthority {
+                    // [authority] No path `image.attach` there (it answers "session not found"): the bytes go up, and the
+                    // staged copy rides on prompt.submit (`attachments: [{path, mime}]`), as Hermes Desktop sends them.
+                    guard let data = try? Data(contentsOf: item.file), !data.isEmpty else { throw ShareFailure.refused(unaccepted) }
+                    let result = try await socket.call("image.attach_bytes", ["session_id": runtime, "content_base64": data.base64EncodedString(),
+                                                                              "filename": item.name, "profile": profile], timeout: 60)
+                    guard result["attached"] as? Bool == true, let stored = result["path"] as? String, !stored.isEmpty else {
+                        throw ShareFailure.refused(Self.said(result["message"]) ?? unaccepted)
+                    }
+                    photos.append(["path": stored, "mime": (result["mime"] as? String) ?? ShareRules.imageMime(name: item.name)])
+                    // The upload was not needed after all: the gateway keeps its own copy of the bytes.
+                    try live()
+                    if await remove(folder, profile: profile) == .removed { uploaded.removeAll { $0 == folder } }
+                } else if item.kind == .image {
                     let result = try await socket.call("image.attach", ["session_id": runtime, "path": path, "profile": profile], timeout: 60)
                     guard result["attached"] as? Bool == true else { throw ShareFailure.refused(Self.said(result["message"]) ?? unaccepted) }
                 } else {
@@ -258,7 +279,7 @@ nonisolated final class ShareSender: NSObject, URLSessionTaskDelegate, @unchecke
                     }
                 }
             }
-            return (socket, runtime, refs)
+            return (socket, runtime, refs, photos)
         } catch {
             socket.close()
             throw error

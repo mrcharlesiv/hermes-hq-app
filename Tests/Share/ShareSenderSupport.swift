@@ -111,6 +111,12 @@ nonisolated final class ShareStubGateway: @unchecked Sendable {
     private var submitEvents: [ShareSocketEvent] = []
     private var eventsBeforeAnswer = false
     private var listener: (@Sendable (ShareSocketEvent) -> Void)?
+    private var authorityMode = false
+    /// [authority] The socket says `session_authority: true` in its `gateway.ready`.
+    var sessionAuthority: Bool {
+        get { lock.withLock { authorityMode } }
+        set { lock.withLock { authorityMode = newValue } }
+    }
 
     /// `host`: a name ending `.test`, or a tailnet address for the Tailscale test. Nothing is ever resolved.
     init(host: String = "share-stub-" + UUID().uuidString.prefix(8).lowercased() + ".test", port: Int = 8642) {
@@ -198,6 +204,8 @@ nonisolated final class ShareStubGateway: @unchecked Sendable {
         case "client.capabilities": return ["server_requests": ["approval.request", "clarify.request"], "declines_not_shown": true]
         case "session.resume": return ["session_id": "runtime-1", "resumed": params["session_id"] ?? ""]
         case "image.attach": return ["attached": true, "path": params["path"] ?? ""]
+        case "image.attach_bytes":
+            return ["attached": true, "path": "/fixture-home/cache/images/upload_" + ((params["filename"] as? String) ?? "x"), "mime": "image/jpeg"]
         case "file.attach":
             let name = params["name"] as? String ?? "file"
             return ["attached": true, "uploaded": true, "path": "/fixture-home/attachments/" + name, "ref_text": "@file:/fixture-home/attachments/" + name]
@@ -220,6 +228,7 @@ nonisolated final class ShareStubGateway: @unchecked Sendable {
         func notify(_ method: String, _ params: [String: Any]) { _ = try? gateway.call(method, params, timeout: 0) }
         func close() { gateway.socketClosed() }
         func listen(_ handler: @escaping @Sendable (ShareSocketEvent) -> Void) { gateway.listen(handler) }
+        var sessionAuthority: Bool { gateway.sessionAuthority }
     }
 
     // MARK: A share against this gateway

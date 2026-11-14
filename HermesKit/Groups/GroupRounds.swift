@@ -61,6 +61,9 @@ import Foundation
 
     func isDriving(_ key: String) -> Bool { store.room(key).map { drives[$0.uid.value] != nil } ?? false }
 
+    /// Sends being tried again, the app's rooms' and the gateway rooms' (`Sending…` under the bubble).
+    var allRetrying: Set<String> { retrying.union(store.hostedRooms?.retrying ?? []) }
+
     /// The app came back, or the socket did: read the waiting sessions now instead of at the next poll.
     func wake() {
         signals.wakeAll()
@@ -69,7 +72,7 @@ import Foundation
 
     /// Rooms that still have a timed-out turn to collect (after a relaunch, or a round that ended first).
     func collectLateReplies() {
-        for room in store.rooms where !room.stranded.isEmpty && !room.running && harvests[room.uid.value] == nil {
+        for room in store.rooms where !room.isHosted && !room.stranded.isEmpty && !room.running && harvests[room.uid.value] == nil {
             startHarvest(room.uid.value)
         }
     }
@@ -88,6 +91,9 @@ import Foundation
     func send(_ raw: String, room key: String, thread replyThread: String? = nil, entryId: String? = nil) -> SendOutcome {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !closed, !text.isEmpty, store.room(key) != nil else { return .ignored }
+        if store.room(key)?.isHosted == true {   // [hosted] Hermes runs this room: the send goes to its gateway
+            return store.hostedRooms?.send(text, room: key, thread: replyThread, entryId: entryId) ?? .ignored
+        }
         if GroupPrompt.isSlashCommand(text) { return .refused(.slashCommand) }
         store.refreshDescriptors(key)
         guard let room = store.room(key) else { return .ignored }
@@ -118,13 +124,14 @@ import Foundation
 
     /// The paused capsule's Resume (`@all resume`, §6.8), in the thread that was stopped.
     func resumeAll(_ key: String) {
-        guard let room = store.room(key) else { return }
+        guard let room = store.room(key), !room.isHosted else { return }   // [hosted] no holds there
         let thread = room.holds.values.sorted { $0.at > $1.at }.compactMap(\.thread).first ?? room.log.last?.thread
         send("@all resume", room: key, thread: thread)
     }
 
     /// Try Again under an undelivered send: the same entry, asked again.
     func retry(_ entryId: String, room key: String) {
+        if store.room(key)?.isHosted == true { store.hostedRooms?.retry(entryId, room: key); return }   // [hosted]
         guard !closed, let room = store.room(key), let entry = room.log.first(where: { $0.id == entryId }), !retrying.contains(entryId) else { return }
         retrying.insert(entryId)
         store.update(key, sync: false) { $0.undelivered[entryId] = nil }
@@ -134,6 +141,7 @@ import Foundation
 
     /// Delete on an undelivered send: the entry leaves the log (and, with the next publish, the mirror).
     func deleteEntry(_ entryId: String, room key: String) {
+        if store.room(key)?.isHosted == true { store.hostedRooms?.deleteEntry(entryId, room: key); return }   // [hosted]
         store.update(key) { room in
             guard let index = room.log.firstIndex(where: { $0.id == entryId }) else { return }
             // Remembered, so the copy already in the mirror is not merged back in and the next publish drops it.
@@ -458,6 +466,7 @@ import Foundation
     /// gateway did not confirm.
     func stop(_ key: String) async -> Bool {
         guard let room = store.room(key) else { return true }
+        if room.isHosted { return await store.hostedRooms?.stop(key) ?? true }   // [hosted]
         let uid = room.uid.value
         let onTurn = room.turn
         let thread = onTurn?.thread ?? room.log.last?.thread

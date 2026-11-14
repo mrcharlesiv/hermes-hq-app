@@ -88,6 +88,57 @@ nonisolated enum AttachmentSender {
         }
     }
 
+    /// [authority] The picture types a session authority takes on `prompt.submit` (`_ATTACHMENT_MIMES`,
+    /// `H:gateway/session_ingress_media.py`).
+    static let authorityImageMimes: Set<String> = ["image/png", "image/jpeg", "image/gif", "image/webp"]
+
+    /// [authority] The mime a photo goes out as, by its file name (the phone's copies are JPEG, PNG or GIF, spec §5.1).
+    static func imageMime(name: String) -> String {
+        switch (name as NSString).pathExtension.lowercased() {
+        case "png": return "image/png"
+        case "gif": return "image/gif"
+        case "webp": return "image/webp"
+        default: return "image/jpeg"
+        }
+    }
+
+    /// [authority] One photo as `prompt.submit` carries it on a session authority.
+    static func submitAttachment(path: String, mime: String) -> JSONValue {
+        .object(["path": .string(path), "mime": .string(mime)])
+    }
+
+    /// [authority] `image.attach_bytes {session_id, profile, content_base64, filename}`: a gateway-hosted Hermes's session
+    /// authority has no path-based `image.attach` (that verb falls through to the old chat helper, which never holds an
+    /// authority session and answers `4001 session not found`; tester log 2026-11-14). Hermes Desktop sends the bytes
+    /// (`apps/desktop/src/app/session/hooks/use-prompt-actions/index.ts`); the answer's `path` + `mime` then ride on
+    /// `prompt.submit` as `attachments: [{path, mime}]` (`H:gateway/session_ingress_media.py` `admit_attachments`).
+    /// `permission_denied` (this socket hasn't resumed the chat since it reconnected) counts as stale: resume once.
+    static func attachImageBytes(client: any GatewayClient, session: String, data: Data, name: String,
+                                 profile: String?) async -> Result<(attached: Attached, mime: String), AttachFailure> {
+        var p: [String: JSONValue] = ["session_id": .string(session), "content_base64": .string(data.base64EncodedString()),
+                                      "filename": .string(name)]
+        if let profile { p["profile"] = .string(profile) }
+        do {
+            let result = try await client.call("image.attach_bytes", .object(p), timeout: .seconds(60))
+            guard result["attached"]?.bool == true, let path = result["path"]?.nonEmptyString else {
+                return .failure(.refused(result["message"]?.nonEmptyString ?? "Your gateway didn’t accept “\(name)”."))
+            }
+            let mime = result["mime"]?.nonEmptyString ?? imageMime(name: name)
+            guard authorityImageMimes.contains(mime) else { return .failure(.refused("Your gateway didn’t accept “\(name)”.")) }
+            return .success((Attached(refText: nil, storedPath: path, uploaded: false, width: nil, height: nil), mime))
+        } catch let error as RPCError {
+            if isStale(error) && error.message != "invalid_params" {
+                AppLog.trace("transfer", "image.attach_bytes \(AppLog.tag(session)): stale runtime (\(error.code) \(error.message)), will resume and attach again")
+                return .failure(.staleRuntime(error))
+            }
+            return .failure(.refused(error.message.isEmpty || error.message == "invalid_params"
+                                     ? "Your gateway didn’t accept “\(name)”." : error.message))
+        } catch {
+            AppLog.swallowed("transfer", "image.attach_bytes \(AppLog.tag(session))", error)
+            return .failure(.refused("Your gateway didn’t accept “\(name)”."))
+        }
+    }
+
     /// `file.attach` (60 s: the handler copies the file inline). Success = `attached != false` and a non-empty `ref_text`.
     static func attachFile(client: any GatewayClient, session: String, path: String, name: String, profile: String?) async -> Result<Attached, AttachFailure> {
         do {

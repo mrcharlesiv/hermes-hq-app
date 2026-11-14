@@ -278,8 +278,43 @@ enum DebugHooks {
             // Screenshots of Settings › Gateways (with `-HQDebugCloudHost YES`, its Manage on Hermes Cloud… entries).
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { SettingsScreens.presentGateways(from: root, services: root.services) }
         }
+        if let members = defaults.string(forKey: "HQDebugCreateGroup") {
+            // [hosted] an app-run group chat of these bots ("otto,ivy"), made once the roster is in, then opened.
+            createGroupWhenListed(members.split(separator: ",").map(String.init), root: root, attempts: 80)
+        }
+        if let words = defaults.string(forKey: "HQDebugOpenRoom") {
+            // [hosted] a group chat by (part of) its name, once it is listed; then the chat hooks (-HQDebugSend…).
+            openRoomWhenListed(words, root: root, attempts: 80)
+        }
         guard let bot = defaults.string(forKey: "HQDebugOpenBot") else { return }
         openWhenListed(bot, root: root, attempts: 40)
+    }
+
+    private static func createGroupWhenListed(_ members: [String], root: MainTabController, attempts: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            guard let model = root.services as? AppModel, let store = model.groupStore,
+                  members.allSatisfy({ name in model.bots.contains { $0.id == name } }) else {
+                if attempts > 0 { createGroupWhenListed(members, root: root, attempts: attempts - 1) }
+                return
+            }
+            Task { @MainActor in
+                guard let key = try? await store.create(name: members.joined(separator: " & "), members: members, image: nil) else { return }
+                model.openRoom(key, from: nil)
+                whenChatShows(root: root, attempts: 30)
+            }
+        }
+    }
+
+    private static func openRoomWhenListed(_ words: String, root: MainTabController, attempts: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            guard let model = root.services as? AppModel,
+                  let room = model.groupStore?.rooms.first(where: { $0.name.localizedCaseInsensitiveContains(words) }) else {
+                if attempts > 0 { openRoomWhenListed(words, root: root, attempts: attempts - 1) }
+                return
+            }
+            model.openRoom(room.key, from: nil)
+            whenChatShows(root: root, attempts: 30)
+        }
     }
 
     private static func openWhenListed(_ id: String, root: MainTabController, attempts: Int) {

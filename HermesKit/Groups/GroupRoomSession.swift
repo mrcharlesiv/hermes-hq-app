@@ -134,7 +134,7 @@ import Foundation
         for (id, reason) in room?.undelivered ?? [:] { out[Self.messageId(entryId: id)] = reason }
         return out
     }
-    var retrying: Set<String> { Set(engine.retrying.map(Self.messageId(entryId:))) }
+    var retrying: Set<String> { Set(engine.allRetrying.map(Self.messageId(entryId:))) }
 
     var paused: [String] {
         guard let room else { return [] }
@@ -285,7 +285,7 @@ import Foundation
     private func signature(_ room: GroupRoom, seats: [GroupSeat]) -> String {
         let turn = room.turn.map { "\($0.name)|\($0.thread)|\($0.waitingOnUser)" } ?? "-"
         return "\(room.name)|\(room.running)|\(turn)|\(room.holds.keys.sorted().joined(separator: ","))|\(seats.map(\.display).joined(separator: ","))"
-            + "|\(room.undelivered.keys.sorted().joined(separator: ","))|\(engine.retrying.sorted().joined(separator: ","))"
+            + "|\(room.undelivered.keys.sorted().joined(separator: ","))|\(engine.allRetrying.sorted().joined(separator: ","))"
     }
 
     private func emit(_ change: ChatChange) { onChange?(change) }

@@ -182,6 +182,15 @@ nonisolated enum GroupTurnError: Error, Sendable, Equatable {
         return rpc.code == 4001 || message.contains("not in memory") || message.contains("session not found")
     }
 
+    /// "This session doesn't exist": 4007 on the plain chat helper; on a gateway-hosted Hermes's session authority every
+    /// refusal is 4001 and its reason says which, so `4001 not_found` is the same answer (tester log 2026-11-14: every
+    /// first send in a new group stopped with "Couldn't check …'s group session (not_found)").
+    static func isAbsent(_ error: RPCError) -> Bool {
+        if error.code == 4007 { return true }
+        guard error.code == 4001 else { return false }
+        return error.message == "not_found" || error.data?["reason"]?.string == "not_found"
+    }
+
     func read(_ target: String, profile: String, messages: Bool) async throws -> GroupSessionState {
         var params: [String: JSONValue] = ["session_id": .string(target), "profile": .string(profile)]
         if !messages { params["omit_messages"] = true }
@@ -227,9 +236,9 @@ nonisolated enum GroupTurnError: Error, Sendable, Equatable {
                     var out = state
                     out.stored = stored
                     return out
-                } catch let error as RPCError where error.code == 4007 {
+                } catch let error as RPCError where Self.isAbsent(error) {
                     // Does not exist: the next target. A 4007 that says "no longer live" is asked once more.
-                    if attempt == 1, error.message.lowercased().contains("no longer live") { continue }
+                    if attempt == 1, error.code == 4007, error.message.lowercased().contains("no longer live") { continue }
                     break
                 } catch is CancellationError {
                     throw GroupTurnError.cancelled

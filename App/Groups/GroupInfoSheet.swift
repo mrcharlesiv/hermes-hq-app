@@ -65,6 +65,8 @@ final class GroupInfoModel {
     var mute: BotMute? { _ = version; return room.flatMap { BotMuteCenter.shared.mute(of: GroupKeys.muteKey($0.key)) } }
     var muteValue: String { BotMutes.value(mute) }
     var floor: Bool { seats.count <= GroupLimits.minMembers }
+    /// [hosted] Hermes runs this room and keeps the bots it was made with.
+    var fixedMembers: Bool { room?.isHosted == true }
 
     /// A member's second line: what it is doing, where it lives, else its role.
     func line(for seat: GroupSeat) -> String? {
@@ -402,7 +404,7 @@ struct GroupInfoView: View {
         let muted = model.mute != nil
         return QuickActionTiles(actions: [
             QuickAction(id: "add", label: model.floor ? "Add Bots" : "Edit Bots", symbol: "person.badge.plus",   // the Members row's words
-                        disabled: !model.online, identifier: "group-info.tile.add") { model.editMembers() },
+                        disabled: !model.online || model.fixedMembers, identifier: "group-info.tile.add") { model.editMembers() },
             QuickAction(id: "activity", label: "Activity", symbol: "clock.arrow.circlepath",
                         identifier: "group-info.tile.activity") { model.activity() },
             // The glyph is the state, as the row's muted bell (UX study #249); the label stays the action.

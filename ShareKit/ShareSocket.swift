@@ -15,10 +15,14 @@ nonisolated protocol ShareRPC: AnyObject, Sendable {
     func close()
     /// Ask Bot: every event and server request from now on, and `.closed` once when the socket ends.
     func listen(_ handler: @escaping @Sendable (ShareSocketEvent) -> Void)
+    /// [authority] `gateway.ready` said `session_authority: true` (a gateway-hosted Hermes): a send names its own
+    /// request id and photos go up as bytes (`image.attach_bytes`).
+    var sessionAuthority: Bool { get }
 }
 
 extension ShareRPC {
     func listen(_ handler: @escaping @Sendable (ShareSocketEvent) -> Void) {}
+    var sessionAuthority: Bool { false }
 }
 
 /// What the socket heard besides answers (Ask Bot waits on these).
@@ -36,6 +40,7 @@ nonisolated final class ShareSocket: ShareRPC, @unchecked Sendable {
     private var waiting: [String: CheckedContinuation<ShareJSON, Error>] = [:]
     private var ready: CheckedContinuation<Void, Never>?
     private var sawReady = false
+    private var authority = false
     private var failure: Error?
     private var counter = 0
     private var listener: (@Sendable (ShareSocketEvent) -> Void)?
@@ -60,6 +65,8 @@ nonisolated final class ShareSocket: ShareRPC, @unchecked Sendable {
     }
 
     private var currentFailure: Error? { lock.withLock { failure } }
+
+    var sessionAuthority: Bool { lock.withLock { authority } }
 
     private func waitReady(seconds: Double) async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
@@ -100,7 +107,12 @@ nonisolated final class ShareSocket: ShareRPC, @unchecked Sendable {
         if frame["method"] as? String == "event" {
             let params = frame["params"] as? [String: Any] ?? [:]
             let type = params["type"] as? String ?? ""
-            if type == "gateway.ready" { settleReady() }
+            if type == "gateway.ready" {
+                // [authority] read before the ready wait ends, so the first call already knows.
+                let payload = params["payload"] as? [String: Any] ?? [:]
+                lock.withLock { authority = payload["session_authority"] as? Bool == true }
+                settleReady()
+            }
             heard(.event(type: type, session: params["session_id"] as? String ?? "", payload: ShareJSON(params["payload"] as? [String: Any] ?? [:])))
             return
         }

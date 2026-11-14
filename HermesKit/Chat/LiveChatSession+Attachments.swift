@@ -17,6 +17,11 @@ struct AttachedSend {
     var releasedFolders: [String] = []
     /// Where each attachment now lives on the gateway (photo: staged path; file: the ref's path).
     var storedPaths: [String: String] = [:]
+    /// [authority] The photos as `prompt.submit`'s `attachments: [{path, mime}]` (a session authority has no queued
+    /// `image.attach`; the pictures travel with the send itself). Empty on the plain chat helper.
+    var submitAttachments: [JSONValue] = []
+    /// [authority] Sent through a session authority: nothing to detach, nothing to re-attach on a new runtime.
+    var viaAuthority = false
 }
 
 enum AttachOutcome {
@@ -105,6 +110,7 @@ extension LiveChatSession {
             }
             guard let rid = runtimeSessionId else { center.sendEnded(ids); return .refused("Couldn’t reach this chat.") }
             var sent = AttachedSend()
+            sent.viaAuthority = ModelMutation.isAuthority(client)   // [authority]
             var stale = false
             for a in attachments {
                 if stopEpoch != epoch {
@@ -118,7 +124,23 @@ extension LiveChatSession {
                     continue
                 }
                 let result: Result<AttachmentSender.Attached, AttachmentSender.AttachFailure>
-                if a.kind == .image {
+                if a.kind == .image, sent.viaAuthority {
+                    // [authority] The phone's own copy goes up as bytes (tester log 2026-11-14: every photo "Session not found").
+                    let local = center.staging.url(for: center.items[a.id] ?? a)
+                    let data: Data? = await Task.detached(priority: .userInitiated) { local.flatMap { try? Data(contentsOf: $0) } }.value
+                    guard let data, !data.isEmpty else {
+                        AppLog.note("send", "send \(AppLog.tag(localId)): photo \(AppLog.tag(a.id)) has no copy on this phone, send refused")
+                        center.sendEnded(ids)
+                        return .refused("This attachment is no longer on this phone.")
+                    }
+                    switch await AttachmentSender.attachImageBytes(client: client, session: rid, data: data, name: a.name, profile: profileParam) {
+                    case .success(let done):
+                        sent.submitAttachments.append(AttachmentSender.submitAttachment(path: done.attached.storedPath, mime: done.mime))
+                        result = .success(done.attached)
+                    case .failure(let failure):
+                        result = .failure(failure)
+                    }
+                } else if a.kind == .image {
                     result = await AttachmentSender.attachImage(client: client, session: rid, path: file.path, name: a.name, profile: profileParam)
                 } else {
                     result = await AttachmentSender.attachFile(client: client, session: rid, path: file.path, name: a.name, profile: profileParam)
@@ -173,6 +195,7 @@ extension LiveChatSession {
     /// After a 4001/4007 on `prompt.submit` and its resume: the photos again, on the new runtime (A5). Files' refs stay
     /// valid (the copy or the in-place path still exists). Returns a refusal reason, or nil when all attached.
     func reattachPhotos(_ sent: inout AttachedSend) async -> String? {
+        if sent.viaAuthority { return nil }   // [authority] the photos ride on the submit itself: nothing was queued
         guard let rid = runtimeSessionId else { return "Couldn’t reach this chat." }
         var attached: [(id: String, path: String)] = []
         for photo in sent.photos {
@@ -200,7 +223,7 @@ extension LiveChatSession {
 
     /// `image.detach` for each photo attached in a send that won't be submitted (A6), errors ignored.
     func detachPhotos(_ sent: AttachedSend) async {
-        guard !sent.photos.isEmpty, let rid = runtimeSessionId else { return }
+        guard !sent.photos.isEmpty, !sent.viaAuthority, let rid = runtimeSessionId else { return }   // [authority] nothing queued
         for photo in sent.photos {
             await AttachmentSender.detachImage(client: client, session: rid, path: photo.path, profile: profileParam)
         }

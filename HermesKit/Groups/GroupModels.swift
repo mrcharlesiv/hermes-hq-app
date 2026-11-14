@@ -115,9 +115,29 @@ nonisolated struct GroupRuntimeID: Sendable, Equatable {
     static func == (a: GroupRuntimeID, b: GroupRuntimeID) -> Bool { true }
 }
 
+/// [hosted] A group chat Hermes itself runs (`groups.*`, gateway/hosted_rooms.py): Hermes Desktop makes every new group
+/// chat this way, so a tester's own group chat never showed here (2026-11-14). The gateway drives its rounds; this
+/// device reads its log and sends into it. Never in the mirror.
+nonisolated struct HostedRoomRef: Codable, Hashable, Sendable {
+    /// The bot profile whose gateway owns the room: every `groups.*` call names it.
+    var owner: String
+    /// The gateway's room id.
+    var roomId: String
+    /// The newest log seq taken into `log`.
+    var cursor = 0
+    /// The newest seq the gateway last reported (`latest_seq`).
+    var latest = 0
+    /// The room's revision as last read (renames bump it).
+    var revision = 0
+    /// The gateway's authority epoch: a new one means the log was replaced, so it is read again from the start.
+    var epoch: Int?
+}
+
 nonisolated struct GroupRoom: Codable, Sendable, Equatable {
     var name: String
     var roomId: String?
+    /// [hosted] Set for a room Hermes runs on its gateway (see `HostedRoomRef`).
+    var hosted: HostedRoomRef?
     var log: [GroupMessage] = []
     /// "<thread>::<memberKey>" → entries of the room log the member has seen (an index into `log`).
     var watermarks: [String: Int] = [:]
@@ -158,7 +178,7 @@ nonisolated struct GroupRoom: Codable, Sendable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case name, roomId, log, watermarks, members, image, holdDetection, holds, heldMessages, sessions, stranded
-        case syncRevision, omitted, extra, pinned, sectionId, rosterOrder, undelivered, pinnedAt, removed, asking, hidden
+        case syncRevision, omitted, extra, pinned, sectionId, rosterOrder, undelivered, pinnedAt, removed, asking, hidden, hosted
     }
 
     init(name: String, roomId: String? = nil) {
@@ -190,6 +210,7 @@ nonisolated struct GroupRoom: Codable, Sendable, Equatable {
         undelivered = (try? c.decodeIfPresent([String: String].self, forKey: .undelivered)) ?? [:]
         removed = (try? c.decodeIfPresent([String].self, forKey: .removed)) ?? []
         asking = (try? c.decodeIfPresent([String: GroupAsking].self, forKey: .asking)) ?? [:]
+        hosted = try? c.decodeIfPresent(HostedRoomRef.self, forKey: .hosted)
     }
 
     /// At launch: every turn the last run left unanswered becomes a late reply to collect (§6.7, stress R1).
@@ -202,7 +223,9 @@ nonisolated struct GroupRoom: Codable, Sendable, Equatable {
         asking = [:]
     }
 
-    var key: String { GroupKeys.roomKey(roomId: roomId, name: name) }
+    var key: String { hosted.map { GroupKeys.hostedKey(owner: $0.owner, roomId: $0.roomId) } ?? GroupKeys.roomKey(roomId: roomId, name: name) }
+    /// [hosted] Hermes runs this room on its gateway.
+    var isHosted: Bool { hosted != nil }
     var lastAt: Double { log.last?.at ?? 0 }
 
     /// Stored log bounds (`HB/group-chat.ts:1410-1426`): each text at most 8,000 characters, the log trimmed from its

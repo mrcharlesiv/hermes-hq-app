@@ -139,7 +139,8 @@ nonisolated enum GroupSnapshot {
     /// `groupChatSyncSnapshot`: this device's rooms as a mirror (rooms with an empty log are left out).
     static func local(rooms: [GroupRoom], tombstones: [String: Int]) -> GroupMirror {
         var mirror = GroupMirror()
-        for room in rooms where !room.log.isEmpty { mirror.rooms[room.key] = compact(room) }
+        // [hosted] A room Hermes runs lives on its gateway: never in the mirror.
+        for room in rooms where !room.log.isEmpty && !room.isHosted { mirror.rooms[room.key] = compact(room) }
         mirror.deleted = tombstones
         return mirror
     }

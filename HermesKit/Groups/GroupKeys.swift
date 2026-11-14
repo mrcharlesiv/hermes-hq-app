@@ -3,6 +3,9 @@
 import Foundation
 
 nonisolated enum GroupKeys {
+    /// [hosted] A room Hermes runs on its gateway: its owner profile and the gateway's room id.
+    static func hostedKey(owner: String, roomId: String) -> String { "gw:\(owner)/\(roomId)" }
+
     static func roomKey(roomId: String?, name: String) -> String {
         if let roomId, !roomId.isEmpty { return "id:\(roomId)" }
         return "name:\(name)"

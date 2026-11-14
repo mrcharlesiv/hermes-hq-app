@@ -371,6 +371,57 @@ struct AttachmentPipelineTests {
         #expect(t.s.attachments(for: users[0].id).first(where: { $0.kind == .image })?.pixelWidth == 30)   // sizes carried over
     }
 
+    /// [authority] A gateway-hosted Hermes's session authority has no path `image.attach` (it answered `4001 session not
+    /// found` for every photo, tester log 2026-11-14): the phone's bytes go up with `image.attach_bytes`, and the staged
+    /// copies ride on `prompt.submit` as `attachments: [{path, mime}]`. Files keep the authority's own `file.attach`.
+    @Test func onASessionAuthorityPhotosGoAsBytesAndRideOnTheSubmit() async throws {
+        let t = try await setup()
+        t.h.client.setReady(["heartbeat": true, "replay_epoch": "fixture-epoch", "session_authority": true])
+        let resume = try ChatFixtures.json("perf-resume.json")["result"]!
+        let staged = Mutex(0)
+        t.h.client.onCall { method, params in
+            switch method {
+            case "image.attach": throw RPCError(code: 4001, message: "session not found", data: nil)
+            case "image.attach_bytes":
+                let n = staged.withLock { $0 += 1; return $0 }
+                return ["attached": true, "path": .string("/home/otto/cache/images/upload_\(n).jpg"), "mime": "image/jpeg", "count": 1]
+            default: return try Self.answer(method, params, resume: resume)
+            }
+        }
+        t.s.send("look", attachments: t.center.takeForSend(t.scope).attachments)
+        #expect(await waitUntil { t.h.lastUser?.isPending == false })
+        let order = t.h.client.calls.map(\.method).filter { ["image.attach", "image.attach_bytes", "file.attach", "image.detach", "prompt.submit"].contains($0) }
+        #expect(order == ["image.attach_bytes", "file.attach", "image.attach_bytes", "prompt.submit"])
+        let bytes = t.h.client.calls("image.attach_bytes")
+        #expect(Set((bytes[0].params.object ?? [:]).keys) == ["session_id", "content_base64", "filename", "profile"])
+        #expect(bytes[0].params["content_base64"]?.string.flatMap { Data(base64Encoded: $0) } == Data("xyz".utf8), "the phone's own copy")
+        #expect(bytes.map { $0.params["filename"]?.string } == ["photo.jpg", "chart.jpg"])
+        let submit = try #require(t.h.client.calls("prompt.submit").first)
+        #expect(submit.params["attachments"] == [["path": "/home/otto/cache/images/upload_1.jpg", "mime": "image/jpeg"],
+                                                 ["path": "/home/otto/cache/images/upload_2.jpg", "mime": "image/jpeg"]])
+        #expect(submit.params["text"] == "@file:/home/att/report.pdf\n\nlook")
+    }
+
+    @Test func onASessionAuthorityAStaleSubmitKeepsThePhotosWithoutReattaching() async throws {
+        let t = try await setup()
+        t.h.client.setReady(["heartbeat": true, "replay_epoch": "fixture-epoch", "session_authority": true])
+        let resume = try ChatFixtures.json("perf-resume.json")["result"]!
+        let submits = Mutex(0)
+        t.h.client.onCall { method, params in
+            if method == "image.attach_bytes" { return ["attached": true, "path": "/home/otto/cache/images/upload.jpg", "mime": "image/jpeg"] }
+            if method == "prompt.submit", submits.withLock({ $0 += 1; return $0 }) == 1 {
+                throw RPCError(code: 4001, message: "session not found", data: nil)
+            }
+            return try Self.answer(method, params, resume: resume)
+        }
+        t.s.send("look", attachments: t.center.takeForSend(t.scope).attachments)
+        #expect(await waitUntil { t.h.lastUser?.isPending == false })
+        #expect(t.h.client.calls("image.attach_bytes").count == 2, "attached once each, never again after the resume")
+        #expect(t.h.client.calls("image.detach").isEmpty && t.h.client.calls("image.attach").isEmpty)
+        let submits2 = t.h.client.calls("prompt.submit")
+        #expect(submits2.count == 2 && submits2.allSatisfy { $0.params["attachments"]?.array?.count == 2 })
+    }
+
     @Test func staleRuntimeOnSubmitReattachesThePhotosOnly() async throws {
         let t = try await setup()
         let resume = try ChatFixtures.json("perf-resume.json")["result"]!

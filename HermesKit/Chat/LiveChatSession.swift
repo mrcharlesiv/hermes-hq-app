@@ -1373,6 +1373,7 @@ final class LiveChatSession: ChatSessionModel {
             var params: [String: JSONValue] = ["session_id": .string(rid), "text": .string(promptText),
                                                "submission_id": AuthorityWire.submissionId(for: localId)]   // [authority]
             if let profileParam { params["profile"] = .string(profileParam) }
+            if !attached.submitAttachments.isEmpty { params["attachments"] = .array(attached.submitAttachments) }   // [authority]
             if useQueued { params["queued"] = true }
             if interrupted { params["interrupted"] = true }   // [talk] the person cut the last reply off (3x-talk §3.6)
             if let context = voiceLiveSends[localId] {

@@ -11,6 +11,8 @@ import UIKit
     var avatar: () -> (image: String?, faces: [GroupRowModel.Face]) = { (nil, []) }
     var info: () -> Void = {}
     var addBots: () -> Void = {}
+    /// [hosted] Hermes runs this room and keeps the bots it was made with: no Add Bots.
+    var fixedMembers: () -> Bool = { false }
     var activity: () -> Void = {}
     var delete: () -> Void = {}
 }
@@ -184,7 +186,7 @@ import UIKit
             let alert = UIAlertController(title: "Can’t Send",
                                           message: "\(name) has no members to send to — add a bot, or reopen the group chat if members are still loading.",
                                           preferredStyle: .alert)
-            if actions.isOnline() {
+            if actions.isOnline(), !actions.fixedMembers() {
                 alert.addAction(UIAlertAction(title: "Add Bots…", style: .default) { [weak self] _ in self?.actions.addBots() })
             }
             alert.addAction(UIAlertAction(title: "OK", style: .cancel))
@@ -307,7 +309,7 @@ import UIKit
             item("Find in Chat", "magnifyingglass", id: "find") { [weak self] in self?.chat?.showFind() },
             item("Group Info", "info.circle", id: "info") { [weak self] in self?.actions.info() },
         ]
-        if online { top.append(item("Add Bots…", "person.badge.plus", id: "add") { [weak self] in self?.actions.addBots() }) }
+        if online, !actions.fixedMembers() { top.append(item("Add Bots…", "person.badge.plus", id: "add") { [weak self] in self?.actions.addBots() }) }
         // Prompts need no model list: the saved prompts go into this room's field as in a bot's chat.
         if let menus = chat?.menus {
             top.append(item("Prompts", "text.book.closed", id: "prompts") { [weak menus] in

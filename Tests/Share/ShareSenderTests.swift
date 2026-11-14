@@ -66,6 +66,31 @@ import Testing
         #expect(keychain.counts.updates == 0)
     }
 
+    /// [authority] A gateway-hosted Hermes refused every share: `prompt.submit` without its own request id is
+    /// `invalid_params` there, and a path `image.attach` answers "session not found" (tester log 2026-11-14).
+    @Test func onASessionAuthorityThePhotoGoesAsBytesAndTheSendNamesItsRequest() async throws {
+        let gateway = ShareStubGateway(), keychain = gateway.keychain()
+        gateway.sessionAuthority = true
+        let files = attachments()
+        let request = ShareRequest(bot: ShareSamples.bot(), message: "From the test", shared: [], attachments: files)
+        let result = try await gateway.sender(keychain).send(request, roster: gateway.roster())
+        #expect(result.status == "streaming")
+        #expect(gateway.count("image.attach") == 0 && gateway.count("image.attach_bytes") == 1)
+        #expect(gateway.event("image.attach_bytes")?.keys == ["content_base64", "filename", "profile", "session_id"])
+        #expect(gateway.event("prompt.submit")?.keys == ["attachments", "profile", "queued", "session_id", "submission_id", "text"])
+        // The photo's upload was not needed: its folder goes as well as the file's.
+        #expect(gateway.count("DELETE /api/files") == 2)
+        #expect(gateway.event("prompt.submit")?.text == "@file:/fixture-home/attachments/note.txt\n\nFrom the test")
+    }
+
+    @Test func onASessionAuthorityAPlainTextShareStillNamesItsRequest() async throws {
+        let gateway = ShareStubGateway(), keychain = gateway.keychain()
+        gateway.sessionAuthority = true
+        let request = ShareRequest(bot: ShareSamples.bot(), message: "Just words", shared: [], attachments: [])
+        _ = try await gateway.sender(keychain).send(request, roster: gateway.roster())
+        #expect(gateway.event("prompt.submit")?.keys == ["profile", "queued", "session_id", "submission_id", "text"])
+    }
+
     @Test func aTextShareMakesNoFileCalls() async throws {
         let gateway = ShareStubGateway()
         let result = try await gateway.sender(gateway.keychain()).send(ShareRequest(bot: ShareSamples.bot(), message: "Just words"), roster: gateway.roster())

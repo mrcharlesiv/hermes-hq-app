@@ -2,7 +2,7 @@ import Testing
 import UIKit
 @testable import HermesHQNative
 
-/// Owner 2026-11-17 (Finance chat): a table in a reply showed its header band and row lines with no words in them,
+/// Owner 2026-11-17: a table in a reply showed its header band and row lines with no words in them,
 /// and its Expand page showed every cell. A bubble reused from a reply taller than the screen kept that reply's
 /// visible area, and the table's cells (the only text drawn in many pieces) were culled against it.
 @Suite("A table's cells show in a reused bubble")
@@ -13,7 +13,7 @@ struct TableCellsShowTests {
 
     private func row(_ id: String, _ markdown: String) -> (ChatRow, RowLayout) {
         var bubble = BubbleRow(mine: false, text: markdown, markdown: true, partIndex: 0, joinsAbove: false, joinsBelow: false,
-                               tail: true, time: nil, pending: false, streaming: false, speaker: "Finance", expanded: true)
+                               tail: true, time: nil, pending: false, streaming: false, speaker: "Ivy", expanded: true)
         bubble.senderInset = false
         let row = ChatRow(id: "\(id)|b0", messageId: id, scope: "", fingerprint: 1, kind: .bubble(bubble), gapAbove: 0, variant: 0)
         return (row, TextLayout.make(row, width: width, style: style))
@@ -46,19 +46,19 @@ struct TableCellsShowTests {
 
         // The same cell, reused for a short reply with a table (no window update: it fits the screen).
         let finance = """
-        **Your plan is assembled.** I set that target before reconciling enough of your bills.
+        **Here is the summary.** The figures below are rounded.
 
-        | Major monthly costs | Amount |
+        | Item | Amount |
         |---|---:|
-        | Mortgage | $3,615 |
-        | Daycare, monthly average | $1,817 |
-        | Car payment | $2,035 |
-        | Observed insurance | $484 |
-        | Utilities and phone | $648 |
-        | Swim lessons | $550 |
-        | **Subtotal** | **$9,148** |
+        | Rent | $1,000 |
+        | Groceries | $400 |
+        | Transit | $120 |
+        | Insurance | $90 |
+        | Utilities | $150 |
+        | Gym | $40 |
+        | **Total** | **$1,800** |
 
-        That's before groceries.
+        That's all of it.
         """
         let (short, shortLayout) = row("short", finance)
         #expect(shortLayout.height < table.bounds.height)
@@ -71,6 +71,6 @@ struct TableCellsShowTests {
         let tableBlock = try #require(blockViews(cell).first { !$0.isHidden && $0.pieceTexts.count == 16 }, "the table's block")
         #expect(tableBlock.drawnPieces.count == 16, "every cell of the table is drawn (8 rows × 2 columns)")
         let words = tableBlock.drawnPieces.compactMap { $0.textKit?.text.string }
-        #expect(words.contains("Mortgage"))
+        #expect(words.contains("Rent"))
     }
 }

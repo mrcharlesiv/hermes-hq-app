@@ -284,11 +284,16 @@ final class BlockView: UIView, UIScrollViewDelegate {
         layer.borderColor = ChatPalette.strokeSecondary.resolvedColor(with: traitCollection).cgColor
     }
 
-    func configure(_ placed: PlacedBlock, mine: Bool) {
+    /// `window`: the screen's visible rect in the bubble's coordinates, for a reply taller than the screen (nil: every
+    /// piece draws). Owner 2026-11-17: a table showed its grid with no words in it. Its view had last drawn a long
+    /// table in a reply read far down, and kept that reply's visible rect, so every cell of the new table was culled
+    /// as off screen until the chat scrolled; the rect is set afresh for each block now.
+    func configure(_ placed: PlacedBlock, mine: Bool, window: CGRect? = nil) {
         desktopOutlined = false
         bubbleOutlined = false
         block = placed.block
         frame = placed.frame
+        windowRect = window?.offsetBy(dx: -placed.frame.minX, dy: -placed.frame.minY)
         let isCard: Bool
         var showsLabel = false, showsCopy = false, showsBar = false, showsAlert = false
         switch placed.block {

@@ -694,10 +694,19 @@ final class ChatBubbleCell: ChatBaseCell, UIContextMenuInteractionDelegate {
             bubble.insertSubview(v, belowSubview: timeLabel)
             blockViews.append(v)
         }
+        // A reply taller than the screen draws only the text near it: the screen's rect in the bubble, worked out for
+        // this reply (a block view's rect from the reply it showed before culled a table's every cell, owner
+        // 2026-11-17). The table's `willDisplay` and scrolling keep it current after this.
+        let window: CGRect? = {
+            var view = superview
+            while let v = view, !(v is UITableView) { view = v.superview }
+            guard let table = view as? UITableView, layout.height > table.bounds.height else { return nil }
+            return table.convert(table.bounds, to: bubble)
+        }()
         for (i, v) in blockViews.enumerated() {
             if i < b.blocks.count {
                 v.isHidden = false
-                v.configure(b.blocks[i], mine: b.mine)
+                v.configure(b.blocks[i], mine: b.mine, window: window)
                 v.setStreaming(spec.streaming && !b.mine, key: "\(row.id):\(i)")
             } else {
                 v.isHidden = true

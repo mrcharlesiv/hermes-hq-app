@@ -637,8 +637,9 @@ extension AppModel: SessionsServices {}
     func deleteProject(key: String, title: String, showFolder: Bool = false) {
         guard let host, let store else { return }
         let folder = showFolder && !key.hasPrefix("id:") ? "Folder: \(key)\n\n" : ""
+        let scope = showFolder ? "Deletes this saved project for every bot that has it. If deletion fails, some bots may already have lost the project.\n\n" : ""
         TextPrompt.confirm(title: "Delete “\(title)”?",
-                           message: folder + "Its chats and its folder are kept. Chats still in the folder will show under the folder’s name instead.",
+                           message: folder + scope + "Its chats and its folder are kept. Chats still in the folder will show under the folder’s name instead.",
                            action: "Delete Project", from: host) { [weak self] in
             self?.run("Couldn’t Delete Project", { try await store.deleteProject(key: key) }, done: { [weak self] in
                 Haptics.play(.success)

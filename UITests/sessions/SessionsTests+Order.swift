@@ -58,6 +58,8 @@ extension SessionsTests {
         XCTAssertTrue(alert.staticTexts.containing(NSPredicate(format: "label CONTAINS 'kept'")).firstMatch.exists)
         XCTAssertTrue(alert.staticTexts.containing(NSPredicate(format: "label CONTAINS '/home/hermes/site'")).firstMatch.exists,
                       "the folder identifies the project")
+        XCTAssertTrue(alert.staticTexts.containing(NSPredicate(format: "label CONTAINS 'every bot'")).firstMatch.exists,
+                      "the confirmation explains the multi-bot scope")
         XCTAssertTrue(rpc("projects.delete").isEmpty, "nothing deleted before confirmation")
         alert.buttons["Cancel"].tap()
         XCTAssertTrue(rpc("projects.delete").isEmpty)

@@ -9,6 +9,7 @@ struct SessionGroupOrderPage: View {
     struct Item: Hashable, Identifiable {
         var key: String
         var title: String
+        var canDelete = false
         var id: String { key }
     }
 
@@ -22,6 +23,7 @@ struct SessionGroupOrderPage: View {
     var onFavorite: (String, Bool) -> Void
     /// Drops the hand-picked order; returns the groups in the default order.
     var onDefault: () -> [Item]
+    var onDelete: (Item) -> Void
 
     private var favoriteItems: [Item] { items.filter { favorites.contains($0.key) } }
     private var otherItems: [Item] { items.filter { !favorites.contains($0.key) } }
@@ -65,6 +67,17 @@ struct SessionGroupOrderPage: View {
                 Text(item.title).foregroundStyle(Color.hqLabel).lineLimit(2)
                 Spacer(minLength: 0)
                 if !bots {
+                    if item.canDelete {
+                        Button { onDelete(item) } label: {
+                            Image(systemName: "trash")
+                                .foregroundStyle(Color.red)
+                                .frame(minWidth: 44, minHeight: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("Delete \(item.title)")
+                        .accessibilityIdentifier("group-order.delete.\(item.title)")
+                    }
                     Button {
                         Haptics.play(.selection)
                         let on = !favorites.contains(item.key)
@@ -103,9 +116,9 @@ extension SessionGroupOrderPage {
     /// The page in a sheet (✕ on the phone, Done on the Mac).
     @MainActor static func sheet(bots: Bool, items: [Item], favorites: Set<String>, custom: Bool,
                                  onOrder: @escaping ([String]) -> Void, onFavorite: @escaping (String, Bool) -> Void,
-                                 onDefault: @escaping () -> [Item]) -> UINavigationController {
+                                 onDefault: @escaping () -> [Item], onDelete: @escaping (Item) -> Void) -> UINavigationController {
         let page = SessionGroupOrderPage(bots: bots, items: items, favorites: favorites, custom: custom,
-                                         onOrder: onOrder, onFavorite: onFavorite, onDefault: onDefault)
+                                         onOrder: onOrder, onFavorite: onFavorite, onDefault: onDefault, onDelete: onDelete)
         return ChatSheet.wrap(UIHostingController(rootView: page), title: bots ? "Reorder Bots" : "Reorder Projects",
                               detents: [.large()])
     }

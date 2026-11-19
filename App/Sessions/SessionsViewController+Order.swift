@@ -75,7 +75,10 @@ extension SessionsViewController {
             if titles[key] == nil { titles[key] = group.title }
         }
         let keys = shown + all.filter { !shown.contains($0) }
-        return keys.map { SessionGroupOrderPage.Item(key: $0, title: titles[$0] ?? $0) }
+        return keys.map { key in
+            SessionGroupOrderPage.Item(key: key, title: titles[key] ?? key,
+                                       canDelete: !bots && key != SessionProjects.homeKey && store.canDeleteProject(key: key))
+        }
     }
 
     /// Filter › Group By › Reorder Projects… (or Reorder Bots…), or a header's hold menu.
@@ -97,6 +100,12 @@ extension SessionsViewController {
                 self.store?.setGroupOrder([], bots: bots)
                 self.reload(animated: false)
                 return self.groupOrderItems(bots: bots)
+            },
+            onDelete: { [weak self] item in
+                guard let self else { return }
+                self.dismiss(animated: true) { [weak self] in
+                    self?.organizer?.deleteProject(key: item.key, title: item.title, showFolder: true)
+                }
             })
         present(sheet, animated: true)
     }

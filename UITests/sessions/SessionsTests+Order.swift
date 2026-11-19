@@ -34,6 +34,56 @@ extension SessionsTests {
         headers(app).filter { $0 != "Pinned" && $0 != "New for You" }.map { $0.components(separatedBy: ",")[0] }
     }
 
+    @MainActor func test99a_DeleteEmptyProjectFromReorder() throws {
+        fixture("/__fixture/rows", ["id": "s-budget", "delete": true])
+        fixture("/__fixture/mode", ["projects": "found"])
+        let app = launch()
+        XCTAssertTrue(row(app, "s-garden").waitForExistence(timeout: 15))
+        openFilter(app)
+        tapFilter(app, "group", "group.project")
+        closeFilter(app)
+        XCTAssertFalse(groupTitles(app).contains("Website"), "the project has no visible chat")
+        openFilter(app)
+        tapFilter(app, "group", "group.reorder")
+        XCTAssertTrue(app.navigationBars["Reorder Projects"].waitForExistence(timeout: 6))
+        let delete = app.buttons["group-order.delete.Website"]
+        XCTAssertTrue(delete.waitForExistence(timeout: 6), "the empty saved project can be deleted")
+        XCTAssertFalse(app.buttons["group-order.delete.Home"].exists, "Home cannot be deleted")
+        let autoRow = app.descendants(matching: .any)["group-order.checkout"].firstMatch
+        XCTAssertTrue(autoRow.exists, "the discovered folder is listed")
+        XCTAssertFalse(app.buttons["group-order.delete.checkout"].exists, "an automatically discovered folder cannot be deleted")
+        delete.tap()
+        let alert = app.alerts["Delete “Website”?"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 3))
+        XCTAssertTrue(alert.staticTexts.containing(NSPredicate(format: "label CONTAINS 'kept'")).firstMatch.exists)
+        XCTAssertTrue(alert.staticTexts.containing(NSPredicate(format: "label CONTAINS '/home/hermes/site'")).firstMatch.exists,
+                      "the folder identifies the project")
+        XCTAssertTrue(rpc("projects.delete").isEmpty, "nothing deleted before confirmation")
+        alert.buttons["Cancel"].tap()
+        XCTAssertTrue(rpc("projects.delete").isEmpty)
+        openFilter(app)
+        tapFilter(app, "group", "group.reorder")
+        XCTAssertTrue(delete.waitForExistence(timeout: 6), "cancel keeps the project")
+        delete.tap()
+        fixture("/__fixture/fail", ["rpc": "projects.delete", "message": "try again", "count": 1])
+        press(app.alerts["Delete “Website”?"].buttons["Delete Project"])
+        let failure = app.alerts["Couldn’t Delete Project"]
+        XCTAssertTrue(failure.waitForExistence(timeout: 8), "failure is shown")
+        failure.buttons["OK"].tap()
+        openFilter(app)
+        tapFilter(app, "group", "group.reorder")
+        XCTAssertTrue(delete.waitForExistence(timeout: 6), "failure keeps the project")
+        delete.tap()
+        press(app.alerts["Delete “Website”?"].buttons["Delete Project"])
+        XCTAssertTrue(waitUntil(8) { self.rpc("projects.delete").filter {
+            $0["profile"] as? String == "default" && $0["id"] as? String == "p_site"
+        }.count == 2 }, "the saved project is retried")
+        XCTAssertTrue(waitUntil(8) { app.descendants(matching: .any)["menus.hud"].exists }, "deletion completes")
+        openFilter(app)
+        tapFilter(app, "group", "group.reorder")
+        XCTAssertFalse(app.buttons["group-order.delete.Website"].exists, "deleted project is no longer offered")
+    }
+
     @MainActor func test99_ProjectOrderFavoritesBotGroupsAndManualSort() throws {
         let app = launch()
         XCTAssertTrue(row(app, "s-garden").waitForExistence(timeout: 15))

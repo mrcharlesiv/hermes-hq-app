@@ -256,10 +256,21 @@ extension SessionsTests {
         toBots.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5)).tap()
         XCTAssertTrue(waitUntil(6) { toProjects.exists && !toBots.exists }, "and its lit (Projects) side flips it back")
         XCTAssertTrue(nothingPicked(app), "the bot picked before went with the view")
-        // [sessions-shape] The Bots side keeps a shortcut to the projects (the starred ones, or the newest two).
-        // [project-opens-page] On the Bots side a project's row opens its page too, on the Projects side; the switch's
-        // other side goes back to the Bots side.
+        // [chats-projects] A tester, 2026-11-20: the Chats side shows no project until Show › Projects is on (and Project
+        // Chats in Recent is offered only then).
         let bySide = ["Website", "Reading", "App"].map { header(app, $0) }
+        XCTAssertTrue(waitUntil(6) { self.headers(app).contains { $0.hasPrefix("Today") || $0.hasPrefix("Yesterday") } }, "\(headers(app))")
+        XCTAssertFalse(bySide.contains(where: \.exists), "no project's row on the Chats side (\(headers(app)))")
+        openFilter(app)
+        tapFilter(app, "show")
+        XCTAssertTrue(filterItem(app, "projects").waitForExistence(timeout: 5) && !filterItem(app, "projectchats").exists,
+                      "Show › Projects, and no Project Chats in Recent while it is off")
+        tapFilter(app, "projects")
+        XCTAssertTrue(filterItem(app, "projectchats").waitForExistence(timeout: 5), "Project Chats in Recent with Projects on")
+        closeFilter(app)
+        // [sessions-shape] With it on, the Chats side keeps a shortcut to the projects (the starred ones, or the newest two).
+        // [project-opens-page] On the Chats side a project's row opens its page too, on the Projects side; the switch's
+        // other side goes back to the Chats side.
         XCTAssertTrue(waitUntil(8) { bySide.contains(where: \.exists) }, "a project's row on the Bots side")
         let projectRow = bySide.first(where: \.exists)!
         let projectName = String(projectRow.label.prefix { $0 != "," })
@@ -472,7 +483,8 @@ extension SessionsTests {
             let from = window.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0.55))
             from.press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.55)))
         }
-        // From the Bots side, a bot picked: back is that bot's list again.
+        // From the Bots side, a bot picked: back is that bot's list again. [chats-projects] Its projects shown there.
+        showProjectsOnChats(app)
         tapChip(app, "research")
         XCTAssertTrue(waitUntil(6) { self.chip(app, "research").isSelected }, "Research picked")
         let reading = header(app, "Reading")
@@ -516,6 +528,7 @@ extension SessionsTests {
             from.press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.55)))
         }
         func onProjectsList() -> Bool { !page.exists && toBots.exists && !toProjects.exists && nothingPicked(app) }
+        showProjectsOnChats(app)                        // [chats-projects] step 2 opens a project from the Chats side
         // 1. The switch to Projects, then a project's row in the list.
         toProjects.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5)).tap()
         XCTAssertTrue(waitUntil(6) { toBots.exists })

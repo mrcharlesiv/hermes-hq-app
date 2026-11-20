@@ -51,15 +51,27 @@ import Testing
         #expect(project.children.last?.children.map(\.title) == ["New Project…"])
         #expect(project.children.map(\.id).prefix(2) == ["sessions.filter.project.0", "sessions.filter.project.1"])
         let show = try #require(node("sessions.filter.show", in: nodes))
-        // [sessions-fresh] Bot Faces and Project Chats in Recent first, on by default, under Group By Recent alone.
-        #expect(show.children.map(\.title) == ["Bot Faces", "Project Chats in Recent", "Outside Chats", "Background Runs", "Archived"])
-        #expect(show.children.map(\.id) == ["sessions.filter.faces", "sessions.filter.projectchats", "sessions.filter.outside",
+        // [sessions-fresh] Bot Faces first, on by default, under Group By Recent alone. [chats-projects] Then Projects, off
+        // by default; Project Chats in Recent (on by default) only while Projects is on.
+        #expect(show.children.map(\.title) == ["Bot Faces", "Projects", "Outside Chats", "Background Runs", "Archived"])
+        #expect(show.children.map(\.id) == ["sessions.filter.faces", "sessions.filter.projects", "sessions.filter.outside",
                                             "sessions.filter.runs", "sessions.filter.archived"])
-        #expect(show.children.prefix(2).allSatisfy { $0.checked && $0.keepsOpen })
+        #expect(show.children.prefix(2).map(\.checked) == [true, false] && show.children.prefix(2).allSatisfy(\.keepsOpen))
+        var shown = state()
+        SessionFilterApply.apply(.showProjects, to: &shown, homeBot: "default")
+        #expect(shown.prefs.showProjects && SessionFilterWords.filterCount(shown) == 0)
+        let withProjects = try #require(node("sessions.filter.show", in: SessionFilterMenuModel.nodes(shown)))
+        #expect(withProjects.children.map(\.title).prefix(3) == ["Bot Faces", "Projects", "Project Chats in Recent"])
+        #expect(withProjects.children.prefix(3).allSatisfy { $0.checked && $0.keepsOpen })
+        SessionFilterApply.clear(&shown)
+        #expect(shown.prefs.showProjects, "Clear Filters keeps Show's choices")
+        // Kept with the other choices; a file from before it reads as off.
+        #expect(try JSONDecoder().decode(SessionsViewPrefs.self, from: JSONEncoder().encode(shown.prefs)).showProjects)
+        #expect(try JSONDecoder().decode(SessionsViewPrefs.self, from: Data("{\"projectChatsInRecent\":true}".utf8)).showProjects == false)
         let byProject = SessionFilterMenuModel.nodes(state { $0.prefs.groupBy = .project })
         // [projects-switch] Owner 2026-11-15 ("an option to hide bot faces"): Bot Faces under Group By Project too.
         #expect(node("sessions.filter.faces", in: byProject) != nil)
-        #expect(node("sessions.filter.projectchats", in: byProject) == nil)
+        #expect(node("sessions.filter.projectchats", in: byProject) == nil && node("sessions.filter.projects", in: byProject) == nil)
         #expect(node("sessions.filter.faces", in: SessionFilterMenuModel.nodes(state { $0.prefs.groupBy = .status })) == nil)
         var hidden = state()
         SessionFilterApply.apply(.projectChatsInRecent, to: &hidden, homeBot: "default")
@@ -153,14 +165,14 @@ import Testing
         let show = try #require(node("sessions.filter.show", in: SessionFilterMenuModel.nodes(checks)))
         #expect(show.subtitle == shown, "the menu's row says the same")
         // [sessions-fresh] Bot Faces and Project Chats in Recent (on by default) add no rows: Show's subtitle leaves them out.
-        let layout: Set<String> = ["sessions.filter.faces", "sessions.filter.projectchats"]
+        let layout: Set<String> = ["sessions.filter.faces", "sessions.filter.projects", "sessions.filter.projectchats"]
         #expect(show.children.filter { $0.checked && !layout.contains($0.id) }.count == [outside, runs, archived].filter { $0 }.count)
     }
 
     @Test func showSubtitleNamesAOneCheckAsItsRowAndFollowsEachToggle() throws {
         // One check on: the subtitle is that row's own title, whatever the menu calls it.
         let rows = try #require(node("sessions.filter.show", in: SessionFilterMenuModel.nodes(state()))).children
-            .filter { $0.id != "sessions.filter.faces" && $0.id != "sessions.filter.projectchats" }
+            .filter { !["sessions.filter.faces", "sessions.filter.projects", "sessions.filter.projectchats"].contains($0.id) }
         let alone: [SessionFilterState] = [state { $0.showOutsideChats = true }, state { $0.showBackgroundRuns = true },
                                            state { $0.prefs.showArchived = true }]
         #expect(alone.map(SessionFilterWords.showSubtitle) == rows.map(\.title))
@@ -312,8 +324,8 @@ import Testing
         func show(_ group: SessionGroupBy) -> [String] {
             node("sessions.filter.show", in: SessionFilterMenuModel.nodes(state { $0.prefs.groupBy = group }))?.children.map(\.title) ?? []
         }
-        #expect(show(.project).first == "Bot Faces" && !show(.project).contains("Project Chats in Recent"))
-        #expect(show(.date).prefix(2) == ["Bot Faces", "Project Chats in Recent"] && !show(.status).contains("Bot Faces"))
+        #expect(show(.project).first == "Bot Faces" && !show(.project).contains("Project Chats in Recent") && !show(.project).contains("Projects"))
+        #expect(show(.date).prefix(2) == ["Bot Faces", "Projects"] && !show(.status).contains("Bot Faces") && !show(.status).contains("Projects"))
         #expect(ProjectPageHeader.meta(folder: "/Users/me/code/site", branch: "main", bots: ["Otto", "Ivy"]) == "~/code/site · main · Otto, Ivy")
         #expect(ProjectPageHeader.meta(folder: "id:x/p", branch: nil, bots: ["Otto", "Ivy", "Wren", "Juno"]) == "Otto, Ivy and 2 more")
         var prefs = SessionsViewPrefs(); prefs.pills = .projects

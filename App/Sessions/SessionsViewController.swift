@@ -2126,6 +2126,7 @@ extension SessionsViewController {
             case .archived: item.state = state.prefs.showArchived ? .on : .off
             case .botFaces: item.state = state.prefs.botFaces ? .on : .off
             case .projectChatsInRecent: item.state = state.prefs.projectChatsInRecent ? .on : .off
+            case .showProjects: item.state = state.prefs.showProjects ? .on : .off
             default: break
             }
         }

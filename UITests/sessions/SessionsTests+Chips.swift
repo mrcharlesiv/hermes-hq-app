@@ -15,7 +15,7 @@ extension SessionsTests {
         let chips = [pillSwitch(app)] + ["default", "research", "deploys"].map { app.buttons["sessions.chip.\($0)"] }
         XCTAssertTrue(chips.allSatisfy(\.exists), "the switch, Hermes, Research, Deploys")
         XCTAssertEqual(chips.map(\.label), ["Switch to Projects", "Hermes", "Research", "Deploys"])
-        XCTAssertEqual(chips[0].value as? String, "Bots", "the switch says the view shown")
+        XCTAssertEqual(chips[0].value as? String, "Chats", "the switch says the view shown")      // [chats-switch]
         for (left, right) in zip(chips, chips.dropFirst()) {
             XCTAssertLessThan(left.frame.midX, right.frame.midX, "in that order")
         }
@@ -241,7 +241,7 @@ extension SessionsTests {
         let toProjects = app.buttons["sessions.pills.projects"], toBots = app.buttons["sessions.pills.bots"]
         XCTAssertTrue(toProjects.waitForExistence(timeout: 15), "the switch: both views side by side")
         XCTAssertEqual(toProjects.label, "Switch to Projects")
-        XCTAssertEqual(toProjects.value as? String, "Bots")
+        XCTAssertEqual(toProjects.value as? String, "Chats")                                     // [chats-switch]
         XCTAssertTrue(nothingPicked(app) && !toBots.exists && !app.buttons["sessions.chip.all"].exists, "one switch, no All")
         shot(app, "P0-switch-bots")
         tapChip(app, "research")
@@ -253,6 +253,7 @@ extension SessionsTests {
         toProjects.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.5)).tap()
         XCTAssertTrue(waitUntil(6) { toBots.exists && !toProjects.exists }, "the lit side flips it too")
         XCTAssertEqual(toBots.value as? String, "Projects")
+        XCTAssertEqual(toBots.label, "Switch to Chats")                                          // [chats-switch]
         toBots.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5)).tap()
         XCTAssertTrue(waitUntil(6) { toProjects.exists && !toBots.exists }, "and its lit (Projects) side flips it back")
         XCTAssertTrue(nothingPicked(app), "the bot picked before went with the view")

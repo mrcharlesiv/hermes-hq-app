@@ -274,7 +274,8 @@ extension SessionsTests {
         closeFilter(app, file: file, line: line)
     }
 
-    /// [switch-toggles] The Bots | Projects switch: one button, a tap anywhere on it flips the view.
+    /// [switch-toggles] The Chats | Projects switch (`sessions.pills.bots` is its Chats side): one button, a tap anywhere
+    /// on it flips the view.
     @MainActor func pillSwitch(_ app: XCUIApplication) -> XCUIElement {
         app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'sessions.pills.'")).firstMatch
     }

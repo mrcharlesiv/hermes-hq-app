@@ -55,6 +55,23 @@ nonisolated enum WorkingRing {
     }
 }
 
+/// [jobs-badge] Settings › Appearance › Tabs › Jobs Badge: when the Jobs tab's count of jobs under Needs Attention
+/// clears (`JobsBadgeClear`). When Fixed, the default, is stored as nothing.
+enum JobsBadgePref {
+    static let key = "hqn.jobsBadgeClear"
+    static let didChange = Notification.Name("hqn.jobsBadgeClear.changed")
+
+    static var clear: JobsBadgeClear {
+        get { UserDefaults.standard.string(forKey: key).flatMap(JobsBadgeClear.init(rawValue:)) ?? .whenFixed }
+        set {
+            guard newValue != clear else { return }
+            if newValue == .whenFixed { UserDefaults.standard.removeObject(forKey: key) } else { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
+            AppLog.note("settings", "Jobs Badge set to \(newValue.title)")
+            NotificationCenter.default.post(name: didChange, object: nil)
+        }
+    }
+}
+
 /// [settings] File Browser (`vendor/.../store/layout.ts` `$fileBrowserOpen`, default off). A phone has no "beside the
 /// chat": on, a chat that has a project folder gets a Files button in its top bar; off, Files stays under ⋯ › More
 /// (docs/spec/3x-settings.md §12).

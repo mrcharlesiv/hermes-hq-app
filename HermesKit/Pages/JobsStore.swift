@@ -110,6 +110,8 @@ final class JobsStore {
     private(set) var listReads = 0
     /// Jobs this app deleted (their page closes itself; a list read without them is no news).
     @ObservationIgnored private(set) var deletedHere: Set<String> = []
+    /// [jobs-badge] What the Jobs list has shown under Needs Attention (`JobsBadge.mark`), for the tab's "When Seen" count.
+    private(set) var attentionSeen: Set<String> = []
     /// At most this many jobs are kept on disk per scope (D-J10); the rest arrive with the network.
     nonisolated static let cachedJobsLimit = 500
     /// [offline] §6.7: list reads run one at a time, none while the app is away, one catch-up on return.
@@ -127,6 +129,7 @@ final class JobsStore {
                                   allowed: { [weak self] in self?.appActive ?? false },
                                   action: { [weak self] in await self?.refresh(background: true) })
         flight = ReadFlight(isActive: { [weak self] in self?.appActive ?? false }, label: "jobs") { [weak self] in await self?.performRefresh() }
+        attentionSeen = Set(UserDefaults.standard.stringArray(forKey: JobsBadge.seenKey(account)) ?? [])
         paintFromCache()
     }
 
@@ -476,6 +479,25 @@ final class JobsStore {
     /// How many of the scope's jobs show Running (the row's rule): the Jobs tab's spinner.
     var workingCount: Int { jobs.count(where: { showsRunning($0) || JobWords.isRunning($0) }) }
 
+    /// [jobs-badge] The Jobs tab's count: the scope's jobs under Needs Attention, or with "When Seen" those the list
+    /// hasn't shown yet (`JobsBadge`).
+    func attentionCount(clear: JobsBadgeClear, now: Date = Date()) -> Int {
+        JobsBadge.count(jobs, now: now, clear: clear, seen: attentionSeen)
+    }
+
+    /// [jobs-badge] The Jobs list is on screen: what is under Needs Attention now has been seen. Kept on this device
+    /// per account, the newest `JobsBadge.seenLimit`.
+    func markAttentionSeen(now: Date = Date()) {
+        let fresh = JobsBadge.marks(jobs, now: now).subtracting(attentionSeen).sorted()
+        guard !fresh.isEmpty else { return }
+        var order = (UserDefaults.standard.stringArray(forKey: JobsBadge.seenKey(account)) ?? []).filter { attentionSeen.contains($0) }
+        order.append(contentsOf: fresh)
+        if order.count > JobsBadge.seenLimit { order.removeFirst(order.count - JobsBadge.seenLimit) }
+        UserDefaults.standard.set(order, forKey: JobsBadge.seenKey(account))
+        attentionSeen = Set(order)
+        AppLog.trace("pages", "jobs badge: \(fresh.count) seen")
+    }
+
     func isBusy(_ job: CronJob) -> Bool { busy[job.key] != nil }
     func isStillRunning(_ job: CronJob) -> Bool { stillRunning[job.key] != nil }
     /// The row says "Running…": a Run Now in flight, or one that outlived the wait.
@@ -647,5 +669,6 @@ final class JobsStore {
         jobs = []
         botWorking = [:]
         hasList = false
+        attentionSeen = []   // [jobs-badge] its stored copy goes with the page's other choices (`PagesTabs.forgetDefaults`)
     }
 }

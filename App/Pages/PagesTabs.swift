@@ -143,6 +143,8 @@ final class PagesTabs {
     private var lastProbe: Date?
     private var eventsTask: Task<Void, Never>?
     private var observers: [NSObjectProtocol] = []
+    /// [jobs-badge] Fires when the next job turns overdue, so the Jobs tab's count rises without a read.
+    private var attentionTimer: Timer?
     private var registryObserver: UUID?
     /// The tab saved by the last run, read before this run's first selection can overwrite it.
     private var savedTab: Int?
@@ -246,17 +248,48 @@ final class PagesTabs {
     }
 
     /// The Jobs tab while jobs run (owner 2026-10-30: "some indicator on the Jobs page icon … that jobs are currently
-    /// running"; a spinner, not a dot): the icon's clock turns (`TabIcons.jobsRunning`). Its accessibility value says
-    /// how many.
+    /// running"; a spinner, not a dot): the icon's clock turns (`TabIcons.jobsRunning`). [jobs-badge] And a red count of
+    /// the jobs under Needs Attention, cleared as Settings › Tabs › Jobs Badge says (`JobsBadge`). Its accessibility
+    /// value says how many of each.
     private func watchWorking() {
-        guard let jobsStore, let item = jobsNav?.tabBarItem else { return }
-        var count = withObservationTracking { jobsStore.workingCount } onChange: { [weak self] in
+        guard let jobsStore else { return }
+        // Everything both counts read (the jobs, Run Now's, what the list has shown), whichever way the badge clears.
+        withObservationTracking { _ = (jobsStore.workingCount, jobsStore.attentionCount(clear: .whenSeen)) } onChange: { [weak self] in
             Task { @MainActor in self?.watchWorking() }
         }
+        showJobsTab()
+    }
+
+    /// Draws the Jobs tab from the store as it is now. Also after the Jobs Badge setting changes and when a job turns
+    /// overdue with no read to say so (`attentionTimer`).
+    private func showJobsTab() {
+        guard let jobsStore, let item = jobsNav?.tabBarItem else { return }
+        let now = Date()
+        var count = jobsStore.workingCount
+        var attention = jobsStore.attentionCount(clear: JobsBadgePref.clear, now: now)
         #if DEBUG
         if UserDefaults.standard.bool(forKey: "HQDebugJobsRunning") { count = max(count, 1) }   // screenshots of the spinner
+        // `-HQDebugJobsAttention <n>`: screenshots of the badge.
+        if UserDefaults.standard.object(forKey: "HQDebugJobsAttention") != nil { attention = UserDefaults.standard.integer(forKey: "HQDebugJobsAttention") }
         #endif
-        item.accessibilityValue = count > 0 ? "\(count) running" : nil
+        item.accessibilityValue = [count > 0 ? "\(count) running" : nil,
+                                   attention > 0 ? "\(attention) \(attention == 1 ? "needs" : "need") attention" : nil]
+            .compactMap { $0 }.joined(separator: ", ").nilIfEmpty
+        let badge = BadgeMath.backTitle(attention)
+        if item.badgeValue != badge {
+            AppLog.trace("pages", "jobs tab badge \(attention) (\(JobsBadgePref.clear.rawValue))")
+            item.badgeValue = badge
+            (host as? MainTabController)?.badgeChanged()
+        }
+        attentionTimer?.invalidate()
+        attentionTimer = JobsBadge.nextChange(jobsStore.jobs, now: now).map { at in
+            let timer = Timer(fire: at, interval: 0, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { self?.showJobsTab() }
+            }
+            timer.tolerance = 5
+            RunLoop.main.add(timer, forMode: .common)
+            return timer
+        }
         let image = count > 0 ? TabIcons.jobsRunning : Self.jobsIcon
         guard item.image !== image else { return }
         AppLog.trace("pages", "jobs tab spinner \(count > 0 ? "on" : "off") (\(count) working)")
@@ -265,6 +298,7 @@ final class PagesTabs {
 
     isolated deinit {
         eventsTask?.cancel()
+        attentionTimer?.invalidate()
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         if let registryObserver { Self.registryObservers[registryObserver] = nil }
     }
@@ -723,10 +757,14 @@ final class PagesTabs {
                 self.overrideChanged()
             }
         })
+        observers.append(center.addObserver(forName: JobsBadgePref.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.showJobsTab() }   // [jobs-badge]
+        })
         observers.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.jobsStore?.appDidBecomeActive()
+                self.showJobsTab()   // [jobs-badge] a job may have turned overdue while the app was away
                 self.madeKanban?.appDidBecomeActive()
                 if self.lastProbe.map({ Date().timeIntervalSince($0) > 600 }) ?? true { Task { await self.probe() } }
             }
@@ -763,7 +801,7 @@ final class PagesTabs {
         let defaults = UserDefaults.standard
         for key in [tabKey(account), availabilityKey(account), KanbanStore.slugKey(account), PagesScope.defaultsKey(account),
                     ArtifactsViewController.filterKey(account), MoreAvailability.key(account),   // [morepages]
-                    TasksHub.scopeKey(account)] {   // [tasks]
+                    TasksHub.scopeKey(account), JobsBadge.seenKey(account)] {   // [tasks] [jobs-badge]
             defaults.removeObject(forKey: key)
         }
     }

@@ -17,6 +17,8 @@ struct TabOrderPage: View {
     #endif
     /// [kanban-tab-one] The Kanban Tab choice; nil while there is none to make (`kanbanChoice`).
     @State private var kanban: KanbanTabOverride?
+    /// [jobs-badge] When the Jobs tab's count clears.
+    @State private var jobsBadge = JobsBadgePref.clear
     /// [kanban-tab-one] The row a search result marks, as the Settings root marks its own (UX study #108).
     @State private var revealed: String?
     @ScaledMetric(relativeTo: .body) private var iconWidth: CGFloat = 28
@@ -52,6 +54,7 @@ struct TabOrderPage: View {
                 } }
                 botsInSidebarSection
                 kanbanSection
+                jobsBadgeSection
                 if !more.isEmpty {
                     Section {
                         // Ids of their own: a row turned on is a new row in the bar, with its drag handle (one that kept
@@ -180,6 +183,49 @@ struct TabOrderPage: View {
                 Text(kanbanFooter(kanban, account: account)).accessibilityIdentifier("tab-order.kanban-footer")
             } }
         }
+    }
+
+    /// [jobs-badge] Jobs Badge: when the red count on Jobs (the jobs under Needs Attention) clears. Drawn as Kanban Tab
+    /// is: the Menu over the row on the iPhone and iPad, the form's pop-up on the Mac.
+    @ViewBuilder
+    private var jobsBadgeSection: some View {
+        let choice = Binding(get: { jobsBadge }, set: { (value: JobsBadgeClear) in
+            Haptics.play(.selection)
+            JobsBadgePref.clear = value
+            jobsBadge = value
+        })
+        let label = Label {
+            Text("Jobs Badge").foregroundStyle(Color.hqLabel)
+        } icon: {
+            iconBox(symbol("calendar.badge.clock").foregroundStyle(Color.hqLabel))
+        }
+        Section {
+            if DeviceWord.isMac {
+                HStack(spacing: 12) {
+                    label
+                    Spacer(minLength: 16)
+                    MacPopUp(label: "Jobs Badge", selection: choice, options: JobsBadgeClear.allCases) { $0.title }
+                        .accessibilityIdentifier("settings.jobs-badge")
+                        .hqMacSettingsControl()
+                }
+            } else {
+                SettingsMenuRowFace(label: label, value: jobsBadge.title)
+                    .overlay {
+                        Menu {
+                            Picker("Jobs Badge", selection: choice) {
+                                ForEach(JobsBadgeClear.allCases) { Text($0.title).tag($0) }
+                            }
+                        } label: {
+                            Color.clear.contentShape(Rectangle())
+                        }
+                        .accessibilityLabel("Jobs Badge")
+                        .accessibilityValue(jobsBadge.title)
+                        .accessibilityIdentifier("settings.jobs-badge")
+                    }
+            }
+        } footer: { HQSectionFooter {
+            Text(SettingsWords.jobsBadgeFooter(jobsBadge)).accessibilityIdentifier("tab-order.jobs-badge-footer")
+        } }
     }
 
     /// [mac] The Mac shows the tabs in its sidebar, not a bar (stress test 2026-10-31).

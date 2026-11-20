@@ -345,6 +345,9 @@ final class JobsViewController: UIViewController, UICollectionViewDelegate, UISe
                                             owner: job.owner, head: bots[job.owner]?.head)
         }
         sections = JobWords.Section.allCases.compactMap { section in grouped[section].map { (section, $0) } }
+        // [jobs-badge] On screen, everything under Needs Attention has been seen (the tab's "When Seen" count), a search
+        // or not: the list is the place the badge sends the person to.
+        if observing { store.markAttentionSeen(now: now) }
         var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
         if !store.hasList && store.loading && skeletonShown {
             snapshot.appendSections([.skeleton])

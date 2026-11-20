@@ -6,6 +6,18 @@
 import Foundation
 
 nonisolated enum SettingsWords {
+    // MARK: Jobs Badge footer ([jobs-badge])
+
+    static let jobsBadgeLead = "The red number on Jobs counts the jobs under Needs Attention: a failed run, a late run or an error. Paused jobs never count."
+
+    /// The footer under the Jobs Badge picker (Settings › Appearance › Tabs): what the number counts, and when it clears.
+    static func jobsBadgeFooter(_ clear: JobsBadgeClear) -> String {
+        switch clear {
+        case .whenFixed: "\(jobsBadgeLead) When Fixed: a job counts until it runs without a problem, or you pause or delete it."
+        case .whenSeen: "\(jobsBadgeLead) When Seen: the number clears once you open Jobs, and a job counts again if it fails or runs late again."
+        }
+    }
+
     // MARK: Kanban Tab footer (#62)
 
     static let kanbanLead = "A task board your bots work from."

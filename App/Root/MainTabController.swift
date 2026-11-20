@@ -114,6 +114,10 @@ final class MainTabController: UITabBarController, UITabBarControllerDelegate {
         badgeOverlay?.refresh()
     }
 
+    /// [jobs-badge] A tab's badge set from elsewhere (the Jobs tab's count, `PagesTabs`): the iPhone's drawn badges
+    /// follow. The Mac sidebar and the Desktop Look bar watch `badgeValue` themselves.
+    func badgeChanged() { badgeOverlay?.refresh() }
+
     /// The tabs for the signed-in account. `fresh`: a gateway switch — the list screens are made again (an open chat, a
     /// search, collapsed sections and anything else held for the old account go with them) and the selected tab stays.
     func installTabs(fresh: Bool) {

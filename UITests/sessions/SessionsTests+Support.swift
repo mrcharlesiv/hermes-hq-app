@@ -265,7 +265,17 @@ extension SessionsTests {
         onScreen(app, chip(app, profile)).tap()
     }
 
-    /// [switch-toggles] The Bots | Projects switch: one button, a tap anywhere on it flips the view.
+    /// [chats-projects] Show › Projects on (off by default): the Chats side draws the projects' shortcut above Recent
+    /// again, for the tests of a project's row there. The menu is left closed.
+    @MainActor func showProjectsOnChats(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        openFilter(app, file: file, line: line)
+        tapFilter(app, "show", "projects", file: file, line: line)
+        XCTAssertTrue(waitUntil(4) { self.filterChecked(app, "projects") }, "Show › Projects on", file: file, line: line)
+        closeFilter(app, file: file, line: line)
+    }
+
+    /// [switch-toggles] The Chats | Projects switch (`sessions.pills.bots` is its Chats side): one button, a tap anywhere
+    /// on it flips the view.
     @MainActor func pillSwitch(_ app: XCUIApplication) -> XCUIElement {
         app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'sessions.pills.'")).firstMatch
     }

@@ -32,6 +32,8 @@
 // project's too (a project still holds all its chats, as under Group By Project), unless Show › Project Chats in
 // Recent is off: then Recent holds Home's chats alone. A status chip (New, Working) draws
 // its chats alone, newest first, in one run.
+// [chats-projects] The projects there only with Show › Projects (off by default): else the Chats side is Pinned and
+// Recent, every chat in Recent, and the projects are the switch's other side.
 //
 // The web: `V/store/sidebar-sort.ts`, `V/app/chat/sidebar/index.tsx:605-680,1471,1872`, `V/lib/session-date-groups.ts`.
 // The web's Archived swaps the pool; here it adds to it, as Background Runs and Outside Chats do (a tester read the
@@ -329,7 +331,9 @@ nonisolated enum SessionListPipeline {
             // is back as a shortcut, not a list: the starred projects (the newest `freshProjectRows` while none is
             // starred), each one tap from its page, and no See All (the switch's Projects side is all of them). A filter
             // narrowing the list shows every project it finds.
-            var projects = projectGroups(projectRows).filter { $0.id != projectPrefix + SessionProjects.homeKey }
+            // [chats-projects] Only with Show › Projects: off (the default), no project here at all, filtered or not.
+            var projects = prefs.showProjects
+                ? projectGroups(projectRows).filter { $0.id != projectPrefix + SessionProjects.homeKey } : []
             if !projects.isEmpty {
                 let narrowed = !prefs.statusFilter.isEmpty || !picked.isEmpty
                 if !narrowed {

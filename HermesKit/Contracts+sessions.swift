@@ -37,6 +37,11 @@ nonisolated struct SessionsViewPrefs: Codable, Hashable, Sendable {
     /// Show › Project Chats in Recent: off lists under "Recent" only the chats outside every project (Home's); a
     /// project's chats then show on its card alone (tester, 2026-11-08: "hide it from Recent too").
     var projectChatsInRecent = true
+    /// [chats-projects] Show › Projects: the Chats side (Group By Recent) draws the projects' shortcut above Recent.
+    /// Off by default: a tester found the projects on both sides of the switch confusing (2026-11-20), so the Chats
+    /// side lists chats alone and the projects are the switch's other side; on brings the shortcut back as it was
+    /// ([sessions-shape]). Project Chats in Recent only means something while it is on.
+    var showProjects = false
     /// Row Detail › Preview under Group By Recent: one line of the last message under each Recent (and project card)
     /// chat's title. Its own setting, off by default, so the one-line Recent rows stay as they were; the other
     /// groupings keep `rowDetail`'s Preview (a tester, 2026-11-12: "toggling previews doesn't do anything").
@@ -64,7 +69,7 @@ nonisolated struct SessionsViewPrefs: Codable, Hashable, Sendable {
         return recentPreview ? rowDetail.union([.preview]) : rowDetail.subtracting([.preview])
     }
 
-    private enum CodingKeys: String, CodingKey { case sortBy, groupBy, rowDetail, statusFilter, projectFilter, showArchived, botFaces, projectChatsInRecent, recentPreview }
+    private enum CodingKeys: String, CodingKey { case sortBy, groupBy, rowDetail, statusFilter, projectFilter, showArchived, botFaces, projectChatsInRecent, showProjects, recentPreview }
 
     /// Lenient: a value this build does not know (a file from a newer one) reads as that field's default, never an error.
     init(from decoder: Decoder) throws {
@@ -77,6 +82,7 @@ nonisolated struct SessionsViewPrefs: Codable, Hashable, Sendable {
         if let value = try? c.decodeIfPresent(Bool.self, forKey: .showArchived) { showArchived = value }
         if let value = try? c.decodeIfPresent(Bool.self, forKey: .botFaces) { botFaces = value }
         if let value = try? c.decodeIfPresent(Bool.self, forKey: .projectChatsInRecent) { projectChatsInRecent = value }
+        if let value = try? c.decodeIfPresent(Bool.self, forKey: .showProjects) { showProjects = value }
         if let value = try? c.decodeIfPresent(Bool.self, forKey: .recentPreview) { recentPreview = value }
     }
 
@@ -90,6 +96,7 @@ nonisolated struct SessionsViewPrefs: Codable, Hashable, Sendable {
         try c.encode(showArchived, forKey: .showArchived)
         try c.encode(botFaces, forKey: .botFaces)
         try c.encode(projectChatsInRecent, forKey: .projectChatsInRecent)
+        try c.encode(showProjects, forKey: .showProjects)
         try c.encode(recentPreview, forKey: .recentPreview)
     }
 }

@@ -247,7 +247,7 @@ Activity place / "I'd like to see it all built". Mac only; the iPhone and iPad k
   unless turned off: the bots are in the sidebar. Off (`MacSidebar.botsInSidebar`, kept in `HQMacBotsInSidebar`): Bots
   is a row among the places, where Settings › Sidebar orders it (above Sessions by default), the sidebar draws no bots
   open or folded, and the Bots list is a list column beside the sidebar as Sessions' is (`listFolded` no longer counts
-  Bots), so one list shows at a time. Sessions keeps its Bots | Projects switch. The switch is in Settings › Sidebar
+  Bots), so one list shows at a time. Sessions keeps its Chats | Projects switch. The switch is in Settings › Sidebar
   and in the sidebar's own menu (a right click between rows, the foot's +), only while Bots is a place. Check:
   `-HQMacBotsInSidebar NO` with `-HQDebugMacShots <name>`.
 - **Tools** = More's Workspace and Insights pages (`PagesTabs.toolSections`, `toolIDs`, `isTool`). Each is a page tab
@@ -294,14 +294,14 @@ match." So the order of sections, a row's words and the text size are the iPhone
 the Mac's. (A first try that put New for You and Working above Pinned on the Mac alone was taken out for that rule; a
 search field always showing was turned down: "behind a click".)
 
-- **The row under the bar** (`SessionsHeaderView.macRow`): the Bots | Projects switch, the view's "All Bots" / "All
+- **The row under the bar** (`SessionsHeaderView.macRow`): the Chats | Projects switch (it said Bots until 2026-11-20), the view's "All Bots" / "All
   Projects" menu (`pages.scope`), and New and Working as counts at its end ("5 new"; a click narrows the list, another
   clears it). No pills that scroll sideways. This reverses the owner's 2026-11-17 pick of the iPhone's pill row.
   [mac-top] Owner 2026-11-19 ("the top section feels so messy", then "redo what we have to be better suited"): the
   same three in the same places as one set of Mac controls (`SessionsMacControl`: 24 pt high, 6 pt corners, footnote
   medium), their left edge on the project header's. The switch is a segmented control with a grey segment for the view
   shown, not the 44 pt glass capsule. A narrow pane drops the counts' words ("● 5"), then the switch's glyphs (it always
-  says Bots and Projects), before the menu's name is cut (it had run past both edges). On a project's page the counts are only the header's.
+  says Chats and Projects), before the menu's name is cut (it had run past both edges). On a project's page the counts are only the header's.
 - **Rows** (`SessionRowView.macTight`, `ProjectCard.rowPad`): in the iOS look at Standard density a one-line chat row
   and a project's row are 36 pt (about 32 on the screen; they were 44 and 39). Compact and the Desktop Look keep theirs.
 - **Captions** are a size under the rows' titles (`SessionDateHeaderView.captionStyle`, footnote) in the iOS look.
@@ -327,7 +327,7 @@ search field always showing was turned down: "behind a click".)
 - **The message box follows the system's text settings** (`ComposerKeyboard.followsSystem`): autocorrect and spell
   check are `.default` on the Mac, so System Settings › Keyboard decides. Not checked with correction turned off.
 - **The Sessions header in a narrow pane** (`SessionsHeaderView.macRow`, `ViewThatFits`): the whole row; then New and
-  Working as numbers; then the switch's words without their glyphs (owner 2026-11-19: it always says Bots and Projects;
+  Working as numbers; then the switch's words without their glyphs (owner 2026-11-19: it always says both names, now Chats and Projects;
   1135 had dropped the words), then the menu's pictures. Checked with a real drag of the divider (AX frames) and the
   tour's two narrow-pane pictures; at the narrowest (320 pt) everything is inside the pane.
 - **Watch Screen takes the keyboard when control is taken** (`ScreenViewerController.couldSendInput`): no keyboard button

@@ -583,7 +583,8 @@ struct MarketplaceView: View {
     }
 
     private func sideRow(_ title: String, symbol: String, count: Int?, on: Bool, id: String, action: @escaping () -> Void) -> some View {
-        Button { HQMotion.withAnimation(.snappy) { action(); state.resetPaging() } } label: {
+        let shape = RoundedRectangle(cornerRadius: HQShape.radius(8, .control), style: .continuous)
+        return Button { HQMotion.withAnimation(.snappy) { action(); state.resetPaging() } } label: {
             HStack(spacing: 9) {
                 // [Mac AAA 2026-11-16] A wide symbol (Agentic AI's people with waves) ran 3 pt past its column and
                 // all but touched its name: drawn a size down when it doesn't fit, so every name keeps its gap.
@@ -599,12 +600,13 @@ struct MarketplaceView: View {
                 }
             }
             .padding(.horizontal, 10).padding(.vertical, 7)
-            .background(on ? Color.hqTint.opacity(0.14) : Color.clear, in: RoundedRectangle(cornerRadius: HQShape.radius(8, .control), style: .continuous))
+            .background(on ? Color.hqTint.opacity(0.14) : Color.clear, in: shape)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .contentShape(.hoverEffect, shape)
         .hoverEffect(.highlight)
-        .hqPointerFill(8, on: !on)   // [mac] Feel list B
+        .hqPointerFill(shape, on: !on)
         .accessibilityLabel(count.map { "\(title), \($0)" } ?? title)
         .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("marketplace.side.\(id)")
@@ -702,13 +704,14 @@ struct MarketplaceView: View {
                                 // [Mac UI check 2026-11-13] Three to the hero's height exactly: a few points more each cut
                                 // the third off at the bottom, which read as clipped rather than more to scroll to.
                                 .frame(height: Self.sidePickHeight)
-                                .background(Color(uiColor: HQPalette.card), in: RoundedRectangle(cornerRadius: HQShape.radius(12, .card), style: .continuous))
-                                .overlay { cardEdge(12) }
-                                .contentShape(RoundedRectangle(cornerRadius: HQShape.radius(12, .card), style: .continuous))
+                                .background(Color(uiColor: HQPalette.card), in: marketplaceCardShape)
+                                .overlay { marketplaceCardShape.strokeBorder(Color(uiColor: MarketplaceHero.edge)) }
+                                .contentShape(marketplaceCardShape)
                             }
                             .buttonStyle(.plain)
+                            .contentShape(.hoverEffect, marketplaceCardShape)
                             .hoverEffect(.highlight)
-                            .hqPointerFill(12)   // [mac] Feel list B
+                            .hqPointerFill(marketplaceCardShape)
                             .accessibilityIdentifier("marketplace.featured.pick-\(entry.name)")
                         }
                     }
@@ -725,8 +728,8 @@ struct MarketplaceView: View {
     private static let sidePickHeight: CGFloat = (heroHeight - 20) / 3
 
     /// Where the card is the page's colour (the Desktop Look, the light iOS look) an outline is its edge.
-    @ViewBuilder private func cardEdge(_ radius: CGFloat) -> some View {
-        RoundedRectangle(cornerRadius: HQShape.radius(radius, .card), style: .continuous).strokeBorder(Color(uiColor: MarketplaceHero.edge))
+    private var marketplaceCardShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: HQShape.radius(12, .card), style: .continuous)
     }
 
     private var kindPicker: some View {
@@ -802,11 +805,12 @@ struct MarketplaceView: View {
         content()
             .padding(14)
             .frame(maxWidth: .infinity, minHeight: 128, alignment: .topLeading)   // the Mac draws the page at 77 %
-            .background(Color(uiColor: HQPalette.card), in: RoundedRectangle(cornerRadius: HQShape.radius(12, .card), style: .continuous))
-            .overlay { cardEdge(12) }
-            .contentShape(RoundedRectangle(cornerRadius: HQShape.radius(12, .card), style: .continuous))
+            .background(Color(uiColor: HQPalette.card), in: marketplaceCardShape)
+            .overlay { marketplaceCardShape.strokeBorder(Color(uiColor: MarketplaceHero.edge)) }
+            .contentShape(marketplaceCardShape)
+            .contentShape(.hoverEffect, marketplaceCardShape)
             .hoverEffect(.highlight)
-            .hqPointerFill(12)   // [mac] Feel list B: `.hoverEffect` draws nothing on the Mac
+            .hqPointerFill(marketplaceCardShape)
     }
 
     @ViewBuilder private func itemCard(_ item: MarketplaceItem) -> some View {

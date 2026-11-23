@@ -9,6 +9,9 @@
 import SwiftUI
 import UIKit
 
+// Never mistake an already-visible hover overlay for the button's own background on the next mouse event.
+private final class PointerFillView: UIView {}
+
 @MainActor enum PointerEffects {
     /// Rows of the screen's lists and its small round controls answer the pointer from now on.
     static func install(in screen: UIViewController) {
@@ -25,7 +28,7 @@ import UIKit
             rows(table)
             return
         }
-        if let control = view as? UIControl { button(control) }
+        if let control = view as? UIControl { button(control, discovered: true) }
         guard depth > 0 else { return }
         for child in view.subviews { walk(child, depth: depth - 1) }
     }
@@ -78,21 +81,141 @@ import UIKit
     }
 
     /// A small round control (composer buttons, the jump button, a Find arrow): the system's highlight.
-    static func button(_ control: UIControl) {
+    /// [hover-shape] A control with its own `outline` takes it whatever its size (its tap area is larger than what it draws).
+    static func button(_ control: UIControl, discovered: Bool = false) {
+        // Decide from the live plate when the pointer arrives, not from a possibly zero size when the page is scanned.
         if let button = control as? UIButton, button.configuration != nil {
             button.isPointerInteractionEnabled = true
             #if targetEnvironment(macCatalyst)
-            if button.bounds.width <= 72, button.bounds.height <= 72 { MacHover.button(button) }
+            MacHover.button(button, discovered: discovered)
             #endif
             return
         }
         guard !(control is UITextField), !(control is UISwitch), !(control is UISegmentedControl), !(control is UISlider),
-              !(control is UIRefreshControl), control.bounds.width <= 72, control.bounds.height <= 72,
-              !control.interactions.contains(where: { $0 is UIPointerInteraction }) else { return }
-        control.addInteraction(UIPointerInteraction(delegate: ButtonPointer.shared))
+              !(control is UIRefreshControl) else { return }
+        if let existing = control.interactions.first(where: { $0 is UIPointerInteraction }) as? UIPointerInteraction {
+            // The control's deliberate choice outranks an earlier page scan. Never replace a system or custom delegate.
+            guard !discovered, existing.delegate === ButtonPointer.scouted else { return }
+            control.removeInteraction(existing)
+        }
+        control.addInteraction(UIPointerInteraction(delegate: discovered ? ButtonPointer.scouted : ButtonPointer.explicit))
         #if targetEnvironment(macCatalyst)
-        MacHover.button(control)
+        MacHover.button(control, discovered: discovered)
         #endif
+    }
+
+    // MARK: Outlines
+
+    /// [hover-shape] Owner 2026-11-22 (the Activity pill's hover, a capsule round its whole 44 pt tap area over the pill's
+    /// 4 pt box: "this highlight isn't shaped properly … fix everywhere"): the pointer's fill (the Mac's) and highlight
+    /// (the iPad's) take the shape the control DRAWS, never a guess from its bounds. `rect` is in the view's own space;
+    /// `strong`: a button's fill (else a row's, fainter); `plate`: the view that draws the shape, which the Mac's fill
+    /// goes inside, over its colour (a filled button's colour would otherwise cover a fill put under it).
+    struct Outline: Equatable {
+        var rect: CGRect
+        var radius: CGFloat
+        var corners: CACornerMask = [.layerMinXMinYCorner, .layerMaxXMinYCorner, .layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+        var strong = true
+        weak var plate: UIView?
+    }
+
+    private final class OutlineBox {
+        var lastLayout: Outline?
+        let make: @MainActor () -> Outline?
+        init(_ make: @escaping @MainActor () -> Outline?) { self.make = make }
+    }
+    private static var outlineKey = 0
+
+    /// A view whose drawn shape is not its own bounds nor a plate inside it (a 44 pt tap area over a 34 pt pill drawn
+    /// beside it, a line over a frosted pill): its outline, asked each time the pointer comes. nil: no fill now.
+    static func outline(_ view: UIControl, _ make: @escaping @MainActor () -> Outline?) {
+        objc_setAssociatedObject(view, &outlineKey, OutlineBox(make), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        if UIDevice.current.userInterfaceIdiom == .pad || DeviceWord.isMac { button(view) }
+    }
+
+    /// The plate may change under a stationary pointer: expanding the shelf, changing looks, or reusing a transcript row.
+    static func outlineDidLayout(_ view: UIControl) {
+        guard let box = objc_getAssociatedObject(view, &outlineKey) as? OutlineBox else { return }
+        let next = box.make()
+        guard next != box.lastLayout else { return }
+        box.lastLayout = next
+        #if targetEnvironment(macCatalyst)
+        MacHover.refresh(view)
+        #else
+        view.interactions.compactMap { $0 as? UIPointerInteraction }.forEach { $0.invalidate() }
+        #endif
+    }
+
+    static func hasOwnOutline(_ view: UIView) -> Bool { objc_getAssociatedObject(view, &outlineKey) != nil }
+
+    /// The outline a view's own `outline` gives (nil when it has none, or none now).
+    static func ownOutline(of view: UIView) -> Outline? {
+        (objc_getAssociatedObject(view, &outlineKey) as? OutlineBox)?.make()
+    }
+
+    /// The shape `view` draws as a button: its own outline; else its own colour or border in its own corners; else the
+    /// plate it draws inside itself (a configured button's background: the colour is a subview, the corners the
+    /// button's own layer's); nil for a bare glyph or words.
+    static func drawnOutline(of view: UIView) -> Outline? {
+        if hasOwnOutline(view) { return ownOutline(of: view) }
+        let box = view.bounds
+        guard box.width > 0, box.height > 0 else { return nil }
+        func clamp(_ radius: CGFloat, _ rect: CGRect) -> CGFloat { min(radius, min(rect.width, rect.height) / 2) }
+        if draws(view) {
+            return Outline(rect: box, radius: clamp(view.layer.cornerRadius, box), corners: view.layer.maskedCorners, plate: view)
+        }
+        // A plate: a coloured or bordered view inside it covering most of it (not a dot, a badge or a glyph).
+        func find(_ parent: UIView, depth: Int) -> UIView? {
+            for child in parent.subviews where !child.isHidden && child.alpha > 0.01 && !(child is PointerFillView)
+                && !(child is UILabel) && !(child is UIImageView) && !(child is UIControl) {
+                let frame = child.convert(child.bounds, to: view)
+                if draws(child), frame.width >= box.width * 0.5, frame.height >= box.height * 0.5 { return child }
+                if depth > 0, let deeper = find(child, depth: depth - 1) { return deeper }
+            }
+            return nil
+        }
+        guard let plate = find(view, depth: 2) else { return nil }
+        let frame = plate.convert(plate.bounds, to: view)
+        // The corners: the plate's own, else the nearest ancestor's that rounds it (a configured button rounds its own layer).
+        var radius = plate.layer.cornerRadius
+        var corners = plate.layer.maskedCorners
+        var up = plate.superview
+        while radius == 0, let here = up {
+            if here.layer.cornerRadius > 0 { radius = here.layer.cornerRadius; corners = here.layer.maskedCorners }
+            if here === view { break }
+            up = here.superview
+        }
+        return Outline(rect: frame, radius: clamp(radius, frame), corners: corners, plate: plate)
+    }
+
+    /// Whether a view paints something of its own: a colour that shows, or a border.
+    private static func draws(_ view: UIView) -> Bool {
+        if view.layer.borderWidth > 0, let border = view.layer.borderColor, border.alpha > 0.01 { return true }
+        guard let color = view.backgroundColor else { return false }
+        return color.resolvedColor(with: view.traitCollection).cgColor.alpha > 0.01
+    }
+
+    /// No visible plate: keep a small glyph's affordance inside its target. An unlaid-out control found by the scout
+    /// may since have become a whole row; only an explicitly interactive surface should light a large empty area.
+    static func bareOutline(in box: CGRect, discovered: Bool) -> Outline? {
+        guard !box.isEmpty else { return nil }
+        if box.width > 72 || box.height > 72 {
+            return discovered ? nil : Outline(rect: box, radius: HQShape.radius(8, .control))
+        }
+        if box.width > box.height * 1.25 { return Outline(rect: box, radius: box.height / 2) }
+        let side = min(box.width, box.height)
+        return Outline(rect: CGRect(x: box.midX - side / 2, y: box.midY - side / 2, width: side, height: side), radius: side / 2)
+    }
+
+    /// The outline as a path in the view's space (the iPad pointer's highlight).
+    static func path(_ outline: Outline) -> UIBezierPath {
+        var corners: UIRectCorner = []
+        if outline.corners.contains(.layerMinXMinYCorner) { corners.insert(.topLeft) }
+        if outline.corners.contains(.layerMaxXMinYCorner) { corners.insert(.topRight) }
+        if outline.corners.contains(.layerMinXMaxYCorner) { corners.insert(.bottomLeft) }
+        if outline.corners.contains(.layerMaxXMaxYCorner) { corners.insert(.bottomRight) }
+        return UIBezierPath(roundedRect: outline.rect, byRoundingCorners: corners,
+                            cornerRadii: CGSize(width: outline.radius, height: outline.radius))
     }
 }
 
@@ -126,11 +249,20 @@ final class RowPointer: NSObject, UIPointerInteractionDelegate {
 }
 
 private final class ButtonPointer: NSObject, UIPointerInteractionDelegate {
-    static let shared = ButtonPointer()
+    static let scouted = ButtonPointer(discovered: true)
+    static let explicit = ButtonPointer(discovered: false)
+    private let discovered: Bool
+    private init(discovered: Bool) { self.discovered = discovered }
 
     func pointerInteraction(_ interaction: UIPointerInteraction, styleFor region: UIPointerRegion) -> UIPointerStyle? {
         guard let view = interaction.view, view.window != nil else { return nil }
-        return UIPointerStyle(effect: .highlight(UITargetedPreview(view: view)))
+        // [hover-shape] The highlight takes the shape the control draws; a control that has grown past a small button
+        // since it was swept (a pill that was 0 × 0 then) and draws nothing gets none.
+        let parameters = UIPreviewParameters()
+        let outline = PointerEffects.drawnOutline(of: view) ?? (PointerEffects.hasOwnOutline(view) ? nil : PointerEffects.bareOutline(in: view.bounds, discovered: discovered))
+        guard let outline else { return nil }
+        parameters.visiblePath = PointerEffects.path(outline)
+        return UIPointerStyle(effect: .highlight(UITargetedPreview(view: view, parameters: parameters)))
     }
 }
 
@@ -156,11 +288,11 @@ private final class ButtonPointer: NSObject, UIPointerInteractionDelegate {
     /// What a control's fill is cut to: a disc round an icon button (a capsule when it is clearly wider than tall), the
     /// view's own corners, a capsule, or corners of a given radius.
     /// `pill`: a capsule with the Desktop Look off, its 4 pt box with it on (read when shown, so it follows the look).
-    enum Shape { case button, own, capsule, pill, rounded(CGFloat) }
+    enum Shape { case button, scouted, own, capsule, pill, rounded(CGFloat) }
 
     private weak var list: UIScrollView?
     private weak var hovered: UIView?
-    private let fill = UIView()
+    private let fill = PointerFillView()
     private var offset: NSKeyValueObservation?
     private var size: NSKeyValueObservation?
     private weak var recognizer: UIHoverGestureRecognizer?
@@ -179,8 +311,14 @@ private final class ButtonPointer: NSObject, UIPointerInteractionDelegate {
     }
 
     /// [Mac AAA 2026-11-17] Tours: a `surface`'s hover drawn as the pointer over it would draw it.
-    static func debugHoverSurface(_ view: UIView) {
-        (objc_getAssociatedObject(view, &key) as? ButtonHover)?.debugOver()
+    static func debugHoverSurface(_ view: UIView, _ on: Bool = true) {
+        (objc_getAssociatedObject(view, &key) as? ButtonHover)?.debugOver(on)
+    }
+
+    /// Tours: the hover installed on `view` and the fill it draws now, in `root`'s coordinates.
+    static func debugHoverReport(_ view: UIView, in root: UIView) -> String {
+        guard let hover = objc_getAssociatedObject(view, &key) as? ButtonHover else { return "no hover" }
+        return hover.debugReport(in: root)
     }
     #endif
 
@@ -208,16 +346,41 @@ private final class ButtonPointer: NSObject, UIPointerInteractionDelegate {
         objc_setAssociatedObject(view, &key, NSNull(), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
 
-    static func button(_ control: UIControl) {
-        guard objc_getAssociatedObject(control, &key) == nil else { return }
-        let hover = ButtonHover(control, shape: .button)
-        objc_setAssociatedObject(control, &key, hover, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+    static func button(_ control: UIControl, discovered: Bool = false) {
+        surface(control, shape: discovered ? .scouted : .button)
     }
+
+    static func refresh(_ view: UIView) {
+        (objc_getAssociatedObject(view, &key) as? ButtonHover)?.refresh()
+    }
+
+    #if DEBUG
+    /// [hover-shape] Tours: every control given a small button's hover, with its size then. One swept at 0 × 0 that has
+    /// since grown past a small button is where the old capsule round a tap area came from.
+    static func debugSweptReport(in root: UIView) -> String {
+        var lines: [String] = []
+        func visit(_ view: UIView) {
+            guard !view.isHidden, view.alpha > 0 else { return }
+            if let hover = objc_getAssociatedObject(view, &key) as? ButtonHover {
+                let from = hover.installedSize, now = view.bounds.size
+                if from == .zero && (now.width > 72 || now.height > 72) {
+                    lines.append("  \(type(of: view)) \(view.accessibilityIdentifier ?? ""): \(from) → \(now)")
+                }
+            }
+            view.subviews.forEach(visit)
+        }
+        visit(root)
+        return lines.joined(separator: "\n")
+    }
+    #endif
 
     /// A view that is not a small control (`PointerEffects.surface`), or a button that is not a `UIControl` (the
     /// composer's ☰, on glass): the fill in `shape`, over `above`, inside `host`.
     static func surface(_ view: UIView, shape: Shape, above: UIView? = nil, host: UIView? = nil) {
-        guard objc_getAssociatedObject(view, &key) == nil else { return }
+        if let existing = objc_getAssociatedObject(view, &key) {
+            (existing as? ButtonHover)?.replaceScouted(with: shape, above: above, host: host)
+            return
+        }
         let hover = ButtonHover(view, shape: shape, above: above, host: host)
         objc_setAssociatedObject(view, &key, hover, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
@@ -364,7 +527,7 @@ private final class ButtonPointer: NSObject, UIPointerInteractionDelegate {
             } else if let table = here as? UITableView, !(table.transform.d < 0) {   // not the chat's inverted transcript
                 PointerEffects.rows(table)
             } else if let control = here as? UIControl {
-                PointerEffects.button(control)
+                PointerEffects.button(control, discovered: true)
             }
             view = here.superview
         }
@@ -376,8 +539,11 @@ private final class ButtonPointer: NSObject, UIPointerInteractionDelegate {
     private weak var view: UIView?
     private weak var above: UIView?
     private weak var host: UIView?
-    private let shape: MacHover.Shape
-    private let fill = UIView()
+    private var shape: MacHover.Shape
+    private let fill = PointerFillView()
+    #if DEBUG
+    let installedSize: CGSize
+    #endif
     private var over = false
     private var pressed = false
     private var highlight: NSKeyValueObservation?
@@ -385,6 +551,9 @@ private final class ButtonPointer: NSObject, UIPointerInteractionDelegate {
     init(_ view: UIView, shape: MacHover.Shape, above: UIView? = nil, host: UIView? = nil) {
         self.view = view
         self.shape = shape
+        #if DEBUG
+        self.installedSize = view.bounds.size
+        #endif
         self.above = above
         self.host = host
         super.init()
@@ -403,6 +572,20 @@ private final class ButtonPointer: NSObject, UIPointerInteractionDelegate {
         }
     }
 
+    /// Keep one recognizer if a control configures its own surface after the window has already discovered it.
+    func replaceScouted(with next: MacHover.Shape, above: UIView?, host: UIView?) {
+        guard case .scouted = shape else { return }
+        if case .scouted = next { return }
+        shape = next
+        self.above = above
+        self.host = host
+        refresh()
+    }
+
+    func refresh() {
+        if over || pressed || (view as? UIControl)?.isHighlighted == true { show() }
+    }
+
     func press(_ down: Bool) {
         guard pressed != down else { return }
         pressed = down
@@ -418,65 +601,89 @@ private final class ButtonPointer: NSObject, UIPointerInteractionDelegate {
     }
 
     #if DEBUG
-    func debugOver() {
-        over = true
+    func debugOver(_ on: Bool) {
+        over = on
         show()
     }
+
+    func debugReport(in root: UIView) -> String {
+        let f = fill.superview.map { $0.convert(fill.frame, to: root) } ?? .zero
+        return String(format: "shape %@, fill (%.1f, %.1f, %.1f × %.1f) radius %.1f alpha %.2f", String(describing: shape),
+                      f.minX, f.minY, f.width, f.height, fill.layer.cornerRadius, fill.alpha)
+    }
     #endif
+
+    private func hide() {
+        guard fill.alpha > 0 else { return }
+        UIView.animate(withDuration: HQMotion.hover, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) { self.fill.alpha = 0 }   // motion-ok: hover fill fades opacity only
+    }
 
     private func show() {
         guard let view else { return }
         let control = view as? UIControl
         let down = pressed || control?.isHighlighted == true
-        guard over || down, control?.isEnabled != false, !view.isHidden, view.isUserInteractionEnabled else {
-            guard fill.alpha > 0 else { return }
-            UIView.animate(withDuration: HQMotion.hover, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) { self.fill.alpha = 0 }   // motion-ok: hover fill fades opacity only
-            return
-        }
-        let holder = host ?? view
+        guard over || down, control?.isEnabled != false, !view.isHidden, view.isUserInteractionEnabled else { return hide() }
+        var holder = host ?? view
         let box = holder.bounds
         let small: Bool
-        switch shape {
-        case .button:
-            small = true
-            // A disc round an icon button; a capsule (the control's own shape) for one clearly wider than it is tall.
-            // Owner 2026-11-03: a circle as wide as the composer's model bubble stuck out above and below it ("looks
-            // really weird").
-            if box.width > box.height * 1.25 {
+        fill.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner, .layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+        // [hover-shape] The shape the control draws (its own outline, else a swept button's plate), not a guess from
+        // its box: the fill goes inside the plate, over its colour, in the plate's corners.
+        let own = PointerEffects.hasOwnOutline(view)
+        var drawn: PointerEffects.Outline?
+        if own {
+            guard let outline = PointerEffects.ownOutline(of: view) else { return hide() }
+            drawn = outline
+        } else {
+            switch shape {
+            case .button, .scouted: drawn = PointerEffects.drawnOutline(of: holder)
+            default: break
+            }
+        }
+        if let drawn {
+            small = drawn.strong
+            let target = drawn.plate ?? holder
+            fill.frame = (own ? view : holder).convert(drawn.rect, to: target)
+            fill.layer.cornerRadius = drawn.radius
+            fill.layer.maskedCorners = drawn.corners
+            holder = target
+        } else {
+            switch shape {
+            case .button, .scouted:
+                let discovered: Bool = if case .scouted = shape { true } else { false }
+                guard let outline = PointerEffects.bareOutline(in: box, discovered: discovered) else { return hide() }
+                small = true
+                fill.frame = outline.rect
+                fill.layer.cornerRadius = outline.radius
+            case .own:
+                small = false
+                if let card {
+                    // A row of a card: the card's width, and the card's corners where the row meets them.
+                    fill.frame = CGRect(x: card.frame.minX - view.frame.minX, y: 0, width: card.frame.width, height: box.height)
+                    var corners: CACornerMask = []
+                    if abs(view.frame.minY - card.frame.minY) < 1 { corners.formUnion([.layerMinXMinYCorner, .layerMaxXMinYCorner]) }
+                    if abs(view.frame.maxY - card.frame.maxY) < 1 { corners.formUnion([.layerMinXMaxYCorner, .layerMaxXMaxYCorner]) }
+                    fill.layer.cornerRadius = corners.isEmpty ? 0 : card.radius
+                    fill.layer.maskedCorners = corners
+                } else {
+                    fill.frame = box
+                    fill.layer.cornerRadius = holder.layer.cornerRadius
+                    fill.layer.maskedCorners = holder.layer.maskedCorners
+                }
+            case .capsule:
+                small = true   // a pill beside the icon buttons (the composer's model bubble) answers as strongly as they do
                 fill.frame = box
                 fill.layer.cornerRadius = box.height / 2
-            } else {
-                let side = max(box.width, box.height)
-                fill.frame = CGRect(x: box.midX - side / 2, y: box.midY - side / 2, width: side, height: side)
-                fill.layer.cornerRadius = side / 2
-            }
-        case .own:
-            small = false
-            if let card {
-                // A row of a card: the card's width, and the card's corners where the row meets them.
-                fill.frame = CGRect(x: card.frame.minX - view.frame.minX, y: 0, width: card.frame.width, height: box.height)
-                var corners: CACornerMask = []
-                if abs(view.frame.minY - card.frame.minY) < 1 { corners.formUnion([.layerMinXMinYCorner, .layerMaxXMinYCorner]) }
-                if abs(view.frame.maxY - card.frame.maxY) < 1 { corners.formUnion([.layerMinXMaxYCorner, .layerMaxXMaxYCorner]) }
-                fill.layer.cornerRadius = corners.isEmpty ? 0 : card.radius
-                fill.layer.maskedCorners = corners
-            } else {
+            case .pill:
+                small = true
                 fill.frame = box
-                fill.layer.cornerRadius = holder.layer.cornerRadius
-                fill.layer.maskedCorners = holder.layer.maskedCorners
+                fill.layer.cornerRadius = HQShape.radius(box.height / 2, .capsule)
+            case .rounded(let radius):
+                small = false
+                fill.frame = box
+                // A plain UIButton can have a 17 pt layer radius without drawing a plate. Keep the requested tab/row shape.
+                fill.layer.cornerRadius = radius
             }
-        case .capsule:
-            small = true   // a pill beside the icon buttons (the composer's model bubble) answers as strongly as they do
-            fill.frame = box
-            fill.layer.cornerRadius = box.height / 2
-        case .pill:
-            small = true
-            fill.frame = box
-            fill.layer.cornerRadius = HQShape.radius(box.height / 2, .capsule)
-        case .rounded(let radius):
-            small = false
-            fill.frame = box
-            fill.layer.cornerRadius = radius
         }
         fill.backgroundColor = small ? (down ? MacHover.buttonPressFill : MacHover.buttonFill)
                                      : (down ? MacHover.rowPressFill : MacHover.rowFill)

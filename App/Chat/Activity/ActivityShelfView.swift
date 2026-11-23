@@ -106,6 +106,8 @@ final class ActivityShelfView: UIView {
         // A command can be arbitrarily long. The inline header stays bounded; VoiceOver keeps the whole step.
         summaryHeader.maximumWrappedLines = 2
         summaryHeader.addTarget(self, action: #selector(toggled), for: .touchUpInside)
+        // The header owns the 44 pt hit target, not the visible shape inside it.
+        PointerEffects.outline(summaryHeader) { [weak self] in self?.summaryOutline }
         accessibilityIdentifier = "chat.shelf"
         themeWatch = NotificationCenter.default.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
             // ThemeChrome restores/flattens the glass first. Never restyle the window from layout.
@@ -127,6 +129,24 @@ final class ActivityShelfView: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
     isolated deinit { if let themeWatch { NotificationCenter.default.removeObserver(themeWatch) } }
 
+    /// A nil radius makes the folded glass a capsule at any text size. Painting and highlighting use the same corners.
+    private var panelRadius: CGFloat? { Theme.isDesktop ? DesktopRows.radius : expanded ? 18 : nil }
+    private var panelCorners: UICornerConfiguration { panelRadius.map { .corners(radius: .fixed($0)) } ?? .capsule() }
+
+    /// The shape drawn under the summary header, in its space (`PointerEffects.outline`).
+    private var summaryOutline: PointerEffects.Outline? {
+        guard !summaryHeader.isHidden, !summaryHeader.bounds.isEmpty else { return nil }
+        if showsCallNotice {
+            return PointerEffects.Outline(rect: summaryHeader.bounds, radius: callNotice.layer.cornerRadius)
+        }
+        let drawn = convert(glass.frame, to: summaryHeader)
+        let radius = panelRadius ?? drawn.height / 2
+        guard expanded else { return PointerEffects.Outline(rect: drawn, radius: min(radius, drawn.height / 2)) }
+        // Opened: the card's head, in the card's top corners.
+        return PointerEffects.Outline(rect: CGRect(x: drawn.minX, y: drawn.minY, width: drawn.width, height: summaryHeader.bounds.height),
+                                      radius: radius, corners: [.layerMinXMinYCorner, .layerMaxXMinYCorner], strong: false)
+    }
+
     @objc private func toggled() { Haptics.play(.selection); onToggle?() }
     @objc private func collapseAllTapped() { Haptics.play(.selection); onCollapseAll?() }
 
@@ -139,7 +159,8 @@ final class ActivityShelfView: UIView {
 
     #if DEBUG
     /// Tours: the ⌃'s hover as the pointer over it draws it.
-    func debugHoverCollapse() { collapseAll.tintColor = ChatPalette.label }
+    func debugHoverCollapse(_ on: Bool = true) { collapseAll.tintColor = on ? ChatPalette.label : ChatPalette.label2 }
+    func debugGlassFrame(in root: UIView) -> CGRect { convert(glass.frame, to: root) }
     #endif
 
     func piece(_ kind: ShelfPieceKind, make: () -> ShelfPieceView) -> ShelfPieceView {
@@ -263,6 +284,7 @@ final class ActivityShelfView: UIView {
         callNotice.isHidden = !present || !direct
         glass.accessibilityElementsHidden = !present || !expanded
         summaryHeader.isHidden = !present
+        defer { PointerEffects.outlineDidLayout(summaryHeader) }
         guard present else { return }
         let w = expanded ? cardWidth(bounds.width) : bounds.width
         prepareHeader(width: w)
@@ -290,7 +312,7 @@ final class ActivityShelfView: UIView {
         }
         if backing.superview != nil {
             backing.frame = glass.frame
-            backing.cornerConfiguration = Theme.isDesktop ? .corners(radius: .fixed(4)) : expanded ? .corners(radius: .fixed(18)) : .capsule()
+            backing.cornerConfiguration = panelCorners
         }
         if styledExpanded != expanded {
             styledExpanded = expanded
@@ -300,7 +322,7 @@ final class ActivityShelfView: UIView {
                 effect.tintColor = expanded ? ShelfPieceView.cardTint : nil
                 glass.effect = effect
             }
-            glass.cornerConfiguration = Theme.isDesktop ? .corners(radius: .fixed(4)) : expanded ? .corners(radius: .fixed(18)) : .capsule()
+            glass.cornerConfiguration = panelCorners
         }
         overview.isHidden = !expanded || detail != nil
         overview.accessibilityElementsHidden = overview.isHidden
@@ -391,6 +413,9 @@ final class ShelfPieceView: UIView {
         cornerConfiguration = .capsule()
         header.addTarget(self, action: #selector(toggled), for: .touchUpInside)
         header.isRow = true
+        // [hover-shape] A category row: the row lit under the pointer, as the cards' other rows (it took the small
+        // buttons' capsule round itself when the sweep found it before it first laid out).
+        PointerEffects.surface(header)
         addSubview(header)
         // The goal's ⋯ sits over the header's trailing end, a sibling (the header is one accessibility element).
         addSubview(header.more)

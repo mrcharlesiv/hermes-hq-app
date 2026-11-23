@@ -42,6 +42,35 @@ struct ActivityPillLayoutTests {
         #expect(shelf.summaryHeader.accessibilityLabel == shelf.summary.accessibilityLabel)
     }
 
+    @Test func pointerFollowsThePaintedShelfWithoutShrinkingTheTapTarget() throws {
+        let shelf = makeShelf(), header = shelf.summaryHeader
+        layout(shelf)
+        let glass = try #require(shelf.subviews.compactMap { $0 as? UIVisualEffectView }.first)
+        let folded = try #require(PointerEffects.drawnOutline(of: header))
+        #expect(folded.rect == glass.convert(glass.bounds, to: header))
+        #expect(folded.rect.height == 34 && header.bounds.height == 44)
+        #expect(folded.radius == (Theme.isDesktop ? DesktopRows.radius : 17))
+        #expect(shelf.point(inside: CGPoint(x: header.center.x, y: 1), with: nil))
+        #expect(!PointerEffects.path(folded).contains(CGPoint(x: header.bounds.midX, y: 1)))
+
+        shelf.expanded = true
+        layout(shelf)
+        let opened = try #require(PointerEffects.drawnOutline(of: header))
+        #expect(opened.rect == header.bounds)
+        #expect(opened.corners == [.layerMinXMinYCorner, .layerMaxXMinYCorner])
+        #expect(!opened.strong)
+
+        shelf.expanded = false
+        shelf.summaryIcon = ("phone.fill", .systemGreen)
+        layout(shelf)
+        let call = try #require(PointerEffects.drawnOutline(of: header))
+        #expect(call.rect == header.bounds && call.rect.height >= 48)
+        #expect(call.radius == HQShape.radius(18, .card))
+        shelf.pieces.values.forEach { $0.setPresent(false, animated: false) }
+        layout(shelf)
+        #expect(PointerEffects.drawnOutline(of: header) == nil)
+    }
+
     @Test func overviewHasEveryCategoryAndExactlyOneDetailScroller() throws {
         let shelf = makeShelf()
         shelf.expanded = true

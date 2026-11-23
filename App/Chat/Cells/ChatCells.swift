@@ -116,6 +116,8 @@ class ChatBaseCell: UITableViewCell {
 
     /// Whether the line has its pill (a press then shades the pill rather than the row's own highlight).
     var showsBacking: Bool { backing.map { !$0.isHidden } ?? false }
+    /// The pill's frame in the content view's space while it shows (the pointer's fill takes its shape).
+    var backingFrame: CGRect? { showsBacking ? backing?.frame : nil }
 
     /// [backdrop] A card of content under a line (an opened run, a group's members): the faint page fill with no
     /// picture, the reply bubble's own colour on one (the faint fill all but vanished there; content stays on solid cards).

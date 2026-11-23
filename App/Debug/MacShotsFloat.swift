@@ -4,7 +4,7 @@
 // activity pill), a queued message, then the window at 1000 × 700. Each picture comes with `<name>-float.txt`: the
 // chat's views in drawing order (back to front) with their frames, and the message box's frame, so what sits over
 // or under what, and the gaps, can be read off.
-// `-HQDebugFloatBot <id>` picks the chat. `-HQDebugFloatSteps <list>` (comma-separated: scroll, pillgo, shelf, reply, edit, tray, work, queue, head, narrow) runs only those parts.
+// `-HQDebugFloatBot <id>` picks the chat. `-HQDebugFloatSteps <list>` (comma-separated: scroll, pillgo, pillhover, shelf, reply, edit, tray, work, queue, head, narrow) runs only those parts.
 
 #if DEBUG && targetEnvironment(macCatalyst)
 import UIKit
@@ -68,6 +68,16 @@ extension MacShots {
             if summary == nil { try? await Task.sleep(for: .seconds(0.5)) }
         }
         await snap("newest")
+        if runs("pillhover"), let summary {
+            // Exercise the hover installed by the view itself; the tour must not manufacture a missing interaction.
+            MacHover.debugHoverSurface(summary)
+            let glass = chat.activity.shelf.debugGlassFrame(in: window)
+            log += "pill hover: \(MacHover.debugHoverReport(summary, in: window))\n"
+            log += String(format: "pill glass (%.1f, %.1f, %.1f × %.1f), window %.1f × %.1f\n", glass.minX, glass.minY, glass.width, glass.height, window.bounds.width, window.bounds.height)
+            await snap("pill-hover", wait: 0.4)
+            MacHover.debugHoverSurface(summary, false)
+            log += "controls installed before layout that grew past a small button:\n\(MacHover.debugSweptReport(in: chat.view))\n"
+        }
         if runs("scroll") {
             // `-HQDebugFloatScrollStep <pt>` (default 90) and `-HQDebugFloatScrollCount <n>` (default 7).
             let stepBy = UserDefaults.standard.double(forKey: "HQDebugFloatScrollStep")
@@ -99,6 +109,13 @@ extension MacShots {
             // The collapse-all ⌃'s hover, as the pointer over it draws it (owner 2026-11-19: "messed up").
             chat.activity.shelf.debugHoverCollapse()
             await snap("shelf-collapse-hover", wait: 0.4)
+            chat.activity.shelf.debugHoverCollapse(false)
+            // [hover-shape] The opened card's head under the pointer: its top, in the card's corners.
+            MacHover.debugHoverSurface(summary)
+            log += "open head hover: \(MacHover.debugHoverReport(summary, in: chat.view))\n"
+            await snap("shelf-head-hover", wait: 0.4)
+            MacHover.debugHoverSurface(summary, false)
+            log += "swept, card open:\n\(MacHover.debugSweptReport(in: chat.view))\n"
             summary.sendActions(for: .touchUpInside)
             try? await Task.sleep(for: .seconds(1))
         }

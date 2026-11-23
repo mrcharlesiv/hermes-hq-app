@@ -200,7 +200,8 @@ struct NewTileView: View {
 
     /// One bot of Made By: its face and name, the chosen one tinted.
     private func botButton(_ bot: Bot) -> some View {
-        Button {
+        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+        return Button {
             if model.bot != bot.id { PagesHaptics.selection() }
             model.bot = bot.id
         } label: {
@@ -217,17 +218,16 @@ struct NewTileView: View {
             }
             .frame(width: HQFont.scaled(76))   // [ui-sizing] × UI Scale, as its caption: names broke mid-word at 150 %
             .padding(.vertical, 4)
-            .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(model.bot == bot.id ? Color.hqTint.opacity(0.14) : .clear))
+            .background(shape.fill(model.bot == bot.id ? Color.hqTint.opacity(0.14) : .clear))
             // The whole card takes the tap: the face is a UIKit view that took it for itself, so
             // only the name chose the bot (owner 2026-11-03).
-            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .contentShape(shape)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(bot.name)
         .accessibilityAddTraits(model.bot == bot.id ? .isSelected : [])
         .accessibilityIdentifier("tile.new.bot.\(bot.id)")
-        .hqPointerFill(14, on: model.bot != bot.id)   // [Mac AAA 2026-11-16] answers the pointer as the app's cards do
+        .hqPointerFill(shape, on: model.bot != bot.id)
     }
 }
 

@@ -121,6 +121,35 @@ import UIKit
         #expect((layout.lineFrame?.height ?? 0) >= ChatMetrics.toolRowMin, "a work line's 40 pt row")
     }
 
+    @MainActor @Test func foldedFilesHoverTracksTheBackingAcrossCellReuse() throws {
+        let backdrop = Backdrop.chats, source = backdrop.source, same = backdrop.sameAsApp
+        if case .photo = source { Issue.record("Requires a simulator without a saved photo"); return }
+        defer {
+            if case .preset(let preset) = source { backdrop.setPreset(preset) } else { backdrop.clear() }
+            backdrop.setSameAsApp(same)
+        }
+        let (parts, diffs) = threeFiles
+        var i = input(parts, diffs: diffs, style: .bottom)
+        i.activity.fileChanges = .folded
+        let row = try #require(ChatRowBuilder.build(i).first { $0.id == "a|files" })
+        let layout = TextLayout.make(row, width: 393, style: ChatStyleCache.shared.style(for: .large))
+        let cell = ChangedFilesCell(style: .default, reuseIdentifier: nil)
+        cell.frame.size = CGSize(width: 393, height: layout.height)
+        backdrop.setPreset(.aurora)
+        cell.configure(row, layout: layout)
+        cell.layoutIfNeeded()
+        let button = try #require(cell.contentView.subviews.first { $0.accessibilityIdentifier == "chat.changed-files.line" } as? UIControl)
+        let backing = try #require(cell.backingFrame)
+        let lit = try #require(PointerEffects.drawnOutline(of: button))
+        #expect(lit.rect == cell.contentView.convert(backing, to: button))
+        #expect(lit.radius == backing.height / 2 && lit.rect.height < button.bounds.height)
+        backdrop.clear()
+        cell.prepareForReuse()
+        cell.configure(row, layout: layout)
+        #expect(cell.backingFrame == nil)
+        #expect(PointerEffects.drawnOutline(of: button)?.rect == button.bounds)
+    }
+
     @Test func foldedOpensOnItsOwnKeyAndKeepsShowAllSeparate() throws {
         let (parts, diffs) = threeFiles
         var i = input(parts, diffs: diffs, style: .bottom)

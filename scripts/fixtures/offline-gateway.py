@@ -300,7 +300,7 @@ STRICT = {
 _fallback = fx.rpc
 FALLBACK = {'gateway.ping', 'model.options', 'free_tier.status', 'setup.status', 'session.most_recent', 'session.usage',
             'session.control.read', 'setup.runtime_check', 'model.list', 'models.list', 'config.get', 'approval.pending',
-            'process.list', 'commands.catalog', 'commands.list', 'tools.list', 'toolsets.list', 'cron.list', 'cron.manage',
+            'commands.catalog', 'commands.list', 'tools.list', 'toolsets.list', 'cron.list', 'cron.manage',
             'plugins.list', 'plugins.manage', 'skills.list', 'skills.manage', 'status.get', 'gateway.status', 'settings.get',
             'client.capabilities'}
 
@@ -387,6 +387,11 @@ def rpc_inner(method, params):
     if method == 'agents.list':
         with lock:
             return {'processes': [dict(row) for row in WORK['processes'].values()]}
+    if method == 'process.list':
+        # The chat shelf reads its own running commands here, not the gateway-wide agents.list.
+        with lock:
+            sid = find_session(params.get('session_id'))
+            return {'processes': [dict(row) for row in WORK['processes'].values() if row['stored_session_id'] == sid]}
     if method == 'subagent.list':
         with lock:
             sid = find_session(params.get('session_id'))

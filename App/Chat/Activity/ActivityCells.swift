@@ -622,6 +622,15 @@ final class ChangedFilesCell: ChatBaseCell {
         lineButton.accessibilityTraits = .button
         lineButton.accessibilityIdentifier = "chat.changed-files.line"
         PointerEffects.surface(lineButton, capsule: true)
+        // [hover-shape] Over a chat background the line draws a frosted pill as tall as its words, inside its taller
+        // row: the pointer's fill is that pill, not a capsule round the whole row.
+        PointerEffects.outline(lineButton) { [weak self] in
+            guard let self else { return nil }
+            let box = lineButton.bounds
+            guard let pill = backingFrame else { return PointerEffects.Outline(rect: box, radius: box.height / 2) }
+            let rect = contentView.convert(pill, to: lineButton)
+            return PointerEffects.Outline(rect: rect, radius: rect.height / 2)
+        }
         contentView.addSubview(lineButton)
         card.layer.cornerRadius = ChatMetrics.insetCardRadius
         card.layer.cornerCurve = .continuous
@@ -778,6 +787,7 @@ final class ChangedFilesCell: ChatBaseCell {
         // [backdrop] A capsule as tall as the words, as a work line's.
         let pillH = min(h, ceil(max(font.lineHeight, side)) + 8)
         placeBacking(lineButton.frame.insetBy(dx: 0, dy: ((h - pillH) / 2).rounded()), radius: pillH / 2)
+        PointerEffects.outlineDidLayout(lineButton)
     }
 
     @objc private func linePressed() {

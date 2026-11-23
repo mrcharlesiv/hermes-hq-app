@@ -64,7 +64,7 @@ SEQ = {}             # stored id → latest seq
 INFLIGHT = {}        # stored id → {'user','assistant','running'}
 TURNS = {}           # stored id → {'chars','drop_at','save_after'}
 WORK = {'subagents': {}, 'processes': {}}
-JOBS = {}   # stored session id -> process.list rows (/__fixture/jobs)
+CHAT_JOBS = {}   # stored session id -> process.list rows (/__fixture/jobs)
 JOBS = []
 changed = threading.Condition(lock)   # notified on every mode/stall change, so held requests wake
 
@@ -98,7 +98,7 @@ def add_session(sid, profile, title, messages, last_active, hidden=False, source
 
 def seed(bots=5, sessions=20):
     BOTS.clear(); SESSIONS.clear(); RING.clear(); SEQ.clear(); INFLIGHT.clear(); TURNS.clear(); JOBS.clear()
-    WORK['subagents'].clear(); WORK['processes'].clear(); JOBS.clear()
+    WORK['subagents'].clear(); WORK['processes'].clear(); CHAT_JOBS.clear()
     base = int(now()) - 60
     for index in range(bots):
         if index < len(BOT_SEED): name, title, about, pinned = BOT_SEED[index]
@@ -379,11 +379,6 @@ def rpc_inner(method, params):
     if method == 'delegation.status':
         with lock:
             return {'active': [dict(row) for row in WORK['subagents'].values()], 'max_concurrent': 3}
-    if method == 'process.list':
-        # The chat's background jobs set by /__fixture/jobs (Hermes' process.list rows: session_id is the process id).
-        with lock:
-            sid = find_session(params.get('session_id'))
-            return {'processes': [dict(row) for row in JOBS.get(sid, [])]}
     if method == 'agents.list':
         with lock:
             return {'processes': [dict(row) for row in WORK['processes'].values()]}
@@ -391,7 +386,8 @@ def rpc_inner(method, params):
         # The chat shelf reads its own running commands here, not the gateway-wide agents.list.
         with lock:
             sid = find_session(params.get('session_id'))
-            return {'processes': [dict(row) for row in WORK['processes'].values() if row['stored_session_id'] == sid]}
+            live = (row for row in WORK['processes'].values() if row['stored_session_id'] == sid)
+            return {'processes': [dict(row) for row in (*CHAT_JOBS.get(sid, ()), *live)]}
     if method == 'subagent.list':
         with lock:
             sid = find_session(params.get('session_id'))
@@ -580,7 +576,7 @@ def handler(gateway, control_only=False):
                             {'id': len(session['messages']) + 2, 'role': 'tool', 'tool_call_id': call, 'timestamp': now(),
                              'content': json.dumps({'output': 'Background process started', 'session_id': 'proc_x'})},
                         ]
-                    JOBS[sid] = [dict(row) for row in body.get('processes') or []]
+                    CHAT_JOBS[sid] = [dict(row) for row in body.get('processes') or []]
             elif path == '/__fixture/work/end':
                 with lock:
                     for ident in body.get('subagents') or []: WORK['subagents'].pop(ident, None)

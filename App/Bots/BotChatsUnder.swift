@@ -24,6 +24,7 @@ nonisolated enum BotChatsMode: String, CaseIterable, Sendable {
     /// The menu's second line.
     var detail: String? {
         switch self {
+        case .off: "Only chats you choose to show under a bot"
         case .active: "Working, waiting for you, or unread"
         case .pinned: "Chats you pin"
         default: nil
@@ -113,9 +114,13 @@ nonisolated enum BotChatsUnder {
 
     /// `sessions` is the Sessions list's recents (pinned first, then newest first): the bot's pinned chats (up to
     /// `maxPinned`), then for Pinned + Recent its newest others, `count` of them. `more`: its chats not shown.
-    static func pick(_ sessions: [SessionSummary], bot: String, choice: BotChatsChoice) -> (shown: [SessionSummary], more: Int) {
-        guard choice.mode != .off else { return ([], 0) }
-        let own = sessions.filter { $0.profile == bot && !$0.archived }
+    static func pick(_ sessions: [SessionSummary], bot: String, choice: BotChatsChoice,
+                     shortcuts: [SessionSummary] = []) -> (shown: [SessionSummary], more: Int) {
+        // `sessions` honours Keep Chats in This Project; `shortcuts` is the separate, hand-picked exception.
+        var chosen = Set<String>()
+        let manual = shortcuts.filter { $0.profile == bot && !$0.archived && chosen.insert($0.id).inserted }
+        guard choice.mode != .off else { return (manual, 0) }
+        let own = sessions.filter { $0.profile == bot && !$0.archived && !chosen.contains($0.id) }
         if choice.mode == .active {
             // Waiting for you first, then working, then unread; newest first within each.
             let active = own.filter(isActive).sorted {
@@ -123,7 +128,7 @@ nonisolated enum BotChatsUnder {
                 return a != b ? a < b : ($0.lastActive ?? .distantPast) > ($1.lastActive ?? .distantPast)
             }
             let shown = Array(active.prefix(maxPinned))
-            return (shown, own.count - shown.count)
+            return (manual + shown, own.count - shown.count)
         }
         let pinned = own.filter(\.pinned).prefix(maxPinned)
         var shown = Array(pinned)
@@ -132,7 +137,23 @@ nonisolated enum BotChatsUnder {
                 .sorted { ($0.lastActive ?? .distantPast) > ($1.lastActive ?? .distantPast) }
             shown += recent.prefix(choice.count)
         }
-        return (shown, own.count - shown.count)
+        return (manual + shown, own.count - shown.count)
+    }
+
+    /// One menu action shared by Sessions (including a project's page), the Bots list and the open Mac sidebar.
+    @MainActor static func shortcutNode(_ session: SessionSummary, services: any AppServices) -> BotMenuNode? {
+        guard let store = (services as? SessionsServices)?.sessionStore else { return nil }
+        let shown = store.hasBotShortcut(session)
+        let bot = services.bots.first { $0.id == session.profile }
+        guard shown || (bot?.hidden != true && store.canAddBotShortcut(session)) else { return nil }
+        let name = bot?.name ?? store.ownerName(for: session)
+        var node = BotMenuNode.action(shown ? "Remove Shortcut Under \(name)" : "Show Under \(name)",
+                                      shown ? "minus.circle" : "arrow.turn.down.right") { [weak store] in
+            Haptics.play(.selection)
+            store?.setBotShortcut(session, !shown)
+        }
+        node.identifier = "sessions.row.botShortcut"
+        return node
     }
 
     private static func rank(_ session: SessionSummary) -> Int {

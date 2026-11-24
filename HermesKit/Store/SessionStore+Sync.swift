@@ -23,6 +23,7 @@ extension SessionStore: GatewaySynced {
             "codingProjects": .object(device.codingProjects.mapValues { .bool($0) }),
             "projectPinsLocal": .object(device.projectPinsLocal.mapValues { .bool($0) }),            // [project-pins]
             "projectPins": .object(device.projectPins.mapValues { .array($0.map { .string($0) }) }),
+            "botChatShortcuts": .array(device.botChatShortcuts.map(\.json)),
             "projectSorts": .object(device.projectSorts.mapValues { .string($0) }),                 // [project-sort]
             "projectKeep": .object(device.projectKeep.mapValues { .bool($0) }),                      // [project-keep]
             "projectAutoDone": .object(device.projectAutoDone.mapValues { .string($0) }),            // [project-auto-done]
@@ -40,6 +41,11 @@ extension SessionStore: GatewaySynced {
 
     func adoptSynced(_ value: JSONValue, merge: GatewaySyncMerge, base: JSONValue?) {
         let oldCodingProjects = device.codingProjects
+        let oldShortcuts = device.botChatShortcuts
+        if let remote = BotChatShortcut.decode(value["botChatShortcuts"]) {
+            device.botChatShortcuts = BotChatShortcut.merged(local: oldShortcuts, remote: remote,
+                base: BotChatShortcut.decode(base?["botChatShortcuts"]) ?? [], policy: merge)
+        }
         func strings(_ key: String) -> [String] { (value[key]?.array ?? []).compactMap(\.string) }
         /// The gateway's order first; this device's chats it doesn't name keep their places after it.
         func joined(_ remote: [String], _ local: [String]) -> [String] {
@@ -168,6 +174,13 @@ extension SessionStore: GatewaySynced {
         }
         persistState()
         if oldCodingProjects != device.codingProjects { codingProjectsChanged() }
-        rebuild()
+        let shortcutsChanged = oldShortcuts != device.botChatShortcuts
+        if shortcutsChanged {
+            let kept = Set(device.botChatShortcuts)
+            offPageShortcuts = offPageShortcuts.filter { kept.contains($0.key) }
+            shortcutCheckedAt = shortcutCheckedAt.filter { kept.contains($0.key) }
+            refreshOffPageShortcuts()
+        }
+        rebuild(force: shortcutsChanged)
     }
 }

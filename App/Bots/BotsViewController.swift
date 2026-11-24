@@ -52,7 +52,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
     }
     #endif
 
-    nonisolated private enum Section: Hashable, Sendable { case list(BotListSectionID), loading, token, notice }
+    nonisolated private enum Section: Hashable, Sendable { case list(BotListSectionID), tileShortcuts, loading, token, notice }
     nonisolated private enum Item: Hashable, Sendable {
         case tile(String), row(String), header(BotListSectionID), skeleton(Int)
         case notice(String)          // [offline] the slow-load or stale-list card ("slow" / "stale"), spec 3x-offline §4
@@ -122,7 +122,21 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
         }
     }
     private var moreCounts: [String: Int] = [:]
-    private var chatsByBot: [String: [SessionSummary]] = [:]
+    private struct ChatLists {
+        var automatic: [String: [SessionSummary]] = [:]
+        var shortcuts: [String: [SessionSummary]] = [:]
+
+        func pick(_ id: String) -> (shown: [SessionSummary], more: Int) {
+            BotChatsUnder.pick(automatic[id] ?? [], bot: id, choice: BotChatsPrefs.choice(for: id), shortcuts: shortcuts[id] ?? [])
+        }
+    }
+    private var chatLists = ChatLists()
+
+    private func currentChatLists() -> ChatLists {
+        let shortcuts = (services as? SessionsServices)?.sessionStore?.botShortcutRows ?? []
+        return ChatLists(automatic: Dictionary(grouping: services.sessionsOutsideKeptProjects, by: \.profile),
+                         shortcuts: Dictionary(grouping: shortcuts, by: \.profile))
+    }
     private var groupBlockCount = 0
     /// Accessibility sizes with pins past the six: the faces shown as rows under the Pinned header (`reload`).
     private var foldedTileCount = 0
@@ -804,7 +818,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
         foldedTileCount = 0
         chatRows = [:]
         moreCounts = [:]
-        chatsByBot = Dictionary(grouping: services.sessionsOutsideKeptProjects, by: \.profile)   // [project-keep]
+        chatLists = currentChatLists()
 
         var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
         if let token = BotsBar.token(kind: kind, activity: activity) {
@@ -818,7 +832,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
             let roomResults = kind == .bots ? [] : GroupList.results(rooms.filter { !$0.hidden || !collapsed.contains(.hidden) }, query: query, activity: activity)
             sections = [BotListSection(id: .results, title: nil, bots: results, rooms: roomResults)]
             snapshot.appendSections([.list(.results)])
-            snapshot.appendItems(results.map { .row($0.id) } + roomResults.map { .room($0.id) })
+            snapshot.appendItems(withChats(results.map { .row($0.id) }, shortcutsOnly: true) + roomResults.map { .room($0.id) })
         } else if bots.isEmpty, showsSkeleton, rooms.isEmpty || kind == .bots {
             sections = []
             // [offline] §4.1: after 15 s of skeleton the slow card stands over a shorter skeleton.
@@ -846,8 +860,20 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
                 snapshot.appendSections([.list(section.id)])
                 switch section.id {
                 case .tiles:
-                    if !foldTiles { snapshot.appendItems(section.bots.map { large ? .row($0.id) : .tile($0.id) }) }
+                    if !foldTiles {
+                        let items = section.bots.map { large ? Item.row($0.id) : .tile($0.id) }
+                        snapshot.appendItems(large ? withChats(items, shortcutsOnly: true) : items)
+                    }
                     snapshot.appendItems(section.rooms.map { large ? .room($0.id) : .roomTile($0.id) })   // [groups]
+                    // A face in the grid has no row for a shortcut. Keep the faces in their chosen order; only a
+                    // bot with an explicit shortcut gets a labelled row for its chats just below the grid.
+                    if !large {
+                        let owners = section.bots.filter { chatLists.shortcuts[$0.id]?.isEmpty == false }
+                        if !owners.isEmpty {
+                            snapshot.appendSections([.tileShortcuts])
+                            snapshot.appendItems(withChats(owners.map { .row($0.id) }, shortcutsOnly: true))
+                        }
+                    }
                 case .results: snapshot.appendItems(section.bots.map { .row($0.id) })
                 case .unassigned, .everything:
                     // [bots-groupby] With sections, Unassigned has a header and folds; its rooms are among its bots.
@@ -1006,13 +1032,13 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
     /// [chats-under] `items` with each bot's chats under its row, as Filter › Chats Under Bots (or the bot's own choice)
     /// asks: pinned chats, then its newest, then "N more" for the rest. Hidden bots list none (they have no chip in
     /// Sessions), and a bot with nothing to show gets no "N more" either.
-    private func withChats(_ items: [Item]) -> [Item] {
+    private func withChats(_ items: [Item], shortcutsOnly: Bool = false) -> [Item] {
         var out: [Item] = []
         out.reserveCapacity(items.count)
         for item in items {
             out.append(item)
             guard case .row(let id) = item, let bot = botsByID[id], !bot.hidden else { continue }
-            let picked = BotChatsUnder.pick(chatsByBot[id] ?? [], bot: id, choice: BotChatsPrefs.choice(for: id))
+            let picked: (shown: [SessionSummary], more: Int) = shortcutsOnly ? (chatLists.shortcuts[id] ?? [], 0) : chatLists.pick(id)
             guard !picked.shown.isEmpty else { continue }
             for (index, session) in picked.shown.enumerated() {
                 let key = id + "\u{1F}" + session.id
@@ -1052,15 +1078,20 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
     /// [chats-under] [mac] The chats the open sidebar lists under each of `bots` (ids), as `withChats` picks them for the
     /// list: Filter › Chats Under Bots or the bot's own choice. Bots with nothing to show are left out.
     func railChats(for bots: [String]) -> [String: (shown: [SessionSummary], more: Int)] {
-        guard BotChatsPrefs.inUse else { return [:] }
-        let byBot = Dictionary(grouping: services.sessionsOutsideKeptProjects, by: \.profile)   // [project-keep]
+        guard listsChatsUnderBots else { return [:] }
+        let lists = currentChatLists()
+        let hidden = Set(services.bots.filter(\.hidden).map(\.id))
         var out: [String: (shown: [SessionSummary], more: Int)] = [:]
-        for id in bots {
-            var picked = BotChatsUnder.pick(byBot[id] ?? [], bot: id, choice: BotChatsPrefs.choice(for: id))
+        for id in bots where !hidden.contains(id) {
+            var picked = lists.pick(id)
             if !Self.sessionsListed { picked.more = 0 }   // [Mac UI check 2026-11-13] no Sessions for "N more" to open
             if !picked.shown.isEmpty { out[id] = picked }
         }
         return out
+    }
+
+    var listsChatsUnderBots: Bool {
+        BotChatsPrefs.inUse || (services as? SessionsServices)?.sessionStore?.hasBotShortcuts == true
     }
 
     /// [chats-under] [mac] A chat under a bot in the sidebar: it opens beside the sidebar, as its row in the list opens it.
@@ -1890,6 +1921,12 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
 
     func collectionView(_ collectionView: UICollectionView, contextMenuConfigurationForItemsAt indexPaths: [IndexPath],
                         point: CGPoint) -> UIContextMenuConfiguration? {
+        if let at = indexPaths.first, case .chat(let key) = dataSource.itemIdentifier(for: at), let session = chatRows[key]?.session {
+            return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
+                guard let self, let node = BotChatsUnder.shortcutNode(session, services: self.services) else { return nil }
+                return BotMenuNode.uiMenu([node], title: SessionRowView.title(session)).menu
+            }
+        }
         // [groups] A room's menu: Group Info, Pin, Mute, Mark as Unread, Move to Section (with sections), Delete Group Chat.
         if let indexPath = indexPaths.first, let room = room(at: indexPath), let groups {
             let source = collectionView.cellForItem(at: indexPath)

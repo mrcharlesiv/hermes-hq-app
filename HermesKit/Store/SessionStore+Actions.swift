@@ -277,6 +277,7 @@ extension SessionStore {
         AppLog.trace("sessions", "\(archived ? "archive" : "unarchive") \(tag): succeeded in \(AppLog.ms(since: started)) ms")
         leaving.remove(key)
         if archived {
+            forgetBotShortcutRow(id: session.id, profile: session.profile, deleting: false)
             startedRows[key] = nil                      // [#440]
             recents.removeAll { $0.id == session.id && $0.profile == session.profile }
             if var row {
@@ -346,6 +347,7 @@ extension SessionStore {
         }
         AppLog.trace("sessions", "delete \(tag): succeeded in \(AppLog.ms(since: started)) ms")
         ManualChatTitles.set(false, account: account.id, profile: session.profile, id: session.id)
+        forgetBotShortcutRow(id: session.id, profile: session.profile, deleting: true)
         func drop(_ rows: inout [SidebarSessionRow]) { rows.removeAll { $0.id == session.id && $0.profile == session.profile } }
         drop(&recents); drop(&cron); drop(&messaging); drop(&archivedRows)
         startedRows[Self.writeKey(id: session.id, profile: session.profile)] = nil   // [#440]

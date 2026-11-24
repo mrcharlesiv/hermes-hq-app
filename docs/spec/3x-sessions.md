@@ -336,6 +336,11 @@ Sort (`V/store/sidebar-sort.ts`), ties always broken by recency (newest first), 
   outside Sessions follow the same rule (`SessionListPipeline.isKeptAway`, `SessionStore.sessionsOutsideKeptProjects`):
   the chats under each bot's row and the Mac rail's, the strip over a chat and its All sheet, and the Mac's Chats tab.
   Pinned everywhere and waiting on the owner still show; the chat on screen always stays in its strip.
+- **Show Under [bot name]** [bot-chat-shortcut]. Hold a chat on its project page or in Sessions (right-click on Mac)
+  to put a shortcut under its own bot in Bots and in the open Mac sidebar, even with Chats Under Bots off. The chat
+  stays in its project. The shortcut is not a pin: Recent, Pinned, the chat strip, search and unread rules are unchanged.
+  Use **Remove Shortcut Under [bot name]** on either row to undo it without touching the chat. Shortcuts follow the
+  account's `sessions` document by bot and session lineage; archived or deleted chats are not shown.
 - **DECISION (2026-11-21, owner): quiet chats can move to Done on a project's page** [project-auto-done]. Move Quiet
   Chats to Done: Never, After 3, 7 or 14 Days, and in a coding project a switch, When the Pull Request Merges
   (`projectAutoDone`, `ProjectAutoDone`). On that page a live chat that is quiet, not pinned (either kind), not read

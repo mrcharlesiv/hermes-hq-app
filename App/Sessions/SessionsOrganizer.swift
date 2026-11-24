@@ -67,7 +67,8 @@ extension AppModel: SessionsServices {}
             .action(Self.exportTitle, "square.and.arrow.down") { [weak self] in self?.exportJSON(session) },
             .action("Copy Chat ID", "doc.on.doc") { [weak self] in self?.copyID(session) },
         ]
-        let main: [BotMenuNode] = [
+        let shortcut = BotChatsUnder.shortcutNode(session, services: services)
+        let main: [BotMenuNode] = [shortcut].compactMap { $0 } + [
             .action("Rename…", "pencil") { [weak self] in self?.rename(session) },
             .action("Branch in New Chat", "arrow.triangle.branch") { [weak self] in self?.branch(session) },
         ] + (store?.project(of: session).map { project in

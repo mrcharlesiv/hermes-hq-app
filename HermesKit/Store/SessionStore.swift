@@ -107,6 +107,8 @@ nonisolated struct SessionsDeviceState: Codable, Sendable, Hashable {
     var projectPinsLocal: [String: Bool] = [:]
     /// [project-pins] The chats pinned on a project's page alone: project key → row keys (`SessionListPipeline.key`).
     var projectPins: [String: [String]] = [:]
+    /// Explicit shortcuts, newest choice first. Not a gateway pin or a project pin.
+    var botChatShortcuts: [BotChatShortcut] = []
     /// [project-sort] Each project page's Sort (key → `ProjectPageSort` raw); absent: Needs Me First.
     var projectSorts: [String: String] = [:]
     /// [project-keep] Projects whose chats stay on their own page (key → on; false kept so sync carries turning it off).
@@ -130,6 +132,7 @@ nonisolated struct SessionsDeviceState: Codable, Sendable, Hashable {
         case unread, showBackgroundRuns, showOutsideChats, colors, view, projects, latest, pins, collapsedGroups
         case chatOrder, projectOrder, projectPillOrder, botGroupOrder, favoriteProjects, openGroups, archivedProjects, botFolders
         case botConfigFolders, projectBots, codingProjects, projectPinsLocal, projectPins, projectSorts
+        case botChatShortcuts
         case projectKeep, projectAutoDone, projectNotify, projectNewChat, projectLooks, projectBranchRows
     }
 
@@ -157,6 +160,7 @@ nonisolated struct SessionsDeviceState: Codable, Sendable, Hashable {
         codingProjects = (try? c.decodeIfPresent([String: Bool].self, forKey: .codingProjects)) ?? [:]
         projectPinsLocal = (try? c.decodeIfPresent([String: Bool].self, forKey: .projectPinsLocal)) ?? [:]
         projectPins = (try? c.decodeIfPresent([String: [String]].self, forKey: .projectPins)) ?? [:]
+        botChatShortcuts = (try? c.decodeIfPresent([BotChatShortcut].self, forKey: .botChatShortcuts)) ?? []
         projectSorts = (try? c.decodeIfPresent([String: String].self, forKey: .projectSorts)) ?? [:]
         projectKeep = (try? c.decodeIfPresent([String: Bool].self, forKey: .projectKeep)) ?? [:]
         projectAutoDone = (try? c.decodeIfPresent([String: String].self, forKey: .projectAutoDone)) ?? [:]
@@ -439,6 +443,10 @@ final class SessionStore {
     @ObservationIgnored var latestReads: Set<String> = []
     @ObservationIgnored var latestDirty = 0
     @ObservationIgnored var device = SessionsDeviceState()
+    /// Only for explicitly chosen chats outside the recents window. Never inserted into `sessions`.
+    @ObservationIgnored var offPageShortcuts: [BotChatShortcut: SidebarSessionRow] = [:]
+    @ObservationIgnored var shortcutCheckedAt: [BotChatShortcut: ContinuousClock.Instant] = [:]
+    @ObservationIgnored var shortcutRead: Task<Void, Never>?
     /// Archived rows as read (the Archived view), and rows whose Archive or Delete is in the air (left out of the
     /// list until the gateway answers; a failure brings them back).
     @ObservationIgnored var archivedRows: [SidebarSessionRow] = []
@@ -615,6 +623,8 @@ final class SessionStore {
         throttle?.cancel()
         for task in [eventsTask, readInFlight, pollTask, archivedRefresh] { task?.cancel() }
         eventsTask = nil; readInFlight = nil; pollTask = nil; archivedRefresh = nil
+        shortcutRead?.cancel(); shortcutRead = nil
+        shortcutCheckedAt.removeAll(); offPageShortcuts.removeAll()
         readInFlightProbes = false
         readToken &+= 1
         isRefreshing = false
@@ -1103,18 +1113,19 @@ final class SessionStore {
     }
 
     /// MENUS (⋯ › Archive, Delete Chat): the chat leaves every list at once.
-    func forget(id: String, profile: String) {
+    func forget(id: String, profile: String, deleting: Bool = false) {
+        let shortcutChanged = forgetBotShortcutRow(id: id, profile: profile, deleting: deleting)
         startedRows[Self.writeKey(id: id, profile: profile)] = nil   // [#440]
         let before = recents.count + cron.count + messaging.count
         recents.removeAll { $0.id == id && $0.profile == profile }
         cron.removeAll { $0.id == id && $0.profile == profile }
         messaging.removeAll { $0.id == id && $0.profile == profile }
-        guard recents.count + cron.count + messaging.count != before else { return }
+        guard recents.count + cron.count + messaging.count != before || shortcutChanged else { return }
         if selectedSessionId == id { selectedSessionId = nil; selectedLineage = nil }
         if onScreenSessionId == id { onScreenSessionId = nil }
         lastFingerprint = nil
         writeCache()
-        rebuild()
+        rebuild(force: shortcutChanged)
     }
 
     /// Rewrite the stored rows' server flag (every list that holds this profile's row, the Archived view's included: an
@@ -1514,6 +1525,7 @@ final class SessionStore {
         let forced = forceNextNotify
         forceNextNotify = false
         rebuild(force: rowsMoved || loadState != prior.loadState || forced)
+        refreshOffPageShortcuts()
         schedulePRDiscovery()
         refreshLatest()
         // [sessions-m9] Group By Project or a project filter kept from the last launch needs the projects without the
@@ -1890,6 +1902,11 @@ final class SessionStore {
         summary.outside = messaging
         summary.origin = ChatSource.origin(source: row.source, handoffPlatform: row.handoffPlatform, handoffState: row.handoffState)
         return summary
+    }
+
+    func shortcutSummary(_ row: SidebarSessionRow) -> SessionSummary {
+        var words: [String: RowWords] = [:]
+        return summary(row, messaging: false, words: &words)
     }
 
     /// The key More › Color keeps a chat's colour under: its lineage root, else its id (`sessionPinId`).

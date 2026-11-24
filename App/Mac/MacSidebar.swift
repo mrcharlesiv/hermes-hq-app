@@ -287,6 +287,8 @@ final class MacSidebar: UIView {
     }
     /// [chats-under] The chats under the bot rows (and their "N more"), by bot id + U+001F + session id (or "more").
     private var chatRows: [String: MacSidebarChat] = [:]
+    /// The last shortcut being removed must clear the rail even with all automatic modes off.
+    var hasChatRows: Bool { !chatRows.isEmpty }
     private var chatsToken: [NSObjectProtocol] = []
     private var railAdd: MacRailAdd?
     /// [mac-layout] The bots, under the places in both widths (owner 2026-11-03 "I like the bots in the sidebar"): heads

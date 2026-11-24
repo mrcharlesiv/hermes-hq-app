@@ -77,7 +77,7 @@ struct ProjectSettingsPage: View {
                 Toggle("Keep Chats in This Project", isOn: bound({ store.isProjectKept(project) }) { store.setProjectKept(project, $0) })
                     .accessibilityIdentifier("sessions.projectSettings.keep")
             } header: { HQSectionLabel { Text("Chats") } } footer: { HQSectionFooter {
-                Text("Chats here stay on this page and leave Recent and your other lists. Chats that need you still show in New for You.")
+                Text("Unpinned chats leave Recent. Chats that need you still show in New for You. To keep a shortcut under a bot, choose Show Under in the chat’s menu.")
             } }
         }
         Section {

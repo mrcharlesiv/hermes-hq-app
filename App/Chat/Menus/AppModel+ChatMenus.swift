@@ -101,7 +101,7 @@ extension AppModel: ChatMenuHosting {
     }
 
     func chatDeleted(_ chat: any ChatSessionModel) {
-        if let id = storedId(chat) { sessionStore?.forget(id: id, profile: chat.profile) }
+        if let id = storedId(chat) { sessionStore?.forget(id: id, profile: chat.profile, deleting: true) }
         refreshSessions()
     }
 

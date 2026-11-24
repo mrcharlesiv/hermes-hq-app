@@ -152,7 +152,8 @@ final class MainTabController: UITabBarController, UITabBarControllerDelegate {
             self?.botsViewController.setNeedsReload(animated: false)   // [chats-under] the chats under the bots
             #if targetEnvironment(macCatalyst)
             // [chats-under] The Mac's are under the sidebar's bot rows.
-            if BotChatsPrefs.inUse, self?.split?.isViewLoaded == true { self?.split?.macSidebar.botsChanged() }
+            if let self, let split = self.split, split.isViewLoaded,
+               self.botsViewController.listsChatsUnderBots || split.macSidebar.hasChatRows { split.macSidebar.botsChanged() }
             #endif
         }
         #if targetEnvironment(macCatalyst)

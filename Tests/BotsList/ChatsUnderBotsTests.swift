@@ -60,6 +60,99 @@ struct ChatsUnderBotsTests {
         #expect(!all.shown.contains { $0.id == "old" }, "archived chats stay out")
     }
 
+    @Test func shortcutsLeadEveryModeWithoutLeakingOrCountingTwice() {
+        let kept = chat("kept", hoursAgo: 900)
+        let chosen = [kept, list[0], kept, chat("kept", "otto", hoursAgo: 1), list.last!]
+        for mode in BotChatsMode.allCases {
+            let result = BotChatsUnder.pick(list, bot: "default", choice: .init(mode: mode, count: 1), shortcuts: chosen)
+            #expect(result.shown.prefix(2).map(\.id) == ["kept", "p1"])
+            #expect(Set(result.shown.map(\.id)).count == result.shown.count)
+            #expect(result.shown.allSatisfy { $0.profile == "default" && !$0.archived })
+            #expect(!result.shown[0].pinned)
+            if mode == .off { #expect(result.shown.count == 2 && result.more == 0) }
+            else { #expect(result.more + result.shown.count == 7, "six visible chats plus the one explicit exception") }
+        }
+        let other = BotChatsUnder.pick([], bot: "otto", choice: .initial, shortcuts: [kept])
+        #expect(other.shown.isEmpty && other.more == 0, "same session id on another bot is not selected")
+    }
+
+    @Test func shortcutPersistsByAccountAndSyncsRemovalsWithoutResurrectingThem() throws {
+        let dir = BotsTest.tempDirectory()
+        func make(_ account: GatewayAccount) -> SessionStore {
+            SessionStore(client: BotsFakeGatewayClient(), account: account, cacheDirectory: dir, timing: .fast, autoStart: false)
+        }
+        let first = make(.botsTestAccount), selected = chat("a", hoursAgo: 2), other = chat("a", "otto", hoursAgo: 1)
+        first.setBotShortcut(selected, true)
+        let base = first.syncValue()
+        RosterDiskWriter.shared.flush()
+        let again = make(.botsTestAccount)
+        #expect(again.hasBotShortcut(selected) && !again.hasBotShortcut(other))
+        var account = GatewayAccount.botsTestAccount; account.id += "-other"
+        #expect(!make(account).hasBotShortcut(selected))
+        first.setBotShortcut(selected, false)
+        again.setBotShortcut(other, true)
+        first.adoptSynced(again.syncValue(), merge: .rebase, base: base)
+        #expect(first.hasBotShortcut(other) && !first.hasBotShortcut(selected))
+        again.adoptSynced(first.syncValue(), merge: .replace, base: base)
+        #expect(again.hasBotShortcut(other) && !again.hasBotShortcut(selected))
+        again.adoptSynced(["sortBy": "updated"], merge: .replace, base: nil)
+        #expect(again.hasBotShortcut(other), "older app versions don't erase the shortcut")
+        #expect(try JSONDecoder().decode(SessionsDeviceState.self, from: Data("{}".utf8)).botChatShortcuts.isEmpty)
+    }
+
+    @Test func offPageShortcutReadsOnlyItsExactLiveChatAndNeverAddsItToRecents() async throws {
+        let client = BotsFakeGatewayClient()
+        let store = SessionStore(client: client, account: .botsTestAccount, cacheDirectory: BotsTest.tempDirectory(), timing: .fast, autoStart: false)
+        defer { store.stop() }
+        let ids = ["old", "hidden", "archived", "prefix", "other-profile", "deleted"]
+        for id in ids { store.setBotShortcut(chat(id, "otto", hoursAgo: 800), true) }
+        let sidebar = SessionStore.sidebarPath
+        client.onREST { _, path, query, _ in
+            if path == sidebar { return SessionActionsTests.sidebar([]) }
+            let id = String(path.split(separator: "/").last ?? "")
+            guard ids.contains(id), query.contains(URLQueryItem(name: "profile", value: "otto")), id != "deleted" else {
+                throw HTTPError(status: 404, body: nil)
+            }
+            let detail: JSONValue = ["id": .string(id == "prefix" ? "prefix-other" : id),
+                "profile": .string(id == "other-profile" ? "ivy" : "otto"), "title": "Old thread", "source": "desktop",
+                "hidden": .bool(id == "hidden"), "archived": .bool(id == "archived")]
+            return try detail.encoded()
+        }
+        store.start()
+        await store.refresh()
+        await store.shortcutRead?.value
+        #expect(store.botShortcutRows.map(\.id) == ["old"])
+        #expect(store.sessions.isEmpty && store.sessionsOutsideKeptProjects().isEmpty)
+        #expect(client.restCalls.filter { $0.path.hasPrefix("/api/sessions/") }.count == ids.count)
+        store.refreshOffPageShortcuts()
+        #expect(store.shortcutRead == nil, "redrawing or refreshing doesn't repeatedly look up an old chat")
+        let old = try #require(store.botShortcutRows.first)
+        store.forget(id: old.id, profile: old.profile)
+        #expect(store.botShortcutRows.isEmpty && store.hasBotShortcut(old), "Archive hides the shortcut immediately")
+        store.forget(id: old.id, profile: old.profile, deleting: true)
+        #expect(!store.hasBotShortcut(old), "deleting the underlying chat also removes its saved shortcut")
+    }
+
+    @Test func shortcutFollowsCompactionButNotAForkOrAnotherProfile() throws {
+        let store = SessionStore(client: BotsFakeGatewayClient(), account: .botsTestAccount, cacheDirectory: BotsTest.tempDirectory(), timing: .fast, autoStart: false)
+        let old = chat("root", "otto", hoursAgo: 6)
+        store.setBotShortcut(old, true)
+        // Another device selected the newer segment before it knew the two ids belonged to one chat.
+        let newer = BotChatShortcut(profile: "otto", id: "next")
+        store.adoptSynced(["botChatShortcuts": .array([newer.json])], merge: .firstContact, base: nil)
+        var current = SidebarSessionRow(id: "next", profile: "otto", title: "Current segment", source: "desktop")
+        current.lineageRootId = "root"
+        var fork = SidebarSessionRow(id: "fork", profile: "otto", title: "Fork", source: "desktop")
+        fork.parentSessionId = "root"
+        var other = current; other.profile = "ivy"
+        store.recents = [fork, current, other]; store.rebuild()
+        #expect(store.botShortcutRows.map(\.id) == ["next"])
+        let moved = try #require(store.botShortcutRows.first)
+        #expect(moved.profile == "otto" && store.hasBotShortcut(moved))
+        store.setBotShortcut(moved, false)
+        #expect(store.botShortcutRows.isEmpty && !store.hasBotShortcut(old))
+    }
+
     @Test func pinsAreCapped() {
         let pins = (0..<8).map { chat("p\($0)", hoursAgo: Double($0), pinned: true) }
         let picked = BotChatsUnder.pick(pins, bot: "default", choice: BotChatsChoice(mode: .pinned, count: 2))

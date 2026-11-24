@@ -6,16 +6,17 @@ import XCTest
 extension SessionsTests {
     // MARK: Helpers
 
-    /// The Projects side, then Website's page (the first project pill).
+    /// Website's pill moves when reading its last unread chat changes the rail order.
     @MainActor func openWebsitePage(_ app: XCUIApplication) {
         let toProjects = app.buttons["sessions.pills.projects"]
         XCTAssertTrue(toProjects.waitForExistence(timeout: 15))
         tapSide(app, toProjects)
-        let website = app.buttons["sessions.chip.project.0"]
+        let website = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'sessions.chip.project.' AND label BEGINSWITH 'Website project'")).firstMatch
         XCTAssertTrue(website.waitForExistence(timeout: 6))
         onScreen(app, website).tap()
-        XCTAssertTrue(app.cells["sessions.projectPage"].waitForExistence(timeout: 6))
-        XCTAssertTrue(app.staticTexts["Website"].exists, "Website's page")
+        let page = app.cells["sessions.projectPage"]
+        XCTAssertTrue(page.waitForExistence(timeout: 6))
+        XCTAssertTrue(page.staticTexts["Website"].waitForExistence(timeout: 6), "Website's page, not just its pill")
     }
 
     /// ⋯ › Project Settings… on the page shown.
@@ -84,7 +85,8 @@ extension SessionsTests {
         XCTAssertTrue(app.navigationBars["Website"].waitForExistence(timeout: 8), "the sheet is titled with the project's name")
         let keep = app.switches["sessions.projectSettings.keep"], pins = app.switches["sessions.projectPage.localPins"]
         XCTAssertTrue(keep.waitForExistence(timeout: 5) && pins.exists, "Chats: Keep Chats in This Project, Pins Stay in Project")
-        XCTAssertTrue(app.staticTexts["Chats here stay on this page and leave Recent and your other lists. Chats that need you still show in New for You."].exists)
+        let keepHelp = "Unpinned chats leave Recent. Chats that need you still show in New for You. To keep a shortcut under a bot, choose Show Under in the chat’s menu."
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label == %@", keepHelp)).firstMatch.exists)
         XCTAssertTrue(projectSetting(app, "sessions.projectSettings.autoDone").exists, "Move Quiet Chats to Done")
         XCTAssertTrue(app.staticTexts["Only on this page. Nothing is archived."].exists)
         shot(app, "PS0-page-top")
@@ -197,6 +199,60 @@ extension SessionsTests {
         closeProjectSettings(app)
         bots.tap()
         XCTAssertTrue(under.waitForExistence(timeout: 8), "off again: back under its bot's row")
+    }
+
+    /// One explicit shortcut with both project switches on and automatic bot rows off. No other chat follows it.
+    @MainActor func testKeptChatShortcutUnderItsBotOnly() throws {
+        let options = ["-hq.bots.chatsUnder", "off", "-hq.bots.pinnedLook", "faces"]
+        let app = launch(projectPages: true, extra: options)
+        XCTAssertTrue(row(app, "s-budget").waitForExistence(timeout: 20))
+        openWebsitePage(app)
+        openProjectSettings(app)
+        flipProjectSwitch(app, "sessions.projectSettings.keep", to: true)
+        flipProjectSwitch(app, "sessions.projectPage.localPins", to: true)
+        closeProjectSettings(app)
+        let budget = row(app, "s-budget")
+        openMenu(app, budget, until: "Pin")
+        let show = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Show Under '")).firstMatch
+        XCTAssertTrue(show.waitForExistence(timeout: 5), "a bot shortcut is separate from Pin")
+        shot(app, "kept-chat-shortcut-menu")
+        let bot = String(show.label.dropFirst("Show Under ".count))
+        show.tap()
+        XCTAssertFalse(header(app, "Pinned").exists, "not a project pin either")
+        tapSide(app, app.buttons["sessions.pills.bots"])
+        XCTAssertTrue(row(app, "s-garden").waitForExistence(timeout: 8))
+        XCTAssertFalse(budget.exists, "still out of Recent and Pinned")
+        app.tabBars.buttons["Bots"].tap()
+        let shortcut = app.cells["bot-chat-s-budget"]
+        XCTAssertTrue(shortcut.waitForExistence(timeout: 10))
+        XCTAssertEqual(app.cells.matching(NSPredicate(format: "identifier BEGINSWITH 'bot-chat-'")).count, 1)
+        shot(app, "kept-chat-under-bot")
+        shortcut.tap()
+        XCTAssertTrue(app.tables["chat.table"].waitForExistence(timeout: 15), "the shortcut opens the chat")
+        XCTAssertTrue(app.tables["chat.table"].descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@", "Draft the quarterly budget for four teams."))
+            .firstMatch.waitForExistence(timeout: 15), "the project conversation, not the bot’s own chat")
+        app.terminate()
+
+        let again = launch(keepView: true, projectPages: true, extra: options)
+        again.tabBars.buttons["Bots"].tap()
+        let kept = again.cells["bot-chat-s-budget"]
+        XCTAssertTrue(kept.waitForExistence(timeout: 15), "the choice survived relaunch")
+        let owner = again.cells["bot-row-default"], face = again.cells["bot-tile-default"]
+        openMenu(again, owner, until: "Pin")
+        again.buttons["Pin"].firstMatch.tap()
+        XCTAssertTrue(face.waitForExistence(timeout: 15) && owner.exists && kept.exists, "a pinned face keeps its shortcut under a labelled row")
+        let remove = "Remove Shortcut Under " + bot
+        openMenu(again, kept, until: remove)
+        again.buttons[remove].firstMatch.tap()
+        XCTAssertTrue(waitUntil(8) { !kept.exists }, "removing the last shortcut immediately clears this bot")
+        XCTAssertTrue(face.exists && !owner.exists, "the pin is still a face; the extra row is gone")
+        openMenu(again, face, until: "Unpin")
+        again.buttons["Unpin"].firstMatch.tap()
+        again.tabBars.buttons["Sessions"].tap()
+        openWebsitePage(again)
+        XCTAssertTrue(row(again, "s-budget").waitForExistence(timeout: 8), "removal left the project chat alone")
+        XCTAssertFalse(writes("PATCH", "/api/sessions/s-budget").contains { $0["pinned"] != nil }, "no global pin write")
     }
 
     // MARK: Step 2: Move Quiet Chats to Done

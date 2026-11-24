@@ -138,8 +138,8 @@ struct ThemeSettingsView: View {
     }
 
     static var desktopChatsNote: String {
-        ThemeState.textBoxIsFixed ? "How round your messages and the message box are. 4 pt is the desktop app’s."
-            : "How round your messages and the text box are. 4 pt is the desktop app’s. Liquid Glass is the \(DeviceWord.name)’s own text box, rounded to match; Desktop is the desktop app’s flat box."
+        ThemeState.textBoxIsFixed ? "How round your messages and the message box are. 4 pt is the Hermes desktop app’s."
+            : "How round your messages and the text box are. 4 pt is the Hermes desktop app’s. Liquid Glass is the \(DeviceWord.name)’s own text box, rounded to match; Hermes is the desktop app’s flat box."
     }
 
     /// [a11y] iOS Increase Contrast (the debug override too) turns High Contrast on: the switch shows it, and is held.
@@ -191,8 +191,8 @@ struct ChatBubblesSettingsView: View {
 
     static var note: String {
         GlassBubbles.offered
-            ? "How round the corners of messages in chats are, and how they’re filled: Solid, Liquid Glass in your theme’s colors, or Tinted with the colors of your Chat Background. 12 pt is the standard. With Reduce Transparency on, messages stay solid. The Desktop Look has its own Corners, here once it is on. \(DeviceWord.onlyHere)"
-            : "How round the corners of messages in chats are, and whether they’re Tinted with the colors of your Chat Background. 12 pt is the standard. With Reduce Transparency on, messages stay solid. The Desktop Look has its own Corners, here once it is on. \(DeviceWord.onlyHere)"
+            ? "How round the corners of messages in chats are, and how they’re filled: Solid, Liquid Glass in your theme’s colors, or Tinted with the colors of your Chat Background. 12 pt is the standard. With Reduce Transparency on, messages stay solid. The Hermes Look has its own Corners, here once it is on. \(DeviceWord.onlyHere)"
+            : "How round the corners of messages in chats are, and whether they’re Tinted with the colors of your Chat Background. 12 pt is the standard. With Reduce Transparency on, messages stay solid. The Hermes Look has its own Corners, here once it is on. \(DeviceWord.onlyHere)"
     }
     /// [bubbles-note] One-line summary of each bubble style.
     static func styleLine(_ style: BubbleStyle) -> String {
@@ -242,7 +242,7 @@ struct ChatBubblesSettingsView: View {
             if !ThemeState.textBoxIsFixed {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Text Box").foregroundStyle(Color.hqLabel).fixedSize()   // [ui-sizing] whole beside its segments
-                    HQSegmentedPicker("Text Box", options: [("Desktop", DesktopComposer.box), ("Liquid Glass", DesktopComposer.glass)],
+                    HQSegmentedPicker("Text Box", options: [("Hermes", DesktopComposer.box), ("Liquid Glass", DesktopComposer.glass)],
                                       selection: Binding(get: { state.desktopComposer }, set: { next in
                                           guard next != state.desktopComposer else { return }
                                           Haptics.play(.selection)

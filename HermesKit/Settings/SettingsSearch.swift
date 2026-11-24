@@ -91,8 +91,8 @@ nonisolated enum SettingsSearch {
     /// Rows the app adds (they aren't in the gateway's catalog).
     static let appRows: [SettingsSearchEntry] = appRowsAlways + (ThemeFeature.desktopLook ? [
         // [appearance-groups] A row of Appearance's Look group (it headed Theme).
-        .init(id: "app:desktop-look", label: "Desktop Look", context: "Appearance", keywords: ["square corners", "desktop app", "flat"], target: .root("row:desktop-look")),
-        .init(id: "app:high-contrast", label: "High Contrast", context: "Appearance", keywords: ["contrast", "borders", "crisp", "desktop look"], target: .root("row:high-contrast")),
+        .init(id: "app:desktop-look", label: "Hermes Look", context: "Appearance", keywords: ["native", "look", "desktop look", "desktop app", "square corners", "flat"], target: .root("row:desktop-look")),
+        .init(id: "app:high-contrast", label: "High Contrast", context: "Appearance", keywords: ["contrast", "borders", "crisp", "hermes look", "desktop look"], target: .root("row:high-contrast")),
     ] : [])
 
     private static let appRowsAlways: [SettingsSearchEntry] = [

@@ -37,14 +37,14 @@ enum BackdropWords {
         return nil
     }
 
-    static var rowsNote: String { "A picture behind the app’s pages, and one behind chats, or the same for both. The Desktop Look keeps its plain pages. \(DeviceWord.onlyHere)" }
+    static var rowsNote: String { "A picture behind the app’s pages, and one behind chats, or the same for both. The Hermes Look keeps its plain pages. \(DeviceWord.onlyHere)" }
     static var appNote: String { "Behind Sessions, Bots, Jobs, More, Settings and the pages they open. Wash blends the page color over it so rows stay readable. \(DeviceWord.onlyHere)" }
     static var chatNote: String { "Behind every chat. Wash blends the page color over it so text and dividers stay readable. \(DeviceWord.onlyHere)" }
     /// [backdrop-cards]
     static let cardsNote = "Cards lay a theme-matched backing behind each list so text stays readable. With Reduce Transparency on, Glass cards are solid."
     static let sameNote = "Chats show the app’s picture, with their own Wash and Blur."
-    /// Added under the preview while the Desktop Look is on, which keeps its plain pages.
-    static let desktopNote = "The Desktop Look is on, so it shows once you turn that off."
+    /// Added under the preview while the Hermes Look is on, which keeps its plain pages.
+    static let desktopNote = "The Hermes Look is on, so it shows once you switch back to Native."
 }
 
 /// [theme-pages] Settings › Appearance › Backgrounds: the two rows, each opening its page.

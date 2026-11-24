@@ -375,15 +375,15 @@ struct AppearanceSections: View {
 
 }
 
-/// Visual two-card Look switcher (`iOS` | `Desktop`) at the top of Settings › Appearance.
+/// Visual two-card Look switcher (`Native` | `Hermes`) at the top of Settings › Appearance.
 private struct LookModePicker: View {
     var desktop: Bool
     var pick: (Bool) -> Void
 
     var body: some View {
         HStack(spacing: 10) {
-            card(title: "iOS", isDesktop: false, selected: !desktop)
-            card(title: "Desktop", isDesktop: true, selected: desktop)
+            card(title: "Native", isDesktop: false, selected: !desktop)
+            card(title: "Hermes", isDesktop: true, selected: desktop)
         }
         .hqRowPadding(4)
         .accessibilityElement(children: .contain)

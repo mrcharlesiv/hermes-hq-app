@@ -973,7 +973,11 @@ private let allStates: [ThemeState] = SkinCatalog.all.flatMap { skin in
         #expect(find("backgrounds").map(\.target).contains(.root("backgrounds")), "the page with both rows")
         #expect(find("chat bubbles").first?.target == .root("chat-bubbles"))
         #expect(find("glass bubbles").first?.target == .root("chat-bubbles"))
-        if ThemeFeature.desktopLook { #expect(find("desktop look").first?.target == .root("row:desktop-look")) }   // [appearance-groups]
+        if ThemeFeature.desktopLook {
+            #expect(find("hermes look").first?.target == .root("row:desktop-look"))
+            #expect(find("native").first?.target == .root("row:desktop-look"))
+            #expect(find("desktop look").first?.target == .root("row:desktop-look"))   // legacy alias stays searchable
+        }
         #expect(find("chat background").count == 1, "Chat Background alone, not the Theme row too")
         #expect(find("skin").first?.target == .root("theme"), "the themes themselves")
         #expect(find("chat bubbles").first?.context == "Appearance" && find("app background").first?.context == "Backgrounds")

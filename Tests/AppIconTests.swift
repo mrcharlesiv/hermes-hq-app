@@ -1,4 +1,5 @@
 import CoreGraphics
+import CryptoKit
 import Foundation
 import ImageIO
 import Testing
@@ -120,6 +121,30 @@ struct AppIconTests {
         #expect(Set(alternates.keys) == Set(AppIconChoice.allSetNames).subtracting([AppIconChoice.primary]))
         let primary = icons["CFBundlePrimaryIcon"] as? [String: Any]
         #expect(primary?["CFBundleIconName"] as? String == AppIconChoice.primary)
+    }
+
+    /// [icon-lock] The app's own icon is Halo and stays Halo (owner 2026-11-24: build 1262 went out wearing Hermes from a
+    /// base cut before Halo reached main; "make sure that does not happen again"). scripts/default-app-icon.lock holds
+    /// every default-icon file's SHA-256; changing the icon on purpose rewrites it (scripts/check-default-icon.py --write).
+    @Test func defaultIconIsLocked() throws {
+        let lock = try #require(try JSONSerialization.jsonObject(
+            with: Data(contentsOf: Self.repo.appending(path: "scripts/default-app-icon.lock"))) as? [String: Any])
+        #expect(lock["icon"] as? String == "Halo")
+        #expect(AppIconChoice.all.first?.title == lock["icon"] as? String)
+        let files = try #require(lock["files"] as? [String: String])
+        let folders = ["AppIcon.appiconset", "AppIcon-Light.appiconset", "AppIcon-Dark.appiconset", "AppIcon-Preview.imageset",
+                       "LaunchIcon.imageset"]
+        var found: [String: String] = [:]
+        for folder in folders {
+            for name in try FileManager.default.contentsOfDirectory(atPath: Self.catalog.appending(path: folder).path)
+            where name.hasSuffix(".png") {
+                let data = try Data(contentsOf: Self.catalog.appending(path: "\(folder)/\(name)"))
+                found["App/Resources/Assets.xcassets/\(folder)/\(name)"] =
+                    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            }
+        }
+        #expect(found.count >= 13)
+        #expect(found == files, "the default icon's files differ from scripts/default-app-icon.lock")
     }
 
     @Test func choiceByName() {

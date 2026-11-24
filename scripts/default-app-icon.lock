@@ -1,0 +1,20 @@
+{
+  "files": {
+    "App/Resources/Assets.xcassets/AppIcon-Dark.appiconset/AppIcon-Dark-Tinted.png": "47f4331c8ce60f5ff7d09ea802a5a44e0492bea661632176adb7229115151aab",
+    "App/Resources/Assets.xcassets/AppIcon-Dark.appiconset/AppIcon-Dark.png": "a50be2ae09d2b67db1bd846665f49f66ee96992eb3b0e3387c1ed6b035225632",
+    "App/Resources/Assets.xcassets/AppIcon-Light.appiconset/AppIcon-Light-Tinted.png": "47f4331c8ce60f5ff7d09ea802a5a44e0492bea661632176adb7229115151aab",
+    "App/Resources/Assets.xcassets/AppIcon-Light.appiconset/AppIcon-Light.png": "c12a534dbb007cc5384909c35e942b40e3f4418e64aabfdd02995d6524bd641c",
+    "App/Resources/Assets.xcassets/AppIcon-Preview.imageset/AppIcon-Preview-Dark.png": "a50be2ae09d2b67db1bd846665f49f66ee96992eb3b0e3387c1ed6b035225632",
+    "App/Resources/Assets.xcassets/AppIcon-Preview.imageset/AppIcon-Preview.png": "c12a534dbb007cc5384909c35e942b40e3f4418e64aabfdd02995d6524bd641c",
+    "App/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png": "c12a534dbb007cc5384909c35e942b40e3f4418e64aabfdd02995d6524bd641c",
+    "App/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-Dark-512@2x.png": "a50be2ae09d2b67db1bd846665f49f66ee96992eb3b0e3387c1ed6b035225632",
+    "App/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-Tinted-512@2x.png": "47f4331c8ce60f5ff7d09ea802a5a44e0492bea661632176adb7229115151aab",
+    "App/Resources/Assets.xcassets/LaunchIcon.imageset/launch-icon-dark@1x.png": "f0fbdff94a084e48f41b211c054853ae6112d27871c36e154d6a01d3b2546707",
+    "App/Resources/Assets.xcassets/LaunchIcon.imageset/launch-icon-dark@2x.png": "d11e1bfb989bf97664a53ae501a942c9893e724a93c05269d36647db41654e08",
+    "App/Resources/Assets.xcassets/LaunchIcon.imageset/launch-icon-dark@3x.png": "5394eac6052a97f931415053fba776c4e62b835091b7526ee464f437f3052238",
+    "App/Resources/Assets.xcassets/LaunchIcon.imageset/launch-icon@1x.png": "3bda0917f4885e5fba622edb9cf690dd6e123113a8ee9d53a4f2487c5e558676",
+    "App/Resources/Assets.xcassets/LaunchIcon.imageset/launch-icon@2x.png": "4ee150f26324ded93bbee4512665b94c86190325e24ee1c4c795f937bdf9d757",
+    "App/Resources/Assets.xcassets/LaunchIcon.imageset/launch-icon@3x.png": "f5865323edf41fdd1696388a5987d2a917e673714114a86bef9c0976e4608344"
+  },
+  "icon": "Halo"
+}

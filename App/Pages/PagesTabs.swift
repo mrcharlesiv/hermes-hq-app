@@ -46,7 +46,8 @@ final class PagesTabs {
 
     /// `S/ui-nav/more-model.ts:12-17`: Settings alone, then Bots, Workspace, Insights, Integrations.
     /// [plugin-pages-more] Plugin Pages after Insights: places you go to, before Integrations' setup pages.
-    static let sectionOrder = ["account", "settings", "bots", "workspace", "insights", "plugins", "integrations"]
+    /// Owner 2026-11-23: the Discord card (`HQCommunity`) above everything until it's closed.
+    static let sectionOrder = ["community", "account", "settings", "bots", "workspace", "insights", "plugins", "integrations"]
     private static var registered: [String: MoreSection] = [:]
     private static var registryObservers: [UUID: () -> Void] = [:]
 

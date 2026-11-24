@@ -495,15 +495,29 @@ final class MoreLinksFooter: UICollectionReusableView {
     static let website = URL(string: "https://gethermeshq.com")!
     static let github = URL(string: "https://github.com/mrcharlesiv/hermes-hq-app")!
 
+    /// A pill's words, its glyph (an SF Symbol, or the app's own Discord mark) and where it goes.
+    private struct Link {
+        var title: String
+        var symbol: String?
+        var asset: String?
+        var url: URL
+        var id: String
+    }
+    /// Owner 2026-11-23: Discord beside Website and GitHub, where the Discord card at More's top says it stays.
+    private static let links = [
+        Link(title: "Website", symbol: "globe", url: website, id: "more.link.website"),
+        Link(title: "GitHub", symbol: "chevron.left.forwardslash.chevron.right", url: github, id: "more.link.github"),
+        Link(title: "Discord", asset: "Platforms/discord", url: HQCommunity.discordInvite, id: "more.link.discord"),
+    ]
+
     private let stack = UIStackView()
-    private let websiteButton = UIButton(type: .system)
-    private let githubButton = UIButton(type: .system)
+    private let buttons = links.map { _ in UIButton(type: .system) }
     /// [backdrop-ink] Owner 2026-11-15 (More on a night sky, Soft Cards): "Look at … link pills at bottom." The two
     /// buttons stand on the page itself, not on a card: iOS's grey capsule with label 2 on it was dark on the dark
     /// picture. While the page's picture shows with Soft Cards on, each stands on a soft capsule of the cards' own
     /// material instead (as a loose line does, `hqPictureBacking`). With Soft Cards off the list is drawn in the mode
     /// that reads on the picture, and iOS's grey capsule follows it.
-    private let websiteCard = SoftCardSurface(), githubCard = SoftCardSurface()
+    private let cards = links.map { _ in SoftCardSurface() }
     private var watches: [NSObjectProtocol] = []
 
     override init(frame: CGRect) {
@@ -518,19 +532,16 @@ final class MoreLinksFooter: UICollectionReusableView {
             stack.centerXAnchor.constraint(equalTo: centerXAnchor),
             stack.leadingAnchor.constraint(greaterThanOrEqualTo: layoutMarginsGuide.leadingAnchor),
         ])
-        for (button, title, symbol, url, id) in [
-            (websiteButton, "Website", "globe", Self.website, "more.link.website"),
-            (githubButton, "GitHub", "chevron.left.forwardslash.chevron.right", Self.github, "more.link.github"),
-        ] {
-            button.accessibilityIdentifier = id
-            button.accessibilityLabel = title
-            button.accessibilityHint = "Opens \(url.host() ?? "") in your browser"
-            button.addAction(UIAction(title: title, image: UIImage(systemName: symbol)) { _ in
-                UIApplication.shared.open(url)
+        for (link, button) in zip(Self.links, buttons) {
+            button.accessibilityIdentifier = link.id
+            button.accessibilityLabel = link.title
+            button.accessibilityHint = link.asset == nil ? "Opens \(link.url.host() ?? "") in your browser" : "Opens the Hermes HQ server in Discord"
+            button.addAction(UIAction(title: link.title) { _ in
+                if link.url == HQCommunity.discordInvite { HQCommunity.openInvite(from: "more footer") } else { UIApplication.shared.open(link.url) }
             }, for: .primaryActionTriggered)
             stack.addArrangedSubview(button)
         }
-        for (card, button) in [(websiteCard, websiteButton), (githubCard, githubButton)] {
+        for (card, button) in zip(cards, buttons) {
             card.shape = .capsule
             card.isHidden = true
             card.translatesAutoresizingMaskIntoConstraints = false
@@ -557,14 +568,26 @@ final class MoreLinksFooter: UICollectionReusableView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
+    /// Owner 2026-11-23: three pills don't fit one line at the larger text sizes (the words broke mid-word, "We/bsit/e"):
+    /// they stand one under another then. Decided at the width the list offers, before the footer sizes itself.
+    override func preferredLayoutAttributesFitting(_ attributes: UICollectionViewLayoutAttributes) -> UICollectionViewLayoutAttributes {
+        let room = attributes.size.width - layoutMargins.left - layoutMargins.right
+        let need = buttons.reduce(0) { $0 + $1.intrinsicContentSize.width } + stack.spacing * CGFloat(buttons.count - 1)
+        let axis: NSLayoutConstraint.Axis = room > 0 && need > room ? .vertical : .horizontal
+        if stack.axis != axis {
+            stack.axis = axis
+            stack.alignment = axis == .vertical ? .center : .fill
+        }
+        return super.preferredLayoutAttributesFitting(attributes)
+    }
+
     /// Styled for the look on show (re-run when the list reloads after a theme change).
     func update() {
         // On soft cards just now (asked of the list: its picture shows and Soft Cards is on).
         let soft = (superview as? UIScrollView).map(BackdropPlates.wanted(for:)) ?? false
-        websiteCard.isHidden = !soft
-        githubCard.isHidden = !soft
-        for button in [websiteButton, githubButton] {
-            let title = button === websiteButton ? "Website" : "GitHub"
+        cards.forEach { $0.isHidden = !soft }
+        for (link, button) in zip(Self.links, buttons) {
+            let title = link.title
             var config = soft ? UIButton.Configuration.plain() : UIButton.Configuration.gray()
             config.cornerStyle = .capsule
             config.imagePadding = 6
@@ -572,8 +595,16 @@ final class MoreLinksFooter: UICollectionReusableView {
             let font = HQFont.preferred(.footnote)
             // [Mac AAA 2026-11-16] The glyph from the words' own font: the system's footnote style is the iPhone's size,
             // so on the Mac (text a step larger) the globe and </> came out about two-thirds of the words' height.
-            config.image = UIImage(systemName: button === websiteButton ? "globe" : "chevron.left.forwardslash.chevron.right",
-                                   withConfiguration: UIImage.SymbolConfiguration(font: font, scale: .small))
+            if let symbol = link.symbol {
+                config.image = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(font: font, scale: .small))
+            } else if let asset = link.asset, let mark = UIImage(named: asset) {
+                // The Discord mark is an asset, not a symbol: drawn at the size the small symbols come out at.
+                let height = (font.capHeight * 1.3).rounded()
+                let size = CGSize(width: (height * mark.size.width / max(mark.size.height, 1)).rounded(), height: height)
+                config.image = UIGraphicsImageRenderer(size: size).image { _ in
+                    mark.draw(in: CGRect(origin: .zero, size: size))
+                }.withRenderingMode(.alwaysTemplate)
+            }
             var text = AttributedString(title)
             // [Mac AAA 2026-11-17] Q23, owner: in the Desktop Look the words were scaled twice (`preferred` already
             // carries UI Scale, `system` multiplied it again: about 20 pt on screen, "Website" cut at laptop size). There

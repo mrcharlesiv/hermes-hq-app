@@ -27,6 +27,8 @@ import UIKit
         // [pages] → settings: the Kanban Tab picker (Appearance › Tabs) shows once the gateway answered and has the Kanban API.
         SettingsHooks.kanbanAvailability = { account in PagesTabs.probedKanbanAvailability(account) }
 
+        // Owner 2026-11-23: the Hermes HQ Discord card over the gateway card, until it's closed.
+        HQCommunity.registerMoreCard()
         // [settings] → pages: the gateway card heads More (spec 1x-pages §1.2, `S/ui-nav/more-account.tsx`): the gateway's
         // name and "● Connected · 9 Bots · Hermes 0.21.5"; it opens Settings › Gateway on More's own stack.
         PagesTabs.registerMoreSection(MoreSection(id: "account", header: nil) {

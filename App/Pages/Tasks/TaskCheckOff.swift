@@ -73,7 +73,7 @@ enum TaskDust {
             let parts = await Task.detached(priority: .userInitiated) { Self.split(whole, grain: grain) }.value
             guard cloud.superview != nil else { return }
             guard let parts, !parts.isEmpty else {
-                UIView.animate(withDuration: 0.25, animations: { cloud.alpha = 0 }) { _ in cloud.removeFromSuperview() }
+                UIView.animate(withDuration: 0.25, animations: { cloud.alpha = 0 }) { _ in cloud.removeFromSuperview() }   // motion-ok: never under Reduce Motion (`TasksViewController.blowAway` guards)
                 return
             }
             still.removeFromSuperlayer()

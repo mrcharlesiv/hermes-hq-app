@@ -147,28 +147,64 @@ struct AppIconTests {
         #expect(found == files, "the default icon's files differ from scripts/default-app-icon.lock")
     }
 
-    /// [app-icons] The primary icon also ships as an Icon Composer document (`AppIcon.icon`) with light, dark and
-    /// tinted specializations across iOS and macOS, so macOS switches the bundle icon in Finder, Spotlight, Dock,
-    /// Applications and Notifications automatically with system appearance (not only while the app runs).
+    /// [app-icons] Every icon option (and its pinned Light and Dark variants) ships as an Icon Composer document
+    /// (`.icon`) with light, dark, and tinted/clear specializations across iOS, iPadOS, and macOS.
+    static func iconBundleURL(for set: String) -> URL {
+        if set == AppIconChoice.primary {
+            return repo.appending(path: "App/Resources/AppIcon.icon")
+        }
+        return repo.appending(path: "App/Resources/AppIcons/\(set).icon")
+    }
+
     @Test func iconComposerDocumentHasLightAndDarkLooks() throws {
-        let iconDir = Self.repo.appending(path: "App/Resources/AppIcon.icon")
+        try Self.validateIconComposerBundle(AppIconChoice.primary)
+    }
+
+    @Test(arguments: AppIconChoice.allSetNames) func everyIconOptionHasIconComposerDocument(_ set: String) throws {
+        try Self.validateIconComposerBundle(set)
+    }
+
+    @Test func iconComposerBundlesMatchAllSetNames() throws {
+        let altDir = Self.repo.appending(path: "App/Resources/AppIcons")
+        let altBundles = try FileManager.default.contentsOfDirectory(atPath: altDir.path)
+            .filter { $0.hasSuffix(".icon") }
+            .map { String($0.dropLast(".icon".count)) }
+        let primaryExists = FileManager.default.fileExists(atPath: Self.iconBundleURL(for: AppIconChoice.primary).path)
+        #expect(primaryExists)
+        #expect(Set(altBundles + [AppIconChoice.primary]) == Set(AppIconChoice.allSetNames))
+    }
+
+    static func validateIconComposerBundle(_ set: String) throws {
+        let iconDir = Self.iconBundleURL(for: set)
         let data = try Data(contentsOf: iconDir.appending(path: "icon.json"))
         let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         let platforms = try #require(json["supported-platforms"] as? [String: Any])
-        #expect(platforms["squares"] as? String == "shared")
+        #expect(platforms["squares"] as? String == "shared", "\(set)")
 
         let fills = try #require(json["fill-specializations"] as? [[String: Any]])
         let fillLooks = Set(fills.map { ($0["appearance"] as? String) ?? "any" })
-        #expect(fillLooks.contains("any") && fillLooks.contains("dark"))
+        #expect(fillLooks.contains("any") && fillLooks.contains("dark"), "\(set)")
 
         let groups = try #require(json["groups"] as? [[String: Any]])
         let layers = try #require(groups.first?["layers"] as? [[String: Any]])
         let images = try #require(layers.first?["image-name-specializations"] as? [[String: Any]])
         let imageLooks = Set(images.map { ($0["appearance"] as? String) ?? "any" })
-        #expect(imageLooks == ["any", "dark", "tinted"])
+        #expect(imageLooks == ["any", "dark", "tinted"], "\(set)")
+        var imageByLook: [String: String] = [:]
         for entry in images {
+            let look = (entry["appearance"] as? String) ?? "any"
             let file = try #require(entry["value"] as? String)
-            #expect(FileManager.default.fileExists(atPath: iconDir.appending(path: "Assets/\(file)").path), "\(file)")
+            imageByLook[look] = file
+            #expect(FileManager.default.fileExists(atPath: iconDir.appending(path: "Assets/\(file)").path), "\(set): \(file)")
+        }
+
+        // Pinned Light and Dark .icon bundles keep one look across Light/Dark while preserving their Clear/Tinted layer.
+        let (_, pinnedLook) = AppIconChoice.worn(named: set)
+        if pinnedLook != .automatic {
+            #expect(imageByLook["any"] == imageByLook["dark"], "\(set) pinned images should match across any/dark")
+            let anyFill = try JSONSerialization.data(withJSONObject: try #require(fills.first { $0["appearance"] == nil }?["value"]), options: [.sortedKeys, .fragmentsAllowed])
+            let darkFill = try JSONSerialization.data(withJSONObject: try #require(fills.first { ($0["appearance"] as? String) == "dark" }?["value"]), options: [.sortedKeys, .fragmentsAllowed])
+            #expect(anyFill == darkFill, "\(set) pinned fills should match across any/dark")
         }
     }
 

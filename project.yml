@@ -123,9 +123,15 @@ targets:
         INFOPLIST_PREPROCESS: YES
         "INFOPLIST_PREPROCESSOR_DEFINITIONS[sdk=macosx*]": HQ_MAC_WINDOWS=1
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        # [app-icons] Every other icon set in the catalog is an alternate icon (Settings › Appearance › App Icon,
-        # AppIconChoice.all). iPhone and iPad only: Mac Catalyst has no alternate icons.
+        # [app-icons] Every other icon set / Icon Composer .icon bundle is an alternate icon (Settings › Appearance ›
+        # App Icon, AppIconChoice.all). On iOS/iPadOS all 42 sets (automatic + pinned Light/Dark) are included so
+        # Light, Dark, Clear and Tinted work for every choice and look. On Mac Catalyst only the 13 automatic alternate
+        # .icon stacks are compiled into Assets.car (MacDockIcon applies pinned Light/Dark and live Clear/Tinted).
         "ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS[sdk=iphone*]": YES
+        "ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES[sdk=macosx*]": >-
+          AppIcon-Hermes AppIcon-Feather AppIcon-Pearl AppIcon-BlackWhite AppIcon-Shapes AppIcon-Matrix
+          AppIcon-Robot AppIcon-Flux AppIcon-Afterimage AppIcon-ReplyCut AppIcon-Turntaking AppIcon-Swoop
+          AppIcon-Silhouette
         GENERATE_INFOPLIST_FILE: NO
         # [mac] The Mac app is this target built with Mac Catalyst (scripts/build-mac.sh): the iPad layout scaled to
         # the Mac, the same bundle ID (one App Store record for both), and the sandboxed entitlements.

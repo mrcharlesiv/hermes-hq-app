@@ -1,0 +1,75 @@
+{
+  "fill-specializations": [
+    {
+      "value": "system-dark"
+    },
+    {
+      "appearance": "dark",
+      "value": "system-dark"
+    }
+  ],
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name-specializations": [
+            {
+              "value": "shapes-dark.svg"
+            },
+            {
+              "appearance": "dark",
+              "value": "shapes-dark.svg"
+            },
+            {
+              "appearance": "tinted",
+              "value": "shapes-tinted.svg"
+            }
+          ],
+          "name": "Shapes",
+          "glass-specializations": [
+            {
+              "value": false
+            },
+            {
+              "appearance": "tinted",
+              "value": true
+            }
+          ]
+        }
+      ],
+      "shadow-specializations": [
+        {
+          "value": {
+            "kind": "none",
+            "opacity": 0.0
+          }
+        },
+        {
+          "appearance": "tinted",
+          "value": {
+            "kind": "neutral",
+            "opacity": 0.4
+          }
+        }
+      ],
+      "translucency-specializations": [
+        {
+          "value": {
+            "enabled": false,
+            "value": 0.0
+          }
+        },
+        {
+          "appearance": "tinted",
+          "value": {
+            "enabled": true,
+            "value": 0.35
+          }
+        }
+      ]
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}

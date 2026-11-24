@@ -1,0 +1,47 @@
+{
+  "fill-specializations": [
+    {
+      "value": {
+        "solid": "srgb:0.96863,0.96078,0.94118,1.00000"
+      }
+    },
+    {
+      "appearance": "dark",
+      "value": "system-dark"
+    }
+  ],
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name-specializations": [
+            {
+              "value": "matrix-light.png"
+            },
+            {
+              "appearance": "dark",
+              "value": "matrix-dark.png"
+            },
+            {
+              "appearance": "tinted",
+              "value": "matrix-tinted.png"
+            }
+          ],
+          "name": "Matrix",
+          "glass": false
+        }
+      ],
+      "shadow": {
+        "kind": "none",
+        "opacity": 0.0
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.0
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}

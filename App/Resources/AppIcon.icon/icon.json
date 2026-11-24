@@ -14,7 +14,6 @@
     {
       "layers": [
         {
-          "glass": false,
           "image-name-specializations": [
             {
               "value": "halo-light.svg"
@@ -28,17 +27,48 @@
               "value": "halo-dark.svg"
             }
           ],
-          "name": "Halo"
+          "name": "Halo",
+          "glass-specializations": [
+            {
+              "value": false
+            },
+            {
+              "appearance": "tinted",
+              "value": true
+            }
+          ]
         }
       ],
-      "shadow": {
-        "kind": "none",
-        "opacity": 0.0
-      },
-      "translucency": {
-        "enabled": false,
-        "value": 0.0
-      }
+      "shadow-specializations": [
+        {
+          "value": {
+            "kind": "none",
+            "opacity": 0.0
+          }
+        },
+        {
+          "appearance": "tinted",
+          "value": {
+            "kind": "neutral",
+            "opacity": 0.4
+          }
+        }
+      ],
+      "translucency-specializations": [
+        {
+          "value": {
+            "enabled": false,
+            "value": 0.0
+          }
+        },
+        {
+          "appearance": "tinted",
+          "value": {
+            "enabled": true,
+            "value": 0.35
+          }
+        }
+      ]
     }
   ],
   "supported-platforms": {

@@ -280,7 +280,7 @@ struct ConnectorLogsView: View {
                                 .onAppear { following = true }
                                 .onDisappear { following = false }
                         }
-                        .padding(.horizontal, 16).padding(.vertical, 12)
+                        .padding(.leading, 16).padding(.trailing, 16 + ScrollBarLane.listTrailing).padding(.vertical, 12)
                         .accessibilityElement(children: .combine)
                         .accessibilityIdentifier("connector-logs-text")
                     }

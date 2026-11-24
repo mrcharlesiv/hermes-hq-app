@@ -961,7 +961,8 @@ struct TodoNoteView: View {
                     }
                 }
             }
-            .padding(16)
+            .padding(.top, 16).padding(.bottom, 16)
+            .padding(.leading, 16).padding(.trailing, 16 + ScrollBarLane.listTrailing)
         }
         .background(Color(uiColor: HQPalette.sheetPage))
     }

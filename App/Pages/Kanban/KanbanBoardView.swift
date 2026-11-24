@@ -153,7 +153,7 @@ struct KanbanBoardColumn: Equatable {
             let section = NSCollectionLayoutSection(group: group)
             section.interGroupSpacing = 8
             section.contentInsets = NSDirectionalEdgeInsets(top: 2, leading: 8, bottom: 10, trailing: 8)
-            return section
+            return ScrollBarLane.keep(section)
         }
         list = UICollectionView(frame: .zero, collectionViewLayout: layout)
         list.backgroundColor = .clear
@@ -180,7 +180,7 @@ struct KanbanBoardColumn: Equatable {
             dot.heightAnchor.constraint(equalToConstant: 8),
             header.topAnchor.constraint(equalTo: topAnchor, constant: 10),
             header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -(12 + ScrollBarLane.listTrailing)),
             list.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 8),
             list.leadingAnchor.constraint(equalTo: leadingAnchor),
             list.trailingAnchor.constraint(equalTo: trailingAnchor),

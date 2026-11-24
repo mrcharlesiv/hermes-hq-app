@@ -299,7 +299,8 @@ struct MacUpdateNotes: View {
                     }
                 }
             }
-            .padding(14)
+            .padding(.top, 14).padding(.bottom, 14)
+            .padding(.leading, 14).padding(.trailing, 14 + (items.count > 6 ? ScrollBarLane.listTrailing : 0))
             .frame(maxWidth: .infinity, alignment: .leading)
             Group {
                 // A long list scrolls in a fixed box; a short one is drawn whole.

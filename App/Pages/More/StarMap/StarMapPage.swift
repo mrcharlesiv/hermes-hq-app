@@ -304,7 +304,8 @@ struct StarMapNodeSheet: View {
                 }
                 words.hqGlassCard()
             }
-            .padding(.horizontal, 20)
+            .padding(.leading, 20)
+            .padding(.trailing, 20 + ScrollBarLane.listTrailing)
             .padding(.top, 28)
             .padding(.bottom, 24)
             .frame(maxWidth: .infinity, alignment: .leading)

@@ -349,7 +349,7 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
         let section = NSCollectionLayoutSection(group: group)
         let side = Self.side(pageWidth) - half
         section.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: side, bottom: 24, trailing: side)
-        return section
+        return ScrollBarLane.keep(section)
     }
 
     /// The room either side of the grid, to the tiles' edges.
@@ -359,7 +359,7 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
     private func pictureSize(_ tile: QuickTile, width: CGFloat? = nil) -> CGSize? {
         guard isPicture(tile) else { return nil }
         let width = width ?? (collectionView.bounds.width > 0 ? collectionView.bounds.width : view.bounds.width)
-        return FavoriteTileSize.picture(width: width, side: Self.side(width), gap: gap, wide: tile.wide, stacked: stacked)
+        return FavoriteTileSize.picture(width: width - ScrollBarLane.listTrailing, side: Self.side(width), gap: gap, wide: tile.wide, stacked: stacked)
     }
 
     /// [favorites-live-tiles] A Dashboard tile's height on this page, its name's line included (nil: not one).

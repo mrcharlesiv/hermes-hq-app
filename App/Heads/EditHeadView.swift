@@ -330,7 +330,8 @@ struct EditHeadView: View {
                             .accessibilityIdentifier("edit-head.reset")
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.leading, 20)
+                .padding(.trailing, 20 + ScrollBarLane.listTrailing)
                 .padding(.bottom, 32)
                 .disabled(model.saving)
             }
@@ -491,9 +492,11 @@ struct EditHeadView: View {
                     }
                 }
                 .padding(.vertical, 2)
-                .padding(.horizontal, 20)
+                .padding(.horizontal, DeviceWord.isMac ? 0 : 20)
             }
-            .padding(.horizontal, -20)        // the strip scrolls to the screen's edges
+            .scrollIndicators(.never)
+            .hqScrollEdgeFade(width: DeviceWord.isMac ? 20 : 0)
+            .padding(.horizontal, DeviceWord.isMac ? 0 : -20)   // on Mac stay clear of the vertical scroll bar lane
         }
     }
 
@@ -548,9 +551,11 @@ struct EditHeadView: View {
                     }
                 }
                 .padding(.vertical, 2)
-                .padding(.horizontal, 20)
+                .padding(.horizontal, DeviceWord.isMac ? 0 : 20)
             }
-            .padding(.horizontal, -20)        // the strip scrolls to the screen's edges
+            .scrollIndicators(.never)
+            .hqScrollEdgeFade(width: DeviceWord.isMac ? 20 : 0)
+            .padding(.horizontal, DeviceWord.isMac ? 0 : -20)   // on Mac stay clear of the vertical scroll bar lane
         }
     }
 

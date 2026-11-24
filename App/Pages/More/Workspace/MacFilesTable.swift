@@ -62,7 +62,7 @@ import UIKit
     /// Where the trailing columns start in a row `width` wide: each column's leading x, left to right.
     static func columns(_ columns: [Column], in width: CGFloat, kindNeed: CGFloat? = nil) -> (starts: [CGFloat], widths: [CGFloat]) {
         let widths = columns.map { $0.width(in: width, need: kindNeed) }
-        var x = width - margin - widths.reduce(0, +)
+        var x = width - margin - ScrollBarLane.listTrailing - widths.reduce(0, +)
         return (widths.map { w in defer { x += w }; return x }, widths)
     }
 }
@@ -127,7 +127,7 @@ final class MacFileRowCell: UITableViewCell {
         let (starts, widths) = MacFilesTable.columns(columns, in: bounds.width, kindNeed: kindNeed)
         place(icon, x: margin, width: glyph - 6)
         spinner.center = icon.center
-        let nameEnd = (starts.first ?? bounds.width - margin) - 10
+        let nameEnd = (starts.first ?? bounds.width - margin - ScrollBarLane.listTrailing) - 10
         place(nameLabel, x: margin + glyph, width: nameEnd - margin - glyph)
         for (index, x) in starts.enumerated() { place(columnLabels[index], x: x, width: widths[index] - (index == starts.count - 1 ? 0 : 8)) }
     }
@@ -140,6 +140,7 @@ final class MacFileRowCell: UITableViewCell {
             background.backgroundInsets = MacSelection.insets
             background.cornerRadius = MacSelection.radius
         }
+        background.backgroundInsets.trailing += ScrollBarLane.listTrailing
         backgroundConfiguration = background
         #endif
     }
@@ -257,10 +258,11 @@ final class MacFilesHeaderView: UIView {
         func flip(_ rect: CGRect) -> CGRect {
             rightToLeft ? CGRect(x: bounds.width - rect.maxX, y: rect.minY, width: rect.width, height: rect.height) : rect
         }
+        let trailing = margin + ScrollBarLane.listTrailing
         let countWidth = min(bounds.width * 0.4, ceil(countLabel.intrinsicContentSize.width))
-        countLabel.frame = flip(CGRect(x: bounds.width - margin - countWidth, y: 0, width: countWidth, height: top))
+        countLabel.frame = flip(CGRect(x: bounds.width - trailing - countWidth, y: 0, width: countWidth, height: top))
         // The crumbs' own 6 pt inset puts the first glyph on the rows' margin.
-        let room = bounds.width - (margin - 6) - margin - countWidth - (countWidth > 0 ? 10 : 0)
+        let room = bounds.width - (margin - 6) - trailing - countWidth - (countWidth > 0 ? 10 : 0)
         scroll.frame = flip(CGRect(x: margin - 6, y: 0, width: max(0, room), height: top))
         let fitted = trail.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
         trail.frame = CGRect(x: 0, y: 0, width: fitted.width, height: top)
@@ -272,7 +274,7 @@ final class MacFilesHeaderView: UIView {
         guard showsColumns else { return }
         let height = bounds.height - top
         let (starts, widths) = MacFilesTable.columns(columns, in: bounds.width, kindNeed: kindNeed)
-        let nameEnd = (starts.first ?? bounds.width - margin) - 10
+        let nameEnd = (starts.first ?? bounds.width - trailing) - 10
         nameTitle.frame = flip(CGRect(x: margin + MacFilesTable.glyph, y: top, width: max(0, nameEnd - margin - MacFilesTable.glyph), height: height - 2))
         for (index, x) in starts.enumerated() {
             columnTitles[index].frame = flip(CGRect(x: x, y: top, width: widths[index], height: height - 2))

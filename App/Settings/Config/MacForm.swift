@@ -181,8 +181,10 @@ private struct MacReadableColumn: ViewModifier {
 
     func body(content: Content) -> some View {
         let _ = Theme.touch()
+        let side = MacForm.side(in: width)
         content
-            .contentMargins(.horizontal, MacForm.side(in: width), for: .scrollContent)
+            .contentMargins(.leading, side, for: .scrollContent)
+            .contentMargins(.trailing, max(side, MacInset.side + ScrollBarLane.listTrailing), for: .scrollContent)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
 }
@@ -229,7 +231,8 @@ private struct MacFormPage: ViewModifier {
             // [mac] Stress test 2026-10-28 round 9: a Settings page's one row height (`MacForm.settingsRowHeight`).
             .environment(\.defaultMinListRowHeight, settings ? MacForm.settingsRowHeight : MacForm.rowHeight)
             .environment(\.macSettingsForm, settings)
-            .contentMargins(.horizontal, side, for: .scrollContent)
+            .contentMargins(.leading, side, for: .scrollContent)
+            .contentMargins(.trailing, max(side, least + ScrollBarLane.listTrailing), for: .scrollContent)
             // [mac] Stress test 2026-10-28 #53: one gap under the bar on every form page (the first card started at
             // about 100 on some pages and 117 on others).
             .contentMargins(.top, MacInset.top, for: .scrollContent)

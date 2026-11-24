@@ -34,7 +34,9 @@ struct SpawnDashboard: View {
             // [macpass-tools] Mac full pass 2026-11-14 (round 2): the Tools' one side inset (`MacInset.side`), under the
             // page title's left edge; the dashboards' own 24 put their cards ~19 px in where Files' rows and Star Map
             // stand ~15 px in.
-            .padding(.horizontal, DeviceWord.isMac ? MacInset.side : 24).padding(.top, MacInset.top(otherwise: 18)).padding(.bottom, 28)
+            .padding(.leading, DeviceWord.isMac ? MacInset.side : 24)
+            .padding(.trailing, DeviceWord.isMac ? MacInset.side + ScrollBarLane.listTrailing : 24)
+            .padding(.top, MacInset.top(otherwise: 18)).padding(.bottom, 28)
         }
         .background(Color.hqGroupedPage)
         .accessibilityIdentifier("spawn-tree.dashboard")

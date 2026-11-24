@@ -84,6 +84,7 @@ struct GoalPlainView: View {
                     milestones(goal, tasks: tasks, proxy: proxy)
                     loose(goal, tasks: tasks, proxy: proxy)
                 }
+                .padding(.trailing, ScrollBarLane.listTrailing)
                 .padding(.bottom, 24 + (model.embedded && !model.tucked ? model.shelfRoom : 0))   // clear of the chat's chips
                 .frame(maxWidth: .infinity, alignment: .leading)
             }

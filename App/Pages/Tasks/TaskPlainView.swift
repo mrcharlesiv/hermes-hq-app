@@ -66,6 +66,7 @@ struct TaskPlainView: View {
                         TaskTeammate(model: model, task: task, part: .foot)
                     }
                 }
+                .padding(.trailing, ScrollBarLane.listTrailing)
                 .padding(.bottom, 16 + (showsMessageLine ? model.shelfRoom : 0))   // clear of the chat's chips
                 .frame(maxWidth: .infinity, alignment: .leading)
                 // What the page draws, said at once and on every change (the scroll view's own geometry said nothing

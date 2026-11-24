@@ -259,7 +259,7 @@ struct NewGoalView: View {
                     }
                     .padding(.vertical, 2)
                 }
-                .scrollIndicators(.hidden)
+                .scrollIndicators(.never)
                 QuickAddButton(enabled: model.canAdd, saving: model.saving, identifier: "goals.new.add") { model.add() }
             }
             .padding(.top, 12)
@@ -314,10 +314,11 @@ struct NewGoalView: View {
                 }
                 .padding(.vertical, 2)
             }
-            .scrollIndicators(.hidden)
-            // Chips that don't fit run to the sheet's edge, not into the margin's cut.
-            .contentMargins(.horizontal, 18, for: .scrollContent)
-            .padding(.horizontal, -18)
+            .scrollIndicators(.never)
+            .hqScrollEdgeFade(width: DeviceWord.isMac ? 16 : 0)
+            // Chips that don't fit run to the sheet's edge on iPhone/iPad; on Mac stay inside the sheet margin.
+            .contentMargins(.horizontal, DeviceWord.isMac ? 0 : 18, for: .scrollContent)
+            .padding(.horizontal, DeviceWord.isMac ? 0 : -18)
             Text(GoalPlanWith.note(model.team, botName: model.name))
                 .font(Font.hq(.footnote))
                 .foregroundStyle(Color.hqLabel2)

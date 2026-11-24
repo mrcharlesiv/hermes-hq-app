@@ -1603,7 +1603,8 @@ struct SettingsCategoryColumn: View {
                     .accessibilityIdentifier("settings.category.\(category.rawValue)")
                 }
             }
-            .padding(.horizontal, 12)
+            .padding(.leading, 12)
+            .padding(.trailing, 12 + ScrollBarLane.listTrailing)
             // [Mac AAA 2026-11-16] The search field on the sidebar's search line (its middle 79 pt down in both
             // windows): beside the sidebar it stood 6 pt higher than the sidebar's own field. [Mac AAA rest 2026-11-17]
             // Mac only: the iPad's two-column Settings keeps its 14 pt (no sidebar field beside it to line up with).

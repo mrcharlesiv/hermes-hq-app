@@ -254,7 +254,8 @@ struct GoalTeamView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 14)
             }
-            .padding(.horizontal, 18)
+            .padding(.leading, 18)
+            .padding(.trailing, 18 + ScrollBarLane.listTrailing)
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { onHeight($0) }

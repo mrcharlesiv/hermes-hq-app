@@ -280,12 +280,14 @@ nonisolated struct SessionPRStatus: Hashable, Sendable {
 
     /// The states a project's counts and filter find this chat under: each listed item's (a chat with a merged PR
     /// and an open one is under both), else the one answer. The owner's own Closed mark stands alone: they said the
-    /// chat is done, so an item still open on GitHub doesn't count it as open. Unknown is never counted.
+    /// chat is done, so an item still open on GitHub doesn't count it as open. Resolved `.unknown` counts so the
+    /// project's `?` filter finds unmatched chats; an in-flight `.checking` placeholder is never counted.
     var countedStates: Set<State> {
-        if manual || items?.isEmpty != false { return state == .unknown ? [] : [state] }
-        let listed = Set(items?.map(\.state) ?? []).subtracting([.unknown, .none])
+        if isPendingCheck { return [] }
+        if manual || items?.isEmpty != false { return [state] }
+        let listed = Set(items?.map(\.state) ?? []).subtracting([.none])
         if !listed.isEmpty { return listed }
-        return state == .unknown ? [] : [state]
+        return [state]
     }
 
     /// The one answer, and how many more are still waiting ("Open #12, 1 more not merged"; under the owner's own

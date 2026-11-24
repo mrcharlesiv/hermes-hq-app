@@ -41,12 +41,13 @@ import Testing
             return row
         }
         var archived = row("merged", "/a", .merged); archived.archived = true
+        var checking = row("checking", "/a", .unknown)
+        checking.pullRequest?.unknownReason = .checking
         let rows = [row("none", "/a", SessionPRStatus.State.none), row("open", "/a/sub", .open), archived, archived,
-                    row("other", "/b", .open), row("unknown", "/a", .unknown), row("unqueried", "/a", nil),
+                    row("other", "/b", .open), row("unknown", "/a", .unknown), checking, row("unqueried", "/a", nil),
                     row("draft", "/a", .draft), row("closed", "/a", .closed)]
         let counts = ProjectPageHeader.pullRequestCounts(rows, project: "/a", projects: projects)
-        for state in [SessionPRStatus.State.none, .draft, .open, .merged, .closed] { #expect(counts[state] == 1) }
-        #expect(counts[.unknown] == nil)
+        for state in [SessionPRStatus.State.none, .draft, .open, .merged, .closed, .unknown] { #expect(counts[state] == 1) }
         #expect(ProjectPageHeader.pullRequestCounts(rows, project: "/b", projects: projects)[.open] == 1)
     }
 

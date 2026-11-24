@@ -404,10 +404,20 @@ extension SessionsTests {
         XCTAssertTrue(row(app, "s-garden").waitForExistence(timeout: 15))
         ensureAppCoding(app)
 
-        // Health banner reports the unmatched chat and lets the user jump straight to Repository….
-        let health = app.descendants(matching: .any)["sessions.projectPage.codingHealth"].firstMatch
-        XCTAssertTrue(health.waitForExistence(timeout: 15), "inline health banner for unmatched chat")
-        shot(app, "CR6-page-health-banner")
+        // Healthy project (PRs already matching): zero health banner; `?` sits cleanly in the PR filter bar.
+        // Count matches the exact 2 displayed unknown rows (s-shortcuts in Active + s-old in Done; never phantom outside rows).
+        let unknown = app.buttons["sessions.projectPage.pr.unknown"]
+        XCTAssertTrue(unknown.waitForExistence(timeout: 15), "? filter pill for unmatched chat")
+        XCTAssertTrue(waitUntil(10) { unknown.label.contains("2 loaded chats") }, unknown.label)
+        XCTAssertFalse(app.descendants(matching: .any)["sessions.projectPage.codingHealth"].firstMatch.exists,
+                       "no health banner when PRs are already matching")
+        shot(app, "CR6-header-unknown-pill")
+        // Tapping `?` rings it ("2 Unknown") and filters the project list to the exact 2 unmatched chats.
+        unknown.tap()
+        XCTAssertTrue(waitUntil(10) { unknown.isSelected && self.row(app, "s-shortcuts").exists && self.row(app, "s-old").exists && !self.row(app, "s-garden").exists })
+        shot(app, "CR6-unknown-filter-active")
+        unknown.tap()
+        XCTAssertTrue(waitUntil(10) { !unknown.isSelected && self.row(app, "s-garden").exists })
 
         // Unified Project Settings now includes Coding Project + Repository row.
         openProjectSettings(app)

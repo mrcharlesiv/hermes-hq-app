@@ -31,8 +31,9 @@ import Testing
         #expect(ProjectPageHeader.shownPRStates([:], selected: nil).isEmpty)
         #expect(ProjectPageHeader.shownPRStates([.open: 0, .closed: 0], selected: nil).isEmpty)
         // The order is the line's own whatever the dictionary's.
-        #expect(ProjectPageHeader.shownPRStates([.closed: 1, .draft: 3, .open: 2, .none: 4, .merged: 5], selected: nil)
-                == [.none, .draft, .open, .merged, .closed])
+        #expect(ProjectPageHeader.shownPRStates([.unknown: 2, .closed: 1, .draft: 3, .open: 2, .none: 4, .merged: 5], selected: nil)
+                == [.none, .draft, .open, .merged, .closed, .unknown])
+        #expect(ProjectPageHeader.prWord(.unknown) == "Unknown")
     }
 
     // MARK: Step 3: the PR card

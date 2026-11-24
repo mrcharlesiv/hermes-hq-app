@@ -299,13 +299,13 @@ struct ProjectPageHeader: View {
     }
 
     static func prWord(_ state: SessionPRStatus.State) -> String {
-        ["none": "No PR", "draft": "Draft", "open": "Open", "merged": "Merged", "closed": "Closed"][state.rawValue] ?? ""
+        ["none": "No PR", "draft": "Draft", "open": "Open", "merged": "Merged", "closed": "Closed", "unknown": "Unknown"][state.rawValue] ?? ""
     }
 
     /// The count line's states, in order: [coding-pr-review] owner 2026-11-21 (option B), a state at zero is not drawn,
     /// unless it is the picked one (lit at zero, so the filter can be cleared). Empty: the line is absent.
     nonisolated static func shownPRStates(_ counts: [SessionPRStatus.State: Int], selected: SessionPRStatus.State?) -> [SessionPRStatus.State] {
-        [SessionPRStatus.State.none, .draft, .open, .merged, .closed].filter { counts[$0, default: 0] > 0 || $0 == selected }
+        [SessionPRStatus.State.none, .draft, .open, .merged, .closed, .unknown].filter { counts[$0, default: 0] > 0 || $0 == selected }
     }
 
     /// Owner 2026-11-19: the picked state says its name inside its ring ("58 Merged"), so the filter on screen reads
@@ -315,7 +315,11 @@ struct ProjectPageHeader: View {
         PagesFlowLayout(spacing: 12, lineSpacing: 0) {
             ForEach(Self.shownPRStates(prCounts, selected: selectedPR), id: \.self) { state in
                 let count = prCounts[state, default: 0]
-                let status = state == .none ? "No PR yet" : "\(SessionPRStatus(state: state).label) PR"
+                let status: String = switch state {
+                case .none: "No PR yet"
+                case .unknown: "PR status unknown"
+                default: "\(SessionPRStatus(state: state).label) PR"
+                }
                 let label = "\(status), \(count) loaded \(count == 1 ? "chat" : "chats")"
                 let picked = selectedPR == state
                 Button { onPRPick(state) } label: {
@@ -509,14 +513,17 @@ extension SessionsViewController {
         return "\(look.emoji ?? "")/\(look.color.map(String.init) ?? "")/\(store.isProjectBranchRows(key))"
     }
 
-    /// All loaded rows belonging to `key` (live + outside when shown + archived), matching what the project page displays.
+    /// All loaded rows that the project page can display for `key`, matching `SessionListPipeline.projectPage` 1-to-1
+    /// (live + non-outside archived, respecting bot and status filters so every pill count equals the filtered rows).
     func projectCodingRows(_ key: String) -> [SessionSummary] {
         guard let store else { return [] }
         var seen = Set<String>()
         var out: [SessionSummary] = []
-        for row in store.liveRows + store.archivedSessions {
+        let pool = store.sessions + store.archivedSessions.filter { !ChatSource.hasFolder($0.source) }
+        for row in pool {
             if let bot = store.botFilter, row.profile != bot { continue }
-            guard store.projectKeyFor(cwd: row.cwd, profile: row.profile) == key,
+            if !store.view.statusFilter.isEmpty, !store.view.statusFilter.contains(row.status) { continue }
+            guard SessionProjects.key(cwd: row.cwd, profile: row.profile, projectsByProfile: store.projectsByProfile) == key,
                   seen.insert(SessionListPipeline.key(row)).inserted else { continue }
             var copy = row
             copy.pullRequest = store.pullRequest(profile: row.profile, id: row.id) ?? row.pullRequest
@@ -556,9 +563,8 @@ extension SessionsViewController {
         if unavailable > 0 && unavailable == rows.count {
             return .init(kind: .unavailable, message: "Couldn’t reach the gateway for pull request status.", actionTitle: "Retry")
         }
-        if unmatched > 0 && store.prManageAvailable && linked != nil {
-            let noun = unmatched == 1 ? "1 chat isn’t" : "\(unmatched) chats aren’t"
-            return .init(kind: .unmatched(unmatched), message: "\(noun) matched to \(SessionStore.folderName(linked!.path)).",
+        if matched == 0 && unmatched > 0 && store.prManageAvailable && linked != nil {
+            return .init(kind: .unmatched(unmatched), message: "No chats matched \(SessionStore.folderName(linked!.path)).",
                          actionTitle: "Repository…")
         }
         return nil

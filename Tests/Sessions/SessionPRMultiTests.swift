@@ -76,9 +76,10 @@ import Testing
         two.manual = true; two.state = .closed
         #expect(two.countedStates == [.closed] && two.summary == "Closed #2, 1 not merged")
         let unread = SessionPRStatus(state: .unknown, items: [item(.unknown, 3), item(.merged, 1)])
-        #expect(unread.countedStates == [.merged])                            // its merged one still counts
+        #expect(unread.countedStates == [.unknown, .merged])                  // both unknown and merged count
         #expect(SessionPRStatus(state: .none).countedStates == [SessionPRStatus.State.none])
-        #expect(SessionPRStatus(state: .unknown).countedStates.isEmpty)
+        #expect(SessionPRStatus(state: .unknown).countedStates == [.unknown])
+        #expect(SessionPRStatus(state: .unknown, unknownReason: .checking).countedStates.isEmpty)
         #expect(SessionPRStatus(state: .draft, items: []).countedStates == [.draft])
     }
 

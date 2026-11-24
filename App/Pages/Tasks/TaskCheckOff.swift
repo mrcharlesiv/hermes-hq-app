@@ -21,7 +21,7 @@ enum TaskCheckOff {
 /// let go first, and each drifts up and away on its own curve as it fades. Until a sheet lets go the sheets together
 /// are the picture exactly, so the hand-over from the real view can't be seen.
 enum TaskDust {
-    private static let sheets = 28
+    nonisolated private static let sheets = 16
 
     /// Plays over `source` (which the caller empties), in `host`'s coordinates. False when there was nothing to draw.
     @discardableResult
@@ -30,7 +30,8 @@ enum TaskDust {
         guard source.window != nil, bounds.width >= 1, bounds.height >= 1 else { return false }
         let format = UIGraphicsImageRendererFormat.preferred()
         format.opaque = false
-        format.scale = min(2, source.traitCollection.displayScale)
+        // Cap scale on wide Mac/iPad rows so off-main bitmap slicing stays fast and low-memory.
+        format.scale = bounds.width > 500 ? 1 : min(2, source.traitCollection.displayScale)
         let picture = UIGraphicsImageRenderer(bounds: bounds, format: format).image { _ in
             source.drawHierarchy(in: bounds, afterScreenUpdates: false)
         }
@@ -44,7 +45,7 @@ enum TaskDust {
         guard host.window != nil, area.width >= 1, area.height >= 1 else { return false }
         let format = UIGraphicsImageRendererFormat.preferred()
         format.opaque = false
-        format.scale = min(2, host.traitCollection.displayScale)
+        format.scale = area.width > 500 ? 1 : min(2, host.traitCollection.displayScale)
         let picture = UIGraphicsImageRenderer(bounds: area, format: format).image { _ in
             host.drawHierarchy(in: host.bounds, afterScreenUpdates: false)
         }
@@ -53,63 +54,78 @@ enum TaskDust {
 
     private static func play(_ picture: UIImage, scale: CGFloat, frame: CGRect, in host: UIView,
                              direction: UIUserInterfaceLayoutDirection) -> Bool {
-        // A grain is a point across: finer reads as a fade, coarser as tiles.
-        guard let whole = picture.cgImage, let parts = split(whole, grain: max(1, Int(scale))) else { return false }
+        guard let whole = picture.cgImage else { return false }
+        let grain = max(1, Int(scale))
 
+        // Place the intact snapshot immediately so hiding the underlying cell is seamless while slicing runs off main.
         let cloud = UIView(frame: frame)
         cloud.isUserInteractionEnabled = false
         cloud.layer.zPosition = 50
+        let still = CALayer()
+        still.frame = cloud.bounds
+        still.contents = whole
+        still.contentsGravity = .resize
+        cloud.layer.addSublayer(still)
         host.addSubview(cloud)
 
-        let now = CACurrentMediaTime()
         let leadingToTrailing = direction == .leftToRight
-        let wind: CGFloat = leadingToTrailing ? 1 : -1
-        var rng = SystemRandomNumberGenerator()
-        for (index, part) in parts.enumerated() {
-            let sheet = CALayer()
-            sheet.frame = cloud.bounds
-            sheet.contents = part
-            sheet.contentsGravity = .resize
-            sheet.actions = ["position": NSNull(), "opacity": NSNull(), "transform": NSNull()]
-            cloud.layer.addSublayer(sheet)
+        Task { @MainActor in
+            let parts = await Task.detached(priority: .userInitiated) { Self.split(whole, grain: grain) }.value
+            guard cloud.superview != nil else { return }
+            guard let parts, !parts.isEmpty else {
+                UIView.animate(withDuration: 0.25, animations: { cloud.alpha = 0 }) { _ in cloud.removeFromSuperview() }
+                return
+            }
+            still.removeFromSuperlayer()
+            let now = CACurrentMediaTime()
+            let wind: CGFloat = leadingToTrailing ? 1 : -1
+            var rng = SystemRandomNumberGenerator()
+            for (index, part) in parts.enumerated() {
+                let sheet = CALayer()
+                sheet.frame = cloud.bounds
+                sheet.contents = part
+                sheet.contentsGravity = .resize
+                sheet.actions = ["position": NSNull(), "opacity": NSNull(), "transform": NSNull()]
+                cloud.layer.addSublayer(sheet)
 
-            let start = sheet.position
-            let reach = CGPoint(x: wind * CGFloat.random(in: 50...150, using: &rng), y: -CGFloat.random(in: 24...90, using: &rng))
-            let path = CGMutablePath()
-            path.move(to: start)
-            // The wind lifts first, then carries: the bend sits over the start.
-            path.addQuadCurve(to: CGPoint(x: start.x + reach.x, y: start.y + reach.y),
-                              control: CGPoint(x: start.x + reach.x * CGFloat.random(in: 0.05...0.35, using: &rng),
-                                               y: start.y + reach.y * CGFloat.random(in: 0.7...1.15, using: &rng)))
-            let move = CAKeyframeAnimation(keyPath: "position")   // motion-ok: never under Reduce Motion (`TasksViewController.blowAway` guards)
-            move.path = path
-            move.calculationMode = .paced
-            let turn = CABasicAnimation(keyPath: "transform.rotation.z")   // motion-ok: never under Reduce Motion (`TasksViewController.blowAway` guards)
-            turn.fromValue = 0
-            turn.toValue = CGFloat.random(in: -0.09...0.09, using: &rng)
-            let grow = CABasicAnimation(keyPath: "transform.scale")   // motion-ok: never under Reduce Motion (`TasksViewController.blowAway` guards)
-            grow.fromValue = 1
-            grow.toValue = CGFloat.random(in: 1.0...1.08, using: &rng)
-            let fade = CAKeyframeAnimation(keyPath: "opacity")   // motion-ok: never under Reduce Motion (`TasksViewController.blowAway` guards)
-            fade.values = [1, 1, 0.6, 0]
-            fade.keyTimes = [0, 0.35, 0.7, 1]
+                let start = sheet.position
+                let reach = CGPoint(x: wind * CGFloat.random(in: 50...150, using: &rng), y: -CGFloat.random(in: 24...90, using: &rng))
+                let path = CGMutablePath()
+                path.move(to: start)
+                // The wind lifts first, then carries: the bend sits over the start.
+                path.addQuadCurve(to: CGPoint(x: start.x + reach.x, y: start.y + reach.y),
+                                  control: CGPoint(x: start.x + reach.x * CGFloat.random(in: 0.05...0.35, using: &rng),
+                                                   y: start.y + reach.y * CGFloat.random(in: 0.7...1.15, using: &rng)))
+                let move = CAKeyframeAnimation(keyPath: "position")   // motion-ok: never under Reduce Motion (`TasksViewController.blowAway` guards)
+                move.path = path
+                move.calculationMode = .paced
+                let turn = CABasicAnimation(keyPath: "transform.rotation.z")   // motion-ok: never under Reduce Motion (`TasksViewController.blowAway` guards)
+                turn.fromValue = 0
+                turn.toValue = CGFloat.random(in: -0.09...0.09, using: &rng)
+                let grow = CABasicAnimation(keyPath: "transform.scale")   // motion-ok: never under Reduce Motion (`TasksViewController.blowAway` guards)
+                grow.fromValue = 1
+                grow.toValue = CGFloat.random(in: 1.0...1.08, using: &rng)
+                let fade = CAKeyframeAnimation(keyPath: "opacity")   // motion-ok: never under Reduce Motion (`TasksViewController.blowAway` guards)
+                fade.values = [1, 1, 0.6, 0]
+                fade.keyTimes = [0, 0.35, 0.7, 1]
 
-            let flight = CAAnimationGroup()
-            flight.animations = [move, turn, grow, fade]
-            flight.duration = TaskCheckOff.drift * Double.random(in: 0.72...1, using: &rng)
-            flight.beginTime = now + TaskCheckOff.sweep * Double(index) / Double(max(1, parts.count - 1))
-            flight.timingFunction = CAMediaTimingFunction(controlPoints: 0.25, 0.3, 0.5, 1)   // taken at once, then hanging
-            flight.fillMode = .both
-            flight.isRemovedOnCompletion = false
-            sheet.add(flight, forKey: "dust")
+                let flight = CAAnimationGroup()
+                flight.animations = [move, turn, grow, fade]
+                flight.duration = TaskCheckOff.drift * Double.random(in: 0.72...1, using: &rng)
+                flight.beginTime = now + TaskCheckOff.sweep * Double(index) / Double(max(1, parts.count - 1))
+                flight.timingFunction = CAMediaTimingFunction(controlPoints: 0.25, 0.3, 0.5, 1)   // taken at once, then hanging
+                flight.fillMode = .both
+                flight.isRemovedOnCompletion = false
+                sheet.add(flight, forKey: "dust")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + TaskCheckOff.sweep + TaskCheckOff.drift + 0.05) { cloud.removeFromSuperview() }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + TaskCheckOff.sweep + TaskCheckOff.drift + 0.05) { cloud.removeFromSuperview() }
         return true
     }
 
     /// The picture as `sheets` pictures of the same size, each grain (a square `grain` pixels across) in exactly one
-    /// of them: mostly by how far along the row it is, with enough chance that the front is ragged.
-    private static func split(_ image: CGImage, grain: Int) -> [CGImage]? {
+    /// of them: runs off the main thread.
+    nonisolated private static func split(_ image: CGImage, grain: Int) -> [CGImage]? {
         let width = image.width, height = image.height
         guard width > 0, height > 0 else { return nil }
         let space = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()

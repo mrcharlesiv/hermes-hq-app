@@ -1198,6 +1198,14 @@ final class LiveChatSession: ChatSessionModel {
 
     /// [tasks] Set by a task's page: what a typed send carries and shows instead (nil: as typed).
     var wrapsSend: ((String) -> (text: String, display: String)?)?
+    /// [tasks] Set by a task's page: notified on every `deliver()` so the task view updates without 1 Hz polling timers.
+    var onTaskActivity: (() -> Void)?
+
+    /// Whether the session already has a user message (excluding `id`, e.g., an in-flight voice memo bubble).
+    /// Used by task chats so failed first sends still carry task context on retry, and first voice memos include it too.
+    func hasOtherUserMessage(excluding id: String? = nil) -> Bool {
+        messages.contains { $0.role == .user && $0.id != id }
+    }
     /// [phone-calls] Set by AppModel: the note a typed message carries when it mentions calling and Phone Calls is
     /// ready (nil: none). Only what is sent carries it; the bubble shows the words as typed, also from history
     /// (SentTitles strips it). A typed message that steers a running reply goes in as typed, without the note.
@@ -2324,6 +2332,7 @@ final class LiveChatSession: ChatSessionModel {
         }
         if drainingAway && !observing { endAwayDrainIfDone() }   // verify round 3
         onVoiceChange?()   // [talk] the conversation hears every change, on screen or off
+        onTaskActivity?()  // [tasks] the task view observes running/message updates without 1 Hz polling
         onThreadChange?()  // [threads]
         guard !changes.isEmpty else { return }
         watchForDoubledReply()                                   // [doubled-reply]

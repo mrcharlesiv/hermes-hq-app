@@ -70,6 +70,8 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     private var notices: PageNoticeHost!
     /// [notify] How long a task opened from outside has waited for the list to name it (`openTask`, half-seconds).
     private var listWait = 0
+    private var openWaitToken = 0
+    private var ideasCreated = false
     /// Where a held task would land (section and index): a tick each time it moves to a new place.
     private var dropPlace: String?
     private let scopeItem = ScopeBarItem()
@@ -88,7 +90,10 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     private var skeletonShown = false
     private var skeletonWork: DispatchWorkItem?
     private var updateAsked = false
-    private lazy var ideas: TaskIdeasStore = TaskIdeasStore(api: store.api, directory: store.directory)
+    private lazy var ideas: TaskIdeasStore = {
+        ideasCreated = true
+        return TaskIdeasStore(api: store.api, directory: store.directory)
+    }()
     private var ideaCards: [String: TaskIdeaCardModel] = [:]
     private var shownGoalCards: [String: GoalCardModel] = [:]
     /// [goals] The Goals view's cards on show, its groups (ids in order), and the folded groups opened.
@@ -350,6 +355,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         Self.onScreen = false
         minuteTimer?.invalidate()
         minuteTimer = nil
+        if ideasCreated { ideas.stopPolling() }
     }
 
     // MARK: Layout
@@ -918,12 +924,11 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         // Today's own tasks aren't "coming up", but its day on the strip still says it has some.
         let todayKey = TodoViews.dayKey(calendar.startOfDay(for: now), calendar: calendar)
         if !TodoViews.dayGroups(visible, day: todayKey, sections: store.sections, bots: bots.map(\.id), now: now).isEmpty { busy.insert(todayKey) }
-        let format = DateFormatter()
-        format.setLocalizedDateFormatFromTemplate("EEE")
         return (0..<7).compactMap { offset in
             guard let date = calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: now)) else { return nil }
             let key = TodoViews.dayKey(date, calendar: calendar)
-            return TodoWeekStrip.Day(key: key, weekday: format.string(from: date), number: "\(calendar.component(.day, from: date))",
+            return TodoWeekStrip.Day(key: key, weekday: TodoDates.format(date, template: "EEE", calendar: calendar),
+                                     number: "\(calendar.component(.day, from: date))",
                                      today: offset == 0, busy: busy.contains(key), picked: key == pickedDay)
         }
     }
@@ -1126,6 +1131,8 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
             Task { if await !store.setDone(id, false) { PagesHaptics.error() } }
             return
         }
+        // Guard against rapid double-taps firing duplicate dust animations and duplicate PATCHes.
+        guard !ticking.contains(id) else { return }
         // [task-check-off] The circle fills and the row turns to dust at once; the list closes behind it as the task
         // moves to Done.
         PagesHaptics.success()
@@ -1139,7 +1146,8 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
                 // The save moves the row at once (the store shows it before the gateway answers), so it waits until
                 // the dust's front is most of the way across: the list closes behind the dust, not under what stands.
                 if blown { try? await Task.sleep(for: .seconds(TaskCheckOff.sweep * 0.8)) }
-                if await !self.store.setDone(id, true) { PagesHaptics.error() }   // the notice says why
+                let saved = await self.store.setDone(id, true)
+                if saved { self.offerUndoDone(task) } else { PagesHaptics.error() }   // the notice says why
                 self.ticking.remove(id)
                 self.reload(animated: true)
                 guard blown else { return }
@@ -1226,14 +1234,19 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     /// `asking`: the question goes into the task's own chat at once (New Task with a bot). `atReply`: the page opens at
     /// its chat's newest end (a reply's alert), not the task's top.
     func openTask(_ id: String, asking question: String? = nil, atReply: Bool = false) {
+        openWaitToken += 1
+        let token = openWaitToken
+        openTask(id, asking: question, atReply: atReply, attempt: 0, token: token)
+    }
+
+    private func openTask(_ id: String, asking question: String?, atReply: Bool, attempt: Int, token: Int) {
+        guard token == openWaitToken else { return }
         // [notify] Audit 2026-11-19: a task's alert on a launch with no list yet chose the page before the task was
-        // read, and stayed the bare page (no chat) once it came. A task not in hand (no list yet, or one read before
-        // the task was added elsewhere) waits for a fresh read (≤ 10 s), then opens.
-        if store.task(id) == nil, listWait == 0 || ((store.loading || !store.hasList) && listWait < 20) {
-            listWait += 1
-            if listWait == 1 { Task { [store] in await store.refresh(force: true) } }
+        // read, and stayed the bare page (no chat) once it came. A task not in hand waits for a fresh read (≤ 10 s).
+        if store.task(id) == nil, attempt == 0 || ((store.loading || !store.hasList) && attempt < 20) {
+            if attempt == 0 { Task { [store] in await store.refresh(force: true) } }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                self?.openTask(id, asking: question, atReply: atReply)
+                self?.openTask(id, asking: question, atReply: atReply, attempt: attempt + 1, token: token)
             }
             return
         }
@@ -1271,10 +1284,10 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         }
     }
 
-    /// [tasks] Marked done on its page (owner 2026-11-07, Pinned Task: Done in every state, with Undo): the page goes
-    /// and the list says so, with Undo. A repeating task has already rolled on to its next date, so it has none.
+    /// [tasks] Marked done (from its page or the list): offers Undo. A repeating task (`.me` or `.together`) has
+    /// already rolled forward to its next date, so it has no Undo.
     private func offerUndoDone(_ task: TodoTask) {
-        guard task.repeatRule == nil || task.whoKind != .me else { return }
+        guard task.repeatRule == nil || task.whoKind == .bot else { return }
         UndoPill.show(label: "Marked Done", wayBack: "“\(task.title)” is back on the list", in: self) { [weak self] in
             guard let self else { return }   // the pill plays Undo's tap
             Task { if await !self.store.setDone(task.id, false) { PagesHaptics.error() } }
@@ -1747,13 +1760,17 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     }
 
     private func markSelectedDone() {
-        let ids = selectedIDs()
+        let ids = selectedIDs().filter { store.task($0)?.isDone == false }
         guard !ids.isEmpty else { return }
         PagesHaptics.success()
         setSelecting(false)
         Task {
-            var allDone = true
-            for id in ids where store.task(id)?.isDone == false { if await !store.setDone(id, true) { allDone = false } }
+            let allDone = await withChildTasks(of: Bool.self) { group in
+                for id in ids { group.addTask { await self.store.setDone(id, true) } }
+                var ok = true
+                while let one = await group.next() { ok = ok && one }
+                return ok
+            }
             if !allDone { PagesHaptics.error() }
         }
     }
@@ -1768,8 +1785,12 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
             self.setSelecting(false)
             // One cue for the lot, once every delete has answered: success, or error if any was refused.
             Task {
-                var allGone = true
-                for id in ids where !(await self.store.delete(id)) { allGone = false }
+                let allGone = await withChildTasks(of: Bool.self) { group in
+                    for id in ids { group.addTask { await self.store.delete(id) } }
+                    var ok = true
+                    while let one = await group.next() { ok = ok && one }
+                    return ok
+                }
                 if allGone { PagesHaptics.success() } else { PagesHaptics.error() }
             }
         })
@@ -1780,8 +1801,10 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
 
     // MARK: Drag a task up or down its list
 
-    /// A list's open tasks can be put in your own order by hand.
-    private var canArrange: Bool { currentList != nil && !searching && !selecting && !store.readOnlyGateway }
+    /// A list's open tasks can be put in your own order by hand only when Sort By is My Order (`"smart"`).
+    private var canArrange: Bool {
+        currentList != nil && store.settings.sort == "smart" && !searching && !selecting && !store.readOnlyGateway
+    }
 
     func collectionView(_ collectionView: UICollectionView, itemsForBeginning session: UIDragSession,
                         at indexPath: IndexPath) -> [UIDragItem] {

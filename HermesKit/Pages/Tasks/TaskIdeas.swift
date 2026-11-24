@@ -135,7 +135,8 @@ final class TaskIdeasStore {
     @ObservationIgnored var onNotice: ((String) -> Void)?
     @ObservationIgnored private var prepared = false
     @ObservationIgnored private var lastReadAt: Date?
-    @ObservationIgnored private var polling = false
+    @ObservationIgnored private var pollTask: Task<Void, Never>?
+    @ObservationIgnored private var closed = false
     /// Dismisses still on their way, by idea: an Undo waits for its dismiss to land before it asks for the idea back
     /// (sent at once, the restore could reach the gateway first and the dismiss then win).
     @ObservationIgnored private var dismissing: [String: Task<Bool, Never>] = [:]
@@ -166,6 +167,7 @@ final class TaskIdeasStore {
     }
 
     func refresh(force: Bool = false) async {
+        guard !closed else { return }
         prepare()
         if !force, let at = lastReadAt, Date().timeIntervalSince(at) < 2 { return }
         loading = true
@@ -173,11 +175,13 @@ final class TaskIdeasStore {
         defer { loading = false; onChange?() }
         do {
             let fresh = try await api.ideas()
+            guard !closed else { return }
             lastReadAt = Date()
             error = nil
             adopt(fresh)
-            if fresh.looking { poll() }
+            if fresh.looking { poll() } else { stopPolling() }
         } catch {
+            guard !closed else { return }
             self.error = PagesREST.reason(error)
         }
     }
@@ -265,17 +269,38 @@ final class TaskIdeasStore {
         }
     }
 
+    /// Stops any active "Look Now" poll (view disappeared, app backgrounded, or sign-out).
+    func stopPolling() {
+        pollTask?.cancel()
+        pollTask = nil
+    }
+
+    /// Sign-out or gateway switch: stop polling and drop in-memory state.
+    func forget() {
+        closed = true
+        stopPolling()
+        for task in dismissing.values { task.cancel() }
+        dismissing = [:]
+        decided = []
+        page = nil
+        prepared = false
+    }
+
     private func poll() {
-        guard !polling else { return }
-        polling = true
-        Task { [weak self] in
+        guard !closed, pollTask == nil else { return }
+        pollTask = Task { [weak self] in
+            defer { self?.pollTask = nil }
             let started = Date()
-            while let self, Date().timeIntervalSince(started) < 600 {
-                try? await Task.sleep(for: .seconds(4))
+            while !Task.isCancelled, let self, !self.closed, Date().timeIntervalSince(started) < 600 {
+                do {
+                    try await Task.sleep(for: .seconds(4))
+                } catch {
+                    break
+                }
+                guard !Task.isCancelled, !self.closed else { break }
                 await self.refresh(force: true)
                 if self.page?.looking != true { break }
             }
-            self?.polling = false
         }
     }
 }

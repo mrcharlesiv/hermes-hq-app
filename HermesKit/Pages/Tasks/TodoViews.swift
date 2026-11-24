@@ -282,24 +282,14 @@ nonisolated enum TodoViews {
         if word == "Today" || word == "Tomorrow" || word == "Yesterday" { return word }
         let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: date)).day ?? 99
         guard (2...6).contains(days) else { return word }
-        let format = DateFormatter()
-        format.calendar = calendar
-        format.timeZone = calendar.timeZone
-        format.locale = calendar.locale ?? .current
-        format.setLocalizedDateFormatFromTemplate("EEE")
-        return format.string(from: date)
+        return TodoDates.format(date, template: "EEE", calendar: calendar)
     }
 
     /// A day group's heading in Upcoming: ("Tomorrow", "Fri, Nov 13") or ("Sat, Nov 14", nil).
     static func dayHeading(_ key: String, now: Date, calendar: Calendar = .current) -> (title: String, detail: String?) {
         guard let date = TodoDates.day(key, calendar: calendar) else { return (key, nil) }
-        let format = DateFormatter()
-        format.calendar = calendar
-        format.timeZone = calendar.timeZone
-        format.locale = calendar.locale ?? .current
         let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: now)
-        format.setLocalizedDateFormatFromTemplate(sameYear ? "EEEMMMd" : "EEEyMMMd")
-        let full = format.string(from: date)
+        let full = TodoDates.format(date, template: sameYear ? "EEEMMMd" : "EEEyMMMd", calendar: calendar)
         let word = TodoWords.day(date, now: now, calendar: calendar)
         return word == "Tomorrow" ? (word, full) : (full, nil)
     }

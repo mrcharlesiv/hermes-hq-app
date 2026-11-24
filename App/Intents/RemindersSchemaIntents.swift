@@ -141,6 +141,28 @@ struct HQReminderSection {
     }
 }
 
+/// Short-lived cache so rapid consecutive Siri/Shortcuts entity queries don't refetch `GET /tasks` on every lookup.
+@available(iOS 27.0, *)
+nonisolated enum HQReminderCache {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var cached: (at: Date, answer: TodoListAnswer)?
+    private static let ttl: TimeInterval = 30
+
+    static func list() async throws -> TodoListAnswer {
+        if let hit = lock.withLock({ cached }), Date().timeIntervalSince(hit.at) < ttl {
+            return hit.answer
+        }
+        let answer = try await ShortcutGateway.send("GET", TasksAPI.base, what: "your tasks")
+        let decoded = try JSONDecoder().decode(TodoListAnswer.self, from: answer.data)
+        lock.withLock { cached = (Date(), decoded) }
+        return decoded
+    }
+
+    static func invalidate() {
+        lock.withLock { cached = nil }
+    }
+}
+
 @available(iOS 27.0, *)
 nonisolated struct HQReminderSectionQuery: EntityStringQuery {
     func entities(for identifiers: [String]) async throws -> [HQReminderSection] {
@@ -155,8 +177,7 @@ nonisolated struct HQReminderSectionQuery: EntityStringQuery {
     }
 
     static func all() async throws -> [HQReminderSection] {
-        let answer = try await ShortcutGateway.send("GET", TasksAPI.base, what: "your tasks")
-        let sections = (try? JSONDecoder().decode(TodoListAnswer.self, from: answer.data))?.sections ?? []
+        let sections = (try await HQReminderCache.list()).sections ?? []
         return sections.map { HQReminderSection(id: $0.id, name: $0.name) }
     }
 }
@@ -241,8 +262,7 @@ struct HQReminder {
 @available(iOS 27.0, *)
 nonisolated struct HQReminderQuery: EntityQuery {
     func entities(for identifiers: [String]) async throws -> [HQReminder] {
-        let answer = try await ShortcutGateway.send("GET", TasksAPI.base, what: "your tasks")
-        let tasks = (try? JSONDecoder().decode(TodoListAnswer.self, from: answer.data))?.tasks ?? []
+        let tasks = (try await HQReminderCache.list()).tasks ?? []
         return identifiers.compactMap { id in tasks.first { $0.id == id }.map(HQReminder.init) }
     }
 }
@@ -274,8 +294,27 @@ struct CreateHQReminderIntent {
                                          place: locationTrigger?.place.commonName, arriving: locationTrigger?.event != .depart,
                                          section: section?.id)
         let answer = try await ShortcutGateway.send("POST", TasksAPI.base, json: try JSONValue.object(body).encoded(), what: "the task")
-        let made = try TasksAPI.task(answer.data)
-        AppLog.note("intents", "reminders schema: added a task")
+        var made = try TasksAPI.task(answer.data)
+        // Upload any attached images (up to TasksStore.fileLimit each); older add-ons ignore or refuse gracefully.
+        for (index, file) in images.enumerated() {
+            let data = file.data
+            guard !data.isEmpty, data.count <= TasksStore.fileLimit else { continue }
+            let filename = file.filename.isEmpty ? "image-\(index + 1).jpg" : file.filename
+            let attachBody: [String: JSONValue] = [
+                "kind": .string("file"),
+                "name": .string(filename),
+                "data": .string(data.base64EncodedString()),
+            ]
+            if let encoded = try? JSONValue.object(attachBody).encoded(),
+               let attached = try? await ShortcutGateway.send("POST", TasksAPI.base + "/" + PagesREST.segment(made.id) + "/attach",
+                                                              json: encoded, what: "the image", timeout: 60),
+               let updated = try? TasksAPI.task(attached.data) {
+                made = updated
+            }
+        }
+        HQReminderCache.invalidate()
+        await ShortcutTasksSync.refreshAfterWrite()
+        AppLog.note("intents", "reminders schema: added a task\(images.isEmpty ? "" : " with \(images.count) image(s)")")
         return .result(value: HQReminder(made))
     }
 

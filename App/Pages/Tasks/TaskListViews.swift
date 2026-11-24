@@ -374,7 +374,7 @@ struct TaskListEditView: View {
                 Section {
                     swatches
                 } header: { HQSectionLabel { Text("Colour") } } footer: { HQSectionFooter {
-                    Text("A small dot in this colour marks the list’s tasks in Today, Upcoming and search.")
+                    Text("Sets the colour of this list’s icon.")
                 } }
                 .hqSheetRows()
 

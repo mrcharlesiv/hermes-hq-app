@@ -506,8 +506,9 @@ nonisolated enum TodoDates {
         return calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))
     }
 
-    // [13-18] Made once: a Done list's sort read two dates per comparison, each making new formatters, on main.
-    // (ISO 8601 parsing is safe from any thread; neither depends on the phone's zone.)
+    // [13-18] Made once and guarded by `formatterLock`: ISO8601DateFormatter and DateFormatter are not thread-safe,
+    // and `moment` / `now` are called concurrently from @concurrent decoders, main actor UI, and widget writers.
+    private static let formatterLock = NSLock()
     nonisolated(unsafe) private static let plain: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime]
@@ -516,6 +517,18 @@ nonisolated enum TodoDates {
     nonisolated(unsafe) private static let fractional: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    nonisolated(unsafe) private static let localMicros: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSS"
+        return f
+    }()
+    nonisolated(unsafe) private static let localWhole: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
         return f
     }()
 
@@ -536,7 +549,8 @@ nonisolated enum TodoDates {
         if let known = memoLock.withLock({ memo[raw] }) {
             read = known
         } else {
-            read = (plain.date(from: raw) ?? fractional.date(from: raw)).map(Read.zoned) ?? .unzoned
+            let parsed = formatterLock.withLock { plain.date(from: raw) ?? fractional.date(from: raw) }
+            read = parsed.map(Read.zoned) ?? .unzoned
             memoLock.withLock {
                 if memo.count >= memoLimit { memo.removeAll(keepingCapacity: true) }
                 memo[raw] = read
@@ -555,13 +569,12 @@ nonisolated enum TodoDates {
 
     /// Python's isoformat() with no zone: read as the phone's time.
     private static func localMoment(_ raw: String) -> Date? {
-        let local = DateFormatter()
-        local.locale = Locale(identifier: "en_US_POSIX")
-        for format in ["yyyy-MM-dd'T'HH:mm:ss.SSSSSS", "yyyy-MM-dd'T'HH:mm:ss"] {
-            local.dateFormat = format
-            if let date = local.date(from: raw) { return date }
+        formatterLock.withLock {
+            let zone = TimeZone.current
+            if localMicros.timeZone != zone { localMicros.timeZone = zone }
+            if localWhole.timeZone != zone { localWhole.timeZone = zone }
+            return localMicros.date(from: raw) ?? localWhole.date(from: raw)
         }
-        return nil
     }
 
     /// The wire form of a due: "2026-11-05" for a day, "2026-11-05T17:00:00-06:00" for a time.
@@ -577,9 +590,32 @@ nonisolated enum TodoDates {
 
     /// Now as the routes write times.
     static func now(_ date: Date = Date()) -> String {
-        let format = ISO8601DateFormatter()
-        format.formatOptions = [.withInternetDateTime]
-        return format.string(from: date)
+        formatterLock.withLock { plain.string(from: date) }
+    }
+
+    /// Thread-safe cached localized `DateFormatter` for hot UI paths (clock, monthDay, weekday, headings).
+    private static let displayLock = NSLock()
+    nonisolated(unsafe) private static var displayCache: [String: DateFormatter] = [:]
+
+    static func format(_ date: Date, template: String, calendar: Calendar = .current) -> String {
+        let locale = calendar.locale ?? .current
+        let key = "\(template)|\(calendar.identifier)|\(calendar.timeZone.identifier)|\(locale.identifier)"
+        return displayLock.withLock {
+            let formatter: DateFormatter
+            if let cached = displayCache[key] {
+                formatter = cached
+            } else {
+                if displayCache.count >= 64 { displayCache.removeAll(keepingCapacity: true) }
+                let made = DateFormatter()
+                made.calendar = calendar
+                made.timeZone = calendar.timeZone
+                made.locale = locale
+                made.setLocalizedDateFormatFromTemplate(template)
+                displayCache[key] = made
+                formatter = made
+            }
+            return formatter.string(from: date)
+        }
     }
 }
 
@@ -771,25 +807,15 @@ nonisolated enum TodoWords {
 
     /// The clock in the phone's style ("5:00 PM").
     static func clock(_ date: Date, calendar: Calendar = .current) -> String {
-        let format = DateFormatter()
-        format.calendar = calendar
-        format.timeZone = calendar.timeZone
-        format.locale = calendar.locale ?? .current
-        format.setLocalizedDateFormatFromTemplate("jmm")
         // [Mac AAA 2026-11-16] The system's narrow space ("5:00\u{202F}PM") read as "5:00PM" in Tasks' rows beside
         // Jobs' and Sessions' "6:00 AM" (JobSchedule turns it into a plain space too).
-        return format.string(from: date).replacingOccurrences(of: "\u{202F}", with: " ")
+        TodoDates.format(date, template: "jmm", calendar: calendar).replacingOccurrences(of: "\u{202F}", with: " ")
     }
 
     /// "Nov 12" (with the year when it isn't this year's).
     static func monthDay(_ date: Date, now: Date, calendar: Calendar = .current) -> String {
-        let format = DateFormatter()
-        format.calendar = calendar
-        format.timeZone = calendar.timeZone
-        format.locale = calendar.locale ?? .current
         let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: now)
-        format.setLocalizedDateFormatFromTemplate(sameYear ? "MMMd" : "yMMMd")
-        return format.string(from: date)
+        return TodoDates.format(date, template: sameYear ? "MMMd" : "yMMMd", calendar: calendar)
     }
 
     /// "Today", "Tomorrow", "Yesterday" or "Nov 12".
@@ -1051,6 +1077,79 @@ nonisolated enum TodoEdits {
         }
         return .resend(rev: current.rev)
     }
+
+    /// 3-way conflict resolution that merges non-conflicting per-step edits (by step `id`) instead of treating the
+    /// entire `steps` array as an atomic conflict. Returns the fields to resend on `current.rev`, or nil on a clash.
+    static func resolveFields(base: TodoTask, current: TodoTask, fields: [String: JSONValue]) -> (rev: Int, fields: [String: JSONValue])? {
+        var resolved = fields
+        for key in fields.keys where key != "rev" {
+            if value(key, of: base) == value(key, of: current) { continue }
+            guard key == "steps",
+                  let raw = fields["steps"],
+                  let data = try? raw.encoded(),
+                  let ours = try? JSONDecoder().decode([TodoStep].self, from: data),
+                  let merged = mergeSteps(base: base.steps, current: current.steps, ours: ours) else {
+                return nil
+            }
+            resolved["steps"] = TodoWire.steps(merged)
+        }
+        return (current.rev, resolved)
+    }
+
+    /// 3-way merge of `steps` keyed by `id`. Two edits to different steps (or non-overlapping fields of the same step,
+    /// or concurrent additions) merge cleanly; conflicting edits or edit-vs-delete on the same step return nil.
+    static func mergeSteps(base: [TodoStep], current: [TodoStep], ours: [TodoStep]) -> [TodoStep]? {
+        let baseByID = Dictionary(base.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let currentByID = Dictionary(current.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let oursByID = Dictionary(ours.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+
+        var out: [TodoStep] = []
+        var emitted = Set<String>()
+
+        // Walk `current`'s order first so remote additions/order are preserved.
+        for step in current {
+            let id = step.id
+            emitted.insert(id)
+            guard let orig = baseByID[id] else {
+                // Added remotely. If we also added the exact same id with different content, conflict.
+                if let mine = oursByID[id], mine != step { return nil }
+                out.append(step)
+                continue
+            }
+            guard let mine = oursByID[id] else {
+                // Deleted by us. If they changed it, edit-vs-delete conflict; otherwise honor delete.
+                if step != orig { return nil }
+                continue
+            }
+            // Present in all three: merge field-by-field.
+            var merged = step
+            if mine.title != orig.title {
+                if step.title != orig.title && step.title != mine.title { return nil }
+                merged.title = mine.title
+            }
+            if mine.who != orig.who {
+                if step.who != orig.who && step.who != mine.who { return nil }
+                merged.who = mine.who
+            }
+            if mine.done != orig.done {
+                if step.done != orig.done && step.done != mine.done { return nil }
+                merged.done = mine.done
+            }
+            out.append(merged)
+        }
+
+        // Check steps that were in `base` and deleted remotely: if we edited one, edit-vs-delete conflict.
+        for orig in base where currentByID[orig.id] == nil {
+            if let mine = oursByID[orig.id], mine != orig { return nil }
+        }
+
+        // Append steps newly added by us (not in `base` and not already emitted).
+        for step in ours where baseByID[step.id] == nil && !emitted.contains(step.id) {
+            emitted.insert(step.id)
+            out.append(step)
+        }
+        return out
+    }
 }
 
 // MARK: - The chat card ("Added to Tasks")
@@ -1111,13 +1210,7 @@ nonisolated extension TodoWords {
     static func newTaskDue(_ date: Date, hasTime: Bool, now: Date, calendar: Calendar = .current) -> String {
         let day = TodoViews.soon(date, now: now, calendar: calendar)
         guard hasTime else { return day }
-        let format = DateFormatter()
-        format.calendar = calendar
-        format.timeZone = calendar.timeZone
-        format.locale = calendar.locale ?? .current
-        format.timeStyle = .short
-        format.dateStyle = .none
-        return day + " " + format.string(from: date)
+        return day + " " + TodoWords.clock(date, calendar: calendar)
     }
 
     static func newTaskHelpNote(_ bot: String, tap: String = DeviceWord.tap) -> String {

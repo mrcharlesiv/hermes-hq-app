@@ -150,6 +150,14 @@ nonisolated struct HQAppShortcuts: AppShortcutsProvider {
                     phrases: ["Add a task in \(.applicationName)",
                               "Add a task for \(\.$bot) in \(.applicationName)"],
                     shortTitle: "Add Task", systemImageName: "checklist")
+        AppShortcut(intent: GetTasksIntent(),
+                    phrases: ["Show my tasks in \(.applicationName)",
+                              "Get \(\.$view) tasks in \(.applicationName)"],
+                    shortTitle: "Get Tasks", systemImageName: "list.bullet")
+        AppShortcut(intent: CompleteTaskIntent(),
+                    phrases: ["Complete a task in \(.applicationName)",
+                              "Mark a task done in \(.applicationName)"],
+                    shortTitle: "Complete Task", systemImageName: "checkmark.circle")
         AppShortcut(intent: RunJobIntent(),
                     phrases: ["Run a job in \(.applicationName)",
                               "Run \(\.$job) in \(.applicationName)"],

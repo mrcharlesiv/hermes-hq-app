@@ -188,25 +188,56 @@ enum TodoRemindersImport {
             alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
             alert.addAction(UIAlertAction(title: "Import", style: .default) { _ in
                 PagesHaptics.selection()
-                // A long import says it's under way (each reminder is its own add).
-                let progress = PagesHUD.show("Importing \(fresh.count) Reminder\(fresh.count == 1 ? "" : "s")…", from: host, duration: 600)
-                Task {
+                var cancelled = false
+                let progressAlert = UIAlertController(
+                    title: "Importing \(fresh.count) Reminder\(fresh.count == 1 ? "" : "s")…",
+                    message: "0 of \(fresh.count)",
+                    preferredStyle: .alert
+                )
+                let importTask = Task {
                     var added = 0
+                    var processed = 0
                     var reason: String?
-                    for reminder in fresh {
-                        let fields = TodoWire.newTask(title: reminder.title, who: .me, bot: nil,
-                                                      due: reminder.due.map { TodoDates.wire($0.date, hasTime: $0.hasTime) },
-                                                      repeatRule: reminder.repeatRule, prep: false, notes: reminder.notes,
-                                                      source: TodoSource(kind: "reminders", reminderId: reminder.id))
-                        // Quiet: one notice for the whole import, not one per reminder.
-                        if await store.add(fields, quiet: true) != nil { added += 1 } else { reason = reason ?? store.addFailure }
+                    let batchSize = 4
+                    for start in stride(from: 0, to: fresh.count, by: batchSize) {
+                        guard !cancelled, !Task.isCancelled else { break }
+                        let slice = Array(fresh[start..<min(start + batchSize, fresh.count)])
+                        let outcomes = await withChildTasks(of: (Bool, String?).self) { group in
+                            for reminder in slice {
+                                let fields = TodoWire.newTask(
+                                    title: reminder.title, who: .me, bot: nil,
+                                    due: reminder.due.map { TodoDates.wire($0.date, hasTime: $0.hasTime) },
+                                    repeatRule: reminder.repeatRule, prep: false, notes: reminder.notes,
+                                    source: TodoSource(kind: "reminders", reminderId: reminder.id)
+                                )
+                                group.addTask { @MainActor in
+                                    let made = await store.add(fields, quiet: true)
+                                    return (made != nil, made == nil ? store.addFailure : nil)
+                                }
+                            }
+                            var results: [(Bool, String?)] = []
+                            while let one = await group.next() { results.append(one) }
+                            return results
+                        }
+                        for (ok, fail) in outcomes {
+                            processed += 1
+                            if ok { added += 1 } else { reason = reason ?? fail }
+                        }
+                        progressAlert.message = "\(processed) of \(fresh.count)"
                     }
-                    progress?.dismiss(animated: false)
-                    AppLog.note("tasks", "imported \(added) of \(fresh.count) reminders")
-                    let words = importResult(added: added, of: fresh.count, reason: reason)
-                    if added > 0 { PagesHaptics.success() } else { PagesHaptics.error() }
+                    progressAlert.dismiss(animated: false)
+                    AppLog.note("tasks", "imported \(added) of \(fresh.count) reminders\(cancelled ? " (cancelled)" : "")")
+                    let words = cancelled && added > 0
+                        ? "Imported \(added) reminder\(added == 1 ? "" : "s") before cancelling."
+                        : importResult(added: added, of: fresh.count, reason: reason)
+                    if added > 0 { PagesHaptics.success() } else if !cancelled { PagesHaptics.error() }
                     done(words, added > 0)
                 }
+                progressAlert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in
+                    cancelled = true
+                    importTask.cancel()
+                })
+                host.present(progressAlert, animated: true)
             })
             host.present(alert, animated: true)
         }

@@ -66,6 +66,11 @@ final class TaskBriefHost: UIHostingController<HQScaledRoot<TaskBriefRoot>> {
         onKeysChanged?()
     }
 
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        model.flushUnsavedEdits()
+    }
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         guard abs(view.bounds.width - laidWidth) > 0.5 else { return }
@@ -104,6 +109,7 @@ enum TaskPage {
         sheet.embedded = true
         sheet.chat = chat
         sheet.controller = chat
+        sheet.observeChat(chatModel)
         let brief = TaskBriefHost(model: sheet)
         chat.setTopAccessory(brief)
         // A start to measure in (a list in no room draws no rows, so it never says how tall it is); it settles at once.
@@ -208,6 +214,7 @@ enum TaskPage {
         sheet.split = true
         sheet.chat = chat
         sheet.keptChat = chat
+        sheet.observeChat(chatModel)
         chat.suppressesTalkTip = true
         chat.view.accessibilityIdentifier = "task.chat-pane"
         chat.menus?.isTaskChat = true
@@ -244,14 +251,14 @@ enum TaskPage {
         }
         if let live = model as? LiveChatSession {
             if link == nil { live.pendingScope = "task." + task.id }   // its draft is this task's, not the bot's
-            // The chat is made by its first message, so "first" is this chat's first message, not "no link yet".
-            var first = link == nil
+            // Derive "first" from whether any user message exists in the session (excluding an in-flight voice memo),
+            // so a failed first send retains task context on retry and a first voice memo receives task context too.
             let id = task.id
-            live.wrapsSend = { [weak store] typed in
+            let hadLink = link != nil
+            live.wrapsSend = { [weak store, weak live] typed in
                 guard let task = store?.task(id) else { return nil }
-                let out = outgoing(typed, task: task, first: first)
-                if !typed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { first = false }
-                return out
+                let first = !hadLink && live?.hasOtherUserMessage() != true
+                return outgoing(typed, task: task, first: first)
             }
         }
         return model

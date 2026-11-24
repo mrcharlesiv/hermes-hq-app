@@ -28,7 +28,7 @@ struct TaskPlainView: View {
     @State private var notesWidth: CGFloat = 0
     /// The lines long notes fold to.
     static let notesFold = 3
-    enum Field: Hashable { case step, notes }
+    enum Field: Hashable { case title, step, notes }
     @Environment(\.dynamicTypeSize) private var typeSize
     /// The page has a bot's conversation (a bot is on the task, or it had one): its section, card and message box show.
     private var teammate: Bool { model.chatAtHand }
@@ -56,14 +56,14 @@ struct TaskPlainView: View {
                     }
                     moreRow
                     if teammate {
-                        TimelineView(.periodic(from: .now, by: 1)) { context in TaskTeammate(model: model, task: task, part: .ask, tick: context.date) }
+                        TaskTeammate(model: model, task: task, part: .ask)
                     }
                     notes
                     steps(proxy)
                     files
                     // Beside its chat (the Mac's pane) the task needs no copy of the conversation at its foot.
                     if teammate, !model.split {
-                        TimelineView(.periodic(from: .now, by: 1)) { context in TaskTeammate(model: model, task: task, part: .foot, tick: context.date) }
+                        TaskTeammate(model: model, task: task, part: .foot)
                     }
                 }
                 .padding(.bottom, 16 + (showsMessageLine ? model.shelfRoom : 0))   // clear of the chat's chips
@@ -102,6 +102,7 @@ struct TaskPlainView: View {
         .onChange(of: task.rev) { _, rev in model.taskChanged(rev) }
         // The bar's title is the task's list: a move (or a rename) shows there at once.
         .onChange(of: model.listTitle) { _, _ in model.onBriefLayoutChange?() }
+        .onDisappear { model.flushUnsavedEdits() }
     }
 
     /// The one-line message box: on a task with a bot's conversation, while no field of the view has the keys.
@@ -136,7 +137,7 @@ struct TaskPlainView: View {
         }
     }
 
-    /// The circle (finishes it, or opens it again) and the title, at the page's own scale.
+    /// The circle (finishes it, or opens it again) and the title, tap-to-edit like GoalPlainView.
     private var titleRow: some View {
         TaskGridRow(last: true, minHeight: 46) {
             Button { task.isDone ? model.reopen() : model.markDone() } label: {
@@ -151,15 +152,34 @@ struct TaskPlainView: View {
             .hqIconLabel(task.isDone ? "Done. Open it again" : "Mark Done")
             .accessibilityIdentifier("task.check")
         } text: {
-            Text(task.title.isEmpty ? "Untitled Task" : task.title)
-                .font(Font.hqSystem(.title3, design: .default, weight: .semibold))
-                .foregroundStyle(task.isDone ? Color.hqLabel2 : Color.hqLabel)
-                .lineLimit(typeSize.isAccessibilitySize ? nil : 4)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-                .padding(.vertical, 4)
-                .accessibilityAddTraits(.isHeader)
-                .accessibilityIdentifier("task.title")
+            if model.editingTitle {
+                TextField("Task title", text: $model.titleDraft, axis: .vertical)
+                    .font(Font.hqSystem(.title3, design: .default, weight: .semibold))
+                    .foregroundStyle(Color.hqLabel)
+                    .lineLimit(1...4)
+                    .focused($focus, equals: .title)
+                    .submitLabel(.done)
+                    .onSubmit { model.saveTitle() }
+                    .onAppear { focus = .title }
+                    .onChange(of: focus) { old, new in if old == .title, new != .title { model.saveTitle() } }
+                    .padding(.vertical, 4)
+                    .accessibilityIdentifier("task.title.field")
+            } else {
+                Text(task.title.isEmpty ? "Untitled Task" : task.title)
+                    .font(Font.hqSystem(.title3, design: .default, weight: .semibold))
+                    .foregroundStyle(task.isDone ? Color.hqLabel2 : Color.hqLabel)
+                    .lineLimit(typeSize.isAccessibilitySize ? nil : 4)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .padding(.vertical, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture { if !model.gone { model.editTitle() } }
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityHint(model.gone ? "" : "Edits the title.")
+                    .accessibilityAction(named: "Rename Task") { model.editTitle() }
+                    .accessibilityIdentifier("task.title")
+            }
         }
     }
 
@@ -390,16 +410,12 @@ struct TaskPlainView: View {
                     }
                     Spacer(minLength: 8)
                     if task.helper != nil {
-                        // Only these words are drawn again each second (the chat's running turn isn't observed). The
-                        // whole row in a timeline lost its menu's place: the sheet behind the open menu went blank.
-                        TimelineView(.periodic(from: .now, by: 1)) { _ in
-                            if let state = TodoViews.botState(task, running: model.chat?.session.isRunning == true) {
-                                Text(state.words)
-                                    .font(Font.hq(.footnote).weight(.medium))
-                                    .foregroundStyle(TodoInk.color(state.tone))
-                                    .lineLimit(1)
-                                    .accessibilityIdentifier("task.bot-state")
-                            }
+                        if let state = TodoViews.botState(task, running: model.chatRunning || model.chat?.session.isRunning == true) {
+                            Text(state.words)
+                                .font(Font.hq(.footnote).weight(.medium))
+                                .foregroundStyle(TodoInk.color(state.tone))
+                                .lineLimit(1)
+                                .accessibilityIdentifier("task.bot-state")
                         }
                     } else if task.whoKind == .me, !task.isDone {
                         HStack(spacing: 3) {
@@ -716,7 +732,12 @@ struct TaskPlainView: View {
                             .submitLabel(.done)
                             .onSubmit { model.addStep(); focus = .step }
                             .onAppear { focus = .step }
-                            .onChange(of: focus) { old, new in if old == .step, new != .step { model.addingStep = false } }
+                            .onChange(of: focus) { old, new in
+                                if old == .step, new != .step {
+                                    if !model.newStep.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { model.addStep() }
+                                    model.addingStep = false
+                                }
+                            }
                             .accessibilityIdentifier("task.add-step")
                     }
                     .id("task.add-step")
@@ -932,12 +953,10 @@ struct TaskTeammate: View {
     @Bindable var model: TodoSheetModel
     let task: TodoTask
     var part: Part
-    /// The timeline's tick: a new value each second draws the section again.
-    var tick = Date()
-    @State private var wasRunning = false
 
     var body: some View {
-        let running = model.chat?.session.isRunning == true
+        let _ = model.chatVersion   // subscribe to reactive chat updates without 1 Hz TimelineView polling
+        let running = model.chatRunning || model.chat?.session.isRunning == true
         let profile = model.chatBot(task)
         let name = model.botName(profile)
         let summary = task.page?.summary.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -970,12 +989,6 @@ struct TaskTeammate: View {
                      answer: answer, latest: latest, count: count)
             }
         }
-        .onChange(of: running) { _, now in
-            // The turn ended: read the list now, so what the bot changed shows at once.
-            if part == .foot, wasRunning, !now { Task { await model.store.refresh(force: true) } }
-            wasRunning = now
-        }
-        .onAppear { wasRunning = running }
     }
 
     /// The bot's question, set off as one soft card in its state's colour, under the who row.

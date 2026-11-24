@@ -296,7 +296,7 @@ nonisolated struct TodoOffer: Codable, Hashable, Sendable, Identifiable {
 }
 
 /// A tap on an offer's card.
-nonisolated enum TodoOfferAction: String, Sendable {
+nonisolated enum TodoOfferAction: String, Codable, Sendable {
     case accept, decline, move, leave, undo
 }
 

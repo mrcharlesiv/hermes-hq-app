@@ -350,8 +350,11 @@ struct TasksRowView: View {
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    if let color = TasksInk.list(row.dot) {
-                        Circle().fill(row.done ? Color.gray : color).frame(width: 7, height: 7).accessibilityHidden(true)
+                    if let goalColor = TasksInk.list(row.goalColor) {
+                        Image(systemName: "target")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(row.done ? Color.gray : goalColor)
+                            .accessibilityHidden(true)
                     }
                     if let when = row.when {
                         Text(when)

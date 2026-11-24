@@ -245,7 +245,14 @@ extension LiveChatSession: ChatVoiceMemos {
         }
         scheduleFlush()
         armWatchdog()
-        await submit(prompt, localId: localId, queued: queued, holdForStop: holdForStop, epoch: epoch)
+        // [tasks] First voice memo in a new task chat carries the task's details to the bot while the bubble shows the memo.
+        let outgoingPrompt: String
+        if !hasOtherUserMessage(excluding: localId), let wrapped = wrapsSend?(prompt) {
+            outgoingPrompt = wrapped.text
+        } else {
+            outgoingPrompt = prompt
+        }
+        await submit(outgoingPrompt, localId: localId, queued: queued, holdForStop: holdForStop, epoch: epoch)
     }
 
     /// (c) `file.attach {session_id, profile, name, path}`; a stale runtime id (4001) resumes once and attaches again

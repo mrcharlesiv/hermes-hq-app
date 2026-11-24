@@ -69,13 +69,19 @@ nonisolated enum TodoQuickParse {
             return date
         }
         /// "9am", "9:30pm", "17:00"; with `bare`, "5" and "5:30" too (after "at").
+        /// Single-letter "a"/"p" suffixes require minutes ("9:30a") so tokens like "2a" ("Buy 2a fuses") stay literal.
         func time(_ word: String, bare: Bool = false) -> (hour: Int, minute: Int)? {
             var body = word
             var half: String?
+            var shortSuffix = false
             for mark in ["am", "pm", "a", "p"] where body.hasSuffix(mark) && body.count > mark.count && body.dropLast(mark.count).last?.isNumber == true {
-                half = String(mark.prefix(1)); body.removeLast(mark.count); break
+                half = String(mark.prefix(1))
+                shortSuffix = mark.count == 1
+                body.removeLast(mark.count)
+                break
             }
             let pieces = body.split(separator: ":", omittingEmptySubsequences: false)
+            if shortSuffix, pieces.count != 2 { return nil }
             guard (1...2).contains(pieces.count), let hour = Int(pieces[0]), pieces[0].allSatisfy(\.isNumber) else { return nil }
             var minute = 0
             if pieces.count == 2 {
@@ -90,6 +96,33 @@ nonisolated enum TodoQuickParse {
             guard bare, (1...12).contains(hour) else { return nil }
             // "at 5" is the afternoon; "at 9" the morning; "at 12" noon.
             return (hour == 12 ? 12 : (hour <= 7 ? hour + 12 : hour), minute)
+        }
+
+        /// Common measurement/cooking fractions ("1/2 gallon", "3/4 inch") should not be misread as month/day dates.
+        func isCommonFraction(_ slash: [Substring]) -> Bool {
+            guard slash.count == 2, slash[0].count == 1, slash[1].count == 1,
+                  let num = Int(slash[0]), let den = Int(slash[1]) else { return false }
+            switch (num, den) {
+            case (1, 2), (1, 3), (1, 4), (2, 3), (3, 4), (1, 8), (3, 8), (5, 8), (7, 8): return true
+            default: return false
+            }
+        }
+
+        /// ALL-CAPS short abbreviations like "SAT" ("Study for SAT") or "MON" stay literal rather than turning into weekdays.
+        func isAllCapsShortWeekday(_ index: Int) -> Bool {
+            let clean = raw[index].trimmingCharacters(in: CharacterSet(charactersIn: ",.;"))
+            return clean.count <= 4 && clean == clean.uppercased() && clean.contains(where: \.isLetter)
+        }
+
+        /// Bare "daily"/"weekly"/"monthly"/"yearly" only parses as recurrence at the end of the line or before another
+        /// structured token (tag, priority, date/time), so noun phrases like "Send weekly report" stay intact.
+        func isTrailingOrMeta(_ nextWord: String?) -> Bool {
+            guard let nextWord else { return true }
+            if nextWord.hasPrefix("#") { return true }
+            if ["!high", "!1", "p1", "!medium", "!med", "!2", "p2", "!low", "!3", "p3"].contains(nextWord) { return true }
+            if ["today", "tonight", "tomorrow", "tmrw", "next", "in", "on", "this", "at", "noon"].contains(nextWord) { return true }
+            if weekdays[nextWord] != nil || months[nextWord] != nil || time(nextWord) != nil { return true }
+            return false
         }
 
         var i = 0
@@ -120,7 +153,8 @@ nonisolated enum TodoQuickParse {
                     out.repeatRule = rule; take(i...i + 1); continue
                 }
             }
-            if !goal, repeats, let rule = ["daily": "daily", "weekdays": "weekdays", "weekly": "weekly", "monthly": "monthly", "yearly": "yearly",
+            if !goal, repeats, isTrailingOrMeta(next),
+               let rule = ["daily": "daily", "weekdays": "weekdays", "weekly": "weekly", "monthly": "monthly", "yearly": "yearly",
                            "annually": "yearly"][word] {
                 out.repeatRule = rule; take(i...i); continue
             }
@@ -145,16 +179,17 @@ nonisolated enum TodoQuickParse {
                 if let unit { day = calendar.date(byAdding: unit, value: count, to: today); take(i...i + 2); continue }
             }
             if (word == "on" || word == "this"), let next, let weekday = weekdays[next] { day = coming(weekday); take(i...i + 1); continue }
-            if let weekday = weekdays[word] { day = coming(weekday); take(i...i); continue }
+            if let weekday = weekdays[word], !isAllCapsShortWeekday(i) { day = coming(weekday); take(i...i); continue }
             if let month = months[word], let next, let number = dayNumber(next), let date = monthDay(month, number) {
                 day = date; take(i...i + 1); continue
             }
             if let number = dayNumber(word), let next, let month = months[next], let date = monthDay(month, number) {
                 day = date; take(i...i + 1); continue
             }
-            // 11/20, 11/20/26, 11/20/2026 (month first).
+            // 11/20, 11/20/26, 11/20/2026 (month first), excluding common cooking/measurement fractions like 1/2 or 3/4.
             let slash = word.split(separator: "/", omittingEmptySubsequences: false)
-            if (2...3).contains(slash.count), slash.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }),
+            if (2...3).contains(slash.count), !isCommonFraction(slash),
+               slash.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }),
                let month = Int(slash[0]), (1...12).contains(month), let number = Int(slash[1]), (1...31).contains(number) {
                 let year = slash.count == 3 ? Int(slash[2]).map { $0 < 100 ? 2000 + $0 : $0 } : nil
                 if let date = monthDay(month, number, year: year) { day = date; take(i...i); continue }

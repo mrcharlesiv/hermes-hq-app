@@ -21,7 +21,9 @@ enum TasksHub {
                               directory: PagesCache.directory(for: context.account))
         made.readOnlyGateway = context.readOnly
         made.onListChanged = { tasks in
-            if made.settings.enabled { TaskReminders.sync(tasks) } else { TaskReminders.removeAll() }
+            let accountKey = TileWidgetIndex.key(made.account.id)
+            if made.settings.enabled { TaskReminders.sync(tasks, account: accountKey) }
+            else { TaskReminders.removeAll(account: accountKey) }
         }
         made.onEnabledChanged = { on in noteEnabled(on, account: made.account) }
         made.onPlanTaken = { [weak made] offer in if let made { GoalPlanTaken.tell(offer, store: made) } }
@@ -31,6 +33,18 @@ enum TasksHub {
     }
 
     static var current: TasksStore? { MorePages.context.map(store) }
+
+    /// Live `tasks.changed` socket event from the gateway.
+    static func tasksChanged(for account: GatewayAccount?) {
+        guard let account, let store, store.account.id == account.id else { return }
+        store.tasksChanged()
+    }
+
+    /// Gateway reconnected (`gateway.ready`): replay any queued offline mutations and refresh.
+    static func gatewayReady(for account: GatewayAccount?) {
+        guard let account, let store, store.account.id == account.id else { return }
+        store.gatewayReady()
+    }
 
     // MARK: On and off (Settings › Tasks)
 
@@ -44,7 +58,7 @@ enum TasksHub {
     static func noteEnabled(_ on: Bool, account: GatewayAccount) {
         guard isOff(account) == on else { return }
         UserDefaults.standard.set(!on, forKey: offKey(account.id))
-        if !on { TaskReminders.removeAll() }
+        if !on { TaskReminders.removeAll(account: TileWidgetIndex.key(account.id)) }
         AppLog.note("tasks", "tasks turned \(on ? "on" : "off")")
         PagesTabs.moreRowsChanged()
     }
@@ -131,16 +145,31 @@ enum TasksHub {
         return stack.topViewController as? TasksViewController ?? opened as? TasksViewController
     }
 
-    /// A task's alert or a chat card's row: the page, then that task's sheet (`atReply`: at its chat's newest end, for a
-    /// reply's alert). False when there is no Tasks page to show.
-    @discardableResult
+    /// Runs `work` once `page`'s navigation / modal transition finishes (no hardcoded 0.45 s sleep).
+    private static func afterTransition(on page: TasksViewController, token: Int, _ work: @escaping @MainActor () -> Void) {
+        let run: @MainActor () -> Void = {
+            guard token == openToken else { return }
+            work()
+        }
+        if let coordinator = page.transitionCoordinator ?? page.navigationController?.transitionCoordinator {
+            coordinator.animate(alongsideTransition: nil) { _ in
+                DispatchQueue.main.async { run() }
+            }
+        } else {
+            DispatchQueue.main.async { run() }
+        }
+    }
+
     /// The New Task sheet over the Tasks page: a widget's New Task, and [quick-actions] an Add Task tile (its bot chosen).
     static func newTask(bot: String? = nil) {
         guard let page = showPage() else { return }
         page.loadViewIfNeeded()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { page.newTask(bot: bot) }
+        openToken += 1
+        let token = openToken
+        afterTransition(on: page, token: token) { page.newTask(bot: bot) }
     }
 
+    @discardableResult
     static func open(taskID: String?, atReply: Bool = false) -> Bool {
         guard let page = showPage() else { return false }
         guard let taskID else { return true }
@@ -149,10 +178,7 @@ enum TasksHub {
         // meantime, and the older task came up over it).
         openToken += 1
         let token = openToken
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-            guard token == openToken else { return }
-            page.openTask(taskID, atReply: atReply)
-        }
+        afterTransition(on: page, token: token) { page.openTask(taskID, atReply: atReply) }
         return true
     }
 
@@ -171,10 +197,7 @@ enum TasksHub {
         page.loadViewIfNeeded()
         openToken += 1
         let token = openToken
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-            guard token == openToken else { return }   // only the newest way in opens
-            page.openGoal(id, chat: chat, plan: plan)
-        }
+        afterTransition(on: page, token: token) { page.openGoal(id, chat: chat, plan: plan) }
         return true
     }
 
@@ -346,6 +369,13 @@ enum TaskChatLinks {
         UserDefaults.standard.set(all, forKey: key(account))
     }
 
+    /// Clears the local chat link when a task is reassigned to a different bot so the new bot starts its own chat.
+    static func clear(task: String, account: GatewayAccount) {
+        var all = UserDefaults.standard.dictionary(forKey: key(account)) ?? [:]
+        guard all.removeValue(forKey: task) != nil else { return }
+        UserDefaults.standard.set(all, forKey: key(account))
+    }
+
     /// The link saved to the task on the gateway; on failure it stays this device's (`unsaved`) and is tried again.
     static func save(_ chat: TodoChat, task: String, store: TasksStore, account: GatewayAccount) {
         Task { @MainActor in
@@ -388,28 +418,66 @@ extension MorePages {
 // MARK: - Due reminders on this phone
 
 /// Your task, or one you share with a bot, rings on this device when it's due (a day alone at 9:00; pushes from the
-/// computer cover a bot's news). Kept in step with the list each time it changes: one pending alert per such task.
+/// computer cover a bot's news). Kept in step with the list each time it changes: sorted by soonest fire date and
+/// capped below iOS's 64 pending local notification limit, serialized so remove/add never race, and scoped per gateway.
 @MainActor
 enum TaskReminders {
-    static let prefix = "hq.task."
-    private static var lastSignature = ""
+    nonisolated static let prefix = "hq.task."
+    /// Below iOS's hard 64 pending local notification ceiling, leaving headroom for non-task local alerts.
+    nonisolated static let maxPending = 60
 
-    static func sync(_ tasks: [TodoTask], now: Date = Date()) {
-        let wanted = tasks.compactMap { task -> (TodoTask, Date)? in
+    private static var lastSignatures: [String: String] = [:]
+    private static var syncTail: Task<Void, Never>?
+
+    nonisolated static func accountPrefix(_ account: String?) -> String {
+        guard let account, !account.isEmpty else { return prefix }
+        return "\(prefix)\(account)."
+    }
+
+    /// Selects the soonest `limit` future reminders in deterministic fire order (pure: tested directly).
+    nonisolated static func select(_ tasks: [TodoTask], now: Date = Date(), limit: Int = maxPending,
+                                   calendar: Calendar = .current) -> [(task: TodoTask, when: Date)] {
+        tasks.compactMap { task -> (TodoTask, Date)? in
             guard task.whoKind != .bot, !task.isDone, !TodoIDs.isLocal(task.id),
-                  let when = TodoReminder.time(task), when > now else { return nil }
+                  let when = TodoReminder.time(task, calendar: calendar), when > now else { return nil }
             return (task, when)
         }
-        let signature = wanted.map { "\($0.0.id)|\($0.0.title)|\(TodoReminder.body($0.0))|\($0.1.timeIntervalSince1970)" }
-            .sorted().joined(separator: "\n")
-        guard signature != lastSignature else { return }
-        lastSignature = signature
-        let center = UNUserNotificationCenter.current()
-        let items = wanted.map { (id: $0.0.id, title: $0.0.title, body: TodoReminder.body($0.0), profile: $0.0.helper,
-                                  parts: TodoReminder.triggerParts($0.0, at: $0.1)) }
-        Task {
-            let pending = await center.pendingNotificationRequests().map(\.identifier).filter { $0.hasPrefix(prefix) }
-            let keep = Set(items.map { prefix + $0.id })
+        .sorted { a, b in a.1 != b.1 ? a.1 < b.1 : a.0.id < b.0.id }
+        .prefix(max(0, limit))
+        .map { $0 }
+    }
+
+    private static func enqueue(_ work: @escaping @Sendable () async -> Void) {
+        let previous = syncTail
+        syncTail = Task {
+            await previous?.value
+            await work()
+        }
+    }
+
+    static func sync(_ tasks: [TodoTask], account: String? = nil, now: Date = Date()) {
+        let scope = accountPrefix(account)
+        let wanted = select(tasks, now: now, limit: maxPending)
+        let signature = wanted.map { "\($0.task.id)|\($0.task.title)|\(TodoReminder.body($0.task))|\($0.when.timeIntervalSince1970)" }
+            .joined(separator: "\n")
+        guard signature != lastSignatures[scope] else { return }
+        lastSignatures[scope] = signature
+        let items = wanted.map { (id: $0.task.id, title: $0.task.title, body: TodoReminder.body($0.task), profile: $0.task.helper,
+                                  parts: TodoReminder.triggerParts($0.task, at: $0.when)) }
+        enqueue {
+            let center = UNUserNotificationCenter.current()
+            let allPending = await center.pendingNotificationRequests().map(\.identifier)
+            // Only manage this gateway's scoped reminders (plus any legacy unscoped `hq.task.<id>` ones).
+            let pending = allPending.filter { id in
+                if id.hasPrefix(scope) { return true }
+                // Legacy identifier has no account segment (`hq.task.<taskId>` without a third dot).
+                if account != nil, id.hasPrefix(prefix) {
+                    let rest = id.dropFirst(prefix.count)
+                    return !rest.contains(".")
+                }
+                return false
+            }
+            let keep = Set(items.map { scope + $0.id })
             let stale = pending.filter { !keep.contains($0) }
             if !stale.isEmpty { center.removePendingNotificationRequests(withIdentifiers: stale) }
             for item in items {
@@ -421,7 +489,7 @@ enum TaskReminders {
                 var info: [String: Any] = ["kind": "task", "task_id": item.id]
                 if let profile = item.profile { info["profile"] = profile }
                 content.userInfo = info
-                let request = UNNotificationRequest(identifier: prefix + item.id, content: content,
+                let request = UNNotificationRequest(identifier: scope + item.id, content: content,
                                                     trigger: UNCalendarNotificationTrigger(dateMatching: item.parts, repeats: false))
                 try? await center.add(request)
             }
@@ -429,12 +497,13 @@ enum TaskReminders {
         }
     }
 
-    static func removeAll() {
-        lastSignature = ""
-        let center = UNUserNotificationCenter.current()
-        Task {
-            let ids = await center.pendingNotificationRequests().map(\.identifier).filter { $0.hasPrefix(prefix) }
-            center.removePendingNotificationRequests(withIdentifiers: ids)
+    static func removeAll(account: String? = nil) {
+        let scope = accountPrefix(account)
+        if account == nil { lastSignatures.removeAll() } else { lastSignatures[scope] = nil }
+        enqueue {
+            let center = UNUserNotificationCenter.current()
+            let ids = await center.pendingNotificationRequests().map(\.identifier).filter { $0.hasPrefix(scope) }
+            if !ids.isEmpty { center.removePendingNotificationRequests(withIdentifiers: ids) }
         }
     }
 }

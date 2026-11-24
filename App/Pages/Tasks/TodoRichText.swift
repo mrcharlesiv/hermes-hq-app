@@ -8,9 +8,17 @@ import SwiftUI
 import UIKit
 
 enum TodoRich {
+    /// Lightweight LRU-bounded cache so Markdown isn't re-parsed on every SwiftUI body evaluation.
+    private static let cache = NSCache<NSString, NSAttributedString>()
+    private static let configured: Void = { cache.countLimit = 128 }()
+
     /// `text` rendered at `style`'s size. `readable`: a bot's one-paragraph run is split into lines first.
     static func attributed(_ text: String, style: UIFont.TextStyle = .body, category: UIContentSizeCategory,
                            readable: Bool = true, color: UIColor? = nil) -> NSAttributedString {
+        _ = configured
+        let colorKey = color.map { String(ObjectIdentifier($0).hashValue) } ?? "-"
+        let key = "\(style.rawValue)|\(category.rawValue)|\(readable ? 1 : 0)|\(colorKey)|\(text)" as NSString
+        if let cached = cache.object(forKey: key) { return cached }
         let source = readable ? TodoReadable.markdown(text) : text
         let rendered = NSMutableAttributedString(attributedString:
             PagesMarkdown.attributed(source, category: category, highlight: false, filePaths: true))
@@ -33,6 +41,7 @@ enum TodoRich {
             }
         }
         shortenPaths(rendered)
+        if text.count <= 16_000 { cache.setObject(rendered, forKey: key) }
         return rendered
     }
 
@@ -73,54 +82,5 @@ struct TodoRichTextView: View {
             open(path)
             return true
         }, onTap: onTap)
-    }
-}
-
-/// Notes folded to about ten lines, with Show More / Show Less (as Kanban's `FoldedMarkdown`).
-struct TodoFoldedText: View {
-    var text: String
-    var lines = 10
-    var identifier: String?
-    var open: (String) -> Void
-    /// A tap on the text opens it (and closes it again); no Show More line. The task's card, where "more" over the
-    /// last line had read as a cut word and Show More on its own line as clutter (owner 2026-11-08). Its ellipsis
-    /// says there is more; VoiceOver gets Show More as an action.
-    var tapOpens = false
-    @State private var unfolded = false
-    @State private var width: CGFloat = 0
-    @Environment(\.dynamicTypeSize) private var typeSize
-
-    var body: some View {
-        let attributed = TodoRich.attributed(text, category: UIContentSizeCategory(typeSize))
-        VStack(alignment: .leading, spacing: 6) {
-            AttributedTextView(text: attributed, maxLines: unfolded ? 0 : lines, identifier: identifier,
-                               detectors: [.link, .phoneNumber]) { url in
-                guard let path = FileLinks.path(fromLink: url) else { return false }
-                Haptics.play(.selection)
-                open(path)
-                return true
-            }
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
-            .contentShape(Rectangle())
-            .onTapGesture {
-                guard tapOpens, unfolded || AttributedTextView.exceeds(attributed, lines: lines, width: width) else { return }
-                PagesHaptics.selection()
-                HQMotion.withAnimation(.snappy) { unfolded.toggle() }
-            }
-            .accessibilityAction(named: unfolded ? "Show Less" : "Show More") {
-                guard tapOpens else { return }
-                HQMotion.withAnimation(.snappy) { unfolded.toggle() }
-            }
-            if !tapOpens, unfolded || AttributedTextView.exceeds(attributed, lines: lines, width: width) {
-                Button(unfolded ? "Show Less" : "Show More") {
-                    PagesHaptics.selection()
-                    HQMotion.withAnimation(.snappy) { unfolded.toggle() }
-                }
-                .font(Font.hq(.footnote).weight(.semibold))
-                .buttonStyle(.borderless)
-                .fixedSize()            // standing on the task's page (no card inset), its first letter had been cut
-                .padding(.leading, 2)
-            }
-        }
     }
 }

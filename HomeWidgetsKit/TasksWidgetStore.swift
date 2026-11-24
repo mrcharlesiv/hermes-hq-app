@@ -62,8 +62,10 @@ nonisolated struct TasksWidgetRow: Codable, Equatable, Sendable, Hashable, Ident
     var note: String?
     /// `TodoTone` raw value: plain, ready, working, needsYou, overdue.
     var tone = "plain"
-    /// Its list's colour, outside that list's own view (`TodoListColor` raw value).
+    /// Legacy list dot colour (no longer drawn since Nov 22 "Colour means act"; kept for Codable compatibility).
     var dot: String?
+    /// Goal mark colour (`TodoListColor` raw value) when the task belongs to an active or paused goal.
+    var goalColor: String? = nil
     /// Ticked on the widget, its save on the way: drawn ticked and struck where it stands.
     var done = false
 }

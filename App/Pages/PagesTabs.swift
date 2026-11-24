@@ -751,11 +751,14 @@ final class PagesTabs {
                 switch event.type {
                 case "cron.changed":
                     self.jobsStore?.cronChanged()
+                case "tasks.changed":
+                    TasksHub.tasksChanged(for: self.account)
                 case "gateway.ready":
                     let changeEvents = event.payload["change_events"]?.bool ?? false
                     self.jobsStore?.gatewayReady(changeEvents: changeEvents)
                     self.madeKanban?.gatewayReady()
                     self.madeArtifacts?.onGatewayReady?()
+                    TasksHub.gatewayReady(for: self.account)
                     MorePages.gatewayReady()   // [morepages] rows a gateway lacked are probed again
                     if self.lastProbe.map({ Date().timeIntervalSince($0) > 600 }) ?? true { await self.probe() }
                 default:

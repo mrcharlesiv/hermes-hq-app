@@ -24,6 +24,49 @@ nonisolated enum ShortcutTaskWho: String, AppEnum {
     var wire: TodoWho { self == .bot ? .bot : .together }
 }
 
+nonisolated enum ShortcutTaskPriority: String, AppEnum {
+    case high, medium, low
+
+    static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Priority")
+    static let caseDisplayRepresentations: [ShortcutTaskPriority: DisplayRepresentation] = [
+        .high: "High",
+        .medium: "Medium",
+        .low: "Low",
+    ]
+    var wire: Int {
+        switch self {
+        case .high: 1
+        case .medium: 2
+        case .low: 3
+        }
+    }
+}
+
+nonisolated enum ShortcutTaskRepeat: String, AppEnum {
+    case daily, weekdays, weekly, monthly, yearly
+
+    static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Repeat")
+    static let caseDisplayRepresentations: [ShortcutTaskRepeat: DisplayRepresentation] = [
+        .daily: "Every Day",
+        .weekdays: "Every Weekday",
+        .weekly: "Every Week",
+        .monthly: "Every Month",
+        .yearly: "Every Year",
+    ]
+}
+
+nonisolated enum ShortcutTasksFilter: String, AppEnum {
+    case today, upcoming, inbox, all
+
+    static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "View")
+    static let caseDisplayRepresentations: [ShortcutTasksFilter: DisplayRepresentation] = [
+        .today: "Today",
+        .upcoming: "Upcoming",
+        .inbox: "Inbox",
+        .all: "All Open",
+    ]
+}
+
 struct AddTaskIntent: AppIntent {
     static let title: LocalizedStringResource = "Add Task"
     static let description: IntentDescription? = IntentDescription(
@@ -36,6 +79,11 @@ struct AddTaskIntent: AppIntent {
     @Parameter(title: "Who Does It", default: .together) var who: ShortcutTaskWho
     @Parameter(title: "Due") var due: Date?
     @Parameter(title: "Due Time Matters", default: false) var dueHasTime: Bool
+    @Parameter(title: "Start Date") var starts: Date?
+    @Parameter(title: "Priority") var priority: ShortcutTaskPriority?
+    @Parameter(title: "List") var list: String?
+    @Parameter(title: "Tags") var tags: [String]?
+    @Parameter(title: "Repeat") var repeatRule: ShortcutTaskRepeat?
     @Parameter(title: "Notes", inputOptions: String.IntentInputOptions(multiline: true)) var notes: String?
 
     static var parameterSummary: some ParameterSummary {
@@ -44,6 +92,11 @@ struct AddTaskIntent: AppIntent {
                 \.$who
                 \.$due
                 \.$dueHasTime
+                \.$starts
+                \.$priority
+                \.$list
+                \.$tags
+                \.$repeatRule
                 \.$notes
             }
         } otherwise: {
@@ -51,6 +104,11 @@ struct AddTaskIntent: AppIntent {
                 \.$bot
                 \.$due
                 \.$dueHasTime
+                \.$starts
+                \.$priority
+                \.$list
+                \.$tags
+                \.$repeatRule
                 \.$notes
             }
         }
@@ -66,21 +124,141 @@ struct AddTaskIntent: AppIntent {
             }
             profile = id
         }
-        let body = ShortcutTaskBody.make(title: title, bot: profile, who: who.wire, due: due, hasTime: dueHasTime, notes: notes ?? "")
+        var sectionID: String?
+        if let rawList = list?.trimmingCharacters(in: .whitespacesAndNewlines), !rawList.isEmpty {
+            if let answer = try? await ShortcutGateway.send("GET", TasksAPI.base, what: "your tasks"),
+               let decoded = try? JSONDecoder().decode(TodoListAnswer.self, from: answer.data),
+               let sections = decoded.sections {
+                sectionID = sections.first { $0.id == rawList || $0.name.localizedCaseInsensitiveCompare(rawList) == .orderedSame }?.id
+            }
+        }
+        let body = ShortcutTaskBody.make(title: title, bot: profile, who: who.wire, due: due, hasTime: dueHasTime,
+                                         notes: notes ?? "", priority: priority?.wire, starts: starts,
+                                         tags: tags ?? [], repeatRule: repeatRule?.rawValue, section: sectionID)
         let answer = try await ShortcutGateway.send("POST", TasksAPI.base, json: body, what: "the task")
         let made = (try? TasksAPI.task(answer.data))?.title ?? title
+        await ShortcutTasksSync.refreshAfterWrite()
         AppLog.note("intents", "Add Task shortcut: added\(profile == nil ? "" : " for a bot")")
         return .result(value: made, dialog: IntentDialog(stringLiteral: "Added “\(made)” to Tasks."))
+    }
+}
+
+/// Lists open tasks from Hermes HQ without opening the app.
+struct GetTasksIntent: AppIntent {
+    static let title: LocalizedStringResource = "Get Tasks"
+    static let description: IntentDescription? = IntentDescription(
+        "Get your open tasks from Hermes HQ, optionally filtered by view or search text.",
+        categoryName: "Tasks")
+    static let supportedModes: IntentModes = .background
+
+    @Parameter(title: "View", default: .today) var view: ShortcutTasksFilter
+    @Parameter(title: "Search") var query: String?
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Get \(\.$view) tasks") { \.$query }
+    }
+
+    func perform() async throws -> some IntentResult & ReturnsValue<[String]> & ProvidesDialog {
+        let answer = try await ShortcutGateway.send("GET", TasksAPI.base, what: "your tasks")
+        let decoded = try JSONDecoder().decode(TodoListAnswer.self, from: answer.data)
+        let titles = ShortcutTasksQuery.titles(from: decoded, view: view, query: query ?? "", now: Date())
+        let spoken: String
+        if titles.isEmpty {
+            spoken = "You have no matching tasks."
+        } else {
+            spoken = "You have \(titles.count) task\(titles.count == 1 ? "" : "s"): \(titles.prefix(5).joined(separator: ", "))."
+        }
+        return .result(value: titles, dialog: IntentDialog(stringLiteral: spoken))
+    }
+}
+
+/// Marks a matching open task done without opening Hermes HQ.
+struct CompleteTaskIntent: AppIntent {
+    static let title: LocalizedStringResource = "Complete Task"
+    static let description: IntentDescription? = IntentDescription(
+        "Mark an open task done in Hermes HQ by its title or ID.",
+        categoryName: "Tasks")
+    static let supportedModes: IntentModes = .background
+
+    @Parameter(title: "Task") var taskName: String
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Complete task \(\.$taskName)")
+    }
+
+    func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
+        let clean = taskName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { throw AskBotError.message("Name the task to complete.") }
+        let listAnswer = try await ShortcutGateway.send("GET", TasksAPI.base, what: "your tasks")
+        let decoded = try JSONDecoder().decode(TodoListAnswer.self, from: listAnswer.data)
+        guard let target = ShortcutTasksQuery.matchOpen(clean, in: decoded.tasks ?? []) else {
+            throw AskBotError.message("Couldn’t find an open task matching “\(clean)”.")
+        }
+        let body = try JSONValue.object(["rev": .number(Double(target.rev)), "status": .string("done")]).encoded()
+        _ = try await ShortcutGateway.send("PATCH", TasksAPI.base + "/" + PagesREST.segment(target.id), json: body, what: "the task")
+        await ShortcutTasksSync.refreshAfterWrite()
+        AppLog.note("intents", "Complete Task shortcut: marked done")
+        return .result(value: target.title, dialog: IntentDialog(stringLiteral: "Marked “\(target.title)” done."))
+    }
+}
+
+/// Refreshes the in-process `TasksStore` (local reminders) and Tasks widget after a Shortcut/Siri write.
+@MainActor enum ShortcutTasksSync {
+    static func refreshAfterWrite() async {
+        if let store = TasksHub.current {
+            await store.refresh(force: true)
+            _ = TasksWidgetWriter.shared.write(reason: "shortcut")
+        } else {
+            TasksWidgetWriter.reload()
+        }
+    }
+}
+
+/// Pure query helpers for `GetTasksIntent` and `CompleteTaskIntent` (tested directly).
+nonisolated enum ShortcutTasksQuery {
+    static func titles(from answer: TodoListAnswer, view: ShortcutTasksFilter, query: String,
+                       now: Date, calendar: Calendar = .current) -> [String] {
+        let all = TodoSections.filtered(answer.tasks ?? [], scope: "all", query: query, goals: answer.goals ?? [])
+        let sections = answer.sections ?? []
+        let open: [TodoTask]
+        switch view {
+        case .today:
+            open = TodoViews.groups(all, view: .today, sections: sections, now: now, calendar: calendar)
+                .filter { $0.kind != .done }.flatMap(\.tasks)
+        case .upcoming:
+            open = TodoViews.groups(all, view: .upcoming, sections: sections, now: now, calendar: calendar)
+                .filter { $0.kind != .done }.flatMap(\.tasks)
+        case .inbox:
+            open = TodoViews.groups(all, view: .inbox, sections: sections, now: now, calendar: calendar)
+                .filter { $0.kind != .done }.flatMap(\.tasks)
+        case .all:
+            open = all.filter { !$0.isDone }
+        }
+        return open.map(\.title)
+    }
+
+    static func matchOpen(_ query: String, in tasks: [TodoTask]) -> TodoTask? {
+        let open = tasks.filter { !$0.isDone }
+        if let exactID = open.first(where: { $0.id == query }) { return exactID }
+        if let exact = open.first(where: { $0.title.localizedCaseInsensitiveCompare(query) == .orderedSame }) { return exact }
+        return open.first(where: { $0.title.localizedCaseInsensitiveContains(query) })
     }
 }
 
 /// The New Task sheet's body for a shortcut's task (pure: the tests read it).
 nonisolated enum ShortcutTaskBody {
     static func make(title: String, bot: String?, who: TodoWho, due: Date?, hasTime: Bool, notes: String,
-                     calendar: Calendar = .current) -> Data {
-        let fields = TodoWire.newTask(title: title, who: bot == nil ? .me : who, bot: bot,
-                                      due: due.map { TodoDates.wire($0, hasTime: hasTime, calendar: calendar) }, repeatRule: nil, prep: false,
+                     priority: Int? = nil, starts: Date? = nil, tags: [String] = [], repeatRule: String? = nil,
+                     section: String? = nil, calendar: Calendar = .current) -> Data {
+        var fields = TodoWire.newTask(title: title, who: bot == nil ? .me : who, bot: bot,
+                                      due: due.map { TodoDates.wire($0, hasTime: hasTime, calendar: calendar) },
+                                      repeatRule: repeatRule, prep: false,
                                       notes: notes.trimmingCharacters(in: .whitespacesAndNewlines), source: TodoSource(kind: "app"))
+        if let priority, (1...3).contains(priority) { fields["priority"] = .number(Double(priority)) }
+        if let starts { fields["starts"] = .string(TodoDates.wire(starts, hasTime: false, calendar: calendar)) }
+        let keptTags = tags.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        if !keptTags.isEmpty { fields["tags"] = .array(keptTags.map(JSONValue.string)) }
+        if let section, !section.isEmpty { fields["section"] = .string(section) }
         return (try? JSONValue.object(fields).encoded()) ?? Data()
     }
 }

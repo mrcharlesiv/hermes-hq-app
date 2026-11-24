@@ -32,6 +32,13 @@ nonisolated struct TasksAPI: Sendable {
         try Self.task(try await PagesREST.send(client, "POST", path(id) + "/attach", json: .object(body), timeout: 120))
     }
 
+    /// Encodes a file attachment as base64 off the main actor before sending `POST /tasks/{id}/attach`.
+    @concurrent
+    func attachFile(_ id: String, name: String, data: Data) async throws -> TodoTask {
+        let encoded = data.base64EncodedString()
+        return try await attach(id, ["kind": "file", "name": .string(name), "data": .string(encoded)])
+    }
+
     /// `DELETE /tasks/{id}/made/{made}`: takes a file, link or note off the task.
     @concurrent
     func detach(_ id: String, made: String) async throws -> TodoTask {
@@ -185,6 +192,21 @@ nonisolated struct TodoOfferAnswer: Decodable, Sendable {
     var goals: [Goal]?
 }
 
+/// A task mutation queued while the gateway was unreachable (replayed in FIFO order on reconnect / refresh).
+nonisolated struct TodoPendingOp: Codable, Equatable, Sendable, Identifiable {
+    enum Kind: Codable, Equatable, Sendable {
+        case add(localID: String, fields: [String: JSONValue])
+        case patch(id: String, fields: [String: JSONValue], touch: Bool)
+        case delete(id: String)
+        case saveSections(sections: [TodoUserSection])
+        case answerOffer(id: String, action: TodoOfferAction, list: Bool, goalPlan: Bool?, goalInGoal: Bool?)
+    }
+
+    var id: String = UUID().uuidString
+    var kind: Kind
+    var createdAt: TimeInterval = Date().timeIntervalSince1970
+}
+
 @MainActor @Observable
 final class TasksStore {
     let api: TasksAPI
@@ -244,6 +266,8 @@ final class TasksStore {
     private(set) var loading = false
     /// The add-on on the computer predates Tasks.
     private(set) var needsAddOn = false
+    /// Pending offline mutations waiting to sync when the gateway is reachable again.
+    private(set) var pendingCount = 0
 
     @ObservationIgnored var onChange: (() -> Void)?
     /// A write failed or gave way: plain words for a notice.
@@ -263,6 +287,19 @@ final class TasksStore {
 
     @ObservationIgnored private var prepared = false
     @ObservationIgnored private var inFlight: [String: Int] = [:]
+    /// Tasks whose `DELETE` is in flight: `adopt()` never resurrects them while the request is pending.
+    @ObservationIgnored private var deleting: Set<String> = []
+    /// Per-task serialized write tail so concurrent edits on one task execute in order with up-to-date revs.
+    @ObservationIgnored private var taskQueue: [String: Task<Void, Never>] = [:]
+    /// Monotonic edit token per task so an earlier failed write never rolls back a newer optimistic edit.
+    @ObservationIgnored private var taskEditToken: [String: Int] = [:]
+    /// Newest confirmed server snapshot for a task while subsequent queued writes are still running.
+    @ObservationIgnored private var serverTask: [String: TodoTask] = [:]
+    /// Persisted offline write queue (FIFO).
+    @ObservationIgnored private var pendingOps: [TodoPendingOp] = []
+    @ObservationIgnored private var flushingPending = false
+    /// Throttle timer for live `tasks.changed` socket events.
+    @ObservationIgnored private var changedRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var readGeneration = 0
     @ObservationIgnored private var lastReadAt: Date?
     @ObservationIgnored private var sectionsWriting = false
@@ -280,14 +317,203 @@ final class TasksStore {
         self.directory = directory
     }
 
-    // MARK: Cache
+    // MARK: Cache & Offline Queue
 
     private var cacheURL: URL? { directory?.appending(path: "tasks.json") }
+    private var pendingURL: URL? { directory?.appending(path: "tasks-pending.json") }
+
+    /// True for transport / reachability failures (not HTTP 4xx/5xx server refusals or cancellation).
+    nonisolated static func isOfflineError(_ error: Error) -> Bool {
+        PagesREST.transportReason(error) != nil && (error as NSError).code != NSURLErrorCancelled
+    }
+
+    private var pendingTaskIDs: Set<String> {
+        var ids = Set<String>()
+        for op in pendingOps {
+            switch op.kind {
+            case .add(let localID, _): ids.insert(localID)
+            case .patch(let id, _, _): ids.insert(id)
+            case .delete(let id): ids.insert(id)
+            case .saveSections, .answerOffer: break
+            }
+        }
+        return ids
+    }
+
+    private var pendingDeletedIDs: Set<String> {
+        Set(pendingOps.compactMap { if case .delete(let id) = $0.kind { return id }; return nil })
+    }
+
+    private var hasPendingSections: Bool {
+        pendingOps.contains { if case .saveSections = $0.kind { return true }; return false }
+    }
+
+    private var hasPendingOffers: Bool {
+        pendingOps.contains { if case .answerOffer = $0.kind { return true }; return false }
+    }
+
+    private func savePending() {
+        pendingCount = pendingOps.count
+        guard !closed, let url = pendingURL else { return }
+        if pendingOps.isEmpty {
+            try? FileManager.default.removeItem(at: url)
+        } else {
+            PagesCache.write(PagesCached(at: Date().timeIntervalSince1970, value: pendingOps), to: url)
+        }
+    }
+
+    private func enqueueOffline(_ kind: TodoPendingOp.Kind, quiet: Bool = false, about taskID: String? = nil) {
+        switch kind {
+        case .patch(let id, let fields, let touch):
+            // Fold into an existing queued `.add` for a local task, or coalesce into the last queued `.patch` for `id`.
+            if let idx = pendingOps.lastIndex(where: {
+                if case .add(let localID, _) = $0.kind { return localID == id }
+                return false
+            }), case .add(let localID, var addFields) = pendingOps[idx].kind {
+                for (k, v) in fields { addFields[k] = v }
+                pendingOps[idx].kind = .add(localID: localID, fields: addFields)
+            } else if let idx = pendingOps.lastIndex(where: {
+                if case .patch(let existingID, _, _) = $0.kind { return existingID == id }
+                return false
+            }), case .patch(_, var existingFields, let existingTouch) = pendingOps[idx].kind {
+                for (k, v) in fields { existingFields[k] = v }
+                pendingOps[idx].kind = .patch(id: id, fields: existingFields, touch: existingTouch || touch)
+            } else {
+                pendingOps.append(TodoPendingOp(kind: kind))
+            }
+        case .delete(let id):
+            // Deleting a task added offline cancels the pending add + patches cleanly with zero network traffic.
+            if pendingOps.contains(where: { if case .add(let localID, _) = $0.kind { return localID == id }; return false }) {
+                pendingOps.removeAll {
+                    switch $0.kind {
+                    case .add(let localID, _): return localID == id
+                    case .patch(let pid, _, _): return pid == id
+                    default: return false
+                    }
+                }
+            } else {
+                pendingOps.removeAll { if case .patch(let pid, _, _) = $0.kind { return pid == id }; return false }
+                pendingOps.append(TodoPendingOp(kind: kind))
+            }
+        case .saveSections:
+            pendingOps.removeAll { if case .saveSections = $0.kind { return true }; return false }
+            pendingOps.append(TodoPendingOp(kind: kind))
+        case .add, .answerOffer:
+            pendingOps.append(TodoPendingOp(kind: kind))
+        }
+        savePending()
+        save()
+        changed()
+        if !quiet { notice("Saved offline. Will sync when connected.", about: taskID) }
+    }
+
+    /// Replays queued offline writes in FIFO order. Stops immediately if the gateway is still unreachable.
+    func flushPending() async {
+        guard !closed, !flushingPending, !pendingOps.isEmpty, !readOnlyGateway else { return }
+        flushingPending = true
+        defer { flushingPending = false }
+        var idMap: [String: String] = [:]
+        var replayedAny = false
+
+        while !closed, let op = pendingOps.first {
+            do {
+                switch op.kind {
+                case .add(let localID, let fields):
+                    let made = try await api.create(fields)
+                    idMap[localID] = made.id
+                    tasks.removeAll { $0.id == localID }
+                    put(made)
+                    reconcilePrep(TodoEdits.prepBots(before: nil, after: made, fields: nil))
+                case .patch(let rawID, let fields, _):
+                    let id = idMap[rawID] ?? rawID
+                    guard let current = task(id), !TodoIDs.isLocal(id) else {
+                        pendingOps.removeFirst(); savePending(); continue
+                    }
+                    do {
+                        let answer = try await api.patch(id, rev: current.rev, fields: fields)
+                        put(answer)
+                        reconcilePrep(TodoEdits.prepBots(before: current, after: answer, fields: Set(fields.keys)))
+                    } catch {
+                        if let latest = TasksAPI.conflict(error) {
+                            if let resolved = TodoEdits.resolveFields(base: current, current: latest, fields: fields),
+                               let answer = try? await api.patch(id, rev: resolved.rev, fields: resolved.fields) {
+                                put(answer)
+                            } else {
+                                put(latest)
+                            }
+                        } else if PagesREST.status(error) == 404 {
+                            tasks.removeAll { $0.id == id }
+                        } else {
+                            throw error
+                        }
+                    }
+                case .delete(let rawID):
+                    let id = idMap[rawID] ?? rawID
+                    if !TodoIDs.isLocal(id) {
+                        do { try await api.delete(id) }
+                        catch { if PagesREST.status(error) != 404 { throw error } }
+                    }
+                    tasks.removeAll { $0.id == id }
+                case .saveSections(let next):
+                    let saved = try await api.saveSections(next)
+                    sections = saved
+                case .answerOffer(let id, let action, let list, let plan, let inGoal):
+                    let goal: (plan: Bool, inGoal: Bool)? = (plan != nil && inGoal != nil) ? (plan!, inGoal!) : nil
+                    do {
+                        let answer = try await api.answerOffer(id, action: action, list: list, goal: goal)
+                        if let now = offers.firstIndex(where: { $0.id == id }) { offers[now] = answer.offer }
+                        noteOffers(whole: false)
+                        sections = answer.sections
+                        if let goals = answer.goals { adoptGoals(goals) }
+                    } catch {
+                        if PagesREST.status(error) != 409 && PagesREST.status(error) != 404 { throw error }
+                    }
+                }
+                pendingOps.removeFirst()
+                replayedAny = true
+                savePending()
+                save()
+                changed()
+            } catch {
+                if Self.isOfflineError(error) { break }
+                // Permanent server refusal: drop this op and notify so the rest of the queue isn't blocked forever.
+                pendingOps.removeFirst()
+                savePending()
+                notice("Couldn’t sync an offline change. \(PagesREST.reason(error))")
+            }
+        }
+        if replayedAny { lastReadAt = nil }
+    }
+
+    /// Live `tasks.changed` socket event: throttled forced refresh (at most every 2 s).
+    func tasksChanged() {
+        guard !closed, changedRefreshTask == nil else { return }
+        changedRefreshTask = Task { [weak self] in
+            defer { self?.changedRefreshTask = nil }
+            try? await Task.sleep(for: .seconds(1))
+            guard let self, !self.closed else { return }
+            await self.refresh(force: true)
+        }
+    }
+
+    /// Gateway reconnected (`gateway.ready`): replay any queued offline mutations, then refresh.
+    func gatewayReady() {
+        guard !closed else { return }
+        Task { [weak self] in
+            guard let self, !self.closed else { return }
+            await self.flushPending()
+            await self.refresh(force: true)
+        }
+    }
 
     /// The page is about to draw: paint the list from disk.
     func prepare() {
         guard !prepared, !closed else { return }
         prepared = true
+        if let pendingURL, let queued = PagesCache.read(PagesCached<[TodoPendingOp]>.self, pendingURL) {
+            pendingOps = queued.value
+            pendingCount = pendingOps.count
+        }
         guard !hasList, let url = cacheURL, let cached = PagesCache.read(PagesCached<TodoSnapshot>.self, url) else { return }
         tasks = cached.value.tasks
         settings = cached.value.settings
@@ -313,8 +539,11 @@ final class TasksStore {
 
     private func save() {
         guard !closed, let url = cacheURL else { return }
-        let snapshot = TodoSnapshot(rev: rev, tasks: tasks.filter { !TodoIDs.isLocal($0.id) }, settings: settings,
-                                    sections: sectionsSupported ? sections.filter { !TodoIDs.isLocal($0.id) } : nil,
+        let queuedLocals = pendingTaskIDs
+        let snapshot = TodoSnapshot(rev: rev,
+                                    tasks: tasks.filter { !TodoIDs.isLocal($0.id) || queuedLocals.contains($0.id) },
+                                    settings: settings,
+                                    sections: sectionsSupported ? sections.filter { !TodoIDs.isLocal($0.id) || hasPendingSections } : nil,
                                     pages: pagesSupported, ideas: ideasCount, fields: fieldsSupported, files: filesSupported,
                                     lists: listsSupported, offers: offers,
                                     goals: goalsSupported ? goals.filter { !TodoIDs.isLocal($0.id) } : nil,
@@ -337,6 +566,7 @@ final class TasksStore {
     func refresh(force: Bool = false) async {
         guard !closed else { return }
         prepare()
+        if !pendingOps.isEmpty { await flushPending() }
         if !force, let at = lastReadAt, Date().timeIntervalSince(at) < 2 { return }
         readGeneration += 1
         let generation = readGeneration
@@ -360,7 +590,7 @@ final class TasksStore {
             fieldsSupported = answer.fields
             filesSupported = answer.files
             listsSupported = answer.lists
-            if offersWriting == 0 { offers = Self.once(answer.offers); noteOffers(whole: answer.lists) }
+            if offersWriting == 0 && !hasPendingOffers { offers = Self.once(answer.offers); noteOffers(whole: answer.lists) }
             ideasCount = answer.ideas
             adoptGoals(answer.goals)
             goalBotsSupported = goalsSupported && answer.goalBots
@@ -375,7 +605,7 @@ final class TasksStore {
                     else { self.goalPagesAsked = false }
                 }
             }
-            if !sectionsWriting {
+            if !sectionsWriting && !hasPendingSections {
                 sections = answer.sections ?? []
                 sectionsSupported = answer.sections != nil
             }
@@ -392,16 +622,19 @@ final class TasksStore {
         }
     }
 
-    /// A read's list, keeping tasks that have a write on its way and ones added here and not yet answered.
+    /// A read's list, keeping tasks that have a write on its way and ones added here and not yet answered,
+    /// and never resurrecting tasks whose delete is in flight or queued offline.
     private func adopt(_ fresh: [TodoTask], rev: Int, settings: TodoSettings?) {
-        var next = fresh
+        let suppressedDeletes = deleting.union(pendingDeletedIDs)
+        let pendingIDs = pendingTaskIDs
+        var next = fresh.filter { !suppressedDeletes.contains($0.id) }
         let places = Dictionary(next.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
         for local in tasks {
-            let inHand = inFlight[local.id] != nil || TodoIDs.isLocal(local.id)
+            guard !suppressedDeletes.contains(local.id) else { continue }
+            let inHand = inFlight[local.id] != nil || TodoIDs.isLocal(local.id) || pendingIDs.contains(local.id)
             if let at = places[local.id] {
                 // [tasks-first] A read that left before a change landed carries the task as it was (an older rev): it
-                // never takes the change back. (Move To › New List… saved the list, which reads the list again, then
-                // moved the task; the read's late answer put the task back in no list until the next read.)
+                // never takes the change back.
                 if inHand || next[at].rev < local.rev { next[at] = local }
             } else if inHand {
                 next.append(local)
@@ -500,10 +733,42 @@ final class TasksStore {
     private func end(_ id: String) {
         let left = (inFlight[id] ?? 1) - 1
         inFlight[id] = left > 0 ? left : nil
+        if left <= 0 { serverTask[id] = nil }
     }
 
-    /// Adds a task: shown at once, then swapped for the gateway's (its id, rev and times). nil when it failed, with
-    /// the reason in `addFailure`. `quiet`: no notice of its own (Import from Reminders sums its adds up in one).
+    private func nextEditToken(_ id: String) -> Int {
+        let next = (taskEditToken[id] ?? 0) + 1
+        taskEditToken[id] = next
+        return next
+    }
+
+    /// Serializes network writes per task id so concurrent edits never race with stale revs.
+    private func serializeTaskWrite<T>(_ id: String, _ work: @escaping @MainActor () async -> T) async -> T {
+        let previous = taskQueue[id]
+        var result: T!
+        let next = Task { @MainActor in
+            await previous?.value
+            result = await work()
+        }
+        taskQueue[id] = next
+        await next.value
+        if taskQueue[id] == next { taskQueue[id] = nil }
+        return result
+    }
+
+    /// Restores only the fields `keys` from `base` onto the live task when another edit landed after this one.
+    private func restoreFields(_ keys: Set<String>, from base: TodoTask, on id: String, touch: Bool) {
+        guard let current = task(id) else { return }
+        var revert: [String: JSONValue] = [:]
+        for key in keys where key != "rev" {
+            revert[key] = TodoEdits.value(key, of: base)
+        }
+        if touch { revert["updated_at"] = TodoWire.optional(base.updatedAt) }
+        if let restored = TodoEdits.applying(revert, to: current) { put(restored) }
+    }
+
+    /// Adds a task: shown at once, then swapped for the gateway's (its id, rev and times). On transport failure,
+    /// queues offline and keeps the local task; nil when the server refused it, with the reason in `addFailure`.
     @discardableResult
     func add(_ fields: [String: JSONValue], quiet: Bool = false) async -> TodoTask? {
         addFailure = nil
@@ -514,7 +779,8 @@ final class TasksStore {
         draft["created_at"] = .string(TodoDates.now())
         draft["updated_at"] = draft["created_at"]
         draft["created_by"] = .string("you")
-        if let data = try? JSONValue.object(draft).encoded(), let shown = try? JSONDecoder().decode(TodoTask.self, from: data) {
+        let shown: TodoTask? = (try? JSONValue.object(draft).encoded()).flatMap { try? JSONDecoder().decode(TodoTask.self, from: $0) }
+        if let shown {
             tasks.append(shown)
             changed()
         }
@@ -527,6 +793,10 @@ final class TasksStore {
             reconcilePrep(TodoEdits.prepBots(before: nil, after: made, fields: nil))
             return made
         } catch {
+            if Self.isOfflineError(error), let shown {
+                enqueueOffline(.add(localID: localID, fields: fields), quiet: quiet)
+                return shown
+            }
             tasks.removeAll { $0.id == localID }
             changed()
             let reason = PagesREST.reason(error)
@@ -536,55 +806,101 @@ final class TasksStore {
         }
     }
 
-    /// Changes a task's fields (wire names). The change shows at once; a 409 re-sends it on the current rev when the
-    /// other edit left these fields alone, and otherwise shows the current version.
-    /// `touch`: the shown task counts as changed now (Keep, which sends no fields).
+    /// Changes a task's fields (wire names). The change shows at once; concurrent edits to the same task serialize
+    /// in order; a 409 re-sends on the current rev (including 3-way step merges) when non-conflicting, and transport
+    /// failures queue offline. `touch`: the shown task counts as changed now (Keep, which sends no fields).
     @discardableResult
     func patch(_ id: String, _ fields: [String: JSONValue], touch: Bool = false) async -> Bool {
-        guard !refuse(about: id), let base = task(id) else { return false }
-        guard !TodoIDs.isLocal(id) else { notice("This task is still being added. Try again in a moment.", about: id); return false }
-        let fields = GoalViews.withMilestoneRule(fields, task: base)   // [goals] another goal: no milestone of the last one
-        if var shown = TodoEdits.applying(fields, to: base) {
+        guard !refuse(about: id), let initialBase = task(id) else { return false }
+        let fields = GoalViews.withMilestoneRule(fields, task: initialBase)   // [goals] another goal: no milestone of the last one
+        if TodoIDs.isLocal(id) {
+            // Allow editing a task that was added offline by folding the patch into its pending `.add`.
+            if pendingTaskIDs.contains(id) {
+                if var shown = TodoEdits.applying(fields, to: initialBase) {
+                    if touch { shown.updatedAt = TodoDates.now() }
+                    put(shown)
+                }
+                enqueueOffline(.patch(id: id, fields: fields, touch: touch), quiet: true, about: id)
+                return true
+            }
+            notice("This task is still being added. Try again in a moment.", about: id)
+            return false
+        }
+        let token = nextEditToken(id)
+        if var shown = TodoEdits.applying(fields, to: initialBase) {
             if touch { shown.updatedAt = TodoDates.now() }
             put(shown); changed()
         }
         begin(id)
-        defer { end(id) }
-        do {
-            let answer = try await api.patch(id, rev: base.rev, fields: fields)
-            put(answer)
-            save()
-            changed()
-            reconcilePrep(TodoEdits.prepBots(before: base, after: answer, fields: Set(fields.keys)))
-            return true
-        } catch {
-            if let current = TasksAPI.conflict(error) {
-                switch TodoEdits.resolve(base: base, current: current, fields: fields) {
-                case .resend(let rev):
-                    if let answer = try? await api.patch(id, rev: rev, fields: fields) {
-                        put(answer); save(); changed()
-                        reconcilePrep(TodoEdits.prepBots(before: base, after: answer, fields: Set(fields.keys)))
-                        return true
+        return await serializeTaskWrite(id) { [self] in
+            defer { self.end(id) }
+            let base = self.serverTask[id] ?? initialBase
+            var sendFields = fields
+            // If an earlier queued write changed `steps` on this task, 3-way merge our step edits onto `base`.
+            if let rawSteps = fields["steps"], base.steps != initialBase.steps,
+               let data = try? rawSteps.encoded(),
+               let ours = try? JSONDecoder().decode([TodoStep].self, from: data),
+               let merged = TodoEdits.mergeSteps(base: initialBase.steps, current: base.steps, ours: ours) {
+                sendFields["steps"] = TodoWire.steps(merged)
+            }
+            do {
+                let answer = try await self.api.patch(id, rev: base.rev, fields: sendFields)
+                self.serverTask[id] = answer
+                if self.taskEditToken[id] == token {
+                    self.put(answer)
+                } else if var live = self.task(id) {
+                    live.rev = answer.rev
+                    self.put(live)
+                }
+                self.save()
+                self.changed()
+                self.reconcilePrep(TodoEdits.prepBots(before: base, after: answer, fields: Set(sendFields.keys)))
+                return true
+            } catch {
+                if Self.isOfflineError(error) {
+                    self.enqueueOffline(.patch(id: id, fields: sendFields, touch: touch), about: id)
+                    return true
+                }
+                if let current = TasksAPI.conflict(error) {
+                    if let resolved = TodoEdits.resolveFields(base: base, current: current, fields: sendFields) {
+                        if let answer = try? await self.api.patch(id, rev: resolved.rev, fields: resolved.fields) {
+                            self.serverTask[id] = answer
+                            if self.taskEditToken[id] == token {
+                                self.put(answer)
+                            } else if var live = self.task(id) {
+                                live.rev = answer.rev
+                                self.put(live)
+                            }
+                            self.save(); self.changed()
+                            self.reconcilePrep(TodoEdits.prepBots(before: base, after: answer, fields: Set(resolved.fields.keys)))
+                            return true
+                        }
                     }
-                    put(current); save(); changed()
-                    notice("This task changed somewhere else. Showing the latest.", about: id)
-                    return false
-                case .theirs:
-                    put(current); save(); changed()
-                    notice("This task changed somewhere else. Showing the latest.", about: id)
+                    self.serverTask[id] = current
+                    if self.taskEditToken[id] == token {
+                        self.put(current)
+                    } else {
+                        self.restoreFields(Set(sendFields.keys), from: current, on: id, touch: touch)
+                    }
+                    self.save(); self.changed()
+                    self.notice("This task changed somewhere else. Showing the latest.", about: id)
                     return false
                 }
-            }
-            if PagesREST.status(error) == 404 {
-                tasks.removeAll { $0.id == id }
-                save(); changed()
-                notice("This task was deleted somewhere else.", about: id)
+                if PagesREST.status(error) == 404 {
+                    self.tasks.removeAll { $0.id == id }
+                    self.save(); self.changed()
+                    self.notice("This task was deleted somewhere else.", about: id)
+                    return false
+                }
+                if self.taskEditToken[id] == token {
+                    self.put(base)
+                } else {
+                    self.restoreFields(Set(sendFields.keys), from: base, on: id, touch: touch)
+                }
+                self.changed()
+                self.notice("Couldn’t save the change. \(PagesREST.reason(error))", about: id)
                 return false
             }
-            put(base)
-            changed()
-            notice("Couldn’t save the change. \(PagesREST.reason(error))", about: id)
-            return false
         }
     }
 
@@ -621,14 +937,35 @@ final class TasksStore {
         await attach(id, ["kind": "link", "url": .string(url), "title": .string(title)])
     }
 
-    /// Puts a file on the task: its bytes are kept on the computer running Hermes, where the task's bot can read them.
+    /// Puts a file on the task: its bytes are base64-encoded off main and kept on the computer running Hermes.
     @discardableResult
     func attachFile(_ id: String, name: String, data: Data) async -> Bool {
         guard data.count <= Self.fileLimit else {
             notice("That file is over 10 MB. A task takes files up to 10 MB.", about: id)
             return false
         }
-        return await attach(id, ["kind": "file", "name": .string(name), "data": .string(data.base64EncodedString())])
+        guard !refuse(about: id), task(id) != nil else { return false }
+        guard filesSupported else {
+            notice("Files and links on a task need the newest HQ add-on on your computer (0.9.53 or later).", about: id)
+            return false
+        }
+        let token = nextEditToken(id)
+        begin(id)
+        return await serializeTaskWrite(id) { [self] in
+            defer { self.end(id) }
+            do {
+                let answer = try await self.api.attachFile(id, name: name, data: data)
+                self.serverTask[id] = answer
+                if self.taskEditToken[id] == token { self.put(answer) }
+                else if var live = self.task(id) { live.rev = answer.rev; live.made = answer.made; self.put(live) }
+                self.save()
+                self.changed()
+                return true
+            } catch {
+                self.notice("Couldn’t add it. \(PagesREST.reason(error))", about: id)
+                return false
+            }
+        }
     }
 
     private func attach(_ id: String, _ body: [String: JSONValue]) async -> Bool {
@@ -637,57 +974,97 @@ final class TasksStore {
             notice("Files and links on a task need the newest HQ add-on on your computer (0.9.53 or later).", about: id)
             return false
         }
+        let token = nextEditToken(id)
         begin(id)
-        defer { end(id) }
-        do {
-            put(try await api.attach(id, body))
-            save()
-            changed()
-            return true
-        } catch {
-            notice("Couldn’t add it. \(PagesREST.reason(error))", about: id)
-            return false
+        return await serializeTaskWrite(id) { [self] in
+            defer { self.end(id) }
+            do {
+                let answer = try await self.api.attach(id, body)
+                self.serverTask[id] = answer
+                if self.taskEditToken[id] == token { self.put(answer) }
+                else if var live = self.task(id) { live.rev = answer.rev; live.made = answer.made; self.put(live) }
+                self.save()
+                self.changed()
+                return true
+            } catch {
+                self.notice("Couldn’t add it. \(PagesREST.reason(error))", about: id)
+                return false
+            }
         }
     }
 
-    /// Takes a file, link or note off the task (shown at once; put back if the gateway refuses).
+    /// Takes a file, link or note off the task (shown at once; put back if the gateway refuses without clobbering newer edits).
     @discardableResult
     func detach(_ id: String, made: String) async -> Bool {
         guard !refuse(about: id), let before = task(id) else { return false }
+        let removedItem = before.made.first { $0.id == made }
+        let removedIndex = before.made.firstIndex { $0.id == made }
+        let token = nextEditToken(id)
         var shown = before
         shown.made.removeAll { $0.id == made }
         put(shown); changed()
         begin(id)
-        defer { end(id) }
-        do {
-            put(try await api.detach(id, made: made))
-            save()
-            changed()
-            return true
-        } catch {
-            put(before); changed()
-            notice("Couldn’t remove it. \(PagesREST.reason(error))", about: id)
-            return false
+        return await serializeTaskWrite(id) { [self] in
+            defer { self.end(id) }
+            do {
+                let answer = try await self.api.detach(id, made: made)
+                self.serverTask[id] = answer
+                if self.taskEditToken[id] == token { self.put(answer) }
+                else if var live = self.task(id) { live.rev = answer.rev; live.made = answer.made; self.put(live) }
+                self.save()
+                self.changed()
+                return true
+            } catch {
+                if self.taskEditToken[id] == token {
+                    self.put(before)
+                } else if var live = self.task(id), let removedItem, !live.made.contains(where: { $0.id == made }) {
+                    live.made.insert(removedItem, at: min(removedIndex ?? live.made.count, live.made.count))
+                    self.put(live)
+                }
+                self.changed()
+                self.notice("Couldn’t remove it. \(PagesREST.reason(error))", about: id)
+                return false
+            }
         }
     }
 
-    /// Deletes a task (a chat card's Undo too: the task may not be in the list yet).
+    /// Deletes a task (a chat card's Undo too: the task may not be in the list yet). Tracked in `inFlight` + `deleting`
+    /// so a concurrent `refresh()` never resurrects it, and queued offline on transport failure.
     @discardableResult
     func delete(_ id: String) async -> Bool {
         guard !refuse(about: id) else { return false }
         let at = tasks.firstIndex { $0.id == id }
         let removed = at.map { tasks.remove(at: $0) }
         if removed != nil { changed() }
-        do {
-            try await api.delete(id)
-            save()
-            reconcilePrep(TodoEdits.prepBots(before: removed, after: nil, fields: nil))
+        if TodoIDs.isLocal(id), pendingTaskIDs.contains(id) {
+            enqueueOffline(.delete(id: id), quiet: true, about: id)
             return true
-        } catch {
-            if PagesREST.status(error) == 404 { save(); return true }
-            if let removed, let at { tasks.insert(removed, at: min(at, tasks.count)); changed() }
-            notice("Couldn’t delete the task. \(PagesREST.reason(error))", about: id)
-            return false
+        }
+        deleting.insert(id)
+        begin(id)
+        return await serializeTaskWrite(id) { [self] in
+            defer {
+                self.deleting.remove(id)
+                self.end(id)
+            }
+            do {
+                try await self.api.delete(id)
+                self.save()
+                self.reconcilePrep(TodoEdits.prepBots(before: removed, after: nil, fields: nil))
+                return true
+            } catch {
+                if PagesREST.status(error) == 404 { self.save(); return true }
+                if Self.isOfflineError(error) {
+                    self.enqueueOffline(.delete(id: id), about: id)
+                    return true
+                }
+                if let removed, let at, !self.tasks.contains(where: { $0.id == id }) {
+                    self.tasks.insert(removed, at: min(at, self.tasks.count))
+                    self.changed()
+                }
+                self.notice("Couldn’t delete the task. \(PagesREST.reason(error))", about: id)
+                return false
+            }
         }
     }
 
@@ -770,9 +1147,10 @@ final class TasksStore {
     func patchGoal(_ id: String, _ fields: [String: JSONValue]) async -> Bool {
         guard !refuse(), let base = goal(id) else { return false }
         guard !TodoIDs.isLocal(id) else { notice("This goal is still being added. Try again in a moment."); return false }
-        let beforeTasks = tasks
         putGoal(GoalWire.applying(fields, to: base))
-        if fields["milestones"] != nil { releaseTasks(of: id, keeping: Set(goal(id)?.milestones.map(\.id) ?? [])) }
+        let released: [String: (goal: String?, milestone: String?)] = fields["milestones"] != nil
+            ? releaseTasks(of: id, keeping: Set(goal(id)?.milestones.map(\.id) ?? []))
+            : [:]
         changed()
         goalsInFlight[id, default: 0] += 1
         defer {
@@ -793,19 +1171,19 @@ final class TasksStore {
                     putGoal(answer); save(); changed()
                     return true
                 }
-                putGoal(current); tasks = beforeTasks; save(); changed()
+                putGoal(current); restoreReleasedTasks(released); save(); changed()
                 notice("This goal changed somewhere else. Showing the latest.")
                 return false
             }
             if PagesREST.status(error) == 404 {
                 goals.removeAll { $0.id == id }
-                releaseTasks(of: id, keeping: nil)
+                _ = releaseTasks(of: id, keeping: nil)
                 save(); changed()
                 notice("This goal was deleted somewhere else.")
                 return false
             }
             putGoal(base)
-            tasks = beforeTasks
+            restoreReleasedTasks(released)
             changed()
             notice("Couldn’t save the change. \(PagesREST.reason(error))")
             return false
@@ -818,8 +1196,7 @@ final class TasksStore {
         guard !refuse() else { return false }
         let at = goals.firstIndex { $0.id == id }
         let removed = at.map { goals.remove(at: $0) }
-        let beforeTasks = tasks
-        releaseTasks(of: id, keeping: nil)
+        let released = releaseTasks(of: id, keeping: nil)
         changed()
         do {
             try await goalsAPI.delete(id)
@@ -828,7 +1205,7 @@ final class TasksStore {
         } catch {
             if PagesREST.status(error) == 404 { save(); return true }
             if let removed, let at { goals.insert(removed, at: min(at, goals.count)) }
-            tasks = beforeTasks
+            restoreReleasedTasks(released)
             changed()
             notice("Couldn’t delete the goal. \(PagesREST.reason(error))")
             return false
@@ -836,16 +1213,36 @@ final class TasksStore {
     }
 
     /// The goal's tasks lose their milestone when it isn't in `keeping`; with `keeping` nil they lose the goal too.
-    private func releaseTasks(of goal: String, keeping: Set<String>?) {
+    /// Returns only the affected tasks' prior `(goal, milestone)` so a rollback never clobbers unrelated task edits.
+    @discardableResult
+    private func releaseTasks(of goal: String, keeping: Set<String>?) -> [String: (goal: String?, milestone: String?)] {
+        var prior: [String: (goal: String?, milestone: String?)] = [:]
         tasks = tasks.map { task in
             guard task.goal == goal else { return task }
             var task = task
             if let keeping {
-                if let milestone = task.milestone, !keeping.contains(milestone) { task.milestone = nil }
+                if let milestone = task.milestone, !keeping.contains(milestone) {
+                    prior[task.id] = (task.goal, milestone)
+                    task.milestone = nil
+                }
             } else {
+                prior[task.id] = (task.goal, task.milestone)
                 task.goal = nil
                 task.milestone = nil
             }
+            return task
+        }
+        return prior
+    }
+
+    /// Restores only `(goal, milestone)` on tasks that haven't been reassigned to another goal/milestone since.
+    private func restoreReleasedTasks(_ prior: [String: (goal: String?, milestone: String?)]) {
+        guard !prior.isEmpty else { return }
+        tasks = tasks.map { task in
+            guard let old = prior[task.id] else { return task }
+            var task = task
+            if task.goal == nil { task.goal = old.goal }
+            if task.goal == old.goal && task.milestone == nil { task.milestone = old.milestone }
             return task
         }
     }
@@ -881,11 +1278,13 @@ final class TasksStore {
             notice("Sections need the newest HQ add-on on your computer (0.9.36 or later).")
             return nil
         }
-        let before = sections, beforeTasks = tasks
+        let before = sections
         let kept = Set(next.map(\.id))
+        var clearedSections: [String: String] = [:]
         sections = next
         tasks = tasks.map { task in
             guard let id = task.section, !kept.contains(id) else { return task }
+            clearedSections[task.id] = id
             var task = task; task.section = nil; return task
         }
         changed()
@@ -899,8 +1298,17 @@ final class TasksStore {
             Task { await refresh(force: true) }
             return saved
         } catch {
+            if Self.isOfflineError(error) {
+                enqueueOffline(.saveSections(sections: next))
+                return next
+            }
             sections = before
-            tasks = beforeTasks
+            if !clearedSections.isEmpty {
+                tasks = tasks.map { task in
+                    guard task.section == nil, let old = clearedSections[task.id] else { return task }
+                    var task = task; task.section = old; return task
+                }
+            }
             changed()
             notice("Couldn’t save your sections. \(PagesREST.reason(error))")
             return nil
@@ -953,7 +1361,8 @@ final class TasksStore {
         noteOffers(whole: false)
         changed()
         offersWriting += 1
-        defer { offersWriting -= 1 }
+        var holdingOfferWrite = true
+        defer { if holdingOfferWrite { offersWriting -= 1 } }
         do {
             let answer = try await api.answerOffer(id, action: action, list: list, goal: before.isGoal ? (plan, inGoal) : nil)
             if let now = offers.firstIndex(where: { $0.id == id }) { offers[now] = answer.offer }
@@ -965,13 +1374,26 @@ final class TasksStore {
             // [goals set-up] This device took a plan: its lead is told, once (`GoalPlanTold`). Only here, on the
             // gateway's yes to this tap: another device's answer reaches this one as a 409 or a read, never as this.
             if action == .accept, answer.offer.kind == "plan", answer.offer.state == "accepted" { onPlanTaken?(answer.offer) }
+            // Release `offersWriting` BEFORE the forced refresh so `refresh()` actually updates `offers`.
+            offersWriting -= 1
+            holdingOfferWrite = false
             lastReadAt = nil
             await refresh(force: true)
             return true
         } catch {
+            if Self.isOfflineError(error) {
+                offersWriting -= 1
+                holdingOfferWrite = false
+                enqueueOffline(.answerOffer(id: id, action: action, list: list,
+                                            goalPlan: before.isGoal ? plan : nil,
+                                            goalInGoal: before.isGoal ? inGoal : nil))
+                return true
+            }
             // [goals step 3] Answered on another device first (a 409): the card shows what became of it.
             if PagesREST.status(error) == 409 {
                 if let now = offers.firstIndex(where: { $0.id == id }) { offers[now] = before }
+                offersWriting -= 1
+                holdingOfferWrite = false
                 lastReadAt = nil
                 Task { await refresh(force: true) }   // after this write is off the books, so the read takes the offers
                 notice("That was already answered on another device.")
@@ -980,6 +1402,8 @@ final class TasksStore {
             if let now = offers.firstIndex(where: { $0.id == id }) { offers[now] = before }
             noteOffers(whole: false)
             changed()
+            offersWriting -= 1
+            holdingOfferWrite = false
             notice("Couldn’t do that. \(PagesREST.reason(error))")
             Task { await refresh(force: true) }
             return false
@@ -1054,9 +1478,17 @@ final class TasksStore {
 
     /// Signed out or switched away: forget the list in memory (the cache folder is purged with the account's).
     func forget() {
+        changedRefreshTask?.cancel()
+        changedRefreshTask = nil
         tasks = []
         sections = []
         goals = []
+        pendingOps = []
+        pendingCount = 0
+        deleting = []
+        serverTask = [:]
+        taskEditToken = [:]
+        taskQueue = [:]
         rev = 0
         hasList = false
         prepared = false
@@ -1081,7 +1513,7 @@ nonisolated enum TodoWire {
                         goal: String? = nil, milestone: String? = nil) -> [String: JSONValue] {
         var body: [String: JSONValue] = [
             "title": .string(title), "who": .string(who.rawValue), "notes": .string(notes), "prep": .bool(prep && who != .me),
-            "steps": Self.steps(steps), "due": optional(due), "repeat": optional(who == .me ? repeatRule : nil),
+            "steps": Self.steps(steps), "due": optional(due), "repeat": optional(who == .bot ? nil : repeatRule),
         ]
         body["bot"] = who == .me ? .null : optional(bot ?? "default")
         if let source {

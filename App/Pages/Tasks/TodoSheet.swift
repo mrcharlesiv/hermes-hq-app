@@ -84,11 +84,16 @@ final class TodoSheetModel {
     /// conversation, asking it the words (TasksViewController.openTask).
     @ObservationIgnored var onAssigned: ((String) -> Void)?
     var notice: String?
+    var titleDraft = ""
+    var editingTitle = false { didSet { syncEditing() } }
     var newStep = ""
     /// [tasks] The add-a-step field is open (Steps' +).
     var addingStep = false { didSet { syncEditing() } }
     var notes = ""
     var editingNotes = false { didSet { syncEditing() } }
+    /// Observable mirror of `chat?.session.isRunning` + message updates (replaces 1 Hz `TimelineView` polling).
+    private(set) var chatRunning = false
+    private(set) var chatVersion = 0
     /// Steps whose long title is shown whole (a tap on the title).
     var openSteps: Set<String> = []
     @ObservationIgnored private var noticeWork: DispatchWorkItem?
@@ -110,14 +115,30 @@ final class TodoSheetModel {
         self.context = context
         lastSeen = store.task(taskID)
         notes = lastSeen?.notes ?? ""
+        titleDraft = lastSeen?.title ?? ""
         #if DEBUG
         Self.debugLast = self
         #endif
     }
 
-    /// [tasks] Writing in the brief (a step, the notes) on the task's chat: the composer steps aside meanwhile.
+    /// Hooks into the task's `LiveChatSession` so `TaskPlainView` updates reactively instead of polling at 1 Hz.
+    func observeChat(_ session: any ChatSessionModel) {
+        chatRunning = session.isRunning
+        chatVersion &+= 1
+        guard let live = session as? LiveChatSession else { return }
+        live.onTaskActivity = { [weak self, weak live] in
+            guard let self, let live else { return }
+            let nowRunning = live.isRunning
+            let ended = self.chatRunning && !nowRunning
+            if self.chatRunning != nowRunning { self.chatRunning = nowRunning }
+            self.chatVersion &+= 1
+            if ended { Task { await self.store.refresh(force: true) } }
+        }
+    }
+
+    /// [tasks] Writing in the brief (title, a step, the notes) on the task's chat: the composer steps aside meanwhile.
     private func syncEditing() {
-        let editing = embedded && (addingStep || editingNotes)
+        let editing = embedded && (editingTitle || addingStep || editingNotes)
         if editingBrief != editing { editingBrief = editing }
     }
 
@@ -271,10 +292,15 @@ final class TodoSheetModel {
         if who == .bot || (who == .together && !store.fieldsSupported) { fields["repeat"] = .null }
         if who == .me { fields["prep"] = .bool(false) }
         if let steps = TodoEdits.stepsForJustMe(who, steps: task.steps) { fields["steps"] = TodoWire.steps(steps) }
-        let asks = helper != nil && task.helper != helper && chatLink(task) == nil
+        let switchedBot = helper != nil && task.helper != helper
+        let existingLink = chatLink(task)
+        let replacingChat = switchedBot && existingLink != nil && existingLink?.profile != helper
+        if replacingChat { fields["chat"] = .object([:]) }
+        let asks = switchedBot && (existingLink == nil || replacingChat)
         let words = who == .together ? TodoWords.helpQuestion : TaskNow.startRequest
         Task {
             guard await store.patch(taskID, fields) else { PagesHaptics.error(); return }
+            if replacingChat { TaskChatLinks.clear(task: taskID, account: context.account) }
             if asks { onAssigned?(words) }
         }
     }
@@ -347,10 +373,36 @@ final class TodoSheetModel {
         patch(["steps": TodoWire.steps(task.steps + [TodoStep(title: title, who: "me")])])
     }
 
+    func editTitle() {
+        guard !gone else { return }
+        PagesHaptics.selection()
+        titleDraft = task?.title ?? titleDraft
+        editingTitle = true
+    }
+
+    func saveTitle() {
+        guard editingTitle else { return }
+        editingTitle = false
+        let clean = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let task, !clean.isEmpty, clean != task.title else { return }
+        patch(["title": .string(clean)])
+    }
+
     func saveNotes() {
+        guard editingNotes else { return }
         editingNotes = false
         guard let task, notes != task.notes else { return }
         patch(["notes": .string(notes)])
+    }
+
+    /// Commits any in-progress inline edit (title, notes, new step) so swipe-down dismissal never drops work.
+    func flushUnsavedEdits() {
+        if editingTitle { saveTitle() }
+        if editingNotes { saveNotes() }
+        if addingStep {
+            if !newStep.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { addStep() }
+            addingStep = false
+        }
     }
 
     /// Notes read formatted until Edit; the field starts from the task's notes as they are now (a bot may have added).
@@ -561,7 +613,8 @@ final class TodoSheetModel {
 
     /// The bot the task's chat is (or will be) with.
     func chatBot(_ task: TodoTask) -> String {
-        chatLink(task)?.profile ?? TaskChatLinks.bot(for: task, bots: context.bots)?.id ?? "default"
+        if let link = chatLink(task), task.helper == nil || link.profile == task.helper { return link.profile }
+        return TaskChatLinks.bot(for: task, bots: context.bots)?.id ?? "default"
     }
 
 }
@@ -695,6 +748,9 @@ final class TodoSheetHost: UIHostingController<HQScaledRoot<TodoSheetView>> {
             details.append(UIAction(title: "\(name) Gets It Ready", image: UIImage(systemName: "sparkles"),
                                     state: task.prep ? .on : .off) { _ in model.setPrep(!task.prep) })
         }
+        if !model.gone {
+            details.append(UIAction(title: "Rename Task", image: UIImage(systemName: "pencil")) { _ in model.editTitle() })
+        }
         details.append(UIAction(title: "Copy Title", image: UIImage(systemName: "doc.on.doc")) { _ in
             UIPasteboard.general.string = task.title
             PagesHaptics.success()
@@ -718,6 +774,11 @@ final class TodoSheetHost: UIHostingController<HQScaledRoot<TodoSheetView>> {
                                                name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardChanged(_:)),
                                                name: UIResponder.keyboardWillHideNotification, object: nil)
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        model.flushUnsavedEdits()
     }
 
     /// The keyboard's overlap is this page's own bottom safe area, so the Ask bar rides above it (as the Kanban task's).

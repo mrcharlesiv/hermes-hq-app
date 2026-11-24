@@ -48,6 +48,8 @@ final class TasksWidgetWriter {
     private var observers: [NSObjectProtocol] = []
     private weak var watched: TasksStore?
     private var writePending = false
+    /// Serial background queue for routine Keychain writes so `scheduleWrite()` never blocks the main thread.
+    private static let ioQueue = DispatchQueue(label: "ai.hermes.hq.tasks-widget-io", qos: .utility)
     /// Tasks ticked on a widget whose save is on its way: shown ticked where they stood (as the page's `ticking`).
     private var ticking: [String: TodoTask] = [:]
 
@@ -129,7 +131,61 @@ final class TasksWidgetWriter {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self else { return }
             self.writePending = false
-            self.write(reason: "list changed")
+            self.writeAsync(reason: "list changed")
+        }
+    }
+
+    /// Snapshots store state on `@MainActor`, then builds all widget views and writes Keychain off the main thread.
+    private func writeAsync(reason: String, now: Date = Date()) {
+        guard enabled, let account, let key = accountKey else { return }
+        let scheme = AppIdentity.current.urlScheme
+        guard let store = currentStore(), store.account.id == account.id else { return }
+        watch(store)
+        store.prepare()
+        let state: TasksWidgetIndex.State = TasksHub.isOff(store.account) ? .off
+            : store.needsAddOn ? .needsAddOn : store.hasList ? .live : .noList
+        guard state == .live else {
+            Self.ioQueue.async {
+                let changed = TasksWidgetStore.quiet(state, scheme: scheme, account: key)
+                if changed {
+                    Self.reload()
+                    Task { @MainActor in
+                        #if DEBUG
+                        TileWidgetWriter.showProbe()
+                        #endif
+                        AppLog.note("widgets", "tasks widget (\(reason)): \(state.rawValue)")
+                    }
+                }
+            }
+            return
+        }
+        let roster = bots()
+        let tasks = store.tasks.map { ticking[$0.id] ?? $0 }
+        var profiles = Set(roster.map(\.id))
+        profiles.insert("default")
+        for task in tasks {
+            if let helper = task.helper { profiles.insert(helper) }
+            if let by = task.createdBy { profiles.insert(by) }
+            if let offerBy = task.offer?.by { profiles.insert(offerBy) }
+        }
+        let namesByProfile = Dictionary(uniqueKeysWithValues: profiles.map { ($0, PagesNames.botName($0, bots: roster)) })
+        let botName: @Sendable (String?) -> String = { profile in
+            let id = profile ?? "default"
+            return namesByProfile[id] ?? (id == "default" ? "Hermes" : id.capitalized)
+        }
+        let input = Input(tasks: tasks, sections: store.sections, bots: roster.map(\.id), sort: store.settings.sort,
+                          paused: GoalViews.paused(store.goals), goals: store.goals, ticking: Set(ticking.keys))
+        Self.ioQueue.async {
+            let result = Self.persistLive(scheme: scheme, account: key, input: input, botName: botName, now: now)
+            if result.changed {
+                Self.reload()
+                Task { @MainActor in
+                    #if DEBUG
+                    TileWidgetWriter.showProbe()
+                    #endif
+                    AppLog.note("widgets", "tasks widget (\(reason)): written, \(result.viewCount) views, \(result.openCount) open")
+                }
+            }
         }
     }
 
@@ -169,15 +225,28 @@ final class TasksWidgetWriter {
         let name: (String?) -> String = { PagesNames.botName($0 ?? "default", bots: roster) }
         let tasks = store.tasks.map { ticking[$0.id] ?? $0 }
         let input = Input(tasks: tasks, sections: store.sections, bots: roster.map(\.id), sort: store.settings.sort,
-                          paused: GoalViews.paused(store.goals), ticking: Set(ticking.keys))
-        let choices = Self.choices(tasks: tasks, sections: store.sections)
+                          paused: GoalViews.paused(store.goals), goals: store.goals, ticking: Set(ticking.keys))
+        let result = Self.persistLive(scheme: scheme, account: key, input: input, botName: name, now: now)
+        #if DEBUG
+        TileWidgetWriter.showProbe()
+        #endif
+        if result.changed {
+            Self.reload()
+            AppLog.note("widgets", "tasks widget (\(reason)): written, \(result.viewCount) views, \(result.openCount) open")
+        }
+        return result.changed
+    }
+
+    nonisolated private static func persistLive(scheme: String, account key: String, input: Input,
+                                                botName: (String?) -> String, now: Date) -> (changed: Bool, viewCount: Int, openCount: Int) {
+        let choices = Self.choices(tasks: input.tasks, sections: input.sections)
         var changed = false
         for choice in choices {
             guard let view = TodoView(key: choice.id) else { continue }
-            let made = Self.view(view, name: choice.name, input: input, botName: name, now: now)
+            let made = Self.view(view, name: choice.name, input: input, botName: botName, now: now)
             switch TasksWidgetStore.saveView(made) {
             case .written: changed = true
-            case .refused: AppLog.note("widgets", "tasks widget: a view was refused (\(made.frames.count) frames)")
+            case .refused: break
             case .unchanged: break
             }
         }
@@ -188,23 +257,17 @@ final class TasksWidgetWriter {
             index.writtenAt = now
             changed = TasksWidgetStore.saveIndex(index) || changed
         }
-        #if DEBUG
-        TileWidgetWriter.showProbe()
-        #endif
-        if changed {
-            Self.reload()
-            AppLog.note("widgets", "tasks widget (\(reason)): written, \(choices.count) views, \(tasks.filter { !$0.isDone }.count) open")
-        }
-        return changed
+        return (changed, choices.count, input.tasks.filter { !$0.isDone }.count)
     }
 
     /// What every frame is made from.
-    struct Input {
+    nonisolated struct Input: Sendable {
         var tasks: [TodoTask]
         var sections: [TodoUserSection]
         var bots: [String]
         var sort: String
         var paused: Set<String>
+        var goals: [Goal] = []
         var ticking: Set<String> = []
     }
 
@@ -247,6 +310,9 @@ final class TasksWidgetWriter {
         }
         for task in tasks where !task.isDone {
             if let due = TodoDates.due(task.due, calendar: calendar), due.hasTime { out.insert(due.date.addingTimeInterval(1)) }
+            if let rawStart = task.starts, let startDay = TodoDates.day(String(rawStart.prefix(10)), calendar: calendar) {
+                out.insert(startDay.addingTimeInterval(1))
+            }
             if task.status == "open", task.due == nil,
                let touched = TodoDates.moment(task.updatedAt) ?? TodoDates.moment(task.createdAt) {
                 out.insert(touched.addingTimeInterval(TodoSections.staleAfter + 1))
@@ -271,10 +337,10 @@ final class TasksWidgetWriter {
                 if TodoViews.waitsOnYou(task) { waiting += 1 }
                 guard kept < maxRows else { continue }
                 kept += 1
-                var dot = TodoLists.dot(task, in: view, sections: input.sections)
-                if case .next = group.kind { dot = nil }   // "Next in Work" names the list over the rows
-                rows.append(row(task, kind: group.kind, now: now, calendar: calendar, botName: botName, dot: dot,
-                                ticked: input.ticking.contains(task.id)))
+                // Align with Tasks page ("Colour means act"): no list colour dots; show Goal mark when task serves an active/paused goal.
+                let goalColor = GoalViews.markGoal(task, goals: input.goals)?.tint
+                rows.append(row(task, kind: group.kind, now: now, calendar: calendar, botName: botName, dot: nil,
+                                goalColor: goalColor, ticked: input.ticking.contains(task.id)))
             }
             let left = group.tasks.count - rows.count
             sections.append(TasksWidgetSection(title: heading?.title, detail: heading?.detail, red: group.kind == .overdue,
@@ -291,11 +357,12 @@ final class TasksWidgetWriter {
     }
 
     nonisolated static func row(_ task: TodoTask, kind: TodoGroupKind, now: Date, calendar: Calendar, botName: (String?) -> String,
-                                dot: TodoListColor?, ticked: Bool) -> TasksWidgetRow {
+                                dot: TodoListColor?, goalColor: TodoListColor? = nil, ticked: Bool) -> TasksWidgetRow {
         let words = TodoViews.row(task, in: kind, now: now, calendar: calendar, botName: botName)
         return TasksWidgetRow(id: task.id, title: task.title.isEmpty ? "Untitled Task" : task.title, when: words.when,
                               late: words.late, steps: words.steps, repeats: words.repeats, priority: words.priority,
-                              note: words.note, tone: words.tone.rawValue, dot: dot?.rawValue, done: ticked)
+                              note: words.note, tone: words.tone.rawValue, dot: dot?.rawValue,
+                              goalColor: goalColor?.rawValue, done: ticked)
     }
 
     // MARK: The check circle

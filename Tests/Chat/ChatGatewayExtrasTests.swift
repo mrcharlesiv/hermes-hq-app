@@ -251,8 +251,31 @@ struct ChatGatewayExtrasTests {
         ]
         let matched = try #require(BackgroundJobWords.match(for: clipped, in: messages))
         #expect(matched.botWords == "The release watcher now")
+        #expect(matched.fullBotWords == "The release watcher now")
         #expect(matched.botNote?.contains("poll every five minutes") == true)
         #expect(matched.fullCommand == longCmd)
+
+        // Long bot sentence (>90 chars) and long agent prompt (>80 chars): list row clips, detail view keeps the whole sentence.
+        let longSentence = "Restarting the landing job without the wait (full unit tests on a clean sim, UI video test, Mac build, then advancing main)"
+        let longBotMsgs = [
+            ChatMessage(id: "a2", role: .assistant, parts: [
+                .text(longSentence + "."),
+                .tool(ToolCall(id: "t2", name: "terminal", title: "terminal", argsText: #"{"command":"make land"}"#, summary: nil, state: .done)),
+            ]),
+        ]
+        let longMatch = try #require(BackgroundJobWords.match(for: "make land", in: longBotMsgs))
+        var longJob = BackgroundProcess(id: "p_long", command: "make land", status: "running", uptimeSeconds: 40, exitCode: nil, tail: "")
+        longJob.botWords = longMatch.botWords
+        longJob.fullBotWords = longMatch.fullBotWords
+        longJob.botNote = longMatch.botNote
+        #expect(longJob.headline.hasSuffix("…") && longJob.headline.count <= 90)
+        #expect(longJob.fullHeadline == longSentence)
+        #expect(longJob.botNote == nil, "single-sentence paragraph is not duplicated below Output")
+
+        let longAgentPrompt = "Read the brief in this folder, run every verification check on a clean simulator, and write the full summary report"
+        let longAgentJob = BackgroundProcess(id: "p_ag", command: "claude -p '\(longAgentPrompt)'", status: "running", uptimeSeconds: 30, exitCode: nil, tail: "")
+        #expect(longAgentJob.headline.hasSuffix("…") && longAgentJob.headline.count <= 80)
+        #expect(longAgentJob.fullHeadline == longAgentPrompt)
 
         // Shelf body: list view -> detail view -> wide split view without crashing or breaking layout.
         let body = BackgroundTasksBody()

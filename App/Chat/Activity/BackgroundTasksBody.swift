@@ -87,7 +87,7 @@ final class BackgroundTasksBody: UIView, ShelfMeasuredBody {
         let cmdExpanded = sel.map { expandedCommand.contains($0) } ?? false
         var h = Hasher()
         for c in commands {
-            h.combine(c.id); h.combine(c.headline); h.combine(c.detailLine)
+            h.combine(c.id); h.combine(c.headline); h.combine(c.fullHeadline); h.combine(c.detailLine)
             h.combine(c.cleanedTail); h.combine(c.botNote); h.combine(c.cwd)
             h.combine(c.effectiveCommand); h.combine(c.watchPatterns); h.combine(c.watchHit)
             h.combine(c.pid); h.combine(c.startedAt); h.combine(stopping.contains(c.id))
@@ -718,7 +718,7 @@ final class BackgroundTaskDetailView: UIView {
         self.stopping = stopping
         applyLook()
 
-        if headline.text != command.headline { headline.text = command.headline }
+        if headline.text != command.fullHeadline { headline.text = command.fullHeadline }
         status.attributedText = statusLine(command, stopping: stopping)
 
         stop.isEnabled = !stopping

@@ -63,7 +63,9 @@ nonisolated struct BackgroundProcess: Hashable, Sendable, Identifiable {
     /// [background] The bot's own sentence before the call that started it (`BackgroundJobWords.botWords`), filled in
     /// by the chat from its transcript; nil when the bot said nothing or the call is out of the loaded history.
     var botWords: String? = nil
-    /// [background] Fuller context from the bot's paragraph before starting the job, when longer than `botWords`.
+    /// [background] The unclipped version of `botWords` for the detail view's headline.
+    var fullBotWords: String? = nil
+    /// [background] Fuller context from the bot's paragraph before starting the job, when longer than `fullBotWords`.
     var botNote: String? = nil
     /// [background] The full command recovered from the chat's `terminal` tool call when `process.list` clipped it.
     var fullCommand: String? = nil
@@ -75,6 +77,8 @@ nonisolated struct BackgroundProcess: Hashable, Sendable, Identifiable {
 
     /// [background] The row's name: the bot's # comment, its own words, an agent's prompt, or the program and folder.
     var headline: String { BackgroundJobWords.headline(command: effectiveCommand, botWords: botWords) }
+    /// [background] The detail page's unclipped name: never cut short at the list row's 80/90-character cap.
+    var fullHeadline: String { BackgroundJobWords.fullHeadline(command: effectiveCommand, fullBotWords: fullBotWords, botWords: botWords) }
     /// [background] Who runs it and where ("Claude Code · goals-2"); nil when the name says it all.
     var detailLine: String? { BackgroundJobWords.detail(command: effectiveCommand, cwd: cwd, headline: headline) }
     /// [background] The newest output line, else an honest quiet line ("No output for 1h 22m").

@@ -300,6 +300,7 @@ import UIKit
             var job = job
             if let matched = BackgroundJobWords.match(for: job.command, in: messages) {
                 job.botWords = matched.botWords
+                job.fullBotWords = matched.fullBotWords
                 job.botNote = matched.botNote
                 job.fullCommand = matched.fullCommand
             }

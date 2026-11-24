@@ -17,7 +17,7 @@ nonisolated enum BackgroundJobWords {
     }
 
     /// The agents that print nothing until they finish (`claude -p`, `codex exec`, …).
-    static func agent(_ command: String) -> Agent? {
+    static func agent(_ command: String, promptLimit: Int? = 80) -> Agent? {
         let words = shellWords(command)
         let known: [(String, String, Set<String>)] = [
             ("claude", "Claude Code", ["-p", "--print"]),
@@ -41,7 +41,7 @@ nonisolated enum BackgroundJobWords {
             for word in rest[(at + 1)...] {
                 if skip { skip = false; continue }
                 if word.hasPrefix("-") { skip = valued.contains(word) && !word.contains("="); continue }
-                prompt = firstSentence(word, limit: 80); break
+                prompt = firstSentence(word, limit: promptLimit); break
             }
             return Agent(name: name, prompt: prompt.flatMap { $0.isEmpty ? nil : $0 })
         }
@@ -51,6 +51,7 @@ nonisolated enum BackgroundJobWords {
     /// What the chat's transcript knows about the `terminal` call that started `command`.
     struct TranscriptMatch: Hashable, Sendable {
         var botWords: String?
+        var fullBotWords: String?
         var botNote: String?
         var fullCommand: String?
     }
@@ -70,9 +71,10 @@ nonisolated enum BackgroundJobWords {
                     guard call.name == "terminal", let ran = terminalCommand(call.argsText),
                           ran.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(wanted) else { continue }
                     let words = before.flatMap { lastSentence($0, limit: 90) }
-                    let note = before.flatMap { contextParagraph($0, headline: words) }
+                    let fullWords = before.flatMap { lastSentence($0, limit: nil) }
+                    let note = before.flatMap { contextParagraph($0, headline: fullWords ?? words) }
                     let full = ran.trimmingCharacters(in: .whitespacesAndNewlines).count > wanted.count ? ran : nil
-                    return TranscriptMatch(botWords: words, botNote: note, fullCommand: full)
+                    return TranscriptMatch(botWords: words, fullBotWords: fullWords, botNote: note, fullCommand: full)
                 case .reasoning:
                     continue
                 }
@@ -100,6 +102,16 @@ nonisolated enum BackgroundJobWords {
         if let botWords { return botWords }
         // The agent's name is on the line under it, so the name is just its prompt.
         if let agent = agent(command) { return agent.prompt ?? agent.name }
+        let name = BackgroundTaskText.title(command: command)
+        return name == "background process" ? "Background command" : name
+    }
+
+    /// The detail page's unclipped name: keeps the full sentence or agent prompt without the row's 80/90-char cap.
+    static func fullHeadline(command: String, fullBotWords: String?, botWords: String?) -> String {
+        if let comment = BackgroundTaskText.comment(command: command) { return comment }
+        if let fullBotWords { return fullBotWords }
+        if let botWords { return botWords }
+        if let agent = agent(command, promptLimit: nil) { return agent.prompt ?? agent.name }
         let name = BackgroundTaskText.title(command: command)
         return name == "background process" ? "Background command" : name
     }
@@ -179,14 +191,14 @@ nonisolated enum BackgroundJobWords {
         return s.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }
 
-    static func firstSentence(_ text: String, limit: Int) -> String {
+    static func firstSentence(_ text: String, limit: Int?) -> String {
         let s = plain(text)
         let cut = sentences(s).first ?? s
         return clip(cut, limit)
     }
 
     /// The last sentence of the last paragraph: a bot's lead-in to a call ("Now the app's own test gate.").
-    static func lastSentence(_ text: String, limit: Int) -> String? {
+    static func lastSentence(_ text: String, limit: Int?) -> String? {
         let paragraphs = text.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         guard let last = paragraphs.last else { return nil }
         var s = plain(last)
@@ -226,10 +238,11 @@ nonisolated enum BackgroundJobWords {
         return out.map { $0.hasSuffix(":") ? String($0.dropLast()) : $0 }.filter { !$0.isEmpty }
     }
 
-    private static func clip(_ s: String, _ limit: Int) -> String {
+    private static func clip(_ s: String, _ limit: Int?) -> String {
         var t = s.trimmingCharacters(in: .whitespaces)
         if t.hasSuffix("."), !t.hasSuffix("..") { t.removeLast() }
-        return t.count > limit ? String(t.prefix(limit - 1)).trimmingCharacters(in: .whitespaces) + "…" : t
+        guard let limit, t.count > limit else { return t }
+        return String(t.prefix(limit - 1)).trimmingCharacters(in: .whitespaces) + "…"
     }
 
     /// Shell words with quotes honoured (`claude -p 'Read the brief' --x` → ["claude", "-p", "Read the brief", "--x"]).

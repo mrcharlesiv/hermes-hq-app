@@ -83,9 +83,12 @@ nonisolated struct PullRequestCard: Hashable, Sendable {
     /// The sheet's title: "Pull Request", or "Branch" when there is no number.
     var title: String { shown.number == nil ? "Branch" : "Pull Request" }
 
+    /// Whether the owner's manual Closed mark applies to the focused item (the lead only, never secondary items).
+    var isLeadManual: Bool { (focus == .lead || focus == Self.leadFocus(status)) && status.manual }
+
     /// The state's words. The owner's own Closed mark on the lead says so.
     var stateWords: String {
-        if focus == .lead || focus == Self.leadFocus(status), status.manual { return "Closed, marked by you" }
+        if isLeadManual { return "Closed, marked by you" }
         switch shown.state {
         case .unknown: return "Status Unknown"
         default: return shown.status.label
@@ -94,7 +97,21 @@ nonisolated struct PullRequestCard: Hashable, Sendable {
 
     /// The state the glyph draws: the owner's Closed mark wins on the lead.
     var markState: SessionPRStatus.State {
-        (focus == .lead || focus == Self.leadFocus(status)) && status.manual ? .closed : shown.state
+        isLeadManual ? .closed : shown.state
+    }
+
+    /// Plain explanation when the focused status is `.unknown`.
+    var unknownNotice: String? {
+        guard shown.state == .unknown && !isLeadManual else { return nil }
+        return status.unknownExplanation
+    }
+
+    /// Whether the owner can mark this chat closed (or reopen it) from the card.
+    var markClosedToggle: Bool? {
+        guard focus == .lead || focus == Self.leadFocus(status) else { return nil }
+        if status.manual { return false }
+        let eligible: Set<SessionPRStatus.State> = status.items != nil ? [.draft, .open, .none, .unknown] : [.draft, .none, .unknown]
+        return eligible.contains(status.state) ? true : nil
     }
 
     private static func leadFocus(_ status: SessionPRStatus) -> Focus? { leadIndex(of: status).map { .item($0) } }
@@ -121,10 +138,18 @@ nonisolated struct PullRequestCard: Hashable, Sendable {
         var out: [Action] = []
         if let url = shown.url { out.append(.openOnGitHub(url)) }
         if let words = fixChecksWords { out.append(.askToFixChecks(words: words)) }
-        if [.draft, .open].contains(shown.state), !status.manual, let words = Self.mergeWords(number: shown.number, branch: shown.branch, base: shown.base) {
+        if [.draft, .open].contains(shown.state), !isLeadManual, let words = Self.mergeWords(number: shown.number, branch: shown.branch, base: shown.base) {
             out.append(.askToMerge(words: words))
         }
         return out
+    }
+
+    /// Warning title for the merge confirmation alert when merging now carries risk; nil for a clean open PR.
+    func mergeConfirmTitle(chatWorking: Bool = false) -> String {
+        if shown.checks?.state == .failed { return "Checks Are Failing — Merge Anyway?" }
+        if shown.state == .draft { return shown.number == nil ? "Merge Unopened Branch?" : "Merge Draft Pull Request?" }
+        if chatWorking { return "\(botName) Is Still Working — Merge?" }
+        return mergeTitle.replacingOccurrences(of: "…", with: "")
     }
 
     /// "Ask Otto to Merge…"

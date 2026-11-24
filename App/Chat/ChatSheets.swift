@@ -764,8 +764,8 @@ private final class ChatInfoList: UITableViewController {
     private func showPullRequest(_ focus: PullRequestCard.Focus) {
         guard let chat = source.cardChat else { return }
         let source = self.source
-        guard let sheet = PullRequestCardSheet.make(status: pullRequest, chat: chat, focus: focus, refresh: { [weak source] in
-            await source?.pullRequestDetail()
+        guard let sheet = PullRequestCardSheet.make(status: pullRequest, chat: chat, focus: focus, refreshResult: { [weak source] manual in
+            try await source?.pullRequestDetailResult(manualRetry: manual)
         }, send: { [weak self] words in
             let deliver = { PullRequestCardSheet.deliver(words, to: chat) {} }
             if let presenter = self?.navigationController?.presentingViewController ?? self?.presentingViewController {

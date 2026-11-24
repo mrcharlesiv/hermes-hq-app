@@ -850,7 +850,8 @@ final class AppModel: AppServices {
             screen.sessionPR = nil
             return
         }
-        screen.sessionPR = store.pullRequest(profile: live.profile, id: id)
+        let status = store.pullRequest(profile: live.profile, id: id)
+        screen.sessionPR = status?.drawsMark == true ? status : nil
     }
 
     private static func displayNames(_ bots: [Bot]) -> [String: String] {

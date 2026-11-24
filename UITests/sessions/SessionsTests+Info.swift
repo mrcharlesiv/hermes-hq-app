@@ -239,6 +239,13 @@ extension SessionsTests {
         XCTAssertTrue(app.navigationBars["Repository"].waitForExistence(timeout: 5))
         let folder = app.textFields["project.repository.folder"]
         XCTAssertTrue(folder.waitForExistence(timeout: 5))
+        // Turning Coding Project on now awaits pr-repos and auto-links the project's own folder without racing.
+        let initialUnlink = app.buttons["project.repository.unlink"]
+        if waitUntil(5, { if !initialUnlink.exists { app.swipeUp() }; return initialUnlink.exists }) {
+            initialUnlink.tap()
+            XCTAssertTrue(waitUntil(8) { !initialUnlink.exists }, "unlinks auto-linked repo to test manual linking")
+            app.swipeDown()
+        }
         shot(app, "project-repository-empty")
         XCTAssertFalse(app.buttons["project.repository.unlink"].exists)
         // [repo-pickers] The project's repositories, the others Hermes knows and the GitHub names already seen are one

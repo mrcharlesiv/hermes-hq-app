@@ -236,6 +236,8 @@ nonisolated struct Bot: Identifiable, Hashable, Sendable {
 
 nonisolated struct SessionPRStatus: Hashable, Sendable {
     enum State: String, Hashable, Sendable { case none, draft, open, merged, closed, unknown }
+    /// Why a status is `.unknown`: lets the UI separate "still checking" from an error, missing add-on, or unmatched branch.
+    enum UnknownReason: String, Hashable, Sendable { case checking, unavailable, unsupported, unmatched }
     var state: State
     var repo: String? = nil
     var branch: String? = nil
@@ -251,6 +253,24 @@ nonisolated struct SessionPRStatus: Hashable, Sendable {
     var checks: SessionPRChecks? = nil
     var title: String? = nil
     var base: String? = nil
+    /// Display-only cause for `.unknown` (never persisted to the marks cache).
+    var unknownReason: UnknownReason? = nil
+
+    /// True while the first check for this chat has not answered yet: avoids flashing a misleading `?`.
+    var isPendingCheck: Bool { state == .unknown && unknownReason == .checking }
+
+    /// Whether a coding row (or chat title bar) should draw a PR mark for this status.
+    var drawsMark: Bool { state != .none && !isPendingCheck }
+
+    /// Plain explanation shown when tapping an unknown mark or diagnosing why status couldn't be read.
+    var unknownExplanation: String {
+        switch unknownReason {
+        case .checking: return "Checking pull request status…"
+        case .unavailable: return "Couldn’t reach the gateway to check pull request status."
+        case .unsupported: return "Pull request tracking requires the Hermes HQ add-on on this gateway."
+        case .unmatched, nil: return "No linked repository matched this chat’s branch."
+        }
+    }
 
     /// The pull requests and branches not merged yet (draft or open); the one answer when nothing is listed.
     var waitingCount: Int {
@@ -263,7 +283,9 @@ nonisolated struct SessionPRStatus: Hashable, Sendable {
     /// chat is done, so an item still open on GitHub doesn't count it as open. Unknown is never counted.
     var countedStates: Set<State> {
         if manual || items?.isEmpty != false { return state == .unknown ? [] : [state] }
-        return Set(items?.map(\.state) ?? []).subtracting([.unknown, .none])
+        let listed = Set(items?.map(\.state) ?? []).subtracting([.unknown, .none])
+        if !listed.isEmpty { return listed }
+        return state == .unknown ? [] : [state]
     }
 
     /// The one answer, and how many more are still waiting ("Open #12, 1 more not merged"; under the owner's own

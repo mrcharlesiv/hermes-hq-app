@@ -21,6 +21,8 @@ struct ProjectSettingsPage: View {
     var bot: (id: String, name: String)? = nil
     /// The page behind redraws.
     var onChange: () -> Void = {}
+    /// Pushes the project's Repository… configuration page inside this settings sheet.
+    var onRepository: (() -> Void)? = nil
     /// [coding-pr-review] Icon Guide: the sheet pushes the project's icon guide (nil: no row).
     var onIconGuide: (() -> Void)? = nil
 
@@ -49,6 +51,7 @@ struct ProjectSettingsPage: View {
         let _ = tick
         return List { Group {
             chats
+            if !isHome { codingSection }
             notifications
             if !isHome {
                 newChats
@@ -107,6 +110,37 @@ struct ProjectSettingsPage: View {
                 .accessibilityIdentifier("sessions.projectSettings.autoDoneMerged")
             }
         } footer: { HQSectionFooter { Text("Only on this page. Nothing is archived.") } }
+    }
+
+    // MARK: Coding
+
+    @ViewBuilder private var codingSection: some View {
+        Section {
+            Toggle("Coding Project", isOn: bound({ store.isCodingProject(project) }) { store.setCodingProject(project, $0) })
+                .accessibilityIdentifier("sessions.projectSettings.coding")
+            if coding, let onRepository {
+                let repo = store.prRepo(forProject: project)
+                let needsLink = repo == nil && store.prAutoLinkFailed.contains(project)
+                Button(action: onRepository) {
+                    HStack(spacing: 8) {
+                        Text("Repository").foregroundStyle(Color.hqLabel)
+                        Spacer(minLength: 12)
+                        Text(repo.map { SessionStore.folderName($0.path) } ?? "Not Linked")
+                            .foregroundStyle(needsLink ? Color.hqOrange : Color.hqLabel2)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        SettingsChevron()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityIdentifier("sessions.projectSettings.repository")
+            }
+        } header: { HQSectionLabel { Text("Coding") } } footer: { HQSectionFooter {
+            Text("Shows pull request status, checks, and diff size on this project’s chats.")
+        } }
     }
 
     // MARK: Notifications

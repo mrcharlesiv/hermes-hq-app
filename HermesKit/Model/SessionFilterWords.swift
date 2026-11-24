@@ -62,6 +62,32 @@ nonisolated enum SessionProjects {
         return key(project, profile: profile)
     }
 
+    /// Resolves `cwd` against `profile`'s projects first, falling back to any other profile's registered project
+    /// folders/worktrees (longest match) so a second bot working in a shared coding repo isn't dropped into Home.
+    static func keyAcrossProfiles(cwd: String?, profile: String, projectsByProfile: [String: [SessionProject]],
+                                  linkedRepos: [(project: String, path: String)] = []) -> String {
+        let own = key(cwd: cwd, profile: profile, projectsByProfile: projectsByProfile)
+        if own != homeKey { return own }
+        guard let trimmed = cwd?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else { return homeKey }
+        var best: (key: String, length: Int)?
+        for (other, projects) in projectsByProfile where other != profile {
+            for project in projects {
+                let projectKey = key(project, profile: other)
+                for path in project.paths where trimmed == path || trimmed.hasPrefix(path.hasSuffix("/") ? path : path + "/") {
+                    if path.count > (best?.length ?? -1) { best = (projectKey, path.count) }
+                }
+            }
+        }
+        for repo in linkedRepos {
+            let path = repo.path.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !path.isEmpty else { continue }
+            if trimmed == path || trimmed.hasPrefix(path.hasSuffix("/") ? path : path + "/"), path.count > (best?.length ?? -1) {
+                best = (repo.project, path.count)
+            }
+        }
+        return best?.key ?? homeKey
+    }
+
     /// [project-pills] What each project's chats are doing now (`SessionProjectState`), by project key: every state
     /// one of its chats is in. Archived chats count for nothing.
     static func states(_ sessions: [SessionSummary], projectsByProfile: [String: [SessionProject]]) -> [String: Set<SessionProjectState>] {

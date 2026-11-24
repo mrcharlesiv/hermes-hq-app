@@ -389,4 +389,71 @@ import Testing
         #expect(PullRequestCard.refreshed(old, with: SessionPRStatus(state: .none)) == old)
         #expect(PullRequestCard.refreshed(old, with: SessionPRStatus(state: .unknown)) == old)
     }
+
+    // MARK: Trust & Reliability Improvements
+
+    @Test func unknownReasonsDistinguishCheckingFromRealErrors() {
+        let checking = SessionPRStatus(state: .unknown, unknownReason: .checking)
+        #expect(checking.isPendingCheck && !checking.drawsMark)
+        for reason: SessionPRStatus.UnknownReason in [.unavailable, .unsupported, .unmatched] {
+            let status = SessionPRStatus(state: .unknown, unknownReason: reason)
+            #expect(!status.isPendingCheck && status.drawsMark)
+            #expect(!status.unknownExplanation.isEmpty)
+        }
+        #expect(!SessionPRStatus(state: .none).drawsMark)
+        #expect(SessionPRStatus(state: .open, number: 1).drawsMark)
+    }
+
+    @Test func manualClosedAppliesToLeadOnlyAndWarningsCoverRiskyMerges() throws {
+        let link24 = Self.link24
+        let link25 = URL(string: "https://github.com/example/app/pull/25")!
+        let status = SessionPRStatus(
+            state: .closed, repo: "example/app", number: 24, url: link24, manual: true,
+            items: [
+                SessionPRItem(state: .open, repo: "example/app", number: 24, url: link24, source: .github),
+                SessionPRItem(state: .open, repo: "example/app", number: 25, url: link25, source: .github,
+                              checks: .init(state: .failed, passed: 1, failed: 1, running: 0))
+            ]
+        )
+        let lead = try #require(card(status, focus: .lead))
+        #expect(lead.isLeadManual && merges(lead).isEmpty && lead.markClosedToggle == false)
+        // Secondary item is NOT manually closed, so its actions stay available.
+        let second = try #require(card(status, focus: .item(1)))
+        #expect(!second.isLeadManual)
+        #expect(merges(second) == ["Merge pull request #25."])
+        #expect(second.fixChecksWords == "The checks on pull request #25 are failing. Fix them.")
+        #expect(second.mergeConfirmTitle(chatWorking: false) == "Checks Are Failing — Merge Anyway?")
+
+        let draft = try #require(card(SessionPRStatus(state: .draft, repo: "example/app", branch: "feat/x", number: 9)))
+        #expect(draft.mergeConfirmTitle(chatWorking: false) == "Merge Draft Pull Request?")
+        let open = try #require(card(SessionPRStatus(state: .open, repo: "example/app", number: 24)))
+        #expect(open.mergeConfirmTitle(chatWorking: false) == "Ask Otto to Merge")
+        #expect(open.mergeConfirmTitle(chatWorking: true) == "Otto Is Still Working — Merge?")
+    }
+
+    @Test func mergedPRCanShowChangesAndRunsParseUrlAndSummary() throws {
+        let files = [SessionPRFile(path: "App/Foo.swift", additions: 5, deletions: 2, patch: "@@ -1 +1 @@\n-a\n+b")]
+        let merged = try #require(detailed(.merged, size: SessionPRSize(files: 1, additions: 5, deletions: 2), files: files))
+        #expect(merged.fileRows.count == 1)
+        #expect(merged.changesLabel == "Changes · 1 file · +5 \u{2212}2")
+        #expect(merged.checksRow == nil)
+
+        let checks = try #require(PRFacts.checks(try parse("""
+        {"state": "failed", "passed": 1, "failed": 1, "running": 0,
+         "runs": [
+           {"name": "unit", "state": "failed", "url": "https://github.com/example/app/actions/runs/9", "summary": "2 assertions failed"},
+           {"name": "bad-link", "state": "passed", "url": "https://evil.example/runs/1", "summary": "  "}
+         ]}
+        """), runs: true))
+        let runs = try #require(checks.runs)
+        #expect(runs.count == 2)
+        #expect(runs[0].url?.absoluteString == "https://github.com/example/app/actions/runs/9")
+        #expect(runs[0].summary == "2 assertions failed")
+        #expect(runs[1].url == nil && runs[1].summary == nil)
+    }
+
+    @Test func countedStatesFallsBackWhenItemsAreAllNone() {
+        let status = SessionPRStatus(state: .none, items: [SessionPRItem(state: .none, source: .git)])
+        #expect(status.countedStates == [SessionPRStatus.State.none])
+    }
 }

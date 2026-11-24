@@ -502,7 +502,7 @@ struct SessionRowView: View {
     /// many more (owner 2026-11-20 picked option C, "Tinted pills", over coloured numbers). The lead: not merged yet
     /// first, then unknown, merged, closed; newest first within each. The row's words say it all (summary).
     @ViewBuilder private var prMark: some View {
-        if codingProject, let pr = session.pullRequest, pr.state != .none {   // no code changes: no pill
+        if codingProject, let pr = session.pullRequest, pr.drawsMark {   // no code changes or pending first check: no pill
             let tags = pr.tags(limit: 1)
             let mark = HStack(spacing: 4) {
                 if let tag = tags.shown.first {
@@ -654,7 +654,7 @@ struct SessionRowView: View {
             if session.unread { parts.append("Unread") }
             if session.pinned { parts.append("Pinned") } else if session.projectPinned { parts.append("Pinned in project") }
             if session.archived { parts.append("Archived") }
-            if let pr = session.pullRequest { parts.append("Pull request: " + pr.summary) }
+            if let pr = session.pullRequest, !pr.isPendingCheck { parts.append("Pull request: " + pr.summary) }
             if let verdict = codingVerdict { parts.append(verdict.spoken) }   // [pr-verdict]
             if muted { parts.append("Muted") }
             if let color = SessionColors.name(session.color), !color.isEmpty { parts.append("Color: " + color) }

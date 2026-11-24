@@ -53,6 +53,21 @@ struct ProjectPageHeader: View {
     /// [pr-manage] The ⋯'s Repository… (the project's repository on the computer running Hermes); nil on a gateway
     /// that takes no links, and it shows only while Coding Project is on.
     var onRepository: (() -> Void)? = nil
+    /// Quiet, actionable setup/error notice shown inside the header card only when something needs attention.
+    var codingHealth: CodingHealth? = nil
+    var onHealthAction: (() -> Void)? = nil
+
+    struct CodingHealth: Hashable {
+        enum Kind: Hashable {
+            case unsupported
+            case needsRepo
+            case unmatched(Int)
+            case unavailable
+        }
+        var kind: Kind
+        var message: String
+        var actionTitle: String?
+    }
 
     /// [project-default-bot] Owner 2026-11-17: "a project should be able to have a default bot". The bar's Compose
     /// starts the chat with it at once; this menu says which bot that is, changes it, and starts a chat with another.
@@ -225,6 +240,9 @@ struct ProjectPageHeader: View {
             if coding, !Self.shownPRStates(prCounts, selected: selectedPR).isEmpty {
                 pullRequestCounts
             }
+            if coding, let health = codingHealth {
+                codingHealthBanner(health)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         // [project-header-card] On the card the words keep their column and the header its height (measured: the first
@@ -325,6 +343,47 @@ struct ProjectPageHeader: View {
         .animation(HQMotion.swiftUI(.snappy(duration: 0.2)), value: selectedPR)
     }
 
+    /// Quiet inline status strip shown only when PR tracking needs setup or failed (zero chrome when healthy).
+    private func codingHealthBanner(_ health: CodingHealth) -> some View {
+        let icon: String
+        let tint: Color
+        switch health.kind {
+        case .needsRepo:
+            icon = "arrow.triangle.branch"; tint = Color.hqOrange
+        case .unmatched:
+            icon = "questionmark.circle"; tint = Color.hqLabel2
+        case .unavailable:
+            icon = "exclamationmark.triangle"; tint = Color.hqOrange
+        case .unsupported:
+            icon = "info.circle"; tint = Color.hqLabel2
+        }
+        return HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(Font.hq(.caption))
+                .foregroundStyle(tint)
+                .accessibilityHidden(true)
+            Text(health.message)
+                .font(Font.hq(.caption))
+                .foregroundStyle(Color.hqLabel2)
+                .lineLimit(2)
+            Spacer(minLength: 4)
+            if let title = health.actionTitle, let onHealthAction {
+                Button(title, action: onHealthAction)
+                    .font(Font.hq(.caption).weight(.semibold))
+                    .foregroundStyle(Color.hqTintText)
+                    .buttonStyle(.plain)
+                    .fixedSize()
+                    .accessibilityIdentifier("sessions.projectPage.codingHealth.action")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: HQShape.radius(10, .control), style: .continuous).fill(chipFill))
+        .padding(.top, 2)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("sessions.projectPage.codingHealth")
+    }
+
     private func counts(words: Bool, labelActive: Bool = false) -> some View {
         func showLabel(_ id: String, _ count: Int) -> Bool {
             words || (labelActive && (count > 0 || isLit(id, count)))
@@ -377,6 +436,13 @@ struct ProjectPageHeader: View {
 }
 
 extension SessionsViewController {
+    /// Opens the project's Repository… sheet.
+    func presentProjectRepository(_ key: String) {
+        guard let store else { return }
+        let page = ProjectRepositoryPage(project: key, store: store)
+        present(ChatSheet.wrap(UIHostingController(rootView: page), title: "Repository", detents: [.large()]), animated: true)
+    }
+
     /// [project-settings] ⋯ › Project Settings…: the project's settings as a sheet titled with its name. The page
     /// behind redraws as each setting changes.
     func presentProjectSettings(_ key: String, name: String) {
@@ -385,9 +451,16 @@ extension SessionsViewController {
         let botName = owners[usual]?.name ?? Self.readableProfileName(usual)
         // [coding-pr-review] The icon guide is the page's last row (it left the header's ⓘ): pushed in this sheet.
         weak var sheet: UINavigationController?
+        let openRepository: (() -> Void)? = store.prManageAvailable ? { [weak store] in
+            guard let store else { return }
+            let repo = UIHostingController(rootView: ProjectRepositoryPage(project: key, store: store))
+            repo.title = "Repository"
+            repo.navigationItem.largeTitleDisplayMode = .never
+            sheet?.pushViewController(repo, animated: true)
+        } : nil
         let page = ProjectSettingsPage(project: key, store: store, bot: (usual, botName), onChange: { [weak self] in
             self?.reload(animated: false)
-        }, onIconGuide: { [weak store] in
+        }, onRepository: openRepository, onIconGuide: { [weak store] in
             let guide = UIHostingController(rootView: ProjectIconGuide(coding: store?.isCodingProject(key) ?? false))
             guide.title = "Icon Guide"
             guide.navigationItem.largeTitleDisplayMode = .never
@@ -402,13 +475,26 @@ extension SessionsViewController {
     /// chat and sends the words there. [pr-card-detail] The card asks for this chat's checks and files as it opens.
     func presentPRCard(_ session: SessionSummary) {
         let chat = PullRequestCardSheet.Chat(profile: session.profile, id: session.id, title: SessionRowView.title(session),
-                                             botName: owner(of: session).name)
+                                             botName: owner(of: session).name, isWorking: session.isRunning || session.status == .working)
         let profile = session.profile, id = session.id, store = self.store
         let status = store?.pullRequest(profile: profile, id: id) ?? session.pullRequest
         let key = Self.key(session)
-        guard let sheet = PullRequestCardSheet.make(status: status, chat: chat, refresh: { [weak store] in
-            await store?.pullRequestDetail(profile: profile, id: id)
-        }, send: { [weak self] words in
+        let projectKey = projectPageKey
+        let onMarkClosed: ((Bool) async throws -> SessionPRStatus?)? = store?.prManage == true ? { [weak store] closed in
+            guard let store else { return nil }
+            try await store.setPRClosed(session, closed)
+            return store.pullRequest(profile: profile, id: id)
+        } : nil
+        let onRepository: (() -> Void)? = (store?.prManageAvailable == true && projectKey != nil) ? { [weak self] in
+            guard let projectKey else { return }
+            self?.presentProjectRepository(projectKey)
+        } : nil
+        guard let sheet = PullRequestCardSheet.make(status: status, chat: chat, refreshResult: { [weak store] manual in
+            guard let store else { return nil }
+            return try await store.pullRequestDetailResult(profile: profile, id: id, manualRetry: manual)
+        }, onOpenChat: { [weak self] in
+            self?.open(key)
+        }, onMarkClosed: onMarkClosed, onRepository: onRepository, send: { [weak self] words in
             PullRequestCardSheet.deliver(words, to: chat) { self?.open(key) }
         }) else { return }
         Haptics.play(.selection)
@@ -423,15 +509,59 @@ extension SessionsViewController {
         return "\(look.emoji ?? "")/\(look.color.map(String.init) ?? "")/\(store.isProjectBranchRows(key))"
     }
 
-    /// Count the entire loaded project, not just the visible, folded, or filtered piles.
+    /// All loaded rows belonging to `key` (live + outside when shown + archived), matching what the project page displays.
+    func projectCodingRows(_ key: String) -> [SessionSummary] {
+        guard let store else { return [] }
+        var seen = Set<String>()
+        var out: [SessionSummary] = []
+        for row in store.liveRows + store.archivedSessions {
+            if let bot = store.botFilter, row.profile != bot { continue }
+            guard store.projectKeyFor(cwd: row.cwd, profile: row.profile) == key,
+                  seen.insert(SessionListPipeline.key(row)).inserted else { continue }
+            var copy = row
+            copy.pullRequest = store.pullRequest(profile: row.profile, id: row.id) ?? row.pullRequest
+            out.append(copy)
+        }
+        return out
+    }
+
+    /// Count the entire loaded project, matching the rows the page can show (including outside rows when enabled).
     func projectPRCounts(_ key: String) -> [SessionPRStatus.State: Int] {
         guard let store else { return [:] }
-        let rows = (store.sessions + store.archivedSessions).map { row in
-            var row = row
-            row.pullRequest = store.pullRequest(profile: row.profile, id: row.id) ?? row.pullRequest
-            return row
+        var counts: [SessionPRStatus.State: Int] = [:]
+        for row in projectCodingRows(key) {
+            guard let states = row.pullRequest?.countedStates, !states.isEmpty else { continue }
+            for state in states { counts[state, default: 0] += 1 }
         }
-        return ProjectPageHeader.pullRequestCounts(rows, project: key, projects: store.projectsByProfile)
+        return counts
+    }
+
+    /// Quiet inline diagnostic for a coding project header; nil whenever everything is working cleanly.
+    func projectCodingHealth(_ key: String) -> ProjectPageHeader.CodingHealth? {
+        guard let store, store.isCodingProject(key) else { return nil }
+        if store.isPRRouteUnsupported {
+            return .init(kind: .unsupported, message: "Pull request tracking needs the Hermes HQ add-on.", actionTitle: nil)
+        }
+        let rows = projectCodingRows(key)
+        let unavailable = rows.filter { $0.pullRequest?.state == .unknown && $0.pullRequest?.unknownReason == .unavailable }.count
+        let unmatched = rows.filter { $0.pullRequest?.state == .unknown && $0.pullRequest?.unknownReason == .unmatched }.count
+        let matched = rows.filter { $0.pullRequest.map { $0.state != .unknown } == true }.count
+        let linked = store.prRepo(forProject: key)
+        if store.prReposState == .failed && linked == nil && (matched == 0 || unmatched > 0 || unavailable > 0) {
+            return .init(kind: .unavailable, message: "Couldn’t check repository link.", actionTitle: "Retry")
+        }
+        if store.prManage && linked == nil && (store.prAutoLinkFailed.contains(key) || unmatched > 0) {
+            return .init(kind: .needsRepo, message: "Link a git repository to track pull requests.", actionTitle: "Link…")
+        }
+        if unavailable > 0 && unavailable == rows.count {
+            return .init(kind: .unavailable, message: "Couldn’t reach the gateway for pull request status.", actionTitle: "Retry")
+        }
+        if unmatched > 0 && store.prManageAvailable && linked != nil {
+            let noun = unmatched == 1 ? "1 chat isn’t" : "\(unmatched) chats aren’t"
+            return .init(kind: .unmatched(unmatched), message: "\(noun) matched to \(SessionStore.folderName(linked!.path)).",
+                         actionTitle: "Repository…")
+        }
+        return nil
     }
 }
 

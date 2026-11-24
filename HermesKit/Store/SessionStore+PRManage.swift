@@ -33,6 +33,14 @@ nonisolated enum SessionPRRepoError: Error, Equatable {
     case invalid
 }
 
+/// Lifecycle state of `GET /sessions/pr-repos` so transient failures don't silently hide Repository… or Mark as Closed.
+nonisolated enum SessionPRReposState: Equatable, Sendable {
+    case unknown
+    case loaded
+    case unsupported
+    case failed
+}
+
 extension SessionStore {
     nonisolated static let prReposPath = "/api/plugins/hermes-hq-push/sessions/pr-repos"
     nonisolated static let prMarkPath = "/api/plugins/hermes-hq-push/sessions/pr-mark"
@@ -40,16 +48,41 @@ extension SessionStore {
     /// The gateway takes links and marks (its list of repositories was read).
     var prManage: Bool { prRepos != nil }
 
+    /// Whether Repository… should be offered: true once loaded, or on a transient failure so the user can still open
+    /// the page and retry instead of watching the menu item vanish.
+    var prManageAvailable: Bool { prRepos != nil || prReposState == .failed }
+
     func prRepo(forProject key: String) -> SessionPRRepo? { prRepos?.first { $0.project == key } }
 
-    /// Reads the linked repositories. A failed read keeps what was known (nothing, the first time).
-    func loadPRRepos() async {
-        guard !stopped, let data = try? await client.rest("GET", Self.prReposPath, query: [], body: nil),
-              let rows = (try? JSONValue.parse(data))?["repos"]?.array else { return }
-        let repos = rows.compactMap { SessionPRRepo($0) }
-        guard repos != prRepos else { return }
-        prRepos = repos
-        onChange?()
+    /// Reads the linked repositories. Tracks 404 (unsupported) vs transient failure separately so UI can retry cleanly.
+    @discardableResult
+    func loadPRRepos() async -> SessionPRReposState {
+        guard !stopped else { return prReposState }
+        let previousState = prReposState
+        do {
+            let data = try await client.rest("GET", Self.prReposPath, query: [], body: nil)
+            guard !stopped else { return prReposState }
+            guard let rows = (try? JSONValue.parse(data))?["repos"]?.array else {
+                // Non-JSON (e.g. gateway SPA fallback) or missing "repos" key means this gateway doesn't expose pr-repos.
+                prReposState = .unsupported
+                if prReposState != previousState { onChange?() }
+                return prReposState
+            }
+            let repos = rows.compactMap { SessionPRRepo($0) }
+            let changed = repos != prRepos || prReposState != .loaded
+            prRepos = repos
+            prReposState = .loaded
+            if changed { onChange?() }
+            return .loaded
+        } catch let error as HTTPError where error.status == 404 {
+            prReposState = .unsupported
+            if prReposState != previousState { onChange?() }
+            return .unsupported
+        } catch {
+            if prRepos == nil { prReposState = .failed }
+            if prReposState != previousState { onChange?() }
+            return prReposState
+        }
     }
 
     @discardableResult
@@ -67,7 +100,9 @@ extension SessionStore {
         }
         guard let repo = SessionPRRepo(try JSONValue.parse(data)["repo"]) else { throw SessionPRRepoError.invalid }
         prRepos = (prRepos ?? []).filter { $0.project != project } + [repo]
-        codingProjectsChanged()   // the labels are read again against the new repository
+        prReposState = .loaded
+        prAutoLinkFailed.remove(project)
+        codingProjectsChanged(scopeProject: project)   // revalidate this project without wiping other projects' marks
         onChange?()
         return repo
     }
@@ -75,7 +110,7 @@ extension SessionStore {
     func unlinkPRRepo(project: String) async throws {
         _ = try await client.rest("DELETE", Self.prReposPath, query: [URLQueryItem(name: "project", value: project)], body: nil)
         prRepos = (prRepos ?? []).filter { $0.project != project }
-        codingProjectsChanged()
+        codingProjectsChanged(scopeProject: project)
         onChange?()
     }
 
@@ -158,9 +193,24 @@ extension SessionStore {
         return tidy
     }
 
-    /// Turning Coding Project on for a project whose key is a folder: that folder is tried as its repository, quietly.
+    /// Turning Coding Project on for a project whose key is a folder: awaits `loadPRRepos()` if not yet known (fixing
+    /// the first-toggle race), then tries that folder as its repository. If the folder isn't a git repo, records it so
+    /// the project header can offer a quiet one-tap "Link Repository…" prompt.
     func linkOwnFolderIfUnlinked(_ key: String) {
-        guard prManage, key.hasPrefix("/"), prRepo(forProject: key) == nil else { return }
-        Task { [weak self] in _ = try? await self?.linkPRRepo(project: key, path: key, publicRepo: nil) }
+        guard key.hasPrefix("/"), prReposState != .unsupported else { return }
+        Task { [weak self] in
+            guard let self, !self.stopped else { return }
+            if self.prReposState == .unknown || self.prReposState == .failed {
+                _ = await self.loadPRRepos()
+            }
+            guard !self.stopped, self.prManage, self.isCodingProject(key), self.prRepo(forProject: key) == nil else { return }
+            do {
+                _ = try await self.linkPRRepo(project: key, path: key, publicRepo: nil)
+            } catch SessionPRRepoError.notARepository {
+                if self.prAutoLinkFailed.insert(key).inserted { self.onChange?() }
+            } catch {
+                // Transient error: leave unlinked without flagging as not-a-repo.
+            }
+        }
     }
 }

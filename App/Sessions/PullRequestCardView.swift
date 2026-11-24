@@ -11,14 +11,44 @@ import SwiftUI
 import UIKit
 
 /// [pr-card-detail] What one card sheet shows, shared by its pushed pages: the chat's status, refreshed once by the
-/// card's own `detail: true` ask.
+/// card's own `detail: true` ask, with explicit error/retry and manual refresh support.
 @MainActor final class PullRequestCardModel: ObservableObject {
     @Published var status: SessionPRStatus
     @Published var loading = false
+    @Published var error: String? = nil
+    @Published var marking = false
 
-    init(status: SessionPRStatus) { self.status = status }
+    private let fetcher: ((Bool) async throws -> SessionPRStatus?)?
 
-    /// Asks once; the answer replaces what the card shows unless the chat's code is gone from it.
+    init(status: SessionPRStatus, fetcher: ((Bool) async throws -> SessionPRStatus?)? = nil) {
+        self.status = status
+        self.fetcher = fetcher
+    }
+
+    /// Asks once (or again on explicit manual refresh). Keeps what the card already showed on error and surfaces
+    /// a quiet retry banner instead of failing silently.
+    func refresh(manual: Bool = false) {
+        guard !loading, let fetcher else { return }
+        loading = true
+        if manual { error = nil }
+        Task { [weak self] in
+            defer { self?.loading = false }
+            do {
+                let fresh = try await fetcher(manual)
+                guard let self else { return }
+                self.status = PullRequestCard.refreshed(self.status, with: fresh)
+                self.error = nil
+            } catch SessionStore.PRDetailError.unsupported {
+                guard let self else { return }
+                self.error = "Checks and file diffs require the Hermes HQ add-on."
+            } catch {
+                guard let self else { return }
+                self.error = "Couldn’t load latest checks and changes."
+            }
+        }
+    }
+
+    /// Legacy closure helper for callers without throwing detail refresh.
     func refresh(_ ask: @escaping () async -> SessionPRStatus?) {
         guard !loading else { return }
         loading = true
@@ -29,6 +59,8 @@ import UIKit
             self.loading = false
         }
     }
+
+    var canRefresh: Bool { fetcher != nil }
 }
 
 struct PullRequestCardView: View {
@@ -36,6 +68,7 @@ struct PullRequestCardView: View {
     let focus: PullRequestCard.Focus
     let chatTitle: String
     let botName: String
+    let chatWorking: Bool
     /// The card as it stood when the page opened: kept if a fresh answer drops the item (the chat's code is gone).
     let opened: PullRequestCard
     var onOpen: (URL) -> Void = { _ in }
@@ -43,6 +76,9 @@ struct PullRequestCardView: View {
     var onOther: (PullRequestCard.Focus) -> Void = { _ in }
     var onRuns: ([SessionPRChecks.Run]) -> Void = { _ in }
     var onFile: (PullRequestCard.FileRow) -> Void = { _ in }
+    var onOpenChat: (() -> Void)? = nil
+    var onMarkClosed: ((Bool) -> Void)? = nil
+    var onRepository: (() -> Void)? = nil
 
     private var card: PullRequestCard {
         PullRequestCard(status: model.status, focus: focus, chatTitle: chatTitle, botName: botName) ?? opened
@@ -56,6 +92,53 @@ struct PullRequestCardView: View {
                 // The words start where the section labels under them do, and clear of the cell's rounded corner
                 // (at 4 pt the corner cut the first letter of the last line).
                 .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 8, trailing: 20))
+            if let notice = card.unknownNotice {
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(notice)
+                            .font(Font.hq(.subheadline))
+                            .foregroundStyle(Color.hqLabel2)
+                            .accessibilityIdentifier("prcard.unknownNotice")
+                        HStack(spacing: 16) {
+                            if model.canRefresh {
+                                Button("Try Again") { model.refresh(manual: true) }
+                                    .font(Font.hq(.subheadline).weight(.semibold))
+                                    .foregroundStyle(Color.hqTintText)
+                                    .disabled(model.loading)
+                                    .accessibilityIdentifier("prcard.retry")
+                            }
+                            if model.status.unknownReason == .unmatched, let onRepository {
+                                Button("Link Repository…", action: onRepository)
+                                    .font(Font.hq(.subheadline).weight(.semibold))
+                                    .foregroundStyle(Color.hqTintText)
+                                    .accessibilityIdentifier("prcard.linkRepository")
+                            }
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+            if let error = model.error, card.unknownNotice == nil {
+                Section {
+                    HStack(spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundStyle(Color.hqOrange)
+                            .accessibilityHidden(true)
+                        Text(error)
+                            .font(Font.hq(.footnote))
+                            .foregroundStyle(Color.hqLabel2)
+                        Spacer(minLength: 8)
+                        if model.canRefresh {
+                            Button("Retry") { model.refresh(manual: true) }
+                                .font(Font.hq(.footnote).weight(.semibold))
+                                .foregroundStyle(Color.hqTintText)
+                                .disabled(model.loading)
+                                .accessibilityIdentifier("prcard.retry")
+                        }
+                    }
+                    .accessibilityIdentifier("prcard.error")
+                }
+            }
             if let checks = card.checksRow {
                 Section {
                     checksRow(checks)
@@ -76,7 +159,8 @@ struct PullRequestCardView: View {
                 } header: { HQSectionLabel { Text(verbatim: label) }.accessibilityIdentifier("prcard.changes") }
             }
             let actions = card.actions
-            if !actions.isEmpty {
+            let markToggle = onMarkClosed != nil ? card.markClosedToggle : nil
+            if !actions.isEmpty || onOpenChat != nil || markToggle != nil {
                 Section {
                     ForEach(actions, id: \.self) { action in
                         switch action {
@@ -89,10 +173,21 @@ struct PullRequestCardView: View {
                                 .foregroundStyle(Color.hqTintText)
                                 .accessibilityIdentifier("prcard.askToFixChecks")
                         case .askToMerge(let words):
-                            Button(card.mergeTitle) { onAsk(words, card.mergeTitle) }
+                            Button(card.mergeTitle) { onAsk(words, card.mergeConfirmTitle(chatWorking: chatWorking)) }
                                 .foregroundStyle(Color.hqTintText)
                                 .accessibilityIdentifier("prcard.askToMerge")
                         }
+                    }
+                    if let onOpenChat {
+                        Button("Open Chat", action: onOpenChat)
+                            .foregroundStyle(Color.hqTintText)
+                            .accessibilityIdentifier("prcard.openChat")
+                    }
+                    if let markToggle, let onMarkClosed {
+                        Button(markToggle ? "Mark as Closed" : "Reopen") { onMarkClosed(markToggle) }
+                            .foregroundStyle(markToggle ? Color.hqLabel : Color.hqTintText)
+                            .disabled(model.marking)
+                            .accessibilityIdentifier(markToggle ? "prcard.markClosed" : "prcard.reopen")
                     }
                 } header: { HQSectionLabel { Text("Actions") } }
             }
@@ -118,6 +213,18 @@ struct PullRequestCardView: View {
             }
         }.hqMacSettingsRowInsets() }
         .settingsList()
+        .toolbar {
+            if model.canRefresh {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { model.refresh(manual: true) } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .disabled(model.loading)
+                    .accessibilityLabel("Refresh Pull Request")
+                    .accessibilityIdentifier("prcard.refresh")
+                }
+            }
+        }
         .accessibilityIdentifier("prcard")
     }
 
@@ -275,27 +382,71 @@ struct PullRequestGlyph: View {
         var id: String
         var title: String
         var botName: String
+        var isWorking: Bool = false
     }
 
     /// The card's sheet, or nil where there is no card (no mark). `send`: the confirmed words, after the sheet closed.
-    /// `refresh`: the card's own ask for this chat (`detail: true`, `fresh: true`), made once as it opens.
+    /// `refreshResult`: the card's own ask for this chat (`detail: true`, `fresh: true`), surfacing errors for retry.
     static func make(status: SessionPRStatus?, chat: Chat, focus: PullRequestCard.Focus = .lead,
                      refresh: (() async -> SessionPRStatus?)? = nil,
+                     refreshResult: ((Bool) async throws -> SessionPRStatus?)? = nil,
+                     onOpenChat: (() -> Void)? = nil,
+                     onMarkClosed: ((Bool) async throws -> SessionPRStatus?)? = nil,
+                     onRepository: (() -> Void)? = nil,
                      send: @escaping (String) -> Void) -> UINavigationController? {
         guard let status, let card = PullRequestCard(status: status, focus: focus, chatTitle: chat.title, botName: chat.botName) else { return nil }
-        let model = PullRequestCardModel(status: status)
+        let fetcher: ((Bool) async throws -> SessionPRStatus?)? = refreshResult ?? refresh.map { ask in { _ in await ask() } }
+        let model = PullRequestCardModel(status: status, fetcher: fetcher)
         weak var sheet: UINavigationController?
-        let page = self.page(card, model: model, sheet: { sheet }, send: send)
+        let page = self.page(card, chatWorking: chat.isWorking, model: model, sheet: { sheet },
+                             onOpenChat: onOpenChat, onMarkClosed: onMarkClosed, onRepository: onRepository, send: send)
         let wrapped = ChatSheet.wrap(page, title: card.title, detents: [.medium(), .large()])
         sheet = wrapped
-        if let refresh { model.refresh(refresh) }
+        if fetcher != nil { model.refresh(manual: false) }
         return wrapped
     }
 
-    private static func page(_ card: PullRequestCard, model: PullRequestCardModel, sheet: @escaping () -> UINavigationController?,
+    private static func page(_ card: PullRequestCard, chatWorking: Bool, model: PullRequestCardModel,
+                             sheet: @escaping () -> UINavigationController?,
+                             onOpenChat: (() -> Void)?,
+                             onMarkClosed: ((Bool) async throws -> SessionPRStatus?)?,
+                             onRepository: (() -> Void)?,
                              send: @escaping (String) -> Void) -> UIViewController {
         weak var host: UIViewController?
-        let view = PullRequestCardView(model: model, focus: card.focus, chatTitle: card.chatTitle, botName: card.botName, opened: card,
+        let openChatAction: (() -> Void)? = onOpenChat.map { open in
+            {
+                let nav = sheet()
+                nav?.presentingViewController?.dismiss(animated: true) { open() } ?? open()
+            }
+        }
+        let repoAction: (() -> Void)? = onRepository.map { openRepo in
+            {
+                let nav = sheet()
+                nav?.presentingViewController?.dismiss(animated: true) { openRepo() } ?? openRepo()
+            }
+        }
+        let markAction: ((Bool) -> Void)? = onMarkClosed.map { mark in
+            { closed in
+                guard !model.marking else { return }
+                model.marking = true
+                Task { @MainActor in
+                    defer { model.marking = false }
+                    do {
+                        if let updated = try await mark(closed) {
+                            model.status = updated
+                            model.error = nil
+                        }
+                        Haptics.play(.success)
+                    } catch {
+                        guard let host else { return }
+                        FailureAlert.present(title: closed ? "Couldn’t Mark as Closed" : "Couldn’t Reopen",
+                                             reason: SessionActionText.reason(error), from: host)
+                    }
+                }
+            }
+        }
+        let view = PullRequestCardView(model: model, focus: card.focus, chatTitle: card.chatTitle, botName: card.botName,
+                                       chatWorking: chatWorking, opened: card,
                                        onOpen: { url in
             UIApplication.shared.open(url)
         }, onAsk: { words, title in
@@ -306,22 +457,33 @@ struct PullRequestGlyph: View {
             }
         }, onOther: { focus in
             guard let next = PullRequestCard(status: model.status, focus: focus, chatTitle: card.chatTitle, botName: card.botName) else { return }
-            let pushed = page(next, model: model, sheet: sheet, send: send)
+            let pushed = page(next, chatWorking: chatWorking, model: model, sheet: sheet,
+                              onOpenChat: onOpenChat, onMarkClosed: onMarkClosed, onRepository: onRepository, send: send)
             pushed.title = next.title
             pushed.navigationItem.largeTitleDisplayMode = .never
             sheet()?.pushViewController(pushed, animated: true)
         }, onRuns: { runs in
-            let pushed = UIHostingController(rootView: PullRequestRunsPage(runs: runs))
+            expandDetent(sheet())
+            let pushed = UIHostingController(rootView: PullRequestRunsPage(runs: runs, onOpen: { url in
+                UIApplication.shared.open(url)
+            }))
             pushed.title = "Checks"
             pushed.navigationItem.largeTitleDisplayMode = .never
             sheet()?.pushViewController(pushed, animated: true)
         }, onFile: { file in
             guard case .patch(let patch) = file.body else { return }
+            expandDetent(sheet())
             sheet()?.pushViewController(PullRequestDiffPage(name: file.name, path: file.path, patch: patch), animated: true)
-        })
+        }, onOpenChat: openChatAction, onMarkClosed: markAction, onRepository: repoAction)
         let controller = UIHostingController(rootView: view)
         host = controller
         return controller
+    }
+
+    private static func expandDetent(_ sheet: UINavigationController?) {
+        guard let presentation = sheet?.sheetPresentationController,
+              presentation.selectedDetentIdentifier != .large else { return }
+        presentation.animateChanges { presentation.selectedDetentIdentifier = .large }
     }
 
     /// The exact words, then Cancel or Send. Nothing is sent without Send.
@@ -334,8 +496,9 @@ struct PullRequestGlyph: View {
     }
 
     /// Posts `words` to the chat as a normal message, opening it first when it isn't on show (`open`): the Shortcuts'
-    /// first-message road (`NewChatRouter.deliver`, `ChatViewController.sendFromCard`).
-    static func deliver(_ words: String, to chat: Chat, open: () -> Void) {
+    /// first-message road (`NewChatRouter.deliver`, `ChatViewController.sendFromCard`). If delivery times out, tells
+    /// the user explicitly and lets them copy the message instead of failing silently.
+    static func deliver(_ words: String, to chat: Chat, open: @escaping () -> Void) {
         guard let root = MainTabController.current else { return }
         let profile = chat.profile, id = chat.id
         // Not while the card (or anything else) still covers the chat: the words would go out under a closing sheet.
@@ -348,6 +511,20 @@ struct PullRequestGlyph: View {
         Task {
             let sent = await NewChatRouter.deliver(words, send: true, root: root, wanted: wanted)
             AppLog.note("sessions", "pr card: ask \(sent ? "sent" : "not sent, the chat never came up") (\(words.count) chars)")
+            guard !sent else { return }
+            var top: UIViewController = root
+            while let presented = top.presentedViewController, !presented.isBeingDismissed { top = presented }
+            let alert = UIAlertController(
+                title: "Couldn’t Send Message",
+                message: "The chat didn’t open in time, so nothing was sent:\n\n\(words)",
+                preferredStyle: .alert
+            )
+            alert.addAction(UIAlertAction(title: "Copy Message", style: .default) { _ in
+                UIPasteboard.general.string = words
+            })
+            alert.addAction(UIAlertAction(title: "Open Chat", style: .default) { _ in open() })
+            alert.addAction(UIAlertAction(title: "OK", style: .cancel))
+            top.present(alert, animated: true)
         }
     }
 }

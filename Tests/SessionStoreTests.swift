@@ -418,6 +418,121 @@ import Testing
         #expect(SessionPRStatus(state: .unknown).label == "PR status unknown")
     }
 
+    @Test func scopedInvalidationPreservesOtherProjectsAndTransientFailuresRetryImmediately() async throws {
+        let client = BotsFakeGatewayClient()
+        func row(_ id: String, _ cwd: String) -> JSONValue {
+            var value = Self.srow(id).object!
+            value["cwd"] = .string(cwd)
+            return .object(value)
+        }
+        let sidebar = Self.sidebar([row("a", "/code/a"), row("b", "/code/b")])
+        @Sendable func okHandler(_ method: String, _ path: String, _: [URLQueryItem], _ body: Data?) async throws -> Data {
+            if method == "GET", path.contains("sidebar") { return sidebar }
+            if path.hasSuffix("pr-repos") { return Data("{\"repos\":[]}".utf8) }
+            let data = try #require(body)
+            let rows = try #require(JSONValue.parse(data)["sessions"]?.array)
+            return try JSONValue.object(["sessions": .array(rows.map {
+                ["profile": $0["profile"] ?? .null, "id": $0["id"] ?? .null, "state": "open", "number": 10]
+            })]).encoded()
+        }
+        client.onREST(okHandler)
+        let store = makeStore(client)
+        #expect(await BotsTest.waitUntil { store.sessions.count == 2 })
+        store.projectsByProfile["ivy"] = [
+            SessionProject(id: "pa", label: "A", root: "/code/a", paths: ["/code/a"]),
+            SessionProject(id: "pb", label: "B", root: "/code/b", paths: ["/code/b"])
+        ]
+        store.setCodingProject("/code/a", true)
+        store.setCodingProject("/code/b", true)
+        await store.refreshPullRequests(for: store.sessions, force: true)
+        #expect(store.pullRequest(profile: "ivy", id: "a")?.state == .open)
+        #expect(store.pullRequest(profile: "ivy", id: "b")?.state == .open)
+
+        // Turning off project B drops B's marks without wiping project A's marks!
+        store.setCodingProject("/code/b", false)
+        #expect(store.pullRequest(profile: "ivy", id: "a")?.state == .open)
+        #expect(store.pullRequest(profile: "ivy", id: "b") == nil)
+
+        // Updating projectsByProfile keeps project A's cached mark (stale-while-revalidate).
+        store.projectsByProfile["otto"] = [SessionProject(id: "pc", label: "C", root: "/code/c", paths: ["/code/c"])]
+        #expect(store.pullRequest(profile: "ivy", id: "a")?.state == .open)
+
+        // Transient failure on a new row must NOT poison its 60s cooldown.
+        client.onREST { _, _, _, _ in throw HTTPError(status: 503, body: nil) }
+        let fresh = SessionSummary(id: "new-row", profile: "ivy", title: "New", preview: nil, lastActive: nil,
+                                   source: nil, unread: false, isRunning: false)
+        await store.refreshPullRequests(for: [fresh], force: false)
+        #expect(store.pullRequest(profile: "ivy", id: "new-row")?.unknownReason == .unavailable)
+        client.onREST(okHandler)
+        await store.refreshPullRequests(for: [fresh], force: false)
+        #expect(store.pullRequest(profile: "ivy", id: "new-row")?.state == .open)
+        store.stop()
+    }
+
+    @Test func forcedRefreshIsNotDroppedOrOverwrittenByInFlightBackgroundPoll() async throws {
+        let client = BotsFakeGatewayClient()
+        client.onREST { _, _, _, body in
+            let req = try JSONValue.parse(#require(body))
+            let isFresh = req["fresh"]?.bool == true
+            if !isFresh {
+                try await Task.sleep(for: .milliseconds(200))
+                return Data("{\"sessions\":[{\"profile\":\"ivy\",\"id\":\"a\",\"state\":\"open\",\"number\":12}]}".utf8)
+            }
+            return Data("{\"sessions\":[{\"profile\":\"ivy\",\"id\":\"a\",\"state\":\"merged\",\"number\":12}]}".utf8)
+        }
+        let store = makeStore(client, autoStart: false)
+        let row = SessionSummary(id: "a", profile: "ivy", title: "A", preview: nil, lastActive: nil,
+                                 source: nil, unread: false, isRunning: false)
+        let poll = Task { await store.refreshPullRequests(for: [row], force: false) }
+        #expect(await BotsTest.waitUntil { prChecks(client) == 1 })
+        // While background poll is still in flight, an explicit forced check runs immediately and wins.
+        await store.refreshPullRequests(for: [row], force: true)
+        #expect(store.pullRequest(profile: "ivy", id: "a")?.state == .merged)
+        await poll.value
+        #expect(store.pullRequest(profile: "ivy", id: "a")?.state == .merged)
+        store.stop()
+    }
+
+    @Test func firstCodingToggleAwaitsPRReposAndAutoLinksWithoutRace() async throws {
+        let client = BotsFakeGatewayClient()
+        let repos = Self.prReposPath
+        client.onREST { method, path, _, body in
+            if method == "GET", path == repos {
+                try await Task.sleep(for: .milliseconds(60))
+                return Data("{\"repos\":[]}".utf8)
+            }
+            if method == "PUT", path == repos {
+                let sent = try JSONValue.parse(body ?? Data())
+                if sent["path"]?.string == "/not-a-repo" {
+                    throw HTTPError(status: 422, body: "{\"detail\":\"not_a_repository\"}")
+                }
+                let answer: JSONValue = ["repo": ["project": sent["project"] ?? .null, "path": sent["path"] ?? .null,
+                                                  "main": "main", "public_repo": "example/app", "mirror": false]]
+                return try answer.encoded()
+            }
+            return Self.sidebar([])
+        }
+        let store = makeStore(client, autoStart: false)
+        #expect(store.prRepos == nil && store.prReposState == .unknown)
+        store.setCodingProject("/code/app", true)
+        #expect(await BotsTest.waitUntil(.seconds(2)) { store.prRepo(forProject: "/code/app")?.path == "/code/app" })
+
+        // A folder that isn't a git repo records itself in prAutoLinkFailed instead of failing silently.
+        store.setCodingProject("/not-a-repo", true)
+        #expect(await BotsTest.waitUntil(.seconds(2)) { store.prAutoLinkFailed.contains("/not-a-repo") })
+        store.stop()
+    }
+
+    @Test func multiBotSessionInSharedRepoResolvesToCodingProject() {
+        let store = makeStore(BotsFakeGatewayClient(), autoStart: false)
+        store.projectsByProfile["ivy"] = [SessionProject(id: "p1", label: "App", root: "/code/app", paths: ["/code/app", "/worktrees/app-1"])]
+        store.setCodingProject("/code/app", true)
+        // Bot "otto" doesn't have /code/app in its own projectsByProfile yet, but works in its worktree.
+        #expect(store.isCodingSession(profile: "otto", cwd: "/worktrees/app-1/sub"))
+        #expect(!store.isCodingSession(profile: "otto", cwd: "/unrelated/folder"))
+        store.stop()
+    }
+
     @Test func demoSidebarDecodes() throws {
         let payload = try SidebarPayload.decode(BotsFixture.json("demo-sidebar"))
         #expect(payload.recents.rows?.count == 7)

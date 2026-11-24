@@ -320,6 +320,7 @@ extension SessionStore {
             archivedLoadState = .ready
             AppLog.trace("sessions", "archived list: \(archivedRows.count) rows")
             rebuild(force: true)
+            schedulePRDiscovery()
             refreshLatest()
             return false
         } catch {

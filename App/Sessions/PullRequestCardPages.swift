@@ -21,28 +21,59 @@ struct PullRequestCheckMark: View {
 /// The runs of a pull request's checks: failed first, then running, then passed (the add-on's order).
 struct PullRequestRunsPage: View {
     let runs: [SessionPRChecks.Run]
+    var onOpen: ((URL) -> Void)? = nil
 
     var body: some View {
         List { Group {
             Section {
                 ForEach(Array(runs.enumerated()), id: \.offset) { place, run in
-                    HStack(spacing: 10) {
-                        PullRequestCheckMark(state: run.state)
-                            .frame(width: HQFont.scaled(14))
-                        Text(run.name)
-                            .font(Font.hq(.body))
-                            .foregroundStyle(Color.hqLabel)
-                            .lineLimit(2)
-                        Spacer(minLength: 8)
-                    }
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("\(run.name), \(Self.stateWord(run.state))")
-                    .accessibilityIdentifier("prcard.run.\(place)")
+                    runRow(run)
+                        .accessibilityIdentifier("prcard.run.\(place)")
                 }
             }
         }.hqMacSettingsRowInsets() }
         .settingsList()
         .accessibilityIdentifier("prcard.runs")
+    }
+
+    @ViewBuilder private func runRow(_ run: SessionPRChecks.Run) -> some View {
+        let content = HStack(alignment: run.summary == nil ? .center : .firstTextBaseline, spacing: 10) {
+            PullRequestCheckMark(state: run.state)
+                .frame(width: HQFont.scaled(14))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(run.name)
+                    .font(Font.hq(.body))
+                    .foregroundStyle(Color.hqLabel)
+                    .lineLimit(2)
+                if let summary = run.summary {
+                    Text(summary)
+                        .font(Font.hq(.footnote))
+                        .foregroundStyle(run.state == .failed ? Color.hqRed : Color.hqLabel2)
+                        .lineLimit(3)
+                }
+            }
+            Spacer(minLength: 8)
+            if run.url != nil, onOpen != nil {
+                Image(systemName: "arrow.up.right")
+                    .font(Font.hq(.caption).weight(.semibold))
+                    .foregroundStyle(Color.hqLabel3)
+                    .accessibilityHidden(true)
+            }
+        }
+        .contentShape(Rectangle())
+        let spoken = "\(run.name), \(Self.stateWord(run.state))"
+        if let url = run.url, let onOpen {
+            Button { onOpen(url) } label: { content }
+                .buttonStyle(.plain)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(spoken)
+                .accessibilityHint("Opens on GitHub")
+                .accessibilityAddTraits(.isButton)
+        } else {
+            content
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(spoken)
+        }
     }
 
     static func stateWord(_ state: SessionPRChecks.State) -> String {

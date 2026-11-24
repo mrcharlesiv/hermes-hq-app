@@ -67,9 +67,9 @@ nonisolated extension PullRequestCard {
         return "Changes · \(size.files == 1 ? "1 file" : "\(size.files) files") · \(PRVerdict.sizeWords(size))"
     }
 
-    /// One row per file the answer lists (at most 50), in git's order.
+    /// One row per file the answer lists (at most 50), in git's order. Shown for draft, open, and merged PRs when sent.
     var fileRows: [FileRow] {
-        guard [.draft, .open].contains(shown.state), let files = shown.files else { return [] }
+        guard [.draft, .open, .merged].contains(shown.state), let files = shown.files else { return [] }
         return files.map { file in
             let parts = file.path.split(separator: "/", omittingEmptySubsequences: true)
             let name = parts.last.map(String.init) ?? file.path
@@ -96,7 +96,7 @@ nonisolated extension PullRequestCard {
 
     /// The words Ask to Fix Checks sends, while the checks of a numbered pull request fail. nil: no such action.
     var fixChecksWords: String? {
-        guard [.draft, .open].contains(shown.state), !status.manual, shown.checks?.state == .failed,
+        guard [.draft, .open].contains(shown.state), !isLeadManual, shown.checks?.state == .failed,
               let number = shown.number else { return nil }
         return "The checks on pull request #\(number) are failing. Fix them."
     }

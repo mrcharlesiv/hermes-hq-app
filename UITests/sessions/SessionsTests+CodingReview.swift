@@ -365,4 +365,95 @@ extension SessionsTests {
         Thread.sleep(forTimeInterval: 1)
         XCTAssertTrue(submitted().isEmpty, "Cancel sent nothing")
     }
+
+    // MARK: Step 6: Trustworthy coding view (unified settings, health banner, PR card actions & warnings)
+
+    @MainActor func test40w_CodingTrustAndHealth() throws {
+        let now = Date().timeIntervalSince1970
+        setRow("s-shortcuts", ["profile": "default", "title": "Add keyboard shortcuts", "cwd": "/home/hermes/app",
+                               "last_active": now - 120, "unread": false])
+        let link = "https://github.com/example/app/pull/24"
+        let runLink = "https://github.com/example/app/actions/runs/91"
+        let size = ["files": 4, "additions": 128, "deletions": 12]
+        let counts: [String: Any] = ["state": "failed", "passed": 3, "failed": 2, "running": 0]
+        var withRuns = counts
+        withRuns["runs"] = [
+            ["name": "lint", "state": "failed", "url": runLink, "summary": "2 unused variables in Reconnect.swift"],
+            ["name": "ui-tests", "state": "failed", "summary": "Timeout waiting for PR card"],
+            ["name": "unit-tests", "state": "passed"]
+        ]
+        fixture("/__fixture/mode", ["prManage": true, "prStatus": [
+            "default/s-garden": ["state": "open", "repo": "example/app", "branch": "fix/reconnect-crash", "number": 24, "url": link,
+                                 "size": size, "checks": counts, "title": "Fix reconnect crash", "base": "main",
+                                 "items": [["state": "open", "repo": "example/app", "branch": "fix/reconnect-crash", "number": 24,
+                                            "url": link, "source": "github", "size": size, "checks": withRuns,
+                                            "title": "Fix reconnect crash", "base": "main",
+                                            "files": [["path": "App/Net/Reconnect.swift", "additions": 96, "deletions": 8,
+                                                       "patch": "@@ -10,3 +10,4 @@\n context\n-old line\n+new line\n+one more"]]]]],
+            "deploys/s-release": ["state": "merged", "repo": "example/app", "number": 23,
+                                  "url": "https://github.com/example/app/pull/23",
+                                  "size": ["files": 1, "additions": 14, "deletions": 3],
+                                  "items": [["state": "merged", "repo": "example/app", "number": 23,
+                                             "url": "https://github.com/example/app/pull/23", "source": "github",
+                                             "size": ["files": 1, "additions": 14, "deletions": 3],
+                                             "files": [["path": "App/Sessions/ProjectPage.swift", "additions": 14, "deletions": 3,
+                                                        "patch": "@@ -1,2 +1,3 @@\n context\n+added"]]]]],
+            "default/s-shortcuts": ["state": "unknown"]
+        ]])
+        let app = launch(projectPages: true)
+        XCTAssertTrue(row(app, "s-garden").waitForExistence(timeout: 15))
+        ensureAppCoding(app)
+
+        // Health banner reports the unmatched chat and lets the user jump straight to Repository….
+        let health = app.descendants(matching: .any)["sessions.projectPage.codingHealth"].firstMatch
+        XCTAssertTrue(health.waitForExistence(timeout: 15), "inline health banner for unmatched chat")
+        shot(app, "CR6-page-health-banner")
+
+        // Unified Project Settings now includes Coding Project + Repository row.
+        openProjectSettings(app)
+        XCTAssertTrue(projectSetting(app, "sessions.projectSettings.coding").waitForExistence(timeout: 5))
+        XCTAssertTrue(projectSetting(app, "sessions.projectSettings.repository").waitForExistence(timeout: 5))
+        shot(app, "CR6-project-settings-coding")
+        closeProjectSettings(app)
+
+        // PR card: Refresh toolbar button, Open Chat, Mark as Closed, failing-checks merge warning, and check run summaries.
+        tapPRMark(app, "s-garden")
+        XCTAssertTrue(app.navigationBars["Pull Request"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.buttons["prcard.refresh"].waitForExistence(timeout: 5), "Refresh button")
+        let checks = app.descendants(matching: .any)["prcard.checks"].firstMatch
+        XCTAssertTrue(checks.waitForExistence(timeout: 15))
+        app.swipeUp(velocity: .slow)
+        let openChatBtn = app.buttons["prcard.openChat"]
+        for _ in 0..<3 where !openChatBtn.exists { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(openChatBtn.exists, "Open Chat in PR card")
+        XCTAssertTrue(app.buttons["prcard.markClosed"].exists, "Mark as Closed in PR card")
+        shot(app, "CR6-card-actions")
+
+        // Asking to merge while checks fail surfaces an explicit warning title!
+        let merge = app.buttons["prcard.askToMerge"]
+        merge.tap()
+        let alert = app.alerts.firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        XCTAssertTrue(alert.staticTexts["Checks Are Failing — Merge Anyway?"].exists, "failing-check merge warning")
+        XCTAssertTrue(alert.staticTexts["Merge pull request #24."].exists, "exact merge words preserved")
+        shot(app, "CR6-merge-warning")
+        alert.buttons["Cancel"].tap()
+
+        // Checks page shows failure summaries and external link affordance.
+        for _ in 0..<3 where !checks.isHittable { app.swipeDown(velocity: .slow) }
+        checks.tap()
+        XCTAssertTrue(app.navigationBars["Checks"].waitForExistence(timeout: 5))
+        shot(app, "CR6-checks-summary")
+        app.navigationBars["Checks"].buttons.element(boundBy: 0).tap()
+        app.buttons["sheet.close"].firstMatch.tap()
+
+        // Unmatched `?` card explains why instead of showing an empty "Status Unknown" dead end.
+        XCTAssertTrue(row(app, "s-shortcuts").waitForExistence(timeout: 8))
+        tapPRMark(app, "s-shortcuts")
+        XCTAssertTrue(app.navigationBars["Branch"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.descendants(matching: .any)["prcard.unknownNotice"].firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["prcard.retry"].exists)
+        XCTAssertTrue(app.buttons["prcard.linkRepository"].exists)
+        shot(app, "CR6-unknown-card")
+    }
 }

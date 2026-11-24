@@ -12,6 +12,8 @@ struct ProjectRepositoryPage: View {
     @State private var publicRepo = ""
     @State private var linked: SessionPRRepo?
     @State private var problem: String?
+    @State private var statusNote: String?
+    @State private var loadFailed = false
     @State private var busy = false
     @State private var loaded = false
 
@@ -21,6 +23,24 @@ struct ProjectRepositoryPage: View {
 
     var body: some View {
         List { Group {
+            if loadFailed {
+                Section {
+                    HStack(spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundStyle(Color.hqOrange)
+                            .accessibilityHidden(true)
+                        Text("Couldn’t load linked repositories from the gateway.")
+                            .font(Font.hq(.footnote))
+                            .foregroundStyle(Color.hqLabel2)
+                        Spacer(minLength: 8)
+                        Button("Retry") { reloadRepos() }
+                            .font(Font.hq(.footnote).weight(.semibold))
+                            .foregroundStyle(Color.hqTintText)
+                            .disabled(busy)
+                            .accessibilityIdentifier("project.repository.retry")
+                    }
+                }
+            }
             Section {
                 TextField("Folder", text: $folder, prompt: Text("/Users/you/Projects/app"))
                     .textInputAutocapitalization(.never)
@@ -29,6 +49,10 @@ struct ProjectRepositoryPage: View {
                 if let problem {
                     Text(problem).font(Font.hq(.footnote)).foregroundStyle(Color.hqRed)
                         .accessibilityIdentifier("project.repository.error")
+                }
+                if let statusNote {
+                    Text(statusNote).font(Font.hq(.footnote)).foregroundStyle(Color.hqGreen)
+                        .accessibilityIdentifier("project.repository.status")
                 }
                 // [repo-pickers] The repositories Hermes already knows, one tap each (owner 2026-11-21: "These fields
                 // need to be more than just free-type. It's to hard to manually type these things."). The field stays
@@ -74,13 +98,33 @@ struct ProjectRepositoryPage: View {
             }
         }.hqMacSettingsRowInsets() }
         .settingsList()
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button(linked == nil ? "Link" : "Save") { link() }
+                    .disabled(busy || folder.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .accessibilityIdentifier("project.repository.toolbarLink")
+            }
+        }
         .task {
             guard !loaded else { return }
             loaded = true
             show(store.prRepo(forProject: project))
             readChoices()
-            await store.loadPRRepos()
+            let state = await store.loadPRRepos()
+            loadFailed = (state == .failed && store.prRepos == nil)
             if linked == nil { show(store.prRepo(forProject: project)) }
+            readChoices()
+        }
+    }
+
+    private func reloadRepos() {
+        busy = true
+        loadFailed = false
+        Task {
+            defer { busy = false }
+            let state = await store.loadPRRepos()
+            loadFailed = (state == .failed && store.prRepos == nil)
+            show(store.prRepo(forProject: project))
             readChoices()
         }
     }
@@ -176,12 +220,16 @@ struct ProjectRepositoryPage: View {
     private func link() {
         busy = true
         problem = nil
+        statusNote = nil
         Task {
             defer { busy = false }
             do {
-                show(try await store.linkPRRepo(project: project, path: folder,
-                                                publicRepo: SessionStore.ownerRepo(from: publicRepo)))
+                let saved = try await store.linkPRRepo(project: project, path: folder,
+                                                       publicRepo: SessionStore.ownerRepo(from: publicRepo))
+                show(saved)
+                loadFailed = false
                 readChoices()
+                statusNote = "Linked to \(SessionStore.folderName(saved.path)) (\(saved.main)). Checking pull requests…"
                 Haptics.play(.success)
             } catch SessionPRRepoError.notARepository {
                 problem = "That folder isn’t a git repository on the computer running Hermes."
@@ -196,6 +244,7 @@ struct ProjectRepositoryPage: View {
     private func unlink() {
         busy = true
         problem = nil
+        statusNote = nil
         Task {
             defer { busy = false }
             do {

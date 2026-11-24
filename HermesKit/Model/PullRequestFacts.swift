@@ -21,6 +21,10 @@ nonisolated struct SessionPRChecks: Hashable, Sendable {
     struct Run: Hashable, Sendable {
         var name: String
         var state: State
+        /// Optional GitHub link for this check run (when sent by the add-on).
+        var url: URL? = nil
+        /// Optional short failure/output summary for this check run.
+        var summary: String? = nil
     }
     var state: State
     var passed: Int
@@ -74,10 +78,21 @@ nonisolated enum PRFacts {
             checks.runs = list.prefix(runLimit).compactMap { run in
                 guard let name = run["name"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty,
                       let state = run["state"]?.string.flatMap(SessionPRChecks.State.init(rawValue:)) else { return nil }
-                return SessionPRChecks.Run(name: String(name.prefix(runNameLimit)), state: state)
+                let url = run["url"]?.string.flatMap(Self.validCheckURL)
+                let summary = run["summary"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .nilIfEmpty.map { String($0.prefix(titleLimit)) }
+                return SessionPRChecks.Run(name: String(name.prefix(runNameLimit)), state: state, url: url, summary: summary)
             }
         }
         return checks
+    }
+
+    /// Valid HTTPS GitHub link for a check run (never arbitrary schemes or hosts).
+    static func validCheckURL(_ text: String) -> URL? {
+        guard let parts = URLComponents(string: text), parts.scheme?.lowercased() == "https",
+              parts.host?.lowercased() == "github.com", parts.user == nil, parts.password == nil,
+              parts.port == nil, !parts.path.isEmpty else { return nil }
+        return parts.url
     }
 
     /// The pull request's title on GitHub, trimmed, at most 200 characters; empty is none.

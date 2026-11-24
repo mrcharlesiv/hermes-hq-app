@@ -145,10 +145,13 @@ extension SessionStore {
 
     func setCodingProject(_ key: String, _ enabled: Bool) {
         guard device.codingProjects[key] != enabled else { return }
-        if !enabled, projectPRFilter?.key == key { projectPRFilter = nil }
+        if !enabled {
+            if projectPRFilter?.key == key { projectPRFilter = nil }
+            prAutoLinkFailed.remove(key)
+        }
         device.codingProjects[key] = enabled
         persistState()
-        codingProjectsChanged()
+        codingProjectsChanged(scopeProject: key)
         if enabled { linkOwnFolderIfUnlinked(key) }   // [pr-manage]
         onChange?()
     }
@@ -645,7 +648,7 @@ extension SessionStore {
         guard device.projects != projectsByProfile else { return }
         device.projects = projectsByProfile
         persistState()
-        codingProjectsChanged()
+        codingProjectsChanged(projectsTreeUpdated: true)
         onChange?()
     }
 

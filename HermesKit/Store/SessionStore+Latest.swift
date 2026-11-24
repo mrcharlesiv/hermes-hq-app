@@ -85,18 +85,38 @@ extension SessionStore {
     }
 
     /// Read the newest message of each shown chat whose activity moved since it was last read.
+    /// When viewing a single project page, prioritize that project's live and archived (Done) chats so older coding
+    /// rows and Done rows don't fall outside the global top-60 window and drop to "No recent update".
     func refreshLatest() {
         guard !stopped, timing.readsLatest else { return }
-        let rows = (recents + messaging).filter { ($0.messageCount ?? 1) > 0 && !SessionRules.isBotChat($0) }
-            .sorted { $0.recency > $1.recency }.prefix(SessionLatestRules.window)
-        // Show › Archived lists the archived chats beside the live ones: theirs show the newest message too (read once,
-        // an archived chat doesn't move).
-        let archived = view.showArchived
-            ? archivedRows.filter { ($0.messageCount ?? 1) > 0 && !SessionRules.isBotChat($0) }
-                .sorted { $0.recency > $1.recency }.prefix(SessionLatestRules.window)
-            : []
+        let livePool = (recents + messaging).filter { ($0.messageCount ?? 1) > 0 && !SessionRules.isBotChat($0) }
+            .sorted { $0.recency > $1.recency }
+        let archivedPool = archivedRows.filter { ($0.messageCount ?? 1) > 0 && !SessionRules.isBotChat($0) }
+            .sorted { $0.recency > $1.recency }
+        var candidates: [SidebarSessionRow] = []
+        var pickedKeys = Set<String>()
+        func add(_ rows: some Sequence<SidebarSessionRow>, cap: Int) {
+            var added = 0
+            for row in rows where added < cap {
+                let key = Self.writeKey(id: row.id, profile: row.profile)
+                if pickedKeys.insert(key).inserted {
+                    candidates.append(row)
+                    added += 1
+                }
+            }
+        }
+        if view.projectFilter.count == 1, let projectKey = view.projectFilter.first {
+            let projectLive = livePool.filter { projectKeyFor(cwd: $0.cwd, profile: $0.profile) == projectKey }
+            let projectArchived = archivedPool.filter { projectKeyFor(cwd: $0.cwd, profile: $0.profile) == projectKey }
+            add(projectLive, cap: SessionLatestRules.window)
+            add(projectArchived, cap: SessionLatestRules.window)
+        }
+        add(livePool, cap: SessionLatestRules.window)
+        if view.showArchived {
+            add(archivedPool, cap: SessionLatestRules.window)
+        }
         var queued = 0
-        for row in Array(rows) + Array(archived) {
+        for row in candidates {
             let key = Self.writeKey(id: row.id, profile: row.profile)
             let cached = device.latest[key]
             let current = cached?.at == row.recency && cached?.role != nil && !TimelineNotes.isTaskSnapshot(cached?.text ?? "")
@@ -104,7 +124,7 @@ extension SessionStore {
             latestQueue.append(row)
             queued += 1
         }
-        if queued > 0 { AppLog.trace("sessions", "latest preview: \(queued) rows queued of \(rows.count + archived.count) candidates") }
+        if queued > 0 { AppLog.trace("sessions", "latest preview: \(queued) rows queued of \(candidates.count) candidates") }
         pumpLatest()
     }
 
@@ -131,6 +151,7 @@ extension SessionStore {
         let message = SessionLatestMessage(at: row.recency, text: String(line.prefix(200)), role: "assistant")
         guard device.latest[key] != message else { return }
         device.latest[key] = message
+        confirmedReplyRecency[key] = row.recency
         persistState()
         rebuild()
     }
@@ -167,6 +188,7 @@ extension SessionStore {
         if current != nil, current?.recency != row.recency { refreshLatest() }
         if eligible, let message, device.latest[key] != message {
             device.latest[key] = message
+            confirmedReplyRecency[key] = nil
             latestDirty += 1
         } else if eligible && message == nil {
             AppLog.trace("sessions", "latest preview \(AppLog.tag(row.id)): no user/assistant tail, gateway preview stands")

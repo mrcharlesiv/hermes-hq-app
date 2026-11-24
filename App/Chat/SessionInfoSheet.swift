@@ -52,12 +52,18 @@ import Foundation
         return await store.pullRequestDetail(profile: model.profile, id: storedId)
     }
 
+    func pullRequestDetailResult(manualRetry: Bool) async throws -> SessionPRStatus? {
+        guard let model, let storedId, let store else { return nil }
+        return try await store.pullRequestDetailResult(profile: model.profile, id: storedId, manualRetry: manualRetry)
+    }
+
     /// [coding-pr-review] The chat as the PR card names it: its stored id, title and bot.
     var cardChat: PullRequestCardSheet.Chat? {
         guard let model, let storedId else { return nil }
         let title = model.title.trimmingCharacters(in: .whitespacesAndNewlines)
         return PullRequestCardSheet.Chat(profile: model.profile, id: storedId, title: title.isEmpty ? "Untitled Chat" : title,
-                                         botName: profileName?(model.profile) ?? model.profile)
+                                         botName: profileName?(model.profile) ?? model.profile,
+                                         isWorking: model.isRunning)
     }
 
     /// The sheet opened: one `session.usage` ask (errors swallowed), and the stored row by id when no list holds it.

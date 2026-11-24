@@ -43,7 +43,7 @@ struct ProjectIconGuide: View {
         case .open: "A pull request is open for review."
         case .merged: "The changes are merged into main."
         case .closed: "Closed without merging, or marked closed by you."
-        case .unknown: "Couldn’t be checked. The chat made a branch that isn’t in a linked repository."
+        case .unknown: "Couldn’t be checked, or the chat’s branch isn’t in a linked repository."
         }
     }
 }

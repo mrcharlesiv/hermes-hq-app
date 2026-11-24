@@ -78,8 +78,6 @@ nonisolated enum MemoTip: String, Sendable, Equatable {
     case holdToRecord = "hold-to-record"
     /// [talk] "Talk with <name>" on the circle (docs/spec/3x-talk.md §5.1).
     case talk
-    /// [threads] "Start a Thread", the first time words are typed while the bot works (docs/spec/3x-threads.md §2).
-    case thread
 }
 
 nonisolated enum MemoHaptic: Sendable, Equatable {

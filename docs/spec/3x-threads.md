@@ -16,19 +16,13 @@ and nothing about it needs the add-on.
 
 ## 2. Starting one
 
-- **While the bot works**: with a reply running and words typed, a thread button (`composer.thread`, two speech
-  bubbles) stands in the slot before Send: Dictate's on the iPhone and iPad bar, the microphone's place in the Mac's
-  and the Desktop Look's one box. It is offered for typed words only (as Send's Steer / Queue hold is): no attachments,
-  no memo, not while a queued message is edited. Send itself still goes into the running reply.
-  The thread hangs under the request the bot is working on (your newest message).
+- **Automatically while the bot is busy (§9)**: when the main chat is held by another run or background task, sending
+  normally from the composer routes straight into a thread (with the `Sending to Thread · Use Main` strip above the
+  composer). There is no separate thread button next to Send; Dictate stays in its normal slot.
 - **Any time**: hold a message › **Reply in Thread** (`message.thread`). A banner over the field ("Reply in Thread",
   one line of that message, ✕) marks the next send; that send starts the thread under the held message and opens the
   thread's own chat.
 - Only in a bot's own chat. Sessions, rooms and task chats have neither.
-- **The first time** the button stands there, a tip card sits above the field (`MemoTip.thread`, the Talk tip's card):
-  "Start a Thread. Tap the two-bubbles button to ask this on the side while <bot> keeps working. Send adds to the
-  running job." ✕ or using the button retires it for good; it leaves with the button. On the Mac the button also
-  names itself under the pointer ("Start Thread").
 
 ## 3. What a thread starts out knowing (`ThreadSeed`)
 

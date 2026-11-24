@@ -35,7 +35,7 @@ final class TalkTipBubble: UIView {
 
     init(tip: MemoTip, name: String) {
         self.tip = tip
-        glyph = UIImageView(image: UIImage(systemName: tip == .talk ? "waveform" : tip == .thread ? "bubble.left.and.bubble.right" : "mic",
+        glyph = UIImageView(image: UIImage(systemName: tip == .talk ? "waveform" : "mic",
                                            withConfiguration: UIImage.SymbolConfiguration(textStyle: .title3)))
         var config = UIButton.Configuration.plain()
         config.image = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold))
@@ -44,7 +44,7 @@ final class TalkTipBubble: UIView {
         super.init(frame: .zero)
         close.addAction(UIAction { [weak self] _ in self?.onClose?() }, for: .primaryActionTriggered)
         accessibilityIdentifier = "memo.tip"
-        if tip == .talk || tip == .thread { MemoTips.talkName = name }
+        if tip == .talk { MemoTips.talkName = name }
         addSubview(glass)
         glyph.tintColor = ChatPalette.tint
         glyph.setContentHuggingPriority(.required, for: .horizontal)
@@ -65,7 +65,7 @@ final class TalkTipBubble: UIView {
         words.addArrangedSubview(message)
         words.axis = .vertical
         words.spacing = 2
-        close.accessibilityLabel = tip == .talk ? "Close Talk tip" : tip == .thread ? "Close Thread tip" : "Close tip"
+        close.accessibilityLabel = tip == .talk ? "Close Talk tip" : "Close tip"
         close.accessibilityIdentifier = "memo.tip.close"
         close.widthAnchor.constraint(equalToConstant: 44).isActive = true
         spoken = "\(title.text ?? ""). \(message.text ?? "")"

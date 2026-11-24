@@ -2622,7 +2622,6 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         let wasRunning = composer.isRunning && roomChrome == nil
         // [groups] A room's round shows the same Stop square as a bot chat (it stops the room; owner 2026-11-06).
         composer.isRunning = session.isRunning || (session as? ChatRoomSurface)?.roomRunning == true
-        composer.isExternallyWorking = (session as? ChatExternalWork)?.externalWorking == true   // [threads] §9
         updateBusyThreadBanner()                                                                 // [threads] §9
         // A bot answers a page's button by rewriting the page: its open sheet reloads, its card is pictured again.
         if wasRunning, !session.isRunning, let context = mediaContext { PageSnapshots.noteTurnEnded(context) }

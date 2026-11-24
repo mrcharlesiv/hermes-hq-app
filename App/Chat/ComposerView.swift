@@ -397,51 +397,7 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboa
     let dictateButton = ComposerGlassButton(symbol: "mic", label: "Dictate", identifier: "composer.dictate")
     var onDictate: (() -> Void)? { didSet { dictateButton.onTap = onDictate; setNeedsLayout() } }
     private var dictateShown: Bool {
-        expanded && onDictate != nil && !micShown && !dictating && !memoActive && isEnabled && !threadShown   // [threads]
-    }
-    /// [threads] While a reply runs and words are typed, a thread button stands in the slot before Send (Dictate's on
-    /// the bar, the mic's in the one box): it sends the words as a thread of their own, which is answered beside the
-    /// running reply (docs/spec/3x-threads.md §2). Send itself keeps going into the running reply. Only in a chat that
-    /// sets `onThread` (a bot's own chat).
-    let threadButton = ComposerGlassButton(symbol: "bubble.left.and.bubble.right", label: "Start Thread", identifier: "composer.thread")
-    var onThread: ((String) -> Void)? { didSet { refreshThread() } }
-    /// [threads] Another Hermes run holds this chat: offer the thread button without turning the send circle into Stop.
-    var isExternallyWorking = false { didSet { if isExternallyWorking != oldValue { refreshThread() } } }
-    /// Typed words only, as Send's own Steer / Queue hold: a photo, a memo or a queued message's new words never thread.
-    private var threadShown: Bool {
-        onThread != nil && isEnabled && (isRunning || isExternallyWorking) && primary == .send && hasText && attachmentCount == 0
-            && memoPrimary == .normal && memoChip == nil && !editingQueued && !dictating && !memoActive
-    }
-    /// `threadShown` as of the last look: the row lays out again only when the button comes or goes ([perf], as the mic).
-    private var lastThreadShown = false
-    private func refreshThread() {
-        let shown = threadShown
-        guard shown != lastThreadShown else { return }
-        lastThreadShown = shown
-        setNeedsLayout()
-        onThreadShownChange?(shown)
-    }
-    /// The thread button stands in the row now (its one-time tip shows while it does).
-    var threadButtonShown: Bool { lastThreadShown }
-    var onThreadShownChange: ((Bool) -> Void)?
-    #if DEBUG
-    /// `-HQDemoThreadTap`: the thread button, pressed.
-    func debugTapThread() { submitThread() }
-    #endif
-    /// Hands the field's words to `onThread` and empties the field (and so its saved draft), as `submit` does for Send.
-    private func submitThread() {
-        guard threadShown else { return }
-        if textView.isFirstResponder, textView.markedTextRange == nil {
-            textView.inputDelegate?.selectionWillChange(textView)
-            textView.inputDelegate?.selectionDidChange(textView)
-        }
-        let text = ComposerKeyboard.sendText(textView.text ?? "")
-        guard !text.isEmpty else { return }
-        Haptics.play(.light)
-        textView.text = ""
-        textView.unmarkText()
-        textChanged()
-        onThread?(text)
+        expanded && onDictate != nil && !micShown && !dictating && !memoActive && isEnabled
     }
     /// [composer-expand] The model's name ("Opus 5.5") on a 36 pt glass capsule like the + disc, as wide as the name and
     /// centred in the room from 8 pt after ☰'s disc to 8 pt before the next disc, so the gaps match; the words always
@@ -628,11 +584,6 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboa
         dictateButton.isHidden = true      // [composer-expand]
         dictateButton.showsDisc = true
         addSubview(dictateButton)
-        threadButton.isHidden = true       // [threads]
-        threadButton.onTap = { [weak self] in self?.submitThread() }
-        // The Mac names it under the pointer (an icon with no words beside Send).
-        if DeviceWord.isMac { threadButton.addInteraction(UIToolTipInteraction(defaultToolTip: "Start Thread")) }
-        addSubview(threadButton)
         modelChip.isHidden = true
         addSubview(modelChip)
         mic.isHidden = true
@@ -865,15 +816,6 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboa
             let half = c / 2
             dictateButton.frame = CGRect(x: primaryButton.frame.minX - barScaled(22) - half, y: primaryButton.frame.midY - half, width: c, height: c)
         }
-        // [threads] The thread button: on Dictate's disc on the bar, at the mic's place as a glyph in the one box.
-        let thread = threadShown
-        if threadButton.isHidden == thread { threadButton.isHidden = !thread }
-        if threadButton.showsDisc != barMode { threadButton.showsDisc = barMode }
-        if thread {
-            let half = c / 2
-            let x = barMode ? primaryButton.frame.minX - barScaled(22) : primaryButton.frame.midX - 36
-            threadButton.frame = CGRect(x: x - half, y: primaryButton.frame.midY - half, width: c, height: c)
-        }
         // [composer-expand] The model chip sits centred in the room between ☰'s disc and the next disc (the mic,
         // Dictate, or Send when neither stands there), at least 8 pt from each, so the gaps either side are the same.
         let macChip = barMode ? 0 : macChipWidth(fieldW: fieldW)
@@ -886,15 +828,14 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboa
             // [Mac AAA 2026-11-16] Clear of the circle's own edge (its 36 pt, not 28): beside Send the chip stood 5 px
             // from the circle, against 13 from the mic's glyph.
             let circleHalf = Self.macPlainBox ? MacMessageBox.circle / 2 : 14
-            // [threads] The thread mark is wider than the mic's glyph: the chip keeps as clear of it.
-            let end = (thread ? micCenter.x - 17 : micShown ? micCenter.x - 12 : p.midX - circleHalf) - 8
+            let end = (micShown ? micCenter.x - 12 : p.midX - circleHalf) - 8
             let h = Self.macChipHeight
             modelChip.frame = CGRect(x: (end - macChip).rounded(), y: (p.midY - h / 2).rounded(), width: macChip, height: h)
         } else if chipShown, let last = leadingViews.last {
             let gap = barScaled(8)
             let start = last.frame.maxX - (last.frame.width * 4 / 44).rounded() + gap
             let p = primaryButton.frame
-            let nextDisc = micShown || dictate || thread ? p.minX - barScaled(22) - micDiscRadius : p.minX + (p.width * 4 / 44).rounded()
+            let nextDisc = micShown || dictate ? p.minX - barScaled(22) - micDiscRadius : p.minX + (p.width * 4 / 44).rounded()
             let h = barScaled(36)
             let room = max(0, nextDisc - gap - start)
             let w = modelChip.fittedWidth(in: room, height: h)
@@ -990,7 +931,6 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboa
         // [composer-glass] In the iOS look they hold glass discs, which draw only inside a glass container.
         for part in leadingGlass { flatten(part, holdsGlass: !desktop) }
         flatten(dictateButton, holdsGlass: !desktop)   // [composer-expand] a glyph on the bar
-        flatten(threadButton, holdsGlass: !desktop)    // [threads]
         if desktop {
             flatten(field)
             let trim = boxTrim
@@ -1086,7 +1026,7 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboa
     }
 
     /// [desktoplook] VOICE: the text view's trailing inset grows by 20 pt while the mic shows.
-    private var micInset: CGFloat { micShown || (Self.oneBox && threadShown) ? 20 : 0 }   // [threads] its glyph stands there too
+    private var micInset: CGFloat { micShown ? 20 : 0 }
 
     /// [desktoplook] The primary slot moves 4 pt in so its smaller circle sits as far from the box's edge as ☰ does.
     private var primaryInset: CGFloat { Self.oneBox ? 4 : 0 }
@@ -1302,7 +1242,6 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboa
     private var hasText: Bool { !textView.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     private func updatePrimary(animated: Bool) {
-        defer { refreshThread() }   // [threads] after `primary` is set
         let next: Primary
         // VOICE: the recorder hides the primary while held and shows Send when locked or in review; a draft chip sends.
         let busy = dictating && dictationBusy   // [talk]

@@ -35,9 +35,6 @@ struct ThreadPlacement: Equatable {
 
 extension ChatViewController {
     func threadsHostChanged() {
-        composer.onThread = threadsHost == nil ? nil : { [weak self] text in self?.startThread(text) }
-        // The button's one-time tip: it says what the button is for the first time it stands there.
-        composer.onThreadShownChange = threadsHost == nil ? nil : { [weak self] shown in self?.voice.threadTip(buttonShown: shown) }
         threadsHost?.onChange = { [weak self] in self?.threadsChanged() }
         if isViewLoaded, threadsHost != nil { threadsChanged() }
     }
@@ -140,7 +137,7 @@ extension ChatViewController {
         if !open.isEmpty { host.markSeen(open) }
     }
 
-    /// The thread button: the typed words start a thread instead of joining the running reply.
+    /// Starts a thread with `text` under the newest finished message (used by debug/demo hooks).
     func startThread(_ text: String) {
         guard let host = threadsHost else { return }
         menus?.closeModelPanel()
@@ -148,9 +145,8 @@ extension ChatViewController {
         // Under the newest finished message (the request the bot is answering while its first reply streams, or the
         // finished reply before a later background/tool turn — never trapped above an already-finished assistant reply).
         let anchor = ThreadRules.composerAnchor(in: messages, running: session.isRunning)
-        AppLog.trace("composer", "thread tapped \(logTag): under \(AppLog.tag(anchor?.id)), main chat \(session.isRunning ? "working" : "idle")")
+        AppLog.trace("composer", "thread started \(logTag): under \(AppLog.tag(anchor?.id)), main chat \(session.isRunning ? "working" : "idle")")
         followNewestEnd()
-        voice.threadTip(buttonShown: false, learned: true)   // used: its tip never shows again
         host.start(text: text, under: anchor)
     }
 

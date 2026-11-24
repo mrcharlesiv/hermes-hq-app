@@ -107,7 +107,13 @@ extension ChatDemo {
         let host = DemoThreadsHost(later: argument("-HQDemoThreads") == "later")
         chat.threadsHost = host
         if let after = argument("-HQDemoThreadTap").flatMap(Double.init) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + after) { [weak chat] in chat?.composer.debugTapThread() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + after) { [weak chat] in
+                guard let chat else { return }
+                let text = ChatText.trimmed(chat.composer.text)
+                guard !text.isEmpty else { return }
+                chat.composer.text = ""
+                chat.startThread(text)
+            }
         }
         if let after = argument("-HQDemoThreadOpen").flatMap(Double.init) {
             DispatchQueue.main.asyncAfter(deadline: .now() + after) { [weak chat, weak host] in

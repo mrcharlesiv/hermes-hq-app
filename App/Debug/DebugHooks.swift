@@ -435,8 +435,7 @@ enum DebugHooks {
             }
             if let text = defaults.string(forKey: "HQDebugThread") {       // [threads]
                 DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
-                    chat.composer.text = text
-                    chat.composer.debugTapThread()
+                    chat.startThread(text)
                 }
                 let open = defaults.double(forKey: "HQDebugThreadOpen")
                 if open > 0 {

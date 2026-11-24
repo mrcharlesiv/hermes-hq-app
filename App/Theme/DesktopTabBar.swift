@@ -89,6 +89,7 @@ final class DesktopTabBar: UIView {
 
     private weak var host: UITabBarController?
     private let stack = UIStackView()
+    private let topHairline = UIView()
     private var buttons: [TabButton] = []
     private var badgeWatch: [NSKeyValueObservation] = []
     private var bottomConstraint: NSLayoutConstraint?
@@ -115,9 +116,14 @@ final class DesktopTabBar: UIView {
         stack.distribution = .fillEqually
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
+        topHairline.isUserInteractionEnabled = false
+        topHairline.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(topHairline)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.topAnchor.constraint(equalTo: topAnchor), stack.heightAnchor.constraint(equalToConstant: Self.barHeight),
+            topHairline.leadingAnchor.constraint(equalTo: leadingAnchor), topHairline.trailingAnchor.constraint(equalTo: trailingAnchor),
+            topHairline.topAnchor.constraint(equalTo: topAnchor), topHairline.heightAnchor.constraint(equalToConstant: HQShape.hairline),
         ])
         themeToken = NotificationCenter.default.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.sync() }
@@ -373,6 +379,7 @@ final class DesktopTabBar: UIView {
         guard let host else { return }
         if style == .glass {
             backgroundColor = .clear
+            topHairline.isHidden = true
             if let platter {
                 // [paper-solid] Paper's phone bar: its raised card inside a hairline, no glass.
                 let solid = Self.paperPhone
@@ -386,8 +393,10 @@ final class DesktopTabBar: UIView {
             setNeedsLayout()
         } else {
             let dark = traitCollection.userInterfaceStyle == .dark
-            // The raised panel (owner's pick): the sidebar in light, the elevated surface in dark; no line over it.
+            // Subtle strokeTertiary hairline separates the docked bar cleanly on skins where sidebar == page.
             backgroundColor = dark ? ChatPalette.elevated : ChatPalette.sidebar
+            topHairline.isHidden = false
+            topHairline.backgroundColor = ChatPalette.strokeTertiary
         }
         for (index, button) in buttons.enumerated() { button.apply(selected: index == host.selectedIndex) }
     }
@@ -602,8 +611,8 @@ private final class TabButton: UIControl {
             drawnScale = scale
         }
         let size = min(10 * HQFont.scale, 12.5)
-        label.attributedText = NSAttributedString(string: (item.title ?? "").uppercased(), attributes: [
-            .font: HQFont.face(ofSize: size, weight: .semibold), .kern: size * 0.06, .foregroundColor: colour,
+        label.attributedText = NSAttributedString(string: item.title ?? "", attributes: [
+            .font: HQFont.face(ofSize: size, weight: .medium), .foregroundColor: colour,
         ])
         accessibilityTraits = selected ? [.button, .selected] : .button
     }

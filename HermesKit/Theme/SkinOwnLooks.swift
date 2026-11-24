@@ -38,9 +38,15 @@ nonisolated struct SkinOwnLook: Sendable, Hashable {
     var muted: RGBA
     /// A reply's bubble, where it isn't `card`: Paper's replies lie on the page itself, as Claude's do.
     var reply: RGBA? = nil
+    /// Explicit grouped canvas background behind grouped cards when the seed sidebar equals the page (e.g. Everforest).
+    var grouped: RGBA? = nil
+    /// Explicit text color on `meBubble` (nil uses the theme's `label`, as Paper and Rosé Pine do).
+    var meText: RGBA? = nil
     /// [paper-icons] The tile behind a Settings or More row's glyph, the glyph in the theme's own text, instead of iOS's
     /// coloured tiles with white glyphs (owner 2026-11-16, Paper "needs a lot of work"). nil: iOS's tiles.
     var iconTile: RGBA? = nil
+    /// True for skins that draw bare monochrome glyphs without a tile (Paper); false draws harmonized `iconTile` pills.
+    var plainIcons = false
     /// [paper-pills] Pills and chips on pages (Sessions' bots, Tasks' views, Tiles' pages, Kanban's statuses, New Job's
     /// picks) are drawn flat in this skin: unpicked on the card with a hairline, picked in the solid accent with its own
     /// ink, the same on every page. Otherwise iOS's Liquid Glass.
@@ -128,12 +134,12 @@ nonisolated extension SkinCatalog {
                                codeFill: Ivory.drawer, grey: Ivory.grey, fillAlphas: [0.2, 0.16, 0.12, 0.08],
                                separator: Ivory.grey.alpha(0.3), replyEdge: RGBA(unit: 0, 0, 0, 0), tableHead: Ivory.drawer,
                                replyGlassTint: 0.85, subtle: Ivory.subtle, muted: Ivory.muted, reply: Ivory.page,
-                               iconTile: Ivory.selected, flatPills: true, chosenRow: Ivory.grey),
+                               iconTile: Ivory.selected, plainIcons: true, flatPills: true, chosenRow: Ivory.grey),
             dark: SkinOwnLook(page: Charcoal.page, card: Charcoal.card, pressed: Charcoal.selected, meBubble: Charcoal.box,
                               codeFill: Charcoal.deep, grey: Charcoal.grey, fillAlphas: [0.36, 0.32, 0.24, 0.12],
                               separator: Charcoal.grey.alpha(0.3), replyEdge: RGBA(unit: 0, 0, 0, 0),
                               tableHead: Charcoal.grey.alpha(0.2), replyGlassTint: 0.85, subtle: Charcoal.subtle,
-                              muted: Charcoal.muted, reply: Charcoal.page, iconTile: Charcoal.selected,
+                              muted: Charcoal.muted, reply: Charcoal.page, iconTile: Charcoal.selected, plainIcons: true,
                               flatPills: true, chosenRow: Charcoal.grey)),
         "rose-pine": SkinOwnLook.Pair(
             // Your box: the mockup's lavender, iris leaning to love.
@@ -147,10 +153,46 @@ nonisolated extension SkinCatalog {
                               codeFill: Main.base, grey: Main.muted, fillAlphas: [0.36, 0.32, 0.24, 0.12],
                               separator: Main.muted.alpha(0.3), replyEdge: Main.muted.alpha(0.3), tableHead: Main.muted.alpha(0.2),
                               replyGlassTint: 0.85, subtle: Main.subtle, muted: Main.muted)),
+        "everforest": SkinOwnLook.Pair(
+            // Warm sage neutrals, crisp ivory card lift off a warm grouped canvas, and harmonized sage row tiles.
+            light: SkinOwnLook(page: RGBA(hex: 0xFDF6E3), card: RGBA(hex: 0xFFFDF5), pressed: RGBA(hex: 0xEAE3CD),
+                               meBubble: RGBA(hex: 0x586B35), codeFill: RGBA(hex: 0xEBE4CE), grey: RGBA(hex: 0x829181),
+                               fillAlphas: [0.20, 0.16, 0.12, 0.08], separator: RGBA(hex: 0x829181).alpha(0.28),
+                               replyEdge: RGBA(hex: 0x939F91).alpha(0.32), tableHead: RGBA(hex: 0x829181).alpha(0.16),
+                               replyGlassTint: 0.85, subtle: RGBA(hex: 0x5C6A72), muted: RGBA(hex: 0x829181),
+                               reply: RGBA(hex: 0xF4EEDB), grouped: RGBA(hex: 0xF4ECD8), meText: .white,
+                               iconTile: RGBA(hex: 0xE6E1CB)),
+            dark: SkinOwnLook(page: RGBA(hex: 0x2D353B), card: RGBA(hex: 0x343F44), pressed: RGBA(hex: 0x3D484D),
+                              meBubble: RGBA(hex: 0x475843), codeFill: RGBA(hex: 0x272E33), grey: RGBA(hex: 0x859289),
+                              fillAlphas: [0.34, 0.28, 0.22, 0.14], separator: RGBA(hex: 0x859289).alpha(0.30),
+                              replyEdge: RGBA(hex: 0x859289).alpha(0.28), tableHead: RGBA(hex: 0x859289).alpha(0.18),
+                              replyGlassTint: 0.85, subtle: RGBA(hex: 0x9DA9A0), muted: RGBA(hex: 0x7A8478),
+                              reply: RGBA(hex: 0x343F44), grouped: RGBA(hex: 0x232A2E), meText: RGBA(hex: 0xE8DEC8),
+                              iconTile: RGBA(hex: 0x3D484D))),
+        "mono": {
+            let look = SkinOwnLook(page: RGBA(hex: 0x0D0D0D), card: RGBA(hex: 0x181818), pressed: RGBA(hex: 0x262626),
+                                   meBubble: RGBA(hex: 0x333333), codeFill: RGBA(hex: 0x131313), grey: RGBA(hex: 0x8E8E8E),
+                                   fillAlphas: [0.32, 0.26, 0.20, 0.12], separator: RGBA(hex: 0x8E8E8E).alpha(0.28),
+                                   replyEdge: RGBA(hex: 0x8E8E8E).alpha(0.22), tableHead: RGBA(hex: 0x8E8E8E).alpha(0.16),
+                                   replyGlassTint: 0.85, subtle: RGBA(hex: 0xA3A3A3), muted: RGBA(hex: 0x737373),
+                                   reply: RGBA(hex: 0x1B1B1B), grouped: RGBA(hex: 0x090909), meText: RGBA(hex: 0xF5F5F5),
+                                   iconTile: RGBA(hex: 0x242424), chosenRow: RGBA(hex: 0x8E8E8E))
+            return SkinOwnLook.Pair(light: look, dark: look)
+        }(),
+        "cyberpunk": {
+            let look = SkinOwnLook(page: RGBA(hex: 0x000A00), card: RGBA(hex: 0x021704), pressed: RGBA(hex: 0x042808),
+                                   meBubble: RGBA(hex: 0x063B18), codeFill: RGBA(hex: 0x011202), grey: RGBA(hex: 0x1A8A30),
+                                   fillAlphas: [0.32, 0.26, 0.20, 0.12], separator: RGBA(hex: 0x1A8A30).alpha(0.38),
+                                   replyEdge: RGBA(hex: 0x1A8A30).alpha(0.34), tableHead: RGBA(hex: 0x1A8A30).alpha(0.18),
+                                   replyGlassTint: 0.85, subtle: RGBA(hex: 0x38B852), muted: RGBA(hex: 0x1A8A30),
+                                   reply: RGBA(hex: 0x031B06), grouped: RGBA(hex: 0x000600), meText: RGBA(hex: 0xA6FFC0),
+                                   iconTile: RGBA(hex: 0x042808))
+            return SkinOwnLook.Pair(light: look, dark: look)
+        }(),
     ]
 
-    /// Keywords love, function names iris, constants pine, types gold (the mockup's), strings gold, comments subtle, tags
-    /// foam, errors love. Pine is the light constant; it is made readable in dark with the rest.
+    /// Skin-matched code syntax palettes; each colour is checked against the skin's code surface for 4.5:1 readability
+    /// in `ThemeResolver.syntax`. Nous, GitHub, and iOS System intentionally remain on GitHub's syntax palette.
     static let syntaxColours: [String: SyntaxColours.Pair] = [
         // [paper-code] Paper's code (owner 2026-11-16, "needs a lot of work"): muted and warm in place of GitHub's bright
         // blue, purple and red. Keywords terracotta, strings olive, constants and types amber-brown, functions the ink,
@@ -167,5 +209,63 @@ nonisolated extension SkinCatalog {
                                  entity: Dawn.gold, function: Dawn.iris, tag: Dawn.foam, invalid: Dawn.love),
             dark: SyntaxColours(comment: Main.subtle, keyword: Main.love, string: Main.gold, constant: Main.pine,
                                 entity: Main.gold, function: Main.iris, tag: Main.foam, invalid: Main.love)),
+        "everforest": SyntaxColours.Pair(
+            light: SyntaxColours(comment: RGBA(hex: 0x7A8478), keyword: RGBA(hex: 0xB85651), string: RGBA(hex: 0x7F8A3A),
+                                 constant: RGBA(hex: 0x9E6B30), entity: RGBA(hex: 0x9E6B30), function: RGBA(hex: 0x5E7C3A),
+                                 tag: RGBA(hex: 0x358268), invalid: RGBA(hex: 0xC04444)),
+            dark: SyntaxColours(comment: RGBA(hex: 0x859289), keyword: RGBA(hex: 0xE67E80), string: RGBA(hex: 0xA7C080),
+                                constant: RGBA(hex: 0xD699B6), entity: RGBA(hex: 0xDBBC7F), function: RGBA(hex: 0x83C092),
+                                tag: RGBA(hex: 0x7FBBB3), invalid: RGBA(hex: 0xE67E80))),
+        "catppuccin": SyntaxColours.Pair(
+            light: SyntaxColours(comment: RGBA(hex: 0x6C6F85), keyword: RGBA(hex: 0x8839EF), string: RGBA(hex: 0x40A02B),
+                                 constant: RGBA(hex: 0xFE640B), entity: RGBA(hex: 0xDF8E1D), function: RGBA(hex: 0x1E66F5),
+                                 tag: RGBA(hex: 0x179299), invalid: RGBA(hex: 0xD20F39)),
+            dark: SyntaxColours(comment: RGBA(hex: 0x9399B2), keyword: RGBA(hex: 0xCBA6F7), string: RGBA(hex: 0xA6E3A1),
+                                constant: RGBA(hex: 0xFAB387), entity: RGBA(hex: 0xF9E2AF), function: RGBA(hex: 0x89B4FA),
+                                tag: RGBA(hex: 0x94E2D5), invalid: RGBA(hex: 0xF38BA8))),
+        "solarized": SyntaxColours.Pair(
+            light: SyntaxColours(comment: RGBA(hex: 0x657B83), keyword: RGBA(hex: 0x859900), string: RGBA(hex: 0x2AA198),
+                                 constant: RGBA(hex: 0xCB4B16), entity: RGBA(hex: 0xB58900), function: RGBA(hex: 0x268BD2),
+                                 tag: RGBA(hex: 0x6C71C4), invalid: RGBA(hex: 0xDC322F)),
+            dark: SyntaxColours(comment: RGBA(hex: 0x839496), keyword: RGBA(hex: 0x859900), string: RGBA(hex: 0x2AA198),
+                                constant: RGBA(hex: 0xCB4B16), entity: RGBA(hex: 0xB58900), function: RGBA(hex: 0x268BD2),
+                                tag: RGBA(hex: 0x6C71C4), invalid: RGBA(hex: 0xDC322F))),
+        "mono": {
+            let s = SyntaxColours(comment: RGBA(hex: 0x828282), keyword: RGBA(hex: 0xFFFFFF), string: RGBA(hex: 0xC8C8C8),
+                                  constant: RGBA(hex: 0xB2B2B2), entity: RGBA(hex: 0xDCDCDC), function: RGBA(hex: 0xEDEDED),
+                                  tag: RGBA(hex: 0xBDBDBD), invalid: RGBA(hex: 0xE08080))
+            return SyntaxColours.Pair(light: s, dark: s)
+        }(),
+        "cyberpunk": {
+            let s = SyntaxColours(comment: RGBA(hex: 0x359648), keyword: RGBA(hex: 0x00FF66), string: RGBA(hex: 0xB8FF70),
+                                  constant: RGBA(hex: 0xFFB84D), entity: RGBA(hex: 0xFFC966), function: RGBA(hex: 0x5CFFD6),
+                                  tag: RGBA(hex: 0x4DFF88), invalid: RGBA(hex: 0xFF4D79))
+            return SyntaxColours.Pair(light: s, dark: s)
+        }(),
+        "midnight": {
+            let s = SyntaxColours(comment: RGBA(hex: 0x7C7AB0), keyword: RGBA(hex: 0xB4A7FF), string: RGBA(hex: 0x8AD8E6),
+                                  constant: RGBA(hex: 0xE2A6FF), entity: RGBA(hex: 0x9BB8FF), function: RGBA(hex: 0xC8C0FF),
+                                  tag: RGBA(hex: 0x7EC8E3), invalid: RGBA(hex: 0xF0719B))
+            return SyntaxColours.Pair(light: s, dark: s)
+        }(),
+        "ember": {
+            let s = SyntaxColours(comment: RGBA(hex: 0xAA7A56), keyword: RGBA(hex: 0xFF9E57), string: RGBA(hex: 0xF5D08A),
+                                  constant: RGBA(hex: 0xFF7B54), entity: RGBA(hex: 0xFFC278), function: RGBA(hex: 0xFFE0B2),
+                                  tag: RGBA(hex: 0xE69F6B), invalid: RGBA(hex: 0xFF6B57))
+            return SyntaxColours.Pair(light: s, dark: s)
+        }(),
+        "slate": {
+            let s = SyntaxColours(comment: RGBA(hex: 0x8B949E), keyword: RGBA(hex: 0x79C0FF), string: RGBA(hex: 0xA5D6FF),
+                                  constant: RGBA(hex: 0xD2A8FF), entity: RGBA(hex: 0xFFA657), function: RGBA(hex: 0x9ECBFF),
+                                  tag: RGBA(hex: 0x7EE787), invalid: RGBA(hex: 0xFF7B72))
+            return SyntaxColours.Pair(light: s, dark: s)
+        }(),
+        "nous-alt": SyntaxColours.Pair(
+            light: SyntaxColours(comment: RGBA(hex: 0x666678), keyword: RGBA(hex: 0x0040CC), string: RGBA(hex: 0x166534),
+                                 constant: RGBA(hex: 0x6D28D9), entity: RGBA(hex: 0x9A3412), function: RGBA(hex: 0x1D4ED8),
+                                 tag: RGBA(hex: 0x0F766E), invalid: RGBA(hex: 0xBE123C)),
+            dark: SyntaxColours(comment: RGBA(hex: 0xB5C7F3), keyword: RGBA(hex: 0xFFE6CB), string: RGBA(hex: 0x9FE3D8),
+                                constant: RGBA(hex: 0xF7C59F), entity: RGBA(hex: 0xFFD6A5), function: RGBA(hex: 0xC8DCFF),
+                                tag: RGBA(hex: 0x96D6FF), invalid: RGBA(hex: 0xFF8A80))),
     ]
 }

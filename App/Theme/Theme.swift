@@ -52,10 +52,10 @@ final class Theme {
     /// which draws its own glyphs). A DEBUG build draws the other with `-HQDebugInkIcons tiles`, to compare.
     enum InkIcons { case tiles, plain }
 
-    /// [paper-ink] A switch that is on, in an ink skin (Paper): the ink in light; in dark a warm mid grey, since iOS's white
-    /// thumb vanished on the ivory ink (2026-11-16 audit, Connectors). nil: every other skin keeps its own.
+    /// [paper-ink] A switch that is on, in a monochrome ink skin (Paper): the ink in light; in dark a warm mid grey,
+    /// since iOS's white thumb vanished on the ivory ink (2026-11-16 audit, Connectors). nil: every other skin keeps its own.
     static var inkSwitch: UIColor? {
-        guard inkIcons != nil else { return nil }
+        guard !isDesktop, ThemeTable.current.light.ownLook?.plainIcons == true else { return nil }
         return UIColor { traits in
             traits.userInterfaceStyle == .dark
                 ? UIColor(red: 0x9C / 255, green: 0x9B / 255, blue: 0x93 / 255, alpha: 1)
@@ -63,10 +63,12 @@ final class Theme {
         }
     }
 
-    /// [paper-ink] A swipe action's or status colour that is only a hue (iOS's indigo, blue): in an ink skin (Paper) the
-    /// theme's graphite instead, a warm grey white reads on in both modes (7:1). Red and orange keep their meaning.
+    /// [paper-ink] A swipe action's or status colour that is only a hue (iOS's indigo, blue): in Paper the theme's
+    /// graphite instead, a warm grey white reads on in both modes (7:1). Red and orange keep their meaning.
     static func inkSwipe(_ colour: UIColor) -> UIColor {
-        inkIcons != nil ? UIColor(red: 0x5A / 255, green: 0x59 / 255, blue: 0x55 / 255, alpha: 1) : colour
+        !isDesktop && ThemeTable.current.light.ownLook?.plainIcons == true
+            ? UIColor(red: 0x5A / 255, green: 0x59 / 255, blue: 0x55 / 255, alpha: 1)
+            : colour
     }
 
     /// [paper-pills] How a flat-pill skin (`SkinOwnLook.flatPills`, Paper) draws the pills on pages in the iOS look.
@@ -102,11 +104,11 @@ final class Theme {
     /// A picked pill's words: the ink's own on a soft pill, the on-accent ink on the solid accent.
     static var pickedPillInk: Color { paperPills == .soft ? .hqLabel : .hqOnTint }
     static var inkIcons: InkIcons? {
-        guard !isDesktop, ThemeTable.current.light.ownLook?.iconTile != nil else { return nil }
+        guard !isDesktop, let own = ThemeTable.current.light.ownLook, own.iconTile != nil else { return nil }
         #if DEBUG
         if UserDefaults.standard.string(forKey: "HQDebugInkIcons") == "tiles" { return .tiles }
         #endif
-        return .plain
+        return own.plainIcons ? .plain : .tiles
     }
 
     /// SwiftUI bodies that pick a font, a shape or a colour call this (through `Font.hq`, `Color.hq…`), so they run
@@ -210,6 +212,17 @@ final class Theme {
     /// [top-edge] Theme › Themes › Top Edge.
     func setTopEdge(_ edge: TopEdge) {
         store.setTopEdge(edge)
+        reload()
+    }
+
+    /// Resets every on-device appearance setting (theme, look, scale, bubbles, backgrounds, working ring, light/dark)
+    /// back to the shipped defaults.
+    func resetAppearance() {
+        store.reset()
+        AppearanceSetting.current = .system
+        Backdrop.app.reset()
+        Backdrop.chats.reset()
+        WorkingRing.isOn = false
         reload()
     }
 

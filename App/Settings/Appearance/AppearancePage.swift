@@ -15,6 +15,7 @@ import UIKit
 enum AppearanceRows {
     static let lightOrDark = "row:appearance"
     static let desktopLook = "row:desktop-look"
+    static let highContrast = "row:high-contrast"
     static let uiScale = "row:ui-scale"
     static let density = "row:density"
     static let workingRing = "row:working-ring"
@@ -24,7 +25,7 @@ enum AppearanceRows {
     /// Whether Appearance draws `row` on this device (Thinking Bar is under Sounds & Haptics off the Mac).
     static func contains(_ row: String) -> Bool {
         switch row {
-        case lightOrDark, desktopLook, uiScale, density, workingRing, topEdge: true
+        case lightOrDark, desktopLook, highContrast, uiScale, density, workingRing, topEdge: true
         case thinkingBar: DeviceWord.isMac
         default: false
         }
@@ -93,15 +94,21 @@ struct AppearanceSections: View {
     /// The row a search result marks.
     var revealed: String?
     @AppStorage(WorkingRing.key) private var workingRing = false   // [ring-off-default]
+    @Environment(\.colorSchemeContrast) private var systemContrast
+    @State private var confirmReset = false
+
+    private var increaseContrast: Bool { systemContrast == .increased || HQAccessibility.overrides.contrast }
 
     var body: some View {
         let _ = Theme.touch()
+        let _ = (Backdrop.app.revision, Backdrop.chats.revision)
         let state = Theme.shared.state
         look(state)
         size(state)
         chats(state)
         lists(state)
         app(state)
+        resetSection
     }
 
     private func header(_ part: Part) -> some View { HQSectionLabel { Text(part.title) } }
@@ -117,9 +124,12 @@ struct AppearanceSections: View {
             : "Compact fits more on the Bots and Sessions pages: smaller faces, shorter rows and one line of preview."
     }
 
-    private func lookNote(_ state: ThemeState) -> String {
-        [AppearanceSetting.forcedBySkin.map { "\(state.skin.label) has only a \($0 == .dark ? "dark" : "light") look." },
-         ThemeFeature.desktopLook ? ThemeSettingsView.lookNote : nil].compactMap { $0 }.joined(separator: " ")
+    private func lookNote(_ state: ThemeState) -> String? {
+        let parts = [
+            AppearanceSetting.forcedBySkin.map { "\(state.skin.label) has only a \($0 == .dark ? "dark" : "light") look." },
+            state.desktopLook ? ThemeContrast.switchNote(state, increaseContrast: increaseContrast) ?? ThemeSettingsView.contrastNote : nil,
+        ].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 
     private func listsNote(_ state: ThemeState) -> String {
@@ -130,10 +140,22 @@ struct AppearanceSections: View {
 
     @ViewBuilder private func look(_ state: ThemeState) -> some View {
         Section {
+            if ThemeFeature.desktopLook {
+                LookModePicker(desktop: state.desktopLook) { on in
+                    guard on != state.desktopLook else { return }
+                    Haptics.play(.selection)
+                    Theme.shared.setDesktopLook(on)
+                }
+                .revealRow(AppearanceRows.desktopLook, revealed)
+            }
             lightOrDark
             themeRow(state)
-            desktopLookRow(state)
-        } header: { header(.look) } footer: { HQSectionFooter { Text(lookNote(state)) } }
+            if state.desktopLook {
+                highContrastRow(state)
+            }
+        } header: { header(.look) } footer: {
+            if let note = lookNote(state) { HQSectionFooter { Text(note) } }
+        }
     }
 
     private func themeRow(_ state: ThemeState) -> some View {
@@ -143,18 +165,17 @@ struct AppearanceSections: View {
         .accessibilityIdentifier("settings.theme-row")
     }
 
-    @ViewBuilder private func desktopLookRow(_ state: ThemeState) -> some View {
-        if ThemeFeature.desktopLook {
-            Toggle(isOn: Binding(get: { state.desktopLook }, set: { on in
-                Haptics.play(.selection)
-                Theme.shared.setDesktopLook(on)
-            })) {
-                SettingsRowLabel(title: "Desktop Look", systemImage: "desktopcomputer")
-            }
-            .tint(state.desktopLook ? Color.hqTintText : nil)
-            .accessibilityIdentifier("theme.desktopLook")
-            .revealRow(AppearanceRows.desktopLook, revealed)
+    private func highContrastRow(_ state: ThemeState) -> some View {
+        Toggle(isOn: Binding(get: { ThemeContrast.switchOn(state, increaseContrast: increaseContrast) }, set: { on in
+            Haptics.play(.selection)
+            Theme.shared.setHighContrast(on)
+        })) {
+            SettingsRowLabel(title: "High Contrast", systemImage: "circle.righthalf.filled")
         }
+        .tint(Color.hqTintText)
+        .disabled(increaseContrast)
+        .accessibilityIdentifier("theme.highContrast")
+        .revealRow(AppearanceRows.highContrast, revealed)
     }
 
     /// Light or Dark: a value alone while a one-look skin is picked, the form's pop-up on the Mac, a menu on the iPhone.
@@ -212,7 +233,7 @@ struct AppearanceSections: View {
         Section {
             UIScaleRow(state: state, symbol: "textformat.size")
                 .revealRow(AppearanceRows.uiScale, revealed)
-        } header: { header(.size) } footer: { HQSectionFooter { Text(ThemeSettingsView.scaleNote) } }
+        } header: { header(.size) } footer: { HQSectionFooter { Text(ThemeSettingsView.conciseScaleNote) } }
     }
 
     // MARK: Chats
@@ -220,7 +241,7 @@ struct AppearanceSections: View {
     @ViewBuilder private func chats(_ state: ThemeState) -> some View {
         Section {
             chatBubblesRow(state)
-            backgroundsRow(state)
+            if !state.desktopLook { backgroundsRow(state) }
             macThinkingBarRow
         } header: { header(.chats) }
     }
@@ -234,9 +255,9 @@ struct AppearanceSections: View {
         .accessibilityIdentifier("settings.chat-bubbles-row")
     }
 
-    /// The Desktop Look keeps its plain pages: the row says so, and its pages keep the pictures for the iOS look.
+    /// Shown in the iOS look only: the Desktop Look keeps its plain pages.
     private func backgroundsRow(_ state: ThemeState) -> some View {
-        NavRow(title: "Backgrounds", systemImage: "photo.on.rectangle", value: state.desktopLook ? "Off in Desktop Look" : nil) {
+        NavRow(title: "Backgrounds", systemImage: "photo.on.rectangle", value: BackdropWords.summary) {
             SettingsNavigator.openRoot("backgrounds", router: router)
         }
         .accessibilityIdentifier("settings.backgrounds-row")
@@ -323,6 +344,112 @@ struct AppearanceSections: View {
         }
     }
 
+    // MARK: Reset
+
+    @ViewBuilder private var resetSection: some View {
+        Section {
+            Button(role: .destructive) {
+                confirmReset = true
+            } label: {
+                Text("Reset Appearance…")
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
+            .accessibilityIdentifier("settings.appearance-reset")
+            .confirmationDialog("Reset Appearance?", isPresented: $confirmReset, titleVisibility: .visible) {
+                Button("Reset Appearance", role: .destructive) {
+                    Haptics.play(.selection)
+                    Theme.shared.resetAppearance()
+                    model.appearance = .system
+                    workingRing = false
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Restores the default theme, look, text size, chat bubbles, and backgrounds on this \(DeviceWord.name).")
+            }
+        } footer: {
+            HQSectionFooter {
+                Text("Appearance settings stay on this \(DeviceWord.name).")
+            }
+        }
+    }
+
+}
+
+/// Visual two-card Look switcher (`iOS` | `Desktop`) at the top of Settings › Appearance.
+private struct LookModePicker: View {
+    var desktop: Bool
+    var pick: (Bool) -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            card(title: "iOS", isDesktop: false, selected: !desktop)
+            card(title: "Desktop", isDesktop: true, selected: desktop)
+        }
+        .hqRowPadding(4)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("theme.desktopLook")
+    }
+
+    private func card(title: String, isDesktop: Bool, selected: Bool) -> some View {
+        let corner: CGFloat = desktop ? 4 : 12
+        let miniCorner: CGFloat = isDesktop ? 4 : 9
+        return Button { pick(isDesktop) } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
+                    if isDesktop {
+                        Capsule()
+                            .fill(Color.hqLabel2.opacity(0.5))
+                            .frame(width: 68, height: 6)
+                        HStack {
+                            Spacer(minLength: 0)
+                            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                .fill(Color.hqTint.opacity(0.18))
+                                .overlay(RoundedRectangle(cornerRadius: 3, style: .continuous).strokeBorder(Color.hqTintText, lineWidth: 1))
+                                .frame(width: 48, height: 11)
+                        }
+                    } else {
+                        Capsule()
+                            .fill(Color.hqBotBubble)
+                            .frame(width: 62, height: 10)
+                        HStack {
+                            Spacer(minLength: 0)
+                            Capsule()
+                                .fill(Color.hqTint)
+                                .frame(width: 44, height: 10)
+                        }
+                    }
+                }
+                .padding(8)
+                .frame(maxWidth: .infinity, minHeight: 46, alignment: .leading)
+                .background(Color.hqPage, in: RoundedRectangle(cornerRadius: miniCorner, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: miniCorner, style: .continuous).strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline))
+                .accessibilityHidden(true)
+
+                HStack(spacing: 4) {
+                    Text(title)
+                        .font(Font.hq(.subheadline).weight(.semibold))
+                        .foregroundStyle(Color.hqLabel)
+                    Spacer(minLength: 0)
+                    if selected {
+                        Image(systemName: "checkmark")
+                            .font(Font.hq(.caption).weight(.bold))
+                            .foregroundStyle(Color.hqTintText)
+                            .accessibilityHidden(true)
+                    }
+                }
+            }
+            .padding(9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(uiColor: HQPalette.groupedPage), in: RoundedRectangle(cornerRadius: corner, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: corner, style: .continuous)
+                .strokeBorder(selected ? Color.hqTintText : Color.hqStroke, lineWidth: selected ? 2 : HQShape.hairline))
+            .contentShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(title) Look")
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityIdentifier(isDesktop ? "theme.desktopLook.desktop" : "theme.desktopLook.ios")
+    }
 }
 
 // MARK: - Controls (they were the Theme page's)
@@ -338,12 +465,12 @@ struct UIScaleRow: View {
                 AppearanceControlTitle(title: "UI Scale", symbol: symbol)
                 Spacer(minLength: 0)
             }
-            if DeviceWord.isMac, !state.desktopLook {
-                // [Mac AAA 2026-11-16] The iOS look's segments, as Density's: the desktop's square outlined strip with a
-                // blue fill stood under a rounded segmented control in the same card.
+            if !state.desktopLook {
+                // Native rounded iOS segmented control in the iOS look on every device (iPhone, iPad, Mac).
                 HQSegmentedPicker("UI Scale", options: ThemeState.scalePresets.map { ("\($0)%", $0) },
                                   selection: Binding(get: { state.uiScalePercent }, set: { percent in
                                       guard percent != state.uiScalePercent else { return }
+                                      Haptics.play(.selection)
                                       Theme.shared.setUIScale(percent)
                                   }), ticks: false)
                     .labelsHidden()

@@ -32,6 +32,13 @@ struct ColourSwatch: Identifiable, Hashable {
 }
 
 struct ColourSwatchRow: View {
+    /// Optional dynamic-vs-custom mode strip rendered above the hue swatches (e.g. Theme | Bot's Face | Custom).
+    struct ModeStrip {
+        var options: [(title: String, value: String)]
+        var selected: String
+        var pick: (String) -> Void
+    }
+
     var title: String
     /// The picked choice's name, on the title's line.
     var value: String
@@ -42,6 +49,8 @@ struct ColourSwatchRow: View {
     var picked: String
     /// The custom colour picked, if one is.
     var custom: UInt32?
+    /// Optional segmented mode strip separating dynamic modes from literal color swatches.
+    var modeStrip: ModeStrip? = nil
     /// The start of each swatch's accessibility identifier.
     var identifier: String
     var pick: (ColourSwatch) -> Void
@@ -61,6 +70,18 @@ struct ColourSwatchRow: View {
                 Text(value).foregroundStyle(Color.hqLabel2).accessibilityIdentifier("\(identifier)Name")
             }
             .accessibilityHidden(true)   // each swatch says its own name
+            if let modeStrip {
+                HQSegmentedPicker(title, options: modeStrip.options,
+                                  selection: Binding(get: { modeStrip.selected }, set: { next in
+                                      guard next != modeStrip.selected else { return }
+                                      Haptics.play(.selection)
+                                      pending?.cancel()
+                                      draft = nil
+                                      modeStrip.pick(next)
+                                  }), ticks: false, wholeLabels: true)
+                    .labelsHidden()
+                    .accessibilityIdentifier("\(identifier).mode")
+            }
             // One row where they all fit (the Mac, the iPad); on the iPhone even rows of six (owner 2026-11-08: no
             // wasted space). The system's colour well is a circle on the iPhone and a wider pill on the Mac.
             ViewThatFits(in: .horizontal) {
@@ -77,7 +98,7 @@ struct ColourSwatchRow: View {
                         well
                     }
                 }
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 0, alignment: .leading), count: 6), alignment: .leading, spacing: 8) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 0, alignment: .leading), count: 5), alignment: .leading, spacing: 8) {
                     ForEach(swatches) { swatch($0) }
                     well
                 }

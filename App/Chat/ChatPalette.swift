@@ -93,6 +93,7 @@ nonisolated enum ChatPalette {
     static let sidebar = ThemedColor.make(\.sidebar)
     static let strokePrimary = ThemedColor.make(\.strokePrimary)
     static let strokeSecondary = ThemedColor.make(\.strokeSecondary)
+    static let strokeTertiary = ThemedColor.make(\.strokeTertiary)
     static let meBorder = ThemedColor.make(\.meBorder)
     static let composerBorder = ThemedColor.make(\.composerBorder)
     static let composerGlyph = ThemedColor.make(\.composerGlyph)

@@ -200,6 +200,7 @@ nonisolated enum ThemeResolver {
             t.codeFill = dark ? RGBA(hex: 0x1C1C1E) : RGBA(hex: 0xF2F2F7)
         } else {
             let own = skin.ownLook?.pick(dark)
+            let neutral = seeds.mutedForeground
             t.page = own?.page ?? chrome(seeds, dark: dark)
             t.label = ink.alpha(0.94)
             t.label2 = ThemeMath.readable(own?.subtle ?? ink.alpha(0.74), text: ink.alpha(0.94), on: t.page)
@@ -207,16 +208,25 @@ nonisolated enum ThemeResolver {
             // In dark an accent is brightened to CIELAB L 57, as iOS brightens its tints (phone-ios-tokens.css:109).
             t.tint = dark ? seeds.brand.raisingL(to: 57) : seeds.brand
             t.tintText = ThemeMath.readable(t.tint, text: t.label, on: t.page)
-            t.grouped = seeds.sidebarBackground ?? seeds.background
+            let rawGrouped = seeds.sidebarBackground ?? seeds.background
+            t.grouped = !dark && rawGrouped == seeds.background ? t.page.mix(94, neutral) : rawGrouped
             t.codeText = dark ? ink.mix(72, t.page) : ink
-            // Cards and panels are the page raised a step in its own hue: iOS's neutral #1C1C1E read as a grey patch
-            // on a coloured page (owner 2026-11-01, the question box on a navy skin: "the grey in there looks off").
-            let card = t.page.mix(dark ? 91 : 95, ink)
+            // Hue-matched neutrals for every custom skin so search fields, chips, separators, and tables sit inside
+            // the skin's palette instead of falling back to cold iOS (120, 120, 128) grey.
+            t.fill1 = neutral.alpha(dark ? 0.32 : 0.18)
+            t.fill2 = neutral.alpha(dark ? 0.26 : 0.14)
+            t.fill3 = neutral.alpha(dark ? 0.20 : 0.11)
+            t.fill4 = neutral.alpha(dark ? 0.14 : 0.08)
+            t.separator = neutral.alpha(dark ? 0.36 : 0.28)
+            t.searchFill = neutral.alpha(dark ? 0.18 : 0.12)
+            t.muted = neutral
+            // Cards lift gently off the grouped canvas in light mode (toward white) and rise a step in ink in dark mode.
+            let card = dark ? t.page.mix(91, ink) : (t.page.labL > 96 ? .white : t.page.mix(32, .white))
             t.groupedCard = card
-            t.lifted = dark ? card : t.page.mix(40, .white)
+            t.lifted = dark ? card : t.page.mix(24, .white)
             t.editor = card; t.elevated = card
             t.cellPressed = t.page.mix(dark ? 83 : 88, ink)
-            // The bot's bubble too (owner 2026-11-01: "the grey doesn't seem like it fits"), and the code card in it.
+            // The bot's bubble and code card stay inside the skin's hue.
             t.botBubble = t.page.mix(dark ? 87 : 91, ink)
             // [cards] Standalone cards keep the bubble's elevation when primary text reads at 4.5:1 on it; otherwise
             // they lift cleanly off the page (e.g. Everforest light, Solarized dark) with a border in the skin's hue.
@@ -228,6 +238,7 @@ nonisolated enum ThemeResolver {
                 t.codeFill = t.page.mix(95, ink)
                 t.codeFillOnBubble = t.codeFill
             } else {
+                t.codeFill = t.page.mix(94, ink)
                 t.codeFillOnBubble = t.codeFill.over(t.botBubble)
             }
             if let own {
@@ -239,10 +250,12 @@ nonisolated enum ThemeResolver {
         }
         t.onTint = t.tint.labL >= 60 ? .black : .white
         if let own = skin.ownLook?.pick(dark) {
-            // Your message is the theme's own soft box with the theme's text, not white on the accent.
+            // Your message is the theme's own soft box with its explicit ink or the theme's text.
+            let meInk = own.meText ?? t.label
+            let meTimeSeed = own.meText != nil ? meInk.alpha(dark ? 0.88 : 0.85) : own.subtle
             t.meBubble = own.meBubble
-            t.meText = t.label
-            t.meTime = ThemeMath.readable(own.subtle, text: t.label, on: own.meBubble.over(t.page), ratio: 3)
+            t.meText = meInk
+            t.meTime = ThemeMath.readable(meTimeSeed, text: meInk, on: own.meBubble.over(t.page), ratio: 3)
         } else {
             t.meBubble = dark ? t.tint.mix(75, .black) : t.tint
             // White, as iOS writes on its own blue; black only where a skin's accent is too light for white to read.
@@ -353,6 +366,7 @@ nonisolated enum ThemeResolver {
     /// A skin's own iOS look (`SkinOwnLook`) over what the general rule made: its surfaces, its greys, its code card.
     private static func paint(_ t: inout ThemeTokens, _ own: SkinOwnLook, ink: RGBA) {
         t.groupedCard = own.card; t.lifted = own.card; t.editor = own.card; t.elevated = own.card
+        if let grouped = own.grouped { t.grouped = grouped }
         t.botBubble = own.reply ?? own.card
         t.promptCard = own.card
         t.promptEdge = own.separator
@@ -393,6 +407,13 @@ nonisolated enum ThemeResolver {
         var rowActive = tinted(8, 5)
         var meBubble = (seeds.userBubble ?? seeds.popover).mix(dark ? 46 : 0, neutralCard)
         var meBorder = seeds.userBubbleBorder ?? seeds.border
+        // Repair skins (such as Everforest) whose seed border equals the page background so the message box keeps an edge.
+        let pageGround = page.over(.white)
+        let bubbleGround = meBubble.over(pageGround)
+        if meBorder.over(pageGround).contrast(with: pageGround) < 1.15 &&
+           meBorder.over(bubbleGround).contrast(with: bubbleGround) < 1.15 {
+            meBorder = strokePrimary
+        }
         // Legible colours (desktop-look.ts:64-128): the accent as text and the secondary text, each mixed toward the
         // text colour until it reads at 4.5:1 on the page.
         let accentText = ThemeMath.legible(source: accent, text: textPrimary, page: page)

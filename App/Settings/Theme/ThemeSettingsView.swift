@@ -54,6 +54,12 @@ struct ThemeSettingsView: View {
     static let contrastNote = "Sets your messages, boxes, lines and secondary text further apart from the page, in your theme’s own colors. For themes that look flat."
     /// [density] Both looks on the iPhone and iPad too (it was the Desktop Look's only, the iOS look staying at 100 %).
     static var scaleNote: String { DeviceWord.isMac ? macScaleNote : "Makes text, faces and rows larger or smaller, in both looks, on top of the text size set in \(DeviceWord.settingsApp). \(DeviceWord.onlyHere)" }
+    /// Concise note for Appearance › Text Size (device scope lives once in Appearance's bottom footer).
+    static var conciseScaleNote: String {
+        DeviceWord.isMac
+            ? "Makes text, faces and rows larger or smaller, in both looks. View › Make Text Bigger (⌘+) and Make Text Smaller (⌘−) change it too."
+            : "Makes text, faces and rows larger or smaller, in both looks, on top of the text size set in \(DeviceWord.settingsApp)."
+    }
     /// [density] The iOS look's Density and UI Scale share one group, so its footer names each.
     static var densityNote: String {
         let scale = DeviceWord.isMac
@@ -91,7 +97,6 @@ struct ThemeSettingsView: View {
                             grid(state)
                             gridFooter(state).font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
                         }
-                        DesktopGroup(footer: contrastFooter(state)) { contrastSwitch(state) }
                         DesktopGroup(footer: nil) { DesktopThemeRows(model: installer) }
                     }
                     // [mac] Stress test 2026-10-28 round 6: the Mac form's readable width and inset (`hqMacForm`), as on
@@ -140,22 +145,6 @@ struct ThemeSettingsView: View {
     /// [a11y] iOS Increase Contrast (the debug override too) turns High Contrast on: the switch shows it, and is held.
     private var increaseContrast: Bool { systemContrast == .increased || HQAccessibility.overrides.contrast }
 
-    private func contrastSwitch(_ state: ThemeState) -> some View {
-        Toggle(isOn: Binding(get: { ThemeContrast.switchOn(state, increaseContrast: increaseContrast) }, set: { on in
-            Haptics.play(.selection)
-            theme.setHighContrast(on)
-        })) {
-            Text("High Contrast").foregroundStyle(Color.hqLabel)
-        }
-        .tint(Color.hqTintText)
-        .disabled(increaseContrast)
-        .accessibilityIdentifier("theme.highContrast")
-    }
-
-    private func contrastFooter(_ state: ThemeState) -> String {
-        [Self.contrastNote, ThemeContrast.switchNote(state, increaseContrast: increaseContrast)].compactMap { $0 }.joined(separator: " ")
-    }
-
     static func topEdgeNote(_ state: ThemeState) -> String {
         "Where rows scroll under the top of every tab. Chats always fade softly. Soft blurs them out gradually. Hard is a frosted band with a straight bottom edge."
     }
@@ -185,7 +174,9 @@ struct ThemeSettingsView: View {
 /// (it was the Theme page's Chats tab).
 enum ChatBubblesSettings {
     static func make() -> UIViewController {
-        let page = SettingsPageController(title: "Chat Bubbles", ChatBubblesSettingsView())
+        let opener = BackgroundOpener()
+        let page = SettingsPageController(title: "Chat Bubbles", ChatBubblesSettingsView(openChatBackground: { opener.open(.chats) }))
+        opener.host = page
         page.view.accessibilityIdentifier = "settings.chat-bubbles"
         page.view.backgroundColor = HQPalette.page
         return page
@@ -193,31 +184,30 @@ enum ChatBubblesSettings {
 }
 
 struct ChatBubblesSettingsView: View {
+    var openChatBackground: (() -> Void)? = nil
     private var theme: Theme { Theme.shared }
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     static var note: String {
         GlassBubbles.offered
             ? "How round the corners of messages in chats are, and how they’re filled: Solid, Liquid Glass in your theme’s colors, or Tinted with the colors of your Chat Background. 12 pt is the standard. With Reduce Transparency on, messages stay solid. The Desktop Look has its own Corners, here once it is on. \(DeviceWord.onlyHere)"
             : "How round the corners of messages in chats are, and whether they’re Tinted with the colors of your Chat Background. 12 pt is the standard. With Reduce Transparency on, messages stay solid. The Desktop Look has its own Corners, here once it is on. \(DeviceWord.onlyHere)"
     }
-    /// [bubbles-note] Owner 2026-11-10 (design pick 23): where the three styles are offered, the note follows the
-    /// choice: one line about the style picked, then the rest in three short sentences (it explained all three at
-    /// once, in seven lines).
+    /// [bubbles-note] One-line summary of each bubble style.
     static func styleLine(_ style: BubbleStyle) -> String {
         switch style {
         case .glass: "Glass: Liquid Glass in your theme’s colors."
-        case .tinted: "Tinted: the colors of your Chat Background."
-        case .card: "Card: replies are soft cards, as App Background’s Soft Cards. Your messages are Tinted."
+        case .tinted, .card: "Tinted: the colors of your Chat Background."
         default: "Solid: filled with your theme’s colors."
         }
     }
     static var shortNote: String {
-        "12 pt corners are the standard. With Reduce Transparency on, messages stay solid. The Desktop Look has its own Corners, here once it is on. \(DeviceWord.onlyHere)"
+        "Override a single bot’s bubble color in Bot Info › Settings."
     }
 
     /// [message-colour] What Colour changes, and what Theme means in its row.
     static var colourNote: String {
-        // [bot-colour] The face choice, and where a bot's own colour is.
         let faces = "Bot’s Face gives each bot’s chat the color of its face. A bot can have its own color in Bot Info › Settings."
         return DeviceWord.isMac
             ? "Color is for your own messages and the row chosen in the sidebar. Theme keeps your theme’s color. \(faces)"
@@ -228,6 +218,7 @@ struct ChatBubblesSettingsView: View {
     static let tintedNeedsBackground = "Tinted takes its colors from your Chat Background. Choose one in Appearance › Backgrounds; until then, messages are solid."
 
     var body: some View {
+        let _ = Backdrop.chats.revision
         let state = theme.state
         // UX #118: no "Chat Bubbles" header, under a bar already titled Chat Bubbles.
         List { Group {
@@ -238,12 +229,11 @@ struct ChatBubblesSettingsView: View {
         .listStyle(.insetGrouped)
     }
 
-    /// [desktop-corners] [desktop-composer] Owner 2026-11-08: the Desktop Look's own Corners for messages and the text
-    /// box (with a preview of a reply, your message and the text box), and which text box it draws.
-    /// [appearance-groups] Here, on the page for how chats look in either look (they were on the Theme page).
+    /// [desktop-corners] [desktop-composer] The Desktop Look's own Corners for messages and its Text Box style.
     @ViewBuilder private func desktopSection(_ state: ThemeState) -> some View {
         Section {
-            BubbleCornersRow(stored: state.desktopCorners, style: .solid, composer: state.boxComposer ? .box : .glass) { points in
+            BubbleCornersRow(stored: state.desktopCorners, standard: ThemeState.defaultDesktopCorners,
+                             style: .solid, composer: state.boxComposer ? .box : .glass) { points in
                 theme.setBubbleCorners(points)
             }
             .hqRowPadding(4)
@@ -251,7 +241,7 @@ struct ChatBubblesSettingsView: View {
             if !ThemeState.textBoxIsFixed {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Text Box").foregroundStyle(Color.hqLabel).fixedSize()   // [ui-sizing] whole beside its segments
-                    HQSegmentedPicker("Text Box", options: [("Liquid Glass", DesktopComposer.glass), ("Desktop", DesktopComposer.box)],
+                    HQSegmentedPicker("Text Box", options: [("Desktop", DesktopComposer.box), ("Liquid Glass", DesktopComposer.glass)],
                                       selection: Binding(get: { state.desktopComposer }, set: { next in
                                           guard next != state.desktopComposer else { return }
                                           Haptics.play(.selection)
@@ -264,49 +254,82 @@ struct ChatBubblesSettingsView: View {
                 .accessibilityIdentifier("theme.desktopComposer")
             }
         } footer: { HQSectionFooter {
-            Text(ThemeSettingsView.desktopChatsNote + " The iOS look has its own Corners, Style and Color, here once the Desktop Look is off.")
+            Text(ThemeSettingsView.desktopChatsNote)
         } }
     }
 
+    /// True when the active skin draws replies straight on the page (Paper), so Reply Bubbles is synced off.
+    private func skinDrawsPlainReplies(_ state: ThemeState) -> Bool {
+        guard let own = state.skin.ownLook?.pick(scheme == .dark) else { return false }
+        return own.reply == own.page
+    }
+
     @ViewBuilder private func bubbleSections(_ state: ThemeState) -> some View {
-            // [plain-replies] Owner 2026-11-15: replies full width and plain, as in Claude's app, as a switch.
-            Section {
-                Toggle("Reply Bubbles", isOn: Binding(get: { !state.plainReplies }, set: { setPlainReplies(!$0) }))
+        let paperPlain = skinDrawsPlainReplies(state)
+        let colorMode: String = switch state.messageColour {
+        case .theme: "theme"
+        case .botFace, .face: "botFace"
+        case .preset, .custom: "custom"
+        }
+        Section {
+            BubbleCornersRow(stored: state.bubbleCorners, standard: ThemeState.defaultBubbleCorners,
+                             style: bubbleStyle(state), plainReply: paperPlain || state.plainReplies,
+                             messageColour: state.messageColour) { points in
+                theme.setBubbleCorners(points)
+            }
+            .hqRowPadding(4)
+
+            bubbleStylePicker(state)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle("Reply Bubbles", isOn: Binding(get: { !paperPlain && !state.plainReplies }, set: { setPlainReplies(!$0) }))
                     .tint(Color.hqTint)
+                    .disabled(paperPlain)
                     .accessibilityIdentifier("theme.replyBubbles")
-            } footer: { HQSectionFooter {
-                Text(Self.replyBubblesNote).accessibilityIdentifier("theme.replyBubblesNote")
-            } }
-            Section {
-                BubbleCornersRow(stored: state.bubbleCorners, style: bubbleStyle(state), plainReply: state.plainReplies) { points in
-                    theme.setBubbleCorners(points)
+                if paperPlain {
+                    Text("\(state.skin.label) draws replies straight on the page.")
+                        .font(Font.hq(.caption))
+                        .foregroundStyle(Color.hqLabel2)
+                        .accessibilityIdentifier("theme.replyBubblesNote")
                 }
-                    .hqRowPadding(4)
-                bubbleStylePicker(state)
-                // [message-colour] Owner 2026-11-11: your own messages in a colour of your choosing.
-                ColourSwatchRow(title: "Color", value: state.messageColour.title, state: state,
-                                swatches: MessageColour.offered.map { ColourSwatch($0) },
-                                picked: state.messageColour.swatchID, custom: state.messageColour.customHex,
-                                identifier: "theme.messageColour") { swatch in
-                    setColour(MessageColour(stored: swatch.id))
-                } pickCustom: { hex in
-                    setColour(.custom(hex))
-                }
-                .hqRowPadding(4)
-            } footer: { HQSectionFooter {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(Self.colourNote).accessibilityIdentifier("theme.messageColourNote")
-                    if GlassBubbles.offered {
-                        Text(Self.styleLine(bubbleStyle(state))).foregroundStyle(Color.hqLabel).accessibilityIdentifier("theme.bubbleStyleLine")
-                        Text(Self.shortNote)
-                    } else {
-                        Text(Self.note)
+            }
+
+            // [message-colour] Mode (Theme | Bot's Face | Custom) split cleanly above the 9 hue presets + custom color well.
+            ColourSwatchRow(
+                title: "Your Message Color",
+                value: state.messageColour.title,
+                state: state,
+                swatches: MessageColour.Preset.allCases.map { ColourSwatch(.preset($0)) },
+                picked: state.messageColour.swatchID,
+                custom: state.messageColour.customHex,
+                modeStrip: .init(
+                    options: [("Theme", "theme"), ("Bot’s Face", "botFace"), ("Custom", "custom")],
+                    selected: colorMode
+                ) { next in
+                    switch next {
+                    case "theme": setColour(.theme)
+                    case "botFace": setColour(.botFace)
+                    default:
+                        if case .preset = state.messageColour { return }
+                        if case .custom = state.messageColour { return }
+                        setColour(.preset(.blue))
                     }
-                    if (bubbleStyle(state) == .tinted || bubbleStyle(state) == .card) && Backdrop.chats.drawn == nil {
-                        Text(Self.tintedNeedsBackground).accessibilityIdentifier("theme.tintedNeedsBackground")
-                    }
+                },
+                identifier: "theme.messageColour"
+            ) { swatch in
+                setColour(MessageColour(stored: swatch.id))
+            } pickCustom: { hex in
+                setColour(.custom(hex))
+            }
+            .hqRowPadding(4)
+        } footer: { HQSectionFooter {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(Self.shortNote).accessibilityIdentifier("theme.messageColourNote")
+                if reduceTransparency {
+                    Text("With Reduce Transparency on, messages stay solid.")
                 }
-            } }
+            }
+        } }
     }
 
     /// [plain-replies] What Reply Bubbles changes.
@@ -330,32 +353,61 @@ struct ChatBubblesSettingsView: View {
     /// [glass-bubbles] [tinted-bubbles] The style the chats draw: Glass reads as Solid where it isn't offered (the Mac).
     private func bubbleStyle(_ state: ThemeState) -> BubbleStyle { BubbleStyles.shown(state.bubbleStyle) }
 
-    /// [glass-bubbles] [tinted-bubbles] Solid, Glass or Tinted: segments on the iPhone; on the Mac, which has no glass,
-    /// a Tinted switch (stress test 2026-10-28 #73: no two-choice segments there).
+    /// [glass-bubbles] [tinted-bubbles] Three decoupled styles (`Solid | Glass | Tinted`) stacked cleanly, with an inline
+    /// CTA to add a Chat Background whenever Tinted is picked without one.
     @ViewBuilder private func bubbleStylePicker(_ state: ThemeState) -> some View {
         let style = bubbleStyle(state)
+        let needsBg = style == .tinted && Backdrop.chats.drawn == nil
         let pick = { (next: BubbleStyle) in
             guard next != style else { return }
             Haptics.play(.selection)
             theme.setBubbleStyle(next)
             AppLog.trace("settings", "bubble style \(next.rawValue)")
         }
-        if GlassBubbles.offered {
-            HStack(spacing: 12) {
-                Text("Style").foregroundStyle(Color.hqLabel).fixedSize()   // [ui-sizing] whole beside its segments (it wrapped "Styl / e" at 150 %)
-                Spacer(minLength: 8)
+        VStack(alignment: .leading, spacing: 10) {
+            if GlassBubbles.offered {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Style").foregroundStyle(Color.hqLabel)
+                    Spacer(minLength: 8)
+                    Text(needsBg ? "Tinted (needs background)" : style.title)
+                        .font(Font.hq(.footnote))
+                        .foregroundStyle(Color.hqLabel2)
+                        .accessibilityIdentifier("theme.bubbleStyleLine")
+                }
                 HQSegmentedPicker("Style", options: BubbleStyles.offered.map { ($0.title, $0) },
-                                  selection: Binding(get: { style }, set: { pick($0) }), ticks: false, wholeLabels: true)   // [Mac UI check 2026-11-13]
-                .labelsHidden()
-                .fixedSize()
+                                  selection: Binding(get: { style }, set: { pick($0) }), ticks: false, wholeLabels: true)
+                    .labelsHidden()
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("theme.bubbleStyle")
+            } else {
+                Toggle("Tinted", isOn: Binding(get: { style == .tinted }, set: { pick($0 ? .tinted : .solid) }))
+                    .tint(Color.hqTint)
+                    .accessibilityIdentifier("theme.tintedBubbles")
             }
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("theme.bubbleStyle")
-        } else {
-            Toggle("Tinted", isOn: Binding(get: { style == .tinted }, set: { pick($0 ? .tinted : .solid) }))
-                .tint(Color.hqTint)
-                .accessibilityIdentifier("theme.tintedBubbles")
+            if needsBg, let openChatBackground {
+                Button {
+                    Haptics.play(.selection)
+                    openChatBackground()
+                } label: {
+                    HStack(spacing: 8) {
+                        Text("Add a Chat Background for Tinted")
+                            .font(Font.hq(.footnote).weight(.medium))
+                            .foregroundStyle(Color.hqTintText)
+                        Spacer(minLength: 4)
+                        Image(systemName: "chevron.right")
+                            .font(Font.hq(.caption).weight(.semibold))
+                            .foregroundStyle(Color.hqTintText)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(Color.hqFill3, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("theme.tintedNeedsBackground")
+            }
         }
+        .hqRowPadding(4)
     }
 }
 
@@ -363,52 +415,83 @@ struct ChatBubblesSettingsView: View {
 /// the drag; the chats only change when the slider is let go (each change lays every open chat out again).
 private struct BubbleCornersRow: View {
     var stored: Int
+    var standard: Int = ThemeState.defaultBubbleCorners
     var style: BubbleStyle
     /// [desktop-corners] Set in the Desktop Look: its preview, with the text box this look draws.
     var composer: DesktopComposer?
     /// [plain-replies] Reply Bubbles off: the preview's reply has no bubble, as in the chat.
     var plainReply = false
+    /// Active message color pick (for live Bot's Face preview).
+    var messageColour: MessageColour = .theme
     var commit: (Int) -> Void
     @State private var draft: Double?
     @State private var dragging = false
 
     private static let range = ThemeState.bubbleCornerRange
+    private static let ticks = [0, 4, 12, 18, 24]
 
     var body: some View {
         let points = Int((draft ?? Double(stored)).rounded())
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             // [tinted-bubbles] On the Chat Background where there is one: the styles are told apart on it.
             if let composer {
                 DesktopCornersPreview(radius: CGFloat(points), composer: composer)
             } else {
-                ChatGroundPanel { ground in BubbleCornersPreview(radius: CGFloat(points), style: style, ground: ground, plainReply: plainReply) }
+                ChatGroundPanel { ground in
+                    BubbleCornersPreview(radius: CGFloat(points), style: style, ground: ground,
+                                         plainReply: plainReply, previewBotFace: messageColour == .botFace)
+                }
             }
-            HStack(alignment: .firstTextBaseline) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("Corners").foregroundStyle(Color.hqLabel)
                 Spacer(minLength: 8)
                 Text("\(points) pt").monospacedDigit().foregroundStyle(Color.hqLabel2)
+                if points != standard {
+                    Button("Reset") {
+                        Haptics.play(.selection)
+                        draft = nil
+                        commit(standard)
+                    }
+                    .font(Font.hq(.footnote).weight(.medium))
+                    .foregroundStyle(Color.hqTintText)
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("theme.bubbleCornersReset")
+                }
             }
-            .accessibilityHidden(true)   // the slider says both
-            Slider(value: Binding(get: { draft ?? Double(stored) }, set: { value in
-                if Int(value.rounded()) != points { Haptics.play(.selection) }
-                draft = value
-                // VoiceOver's swipes and the Mac's arrow keys move it without a drag: those apply at once.
-                if !dragging { finish() }
-            // No `step`: iOS 26 draws a dot for every step under the track (25 here). The value is rounded instead.
-            }), in: Double(Self.range.lowerBound)...Double(Self.range.upperBound)) {
-                Text("Bubble Corners")
-            } minimumValueLabel: {
-                Image(systemName: "square").foregroundStyle(Color.hqLabel2).accessibilityHidden(true)
-            } maximumValueLabel: {
-                Image(systemName: "capsule").foregroundStyle(Color.hqLabel2).accessibilityHidden(true)
-            } onEditingChanged: { editing in
-                dragging = editing
-                if !editing { finish() }
+            VStack(spacing: 2) {
+                Slider(value: Binding(get: { draft ?? Double(stored) }, set: { value in
+                    if Int(value.rounded()) != points { Haptics.play(.selection) }
+                    draft = value
+                    // VoiceOver's swipes and the Mac's arrow keys move it without a drag: those apply at once.
+                    if !dragging { finish() }
+                // No `step`: iOS 26 draws a dot for every step under the track (25 here). The value is rounded instead.
+                }), in: Double(Self.range.lowerBound)...Double(Self.range.upperBound)) {
+                    Text("Bubble Corners")
+                } minimumValueLabel: {
+                    Image(systemName: "square").foregroundStyle(Color.hqLabel2).accessibilityHidden(true)
+                } maximumValueLabel: {
+                    Image(systemName: "capsule").foregroundStyle(Color.hqLabel2).accessibilityHidden(true)
+                } onEditingChanged: { editing in
+                    dragging = editing
+                    if !editing { finish() }
+                }
+                // The theme's accent, as UI Scale's segments: the Mac drew the track grey otherwise, in an active window.
+                .tint(Color.hqTint)
+                .accessibilityValue("\(points) points")
+                .accessibilityIdentifier("theme.bubbleCorners")
+
+                HStack {
+                    ForEach(Self.ticks, id: \.self) { tick in
+                        Text("\(tick)")
+                            .font(Font.hq(.caption2))
+                            .monospacedDigit()
+                            .foregroundStyle(tick == points ? Color.hqLabel : Color.hqLabel3)
+                        if tick != Self.ticks.last { Spacer(minLength: 0) }
+                    }
+                }
+                .padding(.horizontal, 26)
+                .accessibilityHidden(true)
             }
-            // The theme's accent, as UI Scale's segments: the Mac drew the track grey otherwise, in an active window.
-            .tint(Color.hqTint)
-            .accessibilityValue("\(points) points")
-            .accessibilityIdentifier("theme.bubbleCorners")
         }
     }
 
@@ -420,13 +503,15 @@ private struct BubbleCornersRow: View {
     }
 }
 
-/// [glass-bubbles] [tinted-bubbles] The style choices where they are offered, and their names.
+/// [glass-bubbles] [tinted-bubbles] The three decoupled bubble style choices (`Solid | Glass | Tinted`) and their names.
 @MainActor enum BubbleStyles {
     /// Solid, Glass and Tinted; the Mac has no glass (`GlassBubbles.offered`).
-    /// [bubble-card] Card where the three are.
-    static var offered: [BubbleStyle] { GlassBubbles.offered ? [.solid, .glass, .tinted, .card] : [.solid, .tinted] }
-    /// A stored style as it draws here: Glass is solid where it isn't offered.
-    static func shown(_ stored: BubbleStyle) -> BubbleStyle { offered.contains(stored) ? stored : .solid }
+    static var offered: [BubbleStyle] { GlassBubbles.offered ? [.solid, .glass, .tinted] : [.solid, .tinted] }
+    /// A stored style as it draws here: legacy `.card` maps cleanly to `.tinted`; Glass is solid where not offered.
+    static func shown(_ stored: BubbleStyle) -> BubbleStyle {
+        let normalized = stored == .card ? .tinted : stored
+        return offered.contains(normalized) ? normalized : .solid
+    }
 }
 
 extension BubbleStyle {
@@ -486,7 +571,7 @@ private struct ChatGroundPanel<Content: View>: View {
     }
 }
 
-/// A reply and two of your messages, joined as in a chat, with the bot's tail (and yours unless Fewer Timestamps is on).
+/// A reply and your message with inline timestamps (and an honest Bot's Face preview chip when Bot's Face is active).
 struct BubbleCornersPreview: View {
     var radius: CGFloat
     /// [glass-bubbles] [tinted-bubbles] Theme › Chat Bubbles › Style: drawn as the chat draws it (`GlassBubbles`,
@@ -496,58 +581,90 @@ struct BubbleCornersPreview: View {
     var ground: ChatGround?
     /// [plain-replies] Reply Bubbles off: the reply's words straight on the page, no bubble or tail.
     var plainReply = false
+    /// When `MessageColour.botFace` is active, preview a real bot face's tint with an explanatory chip.
+    var previewBotFace = false
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.colorScheme) private var scheme
 
+    private static let sampleHead = Head.defaultHead(profile: "otto")
+
+    /// Resolved user bubble & ink colors for the preview (showing Otto's real face color when `previewBotFace` is true).
+    private var meColors: (uiFill: UIColor, fill: Color, uiInk: UIColor, ink: Color) {
+        guard previewBotFace else {
+            return (ChatPalette.meBubble, Color.hqMeBubble, ChatPalette.meText, Color.hqMeText)
+        }
+        var probe = Theme.shared.state
+        probe.desktopLook = false
+        probe.messageColour = Self.sampleHead.messageColour
+        let resolved = ThemeResolver.resolve(probe)
+        let uiFill = UIColor { traits in resolved.tokens(dark: traits.userInterfaceStyle == .dark).meBubble.uiColor }
+        let uiInk = UIColor { traits in resolved.tokens(dark: traits.userInterfaceStyle == .dark).meText.uiColor }
+        return (uiFill, Color(uiColor: uiFill), uiInk, Color(uiColor: uiInk))
+    }
+
     var body: some View {
         VStack(spacing: ChatMetrics.turnGap) {
-            bubble("Your report is ready. It’s in Files, and I can send it to Ivy as well.", mine: false, tail: true)
-            VStack(spacing: ChatMetrics.runGap) {
-                bubble("Yes please", mine: true, joinsBelow: true, tail: false)
-                bubble("Thanks!", mine: true, joinsAbove: true, tail: !ToolCallSettings.fewerTimestamps)
+            if previewBotFace {
+                HStack(spacing: 6) {
+                    HeadImage(head: Self.sampleHead, size: 18)
+                    Text("Previewing Otto’s face color")
+                        .font(Font.hq(.caption))
+                        .foregroundStyle(Color.hqLabel2)
+                }
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .background(Color.hqFill3, in: Capsule())
+                .frame(maxWidth: .infinity, alignment: .center)
             }
+            bubble("Your report is ready. It’s in Files, and I can send it to Ivy too.", time: "2:45 PM", mine: false, tail: true)
+            bubble("Thanks!", time: "2:46 PM", mine: true, tail: !ToolCallSettings.fewerTimestamps)
         }
         .padding(.vertical, 4)
         .accessibilityHidden(true)
     }
 
     @ViewBuilder
-    private func bubble(_ text: String, mine: Bool, joinsAbove: Bool = false, joinsBelow: Bool = false, tail: Bool) -> some View {
+    private func bubble(_ text: String, time: String, mine: Bool, joinsAbove: Bool = false, joinsBelow: Bool = false, tail: Bool) -> some View {
         if plainReply && !mine {
-            Text(text)
-                .font(Font.hq(.body))
-                .foregroundStyle(Color.hqLabel)
-                .padding(.vertical, ChatMetrics.bubblePadV)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(text)
+                    .font(Font.hq(.body))
+                    .foregroundStyle(Color.hqLabel)
+                Text(time)
+                    .font(Font.hq(.caption2))
+                    .foregroundStyle(Color.hqLabel2)
+            }
+            .padding(.vertical, ChatMetrics.bubblePadV)
+            .frame(maxWidth: .infinity, alignment: .leading)
         } else {
-            solidBubble(text, mine: mine, joinsAbove: joinsAbove, joinsBelow: joinsBelow, tail: tail)
+            solidBubble(text, time: time, mine: mine, joinsAbove: joinsAbove, joinsBelow: joinsBelow, tail: tail)
         }
     }
 
-    private func solidBubble(_ text: String, mine: Bool, joinsAbove: Bool, joinsBelow: Bool, tail: Bool) -> some View {
+    private func solidBubble(_ text: String, time: String, mine: Bool, joinsAbove: Bool, joinsBelow: Bool, tail: Bool) -> some View {
         let glassy = style == .glass && GlassBubbles.offered && !reduceTransparency
-        // [bubble-card] A reply on Soft Cards' surface, where a chat draws one.
-        let cardy = style == .card && !mine && !Theme.isDesktop && ground != nil
-        // Glass takes rounded corners only: no tail, its corner as round as the rest. A card too.
-        let outline = BubbleOutline(radius: radius, mine: mine, joinsAbove: joinsAbove, joinsBelow: joinsBelow, tail: tail && !glassy && !cardy)
-        let colour = mine ? Color.hqMeBubble : Color.hqBotBubble
-        // [bubble-ink] The glass's colour as a chat's bubble takes it (`GlassBubbles.tint`): moved from its words until
-        // they read over the background behind it.
+        let outline = BubbleOutline(radius: radius, mine: mine, joinsAbove: joinsAbove, joinsBelow: joinsBelow, tail: tail && !glassy)
+        let me = meColors
+        let colour = mine ? me.fill : Color.hqBotBubble
+        let ink = mine ? me.ink : Color.hqLabel
+        let timeInk = mine ? me.ink.opacity(0.76) : Color.hqLabel2
+        let uiBubble = mine ? me.uiFill : ChatPalette.botBubble
+        let uiInk = mine ? me.uiInk : ChatPalette.label
         let increased = contrast == .increased, overPicture = ground != nil
         let glassColour = Color(uiColor: UIColor { traits in
-            GlassBubbles.tint((mine ? ChatPalette.meBubble : ChatPalette.botBubble).resolvedColor(with: traits), mine: mine,
+            GlassBubbles.tint(uiBubble.resolvedColor(with: traits), mine: mine,
                               increaseContrast: increased,
-                              ink: (mine ? ChatPalette.meText : ChatPalette.label).resolvedColor(with: traits),
+                              ink: uiInk.resolvedColor(with: traits),
                               page: HQPalette.page.resolvedColor(with: traits), overPicture: overPicture)
         })
-        return Text(text)
-            .font(Font.hq(.body))
-            .foregroundStyle(mine ? Color.hqMeText : Color.hqLabel)
-            .padding(.horizontal, ChatMetrics.bubblePadH)
+        let shift = ChatMetrics.timeShift(corner: radius)
+        return Text("\(Text(text).font(Font.hq(.body)).foregroundStyle(ink))  \(Text(time).font(Font.hq(.caption2)).foregroundStyle(timeInk))")
+            .padding(.leading, ChatMetrics.bubblePadH)
+            .padding(.trailing, ChatMetrics.bubblePadH + shift)
             .padding(.vertical, ChatMetrics.bubblePadV)
-            .background { if cardy { SoftCardBackground(bubbleRadius: radius) } else { tinted(mine: mine, in: outline) } }
-            .hqChatBubble(glassy ? glassColour : nil, solid: cardy || tint(mine: mine) != nil ? .clear : colour, in: outline)
+            .background { tinted(mine: mine, uiBubble: uiBubble, in: outline) }
+            .hqChatBubble(glassy ? glassColour : nil, solid: tint(mine: mine, uiBubble: uiBubble) != nil ? .clear : colour, in: outline)
             // As wide as the chat lets each side go (`TextLayout.maxBubbleWidth`): a reply the row, yours a short column.
             .frame(maxWidth: mine ? ChatMetrics.userMaxWidth : ChatMetrics.replyMaxWidth, alignment: mine ? .trailing : .leading)
             // Room for the tail, which hangs outside the bubble.
@@ -559,21 +676,21 @@ struct BubbleCornersPreview: View {
 extension BubbleCornersPreview {
     /// [tinted-bubbles] The bubble's own copy of the picture, as a chat's bubble draws it (`BubbleShapeView`): nil
     /// unless Tinted is picked, Reduce Transparency is off and the preview stands on the chat background.
-    private func tint(mine: Bool) -> (image: CGImage, aspect: CGSize)? {
-        guard style == .tinted || (style == .card && mine), !reduceTransparency, !Theme.isDesktop, ground != nil else { return nil }
+    private func tint(mine: Bool, uiBubble: UIColor) -> (image: CGImage, aspect: CGSize)? {
+        guard (style == .tinted || style == .card), !reduceTransparency, !Theme.isDesktop, ground != nil else { return nil }
         let traits = UITraitCollection { traits in
             traits.userInterfaceStyle = scheme == .dark ? .dark : .light
             traits.accessibilityContrast = contrast == .increased ? .high : .normal
         }
         guard let soft = TintedBubbles.soft(for: traits),
               let image = TintedBubbles.image(soft, picture: Backdrop.chats.picture(for: traits),
-                                              bubble: mine ? ChatPalette.meBubble : ChatPalette.botBubble, mine: mine,
+                                              bubble: uiBubble, mine: mine,
                                               increaseContrast: contrast == .increased, traits: traits) else { return nil }
         return (image, soft.aspect)
     }
 
-    @ViewBuilder private func tinted(mine: Bool, in outline: BubbleOutline) -> some View {
-        if let ground, let tint = tint(mine: mine) {
+    @ViewBuilder private func tinted(mine: Bool, uiBubble: UIColor, in outline: BubbleOutline) -> some View {
+        if let ground, let tint = tint(mine: mine, uiBubble: uiBubble) {
             GeometryReader { proxy in
                 let at = proxy.frame(in: .named(ChatGround.space))
                 let fill = TintedBubbles.fillRect(tint.aspect, in: CGRect(origin: .zero, size: ground.size))
@@ -756,30 +873,49 @@ struct SkinGrid: View {
     var oneColumn: Bool
     var pick: (String) -> Void
 
+    private var adaptive: [Skin] { SkinCatalog.all.filter { !$0.hasOneLook } }
+    private var darkOnly: [Skin] { SkinCatalog.all.filter { $0.hasOneLook } }
+
     var body: some View {
         // Not a LazyVGrid: Mac download 479 died "stuck in a recursive layout loop" (self-sizing rows not returning the
         // same size twice) in this page's List a moment after a theme change. A lazy grid sizes by the cards it has made
         // so far; in a List row that height can differ from pass to pass. A dozen cards gain nothing from laziness.
         let count = oneColumn ? 1 : 2
-        let skins = SkinCatalog.all
-        Grid(alignment: .topLeading, horizontalSpacing: 12, verticalSpacing: 12) {
-            ForEach(Array(stride(from: 0, to: skins.count, by: count)), id: \.self) { start in
-                GridRow(alignment: .top) {
-                    ForEach(start..<start + count, id: \.self) { index in
-                        if index < skins.count {
-                            let skin = skins[index]
-                            SkinCard(skin: skin, dark: dark, isSelected: skin.id == selected) { pick(skin.id) }
-                        } else {
-                            Color.clear.frame(height: 0)   // an odd last row keeps its card one column wide
-                        }
-                    }
-                }
+        VStack(alignment: .leading, spacing: 18) {
+            group(title: "Adaptive (Light & Dark)", skins: adaptive, count: count)
+            if !darkOnly.isEmpty {
+                group(title: "Dark Only", skins: darkOnly, count: count)
             }
         }
         // [page-tabs] Its own height whatever the row offers. The List offers the row's height back, and a Grid given a
         // height shrinks its last row to fit (980 pt wanted, 963 then 961 given back, Cyberpunk's taller card spilling
         // out), so the row came out 20 pt taller than the grid and the grid sat 10 pt down in it, under the tabs.
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func group(title: String, skins: [Skin], count: Int) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title.uppercased())
+                .font(Font.hq(.caption).weight(.semibold))
+                .tracking(0.6)
+                .foregroundStyle(Color.hqLabel2)
+                .padding(.horizontal, 4)
+                .accessibilityAddTraits(.isHeader)
+            Grid(alignment: .topLeading, horizontalSpacing: 12, verticalSpacing: 12) {
+                ForEach(Array(stride(from: 0, to: skins.count, by: count)), id: \.self) { start in
+                    GridRow(alignment: .top) {
+                        ForEach(start..<start + count, id: \.self) { index in
+                            if index < skins.count {
+                                let skin = skins[index]
+                                SkinCard(skin: skin, dark: dark, isSelected: skin.id == selected) { pick(skin.id) }
+                            } else {
+                                Color.clear.frame(height: 0)   // an odd last row keeps its card one column wide
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -801,33 +937,26 @@ private struct SkinCard: View {
 
     var body: some View {
         let desktop = Theme.shared.state.desktopLook
-        // iOS look: the grouped card's own corner (26 pt on iOS 26), so the list's rounded edge never cuts a card's outline.
-        let radius: CGFloat = desktop ? 4 : 26
+        let radius: CGFloat = desktop ? 4 : 18
         // The card previews the skin as it would draw now (the look, the contrast option and the mode on screen).
         var preview = Theme.shared.state
         preview.skinID = skin.id
         let resolved = ThemeResolver.resolve(preview)
         let tokens = resolved.tokens(dark: dark)
-        let previewRadius: CGFloat = desktop ? 3 : 14
+        let previewRadius: CGFloat = desktop ? 3 : 10
         return Button(action: action) {
             VStack(alignment: .leading, spacing: 8) {
                 Group {
-                    if DeviceWord.isMac {
-                        // [mac] Stress test 2026-10-28 #88, round 2: in a dark window Nous, GitHub, Catppuccin, Solarized
-                        // and Nous Alt previewed as near-identical dark pages. A theme with both looks shows both, its
-                        // light page beside its dark one; every preview leads with a filled bar of its own accent.
-                        if skin.onlyModeTag == nil {
-                            HStack(spacing: 0) {
-                                SkinPreview(tokens: resolved.tokens(dark: false), radius: 0, accentBar: true)
-                                SkinPreview(tokens: resolved.tokens(dark: true), radius: 0, accentBar: true)
-                            }
-                            .clipShape(RoundedRectangle(cornerRadius: previewRadius))
-                            .overlay(RoundedRectangle(cornerRadius: previewRadius).strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline))
-                        } else {
-                            SkinPreview(tokens: tokens, radius: previewRadius, accentBar: true)
+                    // Split Light|Dark preview for adaptive skins and bold accent bar on every device (ported from Mac).
+                    if skin.onlyModeTag == nil {
+                        HStack(spacing: 0) {
+                            SkinPreview(tokens: resolved.tokens(dark: false), radius: 0, accentBar: true)
+                            SkinPreview(tokens: resolved.tokens(dark: true), radius: 0, accentBar: true)
                         }
+                        .clipShape(RoundedRectangle(cornerRadius: previewRadius, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: previewRadius, style: .continuous).strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline))
                     } else {
-                        SkinPreview(tokens: tokens, radius: previewRadius)
+                        SkinPreview(tokens: tokens, radius: previewRadius, accentBar: true)
                     }
                 }
                 .frame(height: desktop ? 64 : 56)
@@ -856,10 +985,10 @@ private struct SkinCard: View {
             .padding(12)
             // [compact] iOS look 124 pt (was 150): no empty band under the shorter descriptions.
             .frame(maxWidth: .infinity, minHeight: desktop ? 150 : 124, alignment: .topLeading)
-            .background(RoundedRectangle(cornerRadius: radius).fill(desktop ? Color.hqPage : Color(uiColor: HQPalette.card)))
-            .overlay(RoundedRectangle(cornerRadius: radius)
-                .strokeBorder(isSelected ? Color.hqTintText : (desktop ? Color.hqStroke : Color.clear), lineWidth: isSelected ? 2 : 1))
-            .contentShape(RoundedRectangle(cornerRadius: radius))
+            .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(desktop ? Color.hqPage : Color(uiColor: HQPalette.card)))
+            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .strokeBorder(isSelected ? Color.hqTintText : Color.hqStroke, lineWidth: isSelected ? 2 : HQShape.hairline))
+            .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
         }
         .buttonStyle(.plain)
         // One stop for VoiceOver, speaking the label below. (XCUITest's tree still lists the card's inner texts under
@@ -875,34 +1004,28 @@ private struct SkinCard: View {
 private struct SkinModeTag: View {
     var text: String
 
+    private var compactText: String {
+        if DeviceWord.isMac { return text }
+        if text == "Dark Only" { return "Dark" }
+        if text == "Light Only" { return "Light" }
+        return text
+    }
+
     var body: some View {
-        if DeviceWord.isMac {
-            // [mac] Stress test 2026-10-28 #88, round 2: the outlined tag was easy to miss; it is a filled tag with the
-            // moon (or sun) of the one look the theme has.
-            // [Mac AAA 2026-11-16] The glyph beside its words: a Label put a word's width of room between them on the
-            // Mac ("☾   Dark Only").
-            HStack(spacing: 4) {
-                Image(systemName: text.hasPrefix("Dark") ? "moon.fill" : "sun.max.fill").imageScale(.small)
-                Text(text)
-            }
-                .accessibilityElement(children: .combine)
-                .font(Font.hq(.caption).weight(.semibold))
-                .foregroundStyle(Color.hqLabel)
-                .lineLimit(1)
-                .fixedSize()
-                .padding(.horizontal, 7)
-                .padding(.vertical, 2)
-                .background(Capsule().fill(Color.hqFill3))
-        } else {
-        Text(text)
-            .font(Font.hq(.caption))
-            .foregroundStyle(Color.hqLabel2)
-            .lineLimit(1)
-            .fixedSize()
-            .padding(.horizontal, 6)
-            .padding(.vertical, 1)
-            .overlay(Capsule().strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline))
+        // Filled capsule with moon/sun glyph on both Mac and mobile.
+        HStack(spacing: 4) {
+            Image(systemName: text.hasPrefix("Dark") ? "moon.fill" : "sun.max.fill").imageScale(.small)
+            Text(compactText)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(text)
+        .font(Font.hq(.caption).weight(.semibold))
+        .foregroundStyle(Color.hqLabel)
+        .lineLimit(1)
+        .fixedSize()
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(Capsule().fill(Color.hqFill3))
     }
 }
 

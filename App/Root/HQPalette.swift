@@ -198,20 +198,9 @@ enum ListBarAppearance {
             item.standardAppearance = scrolled
             item.compactAppearance = scrolled
             item.compactScrollEdgeAppearance = rest
-            #if targetEnvironment(macCatalyst)
-            dropLookTitle(item)   // V17: the plain title, not BOTS, SESSIONS
+            // Unified with Mac V17: tab root titles stay readable Title Case (17 pt semibold) instead of 12 pt caps.
+            dropLookTitle(item)
             return
-            #else
-            // [desktoplook2] A tab root's title as the desktop's label: BOTS, SESSIONS (phone-ui-desktop.css:174-178).
-            // The plain title is kept beside the label: clearing the label later wipes `title` too (owner, build 306:
-            // Desktop Look off and on again left the tab with no title at all).
-            let plain = objc_getAssociatedObject(item, &lookTitleKey) as? String ?? item.title
-            if let title = plain, !title.isEmpty {
-                item.attributedTitle = AttributedString(title.uppercased(), attributes: AttributeContainer(DesktopLayout.labelAttributes(size: 12)))
-                objc_setAssociatedObject(item, &lookTitleKey, title, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-            }
-            return
-            #endif
         }
         // [desktoplook2] Only a title the look set is cleared: the getter answers non-nil for a plain title, and nil-ing it wipes the title.
         if let plain = objc_getAssociatedObject(item, &lookTitleKey) as? String {

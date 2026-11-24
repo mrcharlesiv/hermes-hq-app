@@ -25,7 +25,7 @@ enum ThemeChrome {
     /// following UI Scale); the web's fixed 14 pt drew titles smaller than the rows under them. [popup-consistency] Also
     /// the title of a sheet that draws its own header in the look (`SheetCloseDisc.titleFont`).
     static var barTitleFont: UIFont {
-        DeviceWord.isMac ? MacType.pageTitle : HQFont.system(ofSize: 14 * HQFont.dynamicRatio(nil), weight: .semibold)
+        DeviceWord.isMac ? MacType.pageTitle : HQFont.system(ofSize: 17 * HQFont.dynamicRatio(nil), weight: .semibold)
     }
 
     static func solidBar(solid: Bool = false, frosted: Bool = false) -> UINavigationBarAppearance {
@@ -40,9 +40,8 @@ enum ThemeChrome {
         }
         appearance.shadowColor = .clear
         appearance.titleTextAttributes = [.font: barTitleFont, .foregroundColor: HQPalette.label]
-        // A tab root's title: the desktop label (12 pt semibold, uppercase, tracked, secondary colour).
-        let label = HQFont.system(ofSize: HQFont.legibleLiteral(12 * HQFont.dynamicRatio(nil)), weight: .semibold)
-        appearance.largeTitleTextAttributes = [.font: label, .foregroundColor: HQPalette.label2, .kern: 12 * 0.08]
+        // Unified Title Case bar title (matches Mac Desktop Look V17), keeping tracked small caps for section headers.
+        appearance.largeTitleTextAttributes = [.font: barTitleFont, .foregroundColor: HQPalette.label]
         return appearance
     }
 

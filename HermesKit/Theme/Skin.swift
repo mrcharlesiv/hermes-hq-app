@@ -43,6 +43,12 @@ nonisolated struct Skin: Sendable, Hashable, Identifiable {
     var ownLook: SkinOwnLook.Pair? = nil
     var syntax: SyntaxColours.Pair? = nil
 
+    /// Sentinel family name requesting the system monospace typeface (`SF Mono`) instead of a named font family.
+    static let monospacedFamily = "SF Mono"
+
+    /// Whether this skin uses the system monospace typeface (`SF Mono`) for UI text in both looks.
+    var usesMonospacedUI: Bool { sansFamily == Self.monospacedFamily }
+
     /// One palette only (Midnight, Ember, Mono, Slate, Cyberpunk): Light and Dark draw the same.
     var hasOneLook: Bool { dark == nil }
     /// The theme card's tag for a one-palette skin: "Dark Only" / "Light Only" (stress test 2026-10-28 #88), nil otherwise.
@@ -80,7 +86,7 @@ nonisolated enum SkinCatalog {
         ("ember", "Ember", "Warm crimson and bronze — forge vibes", nil),
         ("mono", "Mono", "Clean grayscale — minimal and focused", nil),
         ("slate", "Slate", "Cool slate blue — focused developer theme", nil),
-        ("cyberpunk", "Cyberpunk", "Neon green on black — matrix terminal", "Courier New"),
+        ("cyberpunk", "Cyberpunk", "Neon green on black — matrix terminal", Skin.monospacedFamily),
         // [mac] Stress test 2026-10-28 #27: on a Mac the same colours are the Mac's own system colours too.
         ("ios", DeviceWord.isMac ? "Apple System" : "iOS System",
          DeviceWord.isMac ? "Apple’s system colors, true black in dark, system blue" : "iOS colors, true black in dark, system blue", nil),

@@ -29,12 +29,19 @@ enum BackdropWords {
         }
     }
 
+    /// Concise summary shown on Appearance › Backgrounds (nil when both are None).
+    @MainActor static var summary: String? {
+        if Backdrop.app.drawn != nil { return value(of: .app) }
+        if Backdrop.chats.drawn != nil { return value(of: .chats) }
+        return nil
+    }
+
     static var rowsNote: String { "A picture behind the app’s pages, and one behind chats, or the same for both. The Desktop Look keeps its plain pages. \(DeviceWord.onlyHere)" }
-    static var appNote: String { "Behind Sessions, Bots, Jobs, More, Settings and the pages they open. Dim covers it with the page color, so the rows on it stay easy to read. \(DeviceWord.onlyHere)" }
-    static var chatNote: String { "Behind every chat. Dim covers it with the page color, so the grey lines between messages stay easy to read. \(DeviceWord.onlyHere)" }
+    static var appNote: String { "Behind Sessions, Bots, Jobs, More, Settings and the pages they open. Wash blends the page color over it so rows stay readable. \(DeviceWord.onlyHere)" }
+    static var chatNote: String { "Behind every chat. Wash blends the page color over it so text and dividers stay readable. \(DeviceWord.onlyHere)" }
     /// [backdrop-cards]
-    static let cardsNote = "Soft Cards lays a backing in your theme’s colors behind each list, so words stay easy to read. With Reduce Transparency on, Glass cards are solid."
-    static let sameNote = "Chats show the app’s picture, with their own Dim and Blur."
+    static let cardsNote = "Cards lay a theme-matched backing behind each list so text stays readable. With Reduce Transparency on, Glass cards are solid."
+    static let sameNote = "Chats show the app’s picture, with their own Wash and Blur."
     /// Added under the preview while the Desktop Look is on, which keeps its plain pages.
     static let desktopNote = "The Desktop Look is on, so it shows once you turn that off."
 }
@@ -149,29 +156,66 @@ enum BackgroundPageController {
     }
 }
 
+/// Unified 4-way Soft Cards mode (`Off | Tinted | Glass | Solid`) for App Background.
+private enum CardChoice: String, Hashable, CaseIterable {
+    case off, tinted, glass, solid
+
+    var title: String {
+        switch self {
+        case .off: "Off"
+        case .tinted: "Tinted"
+        case .glass: "Glass"
+        case .solid: "Solid"
+        }
+    }
+
+    var caption: String {
+        switch self {
+        case .off: "Text straight on wallpaper"
+        case .tinted: "Soft theme-tinted blur"
+        case .glass: "Liquid Glass cards"
+        case .solid: "Opaque theme cards"
+        }
+    }
+
+    static func current(for backdrop: Backdrop) -> CardChoice {
+        guard backdrop.cards else { return .off }
+        return switch backdrop.cardStyle {
+        case .tinted: .tinted
+        case .glass: .glass
+        case .solid: .solid
+        }
+    }
+}
+
 struct BackgroundPage: View {
     var place: Backdrop.Place
     @State private var busy = false
     @State private var draftDim: Double?
     @State private var dragging = false
+    @State private var selectedGroup: BackdropPreset.Group = .classic
+    @State private var syncedInitialGroup = false
     @Environment(\.dynamicTypeSize) private var typeSize
 
     private var backdrop: Backdrop { place == .app ? .app : .chats }
 
     var body: some View {
+        let _ = (backdrop.revision, Backdrop.app.revision)
         let dim = Int((draftDim ?? Double(backdrop.dim)).rounded())
-        ScrollViewReader { proxy in
-        List { Group {
-            Section {
+        let side: CGFloat = DeviceWord.isMac ? 20 : 16
+        VStack(spacing: 0) {
+            // Pinned preview + live Wash / Blur / Cards strip so every adjustment is visible in real time.
+            VStack(spacing: 10) {
                 BackdropPreview(place: place, dim: dim)
-                    .listRowInsets(EdgeInsets())
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline))
                     .accessibilityIdentifier("theme.backgroundPreview")
-            } footer: { HQSectionFooter {
-                let note = place == .app ? BackdropWords.appNote : BackdropWords.chatNote
-                Text(Theme.isDesktop ? note + " " + BackdropWords.desktopNote : note)
-            } }
-            if place == .chats, Backdrop.app.source != nil {
-                Section {
+
+                if backdrop.drawn != nil {
+                    controlsCard(dim: dim)
+                }
+
+                if place == .chats, Backdrop.app.source != nil {
                     Toggle(isOn: Binding(get: { backdrop.sameAsApp }, set: { on in
                         Haptics.play(.selection)
                         backdrop.setSameAsApp(on)
@@ -179,89 +223,180 @@ struct BackgroundPage: View {
                         Text("Use App Background").foregroundStyle(Color.hqLabel)
                     }
                     .tint(Color.hqTint)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Color(uiColor: HQPalette.card), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .accessibilityIdentifier("theme.backgroundSame")
-                } footer: { HQSectionFooter {
-                    Text(BackdropWords.sameNote)
-                } }
+                }
+
+                if !backdrop.followsApp {
+                    categoryChips
+                }
             }
-            if !backdrop.followsApp {
-                ForEach(BackdropPreset.Group.allCases, id: \.self) { group in
-                    Section {
-                        BackdropGrid(place: place, group: group, busy: busy, columns: columns) { source in
+            .padding(.horizontal, side)
+            .padding(.top, 8)
+            .padding(.bottom, 10)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    if backdrop.followsApp {
+                        Text(BackdropWords.sameNote)
+                            .font(Font.hq(.footnote))
+                            .foregroundStyle(Color.hqLabel2)
+                            .padding(.horizontal, 4)
+                    } else {
+                        BackdropGrid(place: place, group: selectedGroup, busy: busy, columns: columns) { source in
                             pick(source)
                         } pickPhoto: { from in
                             BackdropPicker.pick(from, for: place) { busy = $0 }
                         }
-                        .padding(.vertical, 6)
-                    } header: { HQSectionLabel {
-                        Text(group.title)
-                    } }
-                    .id(group)
-                }
-            }
-            if backdrop.drawn != nil {
-                Section {
-                    dimRow(dim)
-                        .hqRowPadding(4)
-                    Toggle(isOn: Binding(get: { backdrop.blur }, set: { backdrop.setBlur($0) })) {
-                        Text("Blur").foregroundStyle(Color.hqLabel)
+                        .padding(12)
+                        .background(Color(uiColor: HQPalette.card), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                     }
-                    .tint(Color.hqTint)
-                    .accessibilityIdentifier("theme.backgroundBlur")
-                    // [backdrop-cards] Off until turned on (owner 2026-11-12).
-                    if place == .app {
-                        Toggle(isOn: Binding(get: { backdrop.cards }, set: { backdrop.setCards($0) })) {
-                            Text("Soft Cards").foregroundStyle(Color.hqLabel)
-                        }
-                        .tint(Color.hqTint)
-                        .accessibilityIdentifier("theme.backgroundCards")
-                        // [soft-card-style] Owner 2026-11-15: the cards' fill, from the same three as Chat Bubbles.
-                        if backdrop.cards { cardStylePicker }
+                    if Theme.isDesktop {
+                        Text(BackdropWords.desktopNote)
+                            .font(Font.hq(.footnote))
+                            .foregroundStyle(Color.hqLabel2)
+                            .padding(.horizontal, 4)
                     }
-                } footer: {
-                    if place == .app { HQSectionFooter {
-                        VStack(alignment: .leading, spacing: 6) {
-                            if backdrop.cards {
-                                Text(backdrop.cardStyle.line).foregroundStyle(Color.hqLabel).accessibilityIdentifier("theme.backgroundCardStyleLine")
-                            }
-                            Text(BackdropWords.cardsNote)
-                        }
-                    } }
                 }
+                .padding(.horizontal, side)
+                .padding(.bottom, 20)
             }
-        }.hqMacSettingsRowInsets() }
-        .hqMacForm(settings: true)
-        .hqGroupedPage()
-        .listStyle(.insetGrouped)
-        .animation(HQMotion.reduced ? nil : .default, value: backdrop.followsApp)
-        #if DEBUG
-        .onAppear {
-            // `-HQDebugBackgroundGroup photographic|illustrated|painted|doodles` (screenshots): open scrolled to that group.
-            guard let name = UserDefaults.standard.string(forKey: "HQDebugBackgroundGroup"),
-                  let group = BackdropPreset.Group.allCases.first(where: { "\($0)" == name }) else { return }
-            Task { @MainActor in proxy.scrollTo(group, anchor: .top) }
         }
-        #endif
+        .background(Color(uiColor: HQPalette.groupedPage).ignoresSafeArea())
+        .hqMacForm(settings: true)
+        .animation(HQMotion.reduced ? nil : .default, value: backdrop.followsApp)
+        .onAppear {
+            guard !syncedInitialGroup else { return }
+            syncedInitialGroup = true
+            #if DEBUG
+            if let name = UserDefaults.standard.string(forKey: "HQDebugBackgroundGroup"),
+               let group = BackdropPreset.Group.allCases.first(where: { "\($0)" == name }) {
+                selectedGroup = group
+                return
+            }
+            #endif
+            if case .preset(let preset) = backdrop.chosen,
+               let group = BackdropPreset.Group.allCases.first(where: { $0.presets.contains(preset) }) {
+                selectedGroup = group
+            }
         }
     }
 
-    /// [soft-card-style] Soft Cards › Style: Solid, Glass or Tinted, segments as Chat Bubbles › Style draws them.
-    private var cardStylePicker: some View {
-        let style = backdrop.cardStyle
-        return HStack(spacing: 12) {
-            Text("Style").foregroundStyle(Color.hqLabel).fixedSize()
-            Spacer(minLength: 8)
-            HQSegmentedPicker("Card Style", options: SoftCardStyle.allCases.map { ($0.title, $0) },
-                              selection: Binding(get: { style }, set: { next in
-                                  guard next != style else { return }
-                                  Haptics.play(.selection)
-                                  backdrop.setCardStyle(next)
-                              }), ticks: false, wholeLabels: true)
-            .labelsHidden()
-            .fixedSize()
+    private func controlsCard(dim: Int) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Compact Wash slider + Blur pill in one row.
+            HStack(spacing: 10) {
+                Text("Wash")
+                    .font(Font.hq(.subheadline).weight(.medium))
+                    .foregroundStyle(Color.hqLabel)
+                Slider(value: Binding(get: { draftDim ?? Double(backdrop.dim) }, set: { value in
+                    if Int(value.rounded()) / 10 != dim / 10 { Haptics.play(.selection) }
+                    draftDim = value
+                    if !dragging { finishDim() }
+                }), in: Double(Backdrop.dimRange.lowerBound)...Double(Backdrop.dimRange.upperBound)) {
+                    Text("Wash")
+                } onEditingChanged: { editing in
+                    dragging = editing
+                    if !editing { finishDim() }
+                }
+                .tint(Color.hqTint)
+                .accessibilityLabel("Wash")
+                .accessibilityValue("\(dim) percent")
+                .accessibilityIdentifier("theme.backgroundDim")
+
+                Text("\(dim)%")
+                    .font(Font.hq(.footnote))
+                    .monospacedDigit()
+                    .foregroundStyle(Color.hqLabel2)
+                    .frame(minWidth: 34, alignment: .trailing)
+                    .accessibilityHidden(true)
+
+                Button {
+                    Haptics.play(.selection)
+                    backdrop.setBlur(!backdrop.blur)
+                } label: {
+                    Text("Blur")
+                        .font(Font.hq(.footnote).weight(.semibold))
+                        .foregroundStyle(backdrop.blur ? Color.hqOnTint : Color.hqLabel)
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 5)
+                        .background(backdrop.blur ? Color.hqTint : Color.hqFill3, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Blur")
+                .accessibilityAddTraits(backdrop.blur ? [.isButton, .isSelected] : .isButton)
+                .accessibilityIdentifier("theme.backgroundBlur")
+            }
+
+            // Unified 1-row Cards picker (Off | Tinted | Glass | Solid) on App Background.
+            if place == .app {
+                let choice = CardChoice.current(for: backdrop)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("Cards")
+                            .font(Font.hq(.subheadline).weight(.medium))
+                            .foregroundStyle(Color.hqLabel)
+                        Spacer(minLength: 8)
+                        Text(choice.caption)
+                            .font(Font.hq(.caption))
+                            .foregroundStyle(Color.hqLabel2)
+                            .accessibilityIdentifier("theme.backgroundCardStyleLine")
+                    }
+                    HQSegmentedPicker("Cards", options: CardChoice.allCases.map { ($0.title, $0) },
+                                      selection: Binding(get: { choice }, set: { next in
+                                          guard next != choice else { return }
+                                          Haptics.play(.selection)
+                                          switch next {
+                                          case .off:
+                                              backdrop.setCards(false)
+                                          case .tinted:
+                                              backdrop.setCards(true)
+                                              backdrop.setCardStyle(.tinted)
+                                          case .glass:
+                                              backdrop.setCards(true)
+                                              backdrop.setCardStyle(.glass)
+                                          case .solid:
+                                              backdrop.setCards(true)
+                                              backdrop.setCardStyle(.solid)
+                                          }
+                                      }), ticks: false, wholeLabels: true)
+                        .labelsHidden()
+                        .accessibilityIdentifier("theme.backgroundCards")
+                }
+            }
         }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("theme.backgroundCardStyle")
+        .padding(.horizontal, 13)
+        .padding(.vertical, 11)
+        .background(Color(uiColor: HQPalette.card), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private var categoryChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(BackdropPreset.Group.allCases, id: \.self) { group in
+                    let on = group == selectedGroup
+                    Button {
+                        guard !on else { return }
+                        Haptics.play(.selection)
+                        selectedGroup = group
+                    } label: {
+                        Text(group.shortTitle)
+                            .font(Font.hq(.footnote).weight(.semibold))
+                            .foregroundStyle(on ? Color.hqOnTint : Color.hqLabel2)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(on ? Color.hqTint : Color(uiColor: HQPalette.card), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(group.title)
+                    .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+                    .accessibilityIdentifier("theme.backgroundCategory.\(group)")
+                }
+            }
+            .padding(.vertical, 1)
+        }
     }
 
     private var columns: Int {
@@ -279,40 +414,22 @@ struct BackgroundPage: View {
         HQAnnounce.say("\(BackdropWords.title(place)): \(BackdropWords.name(source)).")
     }
 
-    private func dimRow(_ dim: Int) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Dim").foregroundStyle(Color.hqLabel)
-                Spacer(minLength: 8)
-                Text("\(dim)%").monospacedDigit().foregroundStyle(Color.hqLabel2)
-            }
-            .accessibilityHidden(true)   // the slider says both
-            Slider(value: Binding(get: { draftDim ?? Double(backdrop.dim) }, set: { value in
-                if Int(value.rounded()) / 10 != dim / 10 { Haptics.play(.selection) }
-                draftDim = value
-                // VoiceOver's swipes and the Mac's arrow keys move it without a drag: those apply at once.
-                if !dragging { finishDim() }
-            // No `step`: iOS 26 draws a dot under the track for every step. The value is rounded instead.
-            }), in: Double(Backdrop.dimRange.lowerBound)...Double(Backdrop.dimRange.upperBound)) {
-                Text("Dim")
-            } minimumValueLabel: {
-                Image(systemName: "sun.max").foregroundStyle(Color.hqLabel2).accessibilityHidden(true)
-            } maximumValueLabel: {
-                Image(systemName: "sun.min").foregroundStyle(Color.hqLabel2).accessibilityHidden(true)
-            } onEditingChanged: { editing in
-                dragging = editing
-                if !editing { finishDim() }
-            }
-            .tint(Color.hqTint)
-            .accessibilityValue("\(dim) percent")
-            .accessibilityIdentifier("theme.backgroundDim")
-        }
-    }
-
     private func finishDim() {
         guard let draftDim else { return }
         self.draftDim = nil
         backdrop.setDim(Int(draftDim.rounded()))
+    }
+}
+
+private extension BackdropPreset.Group {
+    var shortTitle: String {
+        switch self {
+        case .classic: "Classic"
+        case .photographic: "Photo"
+        case .illustrated: "Illustrated"
+        case .painted: "Painted"
+        case .doodles: "Doodles"
+        }
     }
 }
 
@@ -548,7 +665,7 @@ private struct BackdropPreview: View {
                 .padding(.vertical, 12)
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 240)
+        .frame(maxWidth: .infinity, minHeight: 196)
         .background {
             ZStack {
                 Color.hqPage
@@ -571,19 +688,19 @@ private struct BackdropPreview: View {
     }
 }
 
-/// Three rows as the Bots list draws them: a face, a name, a line of the last reply, a time.
+/// Three rows as the Bots list draws them, with real Hermes bot faces (demo bots Otto, Ivy, Wren).
 private struct AppRowsPreview: View {
-    private static let rows: [(name: String, line: String, time: String, hue: Color)] = [
-        ("Research", "The three reports are summarised in Files.", "9:41", .blue),
-        ("Finance", "Paid the invoices due this week.", "9:12", .green),
-        ("Writer", "Here’s a second draft of the post.", "8:05", .orange),
+    private static let rows: [(profile: String, name: String, line: String, time: String)] = [
+        ("otto", "Otto", "Drafted release notes for build 1275.", "9:41"),
+        ("ivy", "Ivy", "Weekly metrics are saved in Files.", "9:12"),
+        ("wren", "Wren", "Here’s the revised onboarding copy.", "8:05"),
     ]
 
     var body: some View {
         VStack(spacing: 0) {
-            ForEach(Self.rows, id: \.name) { row in
+            ForEach(Self.rows, id: \.profile) { row in
                 HStack(spacing: 12) {
-                    Circle().fill(row.hue.gradient).frame(width: 40, height: 40)
+                    HeadImage(head: Head.defaultHead(profile: row.profile), size: 36)
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(alignment: .firstTextBaseline) {
                             Text(row.name).font(Font.hq(.headline)).foregroundStyle(Color.hqLabel)
@@ -593,8 +710,8 @@ private struct AppRowsPreview: View {
                         Text(row.line).font(Font.hq(.subheadline)).foregroundStyle(Color.hqLabel2).lineLimit(1)
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
             }
         }
     }

@@ -1962,7 +1962,14 @@ extension SettingsRowLabel {
         // Appearance
         "circle.lefthalf.filled": ("circle.lefthalf.filled", Tile.blue),
         "paintpalette": ("paintpalette.fill", Tile.purple),
+        "paintbrush": ("paintbrush.fill", Tile.purple),
+        "desktopcomputer": ("desktopcomputer", Tile.indigo),
+        "circle.righthalf.filled": ("circle.righthalf.filled", Tile.indigo),
+        "textformat.size": ("textformat.size", Tile.blue),
         "bubble.left.and.bubble.right": ("bubble.left.and.bubble.right.fill", Tile.green),   // [theme-pages] Chat Bubbles
+        "rectangle.compress.vertical": ("rectangle.compress.vertical", Tile.teal),
+        "circle.dashed": ("circle.dashed", Tile.orange),
+        "rectangle.topthird.inset.filled": ("rectangle.topthird.inset.filled", Tile.purple),
         "dock.rectangle": ("dock.rectangle", Tile.teal),
         "sidebar.left": ("sidebar.left", Tile.teal),   // [mac] Mac polish: Sidebar, the Mac's Tabs
         "app.badge": ("app.badge.fill", Tile.indigo),

@@ -18,10 +18,9 @@ nonisolated struct ThemeState: Sendable, Hashable {
     /// be able to still control the radius of the chat bubbles"). The desktop's 4 pt unless another was picked, so the
     /// look's boxes stay as they were for whoever never moves the slider.
     var desktopCorners = ThemeState.defaultDesktopCorners
-    /// [desktop-composer] The Desktop Look's text box: the iOS look's Liquid Glass bar (the default, owner 2026-11-08:
-    /// "the text input could default to the liquid glass one"), its corners following `desktopCorners`, or the
-    /// desktop's one flat box.
-    var desktopComposer = DesktopComposer.glass
+    /// [desktop-composer] The Desktop Look's text box: the desktop's flat bordered box by default for chrome cohesion,
+    /// with an option in Chat Bubbles › Text Box to switch to the iOS look's Liquid Glass bar.
+    var desktopComposer = DesktopComposer.box
     /// [glass-bubbles] [tinted-bubbles] The stored choice: Liquid Glass tinted with the skin's own bubble colour (owner
     /// 2026-11-01: "the tinted glass kind of wins everywhere"), the solid fill, or the bubble's colour over a soft copy
     /// of the Chat Background (owner 2026-11-01, Telegram's bubbles). Only with the Desktop Look off; Solid unless
@@ -122,9 +121,12 @@ nonisolated struct ThemeState: Sendable, Hashable {
         get { bubbleStyle == .glass }
         set { bubbleStyle = newValue ? .glass : .solid }
     }
-    /// [glass-bubbles] The Desktop Look keeps its own boxes. Colours only: a glass or tinted bubble has the solid one's
-    /// frame.
-    var appliedBubbleStyle: BubbleStyle { desktopLook ? .solid : bubbleStyle }
+    /// [glass-bubbles] The Desktop Look keeps its own boxes. Legacy `.card` maps cleanly to `.tinted` so chat bubbles
+    /// stay decoupled from App Background's Soft Card style.
+    var appliedBubbleStyle: BubbleStyle {
+        guard !desktopLook else { return .solid }
+        return bubbleStyle == .card ? .tinted : bubbleStyle
+    }
     var appliedGlassBubbles: Bool { appliedBubbleStyle == .glass }
     var appliedTintedBubbles: Bool { appliedBubbleStyle == .tinted }
     var appliedCardBubbles: Bool { appliedBubbleStyle == .card }
@@ -152,7 +154,7 @@ nonisolated struct ThemeState: Sendable, Hashable {
         hasher.combine(uiScalePercent)
         hasher.combine(compact)
         hasher.combine(desktopRoomy)
-        hasher.combine(desktopLook ? skin.sansFamily : nil)
+        hasher.combine(skin.sansFamily)
         hasher.combine(skin.accentReadsAsText)   // [paper-links] its replies' links are underlined
         // Photo albums and voice memos inside a bubble keep its corner in their layouts.
         hasher.combine(appliedBubbleCorners)
@@ -407,9 +409,9 @@ nonisolated struct ThemeStore: @unchecked Sendable {
         if points == standard { defaults.removeObject(forKey: key) } else { defaults.set(points, forKey: key) }
     }
 
-    /// [desktop-composer] Glass, the default, is stored as nothing.
+    /// [desktop-composer] Desktop (`box`), the default, is stored as nothing.
     func setDesktopComposer(_ composer: DesktopComposer) {
-        if composer == .glass { defaults.removeObject(forKey: Key.desktopComposer) } else { defaults.set(composer.rawValue, forKey: Key.desktopComposer) }
+        if composer == .box { defaults.removeObject(forKey: Key.desktopComposer) } else { defaults.set(composer.rawValue, forKey: Key.desktopComposer) }
     }
 
     /// [glass-bubbles] Stored only when off.

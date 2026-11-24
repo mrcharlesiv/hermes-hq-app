@@ -76,7 +76,8 @@ private let allStates: [ThemeState] = SkinCatalog.all.flatMap { skin in
         #expect(SkinCatalog.skin("midnight")?.description == "Deep blue-violet with cool accents")
         #expect(SkinCatalog.skin("ios")?.label == "iOS System")
         #expect(SkinCatalog.skin("ios")?.description == "iOS colors, true black in dark, system blue")
-        #expect(SkinCatalog.skin("cyberpunk")?.sansFamily == "Courier New")
+        #expect(SkinCatalog.skin("cyberpunk")?.sansFamily == Skin.monospacedFamily)
+        #expect(SkinCatalog.skin("cyberpunk")?.usesMonospacedUI == true)
         #expect(SkinCatalog.all.filter(\.hasOneLook).map(\.id) == ["midnight", "ember", "mono", "slate", "cyberpunk"])
         // Stress test 2026-10-28 #88: one-palette skins say which mode they are; the others have no tag.
         #expect(SkinCatalog.skin("midnight")?.onlyModeTag == "Dark Only")
@@ -377,13 +378,53 @@ private let allStates: [ThemeState] = SkinCatalog.all.flatMap { skin in
         #expect(set.light.tableHead == RGBA(hex: 0xF2E9E1) && set.dark.codeFill == RGBA(hex: 0x191724))
         let desktop = ThemeResolver.resolve(ThemeState(skinID: "rose-pine", desktopLook: true))
         #expect(desktop.light.replyEdge.a == 0 && desktop.dark.replyEdge.a == 0 && desktop.dark.ownLook == nil, "the Desktop Look draws its own")
-        for skin in SkinCatalog.all where skin.id != "rose-pine" && skin.id != "paper" {   // Paper: `paperIsClaudesIvoryAndInk`
+        let githubSyntaxSkins: Set<String> = ["nous", "github", "ios"]
+        for skin in SkinCatalog.all {
             let other = ThemeResolver.resolve(ThemeState(skinID: skin.id))
-            #expect(other.light.syntax == nil && other.dark.syntax == nil, "\(skin.id)")
-            // Paper (owner 2026-11-16) has an own look too: `paperIsClaudesIvoryAndInk`.
+            if githubSyntaxSkins.contains(skin.id) {
+                #expect(other.light.syntax == nil && other.dark.syntax == nil, "\(skin.id)")
+            } else {
+                for (mode, tokens) in [("light", other.light), ("dark", other.dark)] {
+                    let syntax = try #require(tokens.syntax, "\(skin.id) \(mode)")
+                    let ground = tokens.codeFillOnBubble.over(tokens.botBubble.over(tokens.page.over(.white)))
+                    for colour in [syntax.comment, syntax.keyword, syntax.string, syntax.constant, syntax.entity, syntax.function,
+                                   syntax.tag, syntax.invalid] {
+                        #expect(colour.contrast(with: ground) >= 4.5 - 0.01, "\(skin.id) \(mode) \(colour)")
+                    }
+                }
+            }
             guard skin.ownLook == nil else { continue }
             for tokens in [other.light, other.dark] {
                 #expect(tokens.replyEdge.a == 0 && tokens.tableBody == tokens.fill4 && tokens.tableHead == tokens.fill4, "\(skin.id)")
+            }
+        }
+    }
+
+    @Test func everforestDesktopMeBorderAndLightElevationAreVisible() {
+        let lightDesktop = ThemeResolver.resolve(ThemeState(skinID: "everforest", desktopLook: true)).light
+        let darkDesktop = ThemeResolver.resolve(ThemeState(skinID: "everforest", desktopLook: true)).dark
+        for (mode, tokens) in [("light", lightDesktop), ("dark", darkDesktop)] {
+            let page = tokens.page.over(.white)
+            let bubble = tokens.meBubble.over(page)
+            let visible = tokens.meBorder.over(page).contrast(with: page) >= 1.15
+                || tokens.meBorder.over(bubble).contrast(with: bubble) >= 1.15
+            #expect(visible, "Everforest \(mode) Desktop Look meBorder must be visible")
+        }
+        let everforestLight = ThemeResolver.resolve(ThemeState(skinID: "everforest")).light
+        #expect(everforestLight.groupedCard.labL > everforestLight.grouped.labL, "Light grouped card lifts off grouped canvas")
+        #expect(everforestLight.meText == .white)
+    }
+
+    @MainActor @Test func appearanceIconsAllHaveNonGreyTilesAndStylizedSkinsUseHarmonizedTiles() {
+        let appearanceSymbols = ["paintbrush", "paintpalette", "desktopcomputer", "circle.righthalf.filled",
+                                 "textformat.size", "rectangle.compress.vertical", "circle.dashed", "rectangle.topthird.inset.filled"]
+        for symbol in appearanceSymbols {
+            let tile = SettingsRowLabel.tile(for: symbol)
+            #expect(tile.colour != 0x8E8E93, "\(symbol) should have an intentional colored tile, not fallback grey")
+        }
+        for skinID in ["everforest", "mono", "cyberpunk"] {
+            ThemeTable.$testSet.withValue(ThemeResolver.resolve(ThemeState(skinID: skinID))) {
+                #expect(Theme.inkIcons == .tiles, "\(skinID) uses harmonized skin-tinted row tiles")
             }
         }
     }
@@ -445,11 +486,12 @@ private let allStates: [ThemeState] = SkinCatalog.all.flatMap { skin in
         }
     }
 
-    @Test func aSkinInTheIOSLookKeepsThePhonesFillsWithCardsInItsHue() {
+    @Test func aSkinInTheIOSLookKeepsHueMatchedNeutralsAndCards() {
         let base = ThemeResolver.base(dark: true)
         let ember = ThemeResolver.resolve(ThemeState(skinID: "ember")).dark
         #expect(ember.page != base.page && ember.tint != base.tint, "the page and the accent are the skin's")
-        #expect(ember.separator == base.separator && ember.botBubble != base.botBubble)
+        #expect(ember.separator != base.separator && ember.fill1 != base.fill1 && ember.botBubble != base.botBubble,
+                "custom skins receive hue-matched neutrals instead of cold iOS greys")
         // Cards are the page raised in its own hue, not iOS's neutral grey (owner 2026-11-01).
         #expect(ember.groupedCard != base.groupedCard)
         #expect(ember.groupedCard.contrast(with: ember.page) > 1.05, "the card stands off the page")
@@ -1017,22 +1059,22 @@ private let allStates: [ThemeState] = SkinCatalog.all.flatMap { skin in
         #expect(suite.object(forKey: "hqn.theme.desktopCorners") == nil && store.load() == .default)
     }
 
-    @Test func theDesktopLooksTextBoxIsGlassUnlessDesktopIsPicked() {
+    @Test func theDesktopLooksTextBoxDefaultsToDesktopUnlessGlassIsPicked() {
         let suite = defaults()
         let store = ThemeStore(defaults: suite)
         var state = store.load()
-        #expect(state.desktopComposer == .glass && !state.boxComposer)
+        #expect(state.desktopComposer == .box && !state.boxComposer)
         state.desktopLook = true
-        #expect(state.boxComposer == ThemeState.textBoxIsFixed, "the Desktop Look starts with the glass bar (the Mac: its own box)")
-        store.setDesktopComposer(.box)
-        #expect(suite.string(forKey: "hqn.theme.desktopComposer") == "box" && store.load().desktopComposer == .box)
-        state.desktopComposer = .box
-        #expect(state.boxComposer)
+        #expect(state.boxComposer, "the Desktop Look defaults to its flat bordered box")
+        store.setDesktopComposer(.glass)
+        #expect(suite.string(forKey: "hqn.theme.desktopComposer") == "glass" && store.load().desktopComposer == .glass)
+        state.desktopComposer = .glass
+        #expect(state.boxComposer == ThemeState.textBoxIsFixed)
         state.desktopLook = false
         #expect(!state.boxComposer, "the iOS look always has the glass bar")
         suite.set("frosted", forKey: "hqn.theme.desktopComposer")
-        #expect(store.load().desktopComposer == .glass)
-        store.setDesktopComposer(.glass)
+        #expect(store.load().desktopComposer == .box)
+        store.setDesktopComposer(.box)
         #expect(suite.object(forKey: "hqn.theme.desktopComposer") == nil)
     }
 
@@ -1220,28 +1262,26 @@ private let allStates: [ThemeState] = SkinCatalog.all.flatMap { skin in
 
     /// The Mac has no glass: a stored Glass shows and draws as Solid there, and the choices are Solid and Tinted.
     @Test func theChoicesWhereGlassIsOffered() {
-        #expect(BubbleStyles.offered == (GlassBubbles.offered ? [.solid, .glass, .tinted, .card] : [.solid, .tinted]))
+        #expect(BubbleStyles.offered == (GlassBubbles.offered ? [.solid, .glass, .tinted] : [.solid, .tinted]))
         #expect(BubbleStyles.shown(.tinted) == .tinted && BubbleStyles.shown(.solid) == .solid)
         #expect(BubbleStyles.shown(.glass) == (GlassBubbles.offered ? .glass : .solid))
-        #expect(BubbleStyles.shown(.card) == (GlassBubbles.offered ? .card : .solid))
+        #expect(BubbleStyles.shown(.card) == .tinted, "legacy Card maps cleanly to Tinted")
     }
 
-    /// [bubble-card] Owner 2026-11-15, beside Sessions on Soft Cards: "I want to be able to toggle between how it is now
-    /// and exactly how the soft cards are." Card is a fourth style, stored by name; the Desktop Look keeps its boxes;
-    /// colours only, so a card bubble has the solid one's frame; your own messages draw as Tinted's.
-    @Test func cardIsAStyleOfItsOwn() throws {
+    /// Legacy stored `.card` decodes without breaking and maps cleanly to `.tinted` (decoupled from App Background's Soft Cards).
+    @Test func legacyCardMapsCleanlyToTinted() throws {
         let suite = try #require(UserDefaults(suiteName: "bubble-card-\(UUID().uuidString)"))
         let store = ThemeStore(defaults: suite)
         store.setBubbleStyle(.card)
         #expect(store.load().bubbleStyle == .card && suite.string(forKey: "hqn.theme.bubbleStyle") == "card")
         var card = ThemeState.default
         card.bubbleStyle = .card
-        #expect(card.appliedCardBubbles && !card.appliedTintedBubbles && !card.appliedGlassBubbles)
+        #expect(card.appliedBubbleStyle == .tinted && card.appliedTintedBubbles && !card.appliedCardBubbles)
         #expect(card.layoutSignature == ThemeState.default.layoutSignature)
         var look = card
         look.desktopLook = true
         #expect(look.appliedBubbleStyle == .solid)
-        #expect(BubbleStyle.card.title == "Card" && ChatBubblesSettingsView.styleLine(.card).hasPrefix("Card:"))
+        #expect(ChatBubblesSettingsView.styleLine(.card).hasPrefix("Tinted:"))
     }
 
     /// Owner 2026-11-02, a Light chat over a night photo: the reply was a lavender-grey slab. A Light reply over a dark

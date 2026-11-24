@@ -105,31 +105,66 @@ nonisolated struct ArtifactPin: Codable, Sendable, Hashable, Identifiable {
 nonisolated struct DashboardPage: Codable, Sendable, Hashable, Identifiable {
     var id: String
     var name: String
+    /// [tiles-v2] Optional SF Symbol shown beside the page's name in the Dashboard pages bar.
+    var symbol: String? = nil
 
     static let mainId = "main"
     static let main = DashboardPage(id: mainId, name: "Main")
+
+    /// Curated SF Symbols offered for Dashboard pages.
+    static let symbolChoices: [(symbol: String, label: String)] = [
+        ("rectangle.3.group", "Default"),
+        ("chart.bar.fill", "Metrics"),
+        ("briefcase.fill", "Work"),
+        ("house.fill", "Home"),
+        ("calendar", "Schedule"),
+        ("dollarsign.circle.fill", "Finance"),
+        ("chevron.left.forwardslash.chevron.right", "Code"),
+        ("heart.fill", "Health"),
+        ("bolt.fill", "Ops"),
+        ("star.fill", "Starred"),
+        ("globe", "News"),
+        ("tray.full.fill", "Inbox"),
+    ]
 }
 
 /// [dashboard] A pin's tile in Grid (tester feedback, 2026-11-01: "stack these in a grid layout it will actually feel like
 /// a dashboard"): the sizes of a Home Screen widget, in grid cells. Extra Large (owner 2026-11-02, "more like widgets"):
 /// the grid's whole width, three rows down, for a dashboard seen whole.
+/// [tiles-v2] Tall (1×2) and Banner (full-width × 1) complete wide-screen dashboard layouts.
 nonisolated enum PinTileSize: String, Codable, Sendable, CaseIterable {
-    case small, medium, large, extraLarge
+    case small, medium, tall, banner, large, extraLarge
 
     var title: String {
         switch self {
         case .small: "Small"
         case .medium: "Medium"
+        case .tall: "Tall"
+        case .banner: "Banner"
         case .large: "Large"
         case .extraLarge: "Extra Large"
         }
     }
 
-    /// Columns across and rows down (Extra Large's width is cut to the grid's, `PinGridPacking`).
+    /// Short description of the shape for prompts and accessibility.
+    var shapeWords: String {
+        switch self {
+        case .small: "Small (1×1 square)"
+        case .medium: "Medium (2×1 wide)"
+        case .tall: "Tall (1×2 vertical)"
+        case .banner: "Banner (full-width × 1 strip)"
+        case .large: "Large (2×2 big square)"
+        case .extraLarge: "Extra Large (full-width × 3)"
+        }
+    }
+
+    /// Columns across and rows down (Banner and Extra Large's width is cut to the grid's, `PinGridPacking`).
     var span: (columns: Int, rows: Int) {
         switch self {
         case .small: (1, 1)
         case .medium: (2, 1)
+        case .tall: (1, 2)
+        case .banner: (Self.wholeWidth, 1)
         case .large: (2, 2)
         case .extraLarge: (Self.wholeWidth, 3)
         }
@@ -137,11 +172,12 @@ nonisolated enum PinTileSize: String, Codable, Sendable, CaseIterable {
 
     static let wholeWidth = 99
 
-    /// The size a tile dragged by its corner to this many cells takes (Edit Tiles): three rows or more Extra Large, two
-    /// Large, one row two cells across Medium, else Small.
-    static func fitting(columns: Int, rows: Int) -> PinTileSize {
+    /// The size a tile dragged by its corner to this many cells takes (Edit Tiles): three rows or more Extra Large,
+    /// two rows Tall (1 column) or Large (2+), one row Banner (3+ columns on a wide grid), Medium (2), else Small.
+    static func fitting(columns: Int, rows: Int, gridColumns: Int = 2) -> PinTileSize {
         if rows >= 3 { return .extraLarge }
-        if rows == 2 { return .large }
+        if rows == 2 { return columns >= 2 ? .large : .tall }
+        if columns >= 3, gridColumns >= 3 { return .banner }
         return columns >= 2 ? .medium : .small
     }
 }
@@ -319,9 +355,11 @@ final class ArtifactPins {
 
     /// [dashboard] A new page after the others; it becomes the one shown.
     @discardableResult
-    func addPage(named name: String) -> DashboardPage {
+    func addPage(named name: String, symbol: String? = nil) -> DashboardPage {
         let words = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let page = DashboardPage(id: UUID().uuidString, name: words.isEmpty ? "Page \(pages.count + 1)" : words)
+        let cleanSymbol = symbol?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let page = DashboardPage(id: UUID().uuidString, name: words.isEmpty ? "Page \(pages.count + 1)" : words,
+                                 symbol: cleanSymbol?.isEmpty == false ? cleanSymbol : nil)
         pages.append(page)
         currentPage = page.id
         changed()
@@ -332,6 +370,15 @@ final class ArtifactPins {
         let words = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !words.isEmpty, let index = pages.firstIndex(where: { $0.id == id }), pages[index].name != words else { return }
         pages[index].name = words
+        changed()
+    }
+
+    /// [tiles-v2] Sets or clears a Dashboard page's SF Symbol icon.
+    func setPageSymbol(_ id: String, symbol: String?) {
+        let clean = symbol?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let next = clean?.isEmpty == false ? clean : nil
+        guard let index = pages.firstIndex(where: { $0.id == id }), pages[index].symbol != next else { return }
+        pages[index].symbol = next
         changed()
     }
 
@@ -350,6 +397,18 @@ final class ArtifactPins {
         let target = index + step
         guard target >= 1, target < pages.count else { return }
         pages.swapAt(index, target)
+        changed()
+    }
+
+    /// [tiles-v2] A page dragged onto another page's pill: Main stays first (index 0).
+    func reorderPage(_ id: String, to targetId: String) {
+        guard id != DashboardPage.mainId, targetId != id,
+              let source = pages.firstIndex(where: { $0.id == id }),
+              let target = pages.firstIndex(where: { $0.id == targetId }), source > 0 else { return }
+        let destination = max(1, target)
+        guard source != destination else { return }
+        let moved = pages.remove(at: source)
+        pages.insert(moved, at: min(destination, pages.count))
         changed()
     }
 

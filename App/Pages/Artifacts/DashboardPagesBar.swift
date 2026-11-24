@@ -34,6 +34,11 @@ struct DashboardPageActions {
     var rename: (DashboardPage) -> Void
     var move: (DashboardPage, Int) -> Void
     var delete: (DashboardPage) -> Void
+    /// [tiles-v2] Optional SF Symbol icon, drag-to-reorder, and page-level batch update controls.
+    var setSymbol: (DashboardPage, String?) -> Void = { _, _ in }
+    var reorder: (String, String) -> Void = { _, _ in }
+    var updateAll: () -> Void = {}
+    var pauseAll: (Bool) -> Void = { _ in }
 }
 
 struct DashboardPagesBand: View {
@@ -62,11 +67,16 @@ struct DashboardPagesBand: View {
             // Under a sheet the picked pill's tinted glass greys: drawn plain with a ring then, as Tasks' pills.
             let quiet = picked && model.dimmed && !Theme.isDesktop
             let count = model.counts[page.id] ?? 0
-            SessionPill(caption: page.name, name: page.name, picked: picked && !quiet,
-                        identifier: Self.identifier(page)) {
+            let hasIcon = page.symbol.map { !$0.isEmpty } ?? false
+            let pill = SessionPill(caption: page.name, name: page.name, picked: picked && !quiet,
+                                   identifier: Self.identifier(page), hasFace: hasIcon) {
                 actions.select(page.id)
             } face: {
-                EmptyView()
+                if let symbol = page.symbol, !symbol.isEmpty {
+                    Image(systemName: UIImage(systemName: symbol) != nil ? symbol : "rectangle.3.group")
+                        .font(Font.hq(Theme.isDesktop ? .caption : .footnote).weight(.semibold))
+                        .foregroundStyle(picked && !quiet ? Color.hqTintText : Color.hqLabel2)
+                }
             }
             .overlay {
                 if quiet {
@@ -83,6 +93,19 @@ struct DashboardPagesBand: View {
             .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named(Self.space)) }) { model.frames[page.id] = $0 }
             .contextMenu { menu(for: page) }
             .id(page.id)
+            if page.id != DashboardPage.mainId {
+                pill
+                    .draggable("hq-page:" + page.id)
+                    .dropDestination(for: String.self) { items, _ in
+                        guard let raw = items.first, raw.hasPrefix("hq-page:") else { return false }
+                        let source = String(raw.dropFirst("hq-page:".count))
+                        guard source != page.id else { return false }
+                        actions.reorder(source, page.id)
+                        return true
+                    }
+            } else {
+                pill
+            }
         }
         // ＋, as Tasks' New List.
         SessionPill(caption: "", name: "New Page", picked: false, identifier: "dashboard.page.add", hasFace: true, lead: 10) {
@@ -94,6 +117,11 @@ struct DashboardPagesBand: View {
         if let page = model.pages.first(where: { $0.id == model.current }) {
             Menu {
                 Section(page.name) { menu(for: page) }
+                Section("Tiles on This Page") {
+                    Button { actions.updateAll() } label: { Label("Update All Now", systemImage: "arrow.clockwise") }
+                    Button { actions.pauseAll(true) } label: { Label("Pause All Updates", systemImage: "pause.circle") }
+                    Button { actions.pauseAll(false) } label: { Label("Resume All Updates", systemImage: "play.circle") }
+                }
             } label: {
                 MorePill()
             }
@@ -117,10 +145,23 @@ struct DashboardPagesBand: View {
             .padding(.trailing, -8)
     }
 
-    /// Rename, Move Left/Right, Delete (Main can be renamed, not moved or deleted).
+    /// Rename, Choose Icon, Move Left/Right, Delete (Main can be renamed and given an icon, not moved or deleted).
     @ViewBuilder private func menu(for page: DashboardPage) -> some View {
         Button { actions.rename(page) } label: { Label("Rename…", systemImage: "pencil") }
             .accessibilityIdentifier("dashboard.page.rename")
+        Menu {
+            Button { actions.setSymbol(page, nil) } label: {
+                Label("No Icon", systemImage: page.symbol == nil ? "checkmark" : "nosign")
+            }
+            ForEach(DashboardPage.symbolChoices, id: \.symbol) { choice in
+                Button { actions.setSymbol(page, choice.symbol) } label: {
+                    Label(choice.label, systemImage: choice.symbol)
+                }
+            }
+        } label: {
+            Label("Icon", systemImage: page.symbol ?? "sparkles")
+        }
+        .accessibilityIdentifier("dashboard.page.icon")
         if page.id != DashboardPage.mainId, let index = model.pages.firstIndex(of: page) {
             if index > 1 || index < model.pages.count - 1 {
                 Section {

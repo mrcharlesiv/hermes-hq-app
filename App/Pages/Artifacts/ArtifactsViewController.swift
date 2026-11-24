@@ -26,8 +26,8 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
 
     let store: ArtifactsStore
     let scope: PagesScope
-    private weak var services: PagesServices?
-    private let makeChat: (any ChatSessionModel) -> UIViewController
+    weak var services: PagesServices?
+    let makeChat: (any ChatSessionModel) -> UIViewController
     private let previews: ArtifactPreviews
     /// [pins] The Pinned page: the pins alone (no segments, no pass over the chats).
     let pinnedOnly: Bool
@@ -53,13 +53,13 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
     let fixedProfile: String?
     /// [pins] Show in Chat goes here instead of pushing the chat (from a sheet, the chat opens behind it).
     var showInChatOverride: ((ArtifactRecord) -> Void)?
-    private let pins: ArtifactPins
+    let pins: ArtifactPins
     /// What the owner removed: left out of the list and the pins.
-    private var hidden: ArtifactHidden { store.hidden }
+    var hidden: ArtifactHidden { store.hidden }
     private var hiddenObserver: NSObjectProtocol?
-    private var pinPictures: PinPictures!
+    var pinPictures: PinPictures!
     /// [live-tiles] Tiles whose pages have buttons or ask to refresh, running live (the Tiles page only).
-    private var liveTiles: LiveTiles?
+    var liveTiles: LiveTiles?
     private var pinsShown: [String: ArtifactPin] = [:]
     private var pinsObserver: NSObjectProtocol?
     private var pinsViewObserver: NSObjectProtocol?
@@ -382,6 +382,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         // are drawn again when the Dashboard opens (fresh ones are left alone).
         if pinnedOnly { pinPictures.redraw(pins.pins, drawnBefore: Date().addingTimeInterval(-600)) }
         if pinnedOnly { HTMLPageSheet.prewarm(traits: traitCollection) }   // [tiles] a tile opens on a ready web view
+        if pinnedOnly, let services { TileMaker.restorePending(accountId: store.account.id, services: services, from: self) }   // [tiles-v2]
         watchTiles(true)
         liveTiles?.watch(true)
         reload(animated: false)
@@ -495,7 +496,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
             let move = pan.translation(in: collectionView)
             let across = Int(((current.start.width + move.x + Self.gridSpacing) / (metrics.cell + Self.gridSpacing)).rounded())
             let down = Int(((current.start.height + move.y + Self.gridSpacing) / (rowHeight + Self.gridSpacing)).rounded())
-            let size = PinTileSize.fitting(columns: max(1, min(across, metrics.columns)), rows: max(1, down))
+            let size = PinTileSize.fitting(columns: max(1, min(across, metrics.columns)), rows: max(1, down), gridColumns: metrics.columns)
             guard size != current.size else { return }
             resizing?.size = size
             PagesHaptics.selection()
@@ -830,7 +831,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
 
     /// [dashboard] The shape of a pin's picture where it shows (its page is drawn in that shape): its Grid tile, a card's
     /// picture, a list row's square.
-    private func pinPictureShape(_ pin: ArtifactPin) -> PageSnapshots.Shape {
+    func pinPictureShape(_ pin: ArtifactPin) -> PageSnapshots.Shape {
         let width = collectionView.bounds.width > 0 ? collectionView.bounds.width : view.bounds.width
         switch ArtifactPins.view {
         case .grid:
@@ -951,7 +952,11 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         // what was asked, the bot and the step it's on now; a tap opens the chat.
         let makingCell = UICollectionView.CellRegistration<TileMakingCell, String> { cell, _, id in
             guard let maker = TileMaker.active.first(where: { $0.id == id }) else { return }
-            cell.show(what: maker.rowTitle, detail: "\(maker.bot.name) · \(maker.stepWords)", changing: maker.changing != nil)
+            cell.show(what: maker.rowTitle, detail: "\(maker.bot.name) · \(maker.stepWords)", changing: maker.changing != nil) {
+                [weak maker] in
+                PagesHaptics.selection()
+                maker?.cancel()
+            }
         }
         let filterCell = UICollectionView.CellRegistration<SoftCardListCell, String> { [weak self] cell, _, _ in
             guard let self else { return }
@@ -1264,9 +1269,10 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         if grid {
             let names = ArtifactPins.showsNames, editing = editingTiles
             let live = editing ? nil : liveTiles?.view(for: pin, dark: dark)   // [live-tiles]
+            let capped = !editing && (liveTiles?.isCapped(pin) == true)        // [tiles-v2]
             cell.contentConfiguration = UIHostingConfiguration {
                 PinTileView(pin: pin, picture: tilePicture, fills: fills, busy: busy, showsName: names, health: tileHealth,
-                            editing: editing, live: live, hover: hover, failed: failed,
+                            editing: editing, live: live, liveCapped: capped, hover: hover, failed: failed,
                             working: editing ? nil : working, ringed: ringed && !editing) { [weak self] in
                     guard let self else { return }
                     PinActions.toggle(pin.record, pins: self.pins, from: self)
@@ -1418,7 +1424,23 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
             if let self, self.showsPages {
                 let new = UIAction(title: "New Page…", image: UIImage(systemName: "plus.rectangle.on.rectangle")) { [weak self] _ in self?.askNewPage() }
                 new.accessibilityIdentifier = "dashboard.page.new"
-                children.append(UIMenu(options: .displayInline, children: [new]))
+                var pageActions: [UIMenuElement] = [new]
+                if self.services?.readOnlyGateway == false, self.currentPagePins().contains(where: \.isPage) {
+                    let updateAll = UIAction(title: "Update All Now", image: UIImage(systemName: "arrow.clockwise")) { [weak self] _ in
+                        self?.updateAllCurrentPageTiles()
+                    }
+                    updateAll.accessibilityIdentifier = "dashboard.page.update-all"
+                    let pauseAll = UIAction(title: "Pause All Updates", image: UIImage(systemName: "pause.circle")) { [weak self] _ in
+                        self?.setAllCurrentPageTilesPaused(true)
+                    }
+                    pauseAll.accessibilityIdentifier = "dashboard.page.pause-all"
+                    let resumeAll = UIAction(title: "Resume All Updates", image: UIImage(systemName: "play.circle")) { [weak self] _ in
+                        self?.setAllCurrentPageTilesPaused(false)
+                    }
+                    resumeAll.accessibilityIdentifier = "dashboard.page.resume-all"
+                    pageActions += [updateAll, pauseAll, resumeAll]
+                }
+                children.append(UIMenu(options: .displayInline, children: pageActions))
             }
             done(children)
         }
@@ -1449,7 +1471,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
     // MARK: Dashboard pages
 
     /// [dashboard] The page names show on the Dashboard, not on Artifacts' shelf or Bot Info, and not while searching.
-    private var showsPages: Bool { pinnedOnly && fixedProfile == nil && query.pgTrim.isEmpty }
+    var showsPages: Bool { pinnedOnly && fixedProfile == nil && query.pgTrim.isEmpty }
 
     /// [tiles-chips-same] The names' band under the bar (installed on the Tiles page only).
     private lazy var pagesHeader: DashboardPagesHeader = {
@@ -1461,7 +1483,17 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
                 PagesHaptics.selection()
                 self?.pins.movePage(page.id, by: by)
             },
-            delete: { [weak self] page in self?.confirmDeletePage(page) }))
+            delete: { [weak self] page in self?.confirmDeletePage(page) },
+            setSymbol: { [weak self] page, symbol in
+                PagesHaptics.selection()
+                self?.pins.setPageSymbol(page.id, symbol: symbol)
+            },
+            reorder: { [weak self] sourceId, targetId in
+                PagesHaptics.selection()
+                self?.pins.reorderPage(sourceId, to: targetId)
+            },
+            updateAll: { [weak self] in self?.updateAllCurrentPageTiles() },
+            pauseAll: { [weak self] pause in self?.setAllCurrentPageTilesPaused(pause) }))
         header.acceptsDrop = { [weak self] session in
             guard let self else { return false }
             return self.showsPages && session.localDragSession?.items.first?.localObject is String
@@ -1633,18 +1665,21 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         guard let services else { return }
         PagesHaptics.selection()
         let bot = fixedProfile ?? (currentScope == PagesScope.all ? nil : currentScope)
-        let sheet = NewTileSheet.make(services: services, bot: bot) { [weak self] bot, what in
+        let sheet = NewTileSheet.make(services: services, bot: bot, pages: pins.pages, currentPage: pins.currentPage) { [weak self] req in
             guard let self, let services = self.services else { return }
-            let chat = services.tileChat(for: bot)
-            TileMaker.start(bot: bot, what: what, accountId: self.store.account.id, chat: chat, from: self)
+            let chat = services.tileChat(for: req.bot)
+            TileMaker.start(bot: req.bot, what: req.what, size: req.size == .small ? nil : req.size,
+                            schedule: req.schedule, dashboardPage: req.pageId,
+                            accountId: self.store.account.id, chat: chat, from: self)
         }
         present(sheet, animated: true)
     }
 
     /// [tiles] Change… (owner 2026-11-03: "change a tile by asking"): what to change, then the tile's bot changes its page
     /// in a new chat (the Tiles page shows it working, a tap opens the chat), and the tile is drawn again when it's done.
-    /// `before`: run first, handed the ask (the opened tile closes, then asks).
-    func changeTileAction(_ pin: ArtifactPin, before: ((@escaping () -> Void) -> Void)? = nil) -> UIAction {
+    /// `before`: run first, handed the ask (nil when presented directly over an opened tile).
+    func changeTileAction(_ pin: ArtifactPin, presenter: (() -> UIViewController?)? = nil,
+                          before: ((@escaping () -> Void) -> Void)? = nil) -> UIAction {
         // [tiles] Its bot is changing it now: the menu shows that, and opens the chat (a second change would race the first).
         if let maker = TileMaker.working(on: pin.id, accountId: store.account.id), maker.isChange {
             let open = UIAction(title: "Changing…", subtitle: "\(maker.bot.name) is working on it. Open Chat",
@@ -1657,7 +1692,10 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
             return open
         }
         let action = UIAction(title: "Change…", image: UIImage(systemName: "wand.and.sparkles")) { [weak self] _ in
-            let ask: () -> Void = { [weak self] in self?.askTileChange(pin) }
+            let ask: () -> Void = { [weak self] in
+                guard let self else { return }
+                self.askTileChange(pin, from: presenter?() ?? self)
+            }
             if let before { before(ask) } else { ask() }
         }
         action.accessibilityIdentifier = "tile.change"
@@ -1668,18 +1706,23 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
 
     /// [tiles] Change Tile (owner 2026-11-10: "greatly improved"): a sheet with the tile as it looks now, its bot and
     /// updates, a field that grows and quick changes (`ChangeTileSheet`), in place of an alert with one cut-off line.
-    private func askTileChange(_ pin: ArtifactPin) {
+    func askTileChange(_ pin: ArtifactPin, initialWhat: String = "", mode: ChangeTileMode = .change, from host: UIViewController? = nil) {
         guard let bot = services?.bots.first(where: { $0.id == pin.profile }), pin.gatewayPath != nil else { return }
         PagesHaptics.selection()
         let context = pinPictures.context(pin)
         let client = services?.gateway
-        let sheet = ChangeTileSheet.make(name: pins.name(pin), bot: bot, picture: currentPicture(pin), status: {
+        let sheet = ChangeTileSheet.make(name: pins.name(pin), bot: bot, picture: currentPicture(pin),
+                                         initialWhat: initialWhat, mode: mode, status: {
             guard let job = await TileUpdates.shared.job(for: pin, accountId: context.accountId, client: client) else { return nil }
             return TileJobs.shortStatus(job)
         }) { [weak self] words in
-            self?.changeTile(id: pin.id, what: words)
+            if mode == .duplicate {
+                self?.duplicateTile(id: pin.id, what: words)
+            } else {
+                self?.changeTile(id: pin.id, what: words)
+            }
         }
-        present(sheet, animated: true)
+        (host ?? self).present(sheet, animated: true)
     }
 
     /// [tiles] The tile's bot changes it in a new chat (Change Tile, and its Try Again).
@@ -1692,12 +1735,15 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
 
     /// [tile-versions] Versions (owner 2026-11-11: "v1 … v2 … roll back to prior versions … see what prior versions
     /// looked like"): the tile's versions with their pictures, and Roll Back. The menu says which one shows.
-    /// `before`: run first, handed the opening (the opened tile closes, then the sheet opens).
-    func versionsAction(_ pin: ArtifactPin, before: ((@escaping () -> Void) -> Void)? = nil) -> UIAction {
+    func versionsAction(_ pin: ArtifactPin, presenter: (() -> UIViewController?)? = nil,
+                        before: ((@escaping () -> Void) -> Void)? = nil) -> UIAction {
         let shown = pins.pins.first { $0.id == pin.id }?.version
         let action = UIAction(title: "Versions", subtitle: shown.map { "Version \($0)" }, image: UIImage(systemName: "square.stack.3d.up")) {
             [weak self] _ in
-            let show: () -> Void = { [weak self] in self?.showVersions(pin) }
+            let show: () -> Void = { [weak self] in
+                guard let self else { return }
+                self.showVersions(pin, from: presenter?() ?? self)
+            }
             if let before { before(show) } else { show() }
         }
         action.accessibilityIdentifier = "tile.versions"
@@ -1718,7 +1764,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
     }
     #endif
 
-    private func showVersions(_ kept: ArtifactPin) {
+    func showVersions(_ kept: ArtifactPin, from host: UIViewController? = nil) {
         let pin = pins.pins.first { $0.id == kept.id } ?? kept
         guard pin.gatewayPath != nil else { return }
         PagesHaptics.selection()
@@ -1728,7 +1774,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
                                            context: pinPictures.context(pin), writable: services?.readOnlyGateway == false) { [weak self] version in
             self?.rolledBack(pin.id, to: version)
         }
-        present(sheet, animated: true)
+        (host ?? self).present(sheet, animated: true)
     }
 
     /// [tile-versions] A version was put back on the tile: it's drawn again and marked, and when a job keeps the tile up
@@ -1748,7 +1794,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
     }
 
     /// [tiles] The tile's picture as it shows now (the one already drawn for its tile, card or row), for Change Tile.
-    private func currentPicture(_ kept: ArtifactPin) -> UIImage? {
+    func currentPicture(_ kept: ArtifactPin) -> UIImage? {
         let pin = pins.shown(kept)
         let dark = traitCollection.userInterfaceStyle == .dark
         let grid = ArtifactPins.view == .grid
@@ -1757,7 +1803,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
     }
 
     /// [tile-chats] The tile's own chat (the one its bot last worked on it in), or a fresh hidden one when it has none.
-    private func tileOwnChat(_ pin: ArtifactPin, bot: Bot, services: PagesServices) -> any ChatSessionModel {
+    func tileOwnChat(_ pin: ArtifactPin, bot: Bot, services: PagesServices) -> any ChatSessionModel {
         Self.tileOwnChat(pin, bot: bot, services: services)
     }
 
@@ -2716,12 +2762,26 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         } else if !pin.sessionId.isEmpty {
             first.append(chat)
         }
+        if let shareImage = shareTileAsImageAction(pin, anchor: anchor) { first.append(shareImage) }
         first.append(share)
         if let save = saveAction(record, anchor: anchor) { first.append(save) }
         var groups = [UIMenu(options: .displayInline, children: first + [copy])]
         // [tiles] How often it's updated (a page a job rewrites), and its name.
         var tile: [UIMenuElement] = []
-        if pin.isPage { tile.append(tileUpdatesMenu(pin)); tile.append(changeTileAction(pin)); tile.append(versionsAction(pin)) }
+        if pin.isPage {
+            tile.append(tileUpdatesMenu(pin))
+            tile.append(changeTileAction(pin))
+            tile.append(duplicateTileAction(pin))
+            tile.append(versionsAction(pin))
+        }
+        if let maker = TileMaker.working(on: pin.id, accountId: store.account.id) {
+            let stop = UIAction(title: "Stop Updating", image: UIImage(systemName: "stop.circle"), attributes: .destructive) { [weak maker] _ in
+                PagesHaptics.selection()
+                maker?.cancel()
+            }
+            stop.accessibilityIdentifier = "tile.stop"
+            tile.append(stop)
+        }
         tile.append(TileUpdates.renameAction(pin, pins: pins, from: self))
         if let home = addToHomeScreenAction(pin) { tile.append(home) }   // [tile-widgets]
         groups.append(UIMenu(options: .displayInline, children: tile))
@@ -2740,17 +2800,13 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
 
     /// [tiles] A page tile's Updates (read as the menu opens).
     private func tileUpdatesMenu(_ pin: ArtifactPin) -> UIMenuElement {
-        TileUpdates.shared.menu(for: pin, accountId: pinPictures.context(pin).accountId, client: services?.gateway, from: self,
-                                botName: PagesNames.botName(pin.profile, bots: services?.bots ?? []),
-                                botModel: services?.botModelName(pin.profile)) { [weak self] in
-            self?.redrawTile(pin.id)
-        }
+        buildTileUpdatesMenu(pin, inline: false, host: self)
     }
 
     /// [tiles] While the Tiles page shows: the tiles' jobs read each minute (each 15 s while one runs), their marks kept
     /// current, and a tile whose job has just run drawn again at once (owner 2026-11-03: "redraw the moment the job
     /// finishes").
-    private func watchTiles(_ on: Bool) {
+    func watchTiles(_ on: Bool) {
         tileWatch?.cancel()
         tileWatch = nil
         guard on, pinnedOnly else { return }
@@ -2790,7 +2846,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
     }
 
     /// [tiles] A tile's picture drawn again (its job may have rewritten the page).
-    private func redrawTile(_ id: String) {
+    func redrawTile(_ id: String) {
         guard let pin = pins.pins.first(where: { $0.id == id }) else { return }
         pinPictures.redraw([pin])
         liveTiles?.reload(id)   // [live-tiles]
@@ -2804,6 +2860,10 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         live.pin = { [weak self] id in self?.pins.pins.first { $0.id == id } }
         live.context = { [weak self] pin in self?.pinPictures.context(pin) ?? MediaContext(accountId: "", profile: pin.profile) }
         live.onChange = { [weak self] id in self?.pinUpdated(id) }
+        live.isWorking = { [weak self] id in
+            guard let self else { return false }
+            return TileMaker.working(on: id, accountId: self.store.account.id) != nil
+        }
         live.onScreen = { [weak self] in
             guard let self, let collectionView = self.collectionView, let dataSource = self.dataSource else { return [] }
             return Set(collectionView.indexPathsForVisibleItems.compactMap { path -> String? in
@@ -2896,23 +2956,22 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
                 return TileJobs.shortStatus(job)
             }, menu: { [weak self] host in
                 guard let self else { return UIMenu(children: []) }
-                let updates = TileUpdates.shared.menu(for: pin, accountId: context.accountId, client: client, from: host, inline: true,
-                                                      botName: PagesNames.botName(pin.profile, bots: self.services?.bots ?? []),
-                                                      botModel: self.services?.botModelName(pin.profile)) { [weak self] in
-                    self?.redrawTile(pin.id)
-                }
-                // [tiles] Change… from the opened tile: the tile closes and the Tiles page shows the bot working on it.
-                let change = self.changeTileAction(pin) { [weak host] start in
-                    guard let host else { start(); return }
-                    host.dismiss(animated: true, completion: start)
-                }
-                // [tile-versions] Versions from the opened tile: it closes, and the sheet opens over the Tiles page.
-                let versions = self.versionsAction(pin) { [weak host] start in
-                    guard let host else { start(); return }
-                    host.dismiss(animated: true, completion: start)
-                }
+                let updates = self.buildTileUpdatesMenu(pin, inline: true, host: host)
+                // [tiles-v2] Keep context: Change…, Duplicate… and Versions present directly over the opened tile,
+                // which shows "Changing…" and reloads in place when done.
+                let change = self.changeTileAction(pin, presenter: { [weak host] in host }, before: { [weak self, weak host] start in
+                    guard let self, let host else { start(); return }
+                    if TileMaker.working(on: pin.id, accountId: self.store.account.id)?.isChange == true {
+                        host.dismiss(animated: true, completion: start)
+                    } else {
+                        start()
+                    }
+                })
+                let duplicate = self.duplicateTileAction(pin, presenter: { [weak host] in host })
+                let versions = self.versionsAction(pin, presenter: { [weak host] in host })
                 // [tile-widgets] Add to Home Screen… beside its other tile actions, the sheet over the opened tile.
-                var actions: [UIMenuElement] = [change, versions]
+                var actions: [UIMenuElement] = [change, duplicate, versions]
+                if let shareImg = self.shareTileAsImageAction(pin, presenter: host) { actions.append(shareImg) }
                 if let home = self.addToHomeScreenAction(pin, from: { [weak host] in host }) { actions.append(home) }
                 return UIMenu(children: [updates, UIMenu(options: .displayInline, children: actions)])
             })
@@ -2976,7 +3035,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
     }
 
     /// The share popover's arrow: the bar button, else the row (its whole frame), else the page.
-    private func point(_ sheet: UIViewController, item: UIBarButtonItem?, anchor: UIView?) {
+    func point(_ sheet: UIViewController, item: UIBarButtonItem?, anchor: UIView?) {
         guard let popover = sheet.popoverPresentationController else { return }
         if let item { popover.sourceItem = item; return }
         if let anchor, anchor.window != nil {

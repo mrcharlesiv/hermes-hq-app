@@ -8,58 +8,94 @@
 import SwiftUI
 import UIKit
 
+/// [tiles-v2] How often a new tile should refresh.
+nonisolated enum TileScheduleChoice: Equatable, Hashable, Sendable {
+    case auto
+    case oneTime
+    case every(TileJobs.Frequency)
+
+    var title: String {
+        switch self {
+        case .auto: "Automatic"
+        case .oneTime: "One-Time (Static)"
+        case .every(let freq): freq.title
+        }
+    }
+
+    var promptSentence: String {
+        switch self {
+        case .auto:
+            "Keep it up to date with a scheduled job on a sensible schedule, and tell me how often."
+        case .oneTime:
+            "Make it a one-time static tile (do not create a scheduled job)."
+        case .every(let freq):
+            "Keep it up to date with a scheduled job running \(freq.short) (cron: \(freq.cron)), and tell me how often."
+        }
+    }
+
+    static var allChoices: [TileScheduleChoice] {
+        [.auto] + TileJobs.frequencies.map { .every($0) } + [.oneTime]
+    }
+}
+
+/// [tiles-v2] Options collected by `NewTileSheet`.
+struct NewTileRequest {
+    var bot: Bot
+    var what: String
+    var size: PinTileSize
+    var schedule: TileScheduleChoice
+    var pageId: String
+}
+
 @MainActor @Observable
 final class NewTileModel {
     @ObservationIgnored weak var services: PagesServices?
     var bot: String
     var what = ""
-    @ObservationIgnored var onMake: ((Bot, String) -> Void)?
+    /// [tiles-v2] Target tile size, schedule, and Dashboard page.
+    var size: PinTileSize = .small
+    var schedule: TileScheduleChoice = .auto
+    var pageId: String
+    let pages: [DashboardPage]
+    @ObservationIgnored var onMake: ((NewTileRequest) -> Void)?
     @ObservationIgnored weak var controller: UIViewController?
 
     /// What a tile can be: a tap fills the field (the person's own words still come first). The first six show; More
     /// Ideas the rest (owner 2026-11-03: "I also want more suggested tile ideas").
-    static let ideas: [(words: String, symbol: String)] = [
-        ("Revenue this week, with a chart by day", "chart.bar.fill"),
-        ("Today’s calendar and the next meeting", "calendar"),
-        ("Unread emails that need a reply", "envelope.badge"),
-        ("Weather here for the next 12 hours", "cloud.sun.fill"),
-        ("My open tasks, due soonest first", "checklist"),
-        ("Jobs that ran today, and any that failed", "clock.badge.checkmark"),
-        ("Deals closing this month and their total", "target"),
-        ("Spending this month against last month", "dollarsign.circle"),
-        ("My stocks and crypto, today’s change", "chart.line.uptrend.xyaxis"),
-        ("Messages that mention me in Slack", "bubble.left.and.exclamationmark.bubble.right"),
-        ("GitHub pull requests waiting on me", "arrow.triangle.pull"),
-        ("Website and server status", "server.rack"),
-        ("My next trip: flights, hotel and times", "airplane"),
-        ("Birthdays and follow-ups due this week", "person.2"),
-        ("Steps, sleep and workouts this week", "figure.run"),
-        ("Top headlines in my industry today", "newspaper"),
-        ("A countdown to a date that matters", "hourglass"),
-        ("Quote or word of the day", "quote.bubble"),
-    ]
+    static let ideas: [(words: String, symbol: String)] = TileIdeaMatcher.catalog.map { ($0.words, $0.symbol) }
     static let firstIdeas = 6
 
-    init(services: PagesServices, bot: String?) {
+    init(services: PagesServices, bot: String?, pages: [DashboardPage] = [.main], currentPage: String = DashboardPage.mainId) {
         self.services = services
         let bots = services.bots
         self.bot = bot.flatMap { id in bots.first { $0.id == id }?.id } ?? bots.first?.id ?? ""
+        self.pages = pages.isEmpty ? [.main] : pages
+        self.pageId = pages.contains(where: { $0.id == currentPage }) ? currentPage : DashboardPage.mainId
     }
 
     var bots: [Bot] { services?.bots ?? [] }
     var canMake: Bool { !what.pgTrim.isEmpty && bots.contains { $0.id == bot } }
 
+    /// [tiles-v2] Ideas ranked for the currently selected bot (matching ideas float first).
+    var rankedIdeas: [TileIdeaMatcher.Ranked] {
+        let chosen = bots.first { $0.id == bot }
+        let signals = [chosen?.name, chosen?.id, chosen?.role].compactMap { $0 }
+        return TileIdeaMatcher.ranked(for: signals)
+    }
+
     func make() {
         guard canMake, let chosen = bots.first(where: { $0.id == bot }) else { return }
         PagesHaptics.success()
         controller?.dismiss(animated: true)
-        onMake?(chosen, what.pgTrim)
+        onMake?(NewTileRequest(bot: chosen, what: what.pgTrim, size: size, schedule: schedule, pageId: pageId))
     }
 }
 
 enum NewTileSheet {
-    static func make(services: PagesServices, bot: String?, onMake: @escaping (Bot, String) -> Void) -> UIViewController {
-        let model = NewTileModel(services: services, bot: bot)
+    static func make(services: PagesServices, bot: String?, pages: [DashboardPage] = [.main],
+                     currentPage: String = DashboardPage.mainId,
+                     onMake: @escaping (NewTileRequest) -> Void) -> UIViewController {
+        let model = NewTileModel(services: services, bot: bot, pages: pages, currentPage: currentPage)
         model.onMake = onMake
         let host = NewTileHostController(model: model)
         let nav = ChatSheet.wrap(host, title: "New Tile")
@@ -147,14 +183,26 @@ struct NewTileView: View {
             .hqSheetRows()
             if model.what.pgTrim.isEmpty {
                 Section {
-                    let shown = allIdeas ? NewTileModel.ideas : Array(NewTileModel.ideas.prefix(NewTileModel.firstIdeas))
+                    let all = model.rankedIdeas
+                    let shown = allIdeas ? all : Array(all.prefix(NewTileModel.firstIdeas))
                     ForEach(shown, id: \.words) { idea in
                         Button {
                             PagesHaptics.selection()
                             model.what = idea.words
                         } label: {
-                            Label { Text(idea.words).foregroundStyle(Color.hqLabel) } icon: {
-                                Image(systemName: UIImage(systemName: idea.symbol) != nil ? idea.symbol : "sparkles").foregroundStyle(Color.hqTint)
+                            HStack(spacing: 8) {
+                                Label { Text(idea.words).foregroundStyle(Color.hqLabel) } icon: {
+                                    Image(systemName: UIImage(systemName: idea.symbol) != nil ? idea.symbol : "sparkles").foregroundStyle(Color.hqTint)
+                                }
+                                if idea.matched {
+                                    Spacer(minLength: 4)
+                                    Text("Fit")
+                                        .font(Font.hq(.caption2).weight(.semibold))
+                                        .foregroundStyle(Color.hqTintText)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Capsule().fill(Color.hqTint.opacity(0.14)))
+                                }
                             }
                         }
                     }
@@ -172,6 +220,28 @@ struct NewTileView: View {
                 } header: { HQSectionLabel { Text("Ideas") } }
                 .hqSheetRows()
             }
+            Section {
+                Picker("Size", selection: $model.size) {
+                    ForEach(PinTileSize.allCases, id: \.self) { size in
+                        Text(size.title).tag(size)
+                    }
+                }
+                .accessibilityIdentifier("tile.new.size")
+                Picker("Updates", selection: $model.schedule) {
+                    ForEach(TileScheduleChoice.allChoices, id: \.self) { choice in
+                        Text(choice.title).tag(choice)
+                    }
+                }
+                .accessibilityIdentifier("tile.new.schedule")
+                if model.pages.count > 1 {
+                    Picker("Page", selection: $model.pageId) {
+                        ForEach(model.pages) { page in
+                            Text(page.name).tag(page.id)
+                        }
+                    }
+                    .accessibilityIdentifier("tile.new.page")
+                }
+            } header: { HQSectionLabel { Text("Layout & Updates") } }
             Section {
                 Group {
                 #if targetEnvironment(macCatalyst)
@@ -257,6 +327,67 @@ final class TileMaker {
         ids.append(id)
         UserDefaults.standard.set(Array(ids.suffix(300)), forKey: "hqn.tileChats." + accountId)
     }
+
+    /// [tiles-v2] Persist this in-flight maker so app suspension or relaunch never orphans its hidden tile chat.
+    private func persistPending() {
+        guard watching, let sessionId = (chat as? LiveChatSession)?.storedSessionId, !sessionId.isEmpty else { return }
+        let entry = PendingTileMaker(id: id, accountId: accountId, sessionId: sessionId, botId: bot.id,
+                                     pinId: changing?.id, pinName: changing?.name, path: path, what: what,
+                                     dashboardPage: dashboardPage, desiredSize: desiredSize, acting: acting,
+                                     askedAt: asked.timeIntervalSince1970)
+        TilePendingStore.upsert(entry)
+    }
+
+    private func clearPending() {
+        TilePendingStore.remove(id: id, accountId: accountId)
+    }
+
+    /// [tiles-v2] Reattach to any in-flight tile makers saved before suspension/relaunch.
+    static func restorePending(accountId: String, services: PagesServices, from page: UIViewController) {
+        let pending = TilePendingStore.load(accountId: accountId)
+        guard !pending.isEmpty else { return }
+        for item in pending {
+            if active.contains(where: { $0.id == item.id || ($0.chat as? LiveChatSession)?.storedSessionId == item.sessionId }) {
+                continue
+            }
+            guard let bot = services.bots.first(where: { $0.id == item.botId }) else {
+                TilePendingStore.remove(id: item.id, accountId: accountId)
+                continue
+            }
+            let summary = SessionSummary(id: item.sessionId, profile: bot.id, title: item.what, preview: nil,
+                                         lastActive: Date(timeIntervalSince1970: item.askedAt), source: nil,
+                                         unread: false, isRunning: true)
+            let chat = services.chat(for: summary)
+            let maker = TileMaker(chat: chat, bot: bot, accountId: accountId, page: page,
+                                  dashboardPage: item.dashboardPage, desiredSize: item.desiredSize, restoredId: item.id)
+            if let pinId = item.pinId { maker.changing = (pinId, item.pinName ?? "Tile") }
+            maker.acting = item.acting
+            maker.path = item.path
+            maker.what = item.what
+            maker.asked = Date(timeIntervalSince1970: item.askedAt)
+            maker.sawRunning = true   // already sent in the previous run; check if finished once loaded
+            active.append(maker)
+            chat.onChange = { [weak maker] _ in maker?.check() }
+            chat.start()
+            NotificationCenter.default.post(name: Self.changed, object: nil)
+            AppLog.note("pages", "restored pending tile maker \(AppLog.tag(item.id))")
+        }
+    }
+
+    /// [tiles-v2] Stops the running turn and cleans up the maker cleanly.
+    func cancel() {
+        guard watching else { return }
+        watching = false
+        clearPending()
+        chat.stop()
+        chat.onChange = nil
+        Self.active.removeAll { $0 === self }
+        NotificationCenter.default.post(name: Self.changed, object: nil)
+        if let changing {
+            NotificationCenter.default.post(name: Self.tileChanged, object: nil, userInfo: ["id": changing.id, "done": false])
+        }
+        AppLog.note("pages", "tile maker cancelled by user")
+    }
     let accountId: String
     /// What the person asked for (the Tiles page's "making" row says it).
     private(set) var what = ""
@@ -270,7 +401,7 @@ final class TileMaker {
         return changing.map { "\($0.name): \(what)" } ?? what
     }
     /// The row's identity on the Tiles page.
-    let id = UUID().uuidString
+    let id: String
     private weak var page: UIViewController?
     /// [live-tiles] A button's turn ended (the opened tile reads its page again).
     var ended: (() -> Void)?
@@ -299,13 +430,14 @@ final class TileMaker {
 
     /// What the bot is asked: the skill, the person's words, the hand-over line the app looks for, and the rules in
     /// short for a computer whose add-on predates the skill.
-    nonisolated static func prompt(_ what: String) -> String {
-        """
+    nonisolated static func prompt(_ what: String, size: PinTileSize? = nil, schedule: TileScheduleChoice = .auto) -> String {
+        let sizeNote = size.map { " Design it to look great especially at \($0.shapeWords)." } ?? ""
+        return """
         Make me a live tile for my Hermes HQ Dashboard showing: \(what)
 
         Use the hermes-hq-push:dashboard-tile skill (open it with skill_view first) and follow it: make the tile \
         the way it says, with the real numbers in, run its check_tile.py until it passes, and look at the pictures \
-        it makes. Keep it up to date with a scheduled job on a sensible schedule, and tell me how often.
+        it makes.\(sizeNote) \(schedule.promptSentence)
 
         If that skill isn't there: one self-contained .html file that fills its window exactly at any size from \
         about 160×160 to 800×600 (100vw/100vh, text in em from a size that grows with the window, charts in SVG \
@@ -418,23 +550,65 @@ final class TileMaker {
     }
 
     @discardableResult
-    static func start(bot: Bot, what: String, accountId: String, chat: any ChatSessionModel, from page: UIViewController) -> TileMaker {
-        let maker = TileMaker(chat: chat, bot: bot, accountId: accountId, page: page)
+    static func start(bot: Bot, what: String, size: PinTileSize? = nil, schedule: TileScheduleChoice = .auto,
+                      dashboardPage: String? = nil, accountId: String, chat: any ChatSessionModel,
+                      from page: UIViewController) -> TileMaker {
+        let maker = TileMaker(chat: chat, bot: bot, accountId: accountId, page: page,
+                              dashboardPage: dashboardPage, desiredSize: size)
+        maker.scheduleChoice = schedule
         active.append(maker)
         maker.begin(what)
         return maker
     }
 
-    private init(chat: any ChatSessionModel, bot: Bot, accountId: String, page: UIViewController?) {
+    /// [tiles-v2] Creates a new tile modeled on an existing tile (`TileJobs.duplicatePrompt`).
+    @discardableResult
+    static func duplicate(_ pin: ArtifactPin, sourcePath: String, bot: Bot, what: String, accountId: String,
+                          chat: any ChatSessionModel, from page: UIViewController) -> TileMaker {
+        let maker = TileMaker(chat: chat, bot: bot, accountId: accountId, page: page,
+                              dashboardPage: ArtifactPins.of(accountId: accountId).pageId(of: pin),
+                              desiredSize: pin.tileSize)
+        maker.customPrompt = TileJobs.duplicatePrompt(sourcePath: sourcePath, sourceName: pin.name, what: what, size: pin.tileSize)
+        maker.customDisplay = "Duplicate \(pin.name): \(what)"
+        active.append(maker)
+        maker.begin(what)
+        return maker
+    }
+
+    /// [tiles-v2] Asks the bot to attach a scheduled refresh job to a static pinned tile (`TileJobs.schedulePrompt`).
+    @discardableResult
+    static func keepUpdated(_ pin: ArtifactPin, path: String, bot: Bot, frequency: TileJobs.Frequency,
+                            accountId: String, chat: any ChatSessionModel, from page: UIViewController) -> TileMaker {
+        let maker = TileMaker(chat: chat, bot: bot, accountId: accountId, page: page)
+        maker.changing = (pin.id, pin.name)
+        maker.path = path
+        maker.customPrompt = TileJobs.schedulePrompt(path: path, name: pin.name, frequency: frequency)
+        maker.customDisplay = "Keep \(pin.name) updated \(frequency.short)"
+        active.append(maker)
+        maker.begin("update \(frequency.short)")
+        return maker
+    }
+
+    private init(chat: any ChatSessionModel, bot: Bot, accountId: String, page: UIViewController?,
+                 dashboardPage: String? = nil, desiredSize: PinTileSize? = nil, restoredId: String? = nil) {
+        self.id = restoredId ?? UUID().uuidString
         self.chat = chat
         self.bot = bot
         self.accountId = accountId
         self.page = page
-        dashboardPage = ArtifactPins.of(accountId: accountId).currentPage
+        self.dashboardPage = dashboardPage ?? ArtifactPins.of(accountId: accountId).currentPage
+        self.desiredSize = desiredSize
     }
 
     /// [dashboard] The Dashboard page New Tile was asked from: the tile goes there, whatever page is shown when it lands.
     private let dashboardPage: String
+    /// [tiles-v2] Target tile size chosen in New Tile / Duplicate….
+    private let desiredSize: PinTileSize?
+    /// [tiles-v2] Target update schedule chosen in New Tile.
+    private var scheduleChoice: TileScheduleChoice = .auto
+    /// [tiles-v2] Optional custom prompt/display for Duplicate… or Keep Updated….
+    private var customPrompt: String?
+    private var customDisplay: String?
     /// [tiles] The changed tile's file (Change…).
     private var path = ""
     /// [tile-versions] The whole prompt of a hidden turn that isn't a button's (the roll back's).
@@ -459,13 +633,14 @@ final class TileMaker {
             }
             return
         }
-        let prompt = changing == nil ? Self.prompt(what) : Self.changePrompt(path: path, what: what)
-        let display = changing.map { Self.changeDisplay(name: $0.name, what: what) } ?? Self.display(what)
+        let prompt = customPrompt ?? (changing == nil ? Self.prompt(what, size: desiredSize, schedule: scheduleChoice) : Self.changePrompt(path: path, what: what))
+        let display = customDisplay ?? (changing.map { Self.changeDisplay(name: $0.name, what: what) } ?? Self.display(what))
         if let live = chat as? LiveChatSession {
             live.send(prompt, display: display)
         } else {
             chat.send(prompt)
         }
+        persistPending()
         AppLog.note("pages", "\(changing == nil ? "new tile" : "tile change") asked of \(AppLog.tag(bot.id)) (\(what.count) chars)")
         NotificationCenter.default.post(name: Self.changed, object: nil)
         if let page {
@@ -476,6 +651,7 @@ final class TileMaker {
 
     private func check() {
         guard watching else { return }
+        persistPending()
         if chat.isRunning { sawRunning = true; return }
         guard sawRunning else {
             // [tile-versions] A hidden ask refused before it ran: done, with its problem.
@@ -531,6 +707,7 @@ final class TileMaker {
             return
         }
         watching = false
+        clearPending()
         rememberChat()
         // [tile-chats] The tile's Open Chat goes to the chat its bot last worked on it in (a Change… is a new chat).
         if let changing, let stored = (chat as? LiveChatSession)?.storedSessionId, !stored.isEmpty {
@@ -601,9 +778,11 @@ final class TileMaker {
             offerChat("\(PinActions.fullWords). \(PinActions.fullDetail) Your new page is in the chat.")
             return
         }
-        pins.setPage(dashboardPage, id: ArtifactPin.key(profile: record.profile, value: record.value))
+        let pinId = ArtifactPin.key(profile: record.profile, value: record.value)
+        pins.setPage(dashboardPage, id: pinId)
+        if let desiredSize { pins.setSize(desiredSize, id: pinId) }
         // [tile-versions] A new tile's page is its Version 1.
-        TileVersions.shared.keepSoon(pinId: ArtifactPin.key(profile: record.profile, value: record.value), accountId: context.accountId,
+        TileVersions.shared.keepSoon(pinId: pinId, accountId: context.accountId,
                                      kind: .made, what: what)
         Haptics.play(.success)
         AppLog.note("pages", "new tile from \(AppLog.tag(bot.id)) pinned")
@@ -667,7 +846,10 @@ final class TileMakingCell: UICollectionViewCell {
     private let title = UILabel()
     private let detail = UILabel()
     private let spinner = UIActivityIndicatorView(style: .medium)
+    private let stopButton = UIButton(type: .system)
     private let chevron = UIImageView(image: UIImage(systemName: "chevron.right"))
+    /// [tiles-v2] Stops the running tile creation/change directly from the card.
+    var onStop: (() -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -680,14 +862,24 @@ final class TileMakingCell: UICollectionViewCell {
         chevron.preferredSymbolConfiguration = UIImage.SymbolConfiguration(textStyle: .footnote, scale: .small)
         chevron.setContentHuggingPriority(.required, for: .horizontal)
         spinner.setContentHuggingPriority(.required, for: .horizontal)
+        var stopConfig = UIButton.Configuration.plain()
+        stopConfig.image = UIImage(systemName: "stop.circle.fill",
+                                   withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .regular))
+        stopConfig.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 6, bottom: 6, trailing: 6)
+        stopButton.configuration = stopConfig
+        stopButton.accessibilityLabel = "Stop"
+        stopButton.accessibilityIdentifier = "tile.making.stop"
+        stopButton.setContentHuggingPriority(.required, for: .horizontal)
+        stopButton.addAction(UIAction { [weak self] _ in self?.onStop?() }, for: .primaryActionTriggered)
         let words = UIStackView(arrangedSubviews: [title, detail])
         words.axis = .vertical
         words.spacing = 3
-        let row = UIStackView(arrangedSubviews: [icon, words, spinner, chevron])
+        let row = UIStackView(arrangedSubviews: [icon, words, spinner, stopButton, chevron])
         row.axis = .horizontal
         row.alignment = .center
         row.spacing = 12
-        row.setCustomSpacing(10, after: spinner)
+        row.setCustomSpacing(4, after: spinner)
+        row.setCustomSpacing(6, after: stopButton)
         [card, row].forEach { $0.translatesAutoresizingMaskIntoConstraints = false }
         contentView.addSubview(card)
         card.addSubview(row)
@@ -710,7 +902,10 @@ final class TileMakingCell: UICollectionViewCell {
 
     @MainActor required dynamic init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    func show(what: String, detail words: String, changing: Bool = false) {
+    func show(what: String, detail words: String, changing: Bool = false, onStop: (() -> Void)? = nil) {
+        self.onStop = onStop
+        stopButton.isHidden = onStop == nil
+        stopButton.tintColor = HQPalette.label2
         // Colours, fonts and the card's shape read each time: the theme's come along (as the tiles: their corner, and
         // their edge, 1 pt in the Desktop Look).
         card.layer.cornerRadius = HQShape.radius(14, .card)
@@ -732,6 +927,13 @@ final class TileMakingCell: UICollectionViewCell {
         spinner.startAnimating()
         accessibilityLabel = (changing ? "Changing a tile: " : "Making a tile: ") + what
         accessibilityValue = words
+        if let onStop {
+            accessibilityCustomActions = [UIAccessibilityCustomAction(name: changing ? "Stop changing tile" : "Stop making tile") { _ in
+                onStop(); return true
+            }]
+        } else {
+            accessibilityCustomActions = []
+        }
     }
 
     override var isHighlighted: Bool {

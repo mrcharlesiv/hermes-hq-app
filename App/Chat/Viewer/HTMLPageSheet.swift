@@ -504,6 +504,8 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
         }
         if tile?.id != nil {
             NotificationCenter.default.addObserver(self, selector: #selector(tileRan(_:)), name: TileUpdates.ran, object: nil)
+            NotificationCenter.default.addObserver(self, selector: #selector(tileMakerChanged(_:)), name: TileMaker.changed, object: nil)
+            NotificationCenter.default.addObserver(self, selector: #selector(tileDidChange(_:)), name: TileMaker.tileChanged, object: nil)
         }
         #if DEBUG
         if UserDefaults.standard.string(forKey: "HQDebugTour") == "htmlstatus" { show("Sent to Hermes — waiting for a reply…") }
@@ -574,6 +576,22 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
         guard let id = tile?.id, note.object as? String == id else { return }
         AppLog.trace("chatui", "open tile's job ran: read again in place")
         readAgain(note: "Updated")
+        readStatus()
+    }
+
+    /// [tiles-v2] Show an unobtrusive status pill while a Change… / button turn runs on this opened tile.
+    @objc private func tileMakerChanged(_ note: Notification) {
+        guard let id = tile?.id, let accountId = source?.context.accountId else { return }
+        if let maker = TileMaker.working(on: id, accountId: accountId) {
+            show(maker.tileWords)
+        }
+    }
+
+    /// [tiles-v2] Reload the opened tile in place when a Change… or rollback finishes over it.
+    @objc private func tileDidChange(_ note: Notification) {
+        guard let id = tile?.id, note.userInfo?["id"] as? String == id else { return }
+        show(nil)
+        readAgain(note: note.userInfo?["done"] as? Bool == true ? "Updated" : nil)
         readStatus()
     }
 

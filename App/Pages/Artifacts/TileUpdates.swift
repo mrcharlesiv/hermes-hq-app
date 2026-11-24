@@ -65,9 +65,47 @@ final class TileUpdates {
     /// A tile's job is running (its page is read again sooner, to redraw it as the run ends).
     var anyUpdating: Bool { !updating.isEmpty }
 
-    /// Reads the tiles' jobs again (one read per bot). Returns the tiles whose mark changed, and those whose job ran
-    /// since the last read (or ended a run): their pictures are drawn again (owner 2026-11-03: "redraw the moment the
-    /// job finishes").
+    /// [tiles-v2] Reads the jobs for `profiles` concurrently in one pass so multi-bot accounts don't wait serially.
+    func prefetch(profiles: [String], accountId: String, client: (any GatewayClient)?) async {
+        guard let client else { return }
+        let unique = Array(Set(profiles))
+        guard !unique.isEmpty else { return }
+        let fetched: [(String, [CronJob])] = await withTaskGroup(of: (String, [CronJob]?).self) { group in
+            for profile in unique {
+                group.addTask {
+                    let list = try? await JobsStore.readList(client, scope: profile)
+                    return (profile, list)
+                }
+            }
+            var out: [(String, [CronJob])] = []
+            for await (profile, list) in group {
+                if let list { out.append((profile, list)) }
+            }
+            return out
+        }
+        let now = Date()
+        for (profile, list) in fetched {
+            lists[accountId + "|" + profile] = (list, now)
+        }
+    }
+
+    /// [tiles-v2] All matched tile jobs for `pins` (one per unique job key), fetched concurrently per bot.
+    func allJobs(for pins: [ArtifactPin], accountId: String, client: (any GatewayClient)?) async -> [CronJob] {
+        let pages = pins.filter(\.isPage)
+        guard !pages.isEmpty else { return [] }
+        await prefetch(profiles: pages.map(\.profile), accountId: accountId, client: client)
+        var seen: Set<String> = []
+        var out: [CronJob] = []
+        for pin in pages {
+            let (job, _) = await lookup(pin, accountId: accountId, client: client, fresh: Self.fresh)
+            if let job, seen.insert(job.key).inserted { out.append(job) }
+        }
+        return out
+    }
+
+    /// Reads the tiles' jobs again (one concurrent read per bot). Returns the tiles whose mark changed, and those whose
+    /// job ran since the last read (or ended a run): their pictures are drawn again (owner 2026-11-03: "redraw the
+    /// moment the job finishes").
     /// [tile-models] Each job then gets the model Settings › Tile Model and its tile ask for (one write, not retried while
     /// the settings stay as they are); `modelFailed` is the reason one couldn't be written.
     func refresh(_ pins: [ArtifactPin], accountId: String, client: (any GatewayClient)?) async
@@ -78,8 +116,9 @@ final class TileUpdates {
         var reconciled: Set<String> = []
         let pages = pins.filter(\.isPage)
         for profile in Set(pages.map(\.profile)) { lists[accountId + "|" + profile] = nil }
+        await prefetch(profiles: pages.map(\.profile), accountId: accountId, client: client)
         for pin in pages {
-            let (job, known) = await lookup(pin, accountId: accountId, client: client, fresh: 5)
+            let (job, known) = await lookup(pin, accountId: accountId, client: client, fresh: 15)
             // Unread (offline): the mark stays as it was, never dropped for a guess.
             guard known else { continue }
             if let job, reconciled.insert(job.key).inserted,
@@ -107,7 +146,11 @@ final class TileUpdates {
     /// `botName`/`botModel`: the tile's bot and its own model, for "Updated by" (owner 2026-11-03: "understanding how
     /// often it updates and what model is updating it").
     func menu(for pin: ArtifactPin, accountId: String, client: (any GatewayClient)?, from host: UIViewController, inline: Bool = false,
-              botName: String, botModel: String?, redraw: @escaping () -> Void) -> UIMenuElement {
+              botName: String, botModel: String?,
+              onKeepUpdated: ((TileJobs.Frequency) -> Void)? = nil,
+              onFixFailed: ((String?) -> Void)? = nil,
+              onOpenJob: ((CronJob) -> Void)? = nil,
+              redraw: @escaping () -> Void) -> UIMenuElement {
         UIDeferredMenuElement.uncached { [weak self, weak host] completion in
             Task { @MainActor in
                 guard let self else { completion([]); return }
@@ -124,7 +167,8 @@ final class TileUpdates {
                     models.list = await sync.shortList(accountId: accountId, profile: pin.profile, client: client, keep: models.override)
                 }
                 completion([self.updates(pin, job: job, known: known, accountId: accountId, client: client, host: host, inline: inline,
-                                         botName: botName, models: models, redraw: redraw)])
+                                         botName: botName, models: models, onKeepUpdated: onKeepUpdated, onFixFailed: onFixFailed,
+                                         onOpenJob: onOpenJob, redraw: redraw)])
             }
         }
     }
@@ -139,6 +183,9 @@ final class TileUpdates {
 
     private func updates(_ pin: ArtifactPin, job: CronJob?, known: Bool = true, accountId: String, client: (any GatewayClient)?,
                          host: UIViewController?, inline: Bool, botName: String, models: TileModelMenu,
+                         onKeepUpdated: ((TileJobs.Frequency) -> Void)?,
+                         onFixFailed: ((String?) -> Void)?,
+                         onOpenJob: ((CronJob) -> Void)?,
                          redraw: @escaping () -> Void) -> UIMenuElement {
         guard known else {
             let unread = UIAction(title: "Couldn’t Read Updates", subtitle: "Can’t reach your gateway", image: UIImage(systemName: "clock"),
@@ -147,6 +194,20 @@ final class TileUpdates {
             return UIMenu(options: .displayInline, children: [unread])
         }
         guard let job else {
+            let store = JobsStore.current
+            let writable = store != nil && store?.readOnlyGateway == false
+            // [tiles-v2] Turn the dead-end "Not Kept Updated" row into an actionable "Keep Updated…" schedule picker.
+            if writable, let onKeepUpdated {
+                let choices: [UIMenuElement] = TileJobs.frequencies.map { frequency in
+                    let action = UIAction(title: frequency.title) { _ in onKeepUpdated(frequency) }
+                    action.accessibilityIdentifier = "tile.updates.attach-\(frequency.minutes)"
+                    return action
+                }
+                let attach = UIMenu(title: "Keep Updated…", subtitle: "Ask \(botName) to schedule refreshes",
+                                    image: UIImage(systemName: "clock.badge.plus"), children: choices)
+                attach.accessibilityIdentifier = "tile.updates.attach"
+                return UIMenu(options: .displayInline, children: [attach])
+            }
             let none = UIAction(title: "Not Kept Updated", subtitle: "No job rewrites this tile", image: UIImage(systemName: "clock"),
                                 attributes: .disabled) { _ in }
             none.accessibilityIdentifier = "tile.updates.none"
@@ -169,8 +230,15 @@ final class TileUpdates {
         }
         let often = UIMenu(title: "How Often", options: [.displayInline, .singleSelection], children: choices)
         let paused = TileJobs.isPaused(job)
-        let now = UIAction(title: "Update Now", image: UIImage(systemName: "arrow.clockwise")) { [weak self, weak host] _ in
-            self?.updateNow(job, pin: pin, accountId: accountId, host: host, redraw: redraw)
+        let isFailed: Bool
+        let failureReason: String?
+        if case .failed(let why) = TileJobs.health(job) {
+            isFailed = true; failureReason = why
+        } else {
+            isFailed = false; failureReason = nil
+        }
+        let now = UIAction(title: isFailed ? "Retry Now" : "Update Now", image: UIImage(systemName: "arrow.clockwise")) { [weak self, weak host] _ in
+            self?.updateNow(job, pin: pin, accountId: accountId, client: client, host: host, redraw: redraw)
         }
         now.accessibilityIdentifier = "tile.updates.now"
         let pause = UIAction(title: paused ? "Resume Updates" : "Pause Updates", image: UIImage(systemName: paused ? "play" : "pause")) {
@@ -179,7 +247,7 @@ final class TileUpdates {
         }
         pause.accessibilityIdentifier = "tile.updates.pause"
         if !writable { now.attributes = .disabled; pause.attributes = .disabled }
-        // What runs it (a choice, [tile-models]) and, after a failed run, why it failed (a line to read).
+        // What runs it (a choice, [tile-models]) and, after a failed run, why it failed + one-tap recovery actions.
         var about: [UIMenuElement] = []
         if TileModels.isScriptOnly(job) {
             let model = UIAction(title: TileJobs.modelWords(job, botName: botName, botModel: models.botModel), subtitle: "Updates this tile",
@@ -190,11 +258,31 @@ final class TileUpdates {
             about.append(modelMenu(pin, job: job, accountId: accountId, client: client, host: host, botName: botName, models: models,
                                    writable: writable))
         }
-        if case .failed(let why) = TileJobs.health(job) {
-            let failed = UIAction(title: "Last Update Failed", subtitle: why.map { String($0.prefix(120)) },
+        if isFailed {
+            let failed = UIAction(title: "Last Update Failed", subtitle: failureReason.map { String($0.prefix(120)) },
                                   image: UIImage(systemName: "exclamationmark.triangle"), attributes: .disabled) { _ in }
             failed.accessibilityIdentifier = "tile.updates.failed"
             about.append(failed)
+            if writable, let onFixFailed {
+                let fix = UIAction(title: "Fix with \(botName)…", image: UIImage(systemName: "wrench.and.screwdriver")) { _ in
+                    onFixFailed(failureReason)
+                }
+                fix.accessibilityIdentifier = "tile.updates.fix"
+                about.append(fix)
+            }
+            if let onOpenJob {
+                let viewRun = UIAction(title: "View Last Run", image: UIImage(systemName: "doc.text.magnifyingglass")) { _ in
+                    onOpenJob(job)
+                }
+                viewRun.accessibilityIdentifier = "tile.updates.view-run"
+                about.append(viewRun)
+            }
+        } else if let onOpenJob {
+            let viewJob = UIAction(title: "View Job", image: UIImage(systemName: "clock.badge.checkmark")) { _ in
+                onOpenJob(job)
+            }
+            viewJob.accessibilityIdentifier = "tile.updates.view-job"
+            about.append(viewJob)
         }
         let children: [UIMenuElement] = [UIMenu(options: .displayInline, children: about), often,
                                           UIMenu(options: .displayInline, children: [now, pause])]
@@ -301,28 +389,109 @@ final class TileUpdates {
         }
     }
 
-    private func updateNow(_ job: CronJob, pin: ArtifactPin, accountId: String, host: UIViewController?, redraw: @escaping () -> Void) {
+    private var activePolls: [String: Task<Void, Never>] = [:]
+
+    private func updateNow(_ job: CronJob, pin: ArtifactPin, accountId: String, client: (any GatewayClient)?,
+                           host: UIViewController?, redraw: @escaping () -> Void) {
         guard let store = JobsStore.current else { return }
         Haptics.play(.soft)
         if let host { PagesHUD.show("Updating…", symbol: "arrow.clockwise", from: host) }
-        Task { [weak self, weak host] in
+        let priorRun = job.lastRunAt ?? ""
+        activePolls[pin.id]?.cancel()
+        activePolls[pin.id] = Task { [weak self, weak host] in
+            defer { self?.activePolls[pin.id] = nil }
             let result = await store.runNow(job)
             self?.forget(pin, accountId: accountId)
             switch result {
             case .started, .stillRunning, .alreadyRunning:
-                // The job rewrites the file as it ends: the picture is drawn again then (a bot's run takes a while).
                 AppLog.trace("pages", "tile update now: \(result)")
                 NotificationCenter.default.post(name: Self.changed, object: pin.id)
-                for wait in [20, 60, 180] {
-                    try? await Task.sleep(for: .seconds(wait))
-                    redraw()
+                // [tiles-v2] Poll job state actively (every 4 s, up to 3 min) instead of blind [20, 60, 180] sleeps,
+                // redrawing the instant the run completes.
+                var sawRunning = false
+                for _ in 0..<45 {
+                    try? await Task.sleep(for: .seconds(4))
+                    guard !Task.isCancelled, let self else { return }
+                    let (latest, known) = await self.lookup(pin, accountId: accountId, client: client, fresh: 0)
+                    guard known, let latest else { continue }
+                    let running = JobWords.workIsOut(latest)
+                    if running { sawRunning = true }
+                    let finished = (latest.lastRunAt ?? "") != priorRun || (sawRunning && !running)
+                    if finished {
+                        NotificationCenter.default.post(name: Self.ran, object: pin.id)
+                        NotificationCenter.default.post(name: Self.changed, object: pin.id)
+                        redraw()
+                        return
+                    }
                 }
+                redraw()
             default:
                 AppLog.note("pages", "tile update now failed: \(result)")
                 PagesHaptics.error()
                 if let host { PagesHUD.show("Couldn’t Update", symbol: "exclamationmark.triangle", from: host) }
             }
         }
+    }
+
+    /// [tiles-v2] Page-level Update All Now: triggers every active (non-paused) scheduled job for `pins`.
+    func updateAll(_ pins: [ArtifactPin], accountId: String, client: (any GatewayClient)?,
+                   host: UIViewController?, redraw: @escaping (String) -> Void) {
+        guard let store = JobsStore.current, !store.readOnlyGateway else { return }
+        Haptics.play(.soft)
+        Task { [weak self, weak host] in
+            guard let self else { return }
+            let pages = pins.filter(\.isPage)
+            await self.prefetch(profiles: pages.map(\.profile), accountId: accountId, client: client)
+            var matched: [(ArtifactPin, CronJob)] = []
+            var seen: Set<String> = []
+            for pin in pages {
+                let (job, _) = await self.lookup(pin, accountId: accountId, client: client, fresh: Self.fresh)
+                if let job, !TileJobs.isPaused(job), seen.insert(job.key).inserted {
+                    matched.append((pin, job))
+                }
+            }
+            guard !matched.isEmpty else {
+                if let host { PagesHUD.show("No Active Tile Jobs", symbol: "clock", from: host) }
+                return
+            }
+            if let host {
+                let word = matched.count == 1 ? "Updating 1 Tile…" : "Updating \(matched.count) Tiles…"
+                PagesHUD.show(word, symbol: "arrow.clockwise", from: host)
+            }
+            for (pin, job) in matched {
+                let result = await store.runNow(job)
+                if case .started = result { self.forget(pin, accountId: accountId) }
+            }
+            NotificationCenter.default.post(name: Self.changed, object: nil)
+            // Watch jobs finish via the Tiles page's fast 15s watchTiles loop; also do a quick check at 10s.
+            try? await Task.sleep(for: .seconds(10))
+            for (pin, _) in matched { redraw(pin.id) }
+        }
+    }
+
+    /// [tiles-v2] Batch pause or resume all scheduled tile jobs for `pins`.
+    func setAllPaused(_ pause: Bool, pins: [ArtifactPin], accountId: String, client: (any GatewayClient)?,
+                      host: UIViewController?) async -> Int {
+        guard let store = JobsStore.current, !store.readOnlyGateway else { return 0 }
+        let jobs = await allJobs(for: pins, accountId: accountId, client: client)
+        let targets = jobs.filter { TileJobs.isPaused($0) != pause }
+        var changed = 0
+        for job in targets {
+            if await store.setPaused(job, pause) == .done { changed += 1 }
+        }
+        for profile in Set(pins.map(\.profile)) { lists[accountId + "|" + profile] = nil }
+        NotificationCenter.default.post(name: Self.changed, object: nil)
+        if let host {
+            if changed > 0 {
+                PagesHaptics.success()
+                let word = pause ? (changed == 1 ? "Paused 1 Tile" : "Paused \(changed) Tiles")
+                                 : (changed == 1 ? "Resumed 1 Tile" : "Resumed \(changed) Tiles")
+                PagesHUD.show(word, symbol: pause ? "pause.fill" : "play.fill", from: host)
+            } else {
+                PagesHUD.show(pause ? "Already Paused" : "Already Running", symbol: "clock", from: host)
+            }
+        }
+        return changed
     }
 
     /// Rename…: the tile's own name (empty goes back to the page's).

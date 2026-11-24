@@ -139,7 +139,7 @@ nonisolated enum TileNames {
 /// [tiles] The job that keeps a tile up to date, and how often it runs.
 nonisolated enum TileJobs {
     /// How often, as the tile's menu offers it.
-    struct Frequency: Equatable, Sendable {
+    struct Frequency: Equatable, Hashable, Sendable {
         var title: String
         /// Short, after "Updated 5 min ago · ".
         var short: String
@@ -281,4 +281,69 @@ nonisolated enum TileJobs {
     }
 
     static func date(_ text: String) -> Date? { PagesDate.parse(text) }
+
+    /// [tiles-v2] Estimated runs per day for a scheduled tile job (nil when paused or unknown).
+    static func estimatedRunsPerDay(_ job: CronJob) -> Double? {
+        guard !isPaused(job) else { return nil }
+        if let freq = frequency(of: job), freq.minutes > 0 { return 1440.0 / Double(freq.minutes) }
+        if let minutes = job.schedule?.minutes, minutes > 0 { return 1440.0 / minutes }
+        guard let expr = job.schedule?.expr?.trimmingCharacters(in: .whitespaces), !expr.isEmpty else { return nil }
+        let fields = expr.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard fields.count == 5 else { return nil }
+        let minF = fields[0], hourF = fields[1], dowF = fields[4]
+        let dayFactor: Double = (dowF == "1-5" || dowF.lowercased() == "mon-fri") ? (5.0 / 7.0) : 1.0
+        if minF.hasPrefix("*/"), let step = Double(minF.dropFirst(2)), step > 0, hourF == "*" {
+            return (1440.0 / step) * dayFactor
+        }
+        if hourF.hasPrefix("*/"), let step = Double(hourF.dropFirst(2)), step > 0 {
+            return (24.0 / step) * dayFactor
+        }
+        if hourF == "*" {
+            let perHour = minF == "*" ? 60.0 : Double(minF.split(separator: ",").count)
+            return perHour * 24.0 * dayFactor
+        }
+        let hoursPerDay = Double(hourF.split(separator: ",").count)
+        let minsPerHour = minF == "*" ? 60.0 : Double(minF.split(separator: ",").count)
+        return max(0, hoursPerDay * minsPerHour * dayFactor)
+    }
+
+    /// [tiles-v2] Prompt asking the bot to attach a scheduled refresh job to an existing static pinned tile.
+    static func schedulePrompt(path: String, name: String, frequency: Frequency) -> String {
+        """
+        Keep my Hermes HQ Dashboard tile “\(name)” (\(path)) up to date automatically \(frequency.short) \
+        (cron: \(frequency.cron)).
+
+        Use the hermes-hq-push:dashboard-tile skill (open it with skill_view first). Create a scheduled job that \
+        refreshes this tile’s data \(frequency.short) and add its <meta name="hq-tile-job"> tag to \(path) while \
+        keeping the tile’s look, layout and path unchanged. Run the refresh once now to verify, then end your reply \
+        with: MEDIA:\(path)
+        """
+    }
+
+    /// [tiles-v2] Default Change Tile prefill when recovering from a failed tile update.
+    static func fixPrefill(error: String?) -> String {
+        let trimmed = error?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty { return "Fix why this tile’s last update failed and verify the refresh job runs cleanly" }
+        let line = trimmed.split(whereSeparator: \.isNewline).first.map(String.init) ?? trimmed
+        let short = line.count > 140 ? String(line.prefix(139)) + "…" : line
+        return "Fix why this tile’s update failed (“\(short)”) and verify the refresh job runs cleanly"
+    }
+
+    /// [tiles-v2] Prompt asking the bot to create a new tile modeled on an existing one.
+    static func duplicatePrompt(sourcePath: String, sourceName: String, what: String, size: PinTileSize? = nil,
+                                scheduleWords: String? = nil) -> String {
+        let sizeLine = size.map { " Design it to look great especially at \($0.shapeWords)." } ?? ""
+        let scheduleLine = scheduleWords ?? "Keep it up to date with its own scheduled job on a sensible schedule, and tell me how often."
+        return """
+        Make me a new live tile for my Hermes HQ Dashboard based on my existing tile “\(sourceName)” (\(sourcePath)), \
+        but changed to show: \(what)
+
+        Use the hermes-hq-push:dashboard-tile skill (open it with skill_view first). Read \(sourcePath) for its visual \
+        style and structure, then write the new tile to a NEW .html file (do not overwrite \(sourcePath)).\(sizeLine) \
+        \(scheduleLine) Run check_tile.py until it passes and look at the pictures it makes.
+
+        When it's ready, end your reply with the new page alone on its own line: MEDIA:/absolute/path/to/the/new-tile.html \
+        (the app pins it to my Dashboard by itself, so don't tell me how to pin it)
+        """
+    }
 }

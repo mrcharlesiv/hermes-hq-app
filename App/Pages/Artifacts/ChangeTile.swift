@@ -8,21 +8,46 @@
 import SwiftUI
 import UIKit
 
+/// [tiles-v2] Change an existing tile in place, or duplicate it into a new tile with modifications.
+enum ChangeTileMode: Equatable {
+    case change
+    case duplicate
+
+    var sheetTitle: String { self == .change ? "Change Tile" : "Duplicate Tile" }
+    var actionTitle: String { self == .change ? "Change" : "Duplicate" }
+    var promptHeader: String { self == .change ? "What Should Change?" : "How Should the New Tile Differ?" }
+    var placeholder: String {
+        self == .change ? "For example: make it a bar chart and add last month"
+                        : "For example: show expenses instead of revenue"
+    }
+    func botLine(_ botName: String) -> String {
+        self == .change ? "Changed by \(botName)" : "Based on this tile · made by \(botName)"
+    }
+    func footer(_ botName: String) -> String {
+        self == .change
+            ? "\(botName) changes it in a new chat. The tile stays where it is and shows it’s being changed, then it’s drawn again when it’s done."
+            : "\(botName) copies this tile’s style into a new tile in a separate chat. The original tile stays untouched."
+    }
+}
+
 @MainActor @Observable
 final class ChangeTileModel {
     let name: String
     let bot: Bot
     let picture: UIImage?
+    let mode: ChangeTileMode
     /// How often it's updated ("Every hour · 10 min ago"), read as the sheet opens.
     var status: String?
     var what = ""
     @ObservationIgnored var onChange: ((String) -> Void)?
     @ObservationIgnored weak var controller: UIViewController?
 
-    init(name: String, bot: Bot, picture: UIImage?) {
+    init(name: String, bot: Bot, picture: UIImage?, initialWhat: String = "", mode: ChangeTileMode = .change) {
         self.name = name
         self.bot = bot
         self.picture = picture
+        self.mode = mode
+        self.what = initialWhat
     }
 
     var canChange: Bool { !what.pgTrim.isEmpty }
@@ -42,12 +67,12 @@ final class ChangeTileModel {
 }
 
 enum ChangeTileSheet {
-    static func make(name: String, bot: Bot, picture: UIImage?, status: (() async -> String?)?,
-                     onChange: @escaping (String) -> Void) -> UIViewController {
-        let model = ChangeTileModel(name: name, bot: bot, picture: picture)
+    static func make(name: String, bot: Bot, picture: UIImage?, initialWhat: String = "", mode: ChangeTileMode = .change,
+                     status: (() async -> String?)?, onChange: @escaping (String) -> Void) -> UIViewController {
+        let model = ChangeTileModel(name: name, bot: bot, picture: picture, initialWhat: initialWhat, mode: mode)
         model.onChange = onChange
         let host = ChangeTileHostController(model: model)
-        let nav = ChatSheet.wrap(host, title: "Change Tile")
+        let nav = ChatSheet.wrap(host, title: mode.sheetTitle)
         host.installClose()
         SheetEditGuard.install(on: nav)   // [Mac UI check 2026-11-13] typed words ask before Cancel, Escape or ⌘W drop them
         nav.sheetPresentationController?.selectedDetentIdentifier = .large
@@ -69,8 +94,8 @@ final class ChangeTileHostController: UIHostingController<HQScaledRoot<ChangeTil
         self.model = model
         super.init(rootView: HQScaledRoot(ChangeTileView(model: model)))
         model.controller = self
-        title = "Change Tile"
-        changeItem = UIBarButtonItem(title: "Change", primaryAction: UIAction { [weak self] _ in self?.model.change() })
+        title = model.mode.sheetTitle
+        changeItem = UIBarButtonItem(title: model.mode.actionTitle, primaryAction: UIAction { [weak self] _ in self?.model.change() })
         changeItem.style = .prominent
         changeItem.accessibilityIdentifier = "tile.change.send"
         navigationItem.rightBarButtonItem = changeItem
@@ -80,7 +105,7 @@ final class ChangeTileHostController: UIHostingController<HQScaledRoot<ChangeTil
     @MainActor required dynamic init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
     override var keyCommands: [UIKeyCommand]? {
-        (super.keyCommands ?? []) + (model.canChange ? [.save("Change", #selector(changeFromKeyboard))] : [])
+        (super.keyCommands ?? []) + (model.canChange ? [.save(model.mode.actionTitle, #selector(changeFromKeyboard))] : [])
     }
     override var canBecomeFirstResponder: Bool { true }
     @objc private func changeFromKeyboard() { model.change() }
@@ -129,12 +154,12 @@ struct ChangeTileView: View {
                     .listRowInsets(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 16))
             }
             Section {
-                TextField("For example: make it a bar chart and add last month", text: $model.what, axis: .vertical)
+                TextField(model.mode.placeholder, text: $model.what, axis: .vertical)
                     .lineLimit(2...8)
                     .focused($focused)
                     .textInputAutocapitalization(.sentences)
                     .accessibilityIdentifier("tile.change.field")
-            } header: { HQSectionLabel { Text("What Should Change?") } }
+            } header: { HQSectionLabel { Text(model.mode.promptHeader) } }
             Section {
                 PagesFlowLayout(spacing: 6, lineSpacing: 6) {
                     ForEach(TileChangeWords.quick, id: \.words) { change in
@@ -147,7 +172,7 @@ struct ChangeTileView: View {
                 .padding(.vertical, 4)
                 .listRowInsets(EdgeInsets(top: 4, leading: 10, bottom: 4, trailing: 10))
             } header: { HQSectionLabel { Text("Quick Changes") } } footer: { HQSectionFooter {
-                Text("\(model.bot.name) changes it in a new chat. The tile stays where it is and shows it’s being changed, then it’s drawn again when it’s done.")
+                Text(model.mode.footer(model.bot.name))
             } }
         }
         .hqGroupedPage()
@@ -187,7 +212,7 @@ private struct ChangeTileHeader: View {
                         .frame(width: HQFont.scaled(18), height: HQFont.scaled(18))
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
-                    Text("Changed by \(model.bot.name)")
+                    Text(model.mode.botLine(model.bot.name))
                         .font(Font.hq(.footnote))
                         .foregroundStyle(Color.hqLabel2)
                         .lineLimit(1)

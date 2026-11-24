@@ -14,6 +14,9 @@ struct TileModelView: View {
     @State private var applying = false
     @State private var status: String?
     @State private var statusIsIssue = false
+    /// [tiles-v2] Live summary of scheduled tile jobs & estimated daily model runs.
+    @State private var activity: TileActivitySummary?
+    @State private var togglingAll = false
 
     init(router: SettingsRouter, accountId: String) {
         self.router = router
@@ -44,6 +47,39 @@ struct TileModelView: View {
             } header: { HQSectionLabel { Text("Fallback Model") } } footer: { HQSectionFooter {
                 Text(TileModels.footer(default: chosen, fallback: fallback)).accessibilityIdentifier("tile-model.footer")
             } }
+            if let activity, activity.totalJobs > 0 {
+                Section {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(activity.headline)
+                            .font(Font.hq(.body).weight(.medium))
+                            .foregroundStyle(Color.hqLabel)
+                        if let detail = activity.detail {
+                            Text(detail)
+                                .font(Font.hq(.footnote))
+                                .foregroundStyle(activity.failingJobs > 0 ? Color.hqRed : Color.hqLabel2)
+                        }
+                    }
+                    .hqRowPadding(4)
+                    .accessibilityIdentifier("tile-model.activity")
+                    if !readOnly {
+                        let willPause = activity.activeJobs > 0
+                        Button {
+                            toggleAllUpdates(pause: willPause)
+                        } label: {
+                            HStack {
+                                Label(willPause ? "Pause All Tile Updates" : "Resume All Tile Updates",
+                                      systemImage: willPause ? "pause.circle" : "play.circle")
+                                    .foregroundStyle(Color.hqTint)
+                                Spacer()
+                                if togglingAll { ProgressView().controlSize(.small) }
+                            }
+                            .hqRowPadding(4)
+                        }
+                        .disabled(togglingAll)
+                        .accessibilityIdentifier("tile-model.toggle-all")
+                    }
+                } header: { HQSectionLabel { Text("Tile Activity") } }
+            }
             if applying || status != nil || readOnly {
                 Section {
                     if applying {
@@ -59,7 +95,10 @@ struct TileModelView: View {
         }.hqMacSettingsRowInsets() }
         .settingsList().hqMacSettingsRows()
         .disabled(readOnly)
-        .task { if catalog.providers.isEmpty { await catalog.load() } }
+        .task {
+            if catalog.providers.isEmpty { await catalog.load() }
+            await loadActivity()
+        }
         .accessibilityIdentifier("tile-model.list")
     }
 
@@ -124,6 +163,25 @@ struct TileModelView: View {
             status = TileModels.appliedWords(changed: result.changed, failed: result.failed)
             statusIsIssue = !result.failed.isEmpty
             if result.failed.isEmpty { Haptics.play(.success) } else { Haptics.play(.error) }
+            await loadActivity()
+        }
+    }
+
+    private func loadActivity() async {
+        let pages = ArtifactPins.of(accountId: accountId).pins.filter(\.isPage)
+        guard !pages.isEmpty else { activity = nil; return }
+        let jobs = await TileUpdates.shared.allJobs(for: pages, accountId: accountId, client: JobsStore.current?.client)
+        activity = TileActivitySummary.summarize(jobs)
+    }
+
+    private func toggleAllUpdates(pause: Bool) {
+        togglingAll = true
+        let pages = ArtifactPins.of(accountId: accountId).pins.filter(\.isPage)
+        Task {
+            _ = await TileUpdates.shared.setAllPaused(pause, pins: pages, accountId: accountId,
+                                                      client: JobsStore.current?.client, host: nil)
+            togglingAll = false
+            await loadActivity()
         }
     }
 }

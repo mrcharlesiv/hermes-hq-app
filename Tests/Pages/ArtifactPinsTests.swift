@@ -140,16 +140,21 @@ struct ArtifactPinsTests {
         #expect(PinGridPacking.place([], columns: 2).rows == 0)
     }
 
-    /// [dashboard] Edit Tiles: a corner dragged to so many cells picks the size; Extra Large spans the grid's width.
+    /// [dashboard] Edit Tiles: a corner dragged to so many cells picks the size; Banner and Extra Large span the grid's width.
     @Test func cornerDragPicksTheSize() {
         #expect(PinTileSize.fitting(columns: 1, rows: 1) == .small)
         #expect(PinTileSize.fitting(columns: 2, rows: 1) == .medium)
-        #expect(PinTileSize.fitting(columns: 1, rows: 2) == .large)
+        #expect(PinTileSize.fitting(columns: 1, rows: 2) == .tall)
         #expect(PinTileSize.fitting(columns: 2, rows: 2) == .large)
+        #expect(PinTileSize.fitting(columns: 3, rows: 1, gridColumns: 4) == .banner)
         #expect(PinTileSize.fitting(columns: 2, rows: 4) == .extraLarge)
         let placed = PinGridPacking.place([PinTileSize.small.span, PinTileSize.extraLarge.span], columns: 2)
         #expect(placed.cells[1] == PinGridPacking.Cell(column: 0, row: 1, columns: 2, rows: 3))
         #expect(placed.rows == 4)
+        let wide = PinGridPacking.place([PinTileSize.banner.span, PinTileSize.tall.span, PinTileSize.small.span], columns: 4)
+        #expect(wide.cells[0] == PinGridPacking.Cell(column: 0, row: 0, columns: 4, rows: 1))
+        #expect(wide.cells[1] == PinGridPacking.Cell(column: 0, row: 1, columns: 1, rows: 2))
+        #expect(wide.cells[2] == PinGridPacking.Cell(column: 1, row: 1, columns: 1, rows: 1))
     }
 
     @Test func gridColumnsFollowTheWidth() {

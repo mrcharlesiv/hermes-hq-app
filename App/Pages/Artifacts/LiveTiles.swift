@@ -22,6 +22,8 @@ import WebKit
 final class LiveTiles: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     /// Live web views at once (each is a web content process' worth of memory).
     static let limit = 8
+    /// [tiles-v2] Live views kept warm across tab switches (released on backgrounding or memory pressure).
+    static let warmLimit = 4
 
     private struct Live {
         let web: WKWebView
@@ -39,11 +41,14 @@ final class LiveTiles: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     private var reading: Set<String> = []
     private var watch: Task<Void, Never>?
     private weak var host: UIViewController?
+    private var lifecycleObservers: [NSObjectProtocol] = []
 
     /// Opens the tile (a tap on nothing pressable).
     var open: ((String) -> Void)?
     /// A button's prompt for the tile's bot (pin id, prompt): false when it can't be sent.
     var send: ((String, String) -> Bool)?
+    /// [tiles-v2] Whether a bot turn is already running on this tile (blocks duplicate button taps while updating).
+    var isWorking: ((String) -> Bool)?
     /// The pin, by id (its path, bot and refresh are read from it each time).
     var pin: ((String) -> ArtifactPin?)?
     /// Where the pin's page lives (account, bot, chat).
@@ -58,6 +63,17 @@ final class LiveTiles: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     init(host: UIViewController) {
         self.host = host
         super.init()
+        let center = NotificationCenter.default
+        lifecycleObservers.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.dropAll() }
+        })
+        lifecycleObservers.append(center.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.dropAll() }
+        })
+    }
+
+    isolated deinit {
+        for observer in lifecycleObservers { NotificationCenter.default.removeObserver(observer) }
     }
 
     // MARK: Which tiles run live
@@ -70,6 +86,12 @@ final class LiveTiles: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
 
     /// Its live view is up (it takes the tile's taps then).
     func isRunning(_ id: String) -> Bool { tiles[id] != nil }
+
+    /// [tiles-v2] True when this tile wants to run live but is currently shown as a static picture because the
+    /// `limit` (8) live web views on screen are full.
+    func isCapped(_ pin: ArtifactPin) -> Bool {
+        isLive(pin) && !isRunning(pin.id) && !reading.contains(pin.id) && !hasRoom()
+    }
 
     /// The live web view for a tile (made and loaded the first time), or nil while its page is read.
     func view(for pin: ArtifactPin, dark: Bool) -> WKWebView? {
@@ -169,12 +191,15 @@ final class LiveTiles: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
 
     // MARK: While the Tiles page shows
 
-    /// The Tiles page shows: pages that ask for it are read again on their schedule. Hidden: every live view goes.
+    /// The Tiles page shows: pages that ask for it are read again on their schedule.
+    /// [tiles-v2] On tab switch (`on == false`), keep up to `warmLimit` recently visible live views warm instead of
+    /// tearing down every WebContent process; `dropAll()` releases all on backgrounding or memory warnings.
     func watch(_ on: Bool) {
         watch?.cancel()
         watch = nil
         guard on else {
-            for id in Array(tiles.keys) { drop(id) }
+            let ranked = tiles.sorted { $0.value.shownAt > $1.value.shownAt }.map(\.key)
+            for id in ranked.dropFirst(Self.warmLimit) { drop(id) }
             return
         }
         watch = Task { [weak self] in
@@ -183,6 +208,13 @@ final class LiveTiles: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
                 self?.refreshDue()
             }
         }
+    }
+
+    /// Releases every live web view (called on app backgrounding or memory warnings).
+    func dropAll() {
+        watch?.cancel()
+        watch = nil
+        for id in Array(tiles.keys) { drop(id) }
     }
 
     private func refreshDue(now: Date = Date()) {
@@ -214,6 +246,8 @@ final class LiveTiles: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         guard !prompt.isEmpty else { ack(false, "empty"); return }
         // Rejected, never cut, as the opened page does (HTMLPageSheet): a sentence at human speed.
         guard prompt.count <= HTMLPageSheet.maxIntentLength else { ack(false, "too_long"); return }
+        // [tiles-v2] Block duplicate live-tile actions while a turn is already running on this tile.
+        if isWorking?(id) == true { PagesHaptics.error(); ack(false, "busy"); return }
         guard let live = tiles[id] else { ack(false, "undelivered"); return }
         // One a second: a second tap sooner waits out the second (one at most; any more are refused with a buzz).
         let wait = 1 - Date().timeIntervalSince(live.lastIntent)

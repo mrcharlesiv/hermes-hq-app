@@ -57,11 +57,13 @@ final class TileModelSync {
     /// Every tile on the account, after Settings › Tile Model changed: how many jobs changed, and why any failed.
     func reconcileAll(accountId: String, client: (any GatewayClient)?) async -> (changed: Int, failed: [String]) {
         let pages = ArtifactPins.of(accountId: accountId).pins.filter(\.isPage)
+        // [tiles-v2] Prefetch per-bot job lists concurrently before reconciling.
+        await TileUpdates.shared.prefetch(profiles: pages.map(\.profile), accountId: accountId, client: client)
         var seen: Set<String> = []
         var changed = 0
         var failed: [String] = []
         for pin in pages {
-            let (job, _) = await TileUpdates.shared.lookup(pin, accountId: accountId, client: client, fresh: 0)
+            let (job, _) = await TileUpdates.shared.lookup(pin, accountId: accountId, client: client, fresh: TileUpdates.fresh)
             guard let job, seen.insert(job.key).inserted else { continue }
             switch await reconcile(job, accountId: accountId, force: true) {
             case .unchanged: break

@@ -44,6 +44,10 @@ final class TileWidgetWriter {
     private var again = false
     /// When each spec was last drawn this run (`<tile>|<family>|<w>x<h>`).
     private var drawn: [String: Date] = [:]
+    /// [tiles-v2] Last HTML SHA-256 content hash drawn for each spec key so unchanged HTML skips re-encoding.
+    private var drawnHashes: [String: String] = [:]
+    /// [tiles-v2] Whether the current gateway answered 404/501 for `/api/tiles/widget-snapshot` (resets on account switch).
+    private var remoteSnapshotUnsupported = false
     /// The account key of the last index written (a different account's pictures all go).
     private var writtenAccount: String?
 
@@ -64,6 +68,8 @@ final class TileWidgetWriter {
         self.bots = bots
         stale = nil
         drawn = [:]
+        drawnHashes = [:]
+        remoteSnapshotUnsupported = false
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: ArtifactPins.didChange, object: pins, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.schedule() }
@@ -104,6 +110,8 @@ final class TileWidgetWriter {
         pins = nil
         asked = []
         drawn = [:]
+        drawnHashes = [:]
+        remoteSnapshotUnsupported = false
         writtenAccount = nil
         TileWidgetStore.signOut(scheme: AppIdentity.current.urlScheme)
         Self.reload()
@@ -161,7 +169,9 @@ final class TileWidgetWriter {
         passTask?.cancel()
         passTask = nil
         stale = nil
-        drawn = [:]   // every placed picture read again, even one drawn a minute ago
+        drawn = [:]
+        drawnHashes = [:]
+        remoteSnapshotUnsupported = false   // every placed picture read again, even one drawn a minute ago
         return await pass(drawing: drawing)
     }
 
@@ -204,6 +214,7 @@ final class TileWidgetWriter {
                 // Read again once a pass, for each bot: the bot may have rewritten its page.
                 let context = context(pin)
                 if freshened.insert(context).inserted { PageSnapshots.shared.freshen(context) }
+                let key = Self.specKey(spec)
                 for dark in [false, true] {
                     await Self.waitForTheScreen()
                     guard let image = await Self.draw(pin, path: path, spec: spec, dark: dark, context: context) else { continue }
@@ -212,7 +223,39 @@ final class TileWidgetWriter {
                     AppLog.trace("widgets", "tile picture \(spec.family.rawValue) \(spec.width)x\(spec.height) pt \(dark ? "dark" : "light"): "
                                  + "\(Int(image.width * image.scale)) by \(Int(image.height * image.scale)) px drawn, \(image.jpeg.count / 1024) KB, \(saved)")
                 }
-                drawn[Self.specKey(spec)] = Date()
+                if let hash = PageSnapshots.shared.lastHash(path: path, context: context) { drawnHashes[key] = hash }
+                drawn[key] = Date()
+            }
+        } else if !remoteSnapshotUnsupported, let client = JobsStore.current?.client, client.account.id == account.id {
+            // [tiles-v2] Background refresh path (1x-pages.md §5.8 rule 10): fetch gateway/add-on pre-rendered widget
+            // JPEGs for placed widgets with zero WKWebView work. Short-circuits on 404/501 for older gateways.
+            let scale = Int(max(1, min(3, (UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.screen.scale }.first ?? 3).rounded())))
+            for spec in live {
+                guard !Task.isCancelled, !remoteSnapshotUnsupported, self.account?.id == account.id,
+                      let tile = index.tiles.first(where: { $0.id == spec.tile }),
+                      let pin = pins.pins.first(where: { $0.id == tile.pin }), let path = pin.gatewayPath else { continue }
+                for dark in [false, true] {
+                    let outcome = await TileWidgetRemote.fetch(client: client, path: path, profile: pin.profile,
+                                                               width: spec.width, height: spec.height, dark: dark,
+                                                               scale: scale, maxBytes: TileWidgetStore.maxPictureBytes)
+                    switch outcome {
+                    case .picture(let jpeg, let pxW, let pxH):
+                        let points = CGSize(width: Double(pxW) / Double(scale), height: Double(pxH) / Double(scale))
+                        let pic = TilePicture(drawnAt: Date(), width: Double(spec.width), height: Double(spec.height),
+                                              scale: Double(scale),
+                                              fills: TileWidgetPlan.fills(points, in: CGSize(width: spec.width, height: spec.height)),
+                                              edge: nil, jpeg: jpeg)
+                        if TileWidgetStore.savePicture(pic, tile: spec.tile, family: spec.family, dark: dark) == .written {
+                            changed = true
+                        }
+                    case .unsupported:
+                        remoteSnapshotUnsupported = true
+                        AppLog.trace("widgets", "tile widgets: gateway has no remote widget snapshot route; skipping background fetch")
+                    case .unavailable:
+                        break
+                    }
+                    if remoteSnapshotUnsupported { break }
+                }
             }
         }
         if changed { Self.reload() }

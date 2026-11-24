@@ -1,3 +1,4 @@
+import CryptoKit
 import UIKit
 import WebKit
 
@@ -6,8 +7,11 @@ import WebKit
 // the live page (`HTMLPageSheet`). One page draws at a time. Pictures are kept in memory per page, chat look and
 // generation: a chat's turn ending (`turnEnded`) starts a new generation for its pages, since a bot answers a page's
 // button by rewriting the file.
+// [tiles-v2] Content-hash gating skips WebKit re-renders when the downloaded HTML bytes haven't changed, warm off-screen
+// WKWebViews are reused per color scheme instead of spawning a fresh WebContent process per snapshot, and pages can
+// signal early completion via `window.hermes.ready()` or `<html data-hq-ready>` instead of waiting the full 700 ms.
 
-@MainActor final class PageSnapshots: NSObject, WKNavigationDelegate {
+@MainActor final class PageSnapshots: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     static let shared = PageSnapshots()
 
     /// Posted when a chat's turn ends; `object` is the chat's `MediaContext` (boxed). Open pages reload, pictures redraw.
@@ -68,14 +72,22 @@ import WebKit
             }
         }
     }
-    /// How long a page's scripts get after it loads before the picture is taken.
+    /// Ceiling for how long a page's scripts get after it loads before the picture is taken (unless `hermes.ready()` fires sooner).
     private static let settle: Duration = .milliseconds(700)
+    /// Short paint grace after a page signals `hermes.ready()` / `data-hq-ready`.
+    private static let readyMargin: Duration = .milliseconds(60)
 
     private let cache = NSCache<NSString, UIImage>()
+    /// [tiles-v2] Rendered pictures keyed by `<sha256>|<d|l>|<shape.key>` so unchanged HTML bytes skip WebKit.
+    private let contentCache = NSCache<NSString, UIImage>()
+    /// [tiles-v2] Last SHA-256 hash observed for each page (`headKey`).
+    private var fileHashes: [String: String] = [:]
+    /// [tiles-v2] Reusable warm off-screen WKWebViews per color scheme (`true` = dark, `false` = light).
+    private var warmWebs: [Bool: WKWebView] = [:]
     private var generations: [MediaContext: Int] = [:]
     private var waiting: [String: [(UIImage?) -> Void]] = [:]
     /// Pages read and waiting to be drawn (one draws at a time; reading is not in line: see `picture`).
-    private var queue: [(key: String, url: URL, dark: Bool, shape: Shape)] = []
+    private var queue: [(key: String, contentKey: String?, url: URL, dark: Bool, shape: Shape)] = []
     private var drawing = false
     /// [tiles] Each page's title and job, as its last read said (`TileNames.head`), by account, bot and path.
     private var heads: [String: TileNames.Head] = [:]
@@ -83,6 +95,8 @@ import WebKit
     /// over one wears the failed mark instead of a grey chart that looked like one still drawing (Mac pass 2026-11-14).
     private var gone: Set<String> = []
     private var loaded: CheckedContinuation<Bool, Never>?
+    private var readySignal: CheckedContinuation<Void, Never>?
+    private var pageSignaledReady = false
     /// Pictures begun this run: a load's time limit only ends the draw it was set for.
     private var drawCount = 0
     /// How long a page gets to load before it is pictured as not drawable.
@@ -90,7 +104,35 @@ import WebKit
 
     override private init() {
         super.init()
-        cache.countLimit = 24
+        cache.countLimit = 32
+        contentCache.countLimit = 48
+        NotificationCenter.default.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.dropWarmWebs() }
+        }
+    }
+
+    private func dropWarmWebs() {
+        guard !drawing else { return }
+        for web in warmWebs.values {
+            web.removeFromSuperview()
+            web.configuration.userContentController.removeAllScriptMessageHandlers()
+        }
+        warmWebs.removeAll()
+    }
+
+    /// [tiles-v2] SHA-256 digest of a local file's bytes (pure, used for content-hash snapshot gating).
+    nonisolated static func contentHash(of url: URL) -> String? {
+        guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return nil }
+        return contentHash(data)
+    }
+
+    nonisolated static func contentHash(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// [tiles-v2] Last SHA-256 content hash seen for `path` in `context`.
+    func lastHash(path: String, context: MediaContext) -> String? {
+        fileHashes[Self.headKey(path, context)]
     }
 
     /// A chat's turn ended: its pages may have changed.
@@ -146,13 +188,24 @@ import WebKit
         // with them: three plain tiles still spinning half a minute in. Pages are read side by side now (one read per
         // page: the loader joins a second ask), and only drawing waits its turn.
         Task { [weak self] in
-            let url = await Self.read(path: path, name: name, context: context, headKey: Self.headKey(path, context), into: self)
+            let hk = Self.headKey(path, context)
+            let url = await Self.read(path: path, name: name, context: context, headKey: hk, into: self)
             guard let self else { return }
             guard let url else {
                 for callback in self.waiting.removeValue(forKey: k) ?? [] { callback(nil) }
                 return
             }
-            self.queue.append((k, url, dark, shape))
+            // [tiles-v2] Content-hash gating: if the exact HTML bytes were already rendered at this look + shape,
+            // return immediately without touching WebKit.
+            let hash = Self.contentHash(of: url)
+            if let hash { self.fileHashes[hk] = hash }
+            let contentKey = hash.map { "\($0)|\(dark ? "d" : "l")|\(shape.key)" }
+            if let contentKey, let hit = self.contentCache.object(forKey: contentKey as NSString) {
+                self.cache.setObject(hit, forKey: k as NSString)
+                for callback in self.waiting.removeValue(forKey: k) ?? [] { callback(hit) }
+                return
+            }
+            self.queue.append((k, contentKey, url, dark, shape))
             self.drainQueue()
         }
     }
@@ -196,12 +249,36 @@ import WebKit
         Task { [weak self] in
             let image = await self?.draw(job.url, dark: job.dark, shape: job.shape)
             guard let self else { return }
-            if let image { self.cache.setObject(image, forKey: job.key as NSString) }
+            if let image {
+                self.cache.setObject(image, forKey: job.key as NSString)
+                if let contentKey = job.contentKey { self.contentCache.setObject(image, forKey: contentKey as NSString) }
+            }
             for callback in self.waiting.removeValue(forKey: job.key) ?? [] { callback(image) }
             self.drawing = false
             self.drainQueue()
         }
     }
+
+    /// [tiles-v2] Reusable off-screen WKWebView per color scheme, with `window.hermes.ready()` support.
+    private func warmWebView(dark: Bool) -> WKWebView {
+        if let existing = warmWebs[dark] { return existing }
+        let traits = UITraitCollection(userInterfaceStyle: dark ? .dark : .light)
+        let web = HTMLPageSheet.makeWebView(traits: traits)
+        web.configuration.userContentController.add(PageSnapshotReadyHandler(self), name: "hermesSnapReady")
+        web.configuration.userContentController.addUserScript(WKUserScript(
+            source: Self.readyScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        web.navigationDelegate = self
+        web.overrideUserInterfaceStyle = dark ? .dark : .light
+        web.isUserInteractionEnabled = false
+        web.scrollView.contentInsetAdjustmentBehavior = .never
+        warmWebs[dark] = web
+        return web
+    }
+
+    private static let readyScript = """
+    (function(){window.hermes=window.hermes||{};\
+    window.hermes.ready=function(){try{window.webkit.messageHandlers.hermesSnapReady.postMessage(true)}catch(e){}};})();
+    """
 
     private func draw(_ url: URL, dark: Bool, shape: Shape) async -> UIImage? {
         // [tile-widgets] In the background a scene may have no key window: its first window still paints a web view.
@@ -209,10 +286,7 @@ import WebKit
             guard let scene = scene as? UIWindowScene else { return nil }
             return scene.keyWindow ?? scene.windows.first
         }).first else { return nil }
-        let traits = UITraitCollection(userInterfaceStyle: dark ? .dark : .light)
-        let web = HTMLPageSheet.makeWebView(traits: traits)
-        web.navigationDelegate = self
-        web.overrideUserInterfaceStyle = dark ? .dark : .light
+        let web = warmWebView(dark: dark)
         // Off screen but in a window: WebKit only paints a view that is in one.
         // A phone's screen tall: a page sized to the screen ("100vh", a widget centred in it) lays out as it opens.
         // [mac] Zoomed, the page lays out in the tile's size over its zoom and its picture is drawn at the tile's size
@@ -221,13 +295,15 @@ import WebKit
         let zoom = shape.zoom
         web.frame = CGRect(origin: CGPoint(x: -10_000, y: 0),
                            size: CGSize(width: (shape.size.width / zoom).rounded(), height: (shape.size.height / zoom).rounded()))
-        web.isUserInteractionEnabled = false
-        // No safe-area inset: the window's top inset shifted the page under the snapshot's rectangle.
-        web.scrollView.contentInsetAdjustmentBehavior = .never
-        window.addSubview(web)
-        defer { web.removeFromSuperview() }
+        if web.superview !== window { window.addSubview(web) }
+        defer {
+            // Keep the warm web view attached only while drawing so an idle window has no off-screen web views.
+            web.removeFromSuperview()
+        }
         drawCount += 1
         let thisDraw = drawCount
+        pageSignaledReady = false
+        readySignal = nil
         let ok = await withCheckedContinuation { continuation in
             loaded = continuation
             web.loadPageFile(url)
@@ -240,7 +316,7 @@ import WebKit
             }
         }
         guard ok else { return nil }
-        try? await Task.sleep(for: Self.settle)
+        await waitForSettle(web: web, drawId: thisDraw)
         // A tile's shape: a page that fits its window (no scrolling) is pictured whole, edge to edge.
         if shape != .phone {
             // The layout viewport (clientWidth/Height), not innerWidth: a page sized "device-width" lays out at the
@@ -314,6 +390,42 @@ import WebKit
         return try? await web.takeSnapshot(configuration: config)
     }
 
+    /// [tiles-v2] Waits up to `settle` (700 ms), returning early if the page calls `window.hermes.ready()` or sets
+    /// `data-hq-ready` on `<html>` / `<body>`.
+    private func waitForSettle(web: WKWebView, drawId: Int) async {
+        if pageSignaledReady {
+            try? await Task.sleep(for: Self.readyMargin)
+            return
+        }
+        let attrReady = (try? await web.evaluateJavaScript(
+            "Boolean(document.documentElement?.hasAttribute('data-hq-ready') || document.body?.hasAttribute('data-hq-ready'))"
+        )) as? Bool
+        if attrReady == true || pageSignaledReady {
+            try? await Task.sleep(for: Self.readyMargin)
+            return
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            readySignal = continuation
+            Task { [weak self] in
+                try? await Task.sleep(for: Self.settle)
+                guard let self, self.drawCount == drawId else { return }
+                self.finishReady()
+            }
+        }
+        if pageSignaledReady { try? await Task.sleep(for: Self.readyMargin) }
+    }
+
+    private func finishReady() {
+        readySignal?.resume()
+        readySignal = nil
+    }
+
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "hermesSnapReady" else { return }
+        pageSignaledReady = true
+        finishReady()
+    }
+
     private func finishLoad(_ ok: Bool) {
         loaded?.resume(returning: ok)
         loaded = nil
@@ -323,10 +435,24 @@ import WebKit
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { finishLoad(false) }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { finishLoad(false) }
 
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        for (dark, kept) in warmWebs where kept === webView { warmWebs.removeValue(forKey: dark) }
+        finishLoad(false)
+        finishReady()
+    }
+
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
         // Only the page itself: nothing it does while being pictured leaves it.
         decisionHandler(action.request.url?.isFileURL == true || action.targetFrame?.isMainFrame == false ? .allow : .cancel)
+    }
+}
+
+private final class PageSnapshotReadyHandler: NSObject, WKScriptMessageHandler {
+    weak var target: WKScriptMessageHandler?
+    init(_ target: WKScriptMessageHandler) { self.target = target }
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        target?.userContentController(controller, didReceive: message)
     }
 }
 

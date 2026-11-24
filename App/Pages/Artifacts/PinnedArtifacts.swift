@@ -171,6 +171,8 @@ struct PinTileView: View {
     var editing = false
     /// [live-tiles] The tile's page running live (its picture stays under it until the page has drawn).
     var live: WKWebView? = nil
+    /// [tiles-v2] True when this tile wants to run live but is temporarily static because the 8-live-tile cap is full.
+    var liveCapped = false
     /// [mac] The pointer is over it (`PinHover`).
     var hover: PinHover? = nil
     /// Mac polish #46: its picture is gone: the broken-picture mark in grey, and its name inside even with names off (a
@@ -264,6 +266,15 @@ struct PinTileView: View {
                             .frame(width: Self.handleBox, height: Self.handleBox)
                             .accessibilityHidden(true)   // VoiceOver sizes a tile from its menu
                             .transition(.opacity)
+                    } else if liveCapped {
+                        Image(systemName: "bolt.slash.fill")
+                            .font(.system(size: 10, weight: .semibold))   // a11y-font-ok: compact 20 pt status badge
+                            .foregroundStyle(Color.hqLabel2)
+                            .frame(width: 20, height: 20)
+                            .hqTileMark(Circle())
+                            .overlay { Circle().strokeBorder(Color.hqStroke, lineWidth: HQShape.line(0.5)) }
+                            .padding(7)
+                            .accessibilityHidden(true)
                     }
                 }
                 .rotationEffect(.degrees(editing && !reduceMotion ? (tilted ? 1.1 : -1.1) : 0))
@@ -679,30 +690,35 @@ enum PinActions {
         return menu
     }
 
-    /// A size as a picture: a grid two cells across and three down, the tile's cells filled.
+    /// A size as a picture: a 3×3 mini-grid, the tile's cells filled (Small 1×1, Medium 2×1, Tall 1×2, Banner 3×1,
+    /// Large 2×2, Extra Large 3×3).
     static func sizeImage(_ size: PinTileSize) -> UIImage {
-        let cell: CGFloat = 8, gap: CGFloat = 2
-        let box = CGSize(width: cell * 2 + gap, height: cell * 3 + gap * 2)
+        let cell: CGFloat = 6.5, gap: CGFloat = 1.5
+        let cols = 3, rows = 3
+        let box = CGSize(width: cell * CGFloat(cols) + gap * CGFloat(cols - 1),
+                         height: cell * CGFloat(rows) + gap * CGFloat(rows - 1))
         let span = size.span
+        let filledCols = min(span.columns, cols)
+        let filledRows = min(span.rows, rows)
         let image = UIGraphicsImageRenderer(size: box).image { _ in
-            for row in 0..<3 {
-                for column in 0..<2 {
+            for row in 0..<rows {
+                for column in 0..<cols {
                     let rect = CGRect(x: CGFloat(column) * (cell + gap), y: CGFloat(row) * (cell + gap), width: cell, height: cell)
-                    let filled = row < span.rows && column < min(span.columns, 2)
-                    let path = UIBezierPath(roundedRect: rect.insetBy(dx: filled ? 0 : 0.6, dy: filled ? 0 : 0.6), cornerRadius: 2)
+                    let filled = row < filledRows && column < filledCols
+                    let path = UIBezierPath(roundedRect: rect.insetBy(dx: filled ? 0 : 0.5, dy: filled ? 0 : 0.5), cornerRadius: 1.5)
                     if filled {
                         UIColor.black.setFill(); path.fill()
                     } else {
-                        UIColor.black.withAlphaComponent(0.45).setStroke(); path.lineWidth = 1.2; path.stroke()
+                        UIColor.black.withAlphaComponent(0.45).setStroke(); path.lineWidth = 1.0; path.stroke()
                     }
                 }
             }
             // The filled cells as one tile.
-            if span.rows > 1 || span.columns > 1 {
-                let across = CGFloat(min(span.columns, 2)), down = CGFloat(span.rows)
+            if filledRows > 1 || filledCols > 1 {
+                let across = CGFloat(filledCols), down = CGFloat(filledRows)
                 UIColor.black.setFill()
                 UIBezierPath(roundedRect: CGRect(x: 0, y: 0, width: across * cell + (across - 1) * gap,
-                                                 height: down * cell + (down - 1) * gap), cornerRadius: 2.5).fill()
+                                                 height: down * cell + (down - 1) * gap), cornerRadius: 2).fill()
             }
         }
         return image.withRenderingMode(.alwaysTemplate)

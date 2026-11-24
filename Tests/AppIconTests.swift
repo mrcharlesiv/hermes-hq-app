@@ -147,6 +147,31 @@ struct AppIconTests {
         #expect(found == files, "the default icon's files differ from scripts/default-app-icon.lock")
     }
 
+    /// [app-icons] The primary icon also ships as an Icon Composer document (`AppIcon.icon`) with light, dark and
+    /// tinted specializations across iOS and macOS, so macOS switches the bundle icon in Finder, Spotlight, Dock,
+    /// Applications and Notifications automatically with system appearance (not only while the app runs).
+    @Test func iconComposerDocumentHasLightAndDarkLooks() throws {
+        let iconDir = Self.repo.appending(path: "App/Resources/AppIcon.icon")
+        let data = try Data(contentsOf: iconDir.appending(path: "icon.json"))
+        let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let platforms = try #require(json["supported-platforms"] as? [String: Any])
+        #expect(platforms["squares"] as? String == "shared")
+
+        let fills = try #require(json["fill-specializations"] as? [[String: Any]])
+        let fillLooks = Set(fills.map { ($0["appearance"] as? String) ?? "any" })
+        #expect(fillLooks.contains("any") && fillLooks.contains("dark"))
+
+        let groups = try #require(json["groups"] as? [[String: Any]])
+        let layers = try #require(groups.first?["layers"] as? [[String: Any]])
+        let images = try #require(layers.first?["image-name-specializations"] as? [[String: Any]])
+        let imageLooks = Set(images.map { ($0["appearance"] as? String) ?? "any" })
+        #expect(imageLooks == ["any", "dark", "tinted"])
+        for entry in images {
+            let file = try #require(entry["value"] as? String)
+            #expect(FileManager.default.fileExists(atPath: iconDir.appending(path: "Assets/\(file)").path), "\(file)")
+        }
+    }
+
     @Test func choiceByName() {
         #expect(AppIconChoice.choice(named: nil).id == "AppIcon")
         #expect(AppIconChoice.choice(named: "AppIcon-Matrix").title == "Matrix")

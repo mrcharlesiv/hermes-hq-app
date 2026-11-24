@@ -17,13 +17,20 @@ import UIKit
         set { UserDefaults.standard.set(newValue, forKey: key) }
     }
 
-    /// Puts the chosen icon on the Dock in the Mac's own look (System Settings › Appearance, not the app's theme), the
-    /// app's own icon too: owner 2026-11-02, "Every icon that we have for people to use needs dark mode and light mode
-    /// options". With no picture the Dock gets the bundle's icon back.
+    /// Puts the chosen icon on the Dock in the Mac's own look (System Settings › Appearance, not the app's theme).
+    /// For the app's own icon in System look (`alternateName == nil`), clearing `applicationIconImage` lets macOS
+    /// draw the bundle's `AppIcon.icon` natively across Light, Dark, Clear and Tinted appearances everywhere on the
+    /// Mac (Dock, Cmd-Tab, Finder, Spotlight, Applications, Notifications). An alternate icon or a pinned look draws
+    /// its own image onto the Dock while the app runs.
     static func apply() {
         guard let app = (NSClassFromString("NSApplication") as? NSObject.Type)?.value(forKey: "sharedApplication") as? NSObject else { return }
         followMacLook()
         let (choice, look) = AppIconChoice.worn(named: chosen)
+        guard choice.alternateName(look) != nil else {
+            app.setValue(nil, forKey: "applicationIconImage")
+            AppLog.note("mac", "dock icon \(choice.id) system (bundle)")
+            return
+        }
         let dark = look.isDark(onDark: macIsDark(app))   // [icon-look] a pinned look keeps it
         var image: AnyObject?
         if let picture = AppIcons.picture(choice, dark: dark, pixels: Int(body)), let png = dockArt(picture).pngData() {

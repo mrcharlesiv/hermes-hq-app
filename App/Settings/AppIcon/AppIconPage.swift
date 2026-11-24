@@ -38,7 +38,7 @@ struct AppIconPage: View {
                 .padding(.vertical, 12)
             } footer: {
                 if DeviceWord.isMac {
-                    HQSectionFooter { Text("The Dock shows your icon while Hermes HQ is open; Finder and Launchpad keep the Hermes icon.") }
+                    HQSectionFooter { Text("The Dock shows your icon while Hermes HQ is open; Finder and Launchpad keep the default icon.") }
                 }
             }
         }.hqMacSettingsRowInsets() }

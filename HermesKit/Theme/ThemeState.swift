@@ -121,12 +121,9 @@ nonisolated struct ThemeState: Sendable, Hashable {
         get { bubbleStyle == .glass }
         set { bubbleStyle = newValue ? .glass : .solid }
     }
-    /// [glass-bubbles] The Desktop Look keeps its own boxes. Legacy `.card` maps cleanly to `.tinted` so chat bubbles
-    /// stay decoupled from App Background's Soft Card style.
-    var appliedBubbleStyle: BubbleStyle {
-        guard !desktopLook else { return .solid }
-        return bubbleStyle == .card ? .tinted : bubbleStyle
-    }
+    /// [glass-bubbles] [bubble-card] The Desktop Look keeps its own boxes. Colours only: a glass, tinted or card bubble
+    /// has the solid one's frame.
+    var appliedBubbleStyle: BubbleStyle { desktopLook ? .solid : bubbleStyle }
     var appliedGlassBubbles: Bool { appliedBubbleStyle == .glass }
     var appliedTintedBubbles: Bool { appliedBubbleStyle == .tinted }
     var appliedCardBubbles: Bool { appliedBubbleStyle == .card }

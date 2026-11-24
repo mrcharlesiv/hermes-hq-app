@@ -28,5 +28,6 @@ import Testing
         #expect(ChatBubblesSettingsView.styleLine(.solid).hasPrefix("Solid:"))
         #expect(ChatBubblesSettingsView.styleLine(.glass).hasPrefix("Glass:"))
         #expect(ChatBubblesSettingsView.styleLine(.tinted).hasPrefix("Tinted:"))
+        #expect(ChatBubblesSettingsView.styleLine(.card).hasPrefix("Card:"))
     }
 }

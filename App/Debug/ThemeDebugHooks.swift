@@ -12,7 +12,7 @@
 // - `-HQDebugDesktopCorners <pt>`   [desktop-corners] the Desktop Look's own Corners
 // - `-HQDebugDesktopComposer glass|box`   [desktop-composer] the Desktop Look's Text Box
 // - `-HQDebugGlassBubbles YES|NO`   [glass-bubbles] Chat Bubbles › Glass
-// - `-HQDebugBubbleStyle solid|glass|tinted`   [tinted-bubbles] Chat Bubbles › Style
+// - `-HQDebugBubbleStyle solid|glass|tinted|card`   [tinted-bubbles] [bubble-card] Chat Bubbles › Style
 // - `-HQDebugMessageColour <name | #RRGGBB | theme>`   [message-colour] Chat Bubbles › Colour
 // - `-HQDebugBotMessageColour <bot>=<face | name | #RRGGBB>[,…]`   [bot-colour] Bot Info › Settings › Colour, by bot
 // - `-HQDebugResetTheme YES`        forget all the `hqn.theme.*` keys first (`-HQDebugResetAccounts YES` does too),

@@ -1260,28 +1260,30 @@ private let allStates: [ThemeState] = SkinCatalog.all.flatMap { skin in
         ThemeTable.$testSet.withValue(ThemeResolver.resolve(tinted)) { #expect(ThemeTable.bubbleStyle == .tinted) }
     }
 
-    /// The Mac has no glass: a stored Glass shows and draws as Solid there, and the choices are Solid and Tinted.
+    /// The Mac has no glass: a stored Glass or Card shows and draws as Solid there, and the choices are Solid and Tinted.
     @Test func theChoicesWhereGlassIsOffered() {
-        #expect(BubbleStyles.offered == (GlassBubbles.offered ? [.solid, .glass, .tinted] : [.solid, .tinted]))
+        #expect(BubbleStyles.offered == (GlassBubbles.offered ? [.solid, .glass, .tinted, .card] : [.solid, .tinted]))
         #expect(BubbleStyles.shown(.tinted) == .tinted && BubbleStyles.shown(.solid) == .solid)
         #expect(BubbleStyles.shown(.glass) == (GlassBubbles.offered ? .glass : .solid))
-        #expect(BubbleStyles.shown(.card) == .tinted, "legacy Card maps cleanly to Tinted")
+        #expect(BubbleStyles.shown(.card) == (GlassBubbles.offered ? .card : .solid))
     }
 
-    /// Legacy stored `.card` decodes without breaking and maps cleanly to `.tinted` (decoupled from App Background's Soft Cards).
-    @Test func legacyCardMapsCleanlyToTinted() throws {
+    /// [bubble-card] Card is a fourth style beside Solid, Glass and Tinted, stored by name; the Desktop Look keeps its
+    /// boxes; colours only, so a card bubble has the solid one's frame; your own messages draw as Tinted's.
+    @Test func cardIsAStyleOfItsOwn() throws {
         let suite = try #require(UserDefaults(suiteName: "bubble-card-\(UUID().uuidString)"))
         let store = ThemeStore(defaults: suite)
         store.setBubbleStyle(.card)
         #expect(store.load().bubbleStyle == .card && suite.string(forKey: "hqn.theme.bubbleStyle") == "card")
         var card = ThemeState.default
         card.bubbleStyle = .card
-        #expect(card.appliedBubbleStyle == .tinted && card.appliedTintedBubbles && !card.appliedCardBubbles)
+        #expect(card.appliedBubbleStyle == .card && card.appliedCardBubbles && !card.appliedTintedBubbles && !card.appliedGlassBubbles)
         #expect(card.layoutSignature == ThemeState.default.layoutSignature)
+        ThemeTable.$testSet.withValue(ThemeResolver.resolve(card)) { #expect(ThemeTable.bubbleStyle == .card) }
         var look = card
         look.desktopLook = true
         #expect(look.appliedBubbleStyle == .solid)
-        #expect(ChatBubblesSettingsView.styleLine(.card).hasPrefix("Tinted:"))
+        #expect(BubbleStyle.card.title == "Card" && ChatBubblesSettingsView.styleLine(.card).hasPrefix("Card:"))
     }
 
     /// Owner 2026-11-02, a Light chat over a night photo: the reply was a lavender-grey slab. A Light reply over a dark

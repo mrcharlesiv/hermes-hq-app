@@ -82,28 +82,21 @@ struct ColourSwatchRow: View {
                     .labelsHidden()
                     .accessibilityIdentifier("\(identifier).mode")
             }
-            // One row where they all fit (the Mac, the iPad); on the iPhone even rows of six (owner 2026-11-08: no
-            // wasted space). The system's colour well is a circle on the iPhone and a wider pill on the Mac.
+            // One row where they all fit (the Mac, the iPad); on the iPhone two centered, even rows (5×2 in Chat Bubbles,
+            // 6×2 in Bot Info). The system's colour well is a circle on the iPhone and a wider pill on the Mac.
+            let columns = (swatches.count + 1) <= 10 ? 5 : 6
             ViewThatFits(in: .horizontal) {
-                if DeviceWord.isMac {
-                    // [mac] The row spans the card: the spare width goes evenly between the swatches, not all to
-                    // the right of the well (Bot Info › Settings showed a narrow gap on the left, a wide one right).
-                    HStack(spacing: 0) {
-                        ForEach(swatches) { swatch($0); Spacer(minLength: 8) }
-                        well
-                    }
-                } else {
-                    HStack(spacing: 8) {
-                        ForEach(swatches) { swatch($0) }
-                        well
-                    }
+                HStack(spacing: 0) {
+                    ForEach(swatches) { swatch($0); Spacer(minLength: 8) }
+                    well
                 }
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 0, alignment: .leading), count: 5), alignment: .leading, spacing: 8) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 0, alignment: .center), count: columns),
+                          alignment: .center, spacing: 10) {
                     ForEach(swatches) { swatch($0) }
                     well
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .center)
         }
     }
 
@@ -171,8 +164,8 @@ struct ColourSwatchRow: View {
         .labelsHidden()
         .fixedSize()
         .overlay { Capsule().strokeBorder(Color.hqLabel, lineWidth: on ? 2 : 0).padding(-4).allowsHitTesting(false) }
-        .frame(height: Self.size + 6)
-        .padding(.trailing, 4)
+        .frame(minWidth: Self.size + 6, minHeight: Self.size + 6)
+        .padding(.horizontal, DeviceWord.isMac ? 4 : 0)
         .accessibilityIdentifier("\(identifier).custom")
     }
 }

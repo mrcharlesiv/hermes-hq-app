@@ -688,7 +688,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
                                           color: TodoLists.color(store.sections.first { $0.id == offer.section })))
         }, uniquingKeysWith: { first, _ in first })
         // [goals step 3] One goal offer at the top of Today (the oldest first), under the list offers; one answered here
-        // stays with its Undo until you leave Today.
+        // stays only while its answer is on the way, then leaves (its Undo moves to a notice; owner 2026-11-23).
         let previousGoalOffers = goalOfferCards
         var goalOffer: TodoOffer?
         if current == .today, store.goalBotsSupported, !searching, !selecting {
@@ -1617,9 +1617,16 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
             let ok = await store.answerOffer(id, action, plan: button.plan, inGoal: button.inGoal)
             answering.remove(id)
             if ok { PagesHaptics.success() } else { PagesHaptics.error() }
-            if !ok { goalOfferKept = nil }
-            reload(animated: !ok)
+            // Answered, the card leaves Today (the next waiting offer, if any, takes its place); what it did shows
+            // once as a notice, with Undo for what accepting added — as a list offer's answer does.
+            goalOfferKept = nil
+            reload(animated: true)
             AppLog.note("tasks", "goal offer \(offer.kind) \(action.rawValue): \(ok ? "ok" : "refused")")
+            guard ok, action == .accept, let after = store.offers.first(where: { $0.id == id }) ?? TodoOfferStates.live(id).offer,
+                  let words = GoalOffers.done(after) else { return }
+            if after.kind == "checkin" && after.added.isEmpty { return }   // "Got It": nothing was added, nothing to say
+            guard after.state == "accepted" else { notices.show(words); return }
+            notices.show(words, action: (title: "Undo", handler: { [weak self] in self?.undoOffer(id) }))
         }
     }
 

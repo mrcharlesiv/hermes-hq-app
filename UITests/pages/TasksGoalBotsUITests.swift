@@ -251,9 +251,16 @@ extension PagesTests {
         add.tap()
         XCTAssertTrue(waitUntil(10) { self.requests().contains { $0.path == Self.offerRoute + "of_checkin" && $0.body?["action"] as? String == "accept" } })
         XCTAssertGreaterThan(goalCues(), cues, "the answer is felt")
-        XCTAssertTrue(app.staticTexts["Added 3 tasks"].waitForExistence(timeout: 10), "answered on the card, with Undo")
-        XCTAssertTrue(app.buttons["goal.offer-card.undo"].exists)
+        // Answered, the card leaves Today; what it did shows once as a notice, with Undo (owner 2026-11-23).
+        let notice = app.descendants(matching: .any)["pages.notice"].firstMatch
+        XCTAssertTrue(waitUntil(10) { notice.exists && notice.label.contains("Added 3 tasks") }, "the notice: \(notice.label)")
+        XCTAssertTrue(waitUntil(8) { !card.exists }, "the answered card leaves Today")
+        let undo = app.buttons["chat.notice.action"].firstMatch
+        XCTAssertTrue(undo.exists && undo.label == "Undo", "Undo on the notice")
         shot("goals3-11-checkin-added" + name)
+        undo.tap()
+        XCTAssertTrue(waitUntil(10) { self.requests().contains { $0.path == Self.offerRoute + "of_checkin" && $0.body?["action"] as? String == "undo" } },
+                      "Undo on the notice takes the tasks back")
 
         // The check-in's push ("goal:<id>") opens that goal.
         app.terminate()

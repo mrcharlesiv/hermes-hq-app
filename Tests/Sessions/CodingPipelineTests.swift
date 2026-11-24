@@ -91,6 +91,24 @@ import Testing
             #expect(displayed.count == counts[bucket])
             #expect(filteredGroups.allSatisfy { !$0.collapsed })
         }
+
+        // Projects with Sort › By Status or Sort › Newest also honor all 4 pipeline header toggles 1-to-1.
+        var byStatusInput = input
+        byStatusInput.projectsByStatus = ["/app"]
+        #expect(SessionListPipeline.groups(byStatusInput).dropFirst().map(\.title) == ["Ready to Ship", "Needs You", "In Flight", "Shipped"])
+        for bucket in CodingPipelineBucket.allCases {
+            var f = byStatusInput
+            f.projectPipelineBucket = bucket
+            #expect(SessionListPipeline.groups(f).dropFirst().flatMap(\.sessions).count == counts[bucket])
+        }
+
+        var byNewestInput = input
+        byNewestInput.projectsByNewest = ["/app"]
+        for bucket in CodingPipelineBucket.allCases {
+            var f = byNewestInput
+            f.projectPipelineBucket = bucket
+            #expect(SessionListPipeline.groups(f).dropFirst().flatMap(\.sessions).count == counts[bucket])
+        }
     }
 
     @Test func diffLinesParseRealLineNumbersAndFormatTargetedComments() {

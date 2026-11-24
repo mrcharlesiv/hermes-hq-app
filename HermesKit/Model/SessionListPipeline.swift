@@ -562,16 +562,19 @@ nonisolated enum SessionListPipeline {
         // [project-sort] ⋯ › Sort › Newest: one run by the list's sort, reading moves nothing.
         let byNewest = input.projectsByNewest.contains(key)
         let byStatus = input.projectsByStatus.contains(key) && !byNewest
-        // Coding projects use the 4-bucket shipping pipeline by default (Ready to Ship / Needs You / In Flight / Shipped).
-        if input.codingProjects.contains(key), !byNewest, !byStatus {
+        let underPipeline = { (row: SessionSummary) in
+            input.projectPipelineBucket.map { CodingPipeline.bucket(for: row, isDone: doneKeys.contains(Self.key(row))) == $0 } ?? true
+        }
+        // Coding projects use the 4-bucket shipping pipeline (Ready to Ship / Needs You / In Flight / Shipped)
+        // under both Needs Me First and By Status; Sort › Newest keeps chronological order while still honoring bucket filters.
+        if input.codingProjects.contains(key), !byNewest {
             let underPR = { (row: SessionSummary) in
                 input.projectPRState.map { row.pullRequest?.countedStates.contains($0) == true } ?? true
             }
-            let allMarked = marked.filter(underPR)
+            let allMarked = marked.filter { underPR($0) && underPipeline($0) }
             var byBucket: [CodingPipelineBucket: [SessionSummary]] = [:]
             for session in allMarked {
                 let b = CodingPipeline.bucket(for: session, isDone: doneKeys.contains(Self.key(session)))
-                if let pickedBucket = input.projectPipelineBucket, b != pickedBucket { continue }
                 byBucket[b, default: []].append(session)
             }
             let filtered = !input.prefs.statusFilter.isEmpty || input.statusChip != nil || input.projectPRState != nil || input.projectPipelineBucket != nil
@@ -625,8 +628,8 @@ nonisolated enum SessionListPipeline {
         let underPR = { (row: SessionSummary) in
             input.projectPRState.map { row.pullRequest?.countedStates.contains($0) == true } ?? true
         }
-        let shown = statusShown.filter(underPR)
-        let shownDone = done.filter(underPR)
+        let shown = statusShown.filter { underPR($0) && underPipeline($0) }
+        let shownDone = done.filter { underPR($0) && underPipeline($0) }
         let pinnedChats = shown.filter { $0.pinned || $0.projectPinned }
         let activeChats = shown.filter { !$0.pinned && !$0.projectPinned }
         // [project-by-status] ⋯ › Sort › By Status: Active split into a section per state, in rank order (a chat read
@@ -642,7 +645,7 @@ nonisolated enum SessionListPipeline {
             [("pinned", "Pinned", pinnedChats, false)] + middle +
             [("done", "Done", input.statusChip == nil ? sort(shownDone, by: .updated) : [], true)]
         // A status filter or pill shows every match (a closed section would hide what it was set to find).
-        let filtered = !input.prefs.statusFilter.isEmpty || input.statusChip != nil || input.projectPRState != nil
+        let filtered = !input.prefs.statusFilter.isEmpty || input.statusChip != nil || input.projectPRState != nil || input.projectPipelineBucket != nil
         for section in sections where !section.chats.isEmpty {
             var group = SessionGroup(id: statePrefix + section.id, title: section.title, sessions: section.chats)
             group.total = group.sessions.count

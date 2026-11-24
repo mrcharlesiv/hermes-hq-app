@@ -53,7 +53,7 @@ enum SettingsNavigator {
         case "tool-calls": return .chat
         case "attachment-limit": return DeviceWord.isMac ? .gateway : .chat   // a row of Chat Behavior on the Mac (below)
         case "sound-picker": return .sounds
-        case "vault", "sessions", "providers", "keys", "billing", "auxiliary-models", "browser-use-cloud": return .gateway
+        case "vault", "sessions", "providers", "keys", "billing", "auxiliary-models", "browser-use-cloud", "phone-calls": return .gateway
         case "capabilities", "skills", "connectors", "tools", "plugins", ComposioRow.id, "tile-model": return .tools
         case "about", "diagnostics", "licenses", "about:perf-log", "about:detailed-log", "about:mark": return .about
         default: return nil

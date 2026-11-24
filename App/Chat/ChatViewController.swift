@@ -1370,7 +1370,8 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         var reach: CGFloat = 0
         if titleInBar, titleView.window != nil, !titleView.isHidden {
             let bottom = titleView.convert(titleView.bounds, to: view).maxY
-            reach = max(0, (bottom - view.safeAreaInsets.top).rounded(.up))
+            let barBottom = view.safeAreaInsets.top - additionalSafeAreaInsets.top
+            reach = max(0, (bottom - barBottom).rounded(.up))
         }
         guard abs(reach - macTitleOverhang) > 0.5 else { return }
         macTitleOverhang = reach

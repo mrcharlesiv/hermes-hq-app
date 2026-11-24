@@ -860,10 +860,15 @@ enum GoalMenu {
             Task {
                 if await store.deleteGoal(goalID) {
                     PagesHaptics.success()
-                    // Close the goal's page (and Edit Goal over it) once the goal is gone.
-                    if let page = presenter?.navigationController?.viewControllers.first as? GoalPageHost ?? presenter as? GoalPageHost {
-                        // From the sheet's presenter: the page and anything over it (Edit Goal) go together.
-                        (page.navigationController?.presentingViewController ?? page.presentingViewController)?.dismiss(animated: true)
+                    // Close the goal's page (and Edit Goal over it) once the goal is gone — whether modal or in the Mac split pane.
+                    let detailRoot = presenter?.navigationController?.viewControllers.first(where: { $0 is GoalPageHost }) ?? (presenter as? GoalPageHost)
+                    if let page = detailRoot {
+                        if let modalHost = page.navigationController?.presentingViewController ?? page.presentingViewController {
+                            modalHost.dismiss(animated: true)
+                        } else {
+                            if page.presentedViewController != nil { page.dismiss(animated: false) }
+                            AppRoot.tabs(page.view.window)?.leave(page, animated: true)
+                        }
                     } else if presenter?.presentedViewController != nil {
                         presenter?.dismiss(animated: true)
                     }

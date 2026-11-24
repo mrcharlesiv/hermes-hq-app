@@ -102,7 +102,7 @@ final class OtherAppsViewController: UIViewController, UICollectionViewDelegate 
                 if WorkingArc.ringHidesSeparator(indexPath, ringed: { self?.ringed($0) == true }) {
                     separator.bottomSeparatorVisibility = .hidden
                 }
-                separator.bottomSeparatorInsets = NSDirectionalEdgeInsets(top: 0, leading: 72, bottom: 0, trailing: 20)
+                separator.bottomSeparatorInsets = NSDirectionalEdgeInsets(top: 0, leading: 72, bottom: 0, trailing: ListGutter.side)
                 return separator
             }
             let section = NSCollectionLayoutSection.list(using: config, layoutEnvironment: environment)
@@ -126,16 +126,31 @@ final class OtherAppsViewController: UIViewController, UICollectionViewDelegate 
             let busy = list.isBusy(id)
             let detail = list.rowDetail
             let muted = BotMuteCenter.shared.isMuted(session.profile)
+            let hover: SessionRowHover? = DeviceWord.isMac ? SessionRowHover(
+                onPin: { [weak self] in
+                    guard let self, let s = self.sessionsByID[id] else { return }
+                    self.list?.organizer?.pin(s)
+                },
+                onArchive: { [weak self] in
+                    guard let self, let s = self.sessionsByID[id] else { return }
+                    self.list?.organizer?.archive(s)
+                },
+                onMore: { [weak self, weak cell] in
+                    guard let self, let cell, let s = self.sessionsByID[id],
+                          let menu = self.list?.organizer?.uiMenu(for: s, anchor: cell) else { return }
+                    RowMoreMenu.open(menu, from: cell)
+                }
+            ) : nil
             cell.contentConfiguration = UIHostingConfiguration {
                 SessionRowView(session: session, ownerName: owner.name, ownerHead: owner.head,
                                time: ListTime.string(session.lastActive), busy: busy, detail: detail, muted: muted,
-                               titleLines: 2)
+                               titleLines: 2, hover: hover)
             }
             .margins(.all, 0)
             cell.accessibilityIdentifier = "session-row-\(session.id)"
             cell.configurationUpdateHandler = { cell, state in
                 #if targetEnvironment(macCatalyst)
-                if DeviceWord.isMac { cell.backgroundConfiguration = MacSelection.listRow(state); return }   // [mac] Stress test 2026-10-28 #54
+                if DeviceWord.isMac { cell.backgroundConfiguration = MacListFocus.background(cell, state); return }   // [mac] Stress test 2026-10-28 #54
                 #endif
                 if Theme.isDesktop { cell.backgroundConfiguration = DesktopLayout.rowBackground(state); return }   // [desktoplook2]
                 var background = UIBackgroundConfiguration.clear()

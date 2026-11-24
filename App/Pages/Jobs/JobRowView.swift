@@ -462,13 +462,14 @@ struct JobsHeaderWords: View {
 struct JobsPlainHeaderView: View {
     var title: String
     var count: Int
+    var onCard = false
 
     var body: some View {
         HStack(spacing: 6) {
             JobsHeaderWords(title: title, count: count)
             Spacer(minLength: 8)
         }
-        .padding(.horizontal, ListGutter.side)
+        .padding(.horizontal, onCard ? 0 : ListGutter.side)
         .padding(.top, 20)
         .padding(.bottom, 6)
         .frame(maxWidth: .infinity, alignment: .leading)

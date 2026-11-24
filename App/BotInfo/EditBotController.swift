@@ -26,6 +26,8 @@ final class EditBotModel {
     var pictureTab: PictureTab = .head
     var pendingKind: Bool?
     @ObservationIgnored let info: BotInfoModel
+    @ObservationIgnored var tabMover: ((_ back: Bool) -> Void)?
+    @ObservationIgnored var lastField: EditBotView.Field = .title
 
     init(info: BotInfoModel) {
         self.info = info
@@ -220,7 +222,20 @@ final class EditBotController: UIHostingController<HQScaledRoot<EditBotView>>, E
         }
     }
 
-    override var keyCommands: [UIKeyCommand]? { (super.keyCommands ?? []) + (saveItem?.isEnabled == true ? [.save("Save", #selector(save))] : []) }
+    override var keyCommands: [UIKeyCommand]? {
+        var commands = (super.keyCommands ?? []) + (saveItem?.isEnabled == true ? [.save("Save", #selector(save))] : [])
+        #if targetEnvironment(macCatalyst)
+        for back in [false, true] {
+            let tab = UIKeyCommand(input: "\t", modifierFlags: back ? .shift : [],
+                                   action: back ? #selector(tabBack) : #selector(tabForward))
+            tab.wantsPriorityOverSystemBehavior = true
+            commands.append(tab)
+        }
+        #endif
+        return commands
+    }
+    @objc private func tabForward() { model.tabMover?(false) }
+    @objc private func tabBack() { model.tabMover?(true) }
     override var canBecomeFirstResponder: Bool { true }
 
     @objc private func save() {
@@ -319,6 +334,7 @@ struct EditBotView: View {
                 // Empty means no custom title, so the field is never filled with the name (that would save one).
                 TextField(model.defaultName, text: $model.title)
                     .textInputAutocapitalization(.words)
+                    .focused($focused, equals: .title)
                     .onSubmit { if DeviceWord.isMac { model.submit?() } }
                     .accessibilityIdentifier("edit-bot.title")
             } header: { HQSectionLabel { Text("Display Name") } } footer: { HQSectionFooter {   // UX study #184: the footer's own word
@@ -327,6 +343,7 @@ struct EditBotView: View {
             Section {
                 TextField("What should this bot help with?", text: $model.description, axis: .vertical)
                     .lineLimit(Theme.isDesktop ? 3...8 : 2...8)   // [compact] iOS look: two lines empty (was three), growing as it fills
+                    .focused($focused, equals: .description)
                     .accessibilityIdentifier("edit-bot.description")
             } header: { HQSectionLabel { Text("Description") } }
         }
@@ -334,7 +351,18 @@ struct EditBotView: View {
         .contentMargins(.top, 0, for: .scrollContent)
         .disabled(model.saving)
         .navigationBarBackButtonHidden(true)
+        .onChange(of: focused) { _, now in if let now { model.lastField = now } }
+        .onAppear {
+            model.tabMover = { back in
+                let all = Field.allCases
+                let at = all.firstIndex(of: model.lastField) ?? 0
+                focused = all[(at + (back ? all.count - 1 : 1)) % all.count]
+            }
+        }
     }
+
+    enum Field: CaseIterable { case title, description }
+    @FocusState private var focused: Field?
 
     /// A bordered button pads its label by 7 pt above and below: a 30 pt label makes a 44 pt target.
     private static let borderedLabelMinHeight: CGFloat = 30

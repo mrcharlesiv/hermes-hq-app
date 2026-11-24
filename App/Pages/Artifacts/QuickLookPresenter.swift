@@ -73,7 +73,11 @@ enum QuickLookPresenter {
         guard let preview = QuickLookRuntime.makeController(source) else {
             // No Quick Look: hand the file to Share instead.
             let share = UIActivityViewController(activityItems: [url], applicationActivities: nil)
-            share.popoverPresentationController?.sourceView = controller.view
+            if let popover = share.popoverPresentationController {
+                popover.sourceView = controller.view
+                popover.sourceRect = CGRect(x: controller.view.bounds.midX, y: controller.view.bounds.midY, width: 1, height: 1)
+                popover.permittedArrowDirections = []
+            }
             controller.present(share, animated: true)
             return
         }

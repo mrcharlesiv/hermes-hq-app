@@ -106,7 +106,7 @@ import UIKit
     private static var shown: [TabChoice] {
         let order = TabOrder.tabs
         let placed = MainTabController.current?.placedTabs.compactMap { TabChoice(tag: $0.tabBarItem.tag) } ?? order
-        return placed.filter { $0 != .main(.bots) && order.contains($0) }
+        return placed.filter { (!MacSidebar.botsInSidebar || $0 != .main(.bots)) && order.contains($0) }
     }
 
     /// `choice` one row up (-1) or down (+1); false when it is already at that end.

@@ -51,10 +51,15 @@ final class PhotoFramerController: UIViewController, UIGestureRecognizerDelegate
 
     @MainActor required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    /// The cover: full screen, dark, with the toolbar that holds Cancel and Choose.
+    /// The cover: full screen on touch devices; a dark form sheet on Mac so window chrome stays accessible.
     static func wrapped(_ framer: PhotoFramerController) -> UINavigationController {
         let navigation = UINavigationController(rootViewController: framer)
+        #if targetEnvironment(macCatalyst)
+        navigation.modalPresentationStyle = .formSheet
+        navigation.preferredContentSize = CGSize(width: 560, height: 640)
+        #else
         navigation.modalPresentationStyle = .fullScreen
+        #endif
         navigation.overrideUserInterfaceStyle = .dark
         navigation.isToolbarHidden = false
         navigation.view.backgroundColor = .black
@@ -102,6 +107,12 @@ final class PhotoFramerController: UIViewController, UIGestureRecognizerDelegate
         let doubleTap = UITapGestureRecognizer(target: self, action: #selector(doubleTapped))
         doubleTap.numberOfTapsRequired = 2
         for recognizer in [pan, pinch, doubleTap] { stage.addGestureRecognizer(recognizer) }
+        #if targetEnvironment(macCatalyst)
+        let wheel = UIPanGestureRecognizer(target: self, action: #selector(scrolledZoom(_:)))
+        wheel.allowedScrollTypesMask = .all
+        wheel.allowedTouchTypes = []
+        stage.addGestureRecognizer(wheel)
+        #endif
 
         for (glyph, size) in [(smallGlyph, 16.0), (largeGlyph, 24.0)] {
             glyph.image = UIImage(systemName: "photo", withConfiguration: UIImage.SymbolConfiguration(pointSize: size, weight: .regular))
@@ -346,9 +357,29 @@ final class PhotoFramerController: UIViewController, UIGestureRecognizerDelegate
         return true
     }
 
+    override var canBecomeFirstResponder: Bool { true }
+
     override var keyCommands: [UIKeyCommand]? {
-        [UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(cancel))]
+        var cmds = [UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(cancel))]
+        #if targetEnvironment(macCatalyst)
+        if photo != nil, !rendering {
+            cmds.append(UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(choose)))
+            cmds.append(UIKeyCommand(input: "\r", modifierFlags: .command, action: #selector(choose)))
+        }
+        #endif
+        return cmds
     }
+
+    #if targetEnvironment(macCatalyst)
+    @objc private func scrolledZoom(_ pan: UIPanGestureRecognizer) {
+        guard let photo, !rendering else { return }
+        let dy = pan.translation(in: stage).y
+        pan.setTranslation(.zero, in: stage)
+        guard abs(dy) > 0.1 else { return }
+        let factor = exp(-Double(dy) * 0.008)
+        set(placement.zoomed(photo.size, ratio: factor))
+    }
+    #endif
 
     // MARK: - Leaving
 

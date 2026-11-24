@@ -28,19 +28,43 @@ extension UIBarButtonItem {
 /// The words of a disabled prominent bar item (`setProminentEnabled`), drawn by the app so they keep their contrast.
 final class DisabledBarTitle: UILabel {
     private var fitted = CGSize.zero
+    private var lastTitle = ""
+    private var themeObserver: NSObjectProtocol?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        registerForTraitChanges([ThemeGenerationTrait.self, UITraitPreferredContentSizeCategory.self]) { (label: DisabledBarTitle, _) in
+            label.refresh()
+        }
+        themeObserver = NotificationCenter.default.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refresh() }
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    isolated deinit {
+        if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
+    }
 
     func show(_ title: String, identifier: String?) {
+        lastTitle = title
         text = title
-        font = HQFont.preferred(.body)
-        textColor = HQPalette.label3
-        textAlignment = .center
         accessibilityIdentifier = identifier
         accessibilityLabel = title
         accessibilityTraits = [.button, .notEnabled]
         isAccessibilityElement = true
-        // The system's own side padding: inside the glass capsule in the iOS look, none in the Desktop Look's flat bar.
-        let width = ceil((title as NSString).size(withAttributes: [.font: font as Any]).width)
-        fitted = CGSize(width: width + (Theme.isDesktop ? 0 : 28), height: 44)
+        textAlignment = .center
+        refresh()
+    }
+
+    private func refresh() {
+        font = HQFont.preferred(.body)
+        textColor = HQPalette.label3
+        // The system's own side padding: inside the glass capsule in the iOS look, none in the Desktop Look's or Mac's plain bar.
+        let pad: CGFloat = (Theme.isDesktop || DesktopBars.plainItems) ? 0 : 28
+        let width = ceil((lastTitle as NSString).size(withAttributes: [.font: font as Any]).width)
+        fitted = CGSize(width: width + pad, height: 44)
         frame.size = fitted
         invalidateIntrinsicContentSize()
     }

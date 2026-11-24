@@ -172,7 +172,11 @@ struct OnePasswordMoveView: View {
                 Text(why).font(Font.hq(.subheadline)).foregroundStyle(Color.hqRed)
             }
         } footer: { HQSectionFooter {
+            #if targetEnvironment(macCatalyst)
+            Text("Click the box and fill it from 1Password, or type your password.")
+            #else
             Text("Tap the box, then the key above the keyboard to fill it from 1Password.")
+            #endif
         } }
         Section {
             Button("Find My Login", action: send)

@@ -130,6 +130,10 @@ import ObjectiveC
             let main = UIApplication.shared.openSessions.first { !MacSettingsWindow.isSettings($0) && !MacFileWindow.isFile($0) }
             UIApplication.shared.requestSceneSessionActivation(main, userActivity: nil, options: nil)
         }
+        if let mainWindow = MainTabController.current?.view.window {
+            mainWindow.hqMacOrderFront(activating: true)
+            return
+        }
         guard let app = application else { return }
         let activate = NSSelectorFromString("activate")
         if app.responds(to: activate) { app.perform(activate) }

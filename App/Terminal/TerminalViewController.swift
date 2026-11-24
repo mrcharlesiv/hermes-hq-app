@@ -125,18 +125,14 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
         view.backgroundColor = UIColor { @Sendable traits in
             traits.userInterfaceStyle == .dark ? shell : page.resolvedColor(with: traits)
         }
-        if !Theme.isDesktop {
-            // The page brings its own bar in that colour: `MacWindow.pageBar` reads a page's colour off its biggest
-            // scroll view, and the shell's is clear (SwiftTerm paints its cells itself), so it fell back to black.
-            let bar = UINavigationBarAppearance()
-            bar.configureWithOpaqueBackground()
-            bar.backgroundColor = view.backgroundColor
-            bar.shadowColor = .clear
-            bar.titleTextAttributes[.font] = MacType.pageTitle
-            navigationItem.standardAppearance = bar
-            navigationItem.scrollEdgeAppearance = bar
-            navigationItem.compactAppearance = bar
-            navigationItem.compactScrollEdgeAppearance = bar
+        applyMacBarAppearance()
+        NotificationCenter.default.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.applyMacBarAppearance()
+                self.banner.font = HQFont.preferred(.footnote)
+                self.render()
+            }
         }
         #endif
         view.accessibilityIdentifier = "terminal.page"
@@ -183,7 +179,7 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
         pill.clipsToBounds = true
         pill.isHidden = true
         banner.translatesAutoresizingMaskIntoConstraints = false
-        banner.font = .preferredFont(forTextStyle: .footnote)
+        banner.font = HQFont.preferred(.footnote)
         banner.adjustsFontForContentSizeCategory = true
         banner.textColor = .white
         banner.accessibilityIdentifier = "terminal.banner"
@@ -954,10 +950,31 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
         }
     }
 
+    #if targetEnvironment(macCatalyst)
+    private func applyMacBarAppearance() {
+        if Theme.isDesktop {
+            navigationItem.standardAppearance = nil
+            navigationItem.scrollEdgeAppearance = nil
+            navigationItem.compactAppearance = nil
+            navigationItem.compactScrollEdgeAppearance = nil
+            return
+        }
+        let bar = UINavigationBarAppearance()
+        bar.configureWithOpaqueBackground()
+        bar.backgroundColor = view.backgroundColor
+        bar.shadowColor = .clear
+        bar.titleTextAttributes[.font] = MacType.pageTitle
+        navigationItem.standardAppearance = bar
+        navigationItem.scrollEdgeAppearance = bar
+        navigationItem.compactAppearance = bar
+        navigationItem.compactScrollEdgeAppearance = bar
+    }
+    #endif
+
     private func card(_ symbol: String, _ title: String, _ text: String, button: String? = nil, dim: Bool = false,
                       secondary: (title: String, action: () -> Void)? = nil,
                       action: (() -> Void)? = nil) -> UIContentUnavailableConfiguration {
-        var config = UIContentUnavailableConfiguration.empty()
+        var config = UIContentUnavailableConfiguration.empty().hqScaled()
         config.image = UIImage(systemName: symbol)
         config.imageProperties.tintColor = UIColor(white: 0.75, alpha: 1)
         config.text = title
@@ -992,7 +1009,7 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
     }
 
     private func loading(_ text: String) -> UIContentUnavailableConfiguration {
-        var config = UIContentUnavailableConfiguration.loading()
+        var config = UIContentUnavailableConfiguration.loading().hqScaled()
         config.text = text
         config.textProperties.color = UIColor(white: 0.8, alpha: 1)
         config.background.backgroundColor = Self.background

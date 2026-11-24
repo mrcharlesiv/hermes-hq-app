@@ -92,7 +92,14 @@ struct SessionRowView: View {
 
     var body: some View {
         Group {
-            if hover != nil { rowBody.onHover { over = $0 } } else { rowBody }   // [mac-pane]
+            if hover != nil {
+                rowBody
+                    .onHover { over = $0 }
+                    .onChange(of: session.id) { _, _ in over = false }
+                    .onDisappear { over = false }
+            } else {
+                rowBody
+            }
         }
         .accessibilityActions {
             if let onPR { Button("Show Pull Request", action: onPR) }   // [coding-pr-review]
@@ -1391,12 +1398,13 @@ private struct SessionRowHoverButton: View {
             Image(systemName: symbol)
                 .font(Font.hq(.subheadline))
                 .foregroundStyle(over ? Color.hqLabel : Color.hqLabel2)
-                .frame(width: 24, height: 20)
+                .frame(width: HQFont.scaled(24), height: HQFont.scaled(20))
                 .background(over ? Color.hqFill3 : Color.clear, in: RoundedRectangle(cornerRadius: 5))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { over = $0 }
+        .onDisappear { over = false }
         .help(words)
         .accessibilityLabel(words)
         .accessibilityIdentifier("session-row.hover.\(id)")

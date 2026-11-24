@@ -185,7 +185,7 @@ final class MacInspector: UIViewController {
     static func beside(_ screen: UIViewController) -> MacInspector? {
         var at: UIViewController? = screen
         while let next = at, !(next is RootSplitController) { at = next.parent }
-        guard let split = at as? RootSplitController, split.isDouble, split.detail.viewControllers.contains(screen) else { return nil }
+        guard let split = at as? RootSplitController, split.canShowInspector, split.detail.viewControllers.contains(screen) else { return nil }
         return split.inspector
     }
 
@@ -307,13 +307,20 @@ final class MacInspector: UIViewController {
     /// their titles were sized once, when the panel was made (`DesktopSegments.macTitles`), and the control stayed 28 pt,
     /// so at 150 % Info / Steps / Files / Helpers stayed at 100 %. Sized again on every theme change; never under 28 pt.
     private func sizeTabs() {
-        DesktopSegments.macTitles(tabs)
-        segmentsHeight.constant = (28 * max(1, ChatTitleView.macChrome)).rounded()
+        // With 5 tabs inside the narrow inspector (340 pt), cap the iOS-look segment font growth slightly so labels stay whole at 125–150 % UI Scale.
+        let chrome = min(ChatTitleView.macChrome, 1.12)
+        let font = HQFont.face(ofSize: (13 * chrome).rounded(), weight: .regular)
+        tabs.setTitleTextAttributes([.font: font, .foregroundColor: HQPalette.label], for: .normal)
+        tabs.setTitleTextAttributes([.font: font, .foregroundColor: HQPalette.label], for: .selected)
+        segmentsHeight.constant = (28 * max(1, chrome)).rounded()
     }
 
     /// The segments in the iOS look, the outlined strip in the Desktop Look (made the first time it's wanted).
     private func followLook() {
         sizeTabs()
+        taskTitle.font = HQFont.preferred(.subheadline).pagesWeight(.semibold)
+        threadTitle.font = HQFont.preferred(.subheadline).pagesWeight(.semibold)
+        empty.refreshFonts()
         let desktop = Theme.isDesktop
         if desktop, strip == nil {
             stripChoice.index = shownTab.rawValue
@@ -324,6 +331,7 @@ final class MacInspector: UIViewController {
             host.view.backgroundColor = .clear
             host.sizingOptions = .intrinsicContentSize
             host.view.accessibilityIdentifier = "mac.inspector.tabs"
+            MacTitleBarClick.markInteractive(host.view)
             addChild(host)
             tabsRow.addArrangedSubview(host.view)
             host.didMove(toParent: self)
@@ -354,6 +362,7 @@ final class MacInspector: UIViewController {
             onWidthChange?()
         default:
             dragging = false
+            MacWindow.cursor("arrowCursor")
             // What the window had room for, not a wider ask it never showed.
             if view.bounds.width >= Self.narrowest { Self.chosenWidth = view.bounds.width }
         }
@@ -569,7 +578,7 @@ private struct InspectorTabStrip: View {
     var body: some View {
         DesktopSegmentStrip(options: MacInspector.Tab.allCases.map { ($0.title, $0.rawValue) },
                             selection: Binding(get: { choice.index }, set: { choice.index = $0; picked($0) }),
-                            wholeLabels: true)   // [mac-ui-issues] "Helpers" touched both sides of its equal quarter
+                            wholeLabels: false)
             .accessibilityElement(children: .contain)
     }
 }

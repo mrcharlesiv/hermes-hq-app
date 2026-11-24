@@ -828,6 +828,7 @@ final class MacSidebar: UIView {
         botsRoom.priority = footFirst ? .required - 2 : .required - 1
         placeToggle()
         recolor()
+        window?.windowScene?.sizeRestrictions?.minimumSize = MacWindow.minimumSize
         superview?.setNeedsLayout()   // the width follows UI Scale (RootSplitController places it)
     }
 
@@ -1296,11 +1297,12 @@ final class MacSidebar: UIView {
         watchGateways()
         let wanted = railGatewayWanted
         let namedSwitcher = !Self.isCollapsed || Self.railNamed
-        if !wanted || railGateway.map({ $0.isNamed != namedSwitcher }) == true {
+        // Recreate on rebuild / UI Scale change as well as named-mode switches so MacRailGateway scales cleanly.
+        if railGateway != nil {
             railGateway?.removeFromSuperview()
             railGateway = nil
         }
-        if wanted, railGateway == nil {
+        if wanted {
             let button = MacRailGateway(named: namedSwitcher) { [weak self] in
                 self?.tabs?.botsViewController.gatewaySwitcher?.menu([])
             }
@@ -1336,7 +1338,7 @@ final class MacSidebar: UIView {
 
     private var railGatewayWanted: Bool {
         // [gateway-foot] The folded rail only: open, the foot's gateway line is the switcher (owner 2026-11-16).
-        Self.isCollapsed && showsBots && switcherActive
+        Self.isCollapsed && switcherActive
     }
 
     /// More than one gateway saved: the Bots title's switcher (and so the rail's and the foot's) is on.
@@ -1393,7 +1395,7 @@ final class MacSidebar: UIView {
         gatewayName.isAccessibilityElement = !switcher
         guard switcher else { return }
         gatewayArrows.image = UIImage(systemName: "chevron.up.chevron.down",
-                                      withConfiguration: UIImage.SymbolConfiguration(pointSize: Self.sized(14, Self.scheme.gatewayName) * 0.72, weight: .semibold))
+                                      withConfiguration: UIImage.SymbolConfiguration(pointSize: Self.sized(14, Self.scheme.gatewayName) * 0.72 * Self.chrome, weight: .semibold))
         gatewayArrows.tintColor = gatewayName.textColor
         gatewayNews.backgroundColor = HQPalette.tint
         gatewayButton.isEnabled = switching == nil
@@ -1552,6 +1554,7 @@ final class MacSidebar: UIView {
             superview?.layoutIfNeeded()
         default:
             Self.railDragWidth = nil
+            MacWindow.cursor("arrowCursor")
             window?.windowScene?.sizeRestrictions?.minimumSize = MacWindow.minimumSize
             guard let host = superview else { return }
             host.setNeedsLayout()
@@ -1577,6 +1580,7 @@ final class MacSidebar: UIView {
                 AppLog.note("mac", "sidebar width \(Int(Self.openWidth))")
             }
             Self.openDragWidth = nil
+            MacWindow.cursor("arrowCursor")
             superview?.setNeedsLayout()
         }
     }
@@ -1685,6 +1689,23 @@ final class MacSidebar: UIView {
         NSLayoutConstraint.deactivate(settingsSize + settingsBesideAdd + settingsAboveToggle + [footBottom, footAboveSettings])
         settingsSize = [settingsButton.widthAnchor.constraint(equalToConstant: size), settingsButton.heightAnchor.constraint(equalToConstant: size)]
         NSLayoutConstraint.activate(settingsSize + (folded ? settingsAboveToggle + [footAboveSettings] : settingsBesideAdd + [footBottom]))
+        layoutSettingsDot()
+    }
+
+    private func layoutSettingsDot() {
+        guard settingsDot.superview != nil else { return }
+        let side = (8 * Self.chrome).rounded()
+        settingsDot.layer.cornerRadius = side / 2
+        NSLayoutConstraint.deactivate(settingsDotConstraints)
+        let dx = ((Self.isCollapsed ? 10 : 9) * Self.chrome).rounded()
+        let dy = -((Self.isCollapsed ? 9 : 8) * Self.chrome).rounded()
+        settingsDotConstraints = [
+            settingsDot.widthAnchor.constraint(equalToConstant: side),
+            settingsDot.heightAnchor.constraint(equalToConstant: side),
+            settingsDot.centerXAnchor.constraint(equalTo: settingsButton.centerXAnchor, constant: dx),
+            settingsDot.centerYAnchor.constraint(equalTo: settingsButton.centerYAnchor, constant: dy),
+        ]
+        NSLayoutConstraint.activate(settingsDotConstraints)
     }
 
     /// [mac-ui-issues] The add-on reminder's red dot on the gear (it was the count on More's Settings row, which the
@@ -1692,21 +1713,17 @@ final class MacSidebar: UIView {
     func showSettingsDot(_ shown: Bool, spoken: String?) {
         if shown, settingsDot.superview == nil {
             settingsDot.backgroundColor = .systemRed
-            settingsDot.layer.cornerRadius = 4
             settingsDot.isUserInteractionEnabled = false
             settingsDot.translatesAutoresizingMaskIntoConstraints = false
             settingsButton.addSubview(settingsDot)
-            NSLayoutConstraint.activate([
-                settingsDot.widthAnchor.constraint(equalToConstant: 8), settingsDot.heightAnchor.constraint(equalToConstant: 8),
-                settingsDot.centerXAnchor.constraint(equalTo: settingsButton.centerXAnchor, constant: 9),
-                settingsDot.centerYAnchor.constraint(equalTo: settingsButton.centerYAnchor, constant: -8),
-            ])
         }
+        layoutSettingsDot()
         settingsDot.isHidden = !shown
         settingsButton.accessibilityValue = shown ? spoken : nil
         settingsButton.toolTip = shown ? (spoken.map { "Settings (⌘,): \($0)" } ?? "Settings (⌘,)") : "Settings (⌘,)"
     }
     private let settingsDot = UIView()
+    private var settingsDotConstraints: [NSLayoutConstraint] = []
 
     /// The selected tab changed (a click here, ⌘1…⌘5, a link that opened a chat).
     func selectionChanged() {
@@ -1729,6 +1746,7 @@ final class MacSidebar: UIView {
     /// [mac] Stress test 2026-10-28 #54: the open tab's mark is the accent while the sidebar has the focus.
     func focusChanged() {
         rows.forEach { $0.recolor() }
+        foldedTools?.recolor()
         heads.values.forEach { $0.recolor() }   // [bots-rail]
         chatRows.values.forEach { $0.recolor() }   // [chats-under]
     }
@@ -1938,6 +1956,9 @@ final class MacSidebar: UIView {
         dropLine.backgroundColor = tintColor
         selectionChanged()
         rows.forEach { $0.recolor() }
+        foldedTools?.recolor()
+        toolsHeading?.recolor()
+        railGateway?.recolor()
         heads.values.forEach { $0.recolor() }   // [bots-rail]
         chatRows.values.forEach { $0.recolor() }   // [chats-under]
         railAdd?.recolor()
@@ -2147,6 +2168,10 @@ extension MacSidebar: UIContextMenuInteractionDelegate, UIDragInteractionDelegat
             showRoomDropLine(landing.block)
             return UIDropProposal(operation: .move)
         }
+        if showsBots, interaction.view !== foot {
+            dropLine.isHidden = true
+            return UIDropProposal(operation: .forbidden)
+        }
         guard let gap = dropGap(session) else { dropLine.isHidden = true; return UIDropProposal(operation: .cancel) }
         showDropLine(at: gap)
         return UIDropProposal(operation: .move)
@@ -2176,6 +2201,7 @@ extension MacSidebar: UIContextMenuInteractionDelegate, UIDragInteractionDelegat
             if interaction.view !== foot, let landing = roomLanding(room, at: session.location(in: stack).y) { roomDrop(room, landing) }
             return
         }
+        if showsBots, interaction.view !== foot { return }
         guard let box = session.localDragSession?.items.first?.localObject as? SidebarEditing.DragBox, let gap = dropGap(session) else { return }
         let placed = dropRows.compactMap { $0.controller.flatMap { TabChoice(tag: $0.tabBarItem.tag) } }
         SidebarEditing.move(box.choice, before: gap < placed.count ? placed[gap] : nil)
@@ -2206,9 +2232,8 @@ extension MacSidebar: UIContextMenuInteractionDelegate, UIDragInteractionDelegat
         guard !placed.isEmpty else { return }
         guard let host = placed[0].superview as? UIStackView else { return }
         let y = gap < placed.count ? placed[gap].frame.minY - host.spacing / 2 : placed[placed.count - 1].frame.maxY + host.spacing / 2
-        // The places sit in the fixed foot while the bots are in the sidebar: the line is drawn over the strip there,
-        // not in the scrolling list (whose clip would hide it).
-        let canvas: UIView = host === foot ? self : scroll
+        // The places sit in the foot's scroll view while the bots are in the sidebar: draw inside `footScroll` so it clips cleanly on scroll.
+        let canvas: UIView = host === foot ? footScroll : scroll
         if dropLine.superview !== canvas { canvas.addSubview(dropLine) }
         dropLine.frame = host.convert(CGRect(x: 6, y: y - 1, width: host.bounds.width - 12, height: 2), to: canvas)
         dropLine.layer.cornerRadius = 1

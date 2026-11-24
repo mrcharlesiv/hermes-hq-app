@@ -403,7 +403,7 @@ final class TodoSheetModel {
         default:
             let note = TodoNoteView(title: made.title, text: made.ref, open: { [weak self] path in self?.openPath(path) },
                                     share: { [weak self] in self?.share(made) },
-                                    askChanges: embedded && chat != nil ? { [weak self] in self?.askForChanges(made) } : nil)
+                                    askChanges: chatAtHand ? { [weak self] in self?.askForChanges(made) } : nil)
             top.present(ChatSheet.wrap(UIHostingController(rootView: HQScaledRoot(note)), title: "Note"), animated: true)
         }
     }
@@ -430,7 +430,7 @@ final class TodoSheetModel {
     /// [tasks] A draft's Ask for Changes: its sheet goes down and the task's chat bar takes the keys, ready to say
     /// what to change (words already typed there stay as they are).
     func askForChanges(_ made: TodoMade) {
-        guard let chat, embedded else { return }
+        guard let chat, chatAtHand else { return }
         PagesHaptics.selection()
         let name = made.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let finish = { [weak chat] in

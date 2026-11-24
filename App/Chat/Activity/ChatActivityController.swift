@@ -1585,10 +1585,18 @@ import UIKit
         add.isEnabled = false
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         alert.addAction(add)
+        #if targetEnvironment(macCatalyst)
+        alert.preferredAction = nil
+        #else
         alert.preferredAction = add
+        #endif
         if let field = alert.textFields?.first {
-            field.addAction(UIAction { [weak field, weak add] _ in
-                add?.isEnabled = !(field?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            field.addAction(UIAction { [weak field, weak add, weak alert] _ in
+                let ok = !(field?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                add?.isEnabled = ok
+                #if targetEnvironment(macCatalyst)
+                alert?.preferredAction = ok ? add : nil
+                #endif
             }, for: .editingChanged)
         }
         chat.present(alert, animated: true)

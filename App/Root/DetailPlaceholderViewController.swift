@@ -47,7 +47,12 @@ final class DetailPlaceholderViewController: UIViewController {
     /// Mac polish #4: the Bots list is folded into the sidebar on the Mac, so its own state ("Couldn’t Load Bots" with
     /// Try Again, No Bots Yet, every bot hidden) stood on a list nobody sees, beside a blank pane: the pane shows it.
     private func followOnMac(_ list: UIViewController?) {
-        contentUnavailableConfiguration = (list as? BotsViewController).flatMap { bots -> (any UIContentConfiguration)? in
+        #if targetEnvironment(macCatalyst)
+        let mirrorBots = MacSidebar.botsInSidebar
+        #else
+        let mirrorBots = true
+        #endif
+        contentUnavailableConfiguration = mirrorBots ? (list as? BotsViewController).flatMap { bots -> (any UIContentConfiguration)? in
             if let state = Self.foldedListState(BackdropState.unwrap(bots.contentUnavailableConfiguration)) { return state }
             // [Mac AAA 2026-11-16] The folded list's offline state; it exists on the Mac only.
             #if targetEnvironment(macCatalyst)
@@ -55,7 +60,7 @@ final class DetailPlaceholderViewController: UIViewController {
             #else
             return nil
             #endif
-        }
+        } : nil
         let words = Self.macWords(for: list)
         heading.text = words?.title
         detail.text = words?.detail
@@ -164,6 +169,10 @@ final class DetailPlaceholderViewController: UIViewController {
         if view.backgroundColor == nil { view.backgroundColor = HQPalette.page }
         navigationItem.largeTitleDisplayMode = .never
         NotificationCenter.default.addObserver(self, selector: #selector(listChanged), name: Self.listStateChanged, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(refreshFonts), name: Theme.didChange, object: nil)
+        registerForTraitChanges([ThemeGenerationTrait.self, UITraitPreferredContentSizeCategory.self]) { (vc: DetailPlaceholderViewController, _) in
+            vc.refreshFonts()
+        }
         #if targetEnvironment(macCatalyst)
         NotificationCenter.default.addObserver(self, selector: #selector(listLaidOut), name: MacSidebar.neighbourMayChange, object: nil)
         #endif
@@ -234,6 +243,18 @@ final class DetailPlaceholderViewController: UIViewController {
 
     /// [Mac AAA 2026-11-17] The block's widest: the empty states' measure at the current UI Scale.
     private lazy var measure = stack.widthAnchor.constraint(lessThanOrEqualToConstant: MacInset.emptyMeasure)
+
+    @objc private func refreshFonts() {
+        if DeviceWord.isMac {
+            symbol.image = UIImage(systemName: "sidebar.right", withConfiguration: MacType.emptySymbol)
+            heading.font = MacType.emptyTitle
+            detail.font = MacType.emptyBody
+        } else {
+            heading.font = UIFontMetrics(forTextStyle: .title3).scaledFont(for: HQFont.system(ofSize: 20, weight: .semibold))
+            detail.font = HQFont.preferred(.subheadline)
+        }
+        view.setNeedsLayout()
+    }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()

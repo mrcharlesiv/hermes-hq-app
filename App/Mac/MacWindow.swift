@@ -40,6 +40,7 @@ nonisolated(unsafe) private var pageBarKey: UInt8 = 0
     private static var opening: CGRect?
     private static var asks = 0
     private static var keeps = false
+    private static var restoreGen = 0
     /// A tour sizes the window itself, and its sizes are nobody's choice.
     private static var touring: Bool { ProcessInfo.processInfo.arguments.contains { $0.hasPrefix("-HQDebugMacShots") } }
 
@@ -50,13 +51,19 @@ nonisolated(unsafe) private var pageBarKey: UInt8 = 0
         guard !touring else { return }
         keeps = false
         asks = 0
+        restoreGen += 1
+        let gen = restoreGen
         if let kept = WindowFit.decode(UserDefaults.standard.string(forKey: frameKey), minimum: CGSize(width: 320, height: 240)) {
             let frame = WindowFit.inside(kept, visible: MacSettingsWindow.visibleScreen(around: kept))
             AppLog.note("mac", "main window: as left, \(Int(frame.width))×\(Int(frame.height)) at \(Int(frame.minX)),\(Int(frame.minY))")
             opening = frame
             scene.requestGeometryUpdate(.Mac(systemFrame: frame)) { _ in }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { opening = nil; keeps = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            guard restoreGen == gen else { return }
+            opening = nil
+            keeps = true
+        }
     }
 
     /// Every move and resize of the main window: where it is now is where it opens next time. Full screen is a state
@@ -67,8 +74,13 @@ nonisolated(unsafe) private var pageBarKey: UInt8 = 0
         if let asked = opening {
             let there = abs(frame.minX - asked.minX) < 2 && abs(frame.minY - asked.minY) < 2
                 && abs(frame.width - asked.width) < 2 && abs(frame.height - asked.height) < 2
+            if there {
+                opening = nil
+                keeps = true
+                return
+            }
             // The system's own placement, or a frame on the way: asked again (a few times at most), never kept.
-            if !there, !frame.isEmpty, !scene.isFullScreen, asks < 6 {
+            if !frame.isEmpty, !scene.isFullScreen, asks < 6 {
                 asks += 1
                 scene.requestGeometryUpdate(.Mac(systemFrame: asked)) { _ in }
             }

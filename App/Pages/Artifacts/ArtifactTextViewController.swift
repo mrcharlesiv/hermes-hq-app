@@ -119,8 +119,12 @@ final class ArtifactTextViewController: UIViewController, UITextViewDelegate {
         shareButton = share
         if hasModes {
             buildModes()
-            NotificationCenter.default.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.buildModes() }
+        }
+        NotificationCenter.default.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if self.hasModes { self.buildModes() }
+                self.render()
             }
         }
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self, UITraitUserInterfaceStyle.self]) { (vc: ArtifactTextViewController, _) in
@@ -189,14 +193,27 @@ final class ArtifactTextViewController: UIViewController, UITextViewDelegate {
 
     private var showsSource: Bool { mode.index == 1 }
 
+    private var modeHost: UIViewController?
+
     /// Preview | Source under the page: the system's control in the iOS look; in the Desktop Look the desktop's
     /// outlined strip (UISegmentedControl draws iOS 26's pill whatever it is given, and there showed neither half chosen).
     private func buildModes() {
+        if let old = modeHost {
+            old.willMove(toParent: nil)
+            old.removeFromParent()
+            modeHost = nil
+        }
         let control: UIView
         if Theme.isDesktop {
             let host = UIHostingController(rootView: ArtifactModeStrip(choice: mode) { [weak self] in self?.render() })
             host.view.backgroundColor = .clear
             host.sizingOptions = .intrinsicContentSize
+            #if targetEnvironment(macCatalyst)
+            MacTitleBarClick.markInteractive(host.view)
+            #endif
+            addChild(host)
+            host.didMove(toParent: self)
+            modeHost = host
             control = host.view
         } else {
             let segments = UISegmentedControl(items: ["Preview", "Source"])
@@ -367,7 +384,7 @@ final class ArtifactTextViewController: UIViewController, UITextViewDelegate {
         let category = traitCollection.preferredContentSizeCategory
         if markdown && !showsSource {
             // The Preview renders off the main thread (a bot's report can be hundreds of KB); the spinner shows meanwhile.
-            let key = "\(category.rawValue)|\(traitCollection.userInterfaceStyle.rawValue)"
+            let key = "\(category.rawValue)|\(traitCollection.userInterfaceStyle.rawValue)|\(HQFont.scale)|\(Theme.shared.generation)"
             if let cached = previews[key] {
                 spinner.stopAnimating()
                 textView.attributedText = cached

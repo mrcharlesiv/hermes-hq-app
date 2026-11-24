@@ -750,8 +750,18 @@ final class ChatMenus: NSObject, ModelSwitchUI {
         }
         save.isEnabled = savable(prefill ?? (unnamed ? "" : current))
         alert.addAction(save)
+        #if targetEnvironment(macCatalyst)
+        alert.preferredAction = save.isEnabled ? save : nil
+        #else
         alert.preferredAction = save
-        field?.addAction(UIAction { _ in save.isEnabled = savable(field?.text ?? "") }, for: .editingChanged)
+        #endif
+        field?.addAction(UIAction { [weak alert] _ in
+            let ok = savable(field?.text ?? "")
+            save.isEnabled = ok
+            #if targetEnvironment(macCatalyst)
+            alert?.preferredAction = ok ? save : nil
+            #endif
+        }, for: .editingChanged)
         MenusSheet.top(screen)?.present(alert, animated: true)
     }
 

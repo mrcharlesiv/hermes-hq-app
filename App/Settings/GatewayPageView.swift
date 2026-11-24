@@ -248,10 +248,16 @@ final class GatewayPageModel {
             apply(access)
         }
         alert.addAction(save)
+        #if !targetEnvironment(macCatalyst)
         alert.preferredAction = save
+        #endif
         // [Mac UI check 2026-11-13] Save with a field empty closed the prompt and saved nothing, silently: it waits for both.
         let check = { [weak alert, weak save] in
-            save?.isEnabled = CloudflareAccess(clientId: alert?.textFields?.first?.text, clientSecret: alert?.textFields?.last?.text) != nil
+            let ok = CloudflareAccess(clientId: alert?.textFields?.first?.text, clientSecret: alert?.textFields?.last?.text) != nil
+            save?.isEnabled = ok
+            #if targetEnvironment(macCatalyst)
+            alert?.preferredAction = ok ? save : nil
+            #endif
         }
         for field in alert.textFields ?? [] { field.addAction(UIAction { _ in check() }, for: .editingChanged) }
         check()

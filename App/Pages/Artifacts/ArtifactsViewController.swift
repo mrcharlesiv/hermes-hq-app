@@ -40,6 +40,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
     private var barFilter: ArtifactFilterBar?
     /// [Mac AAA 2026-11-16] The bar's one filter, made once (`placeBarFilter`); `barFilter` is it while it is on show.
     private var barFilterView: ArtifactFilterBar?
+    private var barFilterWidth: NSLayoutConstraint?
     private var barFilterHost = false
     private var filterInBar: Bool { barFilterHost && view.bounds.width >= Self.barFilterLeast }
     private static let barFilterLeast: CGFloat = 660
@@ -300,12 +301,20 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
             }
         }
         scopeObserver = scope.observe { [weak self] _ in self?.scopeChanged() }
-        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (vc: ArtifactsViewController, _) in vc.reload(animated: false) }
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self, UITraitUserInterfaceStyle.self]) { (vc: ArtifactsViewController, previous) in
+            if previous.userInterfaceStyle != vc.traitCollection.userInterfaceStyle {
+                vc.reload(animated: false)
+            } else {
+                vc.reload(animated: false)
+            }
+        }
         // [mac] UI Scale (⌘+ / ⌘−) or the look changed: the Grid's cells and the pages in them follow the app's scale.
         drawnScale = HQFont.scale
         NotificationCenter.default.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, HQFont.scale != self.drawnScale else { return }
+                guard let self else { return }
+                self.barFilterWidth?.constant = (320 * max(1, HQFont.scale)).rounded()
+                guard HQFont.scale != self.drawnScale else { return }
                 self.drawnScale = HQFont.scale
                 self.collectionView.collectionViewLayout.invalidateLayout()
                 self.reload(animated: false)
@@ -676,9 +685,10 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         if barFilterView == nil {
             let made = ArtifactFilterBar { [weak self] index in self?.pickSegment(index) }
             made.translatesAutoresizingMaskIntoConstraints = false
-            let width = made.widthAnchor.constraint(equalToConstant: 320)
+            let width = made.widthAnchor.constraint(equalToConstant: (320 * max(1, HQFont.scale)).rounded())
             width.priority = .init(999)   // the stack's own zero width wins while it is hidden
             width.isActive = true
+            barFilterWidth = width
             barFilterView = made
             navigationItem.leftBarButtonItem = MacToolBar.lead(title: title ?? "Artifacts", popUp: made)
             navigationItem.titleView = UIView()   // the middle stays empty; `title` still names the page (VoiceOver)
@@ -2974,6 +2984,8 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
             popover.sourceRect = anchor.bounds
         } else {
             popover.sourceView = view
+            popover.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1)
+            popover.permittedArrowDirections = []
         }
     }
 
@@ -3294,6 +3306,7 @@ final class ArtifactFilterBar: UIView {
     /// The Desktop Look's outlined strip in place of the controls (UISegmentedControl draws iOS 26's pill whatever
     /// it is given, which the look must not show).
     private var strip: UIView?
+    private var stripHost: UIViewController?
     private let stripChoice = ArtifactFilterChoice()
 
     init(changed: @escaping (Int) -> Void) {
@@ -3324,6 +3337,7 @@ final class ArtifactFilterBar: UIView {
         controls = []
         strip?.removeFromSuperview()
         strip = nil
+        stripHost = nil
         if Theme.isDesktop {
             stripChoice.index = selected
             let host = UIHostingController(rootView: ArtifactFilterStrip(titles: Self.titles, choice: stripChoice) { [weak self] index in
@@ -3334,8 +3348,12 @@ final class ArtifactFilterBar: UIView {
             host.view.backgroundColor = .clear
             host.sizingOptions = .intrinsicContentSize
             host.view.accessibilityIdentifier = "artifacts.filter"
+            #if targetEnvironment(macCatalyst)
+            MacTitleBarClick.markInteractive(host.view)
+            #endif
             stack.addArrangedSubview(host.view)
             strip = host.view
+            stripHost = host
             return
         }
         let rows = traitCollection.preferredContentSizeCategory.isAccessibilityCategory ? [[0, 1], [2, 3]] : [[0, 1, 2, 3]]

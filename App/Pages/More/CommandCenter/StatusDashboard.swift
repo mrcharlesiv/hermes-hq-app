@@ -45,13 +45,13 @@ struct MacDashCard<Trailing: View, Content: View>: View {
             // [Mac AAA 2026-11-16] One header height in every card, whatever sits at its right: Recent Logs' Show All
             // and Open (30–32 pt) made its heading sit 3 pt below Hermes Update's beside it. They now overhang the
             // band evenly instead of growing it.
-            .frame(height: 26)
+            .frame(minHeight: HQFont.scaled(26))
             content()
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(Color(uiColor: HQPalette.card), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay { RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color(uiColor: MacDash.edge)) }
+        .background(Color(uiColor: HQPalette.card), in: RoundedRectangle(cornerRadius: HQShape.radius(14, .card), style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: HQShape.radius(14, .card), style: .continuous).strokeBorder(Color(uiColor: MacDash.edge)) }
     }
 }
 
@@ -85,8 +85,8 @@ struct MacDashTile: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(uiColor: HQPalette.card), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay { RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color(uiColor: MacDash.edge)) }
+        .background(Color(uiColor: HQPalette.card), in: RoundedRectangle(cornerRadius: HQShape.radius(14, .card), style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: HQShape.radius(14, .card), style: .continuous).strokeBorder(Color(uiColor: MacDash.edge)) }
         .accessibilityElement(children: .combine)
     }
 }
@@ -289,7 +289,7 @@ struct StatusDashboard: View {
                         }
                         .padding(12)
                     }
-                    .background(Color(uiColor: HQPalette.groupedPage).opacity(0.6), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .background(Color(uiColor: HQPalette.groupedPage).opacity(0.6), in: RoundedRectangle(cornerRadius: HQShape.radius(8, .card), style: .continuous))
                 }
             }
             .frame(maxWidth: .infinity, minHeight: 560, maxHeight: 560, alignment: .topLeading)
@@ -309,7 +309,7 @@ struct StatusDashboard: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(uiColor: HQPalette.groupedPage).opacity(0.6), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color(uiColor: HQPalette.groupedPage).opacity(0.6), in: RoundedRectangle(cornerRadius: HQShape.radius(8, .card), style: .continuous))
     }
 
     private func logLine(_ line: String) -> some View {

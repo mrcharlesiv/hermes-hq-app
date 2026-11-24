@@ -232,7 +232,7 @@ import UIKit
             pane = .sidebar
         } else if view.isDescendant(of: split.tabs.view) {
             pane = .list
-        } else if view.isDescendant(of: split.detail.view) {
+        } else if view.isDescendant(of: split.detail.view) || view.isDescendant(of: split.inspector.view) {
             pane = .detail
         } else {
             return   // a sheet or a menu over the window: the panes keep their focus

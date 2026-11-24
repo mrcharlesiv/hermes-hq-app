@@ -52,7 +52,11 @@ import UIKit
         if !held.isEmpty { held.append(event); return true }
         if CACurrentMediaTime() < fieldComing, ChatFirstResponder.current()?.hqTypingInput == nil {
             let flags = (event.value(forKey: "modifierFlags") as? NSNumber)?.uintValue ?? 0
-            if flags & (1 << 20) == 0 {   // ⌘ shortcuts go on as they are
+            let mainWin = KeyCommands.root?.view.window
+            let pressed = event.value(forKey: "window") as? NSObject
+            let inMain = mainWin != nil && pressed?.responds(to: NSSelectorFromString("uiWindows")) == true
+                && (pressed?.value(forKey: "uiWindows") as? [UIWindow])?.contains(mainWin!) == true
+            if flags & (1 << 20) == 0, inMain {   // ⌘ shortcuts and other windows go on as they are
                 AppLog.note("keys", "typed while a search field takes the keyboard: held for it")
                 held = [event]
                 awaitField()
@@ -94,6 +98,7 @@ import UIKit
             held = [event]
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
+                    MacSelection.focus(on: .detail)
                     chat.composer.textView.becomeFirstResponder()
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { MainActor.assumeIsolated { release() } }
                 }

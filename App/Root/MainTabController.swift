@@ -367,7 +367,12 @@ final class MainTabController: UITabBarController, UITabBarControllerDelegate {
         let above = before.prefix { $0 !== shown }.reversed().first { old in
             old.tabBarItem.tag != HQTab.more.rawValue && now.contains { $0 === old }
         }
-        if let above { show(above) } else { selectedIndex = index(of: .bots) ?? 0 }
+        let target = above ?? viewControllers?[index(of: .bots) ?? 0]
+        if let target {
+            if let split { split.switchPlace(to: target) { self.show(target) } } else { show(target) }
+        } else {
+            selectedIndex = index(of: .bots) ?? 0
+        }
         #else
         selectedIndex = index(of: .more) ?? 0
         #endif

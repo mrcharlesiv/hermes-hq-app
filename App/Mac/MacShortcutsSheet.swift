@@ -117,8 +117,10 @@ import UIKit
     }
 
     static func present(tries: Int = 8) {
-        // [mac] Mac polish #12: over the window in front (the Settings window when it is), not the main window behind it.
-        guard let host: UIViewController = KeyCommands.settingsInFront ?? KeyCommands.root else { return }
+        // [mac] Mac polish #12: over the window in front (File, Settings, or main window), never hidden behind it.
+        let keyRoot = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows).first(where: \.isKeyWindow)?.rootViewController
+        guard let host: UIViewController = keyRoot ?? KeyCommands.settingsInFront ?? KeyCommands.root else { return }
         let over = KeyCommands.presented(host) ?? host
         // [keys] 2026-11-14 (Mac full pass, round 3): picked while a sheet was still closing (this one's Done a moment
         // before), it was presented on that leaving sheet and never showed. It waits for the sheet to go; and a second

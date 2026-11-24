@@ -82,6 +82,8 @@ struct AppIconPage: View {
                     .fixedSize(horizontal: false, vertical: DeviceWord.isMac)
             }
             .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .hqPointerFill(RoundedRectangle(cornerRadius: HQShape.radius(12, .card), style: .continuous))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

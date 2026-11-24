@@ -154,8 +154,9 @@ final class BotChatsPanel: UIViewController, UITableViewDataSource, UITableViewD
                 let said = (chat.preview ?? "").split(whereSeparator: \.isNewline).joined(separator: " ").trimmingCharacters(in: .whitespaces)
                 // A second line only where something wants the eye: the step at work, the reply not read yet.
                 let detail = working ? (chat.step ?? "Working…") : unread ? said : ""
-                out.append(Row(kind: .chat, id: chat.id, title: chat.title, detail: detail, time: working ? "" : ListTime.string(chat.lastActive),
-                               tip: said.isEmpty ? chat.title : chat.title + "\n" + said, working: working, unread: unread, current: current))
+                let title = SessionRowView.title(chat)
+                out.append(Row(kind: .chat, id: chat.id, title: title, detail: detail, time: working ? "" : ListTime.string(chat.lastActive),
+                               tip: said.isEmpty ? title : title + "\n" + said, working: working, unread: unread, current: current))
             }
         }
         return out
@@ -230,6 +231,7 @@ private final class BotChatCell: UITableViewCell {
     private let lines = UIStackView()
     private var lit = false
     private var hovers = true
+    private var pointerOver = false
     private let tip = UIToolTipInteraction()
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
@@ -268,12 +270,12 @@ private final class BotChatCell: UITableViewCell {
         let columnMiddle = Self.fillInset + Self.pad + Self.column / 2
         let words = Self.fillInset + Self.pad + Self.column + 8
         NSLayoutConstraint.activate([
-            fill.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.fillInset),
-            fill.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Self.fillInset),
+            fill.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: Self.fillInset),
+            fill.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -Self.fillInset),
             fill.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 1),
             fill.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -1),
             lines.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: words),
-            lines.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -(Self.fillInset + Self.pad + 2)),
+            lines.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -(Self.fillInset + Self.pad + 2)),
             lines.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
             dot.widthAnchor.constraint(equalToConstant: 7),
             dot.heightAnchor.constraint(equalToConstant: 7),
@@ -293,18 +295,21 @@ private final class BotChatCell: UITableViewCell {
 
     func show(_ row: BotChatsPanel.Row) {
         let header = row.kind == .header
+        headerLabel.font = Self.headerFont
         headerLabel.isHidden = !header
         headerLabel.text = row.title
         lines.isHidden = header
         hovers = !header
         lit = row.current
-        fill.backgroundColor = lit ? HQPalette.cellPressed : .clear
+        updateFill()
         // The chat on show and a reply not read are the two things said in a heavier face.
         titleLabel.font = row.current || row.unread ? InspectorLook.textFont.pagesWeight(.semibold) : InspectorLook.textFont
         titleLabel.textColor = HQPalette.label
         titleLabel.text = row.title
+        timeLabel.font = InspectorLook.detailFont
         timeLabel.text = row.time
         timeLabel.isHidden = row.time.isEmpty
+        detailLabel.font = InspectorLook.detailFont
         detailLabel.text = row.detail
         detailLabel.isHidden = row.detail.isEmpty
         let dotted = !header && (row.working || row.unread)
@@ -325,10 +330,14 @@ private final class BotChatCell: UITableViewCell {
         accessibilityTraits = header ? .header : row.current ? [.button, .selected] : .button
     }
 
+    private func updateFill() {
+        fill.backgroundColor = lit ? HQPalette.cellPressed : (hovers && pointerOver) ? HQPalette.cellPressed.withAlphaComponent(0.5) : .clear
+    }
+
     /// The row under the pointer lights a little, as the sidebar's rows do.
     @objc private func hovered(_ hover: UIHoverGestureRecognizer) {
-        let over = hovers && (hover.state == .began || hover.state == .changed)
-        fill.backgroundColor = lit ? HQPalette.cellPressed : over ? HQPalette.cellPressed.withAlphaComponent(0.5) : .clear
+        pointerOver = hover.state == .began || hover.state == .changed
+        updateFill()
     }
 }
 #endif

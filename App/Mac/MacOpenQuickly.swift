@@ -25,6 +25,7 @@ import UIKit
     /// (`SheetStyle`): glass alone let the page's words show through the card and the marked row.
     private let veil = UIView()
     private let fieldBox = UIView()
+    private let glass = UIImageView(image: UIImage(systemName: "magnifyingglass"))
     private let field = UITextField()
     /// [macpass] Grouped, not plain: a plain table pins its headings, so a result scrolled under "Go To" showed its
     /// blue mark through the heading (2026-11-14 Mac pass). The grouped style's own room above and below a section
@@ -33,6 +34,7 @@ import UIKit
     private var groups: [MoreSearch.Group] = []
     private var marked = IndexPath(row: 0, section: 0)
     private var tableHeight: NSLayoutConstraint!
+    private var lastHeight: CGFloat = 0
 
     private static weak var shown: MacOpenQuickly?
     /// [mac] Stress test 2026-10-28 round 6: the panel's top, a fifth of the way down the window (see viewDidLoad).
@@ -45,6 +47,16 @@ import UIKit
         super.viewDidLayoutSubviews()
         let wanted = Self.topRoom(view.bounds.height)
         if let topFromWindow, topFromWindow.constant != wanted { topFromWindow.constant = wanted }
+        if abs(view.bounds.height - lastHeight) > 0.5 {
+            lastHeight = view.bounds.height
+            sizeTable()
+        }
+    }
+
+    static func refocusIfShown() -> Bool {
+        guard let shown, !shown.closing else { return false }
+        shown.field.becomeFirstResponder()
+        return true
     }
 
     /// Opens the panel over the window (once: ⌘K again while it's up puts the caret back in its field).
@@ -101,7 +113,6 @@ import UIKit
         fieldBox.layer.borderWidth = 2
         fieldBox.translatesAutoresizingMaskIntoConstraints = false
         panel.addSubview(fieldBox)
-        let glass = UIImageView(image: UIImage(systemName: "magnifyingglass"))
         glass.tintColor = HQPalette.label2
         glass.preferredSymbolConfiguration = UIImage.SymbolConfiguration(font: HQFont.preferred(.body))
         glass.translatesAutoresizingMaskIntoConstraints = false
@@ -110,7 +121,8 @@ import UIKit
         field.font = HQFont.preferred(.body)
         field.textColor = HQPalette.label
         // [mac] Mac polish #69: the hint in the look's label 2, not the system's faint placeholder grey (about 2:1).
-        field.attributedPlaceholder = NSAttributedString(string: MoreSearch.placeholder, attributes: [.foregroundColor: HQPalette.label2])
+        field.attributedPlaceholder = NSAttributedString(string: MoreSearch.placeholder,
+                                                         attributes: [.foregroundColor: HQPalette.label2, .font: HQFont.preferred(.body)])
         field.accessibilityLabel = "Open Quickly"
         field.accessibilityIdentifier = "open-quickly.field"
         field.autocapitalizationType = .none
@@ -162,6 +174,7 @@ import UIKit
             panel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             top,
             panel.topAnchor.constraint(greaterThanOrEqualTo: view.safeAreaLayoutGuide.topAnchor, constant: 60),
+            panel.bottomAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -16),
             width,
             panel.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, constant: -80),
             glassBack.topAnchor.constraint(equalTo: panel.topAnchor), glassBack.bottomAnchor.constraint(equalTo: panel.bottomAnchor),
@@ -201,8 +214,17 @@ import UIKit
         if Self.shown === self { Self.shown = nil }
     }
 
-    /// Light or dark changed, or the Desktop Look was turned on or off: the panel follows.
-    private func recolor() { applyLook() }
+    /// Light or dark changed, or the Desktop Look or UI Scale changed: the panel follows.
+    private func recolor() {
+        applyLook()
+        let body = HQFont.preferred(.body)
+        field.font = body
+        glass.preferredSymbolConfiguration = UIImage.SymbolConfiguration(font: body)
+        field.attributedPlaceholder = NSAttributedString(string: MoreSearch.placeholder,
+                                                         attributes: [.foregroundColor: HQPalette.label2, .font: body])
+        table.reloadData()
+        sizeTable()
+    }
 
     /// The panel's corners in the iOS look: the field's 8 pt box 12 pt inside it, concentric.
     private static let glassRadius: CGFloat = 20
@@ -251,6 +273,14 @@ import UIKit
 
     // MARK: Results
 
+    private func sizeTable() {
+        let topOffset = max(Self.topRoom(view.bounds.height), view.safeAreaInsets.top + 60)
+        let fieldH = max(fieldBox.bounds.height, ceil(HQFont.preferred(.body).lineHeight) + 20)
+        let chrome = topOffset + 12 + fieldH + 6 + 6 + max(view.safeAreaInsets.bottom, 0) + 16
+        let room = min(max(view.bounds.height - chrome, 100), 460)
+        tableHeight.constant = groups.isEmpty ? 80 : min(room, table.contentSize.height + 6)
+    }
+
     private func typed() {
         let query = (field.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         groups = query.isEmpty ? search.recent() : search.results(for: query)
@@ -258,12 +288,9 @@ import UIKit
         marked = IndexPath(row: start.row, section: start.section)
         table.reloadData()
         table.backgroundView = groups.isEmpty ? emptyNote(query) : nil
-        let room = min(max(view.bounds.height - Self.topRoom(view.bounds.height) - 80, 120), 460)
-        // [Mac AAA 2026-11-16] The last row's mark 12 pt from the foot, as the field is from the top and the mark from
-        // the sides (it was 17 px under the mark against 11 over the field).
-        tableHeight.constant = groups.isEmpty ? 80 : min(room, table.contentSize.height + 6)
+        sizeTable()
         view.layoutIfNeeded()
-        tableHeight.constant = groups.isEmpty ? 80 : min(room, table.contentSize.height + 6)
+        sizeTable()
         if !groups.isEmpty { table.scrollToRow(at: marked, at: .none, animated: false) }
     }
 
@@ -283,7 +310,7 @@ import UIKit
     func tableView(_ tableView: UITableView, heightForFooterInSection section: Int) -> CGFloat { .leastNormalMagnitude }
 
     func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        (field.text ?? "").isEmpty ? "Recent" : groups[section].kind.title
+        (field.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Recent" : groups[section].kind.title
     }
 
     /// [mac] Mac polish #63: a heading is the look's section label: the Desktop Look's tracked capitals, as every other
@@ -452,8 +479,16 @@ extension MacOpenQuickly {
             // first page is scrolled to and marked, any other setting's page goes beside the categories.
             guard let entry = SettingsSearch.index().first(where: { $0.id == item.id }) else { return false }
             return MacSettingsWindow.open { router in
-                // As the window's search: on the Mac Attachment Limit is a row of Chat Behavior, marked in place.
-                let target: SettingsSearchEntry.Target = entry.target == .root("attachment-limit") ? .root("row:attachment-limit") : entry.target
+                // As the window's search: on the Mac Attachment Limit and Sound are inline rows, marked in place.
+                let target: SettingsSearchEntry.Target
+                if entry.target == .root("attachment-limit") {
+                    target = .root("row:attachment-limit")
+                } else if entry.target == .root("sound-picker") {
+                    let soundOn = MacSettingsWindow.root?.model.completionSound ?? false
+                    target = .root(soundOn ? "row:sound" : "row:completion-sound")
+                } else {
+                    target = entry.target
+                }
                 if case .root(let id) = target, id.hasPrefix("row:") {
                     MacSettingsWindow.root?.reveal(id)
                 } else {

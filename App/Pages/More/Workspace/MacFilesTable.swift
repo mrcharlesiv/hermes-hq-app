@@ -191,6 +191,12 @@ final class MacFilesHeaderView: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
+    func refreshFonts() {
+        countLabel.font = MacFilesTable.detail
+        for label in [nameTitle] + columnTitles { label.font = MacFilesTable.detail.pagesWeight(.medium) }
+        setNeedsLayout()
+    }
+
     static func height(columns: Bool) -> CGFloat { MacFilesTable.trailHeight + (columns ? MacFilesTable.columnsHeight : 0) }
 
     func set(crumbs: [Crumb], count: String, columns: [(String, MacFilesTable.Column)]?) {

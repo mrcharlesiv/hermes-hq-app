@@ -144,6 +144,7 @@ struct NewTileView: View {
             } header: { HQSectionLabel { Text("On the Tile") } } footer: { HQSectionFooter {
                 Text("The bot makes a live tile that fits any size and keeps it up to date. It pins itself here when it’s ready.")
             } }
+            .hqSheetRows()
             if model.what.pgTrim.isEmpty {
                 Section {
                     let shown = allIdeas ? NewTileModel.ideas : Array(NewTileModel.ideas.prefix(NewTileModel.firstIdeas))
@@ -169,6 +170,7 @@ struct NewTileView: View {
                         .accessibilityIdentifier("tile.new.more-ideas")
                     }
                 } header: { HQSectionLabel { Text("Ideas") } }
+                .hqSheetRows()
             }
             Section {
                 Group {
@@ -193,6 +195,7 @@ struct NewTileView: View {
             } header: { HQSectionLabel { Text("Made By") } } footer: { HQSectionFooter {
                 Text("Pick a bot that can reach the data, for example one signed in to your mail or calendar.")
             } }
+            .hqSheetRows()
         }
         .hqGroupedPage()
         .onAppear { focused = true }

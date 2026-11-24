@@ -514,6 +514,16 @@ final class MoreWorkspaceController: UITableViewController {
         tableView.sectionHeaderTopPadding = 0
         tableView.rowHeight = MacFilesTable.rowHeight
         tableHeader.onCrumb = { [weak self] path in self?.browse(path) }
+        NotificationCenter.default.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.tableView.rowHeight = MacFilesTable.rowHeight
+                self.tableHeader.refreshFonts()
+                self.fillTableHeader()
+                self.tableView.reloadData()
+                self.restoreMark()
+            }
+        }
         ListBarAppearance.apply(to: navigationItem)
         var button: UIButton?
         if space.bots.count > 1 {
@@ -699,6 +709,7 @@ final class MoreWorkspaceController: UITableViewController {
             guard let self else { return }
             self.space.setChosen(chosen)
             self.browsed = nil
+            self.repoRoot = nil
             self.navigationController?.popToViewController(self, animated: true)
             // [mac-tools] The chooser stood in the pane beside the table: it leaves with the choice.
             if self.isTable { MainTabController.current?.split?.closeDetail(animated: true) }
@@ -717,6 +728,7 @@ final class MoreWorkspaceController: UITableViewController {
                 PagesHaptics.selection()
                 self.space.setChosen(nil)
                 self.browsed = nil
+                self.repoRoot = nil
                 self.reload()
             })
         }
@@ -730,6 +742,7 @@ final class MoreWorkspaceController: UITableViewController {
                 PagesHaptics.selection()
                 self.space.setProfile(bot.id)
                 self.browsed = nil
+                self.repoRoot = nil
                 self.reload()
             }
         })
@@ -1089,8 +1102,8 @@ final class MoreWorkspaceController: UITableViewController {
                 let diff = try await workspace.diff(in: directory, file: change)
                 return diff.isEmpty ? "No differences to show." : diff
             }
-            navigationController?.pushViewController(page, animated: true)
             if isTable { mark(change.path, page: page) }
+            navigationController?.pushViewController(page, animated: true)
         default:
             break
         }
@@ -1167,7 +1180,12 @@ final class MoreWorkspaceController: UITableViewController {
                         // The row (found again: the list may have been read again since the menu opened).
                         let row = self?.row(showing: path)
                         popover.sourceView = row ?? host.view
-                        if let row { popover.sourceRect = row.bounds }
+                        if let row {
+                            popover.sourceRect = row.bounds
+                        } else {
+                            popover.sourceRect = CGRect(x: host.view.bounds.midX, y: host.view.bounds.midY, width: 1, height: 1)
+                            popover.permittedArrowDirections = []
+                        }
                     }
                     host.present(sheet, animated: true)
                 }
@@ -1273,15 +1291,15 @@ final class MoreWorkspaceController: UITableViewController {
                         if let markdown {
                             let viewer = ArtifactTextViewController(title: entry.name, markdown: true, language: nil) { markdown }
                             viewer.shareItem = share
-                            self.navigationController?.pushViewController(viewer, animated: true)
                             if self.isTable { self.mark(entry.path, page: viewer) }
+                            self.navigationController?.pushViewController(viewer, animated: true)
                             return
                         }
                         let notice = file.truncated ? MoreWorkspaceRoot.truncatedNotice(byteSize: file.byteSize) : nil
                         let page = MoreWorkspaceTextPage(title: entry.name, diff: false, notice: notice) { file.text }
                         page.share = share
-                        self.navigationController?.pushViewController(page, animated: true)
                         if self.isTable { self.mark(entry.path, page: page) }
+                        self.navigationController?.pushViewController(page, animated: true)
                         return
                     }
                 }

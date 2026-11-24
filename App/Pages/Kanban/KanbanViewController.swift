@@ -1056,7 +1056,11 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
                                       preferredStyle: .actionSheet)
         sheet.addAction(UIAlertAction(title: "Delete Task", style: .destructive) { [weak self] _ in self?.delete(task) })
         sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        sheet.popoverPresentationController?.sourceView = source ?? view
+        if let popover = sheet.popoverPresentationController {
+            popover.sourceView = source ?? view
+            popover.sourceRect = source?.bounds ?? CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1)
+            if source == nil { popover.permittedArrowDirections = [] }
+        }
         present(sheet, animated: true)
     }
 
@@ -1125,9 +1129,13 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
         sheet.addAction(UIAlertAction(title: "Move To…", style: .default) { [weak self] _ in self?.presentMoveSheet(task, source: source) })
         sheet.addAction(UIAlertAction(title: "Assign To…", style: .default) { [weak self] _ in self?.presentAssignSheet(task, source: source) })
         if task.status == "done" { sheet.addAction(UIAlertAction(title: "Archive", style: .default) { [weak self] _ in self?.archive(task) }) }
-        sheet.addAction(UIAlertAction(title: "Delete", style: .destructive) { [weak self] _ in self?.confirmDelete(task, source: source) })
+        sheet.addAction(UIAlertAction(title: "Delete…", style: .destructive) { [weak self] _ in self?.confirmDelete(task, source: source) })
         sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        sheet.popoverPresentationController?.sourceView = source ?? view
+        if let popover = sheet.popoverPresentationController {
+            popover.sourceView = source ?? view
+            popover.sourceRect = source?.bounds ?? CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1)
+            if source == nil { popover.permittedArrowDirections = [] }
+        }
         present(sheet, animated: true)
     }
 
@@ -1137,7 +1145,11 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
             sheet.addAction(UIAlertAction(title: KanbanModel.label(name), style: .default) { [weak self] _ in Task { await self?.store.move(task, to: name) } })
         }
         sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        sheet.popoverPresentationController?.sourceView = source ?? view
+        if let popover = sheet.popoverPresentationController {
+            popover.sourceView = source ?? view
+            popover.sourceRect = source?.bounds ?? CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1)
+            if source == nil { popover.permittedArrowDirections = [] }
+        }
         present(sheet, animated: true)
     }
 
@@ -1161,7 +1173,11 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
         unassign.isEnabled = !none
         sheet.addAction(unassign)
         sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        sheet.popoverPresentationController?.sourceView = source ?? view
+        if let popover = sheet.popoverPresentationController {
+            popover.sourceView = source ?? view
+            popover.sourceRect = source?.bounds ?? CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1)
+            if source == nil { popover.permittedArrowDirections = [] }
+        }
         present(sheet, animated: true)
     }
 }

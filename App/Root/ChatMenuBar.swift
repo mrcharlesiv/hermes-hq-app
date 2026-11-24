@@ -145,6 +145,7 @@ extension AppDelegate {
             // with a chat on show or not; one pane, with no room for an inspector, it is Chat Info's sheet.
             if command.propertyList as? String == ChatMenuItemID.info.rawValue {
                 let inspector = chat.flatMap { MacInspector.beside($0) }
+                    ?? KeyCommands.root?.split.flatMap { $0.canShowInspector && $0.inspector.hasChat ? $0.inspector : nil }
                 let visible = inspector?.isVisible ?? MacInspector.isShown
                 command.title = chat != nil && inspector == nil ? "Chat Info" : visible ? "Hide Inspector" : "Show Inspector"
                 // [macpass] 2026-11-14: the first ⌘I after a bot's click did nothing while its chat was still opening
@@ -152,16 +153,23 @@ extension AppDelegate {
                 if inspector != nil { enabled = true }
             }
             #endif
-            if let id = (command.propertyList as? String).flatMap(ChatMenuItemID.init(rawValue:)),
-               let row = chat?.menus?.menuBarRow(id) {
-                enabled = true
-                switch id {
-                case .info: if !DeviceWord.isMac { command.title = "Chat Info" }
-                case .export: command.title = "Export Chat…"
-                case .delete: command.title = ChatMenuBar.deleteTitle
-                case .files: command.title = ChatMenuBar.filesTitle
-                case .changes: command.title = ChatMenuBar.changesTitle
-                default: command.title = row.title
+            if let id = (command.propertyList as? String).flatMap(ChatMenuItemID.init(rawValue:)) {
+                if let row = chat?.menus?.menuBarRow(id) {
+                    enabled = true
+                    switch id {
+                    case .info: if !DeviceWord.isMac { command.title = "Chat Info" }
+                    case .export: command.title = "Export Chat…"
+                    case .delete: command.title = ChatMenuBar.deleteTitle
+                    case .files: command.title = ChatMenuBar.filesTitle
+                    case .changes: command.title = ChatMenuBar.changesTitle
+                    default: command.title = row.title
+                    }
+                } else {
+                    switch id {
+                    case .pin: command.title = "Pin"
+                    case .unread: command.title = "Mark as Unread"
+                    default: break
+                    }
                 }
             }
         case ChatMenuBar.attach:
@@ -199,7 +207,9 @@ extension AppDelegate {
         #if targetEnvironment(macCatalyst)
         // [mac-layout] ⌘I shows and hides the inspector beside the chat, as Linear's and Keynote's do (also while the
         // chat is still opening: [macpass] 2026-11-14).
-        if id == .info, let chat = ChatMenuBar.chat, let inspector = MacInspector.beside(chat) {
+        if id == .info,
+           let inspector = ChatMenuBar.chat.flatMap({ MacInspector.beside($0) })
+               ?? KeyCommands.root?.split.flatMap({ $0.canShowInspector && $0.inspector.hasChat ? $0.inspector : nil }) {
             AppLog.note("keys", "chat menu: info (inspector)")
             inspector.toggle()
             return

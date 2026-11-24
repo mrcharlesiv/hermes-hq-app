@@ -61,7 +61,15 @@ final class MacTitleBarClick: NSObject, UIGestureRecognizerDelegate {
         return frame.minY <= titleStrip(window) + 8 && point.y <= frame.maxY
     }
 
+    private static var interactiveKey: UInt8 = 0
+
+    /// Marks a view (such as a SwiftUI strip inside a top bar) as answering clicks so double-clicking it never zooms the window.
+    static func markInteractive(_ view: UIView) {
+        objc_setAssociatedObject(view, &interactiveKey, true, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+    }
+
     static func answersClicks(_ view: UIView) -> Bool {
+        if objc_getAssociatedObject(view, &interactiveKey) != nil { return true }
         if view is UIControl || view is UITextView || view is UISearchBar { return true }
         if view.accessibilityTraits.contains(.button) || view.accessibilityTraits.contains(.link) { return true }
         return view.gestureRecognizers?.contains { $0 is UITapGestureRecognizer && $0.isEnabled } ?? false

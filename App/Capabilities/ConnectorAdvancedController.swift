@@ -36,6 +36,7 @@ struct ConnectorAdvancedView: View {
                             .padding(.top, 6)
                             .padding(.bottom, configScrolls ? max(6, ScrollBarLane.height) : 6)
                     }
+                    .hqSideWheel()
                     .onScrollGeometryChange(for: Bool.self) { $0.contentSize.width > $0.containerSize.width + 0.5 } action: { _, now in
                         configScrolls = now
                     }

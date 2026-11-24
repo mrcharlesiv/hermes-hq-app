@@ -242,7 +242,11 @@ struct OnePasswordAllowView: View {
         } header: { HQSectionLabel {
             Text("Sign In to 1Password, Once")
         } } footer: { HQSectionFooter {
+            #if targetEnvironment(macCatalyst)
+            Text("Fill your 1Password password here. It’s used once on \(HostWord.phrase) to give your bots a read-only key, then dropped. After this, nothing is asked again.")
+            #else
             Text("Tap the key above the keyboard to fill it from 1Password. It’s used once on \(HostWord.phrase) to give your bots a read-only key, then dropped. After this, nothing is asked again.")
+            #endif
         } }
         Section {
             Button("Continue", action: sendPassword)

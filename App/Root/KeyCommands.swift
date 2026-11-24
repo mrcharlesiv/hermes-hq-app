@@ -666,12 +666,13 @@ extension MoreViewController: KeySearchable {}
 
     /// Opens the list's own search with the caret in it: the magnifier's action where the list has one.
     static func openSearch(_ screen: UIViewController?) {
+        guard let screen else { return }
         #if targetEnvironment(macCatalyst)
         TypeToChatKeys.fieldWillFocus()   // [rest-hands 2026-11-17] letters typed at once wait for the field
         #endif
         if let list = screen as? KeySearchable {
             list.openSearchFromKeyboard()
-        } else if let search = screen?.navigationItem.searchController {
+        } else if let search = screen.navigationItem.searchController {
             search.isActive = true
             DispatchQueue.main.async { PageBarCapsule.focus(search.searchBar, tries: 10) }   // [rest-hands 2026-11-17] once in its window
         } else {
@@ -889,7 +890,7 @@ extension AppDelegate {
             }
             #endif
         case KeyCommands.closeWindow:
-            enabled = true
+            enabled = !covered
             // [mac] While ⌘W itself reads Close Window, a second Close Window under it would only repeat it.
             if !KeyCommands.closeChatCloses(root) { command.attributes = .hidden; return }
         case KeyCommands.back:
@@ -956,15 +957,20 @@ extension AppDelegate {
         case KeyCommands.messageActions:
             enabled = enabled && root.chatOnShow != nil
         case KeyCommands.openQuickly:
+            #if targetEnvironment(macCatalyst)
+            let openQuicklyUp = KeyCommands.presented(root) is MacOpenQuickly
+            enabled = (enabled || openQuicklyUp) && root.pages?.more != nil
+            #else
             enabled = enabled && root.pages?.more != nil
+            #endif
         case KeyCommands.quickActions:
             break
         case KeyCommands.messageField:
             enabled = enabled && root.chatOnShow.map { !$0.composer.textView.isFirstResponder } == true
             #if targetEnvironment(macCatalyst)
             // [Mac AAA 2026-11-16] With no chat on show, Return opens the list row the keyboard has reached (↓ in Jobs or
-            // Tasks marked a row, and Return then did nothing; checked in the running app).
-            if root.chatOnShow == nil, KeyCommands.focusedRow(root) != nil, !KeyCommands.typing(root) { enabled = !covered }
+            // Tasks marked a row, and Return then did nothing; checked in the running app). Only the untitled Return alternate, not ⌘L.
+            if command.title.isEmpty, root.chatOnShow == nil, KeyCommands.focusedRow(root) != nil, !KeyCommands.typing(root) { enabled = !covered }
             #endif
         #if targetEnvironment(macCatalyst)
         case KeyCommands.scrollChat:   // [mac-feel D30]
@@ -1100,7 +1106,7 @@ extension AppDelegate {
         case KeyCommands.find:
             // A page with no search of its own takes ⌘F to the column's Search Settings field (`hqFind`).
             let column = top == nil && MacSettingsWindow.root?.paneStack != nil
-                && settings.topViewController?.navigationItem.searchController == nil
+                && !KeyCommands.canSearch(settings.topViewController)
             enabled = column || KeyCommands.settingsSearchPage(settings) != nil
         case KeyCommands.refresh:
             enabled = (top != nil ? KeyCommands.sheetRefresh(settings) : settings.topViewController.flatMap(Self.refreshAction)) != nil
@@ -1376,9 +1382,9 @@ extension AppDelegate {
         #if targetEnvironment(macCatalyst)
         if let settings = KeyCommands.settingsInFront {   // [mac] Mac polish #12
             AppLog.note("keys", "find (settings window)")
-            // [mac-ui-issues] A page with no search of its own: the column's Search Settings field.
-            if let root = MacSettingsWindow.root, root.paneStack != nil,
-               settings.topViewController?.navigationItem.searchController == nil {
+            // [mac-ui-issues] A page with no search of its own (and no sheet over it): the column's Search Settings field.
+            if KeyCommands.presented(settings) == nil, let root = MacSettingsWindow.root, root.paneStack != nil,
+               !KeyCommands.canSearch(settings.topViewController) {
                 root.model.focusSearch += 1
                 return
             }
@@ -1394,8 +1400,14 @@ extension AppDelegate {
         guard let root = uncovered else { AppLog.note("keys", "find: covered"); return }
         AppLog.note("keys", "find")
         if let chat = root.chatOnShow {
+            #if targetEnvironment(macCatalyst)
+            MacSelection.focus(on: .detail)
+            #endif
             chat.showFind()
         } else {
+            #if targetEnvironment(macCatalyst)
+            MacSelection.focus(on: .list)
+            #endif
             KeyCommands.openSearch(KeyCommands.findTarget(root))
         }
     }
@@ -1432,6 +1444,9 @@ extension AppDelegate {
         #endif
         root.sessionsViewController.navigationController?.popToRootViewController(animated: false)
         root.sessionsViewController.loadViewIfNeeded()
+        #if targetEnvironment(macCatalyst)
+        MacSelection.focus(on: .list)
+        #endif
         KeyCommands.openSearch(root.sessionsViewController)
     }
 
@@ -1448,6 +1463,7 @@ extension AppDelegate {
     @objc func hqOpenQuickly(_ sender: Any?) {
         #if targetEnvironment(macCatalyst)
         mainWindowForward()   // [macpass-settings2]
+        if MacOpenQuickly.refocusIfShown() { return }
         #endif
         guard let root = uncovered, let more = root.pages?.more, let stack = more.navigationController,
               let index = root.slotIndex(for: stack) else { return }
@@ -1523,6 +1539,9 @@ extension AppDelegate {
         #endif
         guard let chat = uncovered?.chatOnShow else { return }
         AppLog.note("keys", "message field")
+        #if targetEnvironment(macCatalyst)
+        MacSelection.focus(on: .detail)
+        #endif
         chat.focusComposer()
     }
 
@@ -1552,6 +1571,9 @@ extension AppDelegate {
         // Phone layout: the chat on show gives way to the next one over the same list, in one step (the list between
         // them is never shown).
         ChatViewController.replacesTopOnNextPush = root.split?.isDouble != true && root.paneChatOnShow != nil
+        #if targetEnvironment(macCatalyst)
+        if root.split?.isDouble == true, root.split?.tabs.view.isHidden == false { MacSelection.focus(on: .list) }
+        #endif
         target.open(target.key)
         ChatViewController.replacesTopOnNextPush = false
     }

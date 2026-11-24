@@ -511,7 +511,7 @@ struct MarketplaceView: View {
 
     /// The page is drawn at 77 % on the Mac: this is about 800 pt of window. Narrower (a listing open beside it), the
     /// side list folds into the segments and chips.
-    private static let sideAt: CGFloat = 1040
+    private static var sideAt: CGFloat { (1040 * max(1, min(HQFont.scale, 1.25))).rounded() }
 
     // MARK: The side list
 
@@ -679,53 +679,70 @@ struct MarketplaceView: View {
 
     /// This week's pick large, with its picture whole, and the other picks down its right side.
     private func storeHero(_ picks: [PluginCatalogEntry]) -> some View {
-        HStack(alignment: .top, spacing: 14) {
-            MarketplaceHero(entry: picks[0], installed: model.installedPlugin(for: picks[0]) != nil) { install in
-                openPlugin(picks[0], install: install)
-            }
-            if picks.count > 1 {
-                ScrollView(showsIndicators: false) {
-                    VStack(spacing: 10) {
-                        ForEach(picks.dropFirst()) { entry in
-                            Button { openPlugin(entry) } label: {
-                                HStack(spacing: 12) {
-                                    MarketplaceBanner(url: entry.image, name: entry.title, symbol: entry.category.symbol)
-                                        .frame(width: 150, height: 84)
-                                        .clipShape(RoundedRectangle(cornerRadius: HQShape.radius(8, .tile), style: .continuous))
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(entry.title).font(Font.hq(.body).weight(.semibold)).foregroundStyle(Color.hqLabel).lineLimit(1)
-                                        Text(PluginCatalogEntry.styled(entry.summary)).font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
-                                            .lineLimit(2)
-                                        Text("by \(entry.maintainer)").font(Font.hq(.caption)).foregroundStyle(Color(uiColor: HQPalette.cardNote)).lineLimit(1)
-                                    }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                                .padding(10)
-                                // [Mac UI check 2026-11-13] Three to the hero's height exactly: a few points more each cut
-                                // the third off at the bottom, which read as clipped rather than more to scroll to.
-                                .frame(height: Self.sidePickHeight)
-                                .background(Color(uiColor: HQPalette.card), in: marketplaceCardShape)
-                                .overlay { marketplaceCardShape.strokeBorder(Color(uiColor: MarketplaceHero.edge)) }
-                                .contentShape(marketplaceCardShape)
-                            }
-                            .buttonStyle(.plain)
-                            .contentShape(.hoverEffect, marketplaceCardShape)
-                            .hoverEffect(.highlight)
-                            .hqPointerFill(marketplaceCardShape)
-                            .accessibilityIdentifier("marketplace.featured.pick-\(entry.name)")
-                        }
+        let heroContentWidth = max(0, pageWidth - 264 - 48)
+        let sideWidth = min(400, max(280, (heroContentWidth * 0.42).rounded()))
+        let stackSide = heroContentWidth < 760
+        let pickH = Self.sidePickHeight
+        let heroH = Self.heroHeight
+        return Group {
+            if stackSide || picks.count <= 1 {
+                VStack(alignment: .leading, spacing: 14) {
+                    MarketplaceHero(entry: picks[0], installed: model.installedPlugin(for: picks[0]) != nil) { install in
+                        openPlugin(picks[0], install: install)
+                    }
+                    .frame(minHeight: heroH)
+                    if picks.count > 1 {
+                        MarketplaceCarousel(entries: Array(picks.dropFirst()), installed: { model.installedPlugin(for: $0) != nil }, open: { entry, install in
+                            openPlugin(entry, install: install)
+                        }, row: true)
                     }
                 }
-                .frame(width: 400)
+            } else {
+                HStack(alignment: .top, spacing: 14) {
+                    MarketplaceHero(entry: picks[0], installed: model.installedPlugin(for: picks[0]) != nil) { install in
+                        openPlugin(picks[0], install: install)
+                    }
+                    ScrollView(showsIndicators: false) {
+                        VStack(spacing: 10) {
+                            ForEach(picks.dropFirst()) { entry in
+                                Button { openPlugin(entry) } label: {
+                                    HStack(spacing: 12) {
+                                        MarketplaceBanner(url: entry.image, name: entry.title, symbol: entry.category.symbol)
+                                            .frame(width: min(150, (sideWidth * 0.36).rounded()), height: max(84, (pickH - 20).rounded()))
+                                            .clipShape(RoundedRectangle(cornerRadius: HQShape.radius(8, .tile), style: .continuous))
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(entry.title).font(Font.hq(.body).weight(.semibold)).foregroundStyle(Color.hqLabel).lineLimit(1)
+                                            Text(PluginCatalogEntry.styled(entry.summary)).font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
+                                                .lineLimit(2)
+                                            Text("by \(entry.maintainer)").font(Font.hq(.caption)).foregroundStyle(Color(uiColor: HQPalette.cardNote)).lineLimit(1)
+                                        }
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                    .padding(10)
+                                    .frame(minHeight: pickH)
+                                    .background(Color(uiColor: HQPalette.card), in: marketplaceCardShape)
+                                    .overlay { marketplaceCardShape.strokeBorder(Color(uiColor: MarketplaceHero.edge)) }
+                                    .contentShape(marketplaceCardShape)
+                                }
+                                .buttonStyle(.plain)
+                                .contentShape(.hoverEffect, marketplaceCardShape)
+                                .hoverEffect(.highlight)
+                                .hqPointerFill(marketplaceCardShape)
+                                .accessibilityIdentifier("marketplace.featured.pick-\(entry.name)")
+                            }
+                        }
+                    }
+                    .frame(width: sideWidth)
+                }
+                .frame(height: heroH)
             }
         }
-        .frame(height: Self.heroHeight)
         .accessibilityIdentifier("marketplace.featured")
     }
 
-    private static let heroHeight: CGFloat = 344
+    private static var heroHeight: CGFloat { (344 * max(1, HQFont.scale)).rounded() }
     /// Three picks and their two 10 pt gaps fill the hero's height.
-    private static let sidePickHeight: CGFloat = (heroHeight - 20) / 3
+    private static var sidePickHeight: CGFloat { ((heroHeight - 20) / 3).rounded() }
 
     /// Where the card is the page's colour (the Desktop Look, the light iOS look) an outline is its edge.
     private var marketplaceCardShape: RoundedRectangle {

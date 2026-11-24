@@ -122,7 +122,7 @@ nonisolated struct PhoneSetupCheck: Equatable, Sendable {
                 rows.append(recording == setup.records
                     ? Row(id: "recording", state: .pass, sentence: recording ? "Recording is on, as set here." : "Recording is off, as set here.")
                     : Row(id: "recording", state: .fail, sentence: "Recording is \(recording ? "on" : "off") on the assistant but \(setup.records ? "on" : "off") here.",
-                          fix: "Tap Save. The next call also sets it."))
+                          fix: "\(DeviceWord.Tap) Save. The next call also sets it."))
             } else {
                 rows.append(Row(id: "recording", state: .unknown, sentence: "Recording: " + couldNotCheck))
             }

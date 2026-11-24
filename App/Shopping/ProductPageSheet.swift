@@ -59,8 +59,8 @@ final class ProductPageSheet: UIViewController, UIScrollViewDelegate {
             scroll.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 8),
             stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -16),
-            stack.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: 16),
-            stack.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -16),
+            stack.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+            stack.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
         ])
         build()
     }
@@ -189,14 +189,44 @@ final class ProductPageSheet: UIViewController, UIScrollViewDelegate {
         }
         dots.numberOfPages = urls.count
         dots.hidesForSinglePage = true
-        dots.isUserInteractionEnabled = false
+        dots.isUserInteractionEnabled = urls.count > 1
+        dots.addAction(UIAction { [weak self] _ in self?.stepPhoto(to: self?.dots.currentPage ?? 0) }, for: .valueChanged)
         dots.translatesAutoresizingMaskIntoConstraints = false
         box.addSubview(dots)
         NSLayoutConstraint.activate([dots.centerXAnchor.constraint(equalTo: box.centerXAnchor),
                                      dots.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -2)])
-        box.isAccessibilityElement = true
+        if urls.count > 1 {
+            let arrows = PhotoPagerArrows(in: box, identifier: "shopping.photo") { [weak self] forward in
+                guard let self else { return }
+                if let next = PhotoPaging.step(from: self.dots.currentPage, count: self.photos.count, forward: forward) {
+                    self.stepPhoto(to: next)
+                }
+            }
+            arrows.update(index: 0, count: urls.count, hidden: false)
+            photoArrows = arrows
+        }
+        box.isAccessibilityElement = urls.count == 1
         box.accessibilityLabel = urls.count == 1 ? "Photo of \(product.title)" : "\(urls.count) photos of \(product.title)"
         add(box, after: 12)
+    }
+
+    private var photoArrows: PhotoPagerArrows?
+
+    private func stepPhoto(to page: Int) {
+        guard photos.indices.contains(page), pager.bounds.width > 0 else { return }
+        dots.currentPage = page
+        photoArrows?.update(index: page, count: photos.count, hidden: false)
+        pager.setContentOffset(CGPoint(x: CGFloat(page) * pager.bounds.width, y: 0), animated: !HQMotion.reduced)
+    }
+
+    override var keyCommands: [UIKeyCommand]? {
+        (super.keyCommands ?? []) + (photos.count > 1 ? UIKeyCommand.photoPaging(#selector(stepPhotoKey(_:))) : [])
+    }
+    override var canBecomeFirstResponder: Bool { true }
+    @objc private func stepPhotoKey(_ command: UIKeyCommand) {
+        if let next = PhotoPaging.step(from: dots.currentPage, count: photos.count, forward: command.pagesForward) {
+            stepPhoto(to: next)
+        }
     }
 
     override func viewDidLayoutSubviews() {
@@ -212,7 +242,9 @@ final class ProductPageSheet: UIViewController, UIScrollViewDelegate {
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard scrollView === pager, pager.bounds.width > 0 else { return }
-        dots.currentPage = Int((pager.contentOffset.x / pager.bounds.width).rounded())
+        let page = max(0, min(photos.count - 1, Int((pager.contentOffset.x / pager.bounds.width).rounded())))
+        dots.currentPage = page
+        photoArrows?.update(index: page, count: photos.count, hidden: false)
     }
 
     // MARK: Buy / Notify Me

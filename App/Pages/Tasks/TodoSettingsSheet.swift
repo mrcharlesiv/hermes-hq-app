@@ -114,7 +114,7 @@ struct TodoSettingsView: View {
                         PagesHUD.show(text, symbol: ok ? "checkmark" : "exclamationmark.triangle", from: controller, duration: ok ? nil : 4)
                     }
                 } label: {
-                    Label("Import from Reminders", systemImage: "square.and.arrow.down").foregroundStyle(Color.hqTint)
+                    Label("Import from Reminders…", systemImage: "square.and.arrow.down").foregroundStyle(Color.hqTint)
                 }
                 .accessibilityIdentifier("tasks.settings.import")
             } footer: { HQSectionFooter { Text("Adds your open reminders as your own tasks. Reminders keeps them too.") } }
@@ -137,6 +137,7 @@ struct TodoSettingsView: View {
                     Picker("Who Looks", selection: Binding(get: { looker }, set: { PagesHaptics.selection(); model.draft.ideasBot = $0; model.save() })) {
                         ForEach(model.bots, id: \.id) { bot in Text(bot.name).tag(bot.id) }
                     }
+                    .hqMenuPicker()
                     .accessibilityIdentifier("tasks.settings.ideas-bot")
                 }
                 HQDatePicker("Each Day At", selection: Binding(get: { TodoSettingsModel.time(model.draft.ideasAt ?? "07:30") },

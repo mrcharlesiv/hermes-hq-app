@@ -304,10 +304,11 @@ struct DesktopSegmentStrip<Value: Hashable>: View {
                         .font(Font.hq(.footnote).weight(selection == option.value && !DeviceWord.isMac ? .semibold : .regular))   // [type] Mac: the fill shows the choice
                         .foregroundStyle(selection == option.value ? Color.hqLabel : Color.hqLabel2)
                         .lineLimit(1)
+                        .minimumScaleFactor(wholeLabels ? 1 : (DeviceWord.isMac ? 0.72 : 1))
                         .fixedSize(horizontal: wholeLabels, vertical: false)
                         // [page-tabs] At least iOS's own room beside a whole label (about 19 pt a segment): 14 put Bot
                         // Info's five tabs in a pull-down one size above the standard text.
-                        .padding(.horizontal, wholeLabels ? 10 : 0)
+                        .padding(.horizontal, wholeLabels ? 10 : (DeviceWord.isMac ? 3 : 0))
                         .frame(maxWidth: .infinity, minHeight: 32)
                         // The fill's own corners (the strip isn't clipped: a clip would cut the taller hit area below).
                         .background(selection == option.value ? Color(uiColor: HQPalette.cellPressed) : Color.clear,

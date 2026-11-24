@@ -132,6 +132,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         }])
         let item = UIBarButtonItem(title: "Move To", image: UIImage(systemName: "folder"), menu: menu)
         item.accessibilityIdentifier = "tasks.select.move"
+        item.accessibilityLabel = "Move To"
         DesktopBars.markThin(item)
         return item
     }
@@ -139,6 +140,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         let item = UIBarButtonItem(title: "Mark Done", image: UIImage(systemName: "checkmark.circle"),
                                    primaryAction: UIAction { [weak self] _ in self?.markSelectedDone() })
         item.accessibilityIdentifier = "tasks.select.mark-done"
+        item.accessibilityLabel = "Mark Done"
         DesktopBars.markThin(item)
         return item
     }()
@@ -147,6 +149,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
                                    primaryAction: UIAction { [weak self] _ in self?.deleteSelected() })
         item.tintColor = .systemRed
         item.accessibilityIdentifier = "tasks.select.delete"
+        item.accessibilityLabel = "Delete"
         DesktopBars.markThin(item)
         return item
     }()
@@ -421,6 +424,14 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
             // Pressed only while the finger is down: a suggestion is never "selected", and the grey fading out over
             // a cell that is growing into its card read as a flash.
             cell.configurationUpdateHandler = { cell, state in
+                #if targetEnvironment(macCatalyst)
+                if DeviceWord.isMac {
+                    var s = state
+                    s.isSelected = false
+                    (cell as! UICollectionViewListCell).backgroundConfiguration = MacListFocus.background(cell, s)
+                    return
+                }
+                #endif
                 var background = UIBackgroundConfiguration.clear()
                 background.backgroundColor = state.isHighlighted ? HQPalette.cellPressed : .clear
                 (cell as! UICollectionViewListCell).backgroundConfiguration = background
@@ -2161,7 +2172,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
                         self.togglePicked(id)
                     },
                 ]),
-                UIAction(title: "Delete", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
+                UIAction(title: "Delete…", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
                     guard let self else { return }
                     self.confirmDelete(id, source: self.dataSource.indexPath(for: .task(id)).flatMap { self.collectionView.cellForItem(at: $0) })
                 },

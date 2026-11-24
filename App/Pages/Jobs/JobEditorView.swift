@@ -792,7 +792,8 @@ struct JobChip: View {
 
     var body: some View {
         let desk = Theme.isDesktop
-        let shape = RoundedRectangle(cornerRadius: desk ? DesktopRows.radius : min(height, 52) / 2, style: .continuous)
+        let chipH = HQFont.scaled(desk ? 34 : min(height, 52)).rounded()
+        let shape = RoundedRectangle(cornerRadius: desk ? DesktopRows.radius : chipH / 2, style: .continuous)
         Button(action: action) {
             Text(title)
                 .font(Font.hq(.subheadline).weight(selected && !DeviceWord.isMac ? .semibold : .medium))   // [type] Mac: the fill shows the choice
@@ -800,7 +801,7 @@ struct JobChip: View {
                 .lineLimit(1)
                 .fixedSize()
                 .padding(.horizontal, desk ? 14 : 16)
-                .frame(minHeight: desk ? 34 : min(height, 52))
+                .frame(minHeight: chipH)
                 .background(shape.fill(desk && selected ? Color(uiColor: HQPalette.cellPressed) : .clear))
                 .overlay(shape.strokeBorder(desk ? (selected ? Color.hqLabel3 : Color.hqStroke) : Color.clear, lineWidth: HQShape.hairline))
                 .hqPickGlass(selected, in: shape, prominent: true)
@@ -830,7 +831,7 @@ struct JobTemplateCard: View {
     var body: some View {
         let desk = Theme.isDesktop
         let shape = RoundedRectangle(cornerRadius: desk ? DesktopRows.radius : 20, style: .continuous)
-        let tile = min(tileSize, 44)
+        let tile = HQFont.scaled(min(tileSize, 44)).rounded()
         // The largest sizes stack the icon over the title on a wider card, so the title keeps whole words.
         let stacked = typeSize.isAccessibilitySize
         Button(action: action) {
@@ -853,7 +854,7 @@ struct JobTemplateCard: View {
             }
             .padding(.horizontal, desk ? 10 : 12)
             .padding(.vertical, desk ? 9 : 12)
-            .frame(width: stacked ? 280 : 176, alignment: .leading)
+            .frame(width: HQFont.scaled(stacked ? 280 : 176).rounded(), alignment: .leading)
             .frame(maxHeight: .infinity)
             .background(shape.fill(desk && selected ? Color.hqTint.opacity(0.12) : .clear))
             .overlay(shape.strokeBorder(desk ? (selected ? Color.hqTint : Color.hqStroke) : Color.clear, lineWidth: selected ? 1.5 : 1))
@@ -898,7 +899,7 @@ struct JobWeekdayPicker: View {
     var body: some View {
         let desk = Theme.isDesktop
         let letters = Calendar.current.veryShortStandaloneWeekdaySymbols
-        let side = min(size, 46)
+        let side = HQFont.scaled(min(size, 46)).rounded()
         let shape = RoundedRectangle(cornerRadius: desk ? DesktopRows.radius : side / 2, style: .continuous)
         HStack(spacing: 0) {
             ForEach(order, id: \.self) { day in

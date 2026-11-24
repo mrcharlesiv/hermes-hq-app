@@ -500,6 +500,7 @@ final class MacRailAdd: UIButton {
         self.menu = UIMenu(children: [UIDeferredMenuElement.uncached { done in done(menu()) }])
         heightAnchor.constraint(equalToConstant: titled ? MacSidebar.openRowHeight : MacBotsRail.rowHeight).isActive = true   // [sidebar-size] New Bot keeps the places' height
         if titled {
+            MacHover.drawsOwnHover(self)
             layer.cornerCurve = .continuous
             plus.contentMode = .center
             words.text = "New Bot"
@@ -596,6 +597,7 @@ final class MacRailGateway: UIButton {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
     private func buildRow() {
+        MacHover.drawsOwnHover(self)
         let chrome = MacSidebar.chrome
         backing.layer.cornerRadius = (8 * chrome).rounded()
         backing.layer.cornerCurve = .continuous

@@ -1,3 +1,4 @@
+import SwiftUI
 import UIKit
 
 /// [macpass-tools] Feel list D32 (2026-11-13): a strip that scrolls only sideways (the Files trail, the Terminal's tabs,
@@ -50,5 +51,34 @@ private final class SideWheelRecognizer: UIPanGestureRecognizer {
 
 private extension Optional where Wrapped == [UIGestureRecognizer] {
     var orEmpty: [UIGestureRecognizer] { self ?? [] }
+}
+#endif
+
+extension View {
+    /// Installs `SideWheel` on the nearest enclosing horizontal `UIScrollView` (no-op off Mac).
+    func hqSideWheel() -> some View {
+        #if targetEnvironment(macCatalyst)
+        background(SideWheelBridge())
+        #else
+        self
+        #endif
+    }
+}
+
+#if targetEnvironment(macCatalyst)
+private struct SideWheelBridge: UIViewRepresentable {
+    func makeUIView(context: Context) -> Probe { Probe() }
+    func updateUIView(_ uiView: Probe, context: Context) { uiView.attach() }
+
+    final class Probe: UIView {
+        override func didMoveToWindow() { super.didMoveToWindow(); attach() }
+        func attach() {
+            var cur = superview
+            while let view = cur {
+                if let scroll = view as? UIScrollView { SideWheel.install(on: scroll); return }
+                cur = view.superview
+            }
+        }
+    }
 }
 #endif

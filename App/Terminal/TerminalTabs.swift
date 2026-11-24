@@ -98,6 +98,24 @@ final class TerminalTabStrip: UIView {
             rule.bottomAnchor.constraint(equalTo: bottomAnchor),
             ruleHeight,
         ])
+        themeObserver = NotificationCenter.default.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let current = self.shown else { return }
+                self.shown = nil
+                self.update(titles: current.titles, current: current.current)
+                self.invalidateIntrinsicContentSize()
+            }
+        }
+    }
+
+    private var themeObserver: NSObjectProtocol?
+
+    isolated deinit {
+        if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
+    }
+
+    override var intrinsicContentSize: CGSize {
+        CGSize(width: UIView.noIntrinsicMetric, height: max(Self.height, HQFont.scaled(Self.height).rounded()))
     }
 
     @MainActor required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
@@ -125,7 +143,7 @@ final class TerminalTabStrip: UIView {
         config.cornerStyle = desktop ? .fixed : .capsule
         config.background.cornerRadius = desktop ? DesktopRows.radius : 0
         config.titleLineBreakMode = .byTruncatingTail
-        config.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 6, trailing: front ? 34 : 12)
+        config.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 6, trailing: front ? HQFont.scaled(36).rounded() : 12)
         config.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in
             var attributes = attributes
             attributes.font = HQFont.mono(ofSize: 13, weight: front && !DeviceWord.isMac ? .semibold : .regular)   // [type] Mac: the fill shows the front tab
@@ -146,21 +164,19 @@ final class TerminalTabStrip: UIView {
         if !first { actions.append(UIAccessibilityCustomAction(name: "Move Left") { [weak self] _ in self?.onMove?(index, index - 1); return true }) }
         if !last { actions.append(UIAccessibilityCustomAction(name: "Move Right") { [weak self] _ in self?.onMove?(index, index + 1); return true }) }
         button.accessibilityCustomActions = actions
+        let stripH = max(Self.height, HQFont.scaled(Self.height).rounded())
         NSLayoutConstraint.activate([
             // [ui-sizing] At least 32: its label follows UI Scale, and at 150 % it was cut in a fixed 32 pt chip.
-            button.heightAnchor.constraint(greaterThanOrEqualToConstant: 32),
-            button.widthAnchor.constraint(lessThanOrEqualToConstant: 200),
-            button.widthAnchor.constraint(greaterThanOrEqualToConstant: front ? 88 : 56),
+            button.heightAnchor.constraint(greaterThanOrEqualToConstant: HQFont.scaled(32).rounded()),
+            button.widthAnchor.constraint(lessThanOrEqualToConstant: HQFont.scaled(220).rounded()),
+            button.widthAnchor.constraint(greaterThanOrEqualToConstant: HQFont.scaled(front ? 88 : 56).rounded()),
         ])
         guard front else { return button }
-        // ✕ inside the tab in front, its own 44 pt target at the tab's end (audit 10-18: it was 32): beside the tab's
-        // button in one box, not in it, so VoiceOver and UI tests find it. The box is the strip's full height, so the
-        // target reaches past the 32 pt tab above and below.
         let box = UIView()
         box.translatesAutoresizingMaskIntoConstraints = false
         box.addSubview(button)
         var x = UIButton.Configuration.plain()
-        x.image = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .bold))
+        x.image = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: HQFont.scaled(10), weight: .bold))
         x.baseForegroundColor = UIColor(white: 1, alpha: 0.8)
         x.contentInsets = .zero
         let close = UIButton(configuration: x)
@@ -169,15 +185,16 @@ final class TerminalTabStrip: UIView {
         close.accessibilityIdentifier = "terminal.tab.close"
         close.addAction(UIAction { [weak self] _ in self?.onClose?(index) }, for: .primaryActionTriggered)
         box.addSubview(close)
+        let closeSide = DeviceWord.isMac ? HQFont.scaled(28).rounded() : 44
         NSLayoutConstraint.activate([
             button.leadingAnchor.constraint(equalTo: box.leadingAnchor),
             button.trailingAnchor.constraint(equalTo: box.trailingAnchor),
             button.centerYAnchor.constraint(equalTo: box.centerYAnchor),
-            box.heightAnchor.constraint(equalToConstant: Self.height),
-            close.trailingAnchor.constraint(equalTo: button.trailingAnchor),
+            box.heightAnchor.constraint(equalToConstant: stripH),
+            close.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: DeviceWord.isMac ? -4 : 0),
             close.centerYAnchor.constraint(equalTo: button.centerYAnchor),
-            close.widthAnchor.constraint(equalToConstant: 44),
-            close.heightAnchor.constraint(equalToConstant: 44),
+            close.widthAnchor.constraint(equalToConstant: closeSide),
+            close.heightAnchor.constraint(equalToConstant: closeSide),
         ])
         return box
     }

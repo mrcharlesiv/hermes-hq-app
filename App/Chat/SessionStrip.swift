@@ -611,7 +611,7 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
             rule.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             rule.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             rule.heightAnchor.constraint(equalToConstant: HQShape.pixel(traitCollection.displayScale)),
-            newChat.heightAnchor.constraint(equalToConstant: 44),
+            newChat.heightAnchor.constraint(equalToConstant: tabs ? stripHeight : 44),
             row.leadingAnchor.constraint(equalTo: scroller.contentLayoutGuide.leadingAnchor, constant: 14),
             row.trailingAnchor.constraint(equalTo: scroller.contentLayoutGuide.trailingAnchor, constant: -14),
             row.topAnchor.constraint(equalTo: scroller.contentLayoutGuide.topAnchor),
@@ -749,9 +749,11 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
     /// The chat on screen sits a little in from the leading edge, the pill before it peeking (there is more that way).
     private func showCurrent() {
         view.layoutIfNeeded()
-        guard let index = shown.firstIndex(where: \.current), index > 0, index < row.arrangedSubviews.count,
+        guard let index = shown.firstIndex(where: \.current), index > 0,
               !scroller.isTracking, !scroller.isDecelerating else { return }
-        let pill = row.convert(row.arrangedSubviews[index].frame, to: scroller)
+        let targetEntry = shown[index]
+        guard let pillView = row.arrangedSubviews.first(where: { pillEntries[ObjectIdentifier($0)] == targetEntry }) else { return }
+        let pill = row.convert(pillView.frame, to: scroller)
         let most = max(0, scroller.contentSize.width - scroller.bounds.width)
         let leading = view.effectiveUserInterfaceLayoutDirection == .rightToLeft
             ? max(0, most - (scroller.contentSize.width - pill.maxX - 56)) : pill.minX - 56

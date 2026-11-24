@@ -431,8 +431,9 @@ final class JobsViewController: UIViewController, UICollectionViewDelegate, UISe
     }
 
     private func configureBlueprintsHeader(_ header: UICollectionViewListCell) {
+        let onCard = BackdropCards.on(self)
         header.contentConfiguration = UIHostingConfiguration {
-            JobsPlainHeaderView(title: "Blueprints", count: blueprintRows.count)
+            JobsPlainHeaderView(title: "Blueprints", count: blueprintRows.count, onCard: onCard)
         }.margins(.all, 0)
         header.backgroundConfiguration = .clear()
         header.accessibilityIdentifier = "jobs.section.Blueprints"
@@ -442,11 +443,11 @@ final class JobsViewController: UIViewController, UICollectionViewDelegate, UISe
     private func emptyText(blueprints: Bool) -> String {
         let current = scope.effective(bots: services?.bots ?? [])
         let bot = current == PagesScope.all ? "" : " for \(PagesNames.botName(current, bots: services?.bots ?? []))"
+        // Audit 863 (08c-10): + is off while changes are: the words don't send you to it.
+        if store.readOnlyGateway { return "Jobs run a prompt\(bot) on a schedule. \(JobsStore.readOnlyNotice)" }
         // [mac] Stress test 2026-10-28 round 8: the Mac's state has its New Job… button, so the words don't send you to +
         // (they wrapped to leave "make one." alone on a second line in both looks).
         if DeviceWord.isMac, !blueprints { return "Jobs run a prompt\(bot) on a schedule." }
-        // Audit 863 (08c-10): + is off while changes are: the words don't send you to it.
-        if store.readOnlyGateway { return "Jobs run a prompt\(bot) on a schedule. \(JobsStore.readOnlyNotice)" }
         return "Jobs run a prompt\(bot) on a schedule. \(DeviceWord.Tap) + to make one\(blueprints ? ", or start from a blueprint below" : "")."
     }
 
@@ -504,7 +505,7 @@ final class JobsViewController: UIViewController, UICollectionViewDelegate, UISe
             // [mac] Stress test 2026-10-28 round 7: the words say + makes one but the state offered nothing to click,
             // where Kanban, Prompts and Commands each have their button. On the Mac it has a New Job… push button that
             // does what + does.
-            if DeviceWord.isMac {
+            if DeviceWord.isMac, !store.readOnlyGateway {
                 var button = UIButton.Configuration.hqMacPush(or: .plain())
                 button.title = "New Job…"
                 empty.button = button

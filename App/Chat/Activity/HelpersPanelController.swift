@@ -43,6 +43,7 @@ final class HelpersPanelController: UIViewController {
         super.viewDidAppear(animated)
         onShown?()
         // Running helpers' times count up while the tab shows.
+        timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.body.tick(now: Date().timeIntervalSince1970) }
         }
@@ -53,6 +54,10 @@ final class HelpersPanelController: UIViewController {
         timer?.invalidate()
         timer = nil
         onShown?()
+    }
+
+    isolated deinit {
+        timer?.invalidate()
     }
 
     /// `fill` updates the body; nil: the chat has no helpers.
@@ -71,23 +76,15 @@ final class InspectorEmptyView: UIView {
     private let glyph = UIImageView()
     private let titleLabel = UILabel()
     private let hintLabel = UILabel()
+    private var lastSymbol = ""
+    private var themeObserver: NSObjectProtocol?
 
     init(symbol: String, title: String, hint: String) {
         super.init(frame: .zero)
         isUserInteractionEnabled = false
         glyph.contentMode = .scaleAspectFit
         glyph.tintColor = HQPalette.label3
-        titleLabel.font = HQFont.preferred(.headline)
-        titleLabel.textColor = HQPalette.label2
-        hintLabel.font = HQFont.preferred(.footnote)
-        hintLabel.textColor = HQPalette.label2
-        #if targetEnvironment(macCatalyst)
-        // [Mac AAA 2026-11-16] The words of the right pane's own empty state ("No Chat Open"), not a size and ink of
-        // their own: the line under the title was footnote (about 10 pt on the screen) and the title grey, beside a
-        // placeholder in the label colour with a 15 pt line.
-        titleLabel.textColor = HQPalette.label
-        hintLabel.font = MacType.emptyBody
-        #endif
+        refreshFonts()
         for label in [titleLabel, hintLabel] {
             label.adjustsFontForContentSizeCategory = true
             label.textAlignment = .center
@@ -117,9 +114,30 @@ final class InspectorEmptyView: UIView {
         ])
         isAccessibilityElement = true
         set(symbol: symbol, title: title, hint: hint)
+        themeObserver = NotificationCenter.default.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshFonts() }
+        }
+    }
+
+    isolated deinit {
+        if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    func refreshFonts() {
+        titleLabel.font = HQFont.preferred(.headline)
+        titleLabel.textColor = HQPalette.label2
+        hintLabel.font = HQFont.preferred(.footnote)
+        hintLabel.textColor = HQPalette.label2
+        #if targetEnvironment(macCatalyst)
+        titleLabel.textColor = HQPalette.label
+        hintLabel.font = MacType.emptyBody
+        #endif
+        if !lastSymbol.isEmpty {
+            glyph.image = UIImage(systemName: lastSymbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: HQFont.scaled(30), weight: .light))
+        }
+    }
 
     /// [Mac AAA 2026-11-16] Where a tab stands its empty state: the title's middle, as the right pane's placeholder
     /// holds its heading. Centred as a whole, Helpers' title stood 21 pt lower than Steps' (a two-line hint against a
@@ -127,7 +145,8 @@ final class InspectorEmptyView: UIView {
     var titleCentre: NSLayoutYAxisAnchor { titleLabel.centerYAnchor }
 
     func set(symbol: String, title: String, hint: String) {
-        glyph.image = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 30, weight: .light))
+        lastSymbol = symbol
+        glyph.image = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: HQFont.scaled(30), weight: .light))
         titleLabel.text = title
         hintLabel.text = hint
         accessibilityLabel = "\(title). \(hint)"

@@ -560,7 +560,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
             DispatchQueue.main.async { [weak self, weak cell] in if let cell { self?.swipePeek.keep(cell) } }
             cell.configurationUpdateHandler = { cell, state in
                 #if targetEnvironment(macCatalyst)
-                if DeviceWord.isMac { cell.backgroundConfiguration = MacSelection.listRow(state); return }   // [mac] Stress test 2026-10-28 #54
+                if DeviceWord.isMac { cell.backgroundConfiguration = MacListFocus.background(cell, state); return }   // [mac] Stress test 2026-10-28 #54
                 #endif
                 if Theme.isDesktop { cell.backgroundConfiguration = DesktopLayout.rowBackground(state); return }   // [desktoplook2]
                 var background = UIBackgroundConfiguration.clear()
@@ -595,7 +595,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
             cell.accessibilityIdentifier = "room-row-\(room.name)"
             cell.configurationUpdateHandler = { cell, state in
                 #if targetEnvironment(macCatalyst)
-                if DeviceWord.isMac { cell.backgroundConfiguration = MacSelection.listRow(state); return }   // [mac] Stress test 2026-10-28 #54
+                if DeviceWord.isMac { cell.backgroundConfiguration = MacListFocus.background(cell, state); return }   // [mac] Stress test 2026-10-28 #54
                 #endif
                 if Theme.isDesktop { cell.backgroundConfiguration = DesktopLayout.rowBackground(state); return }   // [desktoplook2]
                 var background = UIBackgroundConfiguration.clear()
@@ -712,7 +712,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
         // [chats-under] A bot's chat, and its "N more", pressed as a row is.
         let pressed: (UICollectionViewCell, UICellConfigurationState) -> Void = { cell, state in
             #if targetEnvironment(macCatalyst)
-            if DeviceWord.isMac { cell.backgroundConfiguration = MacSelection.listRow(state); return }
+            if DeviceWord.isMac { cell.backgroundConfiguration = MacListFocus.background(cell, state); return }
             #endif
             if Theme.isDesktop { cell.backgroundConfiguration = DesktopLayout.rowBackground(state); return }
             var background = UIBackgroundConfiguration.clear()

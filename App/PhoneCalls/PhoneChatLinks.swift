@@ -276,7 +276,7 @@ nonisolated struct PhoneProposal: Equatable, Sendable {
             return true
         }
         guard controller.ready else {
-            LinkOpener.notice("Phone Calls isn't set up yet. Set it up in Settings › Phone Calls (Beta), then tap the call again.", from: chat)
+            LinkOpener.notice("Phone Calls isn't set up yet. Set it up in Settings › Phone Calls (Beta), then \(DeviceWord.tap) the call again.", from: chat)
             return true
         }
         AppLog.note("phone", "proposal opened")

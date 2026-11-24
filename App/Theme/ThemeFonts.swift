@@ -101,7 +101,8 @@ nonisolated enum HQFont {
             // UI Scale in the iOS look too: the Mac's text size, and [density] on the iPhone and iPad on top of iOS's.
             let factor = iosFactor(traits, state: state)
             guard factor != 1 else { return font }
-            let size = MacTypeSteps.style(legibleStyle(style), size: (font.pointSize * factor * 2).rounded() / 2, state: state)
+            let scaled = (font.pointSize * factor * 2).rounded() / 2
+            let size = MacTypeSteps.style(legibleStyle(style), size: DeviceWord.isMac ? legible(scaled) : scaled, state: state)
             return font.withSize(size)
         }
         let spec = desktopSpec(style)

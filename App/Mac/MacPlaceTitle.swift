@@ -50,12 +50,25 @@ enum MacPlaceTitle {
         }
     }
 
+    private final class LeadWatch {
+        let observations: [NSKeyValueObservation]
+        let leading: NSLayoutConstraint
+        init(observations: [NSKeyValueObservation], leading: NSLayoutConstraint) {
+            self.observations = observations
+            self.leading = leading
+        }
+    }
+
     private static func lead(_ page: UIViewController, afterBack: Bool = false) {
-        guard objc_getAssociatedObject(page, &watchKey) == nil else { return }
+        if let existing = objc_getAssociatedObject(page, &watchKey) as? LeadWatch {
+            page.navigationItem.leftItemsSupplementBackButton = afterBack
+            existing.leading.constant = afterBack ? 2 : 10
+            return
+        }
         page.loadViewIfNeeded()
         let item = page.navigationItem
         guard item.titleView == nil, item.leftBarButtonItems?.isEmpty ?? true, item.largeTitleDisplayMode != .inline else { return }
-        if afterBack { item.leftItemsSupplementBackButton = true }
+        item.leftItemsSupplementBackButton = afterBack
         let label = PlaceTitleLabel()
         label.font = MacType.pageTitle
         label.textColor = HQPalette.label
@@ -67,8 +80,9 @@ enum MacPlaceTitle {
         let box = UIView()
         label.translatesAutoresizingMaskIntoConstraints = false
         box.addSubview(label)
+        let leading = label.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: afterBack ? 2 : 10)
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: afterBack ? 2 : 10),
+            leading,
             label.trailingAnchor.constraint(equalTo: box.trailingAnchor),
             label.topAnchor.constraint(equalTo: box.topAnchor),
             label.bottomAnchor.constraint(equalTo: box.bottomAnchor),
@@ -83,7 +97,7 @@ enum MacPlaceTitle {
         }, page.observe(\.title, options: [.new]) { [weak label, weak item] page, _ in
             MainActor.assumeIsolated { label?.text = item?.title ?? page.title}
         }]
-        objc_setAssociatedObject(page, &watchKey, watch, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        objc_setAssociatedObject(page, &watchKey, LeadWatch(observations: watch, leading: leading), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
     }
 }
 

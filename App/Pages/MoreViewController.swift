@@ -170,10 +170,10 @@ final class MoreViewController: UIViewController, UICollectionViewDelegate {
         if DeviceWord.isMac {
             // [mac] Stress test 2026-10-28 #58: one glyph size and weight (`MacIcon.row`, the row text's size) in a
             // fixed column, so Changes and Spawn Tree aren't shrunk thin and Kanban and Bot Profiles aren't bigger;
-            // the iOS look's tiles grow with the text as the rows do.
+            // the iOS look's tiles grow with the text as the rows do (except Paper & Ink `.plain`, which keeps its glyph).
             let column = Theme.isDesktop ? MacIcon.rowColumn : HQFont.scaled(29)
             if Theme.isDesktop { content.image = Self.macGlyph(row) }
-            else { content.image = Self.tile(row, side: column) }
+            else if Theme.inkIcons != .plain { content.image = Self.tile(row, side: column) }
             content.imageProperties.maximumSize = CGSize(width: column, height: column)
             content.imageProperties.reservedLayoutSize = CGSize(width: column, height: column)
         }
@@ -268,11 +268,10 @@ final class MoreViewController: UIViewController, UICollectionViewDelegate {
         }
     }
 
-    #if DEBUG
-    /// `-HQDebugScrollMoreEnd YES`: More opens scrolled to its foot (screenshots of the website and GitHub buttons).
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         installBarItemTips()   // [Mac UI check 2026-11-13] the bar's icon buttons name themselves under the pointer
+        #if DEBUG
         guard UserDefaults.standard.bool(forKey: "HQDebugScrollMoreEnd") else { return }
         for delay in [1.0, 1.5, 2.0] {   // again once the footer has sized itself
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
@@ -282,8 +281,8 @@ final class MoreViewController: UIViewController, UICollectionViewDelegate {
                 cv.setContentOffset(CGPoint(x: 0, y: max(-cv.adjustedContentInset.top, bottom)), animated: false)
             }
         }
+        #endif
     }
-    #endif
 
     func reload() {
         guard isViewLoaded else { return }
@@ -579,8 +578,8 @@ final class MoreLinksFooter: UICollectionReusableView {
             // [Mac AAA 2026-11-17] Q23, owner: in the Desktop Look the words were scaled twice (`preferred` already
             // carries UI Scale, `system` multiplied it again: about 20 pt on screen, "Website" cut at laptop size). There
             // they take the footnote size once, as the look's other small outlined buttons; the iOS look is unchanged.
-            text.font = Theme.isDesktop && DeviceWord.isMac ? HQFont.face(ofSize: font.pointSize, weight: .medium)
-                                                            : HQFont.system(ofSize: font.pointSize, weight: .medium)
+            text.font = DeviceWord.isMac ? HQFont.face(ofSize: font.pointSize, weight: .medium)
+                                         : HQFont.system(ofSize: font.pointSize, weight: .medium)
             config.attributedTitle = text
             config.baseForegroundColor = HQPalette.label2
             if Theme.isDesktop, DeviceWord.isMac, !soft {

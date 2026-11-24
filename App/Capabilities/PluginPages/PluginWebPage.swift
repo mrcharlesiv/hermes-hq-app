@@ -80,6 +80,11 @@ final class PluginWebPageController: UIViewController, WKNavigationDelegate, WKS
         watchdog?.cancel()
     }
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        installBarItemTips()
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = HQPalette.groupedPage
@@ -590,7 +595,7 @@ struct PluginWebPageTrouble: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(Color.hqGroupedCard, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(Color.hqGroupedCard, in: RoundedRectangle(cornerRadius: HQShape.radius(12, .card), style: .continuous))
             .padding(.horizontal, 16)
             .padding(.bottom, 16)
             .accessibilityElement(children: .contain)
@@ -641,7 +646,7 @@ struct PluginWebPageStatus: View {
                         Button("Try Again", action: retry).hqBorderedButtonStyle()
                             .accessibilityIdentifier("plugin-web-page.retry")
                         if let note = state.askNote {
-                            Text(note).font(Font.hq(.footnote)).foregroundStyle(.red).multilineTextAlignment(.center)
+                            Text(note).font(Font.hq(.footnote)).foregroundStyle(Color.hqRed).multilineTextAlignment(.center)
                         }
                     }
                 }

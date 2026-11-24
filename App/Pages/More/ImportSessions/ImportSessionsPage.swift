@@ -346,7 +346,7 @@ final class ImportPreviewModel {
                 // Its own fill: the Desktop Look greys a bar button view's tint (DesktopBars.quietGlyph), which made
                 // the one action of the page a grey pill.
                 var look = UIButton.Configuration.borderedProminent()
-                look.baseBackgroundColor = host.view.tintColor
+                look.baseBackgroundColor = HQPalette.tint
                 look.baseForegroundColor = HQPalette.onTint   // [paper-ink]
                 let button = UIButton(configuration: look, primaryAction: UIAction { [weak self] _ in self?.act() })
                 button.accessibilityIdentifier = "import-sessions.import"
@@ -472,6 +472,7 @@ struct ImportPreviewView: View {
                 .padding(.top, 8)
                 .padding(.bottom, 32)
             }
+            .hqMacForm()
             .background(Color.hqGroupedPage)
             .accessibilityIdentifier("import-sessions.preview.scroll")
         }
@@ -502,7 +503,7 @@ struct ImportPreviewView: View {
         .padding(.vertical, 12)
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(uiColor: HQPalette.lifted), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(Color(uiColor: HQPalette.lifted), in: RoundedRectangle(cornerRadius: HQShape.radius(12, .card), style: .continuous))
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier(identifier)
     }
@@ -545,7 +546,7 @@ struct ImportTurnBubble: View {
                 .padding(.vertical, 10)
                 .padding(.horizontal, 14)
                 .background(mine ? Color.hqTint.opacity(0.16) : Color(uiColor: HQPalette.lifted),
-                            in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            in: RoundedRectangle(cornerRadius: HQShape.radius(18, .card), style: .continuous))
         }
         .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
         .padding(mine ? .leading : .trailing, 36)

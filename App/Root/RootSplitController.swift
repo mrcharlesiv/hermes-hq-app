@@ -143,7 +143,7 @@ final class RootSplitController: UIViewController {
         }
         inspector.onShownChange = { [weak self] in
             guard let self else { return }
-            if !MacInspector.isShown { self.inspectorTakesList = false }   // ⌘I again: the list comes back
+            if !MacInspector.isShown || !self.inspector.hasChat { self.inspectorTakesList = false }   // ⌘I again or chat closed: the list comes back
             self.view.setNeedsLayout()
             // Mac polish #1: a chat a layout moved never forces another from inside it; the next pass places the panel.
             guard !self.applyingLayout else { return }
@@ -222,6 +222,14 @@ final class RootSplitController: UIViewController {
     }
     /// The inspector was asked for with no room: fold the list away when that gives it some. Read from the window's
     /// size alone, so the layout never depends on itself.
+    /// Whether the inspector can be shown in this window (directly, or by folding the list away).
+    var canShowInspector: Bool {
+        guard isViewLoaded, isDouble else { return false }
+        let panes = Self.panesSize(windowRect.size)
+        return PaneLayout.inspectorFits(panes: panes, inspector: MacInspector.narrowest, listFolded: listFolded)
+            || PaneLayout.inspectorFits(panes: panes, inspector: MacInspector.narrowest, listFolded: true)
+    }
+
     private func foldListForInspector() -> Bool {
         guard isDouble, inspectorRoom == 0 else { return false }
         inspectorTakesList = true
@@ -249,6 +257,10 @@ final class RootSplitController: UIViewController {
     private func applyLayout() {
         #if targetEnvironment(macCatalyst)
         if MacSidebar.windowWidthChanged(windowRect.width) { macSidebar.widthStateChanged() }   // [mac] stress test #13
+        if inspectorTakesList,
+           !inspector.hasChat || PaneLayout.inspectorFits(panes: Self.panesSize(windowRect.size), inspector: MacInspector.narrowest, listFolded: false) {
+            inspectorTakesList = false
+        }
         applyingLayout = true
         defer { applyingLayout = false }
         #endif
@@ -366,7 +378,7 @@ final class RootSplitController: UIViewController {
                                                    : (room > 0 ? window.maxX - room : window.maxX),
                                     y: window.minY, width: panel, height: window.height)
         if inspector.view.frame != inspectorFrame { inspector.view.frame = inspectorFrame }
-        inspector.view.isHidden = room == 0 && !MacInspector.isShown && !inspector.slidingOut
+        inspector.view.isHidden = room == 0 && !inspector.slidingOut
         // [mac-ui-issues] Its Desktop Look band ends where the chat's bar does.
         let bar = detail.navigationBar
         inspector.bandBottom = bar.isHidden || bar.window == nil ? 0 : max(0, bar.convert(bar.bounds, to: view).maxY - inspectorFrame.minY)
@@ -399,6 +411,7 @@ final class RootSplitController: UIViewController {
             view.layoutIfNeeded()
         default:
             dragWidth = nil
+            MacWindow.cursor("arrowCursor")
             let key = windowRect.width < Self.narrowWindow ? Self.narrowListWidthKey : Self.listWidthKey   // [mac] #63
             if layout.isDouble { UserDefaults.standard.set(Double(layout.sidebar), forKey: key) }
         }

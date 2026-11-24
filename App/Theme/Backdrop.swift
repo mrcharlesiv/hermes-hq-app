@@ -37,6 +37,17 @@ final class Backdrop {
         case preset(BackdropPreset)
         /// A photo of the person's own: its file name in the place's folder.
         case photo(String)
+        /// A custom solid color (`#RRGGBB`, auto-adapted for Light and Dark in Studio Matte).
+        case color(UInt32)
+
+        /// Whether this source is a Studio Matte solid-color wallpaper (Blur is a no-op on solids).
+        var isSolid: Bool {
+            switch self {
+            case .preset(let preset): preset.isSolid
+            case .color: true
+            case .photo: false
+            }
+        }
     }
 
     static let app = Backdrop(place: .app)
@@ -57,19 +68,20 @@ final class Backdrop {
     nonisolated static let dimRange = 0...80
 
     nonisolated struct Keys: Sendable {
-        let photo: String, preset: String, dim: String, blur: String, sameAsApp: String, cards: String
+        let photo: String, preset: String, color: String, dim: String, blur: String, sameAsApp: String, cards: String
         /// [soft-card-style] `SoftCardStyle`'s raw value, stored only when it isn't Tinted.
         let cardStyle: String
         init(_ prefix: String) {
             photo = prefix + ".photo"
             preset = prefix + ".preset"
+            color = prefix + ".color"
             dim = prefix + ".dim"
             blur = prefix + ".blur"
             sameAsApp = prefix + ".sameAsApp"
             cards = prefix + ".cards"
             cardStyle = prefix + ".cardStyle"
         }
-        var all: [String] { [photo, preset, dim, blur, sameAsApp, cards, cardStyle] }
+        var all: [String] { [photo, preset, color, dim, blur, sameAsApp, cards, cardStyle] }
     }
 
     nonisolated static func keys(_ place: Place) -> Keys { Keys(place == .app ? "hqn.appBackground" : "hqn.chatBackground") }
@@ -111,7 +123,8 @@ final class Backdrop {
         keys = Self.keys(place)
         let photo = defaults.string(forKey: keys.photo).flatMap { Self.isFileName($0) ? $0 : nil }
         let preset = defaults.string(forKey: keys.preset).flatMap(BackdropPreset.init(stored:))
-        let source = photo.map(Source.photo) ?? preset.map(Source.preset)
+        let color = Self.parseHex(defaults.string(forKey: keys.color))
+        let source = photo.map(Source.photo) ?? preset.map(Source.preset) ?? color.map(Source.color)
         self.source = source
         dim = Self.clampedDim(defaults.object(forKey: keys.dim), place: place)
         blur = (defaults.object(forKey: keys.blur) as? NSNumber)?.boolValue ?? false
@@ -134,6 +147,17 @@ final class Backdrop {
         !name.isEmpty && !name.contains("/") && !name.hasPrefix(".") && name.hasSuffix(".jpg")
     }
 
+    /// A stored custom solid color: strictly `#RRGGBB`.
+    nonisolated static func parseHex(_ value: String?) -> UInt32? {
+        guard let value, value.hasPrefix("#"), value.count == 7,
+              let hex = UInt32(value.dropFirst(), radix: 16) else { return nil }
+        return hex & 0xFFFFFF
+    }
+
+    nonisolated static func hexString(_ hex: UInt32) -> String {
+        String(format: "#%06X", hex & 0xFFFFFF)
+    }
+
     // MARK: What is drawn
 
     /// Chats that use the app's background, and the app has one.
@@ -148,6 +172,9 @@ final class Backdrop {
         if sameAsApp, let app { return app.source.map { ($0, app.folder) } }
         return source.map { ($0, folder) }
     }
+
+    /// Whether what is drawn here is a solid-color Studio Matte surface (Blur is hidden and skipped for solids).
+    var drawnIsSolid: Bool { drawn?.source.isSolid == true }
 
     /// Whether this place draws a picture: one is chosen and the look is the iOS one.
     var shows: Bool { drawn != nil && !Theme.isDesktop }
@@ -174,9 +201,23 @@ final class Backdrop {
         source = .preset(preset)
         defaults.set(preset.rawValue, forKey: keys.preset)
         defaults.removeObject(forKey: keys.photo)
+        defaults.removeObject(forKey: keys.color)
         removeFiles(keeping: nil)
         chooseOwn()
         AppLog.trace("backdrop", "\(place.rawValue) background: \(preset.rawValue)")
+        changed()
+    }
+
+    /// A custom solid color (`#RRGGBB`, auto-adapted for Light and Dark in Studio Matte) becomes the background.
+    func setColor(_ hex: UInt32) {
+        let masked = hex & 0xFFFFFF
+        source = .color(masked)
+        defaults.set(Self.hexString(masked), forKey: keys.color)
+        defaults.removeObject(forKey: keys.photo)
+        defaults.removeObject(forKey: keys.preset)
+        removeFiles(keeping: nil)
+        chooseOwn()
+        AppLog.trace("backdrop", "\(place.rawValue) background: color \(Self.hexString(masked))")
         changed()
     }
 
@@ -224,6 +265,7 @@ final class Backdrop {
         source = .photo(name)
         defaults.set(name, forKey: keys.photo)
         defaults.removeObject(forKey: keys.preset)
+        defaults.removeObject(forKey: keys.color)
         if let decoded, !blur {
             BackdropImages.shared.store(BackdropPicture(kind: .photo(folder.appending(path: name)), blur: false), UIImage(cgImage: decoded))
         }
@@ -237,6 +279,7 @@ final class Backdrop {
         source = nil
         defaults.removeObject(forKey: keys.photo)
         defaults.removeObject(forKey: keys.preset)
+        defaults.removeObject(forKey: keys.color)
         removeFiles(keeping: nil)
         chooseOwn()
         AppLog.trace("backdrop", "\(place.rawValue) background: none")
@@ -319,12 +362,13 @@ nonisolated struct BackdropPicture: Hashable, Sendable {
     enum Kind: Hashable, Sendable {
         case photo(URL)
         case preset(BackdropPreset, dark: Bool, accent: BackdropPreset.Ink, width: Int, height: Int)
+        case color(UInt32, dark: Bool, width: Int, height: Int)
     }
 
     var kind: Kind
     var blur: Bool
 
-    /// The accent every picture but Theme Glow is keyed with: they don't use it.
+    /// The accent every picture except Theme Glow and Theme Tint is keyed with: they don't use it.
     private static let noAccent = BackdropPreset.Ink(r: 0, g: 0, b: 0)
 
     @MainActor static func make(_ source: Backdrop.Source, folder: URL, blur: Bool, traits: UITraitCollection) -> BackdropPicture {
@@ -333,14 +377,18 @@ nonisolated struct BackdropPicture: Hashable, Sendable {
             return BackdropPicture(kind: .photo(folder.appending(path: name)), blur: blur)
         case .preset(let preset):
             let canvas = canvasSize
+            // Solids have no photo detail to blur: skip blur so the smooth matte surface stays crisp while keeping the stored blur setting for photos.
             return BackdropPicture(kind: .preset(preset, dark: traits.userInterfaceStyle == .dark, accent: accent(preset, traits),
-                                                 width: canvas.width, height: canvas.height), blur: blur)
+                                                 width: canvas.width, height: canvas.height), blur: preset.isSolid ? false : blur)
+        case .color(let hex):
+            let canvas = canvasSize
+            return BackdropPicture(kind: .color(hex, dark: traits.userInterfaceStyle == .dark, width: canvas.width, height: canvas.height), blur: false)
         }
     }
 
-    /// The theme's tint for Theme Glow; nothing for the others, so a theme change never draws them again.
+    /// The theme's tint for Theme Glow and Theme Tint; nothing for the others, so a theme change never draws them again.
     @MainActor static func accent(_ preset: BackdropPreset, _ traits: UITraitCollection) -> BackdropPreset.Ink {
-        preset == .glow ? ink(HQPalette.tint.resolvedColor(with: traits)) : noAccent
+        preset.usesAccent ? ink(HQPalette.tint.resolvedColor(with: traits)) : noAccent
     }
 
     static func ink(_ color: UIColor) -> BackdropPreset.Ink {
@@ -378,6 +426,9 @@ nonisolated struct BackdropPicture: Hashable, Sendable {
             if preset.keptOnDisk, let kept = BackdropPictureCache.read(preset, dark: dark, width: w, height: h) { return finish(kept) }
             guard let pixels = preset.render(width: w, height: h, dark: dark, accent: accent) else { return nil }
             if preset.keptOnDisk { BackdropPictureCache.write(pixels, preset, dark: dark, width: w, height: h) }
+            return finish(pixels)
+        case .color(let hex, let dark, let width, let height):
+            guard let pixels = BackdropPreset.renderCustomColor(hex, width: width, height: height, dark: dark) else { return nil }
             return finish(pixels)
         }
     }
@@ -1027,7 +1078,7 @@ struct PageBackdropLayer: UIViewRepresentable {
     }
 
     /// The key window's top page (a SwiftUI page has no controller of its own to present from).
-    private static var activeHost: UIViewController? {
+    fileprivate static var activeHost: UIViewController? {
         let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
         return FailureAlert.topmost((windows.first(where: \.isKeyWindow) ?? windows.first)?.rootViewController)
     }
@@ -1079,4 +1130,75 @@ struct PageBackdropLayer: UIViewRepresentable {
     }
 
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) { end() }
+}
+
+/// Custom color on Backgrounds › Solids: presents the system color picker (`UIColorPickerViewController`), applying
+/// picks live (debounced during continuous drags) and saving `#RRGGBB` onto the place's `Backdrop`.
+@MainActor final class BackdropColorPicker: NSObject, UIColorPickerViewControllerDelegate {
+    private static var current: BackdropColorPicker?
+    private let place: Backdrop.Place
+    private var pending: Task<Void, Never>?
+    private var lastApplied: UInt32?
+
+    private init(place: Backdrop.Place, initial: UInt32?) {
+        self.place = place
+        self.lastApplied = initial
+    }
+
+    static func present(for place: Backdrop.Place, initial: UInt32?) {
+        guard let host = BackdropPicker.activeHost else { return }
+        current?.pending?.cancel()
+        let picker = BackdropColorPicker(place: place, initial: initial)
+        current = picker
+        let controller = UIColorPickerViewController()
+        controller.delegate = picker
+        controller.supportsAlpha = false
+        controller.title = "Custom Color"
+        if let initial {
+            let ink = BackdropPreset.Ink(hex: initial)
+            controller.selectedColor = UIColor(red: ink.r, green: ink.g, blue: ink.b, alpha: 1)
+        } else {
+            controller.selectedColor = HQPalette.tint
+        }
+        host.present(controller, animated: true)
+    }
+
+    private static func hex(of color: UIColor) -> UInt32? {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        guard color.getRed(&r, green: &g, blue: &b, alpha: &a) else { return nil }
+        func byte(_ v: CGFloat) -> UInt32 { UInt32((min(max(v, 0), 1) * 255).rounded()) }
+        return byte(r) << 16 | byte(g) << 8 | byte(b)
+    }
+
+    private func apply(_ hex: UInt32) {
+        guard hex != lastApplied else { return }
+        lastApplied = hex
+        (place == .app ? Backdrop.app : Backdrop.chats).setColor(hex)
+    }
+
+    func colorPickerViewController(_ viewController: UIColorPickerViewController, didSelect color: UIColor, continuously: Bool) {
+        guard let hex = Self.hex(of: color) else { return }
+        pending?.cancel()
+        if continuously {
+            pending = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(160))
+                guard !Task.isCancelled else { return }
+                self?.apply(hex)
+            }
+        } else {
+            Haptics.play(.selection)
+            apply(hex)
+        }
+    }
+
+    func colorPickerViewControllerDidFinish(_ viewController: UIColorPickerViewController) {
+        pending?.cancel()
+        if let hex = Self.hex(of: viewController.selectedColor), hex != lastApplied {
+            apply(hex)
+        }
+        if lastApplied != nil {
+            HQAnnounce.say("\(place == .app ? "App background" : "Chat background"): Custom Color.")
+        }
+        if Self.current === self { Self.current = nil }
+    }
 }

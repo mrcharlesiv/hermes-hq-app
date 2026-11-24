@@ -95,12 +95,18 @@ enum ThemeDebugHooks {
                 if let preset = BackdropPreset(rawValue: value) {
                     defaults.set(preset.rawValue, forKey: keys.preset)
                     defaults.removeObject(forKey: keys.photo)
+                    defaults.removeObject(forKey: keys.color)
+                } else if let hex = Backdrop.parseHex(value) {
+                    defaults.set(Backdrop.hexString(hex), forKey: keys.color)
+                    defaults.removeObject(forKey: keys.photo)
+                    defaults.removeObject(forKey: keys.preset)
                 } else {
                     switch PhotoLoad.read(URL(fileURLWithPath: value), maxPixel: Backdrop.maxPixel) {
                     case .success(let photo):
                         if let file = try? Backdrop.write(photo.image, into: Backdrop.defaultFolder(place)) {
                             defaults.set(file, forKey: keys.photo)
                             defaults.removeObject(forKey: keys.preset)
+                            defaults.removeObject(forKey: keys.color)
                         }
                     case .failure(let error): print("[backdrop] -HQDebug\(name) \(value): \(error)")
                     }

@@ -26,6 +26,7 @@ enum BackdropWords {
         case nil: "None"
         case .preset(let preset): preset.label
         case .photo: "Your Photo"
+        case .color: "Custom Color"
         }
     }
 
@@ -249,6 +250,8 @@ struct BackgroundPage: View {
                             pick(source)
                         } pickPhoto: { from in
                             BackdropPicker.pick(from, for: place) { busy = $0 }
+                        } pickColor: { current in
+                            BackdropColorPicker.present(for: place, initial: current)
                         }
                         .padding(12)
                         .background(Color(uiColor: HQPalette.card), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -280,6 +283,8 @@ struct BackgroundPage: View {
             if case .preset(let preset) = backdrop.chosen,
                let group = BackdropPreset.Group.allCases.first(where: { $0.presets.contains(preset) }) {
                 selectedGroup = group
+            } else if case .color = backdrop.chosen {
+                selectedGroup = .solids
             }
         }
     }
@@ -313,21 +318,23 @@ struct BackgroundPage: View {
                     .frame(minWidth: 34, alignment: .trailing)
                     .accessibilityHidden(true)
 
-                Button {
-                    Haptics.play(.selection)
-                    backdrop.setBlur(!backdrop.blur)
-                } label: {
-                    Text("Blur")
-                        .font(Font.hq(.footnote).weight(.semibold))
-                        .foregroundStyle(backdrop.blur ? Color.hqOnTint : Color.hqLabel)
-                        .padding(.horizontal, 11)
-                        .padding(.vertical, 5)
-                        .background(backdrop.blur ? Color.hqTint : Color.hqFill3, in: Capsule())
+                if !backdrop.drawnIsSolid {
+                    Button {
+                        Haptics.play(.selection)
+                        backdrop.setBlur(!backdrop.blur)
+                    } label: {
+                        Text("Blur")
+                            .font(Font.hq(.footnote).weight(.semibold))
+                            .foregroundStyle(backdrop.blur ? Color.hqOnTint : Color.hqLabel)
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 5)
+                            .background(backdrop.blur ? Color.hqTint : Color.hqFill3, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Blur")
+                    .accessibilityAddTraits(backdrop.blur ? [.isButton, .isSelected] : .isButton)
+                    .accessibilityIdentifier("theme.backgroundBlur")
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Blur")
-                .accessibilityAddTraits(backdrop.blur ? [.isButton, .isSelected] : .isButton)
-                .accessibilityIdentifier("theme.backgroundBlur")
             }
 
             // Unified 1-row Cards picker (Off | Tinted | Glass | Solid) on App Background.
@@ -410,6 +417,7 @@ struct BackgroundPage: View {
         case nil: backdrop.clear()
         case .preset(let preset): backdrop.setPreset(preset)
         case .photo: break   // a photo is chosen through its menu
+        case .color(let hex): backdrop.setColor(hex)
         }
         HQAnnounce.say("\(BackdropWords.title(place)): \(BackdropWords.name(source)).")
     }
@@ -425,6 +433,7 @@ private extension BackdropPreset.Group {
     var shortTitle: String {
         switch self {
         case .classic: "Classic"
+        case .solids: "Solids"
         case .photographic: "Photo"
         case .illustrated: "Illustrated"
         case .painted: "Painted"
@@ -444,12 +453,17 @@ private struct BackdropGrid: View {
     var columns: Int
     var pick: (Backdrop.Source?) -> Void
     var pickPhoto: (BackdropPicker.Source) -> Void
+    var pickColor: (UInt32?) -> Void
     @Environment(\.colorScheme) private var scheme
 
-    private enum Item: Hashable { case none, preset(BackdropPreset), photo }
+    private enum Item: Hashable { case none, preset(BackdropPreset), photo, color }
     private var items: [Item] {
         let pictures = group.presets.map(Item.preset)
-        return group == .classic ? [.none] + pictures + [.photo] : pictures
+        switch group {
+        case .classic: return [.none] + pictures + [.photo]
+        case .solids: return pictures + [.color]
+        default: return pictures
+        }
     }
 
     var body: some View {
@@ -488,11 +502,56 @@ private struct BackdropGrid: View {
             let selected = backdrop.chosen == .preset(preset)
             Button { pick(.preset(preset)) } label: {
                 BackdropTile(name: preset.label, selected: selected) {
-                    BackdropTilePicture(source: .preset(preset), folder: nil, traits: traits)
+                    ZStack {
+                        BackdropTilePicture(source: .preset(preset), folder: nil, traits: traits)
+                        if preset == .solidTint {
+                            Image(systemName: "paintpalette.fill")
+                                .font(Font.hq(.title3))
+                                .foregroundStyle(scheme == .dark ? Color.white.opacity(0.68) : Color.black.opacity(0.42))
+                        }
+                    }
                 }
             }
             .buttonStyle(.plain)
             .modifier(TileTraits(name: preset.label, selected: selected, id: "\(place.rawValue).\(preset.rawValue)"))
+        case .color:
+            let customHex: UInt32? = if case .color(let hex) = backdrop.chosen { hex } else { nil }
+            Button {
+                Haptics.play(.selection)
+                pickColor(customHex)
+            } label: {
+                BackdropTile(name: "Custom", selected: customHex != nil) {
+                    ZStack {
+                        if let customHex {
+                            BackdropTilePicture(source: .color(customHex), folder: nil, traits: traits)
+                        } else {
+                            AngularGradient(
+                                colors: [
+                                    Color(red: 0.88, green: 0.48, blue: 0.48),
+                                    Color(red: 0.89, green: 0.72, blue: 0.45),
+                                    Color(red: 0.53, green: 0.77, blue: 0.55),
+                                    Color(red: 0.42, green: 0.71, blue: 0.81),
+                                    Color(red: 0.60, green: 0.53, blue: 0.85),
+                                    Color(red: 0.85, green: 0.49, blue: 0.70),
+                                    Color(red: 0.88, green: 0.48, blue: 0.48),
+                                ],
+                                center: .center
+                            )
+                            Circle()
+                                .fill(Color.black.opacity(0.38))
+                                .frame(width: 28, height: 28)
+                                .overlay {
+                                    Image(systemName: "plus")
+                                        .font(Font.hq(.callout).weight(.semibold))
+                                        .foregroundStyle(Color.white)
+                                }
+                        }
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .modifier(TileTraits(name: customHex == nil ? "Custom" : "Custom Color, choose another", selected: customHex != nil,
+                                 id: "\(place.rawValue).color"))
         case .photo:
             let photo: Backdrop.Source? = if case .photo = backdrop.chosen { backdrop.chosen } else { nil }
             Menu {
@@ -583,6 +642,7 @@ private struct BackdropTilePicture: View {
         let image: UIImage? = switch source {
         case .preset(let preset): BackdropThumbs.shared.image(preset, traits: traits)
         case .photo(let name): folder.flatMap { BackdropImages.shared.image(BackdropPicture(kind: .photo($0.appending(path: name)), blur: false)) }
+        case .color(let hex): BackdropThumbs.shared.image(color: hex, traits: traits)
         }
         if let image {
             Image(uiImage: image).resizable().scaledToFill()
@@ -603,15 +663,28 @@ private struct BackdropTilePicture: View {
     private static let size = (width: 240, height: 426)
 
     func image(_ preset: BackdropPreset, traits: UITraitCollection) -> UIImage? {
-        let picture = BackdropPicture(kind: .preset(preset, dark: traits.userInterfaceStyle == .dark, accent: BackdropPicture.accent(preset, traits),
-                                                    width: Self.size.width, height: Self.size.height), blur: false)
+        load(BackdropPicture(kind: .preset(preset, dark: traits.userInterfaceStyle == .dark, accent: BackdropPicture.accent(preset, traits),
+                                           width: Self.size.width, height: Self.size.height), blur: false))
+    }
+
+    func image(color hex: UInt32, traits: UITraitCollection) -> UIImage? {
+        load(BackdropPicture(kind: .color(hex, dark: traits.userInterfaceStyle == .dark, width: Self.size.width, height: Self.size.height), blur: false))
+    }
+
+    private func load(_ picture: BackdropPicture) -> UIImage? {
         if let image = made[picture] { return image }
         guard !making.contains(picture) else { return nil }
         making.insert(picture)
         Task {
             let image = await Task.detached(priority: .userInitiated) { picture.make() }.value
             making.remove(picture)
-            if let image { made[picture] = image }
+            if let image {
+                if case .color = picture.kind {
+                    let oldColors = made.keys.filter { if case .color = $0.kind { true } else { false } }
+                    if oldColors.count > 8 { oldColors.forEach { made[$0] = nil } }
+                }
+                made[picture] = image
+            }
         }
         return nil
     }

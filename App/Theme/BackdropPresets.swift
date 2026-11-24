@@ -23,6 +23,9 @@ import WallpaperArt
 /// The pictures that come with the app (Theme › App Background and Chat Background), drawn in code.
 nonisolated enum BackdropPreset: String, CaseIterable, Sendable {
     case aurora, sunset, ocean, meadow, blossom, dunes, nebula, paper, contours, glow
+    // Solids (owner 2026-11-24: 1B Studio Matte + 2A Mineral & Studio): 10 paired mineral pigments + Theme Tint
+    // (the 12th tile in the Solids grid is Custom, backed by `Backdrop.Source.color`).
+    case solidStone, solidGraphite, solidSlate, solidCobalt, solidSpruce, solidSage, solidSand, solidTerracotta, solidRosewood, solidPlum, solidTint
     // Owner 2026-11-05, on four new styles side by side: "I love them all". Each has its own folder in Packages/WallpaperArt/.
     case photoLake, photoOcean, photoClouds, photoDunes, photoCanyon, photoForest, photoAurora, photoAlpenglow
     case posterLake, posterOcean, posterClouds, posterMesa, northernLights, snowyVillage, cityDusk, rollingHills
@@ -68,6 +71,17 @@ nonisolated enum BackdropPreset: String, CaseIterable, Sendable {
         case .paper: "Paper"
         case .contours: "Contours"
         case .glow: "Theme Glow"
+        case .solidStone: "Stone"
+        case .solidGraphite: "Graphite"
+        case .solidSlate: "Slate"
+        case .solidCobalt: "Cobalt"
+        case .solidSpruce: "Spruce"
+        case .solidSage: "Sage"
+        case .solidSand: "Sand"
+        case .solidTerracotta: "Terracotta"
+        case .solidRosewood: "Rosewood"
+        case .solidPlum: "Plum"
+        case .solidTint: "Theme Tint"
         case .doodleForest: "Forest"
         case .doodlePeaks: "Peaks"
         case .doodleGaming: "Gaming"
@@ -108,6 +122,8 @@ nonisolated enum BackdropPreset: String, CaseIterable, Sendable {
         /// The first ten, under Classic with None and Your Photo (titled by style, as the groups after it; "Pictures"
         /// said nothing the page didn't).
         case classic
+        /// Studio Matte solid-color pigments: ten Light/Dark pairs, Theme Tint, plus Custom in the picker.
+        case solids
         /// Real terrain, clouds and water, lit like a photograph.
         case photographic
         /// Designed like a printed travel poster: flat inks, bold shapes.
@@ -120,6 +136,7 @@ nonisolated enum BackdropPreset: String, CaseIterable, Sendable {
         var title: String {
             switch self {
             case .classic: "Classic"
+            case .solids: "Solids"
             case .photographic: "Photographic"
             case .illustrated: "Illustrated"
             case .painted: "Painted"
@@ -133,6 +150,7 @@ nonisolated enum BackdropPreset: String, CaseIterable, Sendable {
     var group: Group {
         switch self {
         case .aurora, .sunset, .ocean, .meadow, .blossom, .dunes, .nebula, .paper, .contours, .glow: .classic
+        case .solidStone, .solidGraphite, .solidSlate, .solidCobalt, .solidSpruce, .solidSage, .solidSand, .solidTerracotta, .solidRosewood, .solidPlum, .solidTint: .solids
         case .photoLake, .photoOcean, .photoClouds, .photoDunes, .photoCanyon, .photoForest, .photoAurora, .photoAlpenglow: .photographic
         case .posterLake, .posterOcean, .posterClouds, .posterMesa, .northernLights, .snowyVillage, .cityDusk, .rollingHills: .illustrated
         case .paintLake, .paintOcean, .paintClouds, .paintHills, .paintForest, .paintDesert, .paintPeaks, .paintHarbor: .painted
@@ -142,6 +160,10 @@ nonisolated enum BackdropPreset: String, CaseIterable, Sendable {
 
     /// Slow enough to draw that the finished picture is kept on disk (`BackdropPictureCache`). Doodles draw in about a tenth of a second.
     var keptOnDisk: Bool { group == .photographic || group == .illustrated || group == .painted }
+    /// Whether this preset follows the active theme's tint (`Theme Glow` and `Theme Tint`).
+    var usesAccent: Bool { self == .glow || self == .solidTint }
+    /// A solid-color Studio Matte surface (Blur is a no-op on these).
+    var isSolid: Bool { group == .solids }
 
     /// An sRGB colour, 0–1 per channel.
     nonisolated struct Ink: Sendable, Hashable {
@@ -152,13 +174,13 @@ nonisolated enum BackdropPreset: String, CaseIterable, Sendable {
     }
 
     /// Draws the picture `width`×`height` pixels for Light or Dark. All geometry is relative to the picture's short
-    /// side, so a small tile is the full picture made small. `accent`: the theme's tint, used by `.glow` only.
+    /// side, so a small tile is the full picture made small. `accent`: the theme's tint, used by `.glow` and `.solidTint`.
     /// Returns nil only if Core Graphics fails.
     func render(width: Int, height: Int, dark: Bool, accent: Ink) -> CGImage? {
         guard width > 0, height > 0 else { return nil }
         // The four styles finish their own pictures, grain and all. Their scene names are these ids.
         switch group {
-        case .classic: break
+        case .classic, .solids: break
         case .photographic: return WallpaperArt.render(.photographic, scene: rawValue, width: width, height: height, dark: dark)
         case .illustrated: return WallpaperArt.render(.illustrated, scene: rawValue, width: width, height: height, dark: dark)
         case .painted: return WallpaperArt.render(.painted, scene: rawValue, width: width, height: height, dark: dark)
@@ -179,10 +201,45 @@ nonisolated enum BackdropPreset: String, CaseIterable, Sendable {
         case .paper: BackdropArt.paper(ctx, rect: rect, unit: unit, dark: dark, seed: seed)
         case .contours: BackdropArt.contours(ctx, rect: rect, unit: unit, dark: dark, seed: seed)
         case .glow: BackdropArt.glow(ctx, rect: rect, unit: unit, dark: dark, seed: seed, accent: accent)
+        case .solidStone, .solidGraphite, .solidSlate, .solidCobalt, .solidSpruce, .solidSage, .solidSand, .solidTerracotta, .solidRosewood, .solidPlum, .solidTint:
+            guard let base = solidBase(dark: dark, accent: accent) else { return nil }
+            BackdropArt.studioMatte(ctx, rect: rect, base: base, dark: dark)
         default: return nil
         }
         // A fixed byte-delta reads as fine, near-invisible grain at phone resolution, but as a coarse speckle on a
         // small picker swatch (fewer, bigger pixels for the same delta): scale it down with the short side.
+        let grainAmount = max(1, Int32((5.0 * unit / 1290).rounded()))
+        BackdropCanvas.grain(ctx, width: width, height: height, seed: seed, amount: grainAmount)
+        return ctx.makeImage()
+    }
+
+    /// The calibrated Studio Matte pigment for a solid preset in Light or Dark (2A Mineral & Studio, plus Theme Tint).
+    func solidBase(dark: Bool, accent: Ink) -> Ink? {
+        func pick(_ light: UInt32, _ darkHex: UInt32) -> Ink { Ink(hex: dark ? darkHex : light) }
+        switch self {
+        case .solidStone: return pick(0xDCD6CB, 0x312F2B)
+        case .solidGraphite: return pick(0xBDC2CA, 0x23272F)
+        case .solidSlate: return pick(0xAEC1D2, 0x223447)
+        case .solidCobalt: return pick(0x8AB0EA, 0x1B3669)
+        case .solidSpruce: return pick(0x8CC2BC, 0x143F40)
+        case .solidSage: return pick(0xA5C59F, 0x203E2C)
+        case .solidSand: return pick(0xE3C692, 0x47361E)
+        case .solidTerracotta: return pick(0xDC9C84, 0x502920)
+        case .solidRosewood: return pick(0xE0AEBA, 0x4A2434)
+        case .solidPlum: return pick(0xBFAEDE, 0x322450)
+        case .solidTint: return accent.adaptedSolid(dark: dark, isTint: true)
+        default: return nil
+        }
+    }
+
+    /// Draws a custom solid-color wallpaper (`#RRGGBB`) in Studio Matte (1B), auto-adapted for Light and Dark (4B).
+    static func renderCustomColor(_ hex: UInt32, width: Int, height: Int, dark: Bool) -> CGImage? {
+        guard width > 0, height > 0, let ctx = BackdropCanvas.context(width: width, height: height) else { return nil }
+        let rect = CGRect(x: 0, y: 0, width: width, height: height)
+        let unit = Double(min(width, height))
+        let base = Ink(hex: hex).adaptedSolid(dark: dark, isTint: false)
+        BackdropArt.studioMatte(ctx, rect: rect, base: base, dark: dark)
+        let seed = (UInt64(hex & 0xFFFFFF) &* 0x100000001b3) ^ (dark ? 0x9E3779B97F4A7C15 : 0xcbf29ce484222325)
         let grainAmount = max(1, Int32((5.0 * unit / 1290).rounded()))
         BackdropCanvas.grain(ctx, width: width, height: height, seed: seed, amount: grainAmount)
         return ctx.makeImage()
@@ -236,6 +293,70 @@ nonisolated extension BackdropPreset.Ink {
         }
         let m = v - c
         return Self(r: r1 + m, g: g1 + m, b: b1 + m)
+    }
+
+    // MARK: OKLab adaptation for Theme Tint & Custom solid wallpapers (4B)
+
+    private static func toLinear(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+    private static func toGamma(_ v: Double) -> Double {
+        min(1, max(0, v <= 0.0031308 ? 12.92 * v : 1.055 * pow(v, 1 / 2.4) - 0.055))
+    }
+
+    /// OKLab `(L, a, b)` (Björn Ottosson's matrices, self-contained so BackdropPresets stays standalone).
+    var oklab: (L: Double, a: Double, b: Double) {
+        let lr = Self.toLinear(r), lg = Self.toLinear(g), lb = Self.toLinear(b)
+        let l = cbrt(0.4122214708 * lr + 0.5363325363 * lg + 0.0514459929 * lb)
+        let m = cbrt(0.2119034982 * lr + 0.6806995451 * lg + 0.1073969566 * lb)
+        let s = cbrt(0.0883024619 * lr + 0.2817188376 * lg + 0.6299787005 * lb)
+        return (0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+                1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+                0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s)
+    }
+
+    private static func oklabToLinear(_ L: Double, _ a: Double, _ b: Double) -> (Double, Double, Double) {
+        let l = pow(L + 0.3963377774 * a + 0.2158037573 * b, 3)
+        let m = pow(L - 0.1055613458 * a - 0.0638541728 * b, 3)
+        let s = pow(L - 0.0894841775 * a - 1.291485548 * b, 3)
+        return (4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+                -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+                -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s)
+    }
+
+    /// Reconstructs an sRGB colour at `(L, a, b)`, scaling chroma down monotonically until it fits sRGB gamut.
+    static func fromOklabInGamut(L: Double, a: Double, b: Double) -> Self {
+        let L = min(1, max(0, L))
+        func fits(_ k: Double) -> Bool {
+            let (lr, lg, lb) = oklabToLinear(L, a * k, b * k)
+            return lr >= -0.0005 && lg >= -0.0005 && lb >= -0.0005 && lr <= 1.0005 && lg <= 1.0005 && lb <= 1.0005
+        }
+        var scale = 1.0
+        if !fits(1) {
+            var low = 0.0, high = 1.0
+            for _ in 0..<14 {
+                let mid = (low + high) / 2
+                if fits(mid) { low = mid } else { high = mid }
+            }
+            scale = low
+        }
+        let (lr, lg, lb) = oklabToLinear(L, a * scale, b * scale)
+        return Self(r: toGamma(lr), g: toGamma(lg), b: toGamma(lb))
+    }
+
+    /// Adapts an arbitrary picked colour (or the theme's accent) into a calm Studio Matte solid for Light or Dark (4B):
+    /// preserves hue, caps chroma to mineral/studio levels so it never clashes or blows out behind UI, and maps lightness
+    /// into each mode's sweet spot so switching between Light and Dark stays cohesive under the Wash veil.
+    func adaptedSolid(dark: Bool, isTint: Bool = false) -> Self {
+        let (L, a, b) = oklab
+        let chroma = hypot(a, b)
+        let targetL: Double = if dark {
+            isTint ? 0.33 : 0.16 + 0.22 * pow(min(1, max(0, L)), 0.45)
+        } else {
+            isTint ? 0.78 : 0.72 + 0.16 * min(1, max(0, L))
+        }
+        let maxChroma = isTint ? 0.085 : 0.092
+        let targetC = min(chroma, maxChroma)
+        let (na, nb) = chroma > 0.0001 ? (a / chroma * targetC, b / chroma * targetC) : (0, 0)
+        return Self.fromOklabInGamut(L: targetL, a: na, b: nb)
     }
 }
 
@@ -755,5 +876,14 @@ private nonisolated extension BackdropArt {
             blob(ctx, center: b, radius: unit * 1.1, color: partner, alpha: 0.2)
             blob(ctx, center: b, radius: unit * 0.48, color: partner, alpha: 0.46)
         }
+    }
+
+    /// Studio Matte (1B): reads unmistakably as one solid color, with a whisper-subtle overhead light falloff (lit top,
+    /// true base in the middle, gently grounded foot) so it feels like matte painted plaster or heavy cardstock rather
+    /// than a flat CSS hex. Fine monochrome grain is stippled over it last.
+    static func studioMatte(_ ctx: CGContext, rect: CGRect, base: Ink, dark: Bool) {
+        let top = base.mixed(with: Ink(hex: 0xFFFFFF), dark ? 0.08 : 0.24)
+        let bottom = base.mixed(with: dark ? Ink(hex: 0x000000) : Ink(hex: 0x12161E), dark ? 0.22 : 0.08)
+        verticalWash(ctx, rect: rect, stops: [(0, top), (0.45, base), (1, bottom)])
     }
 }

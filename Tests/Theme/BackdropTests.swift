@@ -210,9 +210,9 @@ import UIKit
     }
 
     @Test func everyPictureOfTheAppsDrawsInBothLooks() {
-        #expect(BackdropPreset.allCases.count == 42, "the first ten, then 8 each of Photographic, Illustrated, Painted and Doodles")
-        #expect(Set(BackdropPreset.allCases.map(\.label)).count == 42)
-        #expect(BackdropPreset.Group.allCases.map(\.presets.count) == [10, 8, 8, 8, 8])
+        #expect(BackdropPreset.allCases.count == 53, "the first ten, 11 Solids, then 8 each of Photographic, Illustrated, Painted and Doodles")
+        #expect(Set(BackdropPreset.allCases.map(\.label)).count == 53)
+        #expect(BackdropPreset.Group.allCases.map(\.presets.count) == [10, 11, 8, 8, 8, 8])
         let accent = BackdropPreset.Ink(r: 0.04, g: 0.52, b: 1)
         for preset in BackdropPreset.allCases {
             for dark in [false, true] {
@@ -251,6 +251,7 @@ import UIKit
     @Test func onlyTheSlowStylesAreKept() {
         #expect(BackdropPreset.photoLake.keptOnDisk && BackdropPreset.posterMesa.keptOnDisk && BackdropPreset.paintHarbor.keptOnDisk)
         #expect(!BackdropPreset.doodleRose.keptOnDisk && !BackdropPreset.aurora.keptOnDisk)
+        #expect(!BackdropPreset.solidSage.keptOnDisk && !BackdropPreset.solidTint.keptOnDisk)
     }
 
     @Test func blurredPicturesAreDrawnSmall() throws {
@@ -259,10 +260,56 @@ import UIKit
         #expect(max(image.size.width, image.size.height) * image.scale <= CGFloat(Backdrop.blurPixel) + 1)
     }
 
-    @Test func onlyThemeGlowFollowsTheTint() {
+    @Test func onlyThemeGlowAndThemeTintFollowTheTint() {
         let traits = UITraitCollection(userInterfaceStyle: .light)
-        #expect(BackdropPicture.accent(.aurora, traits) == BackdropPreset.Ink(r: 0, g: 0, b: 0))
-        #expect(BackdropPicture.accent(.glow, traits) != BackdropPreset.Ink(r: 0, g: 0, b: 0))
+        let zero = BackdropPreset.Ink(r: 0, g: 0, b: 0)
+        for preset in BackdropPreset.allCases {
+            if preset == .glow || preset == .solidTint {
+                #expect(BackdropPicture.accent(preset, traits) != zero, "\(preset) should follow the theme tint")
+            } else {
+                #expect(BackdropPicture.accent(preset, traits) == zero, "\(preset) should not depend on the theme tint")
+            }
+        }
+    }
+
+    @Test func aCustomSolidColorIsStoredAdaptsAndSkipsBlur() throws {
+        let (app, chats, suite, folder) = pair()
+        app.setBlur(true)
+        app.setColor(0x1E3A6E)
+        #expect(suite.string(forKey: "hqn.appBackground.color") == "#1E3A6E")
+        #expect(app.source == .color(0x1E3A6E) && app.drawnIsSolid)
+        #expect(BackdropWords.value(of: app) == "Custom Color")
+        #expect(chats.followsApp && chats.drawn?.source == .color(0x1E3A6E) && chats.drawnIsSolid)
+        #expect(Backdrop(place: .app, defaults: suite, folder: folder).source == .color(0x1E3A6E))
+        // Blur stays stored for photos, but solid pictures are made unblurred.
+        let pic = try #require(app.picture(for: UITraitCollection(userInterfaceStyle: .dark)))
+        #expect(!pic.blur && app.blur)
+
+        // Switching to a preset clears the color key; garbage color reads as None; reset clears color.
+        app.setPreset(.solidSage)
+        #expect(suite.object(forKey: "hqn.appBackground.color") == nil && app.drawnIsSolid)
+        suite.removeObject(forKey: "hqn.appBackground.preset")
+        suite.set("#ZZZZZZ", forKey: "hqn.appBackground.color")
+        #expect(Backdrop(place: .app, defaults: suite, folder: folder).source == nil)
+        app.setColor(0xA5C59F)
+        app.reset()
+        #expect(app.source == nil && suite.object(forKey: "hqn.appBackground.color") == nil)
+    }
+
+    @Test func customSolidColorsAdaptForLightAndDarkInGamut() throws {
+        let samples: [UInt32] = [0x1E3A6E, 0x0053FD, 0xA5C59F, 0xFF5500, 0xFFD43B, 0x000000, 0xFFFFFF, 0x7A7E85]
+        for hex in samples {
+            let light = BackdropPreset.Ink(hex: hex).adaptedSolid(dark: false)
+            let dark = BackdropPreset.Ink(hex: hex).adaptedSolid(dark: true)
+            for ink in [light, dark] {
+                #expect((0...1).contains(ink.r) && (0...1).contains(ink.g) && (0...1).contains(ink.b))
+            }
+            #expect(light.oklab.L >= 0.70, "Light mode solid for #\(String(format: "%06X", hex)) stays airy (\(light.oklab.L))")
+            #expect(dark.oklab.L <= 0.42, "Dark mode solid for #\(String(format: "%06X", hex)) stays deep (\(dark.oklab.L))")
+            let imgLight = try #require(BackdropPreset.renderCustomColor(hex, width: 64, height: 112, dark: false))
+            let imgDark = try #require(BackdropPreset.renderCustomColor(hex, width: 64, height: 112, dark: true))
+            #expect(imgLight.width == 64 && imgLight.height == 112 && imgDark.width == 64 && imgDark.height == 112)
+        }
     }
 
     @Test func theViewIsHiddenWithNoPicture() {

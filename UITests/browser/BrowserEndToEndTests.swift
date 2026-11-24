@@ -106,6 +106,14 @@ final class BrowserEndToEndTests: XCTestCase {
         }
         attach("viewer-after-drag")
 
+        // Press-and-hold (e.g. a Press & Hold button): holding still sends `down` right away and lifting sends `up`,
+        // with no `tap`.
+        let beforeHold = inputs().count
+        from.press(forDuration: 0.7)
+        XCTAssertTrue(waitUntil(timeout: 8) { self.inputs().dropFirst(beforeHold).contains { $0["type"] as? String == "up" } }, "press-and-hold ends with up")
+        let holdKinds = inputs().dropFirst(beforeHold).compactMap { $0["type"] as? String }.filter { ["down", "up", "tap"].contains($0) }
+        XCTAssertEqual(holdKinds, ["down", "up"], "holding still sends down then up: \(holdKinds)")
+
         // The address: typed while holding the browser, Go sends the page there.
         let address = app.textFields["browser.address"]
         address.tap()

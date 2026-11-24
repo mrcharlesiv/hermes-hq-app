@@ -1286,7 +1286,7 @@ final class BrowserViewerController: UIViewController, BrowserStageHost, UITextF
         hint.text = text
         hint.isHidden = false
         hintTimer?.invalidate()
-        hintTimer = Timer.scheduledTimer(withTimeInterval: 4.5, repeats: false) { [weak self] _ in
+        hintTimer = Timer.scheduledTimer(withTimeInterval: 6, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.hint.isHidden = true }
         }
     }

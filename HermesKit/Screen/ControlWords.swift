@@ -29,9 +29,8 @@ nonisolated enum ControlWords {
     static let browserGestures = "Click, drag and scroll on the page, as in any browser."
     static let screenGestures = "Drag anywhere to move · A click clicks at the cursor · Hold the button then move to drag · Hold it to right-click"
     #else
-    /// The drag is said too (a tester, 2026-11-16, didn't find it): a still hold, then the finger drags what is under
-    /// the pointer.
-    static let browserGestures = "Drag anywhere to move the pointer. Tap to click. Hold, then drag, to drag something. Two fingers scroll; pinch to zoom."
+    /// Both ways to drag are named: hold still then drag, or double-tap and drag, for sliders and items.
+    static let browserGestures = "Drag anywhere to move the pointer. Tap to click. Hold or double-tap and drag to grab and slide. Two fingers scroll; pinch to zoom."
     /// Audit 09-22: the two-finger scroll and the pinch too, as the Browser's hint says (the web's line left them out).
     static let screenGestures = "Drag anywhere to move · Tap to click at the cursor · Hold then move to drag · Hold to right-click · Two fingers scroll · Pinch to zoom"
     #endif

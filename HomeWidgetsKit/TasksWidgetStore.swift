@@ -219,10 +219,23 @@ nonisolated enum TasksWidgetStore {
         WidgetVault.load(TasksWidgetIndex.self, service: indexService, account: "index", maxBytes: maxIndexBytes)
     }
 
-    /// Saves a view. `.unchanged` when the same bytes are there (nothing written, nothing to reload).
+    /// Saves a view. `.unchanged` when the same view is there (nothing written, nothing to reload). The first
+    /// frame is stamped with the moment of writing, so a kept view that differs only there still shows the same
+    /// thing (the widget shows a past frame from now): before, every write rewrote every view and reloaded the
+    /// widget, a keychain write on main every few seconds.
     static func saveView(_ view: TasksWidgetView) -> TileWidgetStore.SaveResult {
-        if loadView(view.key) == view { return .unchanged }
+        if let kept = loadView(view.key), sameButFirstStamp(kept, view) { return .unchanged }
         return WidgetVault.save(view, service: viewService, account: view.key, maxBytes: maxViewBytes) ? .written : .refused
+    }
+
+    /// Alike but for the first frame's stamp, when the kept one is no later (it has already begun).
+    static func sameButFirstStamp(_ kept: TasksWidgetView, _ new: TasksWidgetView) -> Bool {
+        guard let keptFirst = kept.frames.first, let newFirst = new.frames.first, keptFirst.at <= newFirst.at else {
+            return kept == new
+        }
+        var aligned = kept
+        aligned.frames[0].at = newFirst.at
+        return aligned == new
     }
 
     static func loadView(_ key: String) -> TasksWidgetView? {

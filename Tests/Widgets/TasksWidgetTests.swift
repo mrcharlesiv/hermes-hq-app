@@ -68,6 +68,36 @@ private func frame(_ view: TodoView, _ tasks: [TodoTask] = list, at: Date = now)
     TasksWidgetWriter.frame(view, input: input(tasks), botName: name, at: at, calendar: calendar)
 }
 
+/// The widget's write runs on main whenever the list changes. Builds 1160–1249 re-parsed every task's dates inside
+/// each sort comparison (a Done list of hundreds, per view, per frame) — about half a second on main every few
+/// seconds on the owner's phone. A list his size must write all its views quickly.
+struct TasksWidgetWriteCostTests {
+    @Test func aLongDoneListWritesEveryViewQuickly() {
+        let open = (0..<30).map { i in
+            task("open\(i)", due: i % 3 == 0 ? "2026-11-0\(5 + i % 4)T1\(i % 10):00:00-06:00" : nil,
+                 section: i % 2 == 0 ? "work" : "home",
+                 updated: "2026-11-0\(1 + i % 3)T08:\(10 + i):00.\(100000 + i)+00:00",
+                 created: "2026-10-2\(i % 10)T08:00:00.\(200000 + i)+00:00")
+        }
+        let done = (0..<400).map { i in
+            task("done\(i)", status: "done", section: [nil, "work", "home"][i % 3],
+                 updated: "2026-10-\(10 + i % 18)T09:\(10 + i % 50):00.\(300000 + i)+00:00",
+                 created: "2026-09-\(10 + i % 18)T09:00:00.\(400000 + i)+00:00",
+                 doneAt: "2026-10-\(10 + i % 18)T09:\(10 + i % 50):\(10 + i % 40).\(500000 + i)+00:00")
+        }
+        let made = input(open + done)
+        let start = Date()
+        var frames = 0
+        for choice in TasksWidgetWriter.choices(tasks: made.tasks, sections: made.sections) {
+            guard let view = TodoView(key: choice.id) else { continue }
+            frames += TasksWidgetWriter.view(view, name: choice.name, input: made, botName: name, now: now, calendar: calendar).frames.count
+        }
+        let seconds = Date().timeIntervalSince(start)
+        #expect(frames > 5)
+        #expect(seconds < 1.0, "writing every view took \(seconds) s")   // 9.4 s before the dates were remembered
+    }
+}
+
 struct TasksWidgetRowsTests {
     /// Today on the widget is Today on the page: Overdue, Today, Waiting on You, Next in Home, in that order with the
     /// page's rows (Done folded away, as the page folds it).
@@ -256,6 +286,26 @@ private func withTasksVault(_ body: () async throws -> Void) async rethrows {
 }
 
 extension TileWidgetStoreTests {
+    /// A write a minute later with nothing new is not a change: no keychain write, no widget reload (builds
+    /// 1160–1249 rewrote every view on each list change because the first frame carries the moment of writing).
+    @Test func tasksStoreKeepsAViewThatDiffersOnlyInItsFirstStamp() async {
+        await withTasksVault {
+            let first = TasksWidgetWriter.view(.today, name: "Today", input: input(), botName: name, now: now, calendar: calendar)
+            let later = TasksWidgetWriter.view(.today, name: "Today", input: input(), botName: name,
+                                               now: now.addingTimeInterval(60), calendar: calendar)
+            #expect(first != later, "the stamp moved")
+            #expect(TasksWidgetStore.saveView(first) == .written)
+            #expect(TasksWidgetStore.saveView(later) == .unchanged)
+            #expect(TasksWidgetStore.loadView("today") == first, "the kept view stays as written")
+            let edited = TasksWidgetWriter.view(.today, name: "Today", input: input(list + [task("new", due: "2026-11-04")]),
+                                                botName: name, now: now.addingTimeInterval(60), calendar: calendar)
+            #expect(TasksWidgetStore.saveView(edited) == .written, "a real change still writes")
+            let older = TasksWidgetWriter.view(.today, name: "Today", input: input(list + [task("new", due: "2026-11-04")]),
+                                               botName: name, now: now, calendar: calendar)
+            #expect(TasksWidgetStore.saveView(older) == .written, "an earlier stamp is written, never skipped")
+        }
+    }
+
     @Test func tasksStoreRoundTripsAndSignsOut() async {
         await withTasksVault {
             let view = TasksWidgetWriter.view(.today, name: "Today", input: input(), botName: name, now: now, calendar: calendar)

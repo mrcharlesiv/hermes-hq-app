@@ -519,12 +519,42 @@ nonisolated enum TodoDates {
         return f
     }()
 
+    // Each read is remembered: one parse is ~0.1 ms of ICU work, and the Tasks widget's write sorts the list once
+    // per view per frame (24 frames, five views), each comparison reading two to six dates — thousands of parses
+    // a write, half a second on main every few seconds (phone hang reports, builds 1160–1249). The zone-less form
+    // reads as the phone's time, so its answer is kept under the zone it was read in.
+    private enum Read { case zoned(Date), unzoned }
+    private static let memoLock = NSLock()
+    nonisolated(unsafe) private static var memo: [String: Read] = [:]
+    nonisolated(unsafe) private static var localMemo: [String: Date?] = [:]
+    private static let memoLimit = 8192
+
     /// An ISO 8601 moment, with or without fractional seconds ("…Z", "…+00:00", "…-06:00").
     static func moment(_ raw: String?) -> Date? {
         guard let raw, !raw.isEmpty else { return nil }
-        if let date = plain.date(from: raw) { return date }
-        if let date = fractional.date(from: raw) { return date }
-        // Python's isoformat() with no zone: read as the phone's time.
+        let read: Read
+        if let known = memoLock.withLock({ memo[raw] }) {
+            read = known
+        } else {
+            read = (plain.date(from: raw) ?? fractional.date(from: raw)).map(Read.zoned) ?? .unzoned
+            memoLock.withLock {
+                if memo.count >= memoLimit { memo.removeAll(keepingCapacity: true) }
+                memo[raw] = read
+            }
+        }
+        if case .zoned(let date) = read { return date }
+        let localKey = TimeZone.current.identifier + "|" + raw
+        if let known = memoLock.withLock({ localMemo[localKey] }) { return known }
+        let local = localMoment(raw)
+        memoLock.withLock {
+            if localMemo.count >= memoLimit { localMemo.removeAll(keepingCapacity: true) }
+            localMemo[localKey] = .some(local)
+        }
+        return local
+    }
+
+    /// Python's isoformat() with no zone: read as the phone's time.
+    private static func localMoment(_ raw: String) -> Date? {
         let local = DateFormatter()
         local.locale = Locale(identifier: "en_US_POSIX")
         for format in ["yyyy-MM-dd'T'HH:mm:ss.SSSSSS", "yyyy-MM-dd'T'HH:mm:ss"] {

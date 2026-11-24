@@ -81,9 +81,14 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboa
         didSet {
             oldValue?.removeFromSuperview()
             if let editBanner { addSubview(editBanner) }
+            reservedBannerHeight = editBannerHeight
             invalidateIntrinsicContentSize(); onHeightChange?(); setNeedsLayout()
         }
     }
+    /// The banner's height the composer's own height makes room for. Measured when the banner arrives, then again each
+    /// layout: before its first layout a wrapping title measures as one line (44 pt), and the owner's 2026-11-23
+    /// "Answering: …" strip, three lines (59 pt) once laid out, hung 7 pt over the message field.
+    private var reservedBannerHeight: CGFloat = 0
     /// The banner's height at the row's width: at least 44 (its ✕'s tap target), more when its words wrap at the
     /// largest text sizes. A text-size change re-measures it through `recomputeHeight`.
     private var editBannerHeight: CGFloat {
@@ -96,7 +101,7 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboa
     /// [Mac AAA 2026-11-17] On the Mac 8 pt clear of the box's own line (it rises over the row), as the activity pill
     /// and the arrow: the banner stood 6 pt over it.
     private var editExtra: CGFloat {
-        editBanner == nil ? 0 : editBannerHeight + (DeviceWord.isMac ? ChatMetrics.macFloatGap + boxRise : 8)
+        editBanner == nil ? 0 : reservedBannerHeight + (DeviceWord.isMac ? ChatMetrics.macFloatGap + boxRise : 8)
     }
     var topAccessoryHeight: CGFloat = 0 {
         didSet { if topAccessoryHeight != oldValue { invalidateIntrinsicContentSize(); onHeightChange?(); setNeedsLayout() } }
@@ -808,7 +813,15 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboa
         topAccessory?.frame = CGRect(x: 0, y: editExtra, width: bounds.width, height: max(0, rowTop - editExtra))
         // MENUS. [Mac AAA 2026-11-16] Edge to edge with the one box under it (it stood 4 pt inside the box's edges).
         let bannerSide = side - bannerOutset
-        editBanner?.frame = CGRect(x: bannerSide, y: 0, width: max(0, bounds.width - 2 * bannerSide), height: editBannerHeight)
+        if editBanner != nil {
+            let measured = editBannerHeight
+            if abs(measured - reservedBannerHeight) > 0.5 {   // its words wrapped differently at this width: grow (or shrink) to fit
+                reservedBannerHeight = measured
+                invalidateIntrinsicContentSize()
+                DispatchQueue.main.async { [weak self] in self?.onHeightChange?() }
+            }
+        }
+        editBanner?.frame = CGRect(x: bannerSide, y: 0, width: max(0, bounds.width - 2 * bannerSide), height: reservedBannerHeight)
         // [composer-bar] The bar's trailing end: the circle is drawn 4 pt in from the bar's edge.
         let pad = toolbarPad
         primaryButton.frame = CGRect(x: bounds.width - side - c - primaryInset - pad, y: bounds.height - c - pad, width: c, height: c)

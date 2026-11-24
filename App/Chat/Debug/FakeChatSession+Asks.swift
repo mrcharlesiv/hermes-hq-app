@@ -9,7 +9,8 @@ import Foundation
 
 extension FakeChatSession {
     static var askArgs: [String: JSONValue] {
-        ["question": .string("Start with the pilot group?"),
+        // `-HQDemoAskQuestion <words>`: a longer question (the owner's 2026-11-23 strip wrapped to three lines)
+        ["question": .string(ChatDemo.argument("-HQDemoAskQuestion") ?? "Start with the pilot group?"),
          "then": .string("Nothing goes to Dana until you tap Send."),
          "app": .string("Slack"), "from": .string("Dana Reyes"), "where": .string("DM"), "when": .string("11:03 AM"),
          "quote": .string("We're ready to go live for the first wave. Do you think we should just start with the pilot group?"),

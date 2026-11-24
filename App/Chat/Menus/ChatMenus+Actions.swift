@@ -527,6 +527,9 @@ final class ComposerEditBanner: UIView, ComposerFieldWatching {
         return view
     }()
     private var capsule = true
+    /// The words' wrap width at a given strip width (`systemLayoutSizeFitting` sets it before measuring).
+    private var wrapLabels: [UILabel] = []
+    private var usedWidth: () -> CGFloat = { 0 }
     /// [Mac AAA 2026-11-17] On the Mac the page's colour under the glass, as the Find bar's: over a reply the words
     /// behind the banner read through it as words.
     private let veil = UIView()
@@ -599,6 +602,7 @@ final class ComposerEditBanner: UIView, ComposerFieldWatching {
         label.textColor = ChatPalette.label
         label.numberOfLines = 0
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        wrapLabels = [label]
         let words = UIStackView(arrangedSubviews: [label])
         words.axis = .vertical
         if let note {
@@ -610,6 +614,7 @@ final class ComposerEditBanner: UIView, ComposerFieldWatching {
             line.numberOfLines = noteLines
             line.lineBreakMode = .byTruncatingTail
             line.accessibilityIdentifier = "\(identifier).note"
+            wrapLabels.append(line)
             words.addArrangedSubview(line)
         }
         var config = UIButton.Configuration.plain()
@@ -661,10 +666,17 @@ final class ComposerEditBanner: UIView, ComposerFieldWatching {
             saveButton = save
             buttons.append(save)
         }
-        let row = UIStackView(arrangedSubviews: [icon, words, UIView()] + buttons)
+        // The words take the row's free width and wrap only once they fill it (2026-11-23: held to a wrapping label's
+        // own guess at its width, they wrapped at half the row, "Answering: Start with the / pilot group?").
+        label.setContentHuggingPriority(UILayoutPriority(1), for: .horizontal)
+        let row = UIStackView(arrangedSubviews: [icon, words] + buttons)
         row.axis = .horizontal
         row.alignment = .center
         row.spacing = 6
+        // What the row's other parts take: its 14 + 4 pt insets, the icon, each button (at least 44 wide) and the gaps.
+        usedWidth = { [unowned icon] in
+            18 + icon.intrinsicContentSize.width + buttons.reduce(0) { $0 + max(44, $1.intrinsicContentSize.width) } + 6 * CGFloat(buttons.count + 1)
+        }
         row.translatesAutoresizingMaskIntoConstraints = false
         glass.contentView.addSubview(row)
         NSLayoutConstraint.activate([
@@ -687,9 +699,25 @@ final class ComposerEditBanner: UIView, ComposerFieldWatching {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
+    /// The composer sizes the strip by measuring it: the words wrap at the width they will have in the row, known from
+    /// the strip's width, not at whatever width they were last laid out at (2026-11-23: measured before its first
+    /// layout, a three-line "Answering: …" title came out one line tall and hung over the message field).
+    override func systemLayoutSizeFitting(_ targetSize: CGSize, withHorizontalFittingPriority horizontal: UILayoutPriority,
+                                          verticalFittingPriority vertical: UILayoutPriority) -> CGSize {
+        setWrapWidth(for: targetSize.width)
+        return super.systemLayoutSizeFitting(targetSize, withHorizontalFittingPriority: horizontal, verticalFittingPriority: vertical)
+    }
+
+    private func setWrapWidth(for width: CGFloat) {
+        guard width > 0 else { return }
+        let wrap = max(40, floor(width - usedWidth()))
+        for label in wrapLabels where abs(label.preferredMaxLayoutWidth - wrap) > 0.5 { label.preferredMaxLayoutWidth = wrap }
+    }
+
     /// A capsule while it is one line; a rounded card once its words wrap, so the corners don't cut into them (as ChatFindBar).
     override func layoutSubviews() {
         super.layoutSubviews()
+        setWrapWidth(for: bounds.width)
         let isCapsule = bounds.height <= 48
         if isCapsule != capsule {
             capsule = isCapsule

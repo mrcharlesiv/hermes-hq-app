@@ -56,14 +56,15 @@ nonisolated struct PhoneTranscript: Equatable, Sendable {
         var newest: (call: samplehostMessage.ToolCall, key: String)?
         var open: [(id: String, key: String)] = []
         var heardVoicemail = false
-        for (index, message) in ordered.enumerated() {
+        for message in ordered {
             let raw = (message.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             switch message.role {
             case "assistant", "user":
                 let text = spoken(raw)
                 if !text.isEmpty {
                     let assistant = message.role == "assistant"
-                    result.lines.append(Line(id: "\(index)|\(message.role)", speaker: assistant ? .assistant : .them,
+                    let speaker: Line.Speaker = assistant ? .assistant : .them
+                    result.lines.append(Line(id: "\(result.lines.count)|\(speaker.rawValue)", speaker: speaker,
                                              text: text, followsVoicemail: assistant && heardVoicemail ? true : nil))
                     if !assistant, phoneSoundsLikeVoicemail(text) { heardVoicemail = true }
                 }
@@ -72,13 +73,13 @@ nonisolated struct PhoneTranscript: Equatable, Sendable {
                 // in the same request: they show as one line.
                 if let answer = answeredText(raw), !answer.isEmpty,
                    result.lines.last.map({ $0.speaker != .you || $0.text != answer }) ?? true {
-                    result.lines.append(Line(id: "\(index)|you", speaker: .you, text: answer, isAnswer: true))
+                    result.lines.append(Line(id: "\(result.lines.count)|you", speaker: .you, text: answer, isAnswer: true))
                 }
                 // Anything else from a tool is a receipt (`{"http_status":422,…}`, `{"data":{"result":"ok"}}`): hidden.
             case "system":
                 if raw.hasPrefix(PhoneAskOwner.ownerMessagePrefix) {
                     let said = String(raw.dropFirst(PhoneAskOwner.ownerMessagePrefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !said.isEmpty { result.lines.append(Line(id: "\(index)|you", speaker: .you, text: said)) }
+                    if !said.isEmpty { result.lines.append(Line(id: "\(result.lines.count)|you", speaker: .you, text: said)) }
                 }
                 // "[long silence]" and our answer's own system note: hidden.
             default:
@@ -100,10 +101,12 @@ nonisolated struct PhoneTranscript: Equatable, Sendable {
         return result
     }
 
-    /// What a spoken line shows: no `<emotion … />` tags (leading or inline), spaces tidied.
+    /// What a spoken line shows: no `<emotion … />` or `<break …/>` tags (leading or inline), spaces tidied.
     static func spoken(_ text: String) -> String {
         guard text.contains("<") else { return text.trimmingCharacters(in: .whitespacesAndNewlines) }
-        let stripped = text.replacing(/<\/?emotion\b[^>]*>/.ignoresCase(), with: "")
+        let stripped = text
+            .replacing(/<\/?emotion\b[^>]*>/.ignoresCase(), with: "")
+            .replacing(/<(?:break|pause)\b[^>]*\/?>/.ignoresCase(), with: "")
         return stripped.replacing(/[ \t]{2,}/, with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -112,12 +115,25 @@ nonisolated struct PhoneTranscript: Equatable, Sendable {
         text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
-    /// Oldest first. samplehost doesn't document the order, so messages are sorted by `sent_at`/`created_at` when every
-    /// one has a readable time, else kept as sent.
+    /// Oldest first. samplehost returns newest-first without guaranteeing every row carries a timestamp, so detect
+    /// descending order, flip when needed, and interpolate missing dates from neighbors so one undated row never
+    /// leaves the whole transcript upside down.
     static func order(_ messages: [samplehostMessage]) -> [samplehostMessage] {
-        let dates = messages.map { date($0.sent_at ?? $0.created_at) }
-        guard !dates.contains(where: { $0 == nil }) else { return messages }
-        return messages.indices.sorted { (dates[$0]!, $0) < (dates[$1]!, $1) }.map { messages[$0] }
+        let initialDates = messages.map { date($0.sent_at ?? $0.created_at) }
+        let dated = initialDates.compactMap { $0 }
+        guard !dated.isEmpty else { return messages }
+        let descending = dated.count >= 2 && dated.first! > dated.last!
+        let working = descending ? Array(messages.reversed()) : messages
+        var dates = descending ? Array(initialDates.reversed()) : initialDates
+        var lastKnown: Date?
+        for i in dates.indices {
+            if let known = dates[i] { lastKnown = known } else if let lastKnown { dates[i] = lastKnown }
+        }
+        var nextKnown: Date?
+        for i in dates.indices.reversed() {
+            if let known = dates[i] { nextKnown = known } else if let nextKnown { dates[i] = nextKnown }
+        }
+        return working.indices.sorted { (dates[$0]!, $0) < (dates[$1]!, $1) }.map { working[$0] }
     }
 
     static func date(_ value: String?) -> Date? {
@@ -155,11 +171,35 @@ nonisolated struct PhoneTranscript: Equatable, Sendable {
     }
 }
 
-/// Words a voicemail greeting or an answering service says. Either this or samplehost's machine detection marks a call as
-/// voicemail.
+/// Unambiguous voicemail greeting phrases. Intentionally avoids generic human phrases like "7pm is not available"
+/// or "leave a message with me" so normal live conversations never falsely flip to voicemail.
 nonisolated func phoneSoundsLikeVoicemail(_ text: String) -> Bool {
     let lower = text.lowercased().replacingOccurrences(of: "’", with: "'")
-    return ["record your message", "at the tone", "after the tone", "after the beep", "leave a message", "leave your message",
-            "voicemail", "voice mail", "mailbox", "is not available", "isn't available", "can't take your call",
-            "cannot take your call", "unable to take your call"].contains { lower.contains($0) }
+    return [
+        "record your message",
+        "at the tone",
+        "after the tone",
+        "after the beep",
+        "leave a message after",
+        "leave a message at",
+        "please leave a message",
+        "leave your message",
+        "reached the voicemail",
+        "reached voicemail",
+        "forwarded to an automatic voice message",
+        "automatic voice message system",
+        "voice messaging system",
+        "voice mail system",
+        "voice mailbox",
+        "mailbox is full",
+        "the mailbox is full",
+        "person you are calling is not available",
+        "person you are trying to reach is not available",
+        "subscriber you have dialed",
+        "not available to take your call",
+        "can't take your call",
+        "cannot take your call",
+        "unable to take your call",
+        "unavailable to take your call",
+    ].contains { lower.contains($0) }
 }

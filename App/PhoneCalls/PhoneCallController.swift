@@ -58,8 +58,8 @@ nonisolated enum PhoneResultState: String, Codable, Sendable { case none, pendin
 nonisolated struct PhoneCallRecord: Identifiable, Equatable, Codable, Sendable {
     nonisolated enum State: String, Codable, Sendable { case calling, live, ending, ended }
     let id: String              // samplehost call_control_id
-    /// The chat it was placed from (its stored id where known).
-    let sessionID: String
+    /// The chat it was placed from (its stored id where known; migrated once a new chat gets its stored id).
+    var sessionID: String
     var profile: String? = nil
     let to: String
     let purpose: String
@@ -219,6 +219,17 @@ nonisolated struct PhoneCallRecord: Identifiable, Equatable, Codable, Sendable {
         }
     }
 
+    /// Re-keys calls filed under a temporary runtime session id once the chat receives its durable `storedSessionId`.
+    func migrateSession(from oldIDs: [String], to storedID: String) {
+        let targets = Set(oldIDs)
+        var changed = false
+        for i in calls.indices where targets.contains(calls[i].sessionID) && calls[i].sessionID != storedID {
+            calls[i].sessionID = storedID
+            changed = true
+        }
+        if changed { save() }
+    }
+
     // MARK: Dial
 
     /// Dials after the owner confirmed. First makes the assistant's recording match Settings (a failure blocks the
@@ -241,8 +252,8 @@ nonisolated struct PhoneCallRecord: Identifiable, Equatable, Codable, Sendable {
         let commandID = dialRetry.id(for: PhoneStartIntent(session: sessionID, destination: to, goal: purpose, voicemail: voicemail, name: name))
         let request = PhoneDialRequest(to: to, from: from, connectionID: connection, assistantID: assistant,
                                        purpose: purpose, commandID: commandID, ownerName: setup.name,
-                                       recorded: setup.records, voicemail: voicemail)
-        let dialed = try await api.dial(request)
+                                       calleeName: name ?? "", recorded: setup.records, voicemail: voicemail)
+        let dialed = try await api.dial(request, now: now())
         dialRetry.completed()
         let id = dialed.call_control_id
         if index(id) == nil {
@@ -321,11 +332,29 @@ nonisolated struct PhoneCallRecord: Identifiable, Equatable, Codable, Sendable {
             }
         }
         judge(id)
+        await hangupOrphanedAssistant(id, api)
         if let overAt = call(id)?.overAt, now().timeIntervalSince(overAt) >= summaryResultWait {
             await finishResult(id)
         }
         await readSummary(id, api)
         await finishResult(id)
+    }
+
+    /// On Call Control, `call.conversation.start_failed` or `call.conversation.ended` stops the AI assistant without
+    /// hanging up the underlying phone leg, leaving dead air billing until hung up. Close any orphaned leg cleanly.
+    private func hangupOrphanedAssistant(_ id: String, _ api: samplehostAPI) async {
+        guard let i = index(id), calls[i].active, calls[i].state != .ending,
+              !calls[i].events.contains(where: { $0.name == "call.hangup" }) else { return }
+        let startFailed = calls[i].events.contains { $0.name == "call.conversation.start_failed" }
+        let staleConversationEnded = calls[i].events.first(where: { $0.name == "call.conversation.ended" })
+            .flatMap(\.occurredAt).map { now().timeIntervalSince($0) >= 15 } ?? false
+        guard startFailed || staleConversationEnded else { return }
+        let commandID = calls[i].hangupCommandID
+        _ = await Result.of { try await api.hangup(callControlID: id, commandID: commandID) }
+        guard let j = index(id) else { return }
+        if startFailed, calls[j].endNote == nil { calls[j].endNote = "Voice assistant couldn't start" }
+        markOver(id, local: nil)
+        judge(id)
     }
 
     private func readSummary(_ id: String, _ api: samplehostAPI) async {
@@ -357,8 +386,11 @@ nonisolated struct PhoneCallRecord: Identifiable, Equatable, Codable, Sendable {
         }
         let read = await Result.of { try await api.messages(conversationID: conversation) }
         guard let i = index(id) else { return }
-        calls[i].conversationID = conversation
-        if calls[i].liveAt == nil { calls[i].liveAt = now() }
+        var stateChanged = false
+        if calls[i].conversationID == nil { calls[i].conversationID = conversation; stateChanged = true }
+        if calls[i].liveAt == nil { calls[i].liveAt = now(); stateChanged = true }
+        if calls[i].state == .calling { calls[i].state = .live; stateChanged = true }
+        if stateChanged { save() }
         switch read {
         case .failure(let error): calls[i].watchIssue = phoneMessage(error)
         case .success(let messages):
@@ -403,7 +435,11 @@ nonisolated struct PhoneCallRecord: Identifiable, Equatable, Codable, Sendable {
             call.asked[k].answer = text
         }
         if call.state == .calling, !call.lines.isEmpty { call.state = .live }
-        if !call.voicemail, call.theirLines.contains(where: phoneSoundsLikeVoicemail) { call.voicemail = true }
+        let humanDetected = call.events.contains(where: \.isHumanDetection)
+        if !call.voicemail, !(humanDetected && call.theirLines.count >= 3),
+           call.theirLines.prefix(2).contains(where: phoneSoundsLikeVoicemail) {
+            call.voicemail = true
+        }
         let changed = call != calls[i]
         calls[i] = call
         if changed { save() }
@@ -432,7 +468,11 @@ nonisolated struct PhoneCallRecord: Identifiable, Equatable, Codable, Sendable {
     /// What the reads say about the call (PhoneVerdict.derive), applied to it.
     private func judge(_ id: String) {
         guard let i = index(id) else { return }
-        var call = calls[i]
+        if calls[i].active, calls[i].events.contains(where: { $0.name == "call.hangup" }) {
+            markOver(id, local: nil)
+        }
+        guard let idx = index(id) else { return }
+        var call = calls[idx]
         let over = call.state == .ended
         let gaveUp = over && (call.overAt.map { now().timeIntervalSince($0) >= eventsGiveUp } ?? true)
         let verdict = PhoneVerdict.derive(events: call.events, status: call.endedStatus, theirLines: call.theirLines,
@@ -449,8 +489,8 @@ nonisolated struct PhoneCallRecord: Identifiable, Equatable, Codable, Sendable {
             call.outcome = verdict.outcome
             AppLog.note("phone", "call settled")
         }
-        let changed = call != calls[i]
-        calls[i] = call
+        let changed = call != calls[idx]
+        calls[idx] = call
         if changed { save() }
     }
 

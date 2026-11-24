@@ -50,8 +50,11 @@ def empty():
     return {'requests': [], 'problems': [], 'calls': [], 'answers': [], 'told': [], 'hangups': 0, 'assistants': [],
             'created_keys': [], 'dials': [], 'telephony_updates': [],
             'scenario': {'name': 'answers', 'lag': 0.0, 'events_lag': 2.0, 'summary_delay': 3.0},
-            'telephony': {'default_texml_app_id': 'texml-sim', 'noise_suppression': 'krisp',
-                          'recording_settings': {'enabled': True, 'channels': 'dual', 'format': 'mp3'}}}
+            'assistant_config': {'greeting': '', 'transcription': {'model': 'deepgram/flux', 'language': 'auto'},
+                                 'interruption_settings': {'enable': True}},
+            'telephony': {'default_texml_app_id': 'texml-sim', 'noise_suppression': 'aicoustics',
+                          'time_limit_secs': 1800, 'user_idle_timeout_secs': 180, 'user_idle_reply_secs': 5,
+                          'recording_settings': {'enabled': False, 'channels': 'dual', 'format': 'mp3'}}}
 state = empty()
 
 def utc(t):
@@ -181,8 +184,8 @@ def check_dial(body):
                      ('time_limit_secs', body.get('time_limit_secs') == 1800), ('timeout_secs', body.get('timeout_secs') == 45),
                      ('answering_machine_detection', body.get('answering_machine_detection') == 'premium'),
                      ('command_id', bool(body.get('command_id'))), ('assistant.id', assistant.get('id') == ASSISTANT),
-                     ('assistant.greeting', (assistant.get('greeting') or '').startswith('Hi, this is an AI assistant calling')),
-                     ('assistant.instructions', 'ask_owner' in instructions and '60 seconds' not in instructions),
+                     ('assistant.greeting', assistant.get('greeting') == ''),
+                     ('assistant.instructions', 'ask_owner' in instructions and '60 seconds' not in instructions and 'Current local time:' in instructions),
                      ('ask_owner tool', webhook.get('name') == 'ask_owner' and webhook.get('url', '').endswith('.invalid/hermes-hq'))]:
         if not ok: problem('dial ' + name)
 
@@ -204,17 +207,30 @@ def route(method, path, query, body, headers=None):
         if key not in state['created_keys']:
             state['created_keys'].append(key)
             state['assistants'].append({'id': ASSISTANT, 'name': (body or {}).get('name'), 'created_at': iso(0)})
+            if isinstance((body or {}).get('telephony_settings'), dict):
+                merged = dict(state['telephony'])
+                merged.update(body['telephony_settings'])
+                state['telephony'] = merged
+            if 'greeting' in (body or {}): state['assistant_config']['greeting'] = body['greeting']
+            if isinstance((body or {}).get('transcription'), dict): state['assistant_config']['transcription'] = body['transcription']
+            if isinstance((body or {}).get('interruption_settings'), dict): state['assistant_config']['interruption_settings'] = body['interruption_settings']
         return 200, dict(state['assistants'][-1], model='simulated-default')
     if path == '/v2/ai/assistants/' + ASSISTANT and state['assistants']:
         if method == 'POST':
             sent = (body or {}).get('telephony_settings')
-            if not isinstance(sent, dict) or set(sent.keys()) != set(state['telephony'].keys()):
+            if not isinstance(sent, dict) or not set(state['telephony'].keys()).issubset(set(sent.keys())):
                 problem('update-an-assistant must send the whole telephony_settings')
             else:
                 state['telephony'] = sent
                 state['telephony_updates'].append(bool((sent.get('recording_settings') or {}).get('enabled')))
+            if 'greeting' in (body or {}): state['assistant_config']['greeting'] = body['greeting']
+            if isinstance((body or {}).get('transcription'), dict): state['assistant_config']['transcription'] = body['transcription']
+            if isinstance((body or {}).get('interruption_settings'), dict): state['assistant_config']['interruption_settings'] = body['interruption_settings']
         return 200, {'id': ASSISTANT, 'name': state['assistants'][-1]['name'], 'model': 'openai/gpt-4o-mini',
-                     'enabled_features': ['telephony'], 'greeting': 'Hello', 'telephony_settings': state['telephony']}
+                     'enabled_features': ['telephony'], 'greeting': state['assistant_config']['greeting'],
+                     'transcription': state['assistant_config']['transcription'],
+                     'interruption_settings': state['assistant_config']['interruption_settings'],
+                     'telephony_settings': state['telephony']}
     if method == 'GET' and path == '/v2/balance':
         return 200, {'data': {'record_type': 'balance', 'balance': '25.00', 'currency': 'USD', 'credit_limit': '0.00'}}
     if method == 'GET' and path == '/v2/call_control_applications/' + CONNECTION:

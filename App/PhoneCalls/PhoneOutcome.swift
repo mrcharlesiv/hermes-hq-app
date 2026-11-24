@@ -7,22 +7,24 @@ import Foundation
 // MARK: - Logged webhook events
 
 /// One row of list-call-events with `filter[type]=webhook`: `name`, `occurred_at` and the webhook's own
-/// `payload.payload` fields the app reads (`result`, `hangup_cause`, `hangup_source`).
+/// `payload.payload` fields the app reads (`result`, `hangup_cause`, `hangup_source`, error/reason detail).
 nonisolated struct PhoneCallEvent: Codable, Equatable, Sendable {
     let name: String
     let occurredAt: Date?
     var result: String? = nil
     var hangupCause: String? = nil
     var hangupSource: String? = nil
+    var detail: String? = nil
 
-    init(name: String, occurredAt: Date?, result: String? = nil, hangupCause: String? = nil, hangupSource: String? = nil) {
+    init(name: String, occurredAt: Date?, result: String? = nil, hangupCause: String? = nil,
+         hangupSource: String? = nil, detail: String? = nil) {
         self.name = name; self.occurredAt = occurredAt; self.result = result
-        self.hangupCause = hangupCause; self.hangupSource = hangupSource
+        self.hangupCause = hangupCause; self.hangupSource = hangupSource; self.detail = detail
     }
 
-    private enum RowKeys: String, CodingKey { case name, occurred_at, payload, occurredAt, result, hangupCause, hangupSource }
+    private enum RowKeys: String, CodingKey { case name, occurred_at, payload, occurredAt, result, hangupCause, hangupSource, detail }
     private enum OuterKeys: String, CodingKey { case event_type, payload }
-    private enum InnerKeys: String, CodingKey { case result, hangup_cause, hangup_source }
+    private enum InnerKeys: String, CodingKey { case result, hangup_cause, hangup_source, error, reason, message }
 
     /// Reads the API's row and the app's own saved copy alike; a field of an unexpected type is left out.
     init(from decoder: Decoder) throws {
@@ -33,6 +35,7 @@ nonisolated struct PhoneCallEvent: Codable, Equatable, Sendable {
             result = try? row.decodeIfPresent(String.self, forKey: .result)
             hangupCause = try? row.decodeIfPresent(String.self, forKey: .hangupCause)
             hangupSource = try? row.decodeIfPresent(String.self, forKey: .hangupSource)
+            detail = try? row.decodeIfPresent(String.self, forKey: .detail)
             return
         }
         let outer = try? row.nestedContainer(keyedBy: OuterKeys.self, forKey: .payload)
@@ -44,6 +47,10 @@ nonisolated struct PhoneCallEvent: Codable, Equatable, Sendable {
         result = (try? inner?.decodeIfPresent(String.self, forKey: .result)) ?? nil
         hangupCause = (try? inner?.decodeIfPresent(String.self, forKey: .hangup_cause)) ?? nil
         hangupSource = (try? inner?.decodeIfPresent(String.self, forKey: .hangup_source)) ?? nil
+        let errText: String? = (try? inner?.decodeIfPresent(String.self, forKey: .error)) ?? nil
+        let reasonText: String? = (try? inner?.decodeIfPresent(String.self, forKey: .reason)) ?? nil
+        let msgText: String? = (try? inner?.decodeIfPresent(String.self, forKey: .message)) ?? nil
+        detail = errText ?? reasonText ?? msgText
     }
 
     func encode(to encoder: Encoder) throws {
@@ -53,6 +60,7 @@ nonisolated struct PhoneCallEvent: Codable, Equatable, Sendable {
         try c.encodeIfPresent(result, forKey: .result)
         try c.encodeIfPresent(hangupCause, forKey: .hangupCause)
         try c.encodeIfPresent(hangupSource, forKey: .hangupSource)
+        try c.encodeIfPresent(detail, forKey: .detail)
     }
 
     /// `occurred_at` as samplehost writes it: "2026-11-21 12:36:49.554602" (a space, no `T`, no zone: UTC, microseconds).
@@ -78,6 +86,19 @@ nonisolated struct PhoneCallEvent: Codable, Equatable, Sendable {
 
     /// The machine-detection events whose `result` says what answered.
     static let detectionNames: Set<String> = ["call.machine.premium.detection.ended", "call.machine.detection.ended"]
+    /// Premium/Standard greeting-end events; samplehost sends `beep_detected` here even when a beep arrives before detection ends.
+    static let greetingEndedNames: Set<String> = ["call.machine.premium.greeting.ended", "call.machine.greeting.ended"]
+
+    var isMachineDetection: Bool {
+        let lower = result?.lowercased() ?? ""
+        if Self.detectionNames.contains(name) { return lower.hasPrefix("machine") }
+        if Self.greetingEndedNames.contains(name) { return lower == "beep_detected" }
+        return false
+    }
+
+    var isHumanDetection: Bool {
+        Self.detectionNames.contains(name) && result?.lowercased().hasPrefix("human") == true
+    }
 }
 
 // MARK: - The outcome
@@ -122,8 +143,12 @@ nonisolated struct PhoneVerdict: Equatable, Sendable {
         let initiated = first("call.initiated")
         let answered = first("call.answered")
         let hangup = first("call.hangup")
-        let machine = events.contains { PhoneCallEvent.detectionNames.contains($0.name) && $0.result?.lowercased() == "machine" }
-        verdict.voicemail = machine || theirLines.contains(where: phoneSoundsLikeVoicemail)
+        let startFailed = first("call.conversation.start_failed")
+        let machine = events.contains(where: \.isMachineDetection)
+        let humanDetected = events.contains(where: \.isHumanDetection)
+        let openingVoicemail = !(humanDetected && theirLines.count >= 3)
+            && theirLines.prefix(2).contains(where: phoneSoundsLikeVoicemail)
+        verdict.voicemail = machine || openingVoicemail
         verdict.answeredAt = answered?.occurredAt
         verdict.endedAt = hangup?.occurredAt
         if let start = initiated?.occurredAt, let pickup = answered?.occurredAt { verdict.ringSeconds = max(0, pickup.timeIntervalSince(start)) }
@@ -133,12 +158,18 @@ nonisolated struct PhoneVerdict: Equatable, Sendable {
             else if let pickup = answered?.occurredAt, let end = hangup?.occurredAt { verdict.duration = max(0, Int(end.timeIntervalSince(pickup).rounded())) }
         }
         guard ended else { return verdict }
+        let startFailureOutcome: PhoneOutcome? = startFailed.flatMap { failed in
+            guard theirLines.isEmpty else { return nil }
+            let detail = failed.detail?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return .couldNotConnect(detail.flatMap { $0.isEmpty ? nil : $0 } ?? "the voice assistant couldn't start")
+        }
         if let hangup {
             verdict.settled = true
-            verdict.outcome = pickedUp ? (verdict.voicemail ? .voicemail : .finished) : unanswered(hangup.hangupCause)
+            verdict.outcome = startFailureOutcome ?? (pickedUp ? (verdict.voicemail ? .voicemail : .finished) : unanswered(hangup.hangupCause))
         } else if gaveUp {
             verdict.settled = true
-            if pickedUp { verdict.outcome = verdict.voicemail ? .voicemail : .finished }
+            if let startFailureOutcome { verdict.outcome = startFailureOutcome }
+            else if pickedUp { verdict.outcome = verdict.voicemail ? .voicemail : .finished }
             else if localEnd == .youHungUp { verdict.outcome = .noAnswer }
             else { verdict.outcome = .unknown }
         }

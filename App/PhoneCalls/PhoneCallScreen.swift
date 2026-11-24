@@ -23,8 +23,10 @@ struct PhoneCallScreen: View {
         Group {
             if let call = controller.call(id) {
                 VStack(spacing: 8) {
-                    PhoneScreenHeader(title: call.active ? phoneShown(call.to) : "Call summary",
-                                      subtitle: call.active ? call.name : dateLabel(call.placedAt), close: close) {
+                    let activeTitle = call.name ?? phoneShown(call.to)
+                    let activeSubtitle = call.name == nil ? nil : phoneShown(call.to)
+                    PhoneScreenHeader(title: call.active ? activeTitle : "Call summary",
+                                      subtitle: call.active ? activeSubtitle : dateLabel(call.placedAt), close: close) {
                         Menu {
                             Button("Copy number", systemImage: "doc.on.doc") {
                                 UIPasteboard.general.string = call.to
@@ -88,12 +90,18 @@ struct PhoneCallScreen: View {
                             PhoneRingingMark()
                             Text(call.statusText).font(Font.hq(.title).weight(.bold))
                                 .accessibilityIdentifier("phone.call.status")
-                            TimelineView(.periodic(from: call.placedAt, by: 1)) { time in
-                                Text(PhoneCallPresentation.timer(from: call.placedAt, to: time.date)
-                                     + " · If voicemail answers, " + (call.voicemailChoice == .hangUp ? "hang up" : "leave a message"))
-                                    .font(Font.hq(.subheadline)).monospacedDigit().foregroundStyle(Color.hqLabel2)
+                            if call.state == .ending {
+                                Text("If voicemail answers, " + (call.voicemailChoice == .hangUp ? "hang up" : "leave a message"))
+                                    .font(Font.hq(.subheadline)).foregroundStyle(Color.hqLabel2)
+                                    .multilineTextAlignment(.center)
+                            } else {
+                                TimelineView(.periodic(from: call.placedAt, by: 1)) { time in
+                                    Text(PhoneCallPresentation.timer(from: call.placedAt, to: time.date)
+                                         + " · If voicemail answers, " + (call.voicemailChoice == .hangUp ? "hang up" : "leave a message"))
+                                        .font(Font.hq(.subheadline)).monospacedDigit().foregroundStyle(Color.hqLabel2)
+                                }
+                                .multilineTextAlignment(.center)
                             }
-                            .multilineTextAlignment(.center)
                         }
                         .padding(.vertical, 20)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -189,10 +197,17 @@ struct PhoneCallScreen: View {
             }
             .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 4)
-            TimelineView(.periodic(from: call.answeredAt ?? call.liveAt ?? call.placedAt, by: 1)) { time in
-                Text(PhoneCallPresentation.timer(from: call.answeredAt ?? call.liveAt ?? call.placedAt, to: time.date))
+            let start = call.answeredAt ?? call.liveAt ?? call.placedAt
+            if call.state == .ending {
+                Text(PhoneCallPresentation.timer(from: start, to: call.endedAt ?? Date()))
                     .font(Font.hq(.title3).weight(.semibold)).monospacedDigit()
                     .accessibilityIdentifier("phone.call.timer")
+            } else {
+                TimelineView(.periodic(from: start, by: 1)) { time in
+                    Text(PhoneCallPresentation.timer(from: start, to: time.date))
+                        .font(Font.hq(.title3).weight(.semibold)).monospacedDigit()
+                        .accessibilityIdentifier("phone.call.timer")
+                }
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 12)
@@ -392,10 +407,11 @@ struct PhoneConversation: View {
                     if catchingUp {
                         HStack(spacing: 6) {
                             ProgressView().controlSize(.mini).accessibilityHidden(true)
-                            Text("catching up, a few seconds behind")
+                            Text(lines.isEmpty ? "Connected, waiting for the first words…" : "catching up, a few seconds behind")
                                 .accessibilityIdentifier("phone.lag-note")
                         }
                         .font(Font.hq(.caption)).foregroundStyle(Color.hqLabel2)
+                        .padding(.top, lines.isEmpty ? 28 : 0)
                     } else if readOnly && lines.isEmpty {
                         Text("Nothing was said.").foregroundStyle(Color.hqLabel2)
                     }
@@ -470,26 +486,67 @@ private struct PhoneCallSummary: View {
         ScrollView {
             VStack(spacing: 10) {
                 hero
+                if !call.purpose.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    card("GOAL") {
+                        Text(call.purpose)
+                            .accessibilityIdentifier("phone.call.goal")
+                    }
+                }
                 if call.settled {
                     let finished = call.outcome == .finished
                     card(finished ? "WHAT HAPPENED" : "WHY") {
-                        Text(finished ? PhoneCallPresentation.whatHappened(call) : PhoneCallPresentation.reason(call))
-                            .accessibilityIdentifier(finished ? "phone.call.summary" : "phone.call.voicemail-note")
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(finished ? PhoneCallPresentation.whatHappened(call) : PhoneCallPresentation.reason(call))
+                                .accessibilityIdentifier(finished ? "phone.call.summary" : "phone.call.voicemail-note")
+                            if finished && call.summary == nil && call.summaryFinished == false {
+                                HStack(spacing: 6) {
+                                    ProgressView().controlSize(.mini).accessibilityHidden(true)
+                                    Text("Generating summary…")
+                                }
+                                .font(Font.hq(.caption)).foregroundStyle(Color.hqLabel2)
+                            }
+                        }
                     }
-                    if !call.asked.isEmpty {
-                        card("YOU WERE ASKED") {
+                }
+                if call.summary == nil, !call.shownLines.isEmpty {
+                    let preview = Array(call.shownLines.suffix(4))
+                    Button { action(.transcript) } label: {
+                        card(call.shownLines.count > preview.count ? "RECENT CONVERSATION" : "CONVERSATION") {
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(preview) { line in
+                                    Text("\(Text(PhoneCallPresentation.speaker(line) + ": ").fontWeight(.semibold))\(line.text)")
+                                        .foregroundStyle(Color.hqLabel)
+                                        .lineLimit(3)
+                                }
+                                if call.shownLines.count > preview.count {
+                                    Text("View all \(call.shownLines.count) messages")
+                                        .font(Font.hq(.footnote).weight(.semibold))
+                                        .foregroundStyle(Color.hqTintText)
+                                        .padding(.top, 2)
+                                }
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("phone.call.transcript-preview")
+                }
+                if !call.asked.isEmpty {
+                    card("YOU WERE ASKED") {
+                        VStack(alignment: .leading, spacing: 6) {
                             ForEach(Array(call.asked.enumerated()), id: \.offset) { _, pair in
                                 Text(pair.question) + Text(" → " + (pair.answer ?? "Unanswered")).foregroundStyle(Color.hqLabel2)
                             }
                         }
                     }
-                    let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 8))
-                    layout {
-                        ForEach(PhoneCallPresentation.actions(call), id: \.self) { item in
-                            Button(item.rawValue) { action(item) }.buttonStyle(PhoneActionStyle())
-                        }
+                }
+                let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 8))
+                layout {
+                    ForEach(PhoneCallPresentation.actions(call), id: \.self) { item in
+                        Button(item.rawValue) { action(item) }.buttonStyle(PhoneActionStyle())
                     }
-                    card(nil) {
+                }
+                card(nil) {
+                    VStack(spacing: 8) {
                         ForEach(PhoneCallPresentation.facts(call, sendsResults: sendsResults)) { fact in
                             let layout = typeSize.isAccessibilitySize
                                 ? AnyLayout(VStackLayout(alignment: .leading, spacing: 3)) : AnyLayout(HStackLayout(alignment: .firstTextBaseline))
@@ -522,7 +579,7 @@ private struct PhoneCallSummary: View {
             }
             Text(PhoneCallPresentation.title(call.outcome, duration: call.duration))
                 .font(Font.hq(.title2).weight(.bold)).accessibilityIdentifier("phone.call.status")
-            Text([phoneShown(call.to), call.name, PhoneCallPresentation.pickup(call)].compactMap { $0 }.joined(separator: " · "))
+            Text([call.name, phoneShown(call.to), PhoneCallPresentation.pickup(call)].compactMap { $0 }.joined(separator: " · "))
                 .font(Font.hq(.subheadline)).foregroundStyle(Color.hqLabel2)
         }
         .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)

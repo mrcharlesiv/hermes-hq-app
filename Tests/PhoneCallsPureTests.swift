@@ -82,8 +82,33 @@ struct PhoneOutcomeTests {
                       "The mailbox is full"])
     func voicemailWording(_ said: String) { #expect(phoneSoundsLikeVoicemail(said)) }
 
-    @Test(arguments: ["Hello, dental office, how can I help?", "Sure, Tuesday works.", "Can you call back later?"])
+    @Test(arguments: ["Hello, dental office, how can I help?", "Sure, Tuesday works.", "Can you call back later?",
+                      "7pm is not available, how about 8?", "Dr. Smith isn't available today, want to leave a message with me?",
+                      "Did you check your voicemail earlier?"])
     func notVoicemail(_ said: String) { #expect(!phoneSoundsLikeVoicemail(said)) }
+
+    @Test func amdClassificationsAndMultiTurnHumanProtection() {
+        let beepOnly = [Self.event("call.initiated", 0), Self.event("call.answered", 2),
+                        Self.event("call.machine.premium.greeting.ended", 4, result: "beep_detected"),
+                        Self.event("call.hangup", 8, cause: "normal_clearing")]
+        #expect(PhoneVerdict.derive(events: beepOnly, status: nil, theirLines: [], ended: true, localEnd: nil, gaveUp: false).outcome == .voicemail)
+
+        let stdMachine = [Self.event("call.initiated", 0), Self.event("call.answered", 2),
+                          Self.event("call.machine.detection.ended", 4, result: "machine_end_beep"),
+                          Self.event("call.hangup", 8, cause: "normal_clearing")]
+        #expect(PhoneVerdict.derive(events: stdMachine, status: nil, theirLines: [], ended: true, localEnd: nil, gaveUp: false).outcome == .voicemail)
+
+        let humanConversation = [Self.event("call.initiated", 0), Self.event("call.answered", 3),
+                                 Self.event("call.machine.premium.detection.ended", 4, result: "human_residence"),
+                                 Self.event("call.hangup", 40, cause: "normal_clearing")]
+        let multiTurn = ["Hello?", "Yeah, let me check.", "Sorry, please leave a message after the tone is what my other phone says."]
+        #expect(PhoneVerdict.derive(events: humanConversation, status: nil, theirLines: multiTurn, ended: true, localEnd: nil, gaveUp: false).outcome == .finished)
+
+        let startFailed = [Self.event("call.initiated", 0), Self.event("call.answered", 2),
+                           PhoneCallEvent(name: "call.conversation.start_failed", occurredAt: Self.t0.addingTimeInterval(3), detail: "provider error"),
+                           Self.event("call.hangup", 4, cause: "normal_clearing")]
+        #expect(PhoneVerdict.derive(events: startFailed, status: nil, theirLines: [], ended: true, localEnd: nil, gaveUp: false).outcome == .couldNotConnect("provider error"))
+    }
 
     @Test func durationsAndStatusWords() {
         #expect(phoneDuration(23) == "23s")
@@ -170,32 +195,57 @@ struct PhoneTranscriptReaderTests {
         #expect(back.lines.map(\.text) == ["Yes"])
         #expect(back.question == nil)
     }
+
+    @Test func ordersNewestFirstEvenWhenOneRowLacksTimestampAndStripsBreakTags() {
+        let newestFirst = [
+            samplehostMessage(role: "user", text: "Third <break time=\"200ms\"/> line", created_at: "2026-01-01T00:00:03.000Z"),
+            samplehostMessage(role: "assistant", text: "Second <pause/> line", created_at: nil),
+            samplehostMessage(role: "assistant", text: "First line", created_at: "2026-01-01T00:00:01.000Z"),
+        ]
+        let read = PhoneTranscript.read(newestFirst, answered: [])
+        #expect(read.lines.map(\.text) == ["First line", "Second line", "Third line"])
+    }
 }
 
 struct PhoneWordsTests {
-    @Test func greeting() {
-        #expect(PhoneAskOwner.greeting(ownerName: "Alex", recorded: false) == "Hi, this is an AI assistant calling on behalf of Alex.")
-        #expect(PhoneAskOwner.greeting(ownerName: " Alex ", recorded: true) == "Hi, this is an AI assistant calling on behalf of Alex. This call is recorded.")
-        #expect(PhoneAskOwner.greeting(ownerName: "", recorded: false) == "Hi, this is an AI assistant calling with a quick request.")
-        #expect(PhoneAskOwner.greeting(ownerName: "  ", recorded: true) == "Hi, this is an AI assistant calling with a quick request. This call is recorded.")
+    @Test func dialGreetingWaitsForPickup() {
+        #expect(PhoneAskOwner.dialGreeting == "")
     }
 
     @Test func instructionsPieces() {
-        let text = PhoneAskOwner.instructions(purpose: "Move the cleaning to next week", ownerName: "Alex", recorded: true, voicemail: .hangUp)
-        for piece in ["on behalf of Alex", "Alex is not on the call", "Why you are calling, in Alex's words: Move the cleaning to next week",
+        let fixed = Date(timeIntervalSince1970: 1_763_995_200)
+        let text = PhoneAskOwner.instructions(purpose: "Move the cleaning to next week", ownerName: "Alex",
+                                              calleeName: "Bright Dental", recorded: true, voicemail: .hangUp, now: fixed)
+        for piece in ["on behalf of Alex", "You are calling Bright Dental.", "Current local time:",
+                      "Why you are calling, in Alex's words: Move the cleaning to next week",
+                      "Wait for the person who answers to speak first",
+                      "immediately state why you are calling in one clear, plain sentence",
                       "Stay on the call until the goal is done", "Do not end the call just because it is taking long",
                       "call the ask_owner tool once", "its result is a receipt, never the answer",
-                      "never call it twice for the same question", "starts with \"The owner answered\"",
-                      "\"Message from the owner\"", "This call is recorded; say so if asked.",
-                      "hang up right away without saying anything"] {
+                      "never call ask_owner twice for the same question", "starting with \"The owner answered\"",
+                      "\"Message from the owner\"", "briefly mention in your very first turn that the call is recorded",
+                      "hang up right away using the hangup tool without saying anything"] {
             #expect(text.contains(piece), "\(piece)")
         }
         #expect(!text.contains("60"), "no time allotment")
         #expect(!text.contains("—"), "no em dashes")
-        let plain = PhoneAskOwner.instructions(purpose: "p", ownerName: "", recorded: false, voicemail: .leaveMessage)
-        #expect(plain.contains("on behalf of the owner") && plain.contains("The owner is not on the call"))
+        #expect(!text.contains("call back"), "hang up says nothing, so no call-back rule")
+
+        let callingOwner = PhoneAskOwner.instructions(purpose: "Go over today's schedule", ownerName: "Alex",
+                                                      calleeName: "alex", recorded: false, voicemail: .leaveMessage, now: fixed)
+        #expect(callingOwner.contains("calling Alex directly on the phone"))
+        #expect(!callingOwner.contains("The person who answers is not Alex"))
+        #expect(!callingOwner.contains("—"), "no em dashes")
+
+        let plain = PhoneAskOwner.instructions(purpose: "p", ownerName: "", recorded: false, voicemail: .leaveMessage, now: fixed)
+        #expect(plain.contains("on behalf of the owner"))
         #expect(!plain.contains("recorded"))
-        #expect(plain.contains("leave one short message saying who you are calling for and why, then hang up"))
+        for piece in ["leave one short message, then hang up", "the reason in one plain sentence of your own",
+                      "never read the owner's words out as written", "fix any typos or shorthand",
+                      "Do not ask anyone to call back unless the owner's words ask for a call back",
+                      "say it is a test call and that no reply is needed"] {
+            #expect(plain.contains(piece), "\(piece)")
+        }
         #expect(PhoneLimits.stayCopy == "The assistant stays on until the job is done. Safety stop at 30 minutes.")
         #expect(PhoneLocalEnd.safetyStop.note == "30-minute safety stop")
     }
@@ -285,12 +335,16 @@ struct PhoneChatTextTests {
     @Test func callNoteTextAndStripping() throws {
         let note = PhoneChatNote.text(scheme: "hermeshq")
         #expect(note.hasPrefix("(Hermes HQ: this person can place AI phone calls from the app."))
-        #expect(note.contains("[Call +12125550142](hermeshq://phone-call?to=%2B12125550142&goal=<URL-encoded goal in plain words>)"))
+        #expect(note.contains("cannot see this chat history or memory"))
+        #expect(note.contains("hermeshq://phone-call?to=%2B12125550142&name="))
         #expect(note.hasSuffix("If you don't have the number, ask for it or look it up first.)"))
         let sent = "Call the dentist and move my appointment" + "\n\n" + note
         #expect(PhoneChatNote.stripped(sent, scheme: "hermeshq") == "Call the dentist and move my appointment")
         #expect(PhoneChatNote.stripped("Call the dentist", scheme: "hermeshq") == nil)
         #expect(PhoneChatNote.note(for: sent, ready: true, scheme: "hermeshq") == nil, "never twice")
+        // Legacy notes also strip cleanly.
+        #expect(PhoneChatNote.stripped("Call them\n\n" + PhoneChatNote.legacyText(scheme: "hermeshq", includesName: true), scheme: "hermeshq") == "Call them")
+        #expect(PhoneChatNote.stripped("Call them\n\n" + PhoneChatNote.legacyText(scheme: "hermeshq", includesName: false), scheme: "hermeshq") == "Call them")
         // The chat's stored rows: the bubble shows the words as typed, also inside a task's wrapped text.
         let scheme = AppIdentity.current.urlScheme
         let titles = SentTitles()
@@ -333,10 +387,13 @@ struct PhoneProposalTests {
         #expect(SpokenMarkdown.plain(PhoneProposal.spoken(reply, scheme: Self.scheme)).hasSuffix("or bad"))
     }
 
-    @Test func goalLength() {
-        let long = String(repeating: "a", count: 500)
-        #expect(PhoneProposal.parse(Self.url("hermeshq://phone-call?to=%2B12125550142&goal=" + long), scheme: Self.scheme)?.goal.count == 500)
+    @Test func goalLengthAndResilientNumbers() {
+        let long = String(repeating: "a", count: 2000)
+        #expect(PhoneProposal.parse(Self.url("hermeshq://phone-call?to=%2B12125550142&goal=" + long), scheme: Self.scheme)?.goal.count == 2000)
         #expect(PhoneProposal.parse(Self.url("hermeshq://phone-call?to=%2B12125550142&goal=" + long + "a"), scheme: Self.scheme) == nil)
+        // Form-decoded `+` (leading space) and 11-digit NANP numbers still parse when `from` is nil (chat rendering).
+        #expect(PhoneProposal.parse(Self.url("hermeshq://phone-call?to=%2012125550142&goal=Check%20in"), scheme: Self.scheme)?.to == "+12125550142")
+        #expect(PhoneProposal.parse(Self.url("hermeshq://phone-call?to=12125550142&goal=Check%20in"), scheme: Self.scheme)?.to == "+12125550142")
     }
 
     @Test func outsideTheAppIsAlwaysRefused() {
@@ -407,6 +464,19 @@ struct PhoneSetupCheckTests {
                                                                            assistant: .failure(.unexpected(404))))
         #expect(Self.state(missing, "connection") == .fail && Self.state(missing, "assistant") == .fail, "a 404 is an answer")
     }
+
+    @Test func suboptimalVoiceSettingsWarn() {
+        var reads = Self.good()
+        reads.assistant = .success(samplehostAssistantDetail(json: [
+            "id": "assistant-1", "name": "Otto", "model": "openai/gpt-4o", "enabled_features": ["telephony"],
+            "transcription": ["model": "deepgram/nova-2"],
+            "interruption_settings": ["enable": false],
+            "telephony_settings": ["noise_suppression": "krisp", "user_idle_timeout_secs": 30, "user_idle_reply_secs": 10,
+                                   "recording_settings": ["enabled": false]],
+        ]))
+        let rows = PhoneSetupCheck.rows(setup: Self.setup, reads: reads)
+        #expect(Self.state(rows, "voice") == .warn)
+    }
 }
 
 @Suite struct PhoneChatChipTests {
@@ -421,6 +491,8 @@ struct PhoneSetupCheckTests {
         #expect(phoneChipWords([]) == nil)
         #expect(phoneChipWords([call("a", .ended)]) == nil, "an ended call shows nothing")
         #expect(phoneChipWords([call("a", .calling)])?.words == "Calling +1 212 555 0142")
+        var named = call("a", .calling); named.name = "Corner Bistro"
+        #expect(phoneChipWords([named])?.words == "Calling Corner Bistro")
         #expect(phoneChipWords([call("a", .ended), call("b", .live)], now: Date(timeIntervalSince1970: 92))?.words == "On a call · 1:32")
         #expect(phoneChipWords([call("a", .ending)])?.words == "Ending the call")
         var voicemail = call("a", .live); voicemail.voicemail = true
@@ -511,6 +583,15 @@ struct PhoneCallPresentationTests {
         #expect(PhoneChatText.shown(stored.text) == stored.display)
         #expect(PhoneResultCard(stored: PhoneResultMessage(call, includeSummary: false).text)?.localCall(in: [call])?.id == call.id)
         #expect(PhoneResultCard(stored: "hello") == nil)
+        // Without a samplehost summary, the card still shows callee identity and goal, plus parsed Q&A and transcript.
+        var noSummary = PhoneChatTextTests.ended([.init(id: "1", speaker: .assistant, text: "Hello")])
+        noSummary.name = "Corner Bistro"
+        let parsed = try #require(PhoneResultCard(stored: PhoneResultMessage(noSummary).text))
+        #expect(parsed.name == "Corner Bistro")
+        #expect(parsed.goal == "Move my appointment")
+        #expect(parsed.subtitle == "Corner Bistro · +1 212 555 0142\nMove my appointment")
+        #expect(parsed.questions.count == 2)
+        #expect(parsed.transcriptLines == ["Assistant: Hello"])
         let message = ChatMessage(id: "result", role: .user, parts: [.text(stored.text)], timestamp: nil, rowId: nil)
         let shown = SentTitles().applied(to: [message])
         #expect(shown.first?.plainText == stored.display)
@@ -536,9 +617,11 @@ struct PhoneCallPresentationTests {
         let style = ChatStyle.make(category: .large)
         let markdown = MarkdownRenderer.render("I can call them.\n[Review](\(url))\nLet me know.", style: style, phoneProposals: true)
         #expect(markdown.blocks.contains { if case .phoneProposal(_, let card) = $0 { return card == proposal }; return false })
+        let boldMarkdown = MarkdownRenderer.render("I can call them.\n**[Review](\(url))**", style: style, phoneProposals: true)
+        #expect(boldMarkdown.blocks.contains { if case .phoneProposal(_, let card) = $0 { return card == proposal }; return false })
         let note = PhoneChatNote.text()
         #expect(note.contains("&name="))
-        let old = "Call the bistro.\n\n" + PhoneChatNote.text(includesName: false)
+        let old = "Call the bistro.\n\n" + PhoneChatNote.legacyText(includesName: false)
         #expect(PhoneChatText.shown(old) == "Call the bistro.")
     }
 }

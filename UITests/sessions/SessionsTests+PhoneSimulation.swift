@@ -134,13 +134,16 @@ extension SessionsTests {
 
         openPhoneSettings(app)
         connectsamplehost(app)
-        _ = waitUntil(10) { ((try? samplehost.control("/__fixture/state"))?["telephony_updates"] as? [Bool])?.isEmpty == false }
+        _ = waitUntil(10) {
+            (try? samplehostRequests(samplehost).contains { ($0["method"] as? String) == "GET" && ($0["path"] as? String) == "/v2/ai/assistants/assistant-sim" }) == true
+        }
         let setupRequests = try samplehostRequests(samplehost).map { "\($0["method"] ?? "") \($0["path"] ?? "")" }
         XCTAssertEqual(Set(setupRequests), ["GET /v2/phone_numbers", "GET /v2/ai/assistants", "POST /v2/ai/assistants",
-                                            "GET /v2/ai/assistants/assistant-sim", "POST /v2/ai/assistants/assistant-sim"],
-                       "setup reads, creates only the assistant, and turns its recording off to match Record calls")
+                                            "GET /v2/ai/assistants/assistant-sim"],
+                       "setup reads, creates the assistant with recording off by default, and confirms it")
         XCTAssertEqual(setupRequests.filter { $0 == "POST /v2/ai/assistants" }.count, 1, "one assistant made")
-        XCTAssertEqual(try samplehost.control("/__fixture/state")["telephony_updates"] as? [Bool], [false], "Record calls is off by default")
+        let telephony = try XCTUnwrap(try samplehost.control("/__fixture/state")["telephony"] as? [String: Any])
+        XCTAssertEqual((telephony["recording_settings"] as? [String: Any])?["enabled"] as? Bool, false, "Record calls is off by default")
 
         app.tabBars.buttons["Sessions"].tap()
         XCTAssertTrue(garden.waitForExistence(timeout: 15)); garden.tap()

@@ -38,7 +38,8 @@ struct PhoneCallView: View {
                 case .transcript(let id):
                     if let call = controller.call(id) {
                         VStack(spacing: 8) {
-                            PhoneScreenHeader(title: "Transcript", subtitle: phoneShown(call.to),
+                            let who = [call.name, phoneShown(call.to)].compactMap { $0 }.joined(separator: " · ")
+                            PhoneScreenHeader(title: "Transcript", subtitle: who,
                                               back: { path.removeLast() })
                             PhoneConversation(lines: call.shownLines, catchingUp: false, readOnly: true)
                         }
@@ -117,7 +118,7 @@ private struct PhoneNewCallView: View {
                         review
                     } else if controller.ready {
                         fields
-                        Text("From \(controller.setup?.fromNumber ?? "your samplehost number"). \(PhoneLimits.stayCopy) Calls are billed to your samplehost account.")
+                        Text("The voice assistant only knows what you enter here (not your chat history). Calling from \(phoneShown(controller.setup?.fromNumber ?? "your samplehost number")). \(PhoneLimits.stayCopy) Calls are billed to your samplehost account.")
                             .font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
                         if !to.isEmpty && !phoneIsE164(destination) {
                             Text("Enter the full phone number, including the country code for international calls.")
@@ -172,6 +173,9 @@ private struct PhoneNewCallView: View {
             .frame(maxWidth: .infinity, alignment: .leading).padding(14).phoneCard(radius: 18)
             .accessibilityElement(children: .combine).accessibilityIdentifier("phone.review.goal")
             VStack(spacing: 8) {
+                if let owner = controller.setup?.name, !owner.isEmpty {
+                    reviewRow("Calling for", owner)
+                }
                 reviewRow("From", phoneShown(controller.setup?.fromNumber ?? ""))
                 reviewRow("If voicemail answers", voicemail.title)
                 reviewRow("Recording", controller.setup?.records == true ? "On" : "Off")
@@ -218,7 +222,7 @@ private struct PhoneNewCallView: View {
             TextField("Who is this? (optional)", text: $name)
                 .focused($editing, equals: .name).accessibilityIdentifier("phone.name")
                 .padding(.horizontal, 12).frame(minHeight: 44).background(Color.hqGroupedPage, in: .rect(cornerRadius: 12))
-            TextField("Purpose and instructions", text: $goal, axis: .vertical)
+            TextField("Purpose, context, and what to say or ask", text: $goal, axis: .vertical)
                 .focused($editing, equals: .goal).accessibilityIdentifier("phone.purpose")
                 .padding(12).frame(minHeight: 48).background(Color.hqGroupedPage, in: .rect(cornerRadius: 12))
             let voicemailLayout = typeSize.isAccessibilitySize
@@ -409,16 +413,67 @@ struct PhoneStoredResultView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
+        let who = [result.name, phoneShown(result.number)].compactMap { $0 }.joined(separator: " · ")
         VStack(spacing: 10) {
-            PhoneScreenHeader(title: "Call result", subtitle: phoneShown(result.number), close: { dismiss() })
+            PhoneScreenHeader(title: "Call summary", subtitle: who, close: { dismiss() })
             ScrollView {
-                Text(result.stored)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(16)
+                VStack(spacing: 10) {
+                    VStack(spacing: 8) {
+                        PhoneMarkView(mark: result.mark, size: 54)
+                        Text(result.title).font(Font.hq(.title2).weight(.bold))
+                        Text(who).font(Font.hq(.subheadline)).foregroundStyle(Color.hqLabel2)
+                    }
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(18).frame(maxWidth: .infinity)
+                    .phoneCard(radius: 22)
+
+                    if !result.goal.isEmpty {
+                        sectionCard("GOAL") {
+                            Text(result.goal).textSelection(.enabled)
+                        }
+                    }
+                    if let summary = result.summary, !summary.isEmpty {
+                        sectionCard("WHAT HAPPENED") {
+                            Text(summary).textSelection(.enabled)
+                        }
+                    }
+                    if !result.questions.isEmpty {
+                        sectionCard("YOU WERE ASKED") {
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(Array(result.questions.enumerated()), id: \.offset) { _, line in
+                                    Text(line).textSelection(.enabled)
+                                }
+                            }
+                        }
+                    }
+                    sectionCard("TRANSCRIPT") {
+                        if result.transcriptLines.isEmpty {
+                            Text("Nothing was said.").foregroundStyle(Color.hqLabel2)
+                        } else {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(Array(result.transcriptLines.enumerated()), id: \.offset) { _, line in
+                                    Text(line).textSelection(.enabled)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                .padding(.bottom, 16)
             }
         }
         .phonePage()
+    }
+
+    private func sectionCard<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(Font.hq(.caption).weight(.bold)).foregroundStyle(Color.hqLabel2)
+                .accessibilityAddTraits(.isHeader)
+            content().font(Font.hq(.subheadline)).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14).frame(maxWidth: .infinity, alignment: .leading).phoneCard(radius: 18)
     }
 }
 

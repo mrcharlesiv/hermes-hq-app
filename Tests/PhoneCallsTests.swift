@@ -174,7 +174,64 @@ nonisolated final class PhoneCallsTests: XCTestCase {
         let body = try XCTUnwrap(JSONSerialization.jsonObject(with: seen.body ?? Data()) as? [String: Any])
         XCTAssertEqual(body["name"] as? String, "Hermes HQ Caller")
         XCTAssertFalse((body["instructions"] as? String ?? "").isEmpty)
+        XCTAssertEqual(body["enabled_features"] as? [String], ["telephony"])
+        XCTAssertEqual(body["greeting"] as? String, "")
+        let transcription = try XCTUnwrap(body["transcription"] as? [String: Any])
+        XCTAssertEqual(transcription["model"] as? String, "deepgram/flux")
+        let interruption = try XCTUnwrap(body["interruption_settings"] as? [String: Any])
+        XCTAssertEqual(interruption["enable"] as? Bool, true)
+        let telephony = try XCTUnwrap(body["telephony_settings"] as? [String: Any])
+        XCTAssertEqual(telephony["noise_suppression"] as? String, "aicoustics")
+        XCTAssertEqual(telephony["user_idle_timeout_secs"] as? Int, 180)
+        XCTAssertEqual(telephony["user_idle_reply_secs"] as? Int, 5)
+        XCTAssertEqual((telephony["recording_settings"] as? [String: Any])?["enabled"] as? Bool, false)
         XCTAssertFalse(String(decoding: seen.body ?? Data(), as: UTF8.self).contains("KEYTEST"))
+    }
+
+    @MainActor func testOptimizeAssistantPreservesExistingTelephonyKeys() async throws {
+        let script = Script()
+        samplehostStub.reset(script.route)
+        try await api().optimizeAssistant(id: "assistant-1", recording: false)
+        let post = try XCTUnwrap(samplehostStub.seen.first { $0.method == "POST" && $0.path == "/v2/ai/assistants/assistant-1" })
+        let sent = post.json
+        XCTAssertEqual(sent["greeting"] as? String, "")
+        XCTAssertEqual(sent["enabled_features"] as? [String], ["telephony"])
+        XCTAssertEqual((sent["transcription"] as? [String: Any])?["model"] as? String, "deepgram/flux")
+        XCTAssertEqual((sent["interruption_settings"] as? [String: Any])?["enable"] as? Bool, true)
+        let telephony = try XCTUnwrap(sent["telephony_settings"] as? [String: Any])
+        XCTAssertEqual(telephony["default_texml_app_id"] as? String, "texml-1", "preserves existing keys")
+        XCTAssertEqual(telephony["noise_suppression"] as? String, "aicoustics")
+        XCTAssertEqual(telephony["user_idle_reply_secs"] as? Int, 5)
+        XCTAssertEqual((telephony["recording_settings"] as? [String: Any])?["enabled"] as? Bool, false)
+        XCTAssertEqual((telephony["recording_settings"] as? [String: Any])?["channels"] as? String, "dual")
+    }
+
+    @MainActor func testMessagesPaginateAcrossMultiplePages() async throws {
+        samplehostStub.reset { seen in
+            let page = Int(seen.query["page[number]"] ?? "1") ?? 1
+            if page == 1 {
+                return (200, ["data": [["role": "user", "text": "Second", "created_at": "2026-01-01T00:00:02Z"]],
+                              "meta": ["total_pages": 2, "page_number": 1, "page_size": 100, "total_results": 2]])
+            }
+            return (200, ["data": [["role": "assistant", "text": "First", "created_at": "2026-01-01T00:00:01Z"]],
+                          "meta": ["total_pages": 2, "page_number": 2, "page_size": 100, "total_results": 2]])
+        }
+        let messages = try await api().messages(conversationID: "conv-1")
+        XCTAssertEqual(messages.count, 2)
+        XCTAssertEqual(PhoneTranscript.read(messages, answered: []).lines.map(\.text), ["First", "Second"])
+        XCTAssertEqual(samplehostStub.seen.count, 2)
+    }
+
+    @MainActor func testCallControlAppsListsOnlyActiveApps() async throws {
+        samplehostStub.reset { _ in
+            (200, ["data": [
+                ["id": "cc-1", "application_name": "Main Voice", "active": true],
+                ["id": "cc-2", "application_name": "Old Voice", "active": false],
+            ]])
+        }
+        let apps = try await api().callControlApps()
+        XCTAssertEqual(apps.map(\.id), ["cc-1"])
+        XCTAssertEqual(samplehostStub.seen.first?.path, "/v2/call_control_applications")
     }
 
     @MainActor func testWrongKeyReadsAsBadKey() async {
@@ -192,7 +249,7 @@ nonisolated final class PhoneCallsTests: XCTestCase {
         let script = Script()
         samplehostStub.reset(script.route)
         let calls = try controller()
-        let id = try await calls.place(sessionID: "s1", to: "+15550100002", purpose: "Book a table for two")
+        let id = try await calls.place(sessionID: "s1", to: "+15550100002", purpose: "Book a table for two", name: "Corner Bistro")
         XCTAssertEqual(id, Self.callID)
         let dial = try XCTUnwrap(samplehostStub.seen.first { $0.path == "/v2/calls" })
         XCTAssertEqual(dial.method, "POST")
@@ -208,10 +265,13 @@ nonisolated final class PhoneCallsTests: XCTestCase {
         XCTAssertFalse((body["command_id"] as? String ?? "").isEmpty)
         let assistant = try XCTUnwrap(body["assistant"] as? [String: Any])
         XCTAssertEqual(assistant["id"] as? String, "assistant-1")
-        XCTAssertEqual(assistant["greeting"] as? String, "Hi, this is an AI assistant calling with a quick request.")
+        XCTAssertEqual(assistant["greeting"] as? String, "", "empty greeting lets the called party answer first")
         XCTAssertFalse(String(decoding: dial.body ?? Data(), as: UTF8.self).contains("60 seconds"))
-        XCTAssertTrue((assistant["instructions"] as? String ?? "").contains("Book a table for two"))
-        XCTAssertTrue((assistant["instructions"] as? String ?? "").contains("ask_owner"))
+        let instructions = assistant["instructions"] as? String ?? ""
+        XCTAssertTrue(instructions.contains("Book a table for two"))
+        XCTAssertTrue(instructions.contains("You are calling Corner Bistro."))
+        XCTAssertTrue(instructions.contains("Current local time:"))
+        XCTAssertTrue(instructions.contains("ask_owner"))
         let tools = try XCTUnwrap(assistant["tools"] as? [[String: Any]])
         XCTAssertEqual(tools.map { $0["type"] as? String }, ["webhook", "hangup"])
         let webhook = try XCTUnwrap(tools[0]["webhook"] as? [String: Any])

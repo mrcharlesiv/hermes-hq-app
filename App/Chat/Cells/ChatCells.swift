@@ -847,7 +847,7 @@ final class ChatBubbleCell: ChatBaseCell, UIContextMenuInteractionDelegate {
             text.enumerateAttribute(.chatLink, in: NSRange(location: 0, length: text.length)) { value, _, _ in
                 guard let url = value as? URL, seen.insert(url).inserted else { return }
                 if let proposal = PhoneProposal.parse(url) {   // [phone-calls] an agent's call proposal
-                    actions.append(UIAccessibilityCustomAction(name: "Call \(phoneShown(proposal.to))") { [weak self] _ in
+                    actions.append(UIAccessibilityCustomAction(name: "Call \(proposal.name ?? phoneShown(proposal.to))") { [weak self] _ in
                         self?.delegate?.chatCellOpen(url: url)
                         return true
                     })

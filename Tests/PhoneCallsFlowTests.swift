@@ -86,21 +86,87 @@ extension PhoneCallsTests {
         setup.recordCalls = true
         setup.ownerName = " Alex "
         let calls = try controller(setup: setup)
-        try await calls.place(sessionID: "s1", to: "+12125550142", purpose: "Move the appointment", voicemail: .leaveMessage)
+        try await calls.place(sessionID: "s1", to: "+12125550142", purpose: "Move the appointment", voicemail: .leaveMessage, name: "Dental Office")
         let order = samplehostStub.seen.map { "\($0.method) \($0.path)" }
         let update = try XCTUnwrap(order.firstIndex(of: "POST /v2/ai/assistants/assistant-1"))
         let dial = try XCTUnwrap(order.firstIndex(of: "POST /v2/calls"))
         XCTAssertLessThan(update, dial, "recording matches before the dial")
         let assistant = try XCTUnwrap(samplehostStub.seen[dial].json["assistant"] as? [String: Any])
-        XCTAssertEqual(assistant["greeting"] as? String, "Hi, this is an AI assistant calling on behalf of Alex. This call is recorded.")
+        XCTAssertEqual(assistant["greeting"] as? String, "")
         let instructions = assistant["instructions"] as? String ?? ""
-        XCTAssertTrue(instructions.contains("leave one short message saying who you are calling for and why"))
+        XCTAssertTrue(instructions.contains("briefly mention in your very first turn that the call is recorded"))
+        XCTAssertTrue(instructions.contains("leave one short message, then hang up"))
         XCTAssertTrue(instructions.contains("on behalf of Alex"))
+        XCTAssertTrue(instructions.contains("You are calling Dental Office."))
         let call = try XCTUnwrap(calls.calls.first)
         XCTAssertTrue(call.recorded)
         XCTAssertEqual(call.voicemailChoice, .leaveMessage)
         XCTAssertEqual(call.legID, "leg-1")
         XCTAssertEqual(call.statusText, "Ringing…")
+        _ = await calls.endAll()
+    }
+
+    @MainActor func testConversationIDTransitionsToLiveImmediatelyBeforeMessagesArrive() async throws {
+        let script = Script()
+        script.messages = []
+        samplehostStub.reset(script.route)
+        let calls = try controller()
+        try await calls.place(sessionID: "s1", to: "+12125550142", purpose: "Check in")
+        await calls.refresh(Self.callID)
+        XCTAssertEqual(calls.calls.first?.conversationID, "conv-1")
+        XCTAssertEqual(calls.calls.first?.state, .live, "live immediately once samplehost creates the conversation")
+        _ = await calls.endAll()
+    }
+
+    @MainActor func testFastHangupEventEndsCallWithoutWaitingForRingTimeout() async throws {
+        let script = Script()
+        script.alive = false
+        script.messages = []
+        script.events = Self.events(answered: false, ring: 2, hangupCause: "user_busy")
+        samplehostStub.reset { seen in seen.path == "/v2/ai/conversations" ? (200, ["data": []]) : script.route(seen) }
+        var clock = Date(timeIntervalSince1970: 9_000)
+        let calls = try controller()
+        calls.now = { clock }
+        try await calls.place(sessionID: "s1", to: "+12125550142", purpose: "Ask")
+        clock = clock.addingTimeInterval(3)   // well under the 55-second ring timeout
+        await calls.refresh(Self.callID)
+        XCTAssertEqual(calls.calls.first?.state, .ended)
+        XCTAssertEqual(calls.calls.first?.outcome, .busy)
+        XCTAssertEqual(calls.calls.first?.statusText, "Busy")
+    }
+
+    @MainActor func testConversationStartFailedHangsUpOrphanedLegAndReportsFailure() async throws {
+        let script = Script()
+        script.messages = []
+        script.events = [
+            ["record_type": "call_event", "type": "webhook", "name": "call.initiated", "call_leg_id": "leg-1",
+             "occurred_at": "2026-11-21 12:36:40.000000", "payload": ["event_type": "call.initiated", "payload": [:]]],
+            ["record_type": "call_event", "type": "webhook", "name": "call.answered", "call_leg_id": "leg-1",
+             "occurred_at": "2026-11-21 12:36:43.000000", "payload": ["event_type": "call.answered", "payload": [:]]],
+            ["record_type": "call_event", "type": "webhook", "name": "call.conversation.start_failed", "call_leg_id": "leg-1",
+             "occurred_at": "2026-11-21 12:36:44.000000",
+             "payload": ["event_type": "call.conversation.start_failed", "payload": ["error": "model quota exceeded"]]],
+        ]
+        samplehostStub.reset { seen in seen.path == "/v2/ai/conversations" ? (200, ["data": []]) : script.route(seen) }
+        var clock = Date(timeIntervalSince1970: 15_000)
+        let calls = try controller()
+        calls.now = { clock }
+        try await calls.place(sessionID: "s1", to: "+12125550142", purpose: "Ask")
+        await calls.refresh(Self.callID)
+        XCTAssertTrue(samplehostStub.seen.contains { $0.path.hasSuffix("/actions/hangup") }, "orphaned call leg is hung up")
+        XCTAssertEqual(calls.calls.first?.state, .ended)
+        clock = clock.addingTimeInterval(65)
+        await calls.refresh(Self.callID)
+        XCTAssertEqual(calls.calls.first?.outcome, .couldNotConnect("model quota exceeded"))
+    }
+
+    @MainActor func testMigrateSessionReKeysCallsFromRuntimeToStoredID() async throws {
+        let script = Script()
+        samplehostStub.reset(script.route)
+        let calls = try controller()
+        try await calls.place(sessionID: "runtime-1", to: "+12125550142", purpose: "Ask")
+        calls.migrateSession(from: ["runtime-1"], to: "stored-42")
+        XCTAssertEqual(calls.calls.first?.sessionID, "stored-42")
         _ = await calls.endAll()
     }
 

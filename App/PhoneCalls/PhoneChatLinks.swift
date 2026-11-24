@@ -27,7 +27,9 @@ nonisolated struct PhoneResultMessage: Equatable, Sendable {
 
     init(_ call: PhoneCallRecord, includeSummary: Bool = true) {
         let outcome = phoneOutcomeWords(call.outcome, duration: call.duration)
-        display = "Call to \(phoneShown(call.to)): \(outcome)"
+        let callee = call.name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let who = callee.flatMap { $0.isEmpty ? nil : $0 }
+        display = "Call to \(who ?? phoneShown(call.to)): \(outcome)"
         let questions = call.asked.map { "\($0.question) → \($0.answer ?? "(not answered)")" }
         let speech = call.shownLines.map { line -> String in
             switch line.speaker {
@@ -36,12 +38,11 @@ nonisolated struct PhoneResultMessage: Equatable, Sendable {
             case .you: return "You: " + line.text
             }
         }
-        text = [
-            Self.header,
-            "To: \(call.to)",
-            "Goal: \(call.purpose)",
-            "Outcome: \(outcome)",
-        ].joined(separator: "\n") + (includeSummary ? call.summary.map { "\nSummary: " + $0 } ?? "" : "") + "\n" + [
+        var headerLines = [Self.header, "To: \(call.to)"]
+        if let who { headerLines.append("Name: \(who)") }
+        headerLines.append("Goal: \(call.purpose)")
+        headerLines.append("Outcome: \(outcome)")
+        text = headerLines.joined(separator: "\n") + (includeSummary ? call.summary.map { "\nSummary: " + $0 } ?? "" : "") + "\n" + [
             "Questions the assistant asked and the answers: " + (questions.isEmpty ? "none" : "\n" + questions.joined(separator: "\n")),
             "Transcript:",
             Self.capped(speech.isEmpty ? "(nothing was said)" : speech.joined(separator: "\n")),
@@ -62,17 +63,32 @@ nonisolated struct PhoneResultMessage: Equatable, Sendable {
 nonisolated struct PhoneResultCard: Equatable, Sendable {
     let stored: String
     let number: String
+    let name: String?
+    let goal: String
     let outcome: String
     let summary: String?
+    let questions: [String]
+    let transcriptLines: [String]
 
     init?(stored: String) {
         guard stored.hasPrefix(PhoneResultMessage.header) else { return nil }
         let lines = stored.components(separatedBy: "\n")
-        guard lines.first == PhoneResultMessage.header,
-              lines.count >= 5, lines[1].hasPrefix("To: "), lines[2].hasPrefix("Goal: "),
-              let outcomeIndex = lines.dropFirst(3).firstIndex(where: { $0.hasPrefix("Outcome: ") }) else { return nil }
+        guard lines.first == PhoneResultMessage.header, lines.count >= 5, lines[1].hasPrefix("To: ") else { return nil }
         number = String(lines[1].dropFirst(4))
         guard phoneIsE164(number) else { return nil }
+        var cursor = 2
+        if cursor < lines.count, lines[cursor].hasPrefix("Name: ") {
+            let parsed = String(lines[cursor].dropFirst(6)).trimmingCharacters(in: .whitespacesAndNewlines)
+            name = parsed.isEmpty ? nil : parsed
+            cursor += 1
+        } else {
+            name = nil
+        }
+        guard cursor < lines.count, lines[cursor].hasPrefix("Goal: "),
+              let outcomeIndex = lines.dropFirst(cursor + 1).firstIndex(where: { $0.hasPrefix("Outcome: ") }) else { return nil }
+        let goalHead = String(lines[cursor].dropFirst(6))
+        let goalRest = Array(lines[(cursor + 1)..<outcomeIndex])
+        goal = ([goalHead] + goalRest).joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         outcome = String(lines[outcomeIndex].dropFirst(9))
         let rest = lines.dropFirst(outcomeIndex + 1)
         if let first = rest.first, first.hasPrefix("Summary: ") {
@@ -81,6 +97,26 @@ nonisolated struct PhoneResultCard: Equatable, Sendable {
         } else {
             summary = nil
         }
+        if let qIndex = lines.dropFirst(outcomeIndex + 1).firstIndex(where: { $0.hasPrefix("Questions the assistant asked and the answers:") }) {
+            let tIndex = lines.dropFirst(qIndex + 1).firstIndex(where: { $0 == "Transcript:" })
+            let qEnd = tIndex ?? lines.endIndex
+            let inline = String(lines[qIndex].dropFirst("Questions the assistant asked and the answers:".count)).trimmingCharacters(in: .whitespaces)
+            var parsedQuestions: [String] = []
+            if !inline.isEmpty && inline != "none" { parsedQuestions.append(inline) }
+            if qIndex + 1 < qEnd {
+                parsedQuestions.append(contentsOf: lines[(qIndex + 1)..<qEnd].map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && $0 != "none" })
+            }
+            questions = parsedQuestions
+            if let tIndex, tIndex + 1 < lines.endIndex {
+                let rawTranscript = Array(lines[(tIndex + 1)...]).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+                transcriptLines = rawTranscript == ["(nothing was said)"] ? [] : rawTranscript
+            } else {
+                transcriptLines = []
+            }
+        } else {
+            questions = []
+            transcriptLines = []
+        }
         self.stored = stored
     }
 
@@ -88,11 +124,16 @@ nonisolated struct PhoneResultCard: Equatable, Sendable {
         SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
-    var display: String { "Call to \(phoneShown(number)): \(outcome)" }
+    var display: String { "Call to \(name ?? phoneShown(number)): \(outcome)" }
     var subtitle: String {
-        guard let summary, !summary.isEmpty else { return phoneShown(number) }
-        let range = summary.range(of: #"[.!?](?=\s|$)"#, options: .regularExpression)
-        return range.map { String(summary[..<$0.upperBound]) } ?? summary
+        if let summary, !summary.isEmpty {
+            let range = summary.range(of: #"[.!?](?=\s|$)"#, options: .regularExpression)
+            return range.map { String(summary[..<$0.upperBound]) } ?? summary
+        }
+        let who = name.map { "\($0) · \(phoneShown(number))" } ?? phoneShown(number)
+        guard !goal.isEmpty else { return who }
+        let oneLineGoal = goal.split(whereSeparator: \.isNewline).joined(separator: " ")
+        return "\(who)\n\(oneLineGoal)"
     }
 
     var title: String {
@@ -131,8 +172,23 @@ nonisolated struct PhoneResultCard: Equatable, Sendable {
 // MARK: - The note on a sent message (item 13a)
 
 nonisolated enum PhoneChatNote {
-    /// The note, with the app's own link scheme.
-    static func text(scheme: String = AppIdentity.current.urlScheme, includesName: Bool = true) -> String {
+    /// The note, with the app's own link scheme. Tells the agent that the phone voice assistant cannot read chat
+    /// history, so every needed detail must go into `goal` (and `&name=` when known).
+    static func text(scheme: String = AppIdentity.current.urlScheme) -> String {
+        "(Hermes HQ: this person can place AI phone calls from the app. The voice assistant on the phone cannot see this "
+            + "chat history or memory, so pack every needed detail into goal. To propose a call, put a markdown link on "
+            + "its own line in your reply: [Call +12125550142](\(scheme)://phone-call?to=%2B12125550142&name="
+            + "<URL-encoded person or place name>&goal=<URL-encoded full context and instructions in plain words>). "
+            + "Use the full number with %2B and country code. Always include &name= when known. In goal, include who "
+            + "the call is for (or say explicitly if calling this person directly), the exact purpose, relevant facts, "
+            + "dates, times, preferences, and constraints from this chat, and what to say or ask. Optional "
+            + "&voicemail=leave to leave a message if voicemail answers. They approve it with a tap and the call's result "
+            + "comes back as their next message. Never say a call was made before that result arrives. If you don't have "
+            + "the number, ask for it or look it up first.)"
+    }
+
+    /// Older note shapes kept only for stripping historical user bubbles cleanly.
+    static func legacyText(scheme: String = AppIdentity.current.urlScheme, includesName: Bool = true) -> String {
         "(Hermes HQ: this person can place AI phone calls from the app. To propose one, put a markdown link on its own "
             + "line in your reply: [Call +12125550142](\(scheme)://phone-call?to=%2B12125550142&goal=<URL-encoded goal in "
             + "plain words>). Use the full number with + and country code. "
@@ -156,7 +212,8 @@ nonisolated enum PhoneChatNote {
     /// The stored message without the note (nil when it has none): what the owner's bubble shows.
     static func stripped(_ stored: String, scheme: String = AppIdentity.current.urlScheme) -> String? {
         let trimmed = stored.trimmingCharacters(in: .whitespacesAndNewlines)
-        let notes = [text(scheme: scheme), text(scheme: scheme, includesName: false)]
+        let notes = [text(scheme: scheme), legacyText(scheme: scheme, includesName: true),
+                     legacyText(scheme: scheme, includesName: false)]
         guard let note = notes.first(where: trimmed.hasSuffix) else { return nil }
         let words = String(trimmed.dropLast(note.count)).trimmingCharacters(in: .whitespacesAndNewlines)
         return words.isEmpty ? nil : words
@@ -193,7 +250,7 @@ nonisolated struct PhoneProposal: Equatable, Sendable {
     var name: String? = nil
 
     static let kind = "phone-call"
-    static let maxGoal = 500
+    static let maxGoal = 2000
     static let maxName = 120
 
     /// One of the app's links (its scheme, or `hermes`) whose host is `phone-call`, valid or not.
@@ -206,15 +263,24 @@ nonisolated struct PhoneProposal: Equatable, Sendable {
     /// refused, or anyone could pre-fill a call.
     static func refusesOutside(_ url: URL, scheme: String = AppIdentity.current.urlScheme) -> Bool { isLink(url, scheme: scheme) }
 
-    /// A valid proposal: `to` dialable after `phoneDestination`, a goal of 1 to 500 characters, optional
-    /// `voicemail=leave`. Unknown query items are ignored; anything invalid is nil.
+    /// A valid proposal: `to` dialable after `phoneDestination` (also tolerating an unencoded `+` decoded as a leading
+    /// space or an 11-digit North American `1NXX…` number when `from` isn't known at render time), a goal of 1 to
+    /// `maxGoal` characters, optional `name` and `voicemail=leave`. Unknown query items are ignored; anything invalid is nil.
     static func parse(_ url: URL, from: String? = nil, scheme: String = AppIdentity.current.urlScheme) -> PhoneProposal? {
         guard isLink(url, scheme: scheme), let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
               parts.path.isEmpty || parts.path == "/", parts.user == nil, parts.password == nil, parts.port == nil else { return nil }
         let items = parts.queryItems ?? []
         func value(_ name: String) -> String? { items.first { $0.name == name }?.value }
         guard let rawTo = value("to") else { return nil }
-        let to = phoneDestination(rawTo, from: from)
+        var to = phoneDestination(rawTo, from: from)
+        if !phoneIsE164(to) {
+            if rawTo.hasPrefix(" "), phoneIsE164("+" + to) {
+                to = "+" + to
+            } else if from == nil, to.count == 11, to.first == "1",
+                      let npa = to.dropFirst().first, ("2"..."9").contains(npa), to.allSatisfy({ ("0"..."9").contains($0) }) {
+                to = "+" + to
+            }
+        }
         guard phoneIsE164(to) else { return nil }
         let goal = (value("goal") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard (1...maxGoal).contains(goal.count), !goal.unicodeScalars.contains(where: { $0.value < 0x20 && $0 != "\n" }) else { return nil }
@@ -293,7 +359,11 @@ nonisolated struct PhoneProposal: Equatable, Sendable {
         let screen = PhoneCallView(accountID: account, sessionID: session, profile: profile, proposal: proposal,
                                    callID: callID ?? current?.id, matchingSessions: ids)
         let sheet = UIHostingController(rootView: screen)
-        if host.traitCollection.horizontalSizeClass == .compact { sheet.modalPresentationStyle = .fullScreen }
+        if host.traitCollection.horizontalSizeClass == .compact {
+            sheet.modalPresentationStyle = .fullScreen
+        } else {
+            sheet.preferredContentSize = CGSize(width: 540, height: 700)
+        }
         sheet.view.accessibilityIdentifier = "phone.sheet"
         host.present(sheet, animated: true)
     }
@@ -308,7 +378,11 @@ nonisolated struct PhoneProposal: Equatable, Sendable {
                 return
             }
         }
-        chat.present(UIHostingController(rootView: PhoneStoredResultView(result: result)), animated: true)
+        let sheet = UIHostingController(rootView: PhoneStoredResultView(result: result))
+        if chat.traitCollection.horizontalSizeClass != .compact {
+            sheet.preferredContentSize = CGSize(width: 540, height: 700)
+        }
+        chat.present(sheet, animated: true)
     }
 }
 
@@ -336,6 +410,10 @@ nonisolated struct PhoneProposal: Equatable, Sendable {
         chats.removeAll { $0.chat == nil || $0.chat === live }
         chats.append(Box(live))
         let controller = PhoneCallController.shared(for: live.client.account.id)
+        if let stored = live.storedSessionId {
+            let aliases = [live.resolvedStoredId, live.runtimeSessionId].compactMap { $0 }.filter { $0 != stored }
+            if !aliases.isEmpty { controller.migrateSession(from: aliases, to: stored) }
+        }
         controller.deliverPending(matching: { PhoneCallChat.matches(live, $0.sessionID) }) { [weak live] message in
             if let live { send(message, into: live) }
         }

@@ -447,16 +447,25 @@ nonisolated private struct BlockBuilder {
         }
     }
 
-    /// A proposal on its own line breaks the paragraph into prose and a call card.
+    /// A proposal on its own line breaks the paragraph into prose and a call card (including when the agent wrapped
+    /// the standalone link in bold or italics).
     private mutating func appendPhoneProposals(in paragraph: Paragraph) -> Bool {
         let nodes = Array(paragraph.children)
         func isBreak(_ node: Markup) -> Bool { node is SoftBreak || node is LineBreak }
+        func standaloneLink(_ node: Markup) -> Markdown.Link? {
+            if let link = node as? Markdown.Link { return link }
+            if (node is Strong || node is Emphasis), node.childCount == 1,
+               let only = node.children.first(where: { _ in true }) {
+                return standaloneLink(only)
+            }
+            return nil
+        }
         var previous = 0
         var added = false
         for (index, node) in nodes.enumerated() {
             guard (index == 0 || isBreak(nodes[index - 1])),
                   (index + 1 == nodes.count || isBreak(nodes[index + 1])),
-                  let destination = (node as? Markdown.Link)?.destination, let url = URL(string: destination),
+                  let destination = standaloneLink(node)?.destination, let url = URL(string: destination),
                   let proposal = PhoneProposal.parse(url) else { continue }
             if previous < index {
                 let end = index > 0 && isBreak(nodes[index - 1]) ? index - 1 : index
@@ -924,7 +933,7 @@ nonisolated private struct BlockBuilder {
                 // under it. A tap opens the call sheet filled in (PhoneCallChat.open); nothing dials by itself.
                 let font = attributes(ctx)[.font] as? UIFont ?? style.body
                 out.append(PhoneProposal.glyph(font: font, color: theme.link))
-                out.append(styled("Call " + phoneShown(proposal.to), c))
+                out.append(styled("Call " + (proposal.name ?? phoneShown(proposal.to)), c))
                 var goal = attributes(c)
                 goal[.foregroundColor] = theme.secondary
                 goal[.font] = font.withSize(max(11, font.pointSize - 2))

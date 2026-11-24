@@ -4,9 +4,9 @@ import UIKit
 nonisolated func phoneChipWords(_ calls: [PhoneCallRecord], now: Date = Date()) -> (words: String, asking: Bool)? {
     guard let call = calls.last(where: \.active) else { return nil }
     if call.question != nil { return ("Call needs you", true) }
-    let number = phoneShown(call.to)
+    let who = call.name ?? phoneShown(call.to)
     switch call.state {
-    case .calling: return ("Calling \(number)", false)
+    case .calling: return ("Calling \(who)", false)
     case .ending: return ("Ending the call", false)
     default:
         let timer = PhoneCallPresentation.timer(from: call.answeredAt ?? call.liveAt ?? call.placedAt, to: now)

@@ -56,7 +56,7 @@ nonisolated enum PhoneCallPresentation {
         case .voicemail: "Went to voicemail"
         case .couldNotConnect, .noSuchNumber: "Couldn't connect"
         case let outcome?: phoneOutcomeTitle(outcome, duration: nil)
-        case nil: "Ended"
+        case nil: "Wrapping up…"
         }
     }
 
@@ -90,7 +90,10 @@ nonisolated enum PhoneCallPresentation {
 
     static func facts(_ call: PhoneCallRecord, sendsResults: Bool) -> [Fact] {
         var facts: [Fact] = []
-        if call.outcome == .voicemail { facts.append(Fact("Message left", call.messageLeft ? "Yes" : "No")) }
+        if call.outcome == .voicemail {
+            if let seconds = call.duration { facts.append(Fact("Duration", duration(seconds))) }
+            facts.append(Fact("Message left", call.messageLeft ? "Yes" : "No"))
+        }
         let initiated = call.events.first { $0.name == "call.initiated" }?.occurredAt
         let unansweredRing = call.outcome == .noAnswer ? initiated.flatMap { start in
             call.endedAt.map { $0.timeIntervalSince(start) }
@@ -125,10 +128,10 @@ nonisolated enum PhoneCallPresentation {
 
     static func share(_ call: PhoneCallRecord, redacting key: String?) -> String {
         let outcome = title(call.outcome, duration: call.duration)
-        let who = [phoneShown(call.to), call.name].compactMap { $0 }.joined(separator: " · ")
+        let who = [call.name, phoneShown(call.to)].compactMap { $0 }.joined(separator: " · ")
         let questions = call.asked.map { "\($0.question) → \($0.answer ?? "Unanswered")" }
         let transcript = call.shownLines.map { "\(speaker($0)): \($0.text)" }
-        let text = ([outcome, who, "", "What happened", whatHappened(call)]
+        let text = ([outcome, who, "", "Goal", call.purpose, "", "What happened", whatHappened(call)]
             + (questions.isEmpty ? [] : ["", "You were asked"] + questions)
             + ["", "Transcript"] + transcript).joined(separator: "\n")
         guard let key, !key.isEmpty else { return text }

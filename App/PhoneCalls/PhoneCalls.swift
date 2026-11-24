@@ -11,6 +11,7 @@ struct PhoneSettingsView: View {
     let accountID: String
     @State private var setup: PhoneSetup?
     @State private var numbers: [samplehostNumber] = []
+    @State private var apps: [samplehostCallControlAppSummary] = []
     @State private var assistants: [samplehostAssistant] = []
     @State private var key = ""
     @State private var number = ""
@@ -20,6 +21,7 @@ struct PhoneSettingsView: View {
     @State private var recordCalls = false
     @State private var sendResults = true
     @State private var error: String?
+    @State private var notice: String?
     @State private var busy = false
     @State private var loaded = false
     @State private var confirmClear = false
@@ -30,10 +32,14 @@ struct PhoneSettingsView: View {
     private var controller: PhoneCallController { .shared(for: accountID) }
     private var connections: [(id: String, name: String)] {
         var seen = Set<String>()
-        return numbers.compactMap { n in
+        var out: [(id: String, name: String)] = numbers.compactMap { n in
             guard let id = n.connection_id, !id.isEmpty, seen.insert(id).inserted else { return nil }
             return (id, n.connection_name.flatMap { $0.isEmpty ? nil : $0 } ?? id)
         }
+        for app in apps where !app.id.isEmpty && seen.insert(app.id).inserted {
+            out.append((app.id, app.application_name.flatMap { $0.isEmpty ? nil : $0 } ?? app.id))
+        }
+        return out
     }
     private var changed: Bool {
         guard let setup else { return false }
@@ -57,6 +63,8 @@ struct PhoneSettingsView: View {
             } header: { Text("samplehost") } footer: {
                 Text("Hermes HQ calls samplehost directly with your key. It stays in this device's Keychain for this account and is never sent to your gateway. Calls are billed to your samplehost account.")
             }
+            if let error { Section { Text(error).foregroundStyle(.red).accessibilityIdentifier("phone.settings.error") } }
+            if let notice { Section { Text(notice).foregroundStyle(Color.hqLabel2).accessibilityIdentifier("phone.settings.notice") } }
             if setup != nil {
                 Section {
                     Picker("From number", selection: $number) {
@@ -78,7 +86,7 @@ struct PhoneSettingsView: View {
                         .textContentType(.name).autocorrectionDisabled()
                         .accessibilityIdentifier("phone.settings.name")
                 } header: { Text("Calls") } footer: {
-                    Text("The voice connection must be the Call Control application your number uses. Each call gives your assistant this call's purpose, its opening line and an ask_owner tool. With a name, the assistant says it is calling on your behalf. \(PhoneLimits.stayCopy)")
+                    Text("The voice connection must be the Call Control application your number uses. Each call gives your assistant this call's context, who it is calling, and an ask_owner tool. With a name, the assistant introduces itself for you (or speaks directly to you when calling you). \(PhoneLimits.stayCopy)")
                 }
                 if numbers.isEmpty && loaded {
                     Section { Text("No active phone numbers on this samplehost account.").font(Font.hq(.footnote)) }
@@ -94,7 +102,7 @@ struct PhoneSettingsView: View {
                 Section {
                     Toggle("Record calls", isOn: $recordCalls).accessibilityIdentifier("phone.settings.record")
                 } footer: {
-                    Text("Recording is a setting on the chosen samplehost assistant, and Hermes HQ changes that setting there. When it is on, the assistant says the call is recorded. Recordings stay in your samplehost account.")
+                    Text("Recording is a setting on the chosen samplehost assistant, and Hermes HQ changes that setting there. When it is on, the assistant mentions in its opening turn that the call is recorded. Recordings stay in your samplehost account.")
                 }
                 Section {
                     Toggle("Send call results to the chat", isOn: $sendResults).accessibilityIdentifier("phone.settings.results")
@@ -109,15 +117,18 @@ struct PhoneSettingsView: View {
                     Section {
                         NavigationLink("Check my setup") { PhoneSetupCheckView(accountID: accountID).navigationTitle("Check my setup") }
                             .accessibilityIdentifier("phone.settings.check")
+                        Button("Optimize assistant for calls") { optimizeAssistant() }.disabled(busy)
+                            .accessibilityIdentifier("phone.settings.optimize")
                         NavigationLink("Call history") { PhoneHistoryView(accountID: accountID).navigationTitle("Call history") }
                             .accessibilityIdentifier("phone.settings.history")
                         Button("Clear call history", role: .destructive) { confirmClear = true }
                             .disabled(!controller.calls.contains { !$0.active })
                             .accessibilityIdentifier("phone.settings.clear-history")
+                    } footer: {
+                        Text("Optimize updates your chosen samplehost assistant to use fast turn-taking speech recognition, natural interruptions, noise suppression, and clean pickup timing.")
                     }
                 }
             }
-            if let error { Section { Text(error).foregroundStyle(.red).accessibilityIdentifier("phone.settings.error") } }
         }
         .hqGroupedPage()   // [desktoplook] the page follows the skin
         .task { await load() }
@@ -138,8 +149,26 @@ struct PhoneSettingsView: View {
 
     private func fetch(_ api: samplehostAPI) async throws {
         numbers = try await api.phoneNumbers()
+        if !numbers.contains(where: { !($0.connection_id ?? "").isEmpty }) {
+            apps = (try? await api.callControlApps()) ?? []
+        }
         assistants = try await api.assistants()
         pickOnlyAssistant()
+    }
+
+    private func optimizeAssistant() {
+        guard !busy, let stored = setup, let assistantID = stored.assistantID else { return }
+        busy = true; error = nil; notice = nil
+        Task {
+            defer { busy = false }
+            let updated = await Result.of {
+                try await samplehostAPI(key: stored.apiKey).optimizeAssistant(id: assistantID, recording: stored.records)
+            }
+            switch updated {
+            case .success: notice = "Assistant updated for smoother phone calls."
+            case .failure(let failure): error = phoneMessage(failure)
+            }
+        }
     }
 
     /// With exactly one assistant on the account there is nothing to choose: take it.
@@ -183,6 +212,10 @@ struct PhoneSettingsView: View {
                 try store.save(fresh, for: accountID)
                 apply(fresh)
                 if numbers.count != 1 { number = ""; connection = "" }
+                if !numbers.contains(where: { !($0.connection_id ?? "").isEmpty }) {
+                    apps = (try? await api.callControlApps()) ?? []
+                    if apps.count == 1 && connection.isEmpty { connection = apps[0].id }
+                }
                 assistants = try await api.assistants()
                 pickOnlyAssistant()
                 if fresh.ready == false, !number.isEmpty, !connection.isEmpty, !assistant.isEmpty { busy = false; save() }
@@ -226,7 +259,7 @@ struct PhoneSettingsView: View {
             await controller.endAll()
             controller.forgetHistory()
             store.delete(for: accountID)
-            apply(nil); numbers = []; assistants = []; error = nil
+            apply(nil); numbers = []; apps = []; assistants = []; error = nil; notice = nil
         }
     }
 }

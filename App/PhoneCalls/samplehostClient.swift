@@ -105,6 +105,11 @@ nonisolated struct samplehostMessage: Decodable, Sendable, Equatable {
 }
 
 private nonisolated struct DataList<T: Decodable>: Decodable { let data: [T] }
+private nonisolated struct PaginationMeta: Decodable { var total_pages: Int? = nil }
+private nonisolated struct PagedDataList<T: Decodable>: Decodable {
+    let data: [T]
+    var meta: PaginationMeta? = nil
+}
 private nonisolated struct DataOne<T: Decodable>: Decodable { let data: T }
 /// get-insights-for-a-conversation: a completed run may contain plain text or structured results.
 nonisolated struct samplehostConversationInsight: Decodable {
@@ -167,8 +172,8 @@ nonisolated struct samplehostCallStatus: Decodable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey { case is_alive, start_time, end_time, call_duration }
 }
 
-/// get-an-assistant: the fields Check my setup and the recording switch read. `telephony_settings` stays raw JSON so it
-/// can be sent back whole (update-an-assistant).
+/// get-an-assistant: the fields Check my setup, call optimization, and the recording switch read. `telephony_settings`
+/// stays raw JSON so it can be sent back whole (update-an-assistant).
 nonisolated struct samplehostAssistantDetail: Sendable, Equatable {
     var id: String
     var name: String?
@@ -177,6 +182,11 @@ nonisolated struct samplehostAssistantDetail: Sendable, Equatable {
     var enabledFeatures: [String]
     /// The whole `telephony_settings` object as samplehost sent it (nil when absent).
     var telephonyJSON: Data?
+    var transcriptionModel: String?
+    var interruptionEnabled: Bool?
+    var userIdleTimeoutSecs: Int?
+    var userIdleReplySecs: Int?
+    var noiseSuppression: String?
 
     /// `telephony_settings.recording_settings.enabled`. samplehost's default is true (update-an-assistant reference).
     var recordingOn: Bool? {
@@ -185,14 +195,48 @@ nonisolated struct samplehostAssistantDetail: Sendable, Equatable {
     }
     var telephony: [String: Any]? { telephonyJSON.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any] }
 
+    /// Suboptimal stored settings observed on an existing assistant that affect live call fluidity.
+    var callQualityIssues: [String] {
+        var issues: [String] = []
+        if let stt = transcriptionModel, !stt.isEmpty, stt != "deepgram/flux" {
+            issues.append("speech recognition uses \(stt) instead of deepgram/flux")
+        }
+        if interruptionEnabled == false {
+            issues.append("interruptions are turned off")
+        }
+        if let timeout = userIdleTimeoutSecs, timeout < 60 {
+            issues.append("silence timeout is only \(timeout)s")
+        }
+        if let reply = userIdleReplySecs, reply > 6 {
+            issues.append("silent-pickup wait is \(reply)s")
+        }
+        if let noise = noiseSuppression, !noise.isEmpty, noise != "aicoustics" {
+            issues.append("noise suppression uses \(noise) instead of aicoustics")
+        }
+        return issues
+    }
+
     init(json: [String: Any]) {
         id = json["id"] as? String ?? ""
         name = json["name"] as? String
         model = json["model"] as? String
         greeting = json["greeting"] as? String
         enabledFeatures = (json["enabled_features"] as? [Any] ?? []).compactMap { $0 as? String }
-        telephonyJSON = (json["telephony_settings"] as? [String: Any]).flatMap { try? JSONSerialization.data(withJSONObject: $0) }
+        let telephonyDict = json["telephony_settings"] as? [String: Any]
+        telephonyJSON = telephonyDict.flatMap { try? JSONSerialization.data(withJSONObject: $0) }
+        transcriptionModel = (json["transcription"] as? [String: Any])?["model"] as? String
+        interruptionEnabled = (json["interruption_settings"] as? [String: Any])?["enable"] as? Bool
+        userIdleTimeoutSecs = telephonyDict?["user_idle_timeout_secs"] as? Int
+        userIdleReplySecs = telephonyDict?["user_idle_reply_secs"] as? Int
+        noiseSuppression = telephonyDict?["noise_suppression"] as? String
     }
+}
+
+/// list-call-control-applications: `data[]` (`id`, `application_name`, `active`).
+nonisolated struct samplehostCallControlAppSummary: Decodable, Sendable, Hashable, Identifiable {
+    let id: String
+    var application_name: String? = nil
+    var active: Bool? = nil
 }
 
 /// get-balance: `data.balance` (string dollars), `data.currency`.
@@ -229,6 +273,8 @@ nonisolated struct PhoneDialRequest: Sendable, Equatable {
     let commandID: String
     /// Said on calls ("calling on behalf of Alex"); empty: no name.
     var ownerName: String = ""
+    /// Who is being called (person or business name, when known).
+    var calleeName: String = ""
     /// The assistant's recording setting, as made to match the switch just before dialing.
     var recorded: Bool = false
     var voicemail: PhoneVoicemailChoice = .hangUp
@@ -275,43 +321,108 @@ nonisolated enum PhoneAskOwner {
     /// The prefix of the message an unprompted owner message goes in (wire-proven 2026-11-21).
     static let ownerMessagePrefix = "Message from the owner, sent during the call: "
 
-    /// dial `assistant.greeting`: replaces the assistant's stored greeting for this call.
-    static func greeting(ownerName: String, recorded: Bool) -> String {
-        let name = ownerName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let opening = name.isEmpty ? "Hi, this is an AI assistant calling with a quick request."
-            : "Hi, this is an AI assistant calling on behalf of \(name)."
-        return recorded ? opening + " This call is recorded." : opening
+    /// Empty greeting on dial and assistant creation: tells samplehost to wait for the person who answers to speak first
+    /// instead of playing a context-free canned line over their "Hello?". Combined with `user_idle_reply_secs`, the
+    /// assistant opens naturally and immediately with full context once they pick up (or after brief pickup silence).
+    static let dialGreeting = ""
+
+    /// Recommended samplehost transcription settings for fluid telephony turn-taking (`deepgram/flux`, CreateAssistantRequest).
+    static var recommendedTranscription: [String: Any] {
+        [
+            "model": "deepgram/flux",
+            "language": "auto",
+            "settings": [
+                "eot_threshold": 0.55,
+                "eager_eot_threshold": 0.35,
+                "eot_timeout_ms": 3000,
+            ] as [String: Any],
+        ]
     }
 
-    static func instructions(purpose: String, ownerName: String = "", recorded: Bool = false,
-                             voicemail: PhoneVoicemailChoice = .hangUp) -> String {
+    /// Recommended samplehost interruption settings so callers can naturally interrupt without awkward stalls.
+    static var recommendedInterruption: [String: Any] {
+        [
+            "enable": true,
+            "disable_greeting_interruption": false,
+            "interrupt_prediction_threshold": 0.4,
+        ]
+    }
+
+    /// Recommended samplehost telephony settings (`aicoustics` STT-optimized noise suppression, responsive pickup check-in).
+    static func recommendedTelephony(recording: Bool) -> [String: Any] {
+        [
+            "noise_suppression": "aicoustics",
+            "time_limit_secs": PhoneLimits.callSeconds,
+            "user_idle_timeout_secs": 180,
+            "user_idle_reply_secs": 5,
+            "recording_settings": ["enabled": recording],
+        ]
+    }
+
+    static func instructions(purpose: String, ownerName: String = "", calleeName: String = "",
+                             recorded: Bool = false, voicemail: PhoneVoicemailChoice = .hangUp,
+                             now: Date = Date()) -> String {
         let given = ownerName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let callee = calleeName.trimmingCharacters(in: .whitespacesAndNewlines)
         let owner = given.isEmpty ? "the owner" : given
-        let Owner = owner.prefix(1).uppercased() + owner.dropFirst()
-        let recordedLine = recorded ? " This call is recorded; say so if asked." : ""
-        let onVoicemail = voicemail == .hangUp ? "hang up right away without saying anything"
-            : "leave one short message saying who you are calling for and why, then hang up"
+        let callingOwnerDirectly = !given.isEmpty && !callee.isEmpty
+            && given.caseInsensitiveCompare(callee) == .orderedSame
+        let roleBlock: String
+        if callingOwnerDirectly {
+            roleBlock = """
+            You are \(owner)'s AI voice assistant calling \(owner) directly on the phone. Speak warmly and directly to \
+            \(owner) as their own assistant: never say you are "calling on behalf of \(owner)".
+            """
+        } else {
+            let targetLine = callee.isEmpty ? "" : " You are calling \(callee)."
+            roleBlock = """
+            You are an AI voice assistant placing an outbound phone call on behalf of \(owner).\(targetLine) Usually \
+            the person who answers is not \(owner) (\(owner) can follow a live transcript and send you messages). \
+            However, if the goal below is to call \(owner) directly, or if \(owner) themselves answers, speak directly \
+            to them as their assistant instead of saying you are calling on their behalf.
+            """
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "EEEE, MMMM d, yyyy 'at' h:mm a"
+        let localTime = formatter.string(from: now)
+        let recordedRule = recorded
+            ? "\n- This call is recorded: briefly mention in your very first turn that the call is recorded."
+            : ""
+        let onVoicemail = voicemail == .hangUp
+            ? "hang up right away using the hangup tool without saying anything"
+            : "wait for the beep or tone, leave one short message, then hang up. Say who you are and who you are calling for, "
+                + "then the reason in one plain sentence of your own: never read \(owner)'s words out as written, and fix any "
+                + "typos or shorthand. Do not ask anyone to call back unless \(owner)'s words ask for a call back. If \(owner)'s "
+                + "words say this is a test, say it is a test call and that no reply is needed"
         return """
-        You are an AI voice assistant placing a phone call on behalf of \(owner). \(Owner) is not on the call: they \
-        follow a transcript and can send you messages. The person who answers is not \(owner).
+        \(roleBlock)
+        Current local time: \(localTime).
 
         Why you are calling, in \(owner)'s words: \(purpose)
 
         How to run the call:
-        - After your greeting, say why you are calling in one short sentence, then work toward that goal. Keep it \
-        natural and brief.
-        - If asked, say honestly that you are an AI assistant calling for \(owner).\(recordedLine)
-        - Stay on the call until the goal is done or clearly cannot be done, then say goodbye and hang up. Do not end \
-        the call just because it is taking long.
-        - Never invent facts about \(owner) (dates, preferences, payment details, addresses). When you need a decision \
-        or a fact only \(owner) has, call the \(Self.name) tool once with one short question and, when there are clear \
-        options, up to four short choices. The tool only sends the question; its result is a receipt, never the \
-        answer, and may read like an error. Either way the question was sent: never call it twice for the same \
-        question, and never ask the person on the phone to answer for \(owner). Tell the person you are checking \
-        with \(owner) and that it can take a minute, and keep them on the line politely. The answer arrives as a \
-        message that starts with "\(answerPrefix)".
-        - A message that starts with "Message from the owner" is a new instruction from \(owner): follow it.
-        - If a voicemail greeting or another recording answers instead of a person, \(onVoicemail).
+        - Wait for the person who answers to speak first (or begin naturally if the line is quiet after pickup). On your \
+        very first turn, respond naturally to how they answered, briefly introduce yourself, and immediately state why \
+        you are calling in one clear, plain sentence using the context above. Never open with a generic greeting that \
+        leaves out the reason for the call, and never read \(owner)'s notes or typos verbatim.\(recordedRule)
+        - Keep the conversation fluid and natural: speak in short turns (1 to 2 sentences at a time), pause to listen, \
+        and adapt immediately if the other person interrupts or steers the conversation. Never deliver long monologues \
+        or spell out raw URLs or formatting.
+        - If asked, say honestly that you are an AI assistant for \(owner).
+        - Stay on the call until the goal is done or clearly cannot be done. Do not end the call just because it is \
+        taking long. Before ending, briefly confirm any key outcome (times, confirmation details, or next steps), say a \
+        natural goodbye, and call the hangup tool.
+        - Never invent facts about \(owner) (dates, preferences, payment details, addresses). When speaking with someone \
+        other than \(owner) and you need a decision or fact only \(owner) has, briefly tell them you are checking with \
+        \(owner) and it will take a moment, then call the \(Self.name) tool once with one short question and, when there \
+        are clear options, up to four short choices. The tool only sends the question; its result is a receipt, never \
+        the answer, and may read like an error. Never mention tool errors or technical problems aloud, never call \
+        \(Self.name) twice for the same question, and never ask a third party to answer for \(owner). Keep them on the \
+        line politely until a message arrives starting with "\(answerPrefix)", then relay that answer right away. (If \
+        you are speaking directly with \(owner), just ask them aloud instead of calling \(Self.name).)
+        - A message that starts with "Message from the owner" is a live instruction from \(owner): follow it right away.
+        - If a voicemail greeting or automated recording answers instead of a person, \(onVoicemail).
         """
     }
 
@@ -389,10 +500,19 @@ nonisolated struct samplehostAPI: Sendable, CustomStringConvertible, CustomDebug
         try decode(DataList<samplehostAssistant>.self, try await send("GET", ["ai", "assistants"])).data
     }
 
-    /// create-an-assistant: `POST /v2/ai/assistants` with the two required fields (`name`, `instructions`; samplehost picks
-    /// the default model) and an `Idempotency-Key`, so a retried tap never makes a second one. Answers the Assistant.
+    /// create-an-assistant: `POST /v2/ai/assistants` configured for fluid telephony out of the box (`enabled_features`,
+    /// empty `greeting`, `deepgram/flux` turn-taking transcription, natural interruptions, `aicoustics` noise
+    /// suppression, and responsive idle-pickup check-in) with an `Idempotency-Key`, so a retried tap never makes two.
     func createAssistant(idempotencyKey: String) async throws -> samplehostAssistant {
-        let body: [String: Any] = ["name": PhoneAskOwner.assistantName, "instructions": PhoneAskOwner.baseInstructions]
+        let body: [String: Any] = [
+            "name": PhoneAskOwner.assistantName,
+            "instructions": PhoneAskOwner.baseInstructions,
+            "enabled_features": ["telephony"],
+            "greeting": PhoneAskOwner.dialGreeting,
+            "transcription": PhoneAskOwner.recommendedTranscription,
+            "interruption_settings": PhoneAskOwner.recommendedInterruption,
+            "telephony_settings": PhoneAskOwner.recommendedTelephony(recording: false),
+        ]
         let data = try await send("POST", ["ai", "assistants"], body: try JSONSerialization.data(withJSONObject: body),
                                   headers: ["Idempotency-Key": idempotencyKey])
         if let wrapped = try? JSONDecoder().decode(DataOne<samplehostAssistant>.self, from: data) { return wrapped.data }
@@ -400,9 +520,9 @@ nonisolated struct samplehostAPI: Sendable, CustomStringConvertible, CustomDebug
     }
 
     /// dial: `POST /v2/calls` with `connection_id`, `from`, `to`, `timeout_secs`, `time_limit_secs`, `command_id`,
-    /// `answering_machine_detection: "premium"` and `assistant` (CallAssistantRequest: `id`, `greeting`,
-    /// `instructions`, `tools`). Answers `data.call_control_id`, `call_leg_id`, `call_session_id`.
-    func dial(_ request: PhoneDialRequest) async throws -> samplehostDialed {
+    /// `answering_machine_detection: "premium"` and `assistant` (CallAssistantRequest: `id`, empty `greeting` so the
+    /// assistant waits for pickup before opening with full context, `instructions`, `tools`).
+    func dial(_ request: PhoneDialRequest, now: Date = Date()) async throws -> samplehostDialed {
         let body: [String: Any] = [
             "connection_id": request.connectionID,
             "from": request.from,
@@ -413,9 +533,10 @@ nonisolated struct samplehostAPI: Sendable, CustomStringConvertible, CustomDebug
             "answering_machine_detection": "premium",
             "assistant": [
                 "id": request.assistantID,
-                "greeting": PhoneAskOwner.greeting(ownerName: request.ownerName, recorded: request.recorded),
+                "greeting": PhoneAskOwner.dialGreeting,
                 "instructions": PhoneAskOwner.instructions(purpose: request.purpose, ownerName: request.ownerName,
-                                                           recorded: request.recorded, voicemail: request.voicemail),
+                                                           calleeName: request.calleeName, recorded: request.recorded,
+                                                           voicemail: request.voicemail, now: now),
                 "tools": PhoneAskOwner.tools,
             ] as [String: Any],
         ]
@@ -431,10 +552,21 @@ nonisolated struct samplehostAPI: Sendable, CustomStringConvertible, CustomDebug
         return try decode(DataList<ConversationRow>.self, data).data.first?.id
     }
 
-    /// get-conversation-messages: `GET /v2/ai/conversations/{id}/messages?page[size]=100`.
+    /// get-conversation-messages: `GET /v2/ai/conversations/{id}/messages?page[size]=100`, paging through additional
+    /// pages (up to 5 pages / 500 rows) when samplehost reports `meta.total_pages > 1`.
     func messages(conversationID: String) async throws -> [samplehostMessage] {
-        let data = try await send("GET", ["ai", "conversations", conversationID, "messages"], query: [("page[size]", "100")])
-        return try decode(DataList<samplehostMessage>.self, data).data
+        let firstData = try await send("GET", ["ai", "conversations", conversationID, "messages"], query: [("page[size]", "100")])
+        let first = try decode(PagedDataList<samplehostMessage>.self, firstData)
+        var all = first.data
+        let totalPages = min(first.meta?.total_pages ?? 1, 5)
+        if totalPages > 1 {
+            for page in 2...totalPages {
+                let pageData = try await send("GET", ["ai", "conversations", conversationID, "messages"],
+                                              query: [("page[size]", "100"), ("page[number]", "\(page)")])
+                all.append(contentsOf: try decode(PagedDataList<samplehostMessage>.self, pageData).data)
+            }
+        }
+        return all
     }
 
     /// get-insights-for-a-conversation: `GET /v2/ai/conversations/{id}/conversations-insights`.
@@ -537,6 +669,37 @@ nonisolated struct samplehostAPI: Sendable, CustomStringConvertible, CustomDebug
         telephony["recording_settings"] = recording
         try await updateTelephony(assistantID: assistantID, telephony: telephony)
         return true
+    }
+
+    /// Upgrades an existing assistant with fluid telephony defaults (`deepgram/flux` turn-taking, interruptions,
+    /// `aicoustics` noise suppression, responsive pickup check-in, empty greeting) while keeping existing
+    /// `telephony_settings` keys (such as `default_texml_app_id`) and matching `recording`.
+    func optimizeAssistant(id assistantID: String, recording: Bool) async throws {
+        let detail = try await assistant(id: assistantID)
+        var features = detail.enabledFeatures
+        if !features.contains("telephony") { features.append("telephony") }
+        var telephony = detail.telephony ?? [:]
+        telephony["noise_suppression"] = "aicoustics"
+        telephony["time_limit_secs"] = PhoneLimits.callSeconds
+        telephony["user_idle_timeout_secs"] = 180
+        telephony["user_idle_reply_secs"] = 5
+        var rec = telephony["recording_settings"] as? [String: Any] ?? [:]
+        rec["enabled"] = recording
+        telephony["recording_settings"] = rec
+        let body: [String: Any] = [
+            "enabled_features": features,
+            "greeting": PhoneAskOwner.dialGreeting,
+            "transcription": PhoneAskOwner.recommendedTranscription,
+            "interruption_settings": PhoneAskOwner.recommendedInterruption,
+            "telephony_settings": telephony,
+        ]
+        _ = try await send("POST", ["ai", "assistants", assistantID], body: try JSONSerialization.data(withJSONObject: body))
+    }
+
+    /// list-call-control-applications: `GET /v2/call_control_applications?page[size]=250`.
+    func callControlApps() async throws -> [samplehostCallControlAppSummary] {
+        let data = try await send("GET", ["call_control_applications"], query: [("page[size]", "250")])
+        return try decode(DataList<samplehostCallControlAppSummary>.self, data).data.filter { $0.active != false }
     }
 
     /// get-balance: `GET /v2/balance`.

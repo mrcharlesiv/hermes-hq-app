@@ -126,6 +126,12 @@ nonisolated struct PhoneSetupCheck: Equatable, Sendable {
             } else {
                 rows.append(Row(id: "recording", state: .unknown, sentence: "Recording: " + couldNotCheck))
             }
+            let voiceIssues = assistant.callQualityIssues
+            if !voiceIssues.isEmpty {
+                rows.append(Row(id: "voice", state: .warn,
+                                sentence: "Assistant call settings can be tuned for smoother conversations (\(voiceIssues.joined(separator: "; "))).",
+                                fix: "\(DeviceWord.Tap) Optimize assistant below or in Phone Calls settings."))
+            }
         case .failure(.unexpected(404))?:
             rows.append(Row(id: "assistant", state: .fail, sentence: "The chosen assistant isn't on this samplehost account.",
                             fix: "Choose another assistant above."))
@@ -175,6 +181,10 @@ struct PhoneSetupCheckView: View {
     let accountID: String
     @State private var rows: [PhoneSetupCheck.Row] = []
     @State private var running = false
+    @State private var optimizing = false
+    @State private var optimizeError: String?
+
+    private var canOptimize: Bool { rows.contains { $0.id == "voice" && $0.state == .warn } }
 
     var body: some View {
         Form {
@@ -193,15 +203,34 @@ struct PhoneSetupCheckView: View {
                     .accessibilityIdentifier("phone.check." + row.id)
                 }
             } footer: {
-                Text("Hermes HQ reads these from samplehost with your key. Nothing is changed.")
+                Text("Hermes HQ reads these from samplehost with your key. Checking changes nothing.")
+            }
+            if let optimizeError {
+                Section { Text(optimizeError).foregroundStyle(.red) }
             }
             Section {
-                Button(running ? "Checking…" : "Check Again") { Task { await run() } }.disabled(running)
+                if canOptimize {
+                    Button(optimizing ? "Optimizing…" : "Optimize assistant for calls") { Task { await optimize() } }
+                        .disabled(running || optimizing)
+                        .accessibilityIdentifier("phone.check.optimize")
+                }
+                Button(running ? "Checking…" : "Check Again") { Task { await run() } }.disabled(running || optimizing)
                     .accessibilityIdentifier("phone.check.again")
             }
         }
         .hqGroupedPage()   // [desktoplook] the page follows the skin
         .task { await run() }
+    }
+
+    private func optimize() async {
+        guard !optimizing, let setup = PhoneKeyStore.app.load(for: accountID), let assistantID = setup.assistantID else { return }
+        optimizing = true; optimizeError = nil
+        defer { optimizing = false }
+        let updated = await Result.of { try await samplehostAPI(key: setup.apiKey).optimizeAssistant(id: assistantID, recording: setup.records) }
+        switch updated {
+        case .success: await run()
+        case .failure(let error): optimizeError = phoneMessage(error)
+        }
     }
 
     private func run() async {

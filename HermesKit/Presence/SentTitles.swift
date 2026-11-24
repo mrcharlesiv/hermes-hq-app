@@ -40,6 +40,7 @@ nonisolated struct SentTitles: Sendable {
     /// [phone-calls] A call's result message shows its short line, and a message that carried the call note shows the
     /// words without it (PhoneChatText).
     func title(forStored text: String) -> String? {
+        if let inner = ThreadContextNote.stripped(text) { return title(forStored: inner) ?? inner }
         if let inner = PhoneChatNote.stripped(text) { return title(forStored: inner) ?? inner }
         return titles[ChatText.flat(text)] ?? GoalBots.planBubble(forStored: text) ?? PhoneResultMessage.bubble(forStored: text)
     }
@@ -54,7 +55,8 @@ nonisolated struct SentTitles: Sendable {
     /// Stored rows as the chat shows them: a user row that is one of the titled prompts shows its title.
     func applied(to messages: [ChatMessage]) -> [ChatMessage] {
         guard !titles.isEmpty || messages.contains(where: { $0.role == .user && ($0.plainText.hasPrefix(GoalBots.planRequestStart)
-                                                                                   || PhoneChatText.rewrites($0.plainText)) })
+                                                                                   || PhoneChatText.rewrites($0.plainText)
+                                                                                   || ThreadContextNote.hasNote($0.plainText)) })
         else { return messages }
         return messages.map { message in
             guard message.role == .user, let title = title(forStored: message.plainText) else { return message }

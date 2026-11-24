@@ -10,7 +10,10 @@ extension ChatViewController {
     func beginQueueEdit(_ id: String) {
         guard let queue = session as? ChatQueueing else { return }
         // One strip at a time: a message edit or a reply in progress gives way first (its draft comes back).
-        (composer.editBanner as? ComposerEditBanner)?.onCancel?()
+        if let active = composer.editBanner as? ComposerEditBanner,
+           active.accessibilityIdentifier != ComposerEditBanner.busyThreadIdentifier {
+            active.onCancel?()
+        }
         guard let words = queue.beginQueuedEdit(id) else { return }
         AppLog.trace("composer", "queued \(AppLog.tag(id)) edit began \(logTag)")
         let draft = composer.text
@@ -19,6 +22,7 @@ extension ChatViewController {
             screen.sendOverride = nil
             screen.composer.editingQueued = false
             screen.composer.editBanner = nil
+            screen.updateBusyThreadBanner()
         }
         banner.onCancel = { [weak self, weak queue] in
             guard let self else { return }

@@ -11,6 +11,7 @@ enum MemoTips {
         case .nowHold: "hq.voice.tip.nowHold"
         case .holdToRecord: "hq.voice.tip.holdToRecord"
         case .talk: "hq.voice.tip.talk"
+        case .thread: "hq.threads.tip.start"
         }
     }
 
@@ -27,6 +28,7 @@ enum MemoTips {
         case .nowHold: DeviceWord.isMac ? "Now Click and Hold to Record" : "Now Hold to Record"
         case .holdToRecord: DeviceWord.isMac ? "Click and Hold to Record" : "Hold to Record"
         case .talk: "Talk with \(talkName)"
+        case .thread: "Start a Thread"
         }
     }
 
@@ -41,6 +43,10 @@ enum MemoTips {
         // Round 2: shorter, so it fits two lines in a narrow window.
         case .talk: DeviceWord.isMac ? "Click the waveform to talk out loud. Click and hold the mic for a voice memo."
             : "\(DeviceWord.Tap) the waveform button to talk out loud with \(talkName). Hold the mic to send a voice memo."
+        // [threads] Names the button and what Send still does: two buttons stand side by side while the bot works.
+        case .thread: DeviceWord.isMac
+            ? "Click the two-bubbles button to ask this on the side while \(talkName) keeps working. Send adds to the running job."
+            : "\(DeviceWord.Tap) the two-bubbles button to ask this on the side while \(talkName) keeps working. Send adds to the running job."
         }
     }
 }

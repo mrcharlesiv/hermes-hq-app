@@ -1101,6 +1101,8 @@ class FakeChatSession: ChatSessionModel, ChatSessionDetails {
 
     static func generate(count: Int, long: Bool = false) -> [ChatMessage] {
         guard count > 0 else { return [] }
+        if let script { FakeChatSession.script = nil; return script }   // [threads] a thread's own demo chat
+        if ChatDemo.flag("-HQDemoThreads") { return threadsThread() }   // [threads]
         if ChatDemo.flag("-HQDemoMath") { return mathThread() }
         if ChatDemo.flag("-HQDemoWideTable") { return wideTableThread() }
         if ChatDemo.flag("-HQDemoLinks") { return linksThread() }

@@ -20,6 +20,8 @@ final class ChatMenusState {
     var runningPlaceholderAfter: Duration = .milliseconds(250)
     /// The chat's folder from `session.resume` / `session.info` (`cwd`): Files, Changes and Branch read it.
     var cwd: String?
+    /// [threads] A thread of a bot's chat: its bar keeps the bot's face beside its own short title.
+    var isThread = false
     /// Rewinds (Regenerate, Edit, Rewind to Here) whose send is in flight, by the send's local id.
     var rewinds: [String: RewindSend] = [:]
     /// A rewind rewrote the stored rows: the next read replaces the transcript whole.

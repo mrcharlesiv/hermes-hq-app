@@ -908,6 +908,16 @@ final class ChatMenus: NSObject, ModelSwitchUI {
             reply.accessibilityIdentifier = "message.reply"
             children.insert(reply, at: 1)
         }
+        // [threads] Reply in Thread, in a bot's own chat: the next message starts a thread hung under this one
+        // (the way in when the bot is idle; while it works the thread button stands before Send).
+        if delivery == nil, let screen, screen.canThread(under: message) {
+            let thread = UIAction(title: "Reply in Thread", image: UIImage(systemName: "bubble.left.and.bubble.right")) { [weak screen] _ in
+                screen?.beginThreadReply(messageId)
+            }
+            thread.accessibilityIdentifier = "message.thread"
+            let at = children.firstIndex { ($0 as? UIAction)?.accessibilityIdentifier == "message.reply" }.map { $0 + 1 } ?? 1
+            children.insert(thread, at: min(at, children.count))
+        }
         // [activity] Show / Hide Steps on a reply that has steps (docs/spec/1x-activity.md §10.5; spec 1x §9 table).
         if !you, let screen, let steps = StepsMenu.item(forMessage: messageId, in: screen) {
             let at = children.firstIndex { ($0 as? UIAction)?.accessibilityIdentifier == "message.rewind" } ?? children.count

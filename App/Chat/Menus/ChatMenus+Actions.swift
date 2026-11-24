@@ -548,6 +548,24 @@ final class ComposerEditBanner: UIView, ComposerFieldWatching {
         saveButton?.isEnabled = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// [threads] Reply in Thread's banner: "Reply in Thread" over one line of the message the thread will hang under.
+    static func threading(excerpt: String) -> ComposerEditBanner {
+        ComposerEditBanner(title: "Reply in Thread", symbol: "bubble.left.and.bubble.right", note: excerpt, noteLines: 1,
+                           cancelLabel: "Cancel Thread", identifier: "composer.threading")
+    }
+
+    /// [threads] §9: calm proactive-routing banner shown while the main chat is busy and sends go straight into a thread.
+    static let busyThreadIdentifier = "composer.busyThread"
+    var busyBannerContent: ThreadBusyBanner?
+
+    static func busyThread(_ content: ThreadBusyBanner) -> ComposerEditBanner {
+        let banner = ComposerEditBanner(title: content.title, symbol: "bubble.left.and.bubble.right", note: content.note,
+                                        noteLines: 1, cancelLabel: "Use Main", identifier: busyThreadIdentifier,
+                                        cancelInWords: true)
+        banner.busyBannerContent = content
+        return banner
+    }
+
     /// Swipe to Reply's banner: "Replying to <bot>" over one line of the message.
     static func replying(to sender: String, excerpt: String) -> ComposerEditBanner {
         ComposerEditBanner(title: "Replying to \(sender)", symbol: "arrowshape.turn.up.left", note: excerpt, noteLines: 1,
@@ -619,6 +637,8 @@ final class ComposerEditBanner: UIView, ComposerFieldWatching {
         }, for: .primaryActionTriggered)
         cancel.setContentHuggingPriority(.required, for: .horizontal)
         cancel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        icon.contentMode = .scaleAspectFit
+        icon.setContentHuggingPriority(.required, for: .horizontal)
         icon.setContentCompressionResistancePriority(.required, for: .horizontal)
         var buttons: [UIView] = [cancel]
         if saves {

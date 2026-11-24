@@ -654,8 +654,10 @@ extension LiveChatSession {
         let cutsLiveTurn = (turn.busy || turn.streamId != nil) && !turnNotOnGateway
         newestSignature = cutsLiveTurn ? nil : page.rows.last.map(HistoryAPI.signature) ?? newestSignature
         noteCatchUp("tail \(page.rows.count) rows\(cutsLiveTurn ? " busy" : "")\(seeded != nil ? " seed" : "")")
+        let previousMessages = messages
         let before = messages.count
         let keptOlder = replaceTranscript(with: folded, replaceAll: false)
+        if ThreadRules.hasNewFinishedReply(before: previousMessages, after: messages) { onMainReplyLanded?() }   // [threads] §9
         settleLostSends()                               // [sessions-m9] a marked send the page now holds did arrive
         AppLog.trace("history", "tail read applied \(lids): \(before) → \(messages.count) rows, \(keptOlder ? "older rows kept" : "page replaced the screen, paging restarts at offset \(page.nextOffset)")")
         if !keptOlder {

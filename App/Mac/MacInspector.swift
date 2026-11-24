@@ -90,6 +90,47 @@ final class MacInspector: UIViewController {
         }
         if was != Self.isShown || next != nil || was { onShownChange?() }
     }
+    /// [threads] A thread of the chat beside the pane (docs/spec/3x-threads.md §6): its own chat fills the pane in place
+    /// of the tabs, under its title, so the main chat stays in view; ✕ brings the tabs back.
+    private var threadChat: ChatViewController?
+    private let threadRow = UIStackView()
+    private let threadTitle = UILabel()
+    /// The thread's chat on show in the pane, if any.
+    var shownThread: ChatViewController? { threadChat }
+    /// The pane went back to its tabs (✕, or the chat beside it changed).
+    var onThreadClosed: (() -> Void)?
+
+    func showThread(_ next: ChatViewController, name: String) {
+        clear()
+        threadChat = next
+        threadTitle.text = name
+        if !Self.isShown {
+            Self.isShown = true
+            if takesRoom?() == false { _ = makeRoom?() }
+            onShownChange?()
+        } else if takesRoom?() == false, makeRoom?() == true {
+            onShownChange?()
+        }
+        if isViewLoaded {
+            followLook()
+            fill()
+        }
+    }
+
+    /// Its short title arrived.
+    func renameThread(_ name: String) { if threadChat != nil { threadTitle.text = name } }
+
+    @objc func closeThread() {
+        guard threadChat != nil else { return }
+        clear()
+        threadChat = nil
+        onThreadClosed?()
+        if isViewLoaded {
+            followLook()
+            fill()
+        }
+    }
+
     private var content: UIViewController?
     private let tabs = UISegmentedControl(items: Tab.allCases.map(\.title))
     /// Mac polish #62: the Desktop Look's outlined strip in the segments' place (UISegmentedControl draws iOS 26's pill
@@ -176,6 +217,30 @@ final class MacInspector: UIViewController {
         taskTitle.isHidden = true
         taskTitle.accessibilityIdentifier = "mac.inspector.task-title"
         tabsRow.addArrangedSubview(taskTitle)
+        // [threads] The thread's mark and title, and ✕ at the trailing end.
+        let mark = UIImageView(image: UIImage(systemName: "bubble.left.and.bubble.right",
+                                              withConfiguration: UIImage.SymbolConfiguration(textStyle: .subheadline, scale: .medium)))
+        mark.tintColor = HQPalette.label2
+        mark.setContentHuggingPriority(.required, for: .horizontal)
+        threadTitle.font = HQFont.preferred(.subheadline).pagesWeight(.semibold)
+        threadTitle.textColor = HQPalette.label
+        threadTitle.lineBreakMode = .byTruncatingTail
+        threadTitle.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        threadTitle.accessibilityIdentifier = "mac.inspector.thread-title"
+        var closeLook = UIButton.Configuration.plain()
+        closeLook.image = UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(textStyle: .footnote, scale: .medium))
+        closeLook.baseForegroundColor = HQPalette.label2
+        closeLook.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 2)
+        let close = UIButton(configuration: closeLook, primaryAction: UIAction { [weak self] _ in self?.closeThread() })
+        close.accessibilityLabel = "Close Thread"
+        close.accessibilityIdentifier = "mac.inspector.thread-close"
+        close.setContentHuggingPriority(.required, for: .horizontal)
+        threadRow.axis = .horizontal
+        threadRow.alignment = .center
+        threadRow.spacing = 6
+        threadRow.isHidden = true
+        for part in [mark, threadTitle, close] { threadRow.addArrangedSubview(part) }
+        tabsRow.addArrangedSubview(threadRow)
         empty.isHidden = true
         grip.addGestureRecognizer(MacGripPan(target: self, action: #selector(dragged(_:))))
         grip.addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:))))
@@ -264,12 +329,14 @@ final class MacInspector: UIViewController {
             host.didMove(toParent: self)
             strip = host
         }
-        tabs.isHidden = desktop || Self.taskMode
+        let thread = threadChat != nil && !Self.taskMode   // [threads]
+        tabs.isHidden = desktop || Self.taskMode || thread
+        threadRow.isHidden = !thread
         taskTitle.isHidden = !Self.taskMode
         band.isHidden = !desktop
         band.backgroundColor = HQPalette.page
         bandFrost.color = HQPalette.page
-        strip?.view.isHidden = !desktop || Self.taskMode
+        strip?.view.isHidden = !desktop || Self.taskMode || thread
     }
 
     // MARK: Its width
@@ -305,6 +372,13 @@ final class MacInspector: UIViewController {
         guard next !== chat else { return }
         let had = chat != nil
         chat = next
+        // [threads] The thread belonged to the chat that was beside the pane.
+        if threadChat != nil {
+            clear()
+            threadChat = nil
+            onThreadClosed?()
+            if isViewLoaded { followLook() }
+        }
         // [bot-chat-sessions] The Chats tab stays as it is while one of its rows opens (its place in the list, no
         // flash): it takes the chat now beside it and marks that row.
         if isViewLoaded, Self.isShown, shownTab == .chats, taskChat == nil, let next,
@@ -369,6 +443,7 @@ final class MacInspector: UIViewController {
         guard let content else { return }
         // The task's chat outlives the pane's stack (the pane closes and opens again around it).
         if let stack = content as? UINavigationController, let taskChat, stack.viewControllers.contains(taskChat) { stack.viewControllers = [] }
+        if let stack = content as? UINavigationController, let threadChat, stack.viewControllers.contains(threadChat) { stack.viewControllers = [] }   // [threads]
         content.willMove(toParent: nil)
         content.view.removeFromSuperview()
         content.removeFromParent()
@@ -380,13 +455,13 @@ final class MacInspector: UIViewController {
         clear()
         guard Self.isShown else { return }
         var (made, note) = make(shownTab)
-        if let taskChat { made = taskChat }
+        if let taskChat { made = taskChat } else if let threadChat { made = threadChat }   // [threads]
         empty.set(symbol: note.symbol, title: note.title, hint: note.hint)
         empty.isHidden = made != nil
         guard let made else { return }
         // A stack of its own: Info's rows and a step's page push inside the panel.
         let stack = UINavigationController(rootViewController: made)
-        rootHidesBar = (made.navigationItem.title == nil && made.title == nil) || made === taskChat
+        rootHidesBar = (made.navigationItem.title == nil && made.title == nil) || made === taskChat || made === threadChat
         stack.setNavigationBarHidden(rootHidesBar, animated: false)
         stack.delegate = self
         fitPage(made, root: true)

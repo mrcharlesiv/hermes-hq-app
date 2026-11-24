@@ -41,6 +41,8 @@ import UIKit
 ///   adds your answer after it; `-HQDemoAskOther` taps its "Something else…" (`-HQDemoAskOtherText <words>` types them);
 ///   `-HQDemoAskPick <n>` picks choice n (1-based), showing its ready reply
 /// - `-HQDemoLinks` [mac-audit] short plain replies and two bare links (one page without a title)
+/// - `-HQDemoThreads [later]` [threads] a bot's chat with threads (Threads/ThreadsDemo.swift lists its flags);
+///   `-HQDemoDraft <text>` leaves words typed once `-HQDemoSend`'s message is out
 /// - `-HQDemoVoiceRecord` [voice record] a chat that ends with a live voice chat's line (`-HQDemoVoiceRecordOpen` opens it)
 /// - `-HQDemoPhotos <folder>` [photo-grid] messages made from the pictures in <folder> on this Mac: `<set>-<n>.png`
 ///   files are one message per set, in name order; a set whose name starts with "me" is yours, any other the bot's,
@@ -245,6 +247,7 @@ final class ChatDemoListViewController: UITableViewController {
             guard let chat else { return }
             chat.present(ChatInfoSheet.make(model: chat.session, account: nil, modelName: "hermes-4"), animated: true)
         }
+        ChatDemo.installThreads(on: chat)   // [threads] -HQDemoThreads
         navigationController?.pushViewController(chat, animated: true)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { Self.afterOpen(chat) }
     }
@@ -382,6 +385,11 @@ final class ChatDemoListViewController: UITableViewController {
             // -HQDemoStopAfter <s>: Stop that long after the send (0.5 s: before the reply's first token).
             if let after = ChatDemo.argument("-HQDemoStopAfter").flatMap(Double.init) {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3 + after) { chat.session.stop() }
+            }
+            // [threads] -HQDemoDraft <text>: words left typed in the field once the send is out (with -HQDemoHoldStep:
+            // a reply running and words typed, the state the thread button shows in).
+            if let draft = ChatDemo.argument("-HQDemoDraft") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { chat.composer.text = draft }
             }
         }
         if let next = ChatDemo.argument("-HQDemoThenOpen").flatMap(Int.init), !thenOpened, let nav = chat.navigationController,

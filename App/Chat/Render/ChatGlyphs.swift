@@ -18,6 +18,8 @@ nonisolated enum ChatGlyph: Sendable, Hashable {
     case note
     /// [voice record] A live voice chat's words (a waveform).
     case voice
+    /// [threads] A thread of the chat (a message with a reply tucked under it).
+    case thread
 
     /// SVG path data in a 24-unit box (stroked, round caps and joins).
     var svg: [String] {
@@ -35,6 +37,8 @@ nonisolated enum ChatGlyph: Sendable, Hashable {
         case .error: return ["M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0z", "M12 7v6m0 3v1"]
         case .worked: return ["M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0z", "m8 12.5 2.8 2.8 5.2-5.6"]
         case .voice: return ["M4 10v4M8 7v10M12 4v16M16 8v8M20 10.5v3"]
+        case .thread: return ["M4.2 4.6h11.2a2.4 2.4 0 0 1 2.4 2.4v4.2a2.4 2.4 0 0 1-2.4 2.4H9.4l-3.3 2.7v-2.7H4.2a2.4 2.4 0 0 1-2.4-2.4V7a2.4 2.4 0 0 1 2.4-2.4z",
+                              "M21.2 9.4a2.3 2.3 0 0 1 1 1.9v4.4a2.4 2.4 0 0 1-2.4 2.4h-.9v2.5l-3.1-2.5h-4.6"]
         case .note: return ["M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0z", "M12 11v5", "M12 7.9v.1"]
         }
     }

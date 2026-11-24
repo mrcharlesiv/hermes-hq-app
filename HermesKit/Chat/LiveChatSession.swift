@@ -129,6 +129,9 @@ nonisolated struct QueuedMessage: Identifiable, Hashable, Sendable, Codable {
     // MENUS (spec 1x §8.3): a skill send's bubble shows its invocation; `text` (the expanded body) goes on the wire.
     // [activity] For a hidden continuation, the words Hermes gave it.
     var display: String? = nil
+    /// [threads] Queued while the link was away: if the chat is held by another run when the link returns, it may go on
+    /// in a thread instead of waiting behind that run.
+    var queuedOffline: Bool? = nil
 }
 
 final class LiveChatSession: ChatSessionModel {
@@ -190,6 +193,31 @@ final class LiveChatSession: ChatSessionModel {
     var onDraftReturned: ((_ text: String, _ reason: String) -> Void)?
     /// One-line toasts ("Couldn't stop — Hermes finished the reply.", chat-level errors).
     var onNotice: ((String) -> Void)?
+    /// [threads] A bot's own chat that cannot take typed words now sends them on in a thread instead of handing them
+    /// back (docs/spec/3x-threads.md §9). Set by the app model; true = a thread took `text` as its message. `localId`
+    /// is the send's bubble in this chat, which the thread's seed leaves out.
+    var onBusyThread: ((_ text: String, _ localId: String) -> Bool)?
+    /// [threads] §9 rich hand-off (words, skills/titled requests, hidden notes, photos and files, and proactive routing
+    /// before a main bubble exists). Preferred over `onBusyThread` when set.
+    var onBusyThreadSend: ((BusyThreadPayload) -> Bool)?
+    /// [threads] §9 proactive check: true when the app already knows this chat is unavailable (an external run or an
+    /// active busy thread) and the user has not opted to wait in the main chat.
+    var shouldRouteToBusyThread: (() -> Bool)?
+    /// [threads] §9 context reconciliation: supplies a compact summary of auto-threads that settled while this chat was
+    /// busy, carried on the next normal main-chat prompt (stripped from the visible bubble by `SentTitles`).
+    var consumeThreadContextNote: (() -> String?)?
+    /// Restores a consumed reconciliation note if that send ended up refusing or going to a thread instead of the main chat.
+    var restoreThreadContextNote: ((String) -> Void)?
+    /// [threads] §9: fired when a history refresh brings a newer finished assistant reply into this chat (proving an
+    /// external job finished, so an active auto-thread latch can hand the composer back to the main chat).
+    var onMainReplyLanded: (() -> Void)?
+    /// [threads] How long a first `4090` refusal waits for another run to let go before handing off to a thread.
+    var threadAfter: Duration = ThreadRules.busyOwnerGrace
+    /// [threads] How long a `4009` busy refusal retries before a threadable send hands off to a thread.
+    var threadBusyWindow: Duration = .milliseconds(2500)
+    /// [threads] Sends this chat has taken (`prompt.submit` accepted): a thread that took a busy chat's words takes the
+    /// next ones too, until the chat takes a send itself.
+    private(set) var acceptedSends = 0
     /// `4064 Profile '<name>' does not exist.`: the roster is stale — refetch `/api/profiles`, never retry (04 §1.4).
     var onRosterStale: (() -> Void)?
     /// The open failed with nothing to show (03 §4.7): the screen shows an error state with Retry (`start()` again).
@@ -381,6 +409,11 @@ final class LiveChatSession: ChatSessionModel {
     // [talk] A live voice conversation keeps the chat listening off screen the same way (LiveChatSession+Talk.swift).
     var voiceHold = false { didSet { if voiceHold != oldValue { voiceHoldChanged() } } }
     var onVoiceChange: (() -> Void)?
+    /// [threads] A thread the bot chat draws in place keeps listening with no screen of its own, the same way
+    /// (App/Chat/Threads/ThreadStore.swift holds it and lets go once the thread has gone quiet).
+    var threadHold = false { didSet { if threadHold != oldValue, !threadHold { endAwayDrainIfDone() } } }
+    /// [threads] Every change, on screen or off: the chat the thread hangs in redraws it.
+    var onThreadChange: (() -> Void)?
     /// The app's chats keep their queue beyond the screen (the stash, the off-screen drain); set by the app model with
     /// `keepQueue()` before the first frame. Off for chats made by tests and previews.
     private(set) var keepsQueue = false
@@ -692,7 +725,7 @@ final class LiveChatSession: ChatSessionModel {
         }
     }
 
-    private func beginOpen(failedOpen: Bool) {
+    func beginOpen(failedOpen: Bool) {
         started = true
         openError = nil
         chatGone = false
@@ -736,7 +769,7 @@ final class LiveChatSession: ChatSessionModel {
         if !keepsQueue { memoQueueLeaving() }
         // A /btw or /bg still out keeps the chat listening too: its result lands while away (SideTasks.swift).
         let sideOut = sideTasksOut()
-        drainingAway = (keepsQueue && waiting) || voiceHold || sideOut   // [talk] voiceHold
+        drainingAway = (keepsQueue && waiting) || voiceHold || threadHold || sideOut   // [talk] voiceHold [threads] threadHold
         AppLog.trace("chat", "screen off \(logIds): rows=\(messages.count) busy=\(turn.busy) queued=\(queuedMessages.count) parked=\(isQueueParked) ownerWait=\(turn.waitingForOwner != nil) sideOut=\(sideOut) voice=\(voiceHold) → \(drainingAway ? "keeps listening off screen" : "stops listening")")
         if sideOut { armSideTaskLimit() }
         if !drainingAway { stopListening() }
@@ -771,7 +804,7 @@ final class LiveChatSession: ChatSessionModel {
         queueDrainTask?.cancel(); queueDrainTask = nil
     }
 
-    private func subscribe() {
+    func subscribe() {
         let events = client.events()
         eventTask = Task { [weak self] in
             for await event in events {
@@ -1245,6 +1278,14 @@ final class LiveChatSession: ChatSessionModel {
             steerTyped(text)
             return
         }
+        // [threads] §9 proactive routing: when this chat is already known to be unavailable (external run or latched
+        // busy thread), send directly into the thread with zero wait and no main-chat bubble teleport.
+        if !toQueue, !defersForLink, !turn.busy, queuedMessages.isEmpty || isQueueParked,
+           shouldRouteToBusyThread?() == true,
+           deliverToBusyThread(BusyThreadPayload(text: text, display: display, attachments: attachments, localId: nil,
+                                                 reason: externalWorking ? .backgroundTask : nil, proactive: true)) {
+            return
+        }
         // Verify round 3: a fresh message is fresh intent to keep the conversation moving, so a park left by an earlier
         // Stop (or refusal) never holds it, or the messages queued ahead of it, back (the web's `enqueueQueuedPrompt`
         // unparks). Sent while idle it goes first; the parked ones follow its reply.
@@ -1254,22 +1295,35 @@ final class LiveChatSession: ChatSessionModel {
             // Wait in the FIFO for the connection, the current reply or the messages already ahead of this one.
             let qid = nextQueuedId()
             AppLog.trace("send", "queued \(AppLog.tag(qid)) in \(logIds): busy=\(turn.busy), \(queuedMessages.count) ahead, attachments=\(attachments.count)")
-            queuedMessages.append(QueuedMessage(id: qid, text: text, attachments: attachments, display: display))
+            queuedMessages.append(QueuedMessage(id: qid, text: text, attachments: attachments, display: display,
+                                                queuedOffline: defersForLink ? true : nil))
             changes.markState()
             scheduleFlush()
             if !turn.busy { drainQueueHead() }
             return
         }
+        // [threads] §9 context reconciliation: carry a compact hidden summary of settled auto-threads onto the next
+        // normal main-chat send (stripped from the visible bubble by `SentTitles`), restoring it if the send doesn't land.
+        var wireText = text
+        var wireDisplay = display
+        var carriedContextNote: String?
+        if let note = consumeThreadContextNote?(), !note.isEmpty {
+            carriedContextNote = note
+            if wireDisplay == nil { wireDisplay = ChatText.trimmed(text) }
+            wireText = ThreadContextNote.appended(to: text, note: note)
+        }
         let retryItem = canQueueWhileDisconnected && attachments.isEmpty
             ? QueuedMessage(id: nextQueuedId(), text: text, display: display) : nil
-        beginSend(text, display: display, queued: false, attachments: attachments, retryItem: retryItem)
+        beginSend(wireText, display: wireDisplay, queued: false, attachments: attachments, retryItem: retryItem,
+                  carriedContextNote: carriedContextNote)
     }
 
     /// The optimistic bubble, busy at once, then `prompt.submit` (with `queued:true` for queue drains).
     /// VOICE: `memo` stages the memo first (LiveChatSession+Memo.swift); its watchdog arms when `prompt.submit` goes out.
     func beginSend(_ text: String, display: String? = nil, queued: Bool, attachments: [DraftAttachment] = [],
                    memo: MemoSendContext? = nil, interrupted: Bool = false, voiceContext: String? = nil,
-                   retryItem: QueuedMessage? = nil) {   // [talk] interrupted
+                   retryItem: QueuedMessage? = nil, allowBusyThread: Bool = false,
+                   carriedContextNote: String? = nil) {   // [talk] interrupted
         openIfWaiting()   // [tasks] a memo as a task's first message makes its chat as it stages
         sealLeftoverLiveMessage()
         localCounter += 1
@@ -1318,7 +1372,8 @@ final class LiveChatSession: ChatSessionModel {
         }
         Task { [weak self] in
             await self?.submit(text, draft: display ?? text, localId: localId, queued: queued, holdForStop: holdForStop, epoch: epoch,
-                               attachments: attachments, interrupted: interrupted, retryItem: retryItem)   // [talk] interrupted
+                               attachments: attachments, interrupted: interrupted, retryItem: retryItem,
+                               allowBusyThread: allowBusyThread, carriedContextNote: carriedContextNote)   // [talk] interrupted
         }
     }
 
@@ -1326,13 +1381,35 @@ final class LiveChatSession: ChatSessionModel {
     /// nil = `text`). VOICE: internal.
     func submit(_ text: String, draft: String? = nil, localId: String, queued: Bool, holdForStop: Bool, epoch: Int,
                 attachments: [DraftAttachment] = [], interrupted: Bool = false,
-                retryItem: QueuedMessage? = nil) async {   // [talk] interrupted
+                retryItem: QueuedMessage? = nil, allowBusyThread: Bool = false,
+                carriedContextNote: String? = nil) async {   // [talk] interrupted
         let draft = draft ?? text
         // A send turned down. One that Stop overtook never went out either: its words come back as stopped, with no
         // "Couldn’t Send" card, no park and no settle (by then the chat may be running the next message's turn).
         func refuse(_ reason: String) {
+            if let carriedContextNote { restoreThreadContextNote?(carriedContextNote) }
             if stopEpoch != epoch { withdrawStoppedSend(localId: localId, text: draft, attachments: attachments); return }
             refuseSend(localId: localId, text: draft, reason: reason, queued: queued, attachments: attachments)
+        }
+        // [threads] §9: messages a bot's own chat cannot take now go on in a thread. Rich handler (`onBusyThreadSend`)
+        // accepts words, hidden-note prompts, skills/titled requests, and attachments; legacy `onBusyThread` stays plain
+        // words only. Rewinds, voice turns, memos and normal user-queued sends are unchanged; offline-queued sends may
+        // auto-thread if an external run holds the chat on reconnect.
+        func threadable() -> Bool {
+            let hasHandler = onBusyThreadSend != nil || (onBusyThread != nil && attachments.isEmpty && draft == text)
+            return hasHandler && (!queued || allowBusyThread) && !interrupted && !voiceHold
+                && memoSends[localId] == nil && voiceLiveSends[localId] == nil && rewindParams(for: localId) == nil
+        }
+        func threadTakes(reason: OwnerWait?) -> Bool {
+            guard stopEpoch == epoch, threadable() else { return false }
+            let cleanText = carriedContextNote != nil ? (ThreadContextNote.stripped(text) ?? text) : text
+            let cleanDisplay: String? = (carriedContextNote != nil && draft == cleanText) ? nil : (draft == text ? nil : draft)
+            let payload = BusyThreadPayload(text: cleanText, display: cleanDisplay, attachments: attachments,
+                                            localId: localId, reason: reason, proactive: false)
+            guard deliverToBusyThread(payload) else { return false }
+            if let carriedContextNote { restoreThreadContextNote?(carriedContextNote) }
+            sendWentToThread(localId, reason: reason)
+            return true
         }
         // [attachments] the send keeps running while the app is in the background (docs/spec/1x-attachments.md §6.6)
         let background = attachments.isEmpty ? nil : AttachmentPipeline.beginBackground()
@@ -1396,7 +1473,7 @@ final class LiveChatSession: ChatSessionModel {
         if turn.userAnchorId == localId { turn.anchorPromptKey = Hydration.userDisplayKey(promptText) }
         endPreparing(localId)                                                                              // [attachments]
         var resumedOnce = false
-        let busyDeadline = ContinuousClock.now + busyRetryWindow
+        let busyDeadline = ContinuousClock.now + (threadable() ? min(busyRetryWindow, threadBusyWindow) : busyRetryWindow)
         var firstError: RPCError?
         var ownerDeadline: ContinuousClock.Instant?
         var ownerTries = 0
@@ -1508,18 +1585,22 @@ final class LiveChatSession: ChatSessionModel {
                     return
                 case 4090 where Self.isOwnerBusy(error) && !attached.photos.isEmpty:
                     // Photos can't wait in the gateway's queue (it unstages them with this refusal, so a later try would
-                    // go without them): they go back to the tray with the words.
-                    AppLog.note("send", "send \(lid): owner busy with \(attached.photos.count) photos staged → handed back (photos can't wait)")
+                    // go without them): detach from the main runtime and send them on in a thread if possible, else back
+                    // to the tray with the words.
+                    AppLog.note("send", "send \(lid): owner busy with \(attached.photos.count) photos staged → trying thread or hand-back")
                     endOwnerWait()
                     await detachPhotos(attached)                                                              // [attachments]
+                    if threadTakes(reason: .runningReply) { probeTailSoon(); return }                         // [threads] §9
                     refuse(error.message)
                     return
                 case 4090 where Self.waitsForOwner(error):
+                    let waitKind = Self.ownerWait(error)
                     if ownerDeadline == nil {
-                        let kind = Self.ownerWait(error)
                         AppLog.note("chat", "send waits for the chat's owner: \(AppLog.scrub(error.message))")
-                        ownerDeadline = ContinuousClock.now + (kind == .otherWindow ? ownerWaitShortWindow : ownerWaitWindow)
-                        turn.waitingForOwner = kind
+                        let window = waitKind == .otherWindow ? ownerWaitShortWindow : ownerWaitWindow
+                        // [threads] words a thread can take wait only `threadAfter` for the chat (§9)
+                        ownerDeadline = ContinuousClock.now + (threadable() ? min(window, threadAfter) : window)
+                        turn.waitingForOwner = waitKind
                         turn.preparingSendId = localId   // not on the gateway yet: no watchdog, no running:false settle
                         changes.markState()
                         scheduleFlush()
@@ -1528,7 +1609,7 @@ final class LiveChatSession: ChatSessionModel {
                     if let deadline = ownerDeadline, ContinuousClock.now < deadline {
                         ownerTries += 1
                         let pause = ownerPause(ownerTries)
-                        AppLog.trace("send", "send \(lid): still owned (\(Self.ownerWait(error).logWord)), retry \(attempt) in \(pause) or when the other run ends")
+                        AppLog.trace("send", "send \(lid): still owned (\(waitKind.logWord)), retry \(attempt) in \(pause) or when the other run ends")
                         // The chat answered on the runtime in hand: a later reap (a long time in the background) may
                         // resume once more.
                         resumedOnce = false
@@ -1542,8 +1623,9 @@ final class LiveChatSession: ChatSessionModel {
                         continue
                     }
                     endOwnerWait()
-                    AppLog.note("chat", "send refused, the chat is still owned: \(AppLog.scrub(error.message))")
                     await detachPhotos(attached)                                                              // [attachments]
+                    if threadTakes(reason: waitKind) { probeTailSoon(); return }   // [threads] §9: it goes on in a thread, not back
+                    AppLog.note("chat", "send refused, the chat is still owned: \(AppLog.scrub(error.message))")
                     refuse(error.message)
                     probeTailSoon()     // [owner-wait] what the holder saved during the wait (its changes weren't all read)
                     return
@@ -1558,6 +1640,7 @@ final class LiveChatSession: ChatSessionModel {
                         continue
                     }
                     await detachPhotos(attached)                                                              // [attachments]
+                    if threadTakes(reason: .runningReply) { return }   // [threads] §9
                     refuse(error.message)
                     return
                 case 4001, 4007:
@@ -1610,6 +1693,7 @@ final class LiveChatSession: ChatSessionModel {
     }
 
     private func acknowledge(localId: String, result: JSONValue, epoch: Int) {
+        acceptedSends += 1   // [threads]
         _ = memoSendFinished(localId, .acknowledged)   // VOICE
         voiceLiveSends[localId] = nil   // [gpt-live]
         rewindAcknowledged(localId: localId, result: result)   // MENUS: the kept rows' new ids
@@ -1745,8 +1829,18 @@ final class LiveChatSession: ChatSessionModel {
         changes.markState()
         if next.hidden { submitHidden(next.text, queued: true); return }    // [activity] goal continuation
         if let memo = next.memo { beginMemoSend(memo, typed: next.text, queued: true); return }   // VOICE
+        // [threads] §9 offline outbox: if a message queued while offline drains into an externally busy chat, route
+        // directly to a thread instead of blocking behind the other run.
+        if next.queuedOffline == true, shouldRouteToBusyThread?() == true,
+           deliverToBusyThread(BusyThreadPayload(text: next.text, display: next.display, attachments: next.attachments,
+                                                 localId: nil, reason: externalWorking ? .backgroundTask : nil, proactive: true)) {
+            scheduleFlush()
+            if !queuedMessages.isEmpty { scheduleQueueDrain(after: .zero) }
+            return
+        }
         beginSend(next.text, display: next.display, queued: true, attachments: next.attachments,
-                  retryItem: canQueueWhileDisconnected && next.attachments.isEmpty ? next : nil)
+                  retryItem: canQueueWhileDisconnected && next.attachments.isEmpty ? next : nil,
+                  allowBusyThread: next.queuedOffline == true)
     }
 
     /// [activity] Queues a hidden goal continuation behind the running reply (docs/spec/1x-activity.md §6.4).
@@ -2230,6 +2324,7 @@ final class LiveChatSession: ChatSessionModel {
         }
         if drainingAway && !observing { endAwayDrainIfDone() }   // verify round 3
         onVoiceChange?()   // [talk] the conversation hears every change, on screen or off
+        onThreadChange?()  // [threads]
         guard !changes.isEmpty else { return }
         watchForDoubledReply()                                   // [doubled-reply]
         let emitted = changes.emissions()

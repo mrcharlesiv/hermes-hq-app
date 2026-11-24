@@ -972,6 +972,16 @@ final class SessionStore {
         rebuild()
     }
 
+    /// [threads] A thread's reply was read where the thread is drawn, in its bot's chat: its own row is read too (on
+    /// this device and, where reads are shared, on the gateway), without becoming the selected chat.
+    func markReadInPlace(id: String, profile: String) {
+        guard let row = listedRow(id: id, profile: profile), isUnreadNow(row) else { return }
+        device.unread.opened(row, clearServerLocally: row.unread == true && readOnlyGateway)
+        persistState()
+        if sharesRead(row) { writeUnread(false, row: row) }
+        rebuild()
+    }
+
     /// `through` ([read-sync]): the activity a read covers (server seconds), when it is newer than the row's own.
     func writeUnread(_ unread: Bool, row: SidebarSessionRow, through: Double? = nil) {
         let ticket = beginUnreadWrite(unread, row: row, through: through)

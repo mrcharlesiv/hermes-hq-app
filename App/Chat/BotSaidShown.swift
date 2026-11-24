@@ -116,7 +116,7 @@ nonisolated extension BotSaidRules {
         case .error, .prompt, .slashOutput:
             return true
         case .toolRun, .thought, .day, .notice, .caption, .stoppedEarly, .waiting, .sendState, .actions,
-             .activity, .reactions:
+             .activity, .reactions, .thread:   // [threads] a thread speaks for itself (its own chat's row)
             return false
         }
     }

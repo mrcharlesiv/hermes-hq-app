@@ -621,6 +621,7 @@ nonisolated struct RowLayout: @unchecked Sendable {
         case prompt(PromptRowLayout)      // [questions]
         case activity(ActivityLayout)       // [activity] tool bubbles, delegate card, generated image
         case reactions(ReactionsLayout)     // Tapback badges under a message
+        case thread(ThreadLayout)           // [threads] a thread open in place
     }
     var height: CGFloat
     var content: Content
@@ -839,6 +840,8 @@ nonisolated enum TextLayout {
             return ActivityLayouts.make(kind, row: row, width: width, style: style)       // [activity]
         case .reactions(let r):
             return reactions(r, gap: gap, width: width, style: style)
+        case .thread(let t):
+            return ThreadRows.layout(t, row: row, width: width, style: style, keep: keep)   // [threads]
         case .waiting(let waiting):
             let textH = ceil(style.notice.lineHeight)
             let h = max(30, textH)

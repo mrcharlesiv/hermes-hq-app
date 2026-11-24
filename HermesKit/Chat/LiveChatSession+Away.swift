@@ -52,7 +52,7 @@ extension LiveChatSession {
     /// the chat stops listening and the app model lets it go. A parked remainder waits in the stash for the next open.
     func endAwayDrainIfDone() {
         guard drainingAway, !observing, queuedMessages.isEmpty || isQueueParked, !turn.busy, !voiceHold,   // [talk] voiceHold
-              !sideTasksOut() else { return }
+              !threadHold, !sideTasksOut() else { return }   // [threads] threadHold
         AppLog.trace("chat", "off-screen drain done \(logIds): queued=\(queuedMessages.count) parked=\(isQueueParked); stops listening")
         drainingAway = false
         stopListening()

@@ -47,10 +47,13 @@ import UIKit
     /// Swipe to Reply: whether a bot's bubble can be replied to here, and the reply begun (a quote over the composer).
     func chatCellCanReply(rowId: String) -> Bool
     func chatCellReply(rowId: String)
+    /// [threads] A thread's row was tapped: its own chat opens.
+    func chatCellOpenThread(key: String)
 }
 
 extension ChatCellDelegate {
     func chatCellToggleFiles(rowId: String) {}
+    func chatCellOpenThread(key: String) {}
     func chatCellLinkMenu(url: URL, source: UIView) -> UIMenu? { nil }
     func chatCellShowAllSteps(rowId: String) {}
     func chatCellShowLiveSteps() {}

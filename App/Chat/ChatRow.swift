@@ -36,6 +36,8 @@ nonisolated struct ChatRow: @unchecked Sendable {
         case activity(ActivityRowKind)
         /// Tapback badges under a message's last bubble, on its side (ChatGatewayExtras.swift).
         case reactions(ReactionsRow)
+        /// [threads] A thread of this chat, open in place under the message it hangs under (Threads/ThreadRows.swift).
+        case thread(ThreadRow)
     }
 
     /// Stable across content changes: "<message id>|<what>".
@@ -358,6 +360,9 @@ nonisolated enum ChatRowBuilder {
         var asks = AskRowsInput()
         /// [questions] Skipped questions answered later in the chat, by card key (`ClarifyLate.answers`).
         var clarifyLate: [String: ClarifyLate.Found] = [:]
+        /// [threads] The chat's threads, by the id of the message each hangs under (oldest first), and their line's colour.
+        var threads: [String: [ThreadRowInput]] = [:]
+        var threadTint: ThreadTint = .label2
 
         var speakerName: String {
             let name = botName.trimmingCharacters(in: .whitespaces)
@@ -438,6 +443,7 @@ nonisolated enum ChatRowBuilder {
                 // [updates] The run's first small row draws its line (and, opened, its card's rows); the others draw there.
                 if group.head == here { rows += UpdateGroups.rows(group, input: input, rows: made) }
             }
+            if !input.threads.isEmpty { rows += ThreadRows.rows(under: m, input: input) }   // [threads]
             owners.append(contentsOf: Array(repeating: index, count: rows.count - before))
         }
         // Waiting capsule: the turn runs and nothing of the reply is visible yet. [questions] Not while the turn waits on
@@ -474,13 +480,19 @@ nonisolated enum ChatRowBuilder {
                                 gapAbove: ChatMetrics.turnGap, variant: 0))
             owners.append(-1)
         }
-        if upper == lower && !(upper == messages.count && (input.isRunning || !typing.isEmpty)) { return [] }
+        let unanchoredThreads = upper == messages.count ? ThreadRows.unanchoredRows(input: input) : []
+        if upper == lower && !(upper == messages.count && (input.isRunning || !typing.isEmpty || !unanchoredThreads.isEmpty)) { return [] }
         applyRunsAndGaps(&rows, messages: messages, from: contextStart, ownName: input.speakerName,
                          ownFace: input.ownFace, fewerTimes: input.fewerTimes)
         // [updates] No action row under the newest reply any more (owner, 2026-10-27): Copy is in its hold menu and the
         // time is on its Worked line.
+        // [threads] Unanchored threads (started in an empty chat) stand at the foot so they never vanish.
         // [questions] The approval card (and a question note with no running part) at the newest end.
         if upper == messages.count {
+            for row in unanchoredThreads {
+                rows.append(row)
+                owners.append(-1)
+            }
             for row in PromptRows.tail(input) {
                 rows.append(row)
                 owners.append(-1)
@@ -1243,7 +1255,9 @@ nonisolated enum ChatRowBuilder {
             }
             // Tail and time: the last bubble of the run's last message.
             let nextJoins = mi + 1 < messages.count && joins(message, messages[mi + 1])
-            let isRunEnd = !nextJoins
+            // [threads] A thread hung under this message ends the run: what follows it stands apart.
+            let cutBelow = r + 1 < rows.count && ThreadRows.isThread(rows[r + 1])
+            let isRunEnd = !nextJoins || cutBelow
             // Fewer Timestamps: your bubbles carry no time; the reply under them does.
             let endsRun = isRunEnd && lastBubbleRow[message.id] == r
             // [chat-refine] The tail is the run's end, whoever drew a time: Fewer Timestamps took your bubbles' tails

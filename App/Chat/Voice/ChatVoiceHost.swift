@@ -192,8 +192,8 @@ import UIKit
         if isAvailable {
             talk.layout()     // [talk] the "Voice chat ended" caption
             reader.layout()   // [talk] the Read Aloud strip
-            layoutTalkTip()   // [talk]
         }
+        layoutTalkTip()   // [talk] [threads] the thread tip shows where voice is not offered too
         layoutWords()   // [live words]
     }
 
@@ -204,7 +204,8 @@ import UIKit
     func talkPillTop(base: CGFloat) -> CGFloat { isAvailable ? talk.pillTop(base: base) : base }
     /// From the composer up: the Talk tip, the Read Aloud strip, the "Voice chat ended" caption.
     func talkCaptionTop(base: CGFloat) -> CGFloat {
-        isAvailable ? talk.captionTop(base: reader.stripTop(base: talkTipTop(base: base))) : base
+        // [threads] A tip that shows where voice is not offered (the thread tip needs no voice) still docks on the box.
+        isAvailable ? talk.captionTop(base: reader.stripTop(base: talkTipTop(base: base))) : talkTip != nil ? talkTipTop(base: base) : base
     }
     func talkTypedSend(_ text: String, hasAttachments: Bool) -> Bool {
         guard isAvailable else { return false }
@@ -573,6 +574,19 @@ import UIKit
         dismissTipNow(finish: false)
     }
 
+    /// [threads] The thread button came or went: its one-time tip shows with it and leaves with it. `learned`: the
+    /// button was used, the tip is done for good.
+    func threadTip(buttonShown: Bool, learned: Bool = false) {
+        AppLog.trace("threads", "thread button \(buttonShown ? "shown" : "gone")\(learned ? " (used)" : ""): tip done=\(MemoTips.isDone(.thread)) on screen=\(isOnScreen) jump=\(screen?.isJumpButtonShown ?? false) lead=\(screen?.holdsLeadTop ?? false) presented=\(screen?.presentedViewController != nil) memo phase idle=\(controller.state.phase == .idle) target=\(controller.isTarget(self))")
+        if learned { MemoTips.finish(.thread) }
+        if buttonShown, !learned {
+            memoShowTip(.thread)
+        } else {
+            if pendingTip == .thread { pendingTip = nil }
+            if talkTip?.tip == .thread { hideTalkTip(finish: learned) }
+        }
+    }
+
     /// Takes the tip off the screen. Unless it is finished (closed, or its lesson learned), it shows again at the next
     /// settle.
     /// [talk] Talk was tapped, or a voice sheet is about to open: whatever tip shows leaves first, then `done` runs.
@@ -603,7 +617,8 @@ import UIKit
         tipTimer = nil
         guard let tip = pendingTip, !MemoTips.isDone(tip), let screen, let composer, isOnScreen,
               controller.state.phase == .idle || !controller.isTarget(self),
-              tip == .talk ? composer.primary == .talk : !composer.mic.isHidden,       // [talk] its tip points at the circle
+              // [talk] its tip points at the circle; [threads] its tip at the thread button, while that stands
+              tip == .talk ? composer.primary == .talk : tip == .thread ? composer.threadButtonShown : !composer.mic.isHidden,
               !screen.isJumpButtonShown, !screen.holdsLeadTop, screen.presentedViewController == nil else {
             if pendingTip == .talk, MemoTips.isDone(.talk) { pendingTip = nil }
             if pendingTip != nil, isOnScreen { scheduleTipLater() }
@@ -686,7 +701,7 @@ import UIKit
     private var talkTipCheckQueued = false
     private var talkTipYields: Bool {
         guard let screen, let composer, let shown = talkTip else { return true }
-        let away = shown.tip == .talk ? composer.primary != .talk : composer.mic.isHidden
+        let away = shown.tip == .talk ? composer.primary != .talk : shown.tip == .thread ? !composer.threadButtonShown : composer.mic.isHidden   // [threads]
         return away || screen.isJumpButtonShown
     }
 

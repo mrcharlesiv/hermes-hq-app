@@ -88,6 +88,20 @@ final class AppModel: AppServices {
     private var unheardTurnsTask: Task<Void, Never>?
     /// Stored ids of sessions with a running turn (the Sessions rows' "Working…").
     private var runningSessions: Set<String> = []
+    /// [threads] The chats started from inside a bot's chat, which that chat draws in place (ThreadStore.swift).
+    private(set) lazy var threadStore = ThreadStore(model: self)
+    /// [threads] The Mac's pane shows a thread beside its bot chat: which thread, and the bot chat that stays on screen
+    /// with it (two chats in front of the person; the thread's is the focused one).
+    var threadPanel: (key: String, parent: WeakBox<LiveChatSession>, pane: WeakBox<UIViewController>)?
+    /// The bot chat on screen beside its thread, for the turn `runtime` belongs to.
+    private func isBesideThread(_ runtime: String) -> Bool {
+        guard let parent = threadPanel?.parent.value, parent.observing else { return false }
+        return parent.runtimeSessionId == runtime
+    }
+    /// [threads] A turn runs in this chat, as far as this device knows (a thread listed from another device says so).
+    func isSessionWorking(_ storedId: String) -> Bool {
+        runningSessions.contains(storedId) || sessionStore?.sessions.first(where: { $0.id == storedId })?.isRunning == true
+    }
     /// [working-ledger] The chats the gateway itself says run a turn (any process, any device), read while the Sessions
     /// list is on screen: they say Working… there too (WorkingLedgerWatch).
     private var workingLedger: WorkingLedgerWatch?
@@ -194,6 +208,32 @@ final class AppModel: AppServices {
         chat.botName = bot.name
         chat.modelName = botStore.profile(named: bot.id)?.model
         chat.menus.isBotChat = true             // MENUS (spec 1x §4.1): a bot's own chat offers no Rename
+        // [threads] §9: messages this chat cannot take now go on in a thread instead of coming back, and sends made
+        // while the chat is already known to be busy route straight into the thread with zero wait.
+        chat.onBusyThread = { [weak self, weak chat] text, localId in
+            guard let self, let chat, let bot = self.botStore?.bot(named: chat.profile) else { return false }
+            return self.threadStore.takeBusySend(text, from: chat, bot: bot, leavingOut: localId)
+        }
+        chat.onBusyThreadSend = { [weak self, weak chat] payload in
+            guard let self, let chat, let bot = self.botStore?.bot(named: chat.profile) else { return false }
+            return self.threadStore.takeBusySend(payload, from: chat, bot: bot)
+        }
+        chat.shouldRouteToBusyThread = { [weak self, weak chat] in
+            guard let self, let chat else { return false }
+            return self.threadStore.shouldRouteToBusyThread(for: chat, botId: chat.profile)
+        }
+        chat.consumeThreadContextNote = { [weak self, weak chat] in
+            guard let self, let chat else { return nil }
+            return self.threadStore.consumeReconciliationNote(profile: chat.profile)
+        }
+        chat.restoreThreadContextNote = { [weak self, weak chat] note in
+            guard let self, let chat else { return }
+            self.threadStore.restoreReconciliationNote(profile: chat.profile, note: note)
+        }
+        chat.onMainReplyLanded = { [weak self, weak chat] in
+            guard let self, let chat else { return }
+            self.threadStore.noteMainReplyLanded(profile: chat.profile, parent: chat)
+        }
         chat.activityLink.store = activityStore       // [activity]
         wire(chat)
         chat.keepQueue()                        // verify round 3: a queue left in this chat comes back
@@ -256,7 +296,7 @@ final class AppModel: AppServices {
         return chat
     }
 
-    private func freshChat(for bot: Bot, folder: String?, shownTitle: String, extra: [String: JSONValue],
+    func freshChat(for bot: Bot, folder: String?, shownTitle: String, extra: [String: JSONValue],
                            created: (@MainActor (String) -> Void)?) -> ChatSessionModel {
         guard let client, let account, let botStore else { return UnavailableChat(title: shownTitle, profile: bot.id, head: bot.head) }
         botStore.noteChatOpening(true)
@@ -550,6 +590,7 @@ final class AppModel: AppServices {
                 if let screen = entry.screen.value { self?.updatePRTitle(screen) }
             }
             NotificationCenter.default.post(name: SessionStrip.listChanged, object: nil)   // [session-strip]
+            self?.threadStore.sessionsChanged()       // [threads] a thread started elsewhere, or one that moved
             self?.onLaunchListsChange?()              // [restore]
             self?.refreshNotificationDirectory()      // [notifications]
             if let sessions = self?.sessionStore { ProjectMuteCenter.shared.update(sessions.projectMuteLevels) }   // [project-mute]
@@ -669,6 +710,7 @@ final class AppModel: AppServices {
         MemoController.shared.reset()
         MemoPlayer.shared.stop()
         TalkWiring.accountGone()                // [talk] no conversation, notice or speech outlives its account
+        threadStore.reset()                     // [threads]
         MemoUploader.resetCaches()
         MemoAccountStores.shared.deactivate(purge: false)
         if shutdownClient { client?.shutdown() }
@@ -875,12 +917,17 @@ final class AppModel: AppServices {
             noteTurnOutcome(event)                    // [botslist] a standing problem is the row's orange status (L185)
             if let chat = focusedChat, chat.runtimeSessionId == event.sessionId {
                 askNotificationsOnce(after: event)
-            } else if let tracked = runningChats[event.sessionId] {
+            } else if isBesideThread(event.sessionId) {
+                // [threads] The bot chat is on screen beside its thread (the Mac's pane): no alert for what is in view.
+            } else if let tracked = runningChats[event.sessionId],
+                      // [threads] A thread's reply lands in the bot chat on screen: read there, no alert.
+                      !threadStore.isDrawn(storedId: tracked.storedId, profile: tracked.profile, in: focusedChat) {
                 notificationsTurnEnded(event, profile: tracked.profile, storedId: tracked.storedId)
             }
         }
         guard let tracked = runningChats[event.sessionId] else { return }
         if let chat = focusedChat, chat.runtimeSessionId == event.sessionId { return }   // the open chat reports itself
+        if isBesideThread(event.sessionId) { return }                                    // [threads] so does the one beside its thread
         let ended: Bool
         switch event.type {
         case "message.complete", "error": ended = true
@@ -1077,7 +1124,7 @@ final class AppModel: AppServices {
 
     // MARK: - Chat hooks
 
-    private func wire(_ chat: LiveChatSession) {
+    func wire(_ chat: LiveChatSession) {
         chat.statusGraceDelay = StatusGrace.standard   // [transcript] §6.4: waiting words show after a second
         #if DEBUG
         // [transcript] UI tests: `-HQNResumeTimeout 6` so two timed-out resumes do not take four minutes.
@@ -1125,6 +1172,7 @@ final class AppModel: AppServices {
             // [working-ledger] It ended (not just the screen leaving it, after which the gateway's word keeps the row on).
             if !working, !chat.reportsRunning, chat.observing, let id = chat.storedSessionId { self.workingLedger?.turnEnded(id) }
             self.setWorking(profile: chat.profile, storedId: chat.storedSessionId, working || chat.reportsRunning)
+            if chat.menus.isBotChat { self.threadStore.noteMainExternalWork(profile: chat.profile, working: working, parent: chat) }   // [threads] §9
         }
         // A turn sent before the chat's stored id came back: it counts under the id now, so its end clears Working…
         // (TurnWorking.resolved), and its off-screen end names the id too.
@@ -1280,6 +1328,11 @@ final class AppModel: AppServices {
         }
         botStore?.setListVisible(true)
         sessionStore?.setListVisible(sessionsListShown)
+        // [threads] A thread shown beside its bot chat closed: the bot chat is the one in front again.
+        if focusedChat == nil, let parent = threadPanel?.parent.value, parent !== chat, parent.observing {
+            threadPanel = nil
+            chatCameOnScreen(parent)
+        }
     }
 
     // MARK: - Chat screen
@@ -1296,7 +1349,11 @@ final class AppModel: AppServices {
         head.configure(raw: model.head, profile: model.profile, follows: true)   // [moods] the face acts out its turn
         // [session-title-clean] Owner 2026-11-16: "on a session, it's just overkill … it needs to be clean." Only a
         // bot's own chat shows the bot's face in the bar; a session's title is its words (and the bot's name) alone.
-        if (model as? ChatSessionActions)?.isBotChat == true { screen.titleAccessoryView = head }
+        // [threads] A thread is still that bot's chat: its face stays beside the thread's own title.
+        let thread = (model as? LiveChatSession)?.menus.isThread == true
+        if (model as? ChatSessionActions)?.isBotChat == true || thread { screen.titleAccessoryView = head }
+        // [threads] A bot's own chat draws its threads in place and offers the thread button.
+        if let live = model as? LiveChatSession, live.menus.isBotChat { screen.threadsHost = BotChatThreads(model: self, chat: live) }
         screen.onSignInAgain = { [weak self] in self?.offlineHub.signInAgain() }   // UX study #121
         openChatScreens.removeAll { $0.screen.value == nil }
         openChatScreens.append((WeakBox(screen), WeakBox(head)))

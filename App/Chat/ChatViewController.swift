@@ -534,6 +534,17 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     private var backgroundResultCache: [String: String] = [:]
     /// /btw answers already opened as they landed (once: one closed stays closed).
     private var openedAsides: Set<String> = []
+    /// [threads] A bot's own chat draws its threads in place and offers the thread button (ChatViewController+Threads.swift).
+    var threadsHost: ChatThreadsHost? { didSet { threadsHostChanged() } }
+    /// [threads] Where each thread was last drawn, by its key.
+    var threadsDrawn: [String: ThreadPlacement] = [:]
+    /// [threads] Reply in Thread: the message the next send starts a thread under (its banner sits over the field).
+    var threadAnchorId: String?
+    /// [threads] A thread starts at the newest end: the reader goes there and stays, as after a send.
+    func followNewestEnd() {
+        if !isAtBottom { scrollToBottom(animated: true) }
+        following = true
+    }
 
     func input() -> ChatRowBuilder.Input {
         // [groups] A delivery from another bot draws as that bot's incoming bubble (docs/spec/3x-groups.md §7.12).
@@ -611,6 +622,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
                 }
             }
         }
+        addThreads(to: &input)   // [threads]
         return input
     }
 
@@ -708,6 +720,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         tableView.register(ChatActionsCell.self, forCellReuseIdentifier: ChatActionsCell.reuse)
         tableView.register(ChatPromptCell.self, forCellReuseIdentifier: ChatPromptCell.reuse)   // [questions]
         tableView.register(ChatReactionsCell.self, forCellReuseIdentifier: ChatReactionsCell.reuse)
+        tableView.register(ChatThreadCell.self, forCellReuseIdentifier: ChatThreadCell.reuse)   // [threads]
         // [activity] Here, not only in `activity.install`: the rows (a subagent card among them) exist from init, and
         // a layout before the install asked for a cell nobody had registered (build 294 crash, chat opened from a
         // notification).
@@ -2347,6 +2360,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         case .actions: reuse = ChatActionsCell.reuse
         case .prompt: reuse = ChatPromptCell.reuse   // [questions]
         case .reactions: reuse = ChatReactionsCell.reuse
+        case .thread: reuse = ChatThreadCell.reuse   // [threads]
         case .activity: reuse = ""          // [activity] set below
         }
         if case .activity(let kind) = row.kind { reuse = ActivityCells.reuse(for: kind) }    // [activity]
@@ -2474,6 +2488,8 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
             _ = askMessagesToRebuild()   // [asks]
         default: break
         }
+        // [threads] A thread folds once the main reply under it is finished, and moves when its message is replaced.
+        if case .reset = change { _ = threadMessagesToRebuild() } else { pendingTouched += threadMessagesToRebuild() }
         activity.sessionChanged()        // [activity] the live Steps sheet, an open step sheet
         refreshUpdatesSheet()            // [updates] an open group's sheet
         voice.talkSessionChanged()       // [talk] Read Replies Aloud reads a reply that completes on screen
@@ -2603,6 +2619,8 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         let wasRunning = composer.isRunning && roomChrome == nil
         // [groups] A room's round shows the same Stop square as a bot chat (it stops the room; owner 2026-11-06).
         composer.isRunning = session.isRunning || (session as? ChatRoomSurface)?.roomRunning == true
+        composer.isExternallyWorking = (session as? ChatExternalWork)?.externalWorking == true   // [threads] §9
+        updateBusyThreadBanner()                                                                 // [threads] §9
         // A bot answers a page's button by rewriting the page: its open sheet reloads, its card is pictured again.
         if wasRunning, !session.isRunning, let context = mediaContext { PageSnapshots.noteTurnEnded(context) }
         if wasRunning, !session.isRunning { TileMaker.turnEnded(session) }   // [dashboard] a New Tile asked in this chat
@@ -4174,6 +4192,8 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         if voice.talkTypedSend(text, hasAttachments: sendHasAttachments()) { return }
         // MENUS (spec 1x §8.1): a typed slash command runs through the dispatcher instead of going out as a message.
         if SlashCommand.matches(text), !sendHasAttachments(), runCommand(text) { return }
+        // [threads] Reply in Thread: the words start a thread under the message it was chosen on.
+        if !sendHasAttachments(), sendAsThreadReply(text) { return }
         let text = takeReplyQuote(into: text)
         leadPinEnded = true   // [tasks] a send: the newest end wins over the task's details
         endLanding()
@@ -4478,6 +4498,11 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
             return
         }
         // [updates] A group's line opens its sheet (ChatViewController+Updates.swift); the chat stays as it is.
+        // [threads] A folded thread's line opens the thread, not an updates sheet.
+        if let thread = ThreadRows.key(inRowId: rowId) {
+            openThread(key: thread)
+            return
+        }
         if case .backgroundResult(let line) = row.kind, (line.group?.count ?? 1) > 1 {
             presentUpdates(line: row)
             return

@@ -33,7 +33,8 @@ Filter & Sort, chips, Session Info and the reconnect probe (docs/spec/3x-session
                           {"sidebarHold":true} (every sidebar read waits, unanswered, until {"sidebarHold":false}),
                           {"projectsHold":true} (the same for projects.tree; other calls on the socket go on),
                           {"prompts":"hold"|"reply"|"reject"} (a prompt starts a turn that never ends | is answered |
-                          is refused, the default), {"bots":40} (the roster grows to that many bots; 1 leaves Hermes alone),
+                          is refused, the default), {"owned":true} (another Hermes run holds every chat that is not a
+                          thread: its prompts are refused 4090, as a scheduled job's chat is), {"bots":40} (the roster grows to that many bots; 1 leaves Hermes alone),
                           {"projects":"empty"|"odd"|"null"|"many"|"long"|"found"|"configured"} (projects.tree answers;
                           "configured": as "found", but no Bot Chat records a folder and each bot's terminal.cwd names it), {"usage":{…}} (every session.usage),
                           {"down":8} (as a stopped gateway for that many seconds: sockets close, every request is
@@ -177,6 +178,7 @@ def usage_of(sid):
 # session.create mints a live session; its row appears with the first prompt (tui_gateway contracts/sessions.py). Until then
 # it is in neither the lists nor the REST reads, and a resume answers from the live session alone.
 PENDING = {}
+PENDING_SEED = {}    # [threads] a pending chat's parent and seed rows, by its id
 def pending_sid(asked):
     for sid in PENDING:
         if asked in (sid, runtime(sid)): return sid
@@ -306,7 +308,7 @@ def configure(params):
         return {'ok': True, 'applied': {'ui_meta': True, 'ui_meta_revisions': {k: written['revisions'][k] for k in incoming}}}
 
 def seed():
-    SESSIONS.clear(); PENDING.clear(); PROJECTS.clear(); META_WRITES.clear()
+    SESSIONS.clear(); PENDING.clear(); PENDING_SEED.clear(); PROJECTS.clear(); META_WRITES.clear()
     BOTS[:] = DEFAULT_BOTS; BOT_NAMES.clear(); BOT_NAMES.update({name: title for name, title, _ in BOTS})
     if SEED == 'big': return seed_big()
     if SEED == 'everyday': return seed_everyday()
@@ -551,11 +553,14 @@ def run_prompt(sid, text):
         s['running'] = True
         row = len(s['messages'])
         mode = MODE.get('prompts')
+        # [threads] {"threads":"reply"}: a chat with a parent answers even while "hold" keeps the others running.
+        if s.get('parent') and MODE.get('threads') == 'reply': mode = 'reply'
     def turn():
         time.sleep(0.15)
         emit('message.start', sid, {})
         if mode != 'reply': return
-        answer = 'Noted. That is on the list.'
+        answer = MODE.get('answer') or 'Noted. That is on the list.'
+        time.sleep(float(MODE.get('answerDelay') or 0))
         time.sleep(0.2)
         emit('message.delta', sid, {'text': answer})
         with lock:
@@ -662,7 +667,14 @@ def rpc(method, params):
         with lock:
             sid = f's-new-{sum(1 for k in SESSIONS if k.startswith("s-new-")) + len(PENDING) + 1}'
             PENDING[sid] = profile
-        return {'session_id': runtime(sid), 'stored_session_id': sid, 'message_count': 0}
+            # [threads] Hermes keeps a new chat's parent and its seed rows (tui_gateway `_create_session`,
+            # `_coerce_seed_history`): user / assistant rows with words; "hidden" is the one display kind a client may give.
+            seed = [{'role': m['role'], 'content': m.get('content') or m.get('text'),
+                     **({'display_kind': 'hidden'} if m.get('display_kind') == 'hidden' else {})}
+                    for m in (params.get('messages') or [])
+                    if isinstance(m, dict) and m.get('role') in ('user', 'assistant', 'system') and (m.get('content') or m.get('text') or '').strip()]
+            PENDING_SEED[sid] = {'parent': find_session(params.get('parent_session_id')), 'seed': seed}
+        return {'session_id': runtime(sid), 'stored_session_id': sid, 'message_count': len(seed)}
     if method == 'session.title':
         # Hermes (tui_gateway methods_session.py): a title given before the first prompt writes the row at once.
         title = (params.get('title') or '').strip()
@@ -677,8 +689,17 @@ def rpc(method, params):
     if method == 'prompt.submit':
         live = pending_sid(params.get('session_id'))
         if live:
-            with lock: add_session(live, PENDING.pop(live), None, [], now())
+            with lock:
+                made = PENDING_SEED.pop(live, None) or {}
+                seed = [{'id': i + 1, 'timestamp': now(), **m} for i, m in enumerate(made.get('seed') or [])]
+                add_session(live, PENDING.pop(live), None, seed, now())
+                SESSIONS[live]['parent'] = made.get('parent')
+                SESSIONS[live]['started_at'] = now()
         sid = find_session(params.get('session_id'))
+        # [threads] {"owned":true}: another Hermes run holds every chat that is not a thread (3x-threads §9).
+        if MODE.get('owned') and sid and not SESSIONS[sid].get('parent'):
+            raise Fault(4090, 'This chat is open in another Hermes window/terminal. Use it there, or start a new chat here.\n'
+                              'Details: session %s opened by cli 0m ago.' % sid)
         if MODE.get('prompts') in ('hold', 'reply') and sid: return run_prompt(sid, params.get('text') or '')
         raise ValueError('The sessions fixture does not run prompts')
     return _rpc(method, params)

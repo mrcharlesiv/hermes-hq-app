@@ -12,6 +12,11 @@
 // - `-HQDebugSend <text>`         …and send that text once the chat is open
 // - `-HQDebugDraft <text>`        …and leave that text in the field unsent (screenshots of Send)
 // - `-HQDebugQueue <text>`        …and send this one 1.5 s later (it queues behind a running reply)
+// - `-HQDebugThread <text>`       [threads] …and 5 s in, type this and press the thread button (after `-HQDebugSend`:
+//                                 a thread started while the reply runs); `-HQDebugThreadOpen <s>` opens the newest
+//                                 thread's own chat that long after; `-HQDebugThreadReply <text>`: 3 s in, Reply in
+//                                 Thread on the newest reply with this typed (its banner over the field), and with
+//                                 `-HQDebugThreadReplySend YES` sent 2 s later
 // - `-HQDebugScrollBots <points>` scroll the Bots list that far once it has drawn (rows under the bar)
 // - `-HQDebugSessionsTab YES`     start on the Sessions tab
 // - `-HQDebugOtherApps YES`       and open its Other Apps page once it has a row (screenshots)
@@ -399,7 +404,10 @@ enum DebugHooks {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { chat.focusComposer() }
             }
             if let text = defaults.string(forKey: "HQDebugDraft") {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { chat.composer.text = text }
+                // [threads] With `-HQDebugSend` too, the words are typed after the send is out (a reply running and
+                // words in the field: the thread button's state).
+                let after = defaults.string(forKey: "HQDebugSend") == nil ? 1.2 : 4.0
+                DispatchQueue.main.asyncAfter(deadline: .now() + after) { chat.composer.text = text }
             }
             if let text = defaults.string(forKey: "HQDebugSend"), !debugSent {
                 // The words sit in the field for a moment first, as typed ones would (the send lift starts from them).
@@ -413,6 +421,29 @@ enum DebugHooks {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
                     chat.composer.text = text
                     chat.composer.submit()
+                }
+            }
+            if let text = defaults.string(forKey: "HQDebugThreadReply") {  // [threads]
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                    guard let reply = chat.session.messages.last(where: { $0.role == .assistant }) else { return }
+                    chat.beginThreadReply(reply.id)
+                    chat.composer.text = text
+                    if defaults.bool(forKey: "HQDebugThreadReplySend") {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { chat.composer.submit() }
+                    }
+                }
+            }
+            if let text = defaults.string(forKey: "HQDebugThread") {       // [threads]
+                DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+                    chat.composer.text = text
+                    chat.composer.debugTapThread()
+                }
+                let open = defaults.double(forKey: "HQDebugThreadOpen")
+                if open > 0 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5.0 + open) {
+                        guard let key = chat.threadsDrawn.keys.sorted().last else { return }
+                        chat.openThread(key: key)
+                    }
                 }
             }
         }

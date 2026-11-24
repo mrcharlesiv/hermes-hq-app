@@ -101,7 +101,7 @@ final class BrowserStageView: UIView {
         wheels.forEach(addGestureRecognizer)
         #endif
         addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:))))
-        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (stage: BrowserStageView, _) in stage.styleDragRing() }
+        registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (stage: BrowserStageView, _) in stage.styleDragRing() }
     }
 
     override func tintColorDidChange() {

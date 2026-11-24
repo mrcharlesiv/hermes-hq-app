@@ -70,18 +70,13 @@ final class TileUpdates {
         guard let client else { return }
         let unique = Array(Set(profiles))
         guard !unique.isEmpty else { return }
-        let fetched: [(String, [CronJob])] = await withTaskGroup(of: (String, [CronJob]?).self) { group in
+        var fetched: [(String, [CronJob])] = []
+        await withChildTasks(of: (String, [CronJob]?).self) { group in
             for profile in unique {
-                group.addTask {
-                    let list = try? await JobsStore.readList(client, scope: profile)
-                    return (profile, list)
-                }
+                // The read before the tuple: `(key, try await f())` can lose `key` in -O builds (Swift tuple bug).
+                group.addTask { let list = try? await JobsStore.readList(client, scope: profile); return (profile, list) }
             }
-            var out: [(String, [CronJob])] = []
-            for await (profile, list) in group {
-                if let list { out.append((profile, list)) }
-            }
-            return out
+            while let (profile, list) = await group.next() { if let list { fetched.append((profile, list)) } }
         }
         let now = Date()
         for (profile, list) in fetched {

@@ -13,6 +13,81 @@ nonisolated struct SessionPRSize: Hashable, Sendable, Codable {
     var files: Int
     var additions: Int
     var deletions: Int
+
+    var diffText: String { "+\(additions) \u{2212}\(deletions)" }
+}
+
+/// Numbered unified-diff lines for the interactive PR diff viewer (tap any line to send a targeted comment to the bot).
+nonisolated enum PullRequestDiffLines {
+    enum Kind: Hashable, Sendable { case hunk, context, added, removed }
+
+    struct Line: Identifiable, Hashable, Sendable {
+        var id: Int
+        var number: Int?
+        var kind: Kind
+        var text: String
+    }
+
+    /// Parses a unified diff patch into displayable lines with accurate target-file (or removed-line) line numbers.
+    static func parse(_ raw: String) -> [Line] {
+        let stripped = StepRules.stripHeaders(StepRules.stripChrome(raw))
+        var out: [Line] = []
+        var nextID = 0
+        var oldLine = 1
+        var newLine = 1
+        var inHunk = false
+        let hunkRegex = try? NSRegularExpression(pattern: #"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@"#)
+
+        for rawLine in stripped {
+            let s = String(rawLine)
+            if s.hasPrefix("@@") {
+                if let hunkRegex,
+                   let match = hunkRegex.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)),
+                   let r1 = Range(match.range(at: 1), in: s), let r2 = Range(match.range(at: 2), in: s),
+                   let o = Int(s[r1]), let n = Int(s[r2]) {
+                    oldLine = o
+                    newLine = n
+                    inHunk = true
+                    out.append(Line(id: nextID, number: nil, kind: .hunk, text: s))
+                    nextID += 1
+                }
+                continue
+            }
+            if s.hasPrefix("\\") { continue }
+            if !inHunk {
+                // Fallback when a patch has no @@ header.
+                let kind: Kind = s.hasPrefix("+") && !s.hasPrefix("+++") ? .added : s.hasPrefix("-") && !s.hasPrefix("---") ? .removed : .context
+                out.append(Line(id: nextID, number: nextID + 1, kind: kind, text: s))
+                nextID += 1
+                continue
+            }
+            if s.hasPrefix("+") && !s.hasPrefix("+++") {
+                out.append(Line(id: nextID, number: newLine, kind: .added, text: s))
+                newLine += 1
+                nextID += 1
+            } else if s.hasPrefix("-") && !s.hasPrefix("---") {
+                out.append(Line(id: nextID, number: oldLine, kind: .removed, text: s))
+                oldLine += 1
+                nextID += 1
+            } else {
+                out.append(Line(id: nextID, number: newLine, kind: .context, text: s))
+                oldLine += 1
+                newLine += 1
+                nextID += 1
+            }
+        }
+        return out
+    }
+
+    /// Formats a targeted line comment to send directly to the chat's bot.
+    static func commentMessage(path: String, lineNumber: Int, codeLine: String, note: String) -> String {
+        let trimmedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedCode = codeLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedCode.isEmpty {
+            return "In `\(path)` line \(lineNumber):\n\n\(trimmedNote)"
+        }
+        return "In `\(path)` line \(lineNumber) (`\(trimmedCode)`):\n\n\(trimmedNote)"
+    }
 }
 
 /// The head commit's check runs: how many passed, failed and are still running, and (with `detail: true`) each run.

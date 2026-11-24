@@ -170,7 +170,7 @@ extension AppModel: SessionsServices {}
 
     // MARK: - Swipes
 
-    func leadingActions(for session: SessionSummary) -> UISwipeActionsConfiguration {
+    func leadingActions(for session: SessionSummary, quickPR: UIContextualAction? = nil) -> UISwipeActionsConfiguration {
         let read = UIContextualAction(style: .normal, title: session.unread ? "Read" : "Unread") { [weak self] _, _, done in
             self?.toggleRead(session)
             done(true)
@@ -184,8 +184,10 @@ extension AppModel: SessionsServices {}
         }
         pin.image = UIImage(systemName: Self.pinned(session) ? "pin.slash.fill" : "pin.fill")
         pin.backgroundColor = .systemOrange
-        let actions = UISwipeActionsConfiguration(actions: [read, pin])
-        actions.performsFirstActionWithFullSwipe = true
+        var list = [read, pin]
+        if let quickPR { list.insert(quickPR, at: 0) }
+        let actions = UISwipeActionsConfiguration(actions: list)
+        actions.performsFirstActionWithFullSwipe = quickPR == nil
         return actions
     }
 

@@ -309,17 +309,31 @@ struct SessionRowView: View {
     private var codingVerdict: PRVerdict? { codingProject ? PRVerdict.of(session.pullRequest) : nil }
 
     @ViewBuilder private var codingSubtitle: some View {
-        if let codingLine {
+        let ready = codingProject && CodingPipeline.isReadyToMerge(session)
+        let failing = codingProject && CodingPipeline.hasFailingChecks(session)
+        let displayLine: String? = {
+            if ready, let pr = session.pullRequest {
+                var parts: [String] = []
+                if let branch = pr.branch ?? session.branch, !branch.isEmpty {
+                    parts.append(Self.branchShown(branch))
+                }
+                if let checks = pr.checks, checks.passed > 0, checks.failed == 0, checks.running == 0 {
+                    let total = checks.passed + checks.failed + checks.running
+                    parts.append("\(checks.passed)/\(total) checks")
+                }
+                if !parts.isEmpty { return parts.joined(separator: " · ") }
+            }
+            return codingLine
+        }()
+        if let displayLine {
             HStack(spacing: 6) {
                 // While the turn runs, the same small spinner a Recent row's step line has (owner, 2026-11-20).
                 if codingWorking {
                     ProgressView().controlSize(.mini).tint(Color.hqLabel2)
                         .accessibilityHidden(true)
                 }
-                if let branchLead {
+                if let branchLead, !ready {
                     // [project-branch-rows] The branch first, cut in its middle when long, then the usual line.
-                    // A long branch is cut in its middle by characters, so the dot sits right after the words (a
-                    // width-capped Text left a gap whenever its cut fell short of the cap).
                     Text(Self.branchShown(branchLead) + " · ")
                         .font(Font.hq(.footnote))
                         .foregroundStyle(Color.hqLabel2)
@@ -327,17 +341,22 @@ struct SessionRowView: View {
                         .layoutPriority(1)
                         .padding(.trailing, -6)
                 }
-                Text(codingLine)
+                Text(displayLine)
                     .font(Font.hq(.footnote))
-                    // Working reads in the tint a card's step line has; the finished summary goes quiet again.
                     .foregroundStyle(codingWorking ? (DeviceWord.isMac ? quietInk : Color.hqTintText) : quietInk)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                // [pr-verdict] The lead pull request's checks and size at the line's trailing end, under the mark, in
-                // the line's quiet ink; the words give way first. At the accessibility sizes it leaves the row.
-                if let verdict = codingVerdict, !large {
-                    Spacer(minLength: 6)
-                    PRVerdictView(verdict: verdict, ink: quietInk)
+                if !large {
+                    if ready || failing, let size = session.pullRequest?.size {
+                        Spacer(minLength: 6)
+                        Text(verbatim: size.diffText)
+                            .font(Font.hq(.caption).monospacedDigit())
+                            .foregroundStyle(Color.hqLabel3)
+                            .fixedSize()
+                    } else if !ready, !failing, let verdict = codingVerdict {
+                        Spacer(minLength: 6)
+                        PRVerdictView(verdict: verdict, ink: quietInk)
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -505,14 +524,34 @@ struct SessionRowView: View {
         ring && (session.isRunning || session.status == .working) && session.status != .needsInput && !busy
     }
 
-    /// [pr-pill] The lead pull request as a tinted pill, its state's mark and number in its state's colour, then how
-    /// many more (owner 2026-11-20 picked option C, "Tinted pills", over coloured numbers). The lead: not merged yet
-    /// first, then unknown, merged, closed; newest first within each. The row's words say it all (summary).
+    /// Quiet, surgical PR mark on coding rows: green `✓ #N` when ready, red `✕ #N · K failed` when CI fails,
+    /// clean `SessionPRPill` otherwise, and silent on unmatched non-git chats so research rows stay clutter-free.
     @ViewBuilder private var prMark: some View {
-        if codingProject, let pr = session.pullRequest, pr.drawsMark {   // no code changes or pending first check: no pill
+        if codingProject, let pr = session.pullRequest, pr.drawsMark,
+           !(pr.state == .unknown && pr.unknownReason == .unmatched) {
+            let ready = CodingPipeline.isReadyToMerge(session)
+            let failing = CodingPipeline.hasFailingChecks(session)
             let tags = pr.tags(limit: 1)
             let mark = HStack(spacing: 4) {
-                if let tag = tags.shown.first {
+                if ready {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: HQFont.scaled(12), weight: .semibold))
+                        .foregroundStyle(Color.hqGreen)
+                    if let number = tags.shown.first?.number ?? pr.number {
+                        Text(verbatim: "#\(number)")
+                            .font(Font.hq(.footnote).weight(.medium)).monospacedDigit()
+                            .foregroundStyle(Color.hqLabel2)
+                    }
+                } else if failing {
+                    let failedCount = max(1, pr.checks?.failed ?? 1)
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: HQFont.scaled(12), weight: .semibold))
+                        .foregroundStyle(Color.hqRed)
+                    let label = (tags.shown.first?.number ?? pr.number).map { "#\($0) · \(failedCount) failed" } ?? "\(failedCount) failed"
+                    Text(verbatim: label)
+                        .font(Font.hq(.footnote).weight(.medium)).monospacedDigit()
+                        .foregroundStyle(Color.hqLabel2)
+                } else if let tag = tags.shown.first {
                     SessionPRPill(tag: tag)
                 }
                 if tags.more > 0 {
@@ -523,8 +562,6 @@ struct SessionRowView: View {
             }
             .lineLimit(1).fixedSize()
             if let onPR {
-                // [coding-pr-review] The mark opens the PR card: the same drawing, its touch 44 pt reaching into the
-                // row's own padding (the row's height is unchanged); elsewhere the row opens the chat.
                 Button(action: onPR) { mark.contentShape(.interaction, AtLeastHitShape(side: 44)) }
                     .buttonStyle(.plain)
                     .help(pr.summary)
@@ -600,6 +637,10 @@ struct SessionRowView: View {
         // [density] Through the font factory on the iPhone too (it was the system body there), so UI Scale reaches it.
         // [type] Mac: callout, the row title of every Mac list (Jobs, Tasks, Artifacts, Files; the Desktop Look's own).
         let body: Font = Font.hq(Density.compact || DeviceWord.isMac ? .callout : .body)
+        if codingProject {
+            let bucket = CodingPipeline.bucket(for: session)
+            return (session.unread || bucket == .ready || bucket == .needsYou) ? body.weight(.semibold) : body
+        }
         return session.unread ? body.weight(.semibold) : body
     }
 

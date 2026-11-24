@@ -159,10 +159,19 @@ struct PullRequestCardView: View {
                 } header: { HQSectionLabel { Text(verbatim: label) }.accessibilityIdentifier("prcard.changes") }
             }
             let actions = card.actions
+            let pinnedPrimary = primaryPinnedAction(for: card)
+            let listActions = actions.filter { action in
+                switch (pinnedPrimary, action) {
+                case (.fixChecks, .askToFixChecks): return false
+                case (.merge, .askToMerge): return false
+                default: return true
+                }
+            }
+            let showOpenChatInList = pinnedPrimary == nil && onOpenChat != nil
             let markToggle = onMarkClosed != nil ? card.markClosedToggle : nil
-            if !actions.isEmpty || onOpenChat != nil || markToggle != nil {
+            if !listActions.isEmpty || showOpenChatInList || markToggle != nil {
                 Section {
-                    ForEach(actions, id: \.self) { action in
+                    ForEach(listActions, id: \.self) { action in
                         switch action {
                         case .openOnGitHub(let url):
                             Button("Open on GitHub") { onOpen(url) }
@@ -178,7 +187,7 @@ struct PullRequestCardView: View {
                                 .accessibilityIdentifier("prcard.askToMerge")
                         }
                     }
-                    if let onOpenChat {
+                    if showOpenChatInList, let onOpenChat {
                         Button("Open Chat", action: onOpenChat)
                             .foregroundStyle(Color.hqTintText)
                             .accessibilityIdentifier("prcard.openChat")
@@ -213,6 +222,12 @@ struct PullRequestCardView: View {
             }
         }.hqMacSettingsRowInsets() }
         .settingsList()
+        .accessibilityIdentifier("prcard")
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if let pinnedPrimary = primaryPinnedAction(for: card) {
+                pinnedActionBar(pinnedPrimary, card: card)
+            }
+        }
         .toolbar {
             if model.canRefresh {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -225,7 +240,76 @@ struct PullRequestCardView: View {
                 }
             }
         }
-        .accessibilityIdentifier("prcard")
+    }
+
+    private enum PinnedPrimaryAction {
+        case merge(words: String, isReady: Bool)
+        case fixChecks(words: String)
+    }
+
+    private func primaryPinnedAction(for card: PullRequestCard) -> PinnedPrimaryAction? {
+        if let words = card.actions.compactMap({ if case .askToFixChecks(let w) = $0 { return w }; return nil }).first {
+            return .fixChecks(words: words)
+        }
+        if let words = card.actions.compactMap({ if case .askToMerge(let w) = $0 { return w }; return nil }).first {
+            let ready = card.markState == .open && card.checksRow?.state != .failed && card.checksRow?.state != .running
+            return .merge(words: words, isReady: ready)
+        }
+        return nil
+    }
+
+    private func pinnedActionBar(_ primary: PinnedPrimaryAction, card: PullRequestCard) -> some View {
+        HStack(spacing: 10) {
+            switch primary {
+            case .merge(let words, let isReady):
+                Button {
+                    onAsk(words, card.mergeConfirmTitle(chatWorking: chatWorking))
+                } label: {
+                    Text(card.mergeTitle)
+                        .font(Font.hq(.subheadline).weight(.semibold))
+                        .foregroundStyle(isReady ? Color.white : Color.hqOnTint)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(isReady ? Color.hqGreen : Color.hqTint, in: RoundedRectangle(cornerRadius: HQShape.radius(12, .control), style: .continuous))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("prcard.askToMerge")
+            case .fixChecks(let words):
+                Button {
+                    onAsk(words, card.fixChecksTitle)
+                } label: {
+                    Text(card.fixChecksTitle)
+                        .font(Font.hq(.subheadline).weight(.semibold))
+                        .foregroundStyle(Color.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Color.hqRed, in: RoundedRectangle(cornerRadius: HQShape.radius(12, .control), style: .continuous))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("prcard.askToFixChecks")
+            }
+            if let onOpenChat {
+                Button(action: onOpenChat) {
+                    Text("Open Chat")
+                        .font(Font.hq(.subheadline).weight(.semibold))
+                        .foregroundStyle(Color.hqLabel)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .background(Color.hqGroupedCard, in: RoundedRectangle(cornerRadius: HQShape.radius(12, .control), style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: HQShape.radius(12, .control), style: .continuous).strokeBorder(Color.hqStroke, lineWidth: 0.75))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("prcard.openChat")
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, 14)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .top) { Divider() }
     }
 
     /// The Checks row: its mark as on the row (red only when failing), its words; with runs, a chevron to them.
@@ -473,7 +557,12 @@ struct PullRequestGlyph: View {
         }, onFile: { file in
             guard case .patch(let patch) = file.body else { return }
             expandDetent(sheet())
-            sheet()?.pushViewController(PullRequestDiffPage(name: file.name, path: file.path, patch: patch), animated: true)
+            let onComment: (String) -> Void = { message in
+                let nav = sheet()
+                nav?.presentingViewController?.dismiss(animated: true) { send(message) } ?? send(message)
+            }
+            sheet()?.pushViewController(PullRequestDiffPage(name: file.name, path: file.path, patch: patch,
+                                                            botName: card.botName, onComment: onComment), animated: true)
         }, onOpenChat: openChatAction, onMarkClosed: markAction, onRepository: repoAction)
         let controller = UIHostingController(rootView: view)
         host = controller

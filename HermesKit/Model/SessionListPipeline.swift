@@ -94,8 +94,12 @@ nonisolated struct SessionListInput: Sendable {
     var botNames: [String: String] = [:]
     /// [sessions-fresh] The header's New or Working chip (in memory, as the bot chip).
     var statusChip: SessionStatusChip? = nil
+    /// Projects with Coding Project enabled: their project page uses the 4-bucket shipping pipeline.
+    var codingProjects: Set<String> = []
     /// A project-page-only PR state; the other filters still intersect it.
     var projectPRState: SessionPRStatus.State? = nil
+    /// A coding project page's pipeline bucket filter (Ready / Needs You / In Flight / Shipped).
+    var projectPipelineBucket: CodingPipelineBucket? = nil
     /// [sessions-shape] A project's row opens its page (the app, not the tests of a project opening in place): under
     /// Group By Project a closed project keeps its live chats under its row.
     var liveUnderProjects = false
@@ -557,6 +561,50 @@ nonisolated enum SessionListPipeline {
         }
         // [project-sort] ⋯ › Sort › Newest: one run by the list's sort, reading moves nothing.
         let byNewest = input.projectsByNewest.contains(key)
+        let byStatus = input.projectsByStatus.contains(key) && !byNewest
+        // Coding projects use the 4-bucket shipping pipeline by default (Ready to Ship / Needs You / In Flight / Shipped).
+        if input.codingProjects.contains(key), !byNewest, !byStatus {
+            let underPR = { (row: SessionSummary) in
+                input.projectPRState.map { row.pullRequest?.countedStates.contains($0) == true } ?? true
+            }
+            let allMarked = marked.filter(underPR)
+            var byBucket: [CodingPipelineBucket: [SessionSummary]] = [:]
+            for session in allMarked {
+                let b = CodingPipeline.bucket(for: session, isDone: doneKeys.contains(Self.key(session)))
+                if let pickedBucket = input.projectPipelineBucket, b != pickedBucket { continue }
+                byBucket[b, default: []].append(session)
+            }
+            let filtered = !input.prefs.statusFilter.isEmpty || input.statusChip != nil || input.projectPRState != nil || input.projectPipelineBucket != nil
+            for bucket in CodingPipelineBucket.allCases {
+                let raw = byBucket[bucket] ?? []
+                guard !raw.isEmpty else { continue }
+                let orderedBucket = sort(raw, by: byPref).enumerated().sorted { a, b in
+                    let ra = CodingPipeline.subRank(a.element, in: bucket)
+                    let rb = CodingPipeline.subRank(b.element, in: bucket)
+                    return ra != rb ? ra < rb : a.offset < b.offset
+                }.map(\.element)
+                let capped = bucket == .inFlight || bucket == .shipped
+                var group = SessionGroup(id: statePrefix + bucket.sectionId, title: bucket.sectionTitle, sessions: orderedBucket)
+                group.total = group.sessions.count
+                group.unread = group.sessions.reduce(0) { $0 + ($1.unread ? 1 : 0) }
+                if !filtered {
+                    let startsClosed = pageStartsClosed.contains(group.id)
+                    if input.collapsedGroups.contains(group.id) || (startsClosed && !input.openGroups.contains(group.id)) {
+                        group.collapsed = true
+                        group.sessions = []
+                    } else if capped, group.sessions.count > pageFirstRows + 1 {
+                        if input.expandedGroups.contains(group.id) {
+                            group.expanded = true
+                        } else {
+                            group.more = group.sessions.count - pageFirstRows
+                            group.sessions = Array(group.sessions.prefix(pageFirstRows))
+                        }
+                    }
+                }
+                out.append(group)
+            }
+            return out
+        }
         let ordered = byNewest ? sort(rows, by: byPref) : sort(rows, by: byPref).enumerated().sorted { a, b in
             let ra = rank(a.element), rb = rank(b.element)
             return ra != rb ? ra < rb : a.offset < b.offset
@@ -584,7 +632,6 @@ nonisolated enum SessionListPipeline {
         // [project-by-status] ⋯ › Sort › By Status: Active split into a section per state, in rank order (a chat read
         // since the page was last left stays under New until the page is left, as in Needs Me First). Needs You and
         // New show every chat (the ones he acts on); Working and Earlier fold past the first rows as Active does.
-        let byStatus = input.projectsByStatus.contains(key) && !byNewest
         let middle: [(id: String, title: String, chats: [SessionSummary], capped: Bool)] = byStatus
             ? [(statusSectionNeeds, "Needs You", activeChats.filter { rank($0) == SessionProjectState.needsYou.rawValue }, false),
                (statusSectionNew, "New", activeChats.filter { rank($0) == SessionProjectState.ready.rawValue }, false),
@@ -623,7 +670,10 @@ nonisolated enum SessionListPipeline {
     /// this is drawn whole: no row is spent hiding a single chat), about two screens of one-line rows; and the pile
     /// that starts closed.
     static let pageFirstRows = 15
-    static let pageStartsClosed: Set<String> = [statePrefix + "done"]
+    static let pageStartsClosed: Set<String> = [statePrefix + "done", statePrefix + pipelineShipped]
+    /// Coding project shipping pipeline sections (after `statePrefix`).
+    static let pipelineReady = "pipeline-ready", pipelineNeeds = "pipeline-needs",
+               pipelineInFlight = "pipeline-inflight", pipelineShipped = "pipeline-shipped"
     /// A section of the project page ("state-working").
     static func isPageSection(_ groupId: String) -> Bool { groupId.hasPrefix(statePrefix) }
     /// [project-by-status] By Status's sections (after `statePrefix`).

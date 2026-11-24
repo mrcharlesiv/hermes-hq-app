@@ -41,6 +41,9 @@ struct ProjectPageHeader: View {
     var prCounts: [SessionPRStatus.State: Int] = [:]
     var selectedPR: SessionPRStatus.State? = nil
     var onPRPick: (SessionPRStatus.State) -> Void = { _ in }
+    var pipelineCounts: [CodingPipelineBucket: Int] = [:]
+    var selectedBucket: CodingPipelineBucket? = nil
+    var onBucketPick: (CodingPipelineBucket) -> Void = { _ in }
     var onCodingChange: (Bool) -> Void = { _ in }
     /// [project-sort] ⋯ › Sort.
     var sort: ProjectPageSort = .needsMeFirst
@@ -227,18 +230,19 @@ struct ProjectPageHeader: View {
                     .truncationMode(.middle)
                     .accessibilityIdentifier("sessions.projectPage.place")
             }
-            // Owner 2026-11-15 (picked from four drawings): the three counts always, in the same places, a zero dimmed.
-            // [project-header-card] Where the three don't fit on one line (the largest text sizes: "0 Nee…", "1 N…") they
-            // keep their marks and numbers and drop their words, which VoiceOver still says.
-            ViewThatFits(in: .horizontal) {
-                counts(words: true)
-                if DeviceWord.isMac { counts(words: false, labelActive: true) }
-                counts(words: false)
-            }
-            .padding(.top, carded ? 1 : 2)
-            // [coding-pr-review] A state at zero is not drawn (unless picked); with none to draw, no line.
-            if coding, !Self.shownPRStates(prCounts, selected: selectedPR).isEmpty {
-                pullRequestCounts
+            if coding {
+                codingPipelineBar
+                    .padding(.top, carded ? 4 : 5)
+            } else {
+                // Owner 2026-11-15 (picked from four drawings): the three counts always, in the same places, a zero dimmed.
+                // [project-header-card] Where the three don't fit on one line (the largest text sizes: "0 Nee…", "1 N…") they
+                // keep their marks and numbers and drop their words, which VoiceOver still says.
+                ViewThatFits(in: .horizontal) {
+                    counts(words: true)
+                    if DeviceWord.isMac { counts(words: false, labelActive: true) }
+                    counts(words: false)
+                }
+                .padding(.top, carded ? 1 : 2)
             }
             if coding, let health = codingHealth {
                 codingHealthBanner(health)
@@ -345,6 +349,58 @@ struct ProjectPageHeader: View {
             }
         }
         .animation(HQMotion.swiftUI(.snappy(duration: 0.2)), value: selectedPR)
+    }
+
+    /// Calm, lineless 4-bucket shipping pipeline bar for coding projects (Ready / Needs You / In Flight / Shipped).
+    private var codingPipelineBar: some View {
+        HStack(spacing: 4) {
+            pipelineSegment(.ready, dot: Color.hqGreen)
+            pipelineSegment(.needsYou, dot: Color.hqOrange)
+            pipelineSegment(.inFlight, dot: nil)
+            pipelineSegment(.shipped, dot: nil)
+        }
+    }
+
+    private func pipelineSegment(_ bucket: CodingPipelineBucket, dot: Color?) -> some View {
+        let count = pipelineCounts[bucket, default: 0]
+        let picked = selectedBucket == bucket
+        let dim = count == 0 && !picked
+        let shape = RoundedRectangle(cornerRadius: HQShape.radius(9, .control), style: .continuous)
+        let spoken = "\(bucket.sectionTitle), \(count) \(count == 1 ? "chat" : "chats")"
+
+        return Button { onBucketPick(bucket) } label: {
+            VStack(spacing: 2) {
+                HStack(spacing: 4) {
+                    if let dot, count > 0 {
+                        Circle()
+                            .fill(dot)
+                            .frame(width: 6, height: 6)
+                            .accessibilityHidden(true)
+                    }
+                    Text("\(count)")
+                        .font(Font.hq(.subheadline).weight(.semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(dim ? Color.hqLabel3 : (bucket == .shipped && !picked ? Color.hqLabel2 : Color.hqLabel))
+                }
+                Text(bucket.label)
+                    .font(Font.hq(.caption2).weight(picked ? .semibold : .regular))
+                    .foregroundStyle(picked ? Color.hqLabel : Color.hqLabel2)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .background(shape.fill(picked ? chipFill : Color.clear))
+            .overlay(shape.strokeBorder(picked ? Color.hqLabel.opacity(0.22) : Color.clear, lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(dim)
+        .accessibilityLabel(spoken)
+        .accessibilityHint(picked ? "Show all chats" : "Filter chats to \(bucket.sectionTitle)")
+        .accessibilityAddTraits(picked ? .isSelected : [])
+        .accessibilityIdentifier("sessions.projectPage.pipeline.\(bucket.rawValue)")
+        .help(spoken)
     }
 
     /// Quiet inline status strip shown only when PR tracking needs setup or failed (zero chrome when healthy).
@@ -505,6 +561,49 @@ extension SessionsViewController {
         present(sheet, animated: true)
     }
 
+    /// Leading swipe quick action on a coding project page: green Merge on ready PRs, orange/red Fix CI on failing PRs.
+    func codingQuickSwipeAction(for session: SessionSummary) -> UIContextualAction? {
+        guard let projectKey = projectPageKey, store?.isCodingProject(projectKey) == true else { return nil }
+        let status = store?.pullRequest(profile: session.profile, id: session.id) ?? session.pullRequest
+        let botName = owner(of: session).name
+        let title = SessionRowView.title(session)
+        let key = Self.key(session)
+        let chat = PullRequestCardSheet.Chat(profile: session.profile, id: session.id, title: title,
+                                             botName: botName, isWorking: session.isRunning || session.status == .working)
+        guard let card = PullRequestCard(status: status, chatTitle: title, botName: botName) else { return nil }
+
+        if CodingPipeline.isReadyToMerge(session),
+           let mergeWords = card.actions.compactMap({ if case .askToMerge(let w) = $0 { return w }; return nil }).first {
+            let action = UIContextualAction(style: .normal, title: "Merge") { [weak self] _, _, done in
+                done(true)
+                guard let self else { return }
+                PullRequestCardSheet.confirm(mergeWords, title: card.mergeConfirmTitle(chatWorking: chat.isWorking), from: self) {
+                    PullRequestCardSheet.deliver(mergeWords, to: chat) { [weak self] in self?.open(key) }
+                }
+            }
+            action.image = UIImage(systemName: "checkmark.circle.fill")
+            action.backgroundColor = .systemGreen
+            action.accessibilityLabel = "Ask \(botName) to Merge"
+            return action
+        }
+
+        if CodingPipeline.hasFailingChecks(session), let fixWords = card.fixChecksWords {
+            let action = UIContextualAction(style: .normal, title: "Fix CI") { [weak self] _, _, done in
+                done(true)
+                guard let self else { return }
+                PullRequestCardSheet.confirm(fixWords, title: card.fixChecksTitle, from: self) {
+                    PullRequestCardSheet.deliver(fixWords, to: chat) { [weak self] in self?.open(key) }
+                }
+            }
+            action.image = UIImage(systemName: "wrench.and.screwdriver.fill")
+            action.backgroundColor = .systemRed
+            action.accessibilityLabel = "Ask \(botName) to Fix Checks"
+            return action
+        }
+
+        return nil
+    }
+
     /// [project-settings] What of a project's settings its page's header and rows draw (the header redraws when it
     /// changes).
     func projectSettingsSign(_ key: String) -> String {
@@ -532,7 +631,7 @@ extension SessionsViewController {
         return out
     }
 
-    /// Count the entire loaded project, matching the rows the page can show (including outside rows when enabled).
+    /// Count the entire loaded project by PR state.
     func projectPRCounts(_ key: String) -> [SessionPRStatus.State: Int] {
         guard let store else { return [:] }
         var counts: [SessionPRStatus.State: Int] = [:]
@@ -541,6 +640,25 @@ extension SessionsViewController {
             for state in states { counts[state, default: 0] += 1 }
         }
         return counts
+    }
+
+    /// Count the coding project's rows into the 4 shipping pipeline buckets, matching `SessionListPipeline.projectPage` 1-to-1.
+    func projectPipelineCounts(_ key: String) -> [CodingPipelineBucket: Int] {
+        guard let store else { return [:] }
+        let rows = projectCodingRows(key)
+        let rule = store.projectAutoDoneRules[key]
+        let localPins = store.projectPinKeys[key] ?? []
+        let now = Date()
+        return CodingPipeline.counts(rows) { session in
+            let rowKey = SessionListPipeline.key(session)
+            let isPinned = session.pinned || localPins.contains(rowKey)
+            let quiet = SessionProjectState.of(session).isEmpty
+            if session.archived && quiet { return true }
+            guard let rule, quiet, !session.archived, !isPinned, !store.keepNew.contains(rowKey) else { return false }
+            if rule.onMerge, session.pullRequest?.state == .merged { return true }
+            guard let days = rule.days, let last = session.lastActive ?? session.startedAt else { return false }
+            return now.timeIntervalSince(last) > Double(days) * 86_400
+        }
     }
 
     /// Quiet inline diagnostic for a coding project header; nil whenever everything is working cleanly.
@@ -557,7 +675,7 @@ extension SessionsViewController {
         if store.prReposState == .failed && linked == nil && (matched == 0 || unmatched > 0 || unavailable > 0) {
             return .init(kind: .unavailable, message: "Couldn’t check repository link.", actionTitle: "Retry")
         }
-        if store.prManage && linked == nil && (store.prAutoLinkFailed.contains(key) || unmatched > 0) {
+        if store.prManage && linked == nil && matched == 0 && (store.prAutoLinkFailed.contains(key) || unmatched > 0) {
             return .init(kind: .needsRepo, message: "Link a git repository to track pull requests.", actionTitle: "Link…")
         }
         if unavailable > 0 && unavailable == rows.count {

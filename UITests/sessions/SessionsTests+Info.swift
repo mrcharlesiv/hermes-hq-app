@@ -55,7 +55,7 @@ extension SessionsTests {
         XCTAssertTrue(project.waitForExistence(timeout: 10))
         project.tap()
         XCTAssertTrue(app.cells["sessions.projectPage"].waitForExistence(timeout: 10))
-        let coding = app.buttons["sessions.projectPage.pr.merged"]
+        let coding = app.buttons["sessions.projectPage.pipeline.shipped"]
         setPageCoding(app, false)      // [coding-pr-review] a zero count is not drawn: the settings say it
         let sent = row(app, "s-shortcuts")
         XCTAssertTrue(sent.waitForExistence(timeout: 10))
@@ -101,7 +101,7 @@ extension SessionsTests {
         XCTAssertTrue(project.waitForExistence(timeout: 10))
         project.tap()
         XCTAssertTrue(app.cells["sessions.projectPage"].waitForExistence(timeout: 10))
-        let coding = app.buttons["sessions.projectPage.pr.open"]
+        let coding = app.buttons["sessions.projectPage.pipeline.ready"]
         setPageCoding(app, true)       // [coding-pr-review] a zero count is not drawn: the settings say it
         XCTAssertTrue(coding.waitForExistence(timeout: 10))
         openChat(app, "s-shortcuts")
@@ -155,17 +155,13 @@ extension SessionsTests {
         XCTAssertFalse(note.exists)
         closeIconGuide(app)
         toggleProjectCoding(app, captureMenu: true)
-        let merged = app.buttons["sessions.projectPage.pr.merged"]
-        XCTAssertTrue(merged.waitForExistence(timeout: 10))
+        let shipped = app.buttons["sessions.projectPage.pipeline.shipped"]
+        let inFlight = app.buttons["sessions.projectPage.pipeline.inFlight"]
+        XCTAssertTrue(shipped.waitForExistence(timeout: 10))
         shot(app, "project-card-coding-on")
-        XCTAssertTrue(waitUntil(20) { merged.label.contains("2 loaded") }, merged.label)
-        // A state at zero is not drawn: no draft, open or closed chat here.
-        let none = app.buttons["sessions.projectPage.pr.none"]
-        XCTAssertTrue(waitUntil(10) { none.exists && none.label.contains("1 loaded chat") }, none.label)
-        for state in ["draft", "open", "closed"] {
-            XCTAssertFalse(app.buttons["sessions.projectPage.pr.\(state)"].exists, "\(state) at zero is absent")
-        }
-        XCTAssertLessThan(none.frame.midX, merged.frame.midX, "the order is unchanged")
+        XCTAssertTrue(waitUntil(20) { shipped.label.contains("2 chats") }, shipped.label)
+        XCTAssertTrue(waitUntil(10) { inFlight.exists && inFlight.label.contains("1 chat") }, inFlight.label)
+        XCTAssertLessThan(inFlight.frame.midX, shipped.frame.midX, "In Flight precedes Shipped")
         shot(app, "project-card-coding-on-loaded")
         XCTAssertFalse(note.exists)
         openIconGuide(app)
@@ -175,22 +171,18 @@ extension SessionsTests {
         XCTAssertTrue(note.exists)
         shot(app, "project-icon-guide")
         closeIconGuide(app)
-        let plainWidth = merged.frame.width
-        merged.tap()
-        XCTAssertTrue(waitUntil(10) { merged.isSelected && self.row(app, "s-release").exists && self.row(app, "s-old").exists && !self.row(app, "s-garden").exists })
-        // Owner 2026-11-19: the picked state names itself inside its ring ("2 Merged").
-        XCTAssertTrue(waitUntil(5) { merged.frame.width > plainWidth + 30 }, "picked ring holds the word: \(plainWidth) → \(merged.frame.width)")
+        shipped.tap()
+        XCTAssertTrue(waitUntil(10) { shipped.isSelected && self.row(app, "s-release").exists && self.row(app, "s-old").exists && !self.row(app, "s-garden").exists })
         shot(app, "project-pr-summary-selected")
-        merged.tap()
-        XCTAssertTrue(waitUntil(10) { !merged.isSelected && self.row(app, "s-garden").exists })
-        XCTAssertTrue(waitUntil(5) { abs(merged.frame.width - plainWidth) < 1 }, "unpicked drops the word")
-        merged.tap()
-        XCTAssertTrue(waitUntil(10) { merged.isSelected })
+        shipped.tap()
+        XCTAssertTrue(waitUntil(10) { !shipped.isSelected && self.row(app, "s-garden").exists })
+        shipped.tap()
+        XCTAssertTrue(waitUntil(10) { shipped.isSelected })
         toggleProjectCoding(app)
-        XCTAssertTrue(waitUntil(10) { !merged.exists && self.row(app, "s-garden").exists })
+        XCTAssertTrue(waitUntil(10) { !shipped.exists && self.row(app, "s-garden").exists })
         toggleProjectCoding(app)
-        XCTAssertTrue(merged.waitForExistence(timeout: 10))
-        XCTAssertFalse(merged.isSelected)
+        XCTAssertTrue(shipped.waitForExistence(timeout: 10))
+        XCTAssertFalse(shipped.isSelected)
     }
     /// [pr-manage] A coding project's chat is marked closed and reopened from its row menu, and the project is linked
     /// to a repository from its ⋯ (a folder that isn't one says so).
@@ -362,14 +354,14 @@ extension SessionsTests {
         XCTAssertTrue(waitUntil(20) { self.labelOf(release).contains("Open #44, 1 more not merged") }, labelOf(release))
         // [pr-pill] The green "#44" pill and "+2" on the right are drawn, not read (the row's words say it): the shot below.
         XCTAssertFalse(labelOf(row(app, "s-old")).contains("not merged"), labelOf(row(app, "s-old")))
-        let open = app.buttons["sessions.projectPage.pr.open"], merged = app.buttons["sessions.projectPage.pr.merged"]
-        XCTAssertTrue(waitUntil(20) { open.label.contains("1 loaded chat") && merged.label.contains("2 loaded") },
-                      "\(open.label) / \(merged.label)")      // chats, under each state they have
+        let ready = app.buttons["sessions.projectPage.pipeline.ready"], shipped = app.buttons["sessions.projectPage.pipeline.shipped"]
+        XCTAssertTrue(waitUntil(20) { ready.label.contains("1 chat") && shipped.label.contains("1 chat") },
+                      "\(ready.label) / \(shipped.label)")
         shot(app, "pr-several-in-one-chat")
-        merged.tap()
-        XCTAssertTrue(waitUntil(10) { merged.isSelected && self.row(app, "s-release").exists && self.row(app, "s-old").exists })
-        merged.tap()
-        XCTAssertTrue(waitUntil(10) { !merged.isSelected })
+        shipped.tap()
+        XCTAssertTrue(waitUntil(10) { shipped.isSelected && self.row(app, "s-old").exists && !self.row(app, "s-release").exists })
+        shipped.tap()
+        XCTAssertTrue(waitUntil(10) { !shipped.isSelected && self.row(app, "s-release").exists })
         openChat(app, "s-release")
         openSessionInfo(app)
         let first = app.cells["info.pull-request"], second = app.cells["info.pull-request.1"], third = app.cells["info.pull-request.2"]

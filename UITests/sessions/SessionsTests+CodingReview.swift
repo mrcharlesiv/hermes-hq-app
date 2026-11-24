@@ -39,8 +39,8 @@ extension SessionsTests {
         Thread.sleep(forTimeInterval: 1)
     }
 
-    /// The App project's page as a coding project, its `marker` count drawn.
-    @MainActor func ensureAppCoding(_ app: XCUIApplication, waitFor marker: String = "sessions.projectPage.pr.open") {
+    /// The App project's page as a coding project, its `marker` pipeline stat drawn.
+    @MainActor func ensureAppCoding(_ app: XCUIApplication, waitFor marker: String = "sessions.projectPage.pipeline.ready") {
         openAppProjectPage(app)
         setPageCoding(app, true)
         XCTAssertTrue(app.buttons[marker].waitForExistence(timeout: 20), "App is a coding project (\(marker))")
@@ -116,7 +116,7 @@ extension SessionsTests {
         openWebsitePage(app)
         XCTAssertFalse(app.buttons["sessions.projectPage.info"].exists, "no ⓘ in the header")
         setPageCoding(app, false)      // an earlier test may have left it one
-        XCTAssertFalse(app.buttons["sessions.projectPage.pr.none"].exists, "not a coding project: no count line")
+        XCTAssertFalse(app.buttons["sessions.projectPage.pipeline.ready"].exists, "not a coding project: no pipeline bar")
         openIconGuide(app)
         XCTAssertFalse(app.descendants(matching: .any)["project.legend.open"].firstMatch.exists, "not coding: no code marks")
         XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'Needs You'")).firstMatch.exists, "the activity marks")
@@ -125,14 +125,12 @@ extension SessionsTests {
 
         openAppProjectPage(app)
         setPageCoding(app, true)
-        let open = app.buttons["sessions.projectPage.pr.open"], merged = app.buttons["sessions.projectPage.pr.merged"]
-        XCTAssertTrue(waitUntil(20) { open.exists && merged.exists && merged.label.contains("1 loaded chat") }, "\(open.label) / \(merged.label)")
-        for state in ["none", "draft", "closed"] {
-            XCTAssertFalse(app.buttons["sessions.projectPage.pr.\(state)"].exists, "\(state) at zero is absent")
-        }
+        let ready = app.buttons["sessions.projectPage.pipeline.ready"]
+        let shipped = app.buttons["sessions.projectPage.pipeline.shipped"]
+        XCTAssertTrue(waitUntil(20) { ready.exists && shipped.exists && ready.label.contains("1 chat") }, "\(ready.label) / \(shipped.label)")
         XCTAssertFalse(app.buttons["sessions.projectPage.info"].exists)
         let more = app.buttons["sessions.projectPage.more"]
-        XCTAssertGreaterThan(more.frame.midX, open.frame.maxX, "the ⋯ ends the header")
+        XCTAssertGreaterThan(more.frame.midX, ready.frame.maxX, "the ⋯ ends the header")
         shot(app, "CR2-header-coding")
         openProjectSettings(app)
         let guideRow = projectSetting(app, "sessions.projectSettings.iconGuide")
@@ -145,13 +143,12 @@ extension SessionsTests {
         }
         shot(app, "CR2-guide-coding")
         closeIconGuide(app)
-        // Picking Merged rings it with its word; the open count stays.
-        let plain = merged.frame.width
-        merged.tap()
-        XCTAssertTrue(waitUntil(10) { merged.isSelected && merged.frame.width > plain + 30 }, "picked ring holds the word")
+        // Picking Shipped highlights it and reveals the collapsed Shipped section; tapping again clears it.
+        shipped.tap()
+        XCTAssertTrue(waitUntil(10) { shipped.isSelected && self.row(app, "s-release").exists && !self.row(app, "s-garden").exists })
         shot(app, "CR2-header-picked")
-        merged.tap()
-        XCTAssertTrue(waitUntil(10) { !merged.isSelected })
+        shipped.tap()
+        XCTAssertTrue(waitUntil(10) { !shipped.isSelected && self.row(app, "s-garden").exists })
         app.buttons["sessions.projectPage.more"].tap()
         let item = app.buttons["Coding Project"].firstMatch
         XCTAssertTrue(item.waitForExistence(timeout: 5))
@@ -267,12 +264,20 @@ extension SessionsTests {
             XCTAssertTrue(waitUntil(20) { self.labelOf(cell).contains(words) }, "\(id): \(labelOf(cell))")
         }
         XCTAssertFalse(labelOf(row(app, "s-cr-check")).contains("lines added"), "no size, no size words")
-        for id in ["s-release", "s-cr-plain"] {
-            let label = labelOf(row(app, id))
-            XCTAssertFalse(label.contains("Checks") || label.contains("lines added") || label.contains("checks"), "\(id) gains nothing: \(label)")
-        }
-        XCTAssertTrue(labelOf(row(app, "s-release")).contains("Merged #23"))
+        let plainLabel = labelOf(row(app, "s-cr-plain"))
+        XCTAssertFalse(plainLabel.contains("Checks") || plainLabel.contains("lines added") || plainLabel.contains("checks"), "s-cr-plain gains nothing: \(plainLabel)")
         shot(app, "CR4-rows")
+        // Merged PR lives cleanly in the collapsed Shipped section; opening Shipped reveals it without check/size clutter.
+        let shippedHeader = header(app, "Shipped")
+        for _ in 0..<3 where !shippedHeader.isHittable { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(shippedHeader.waitForExistence(timeout: 5), "Shipped section")
+        shippedHeader.tap()
+        let releaseRow = row(app, "s-release")
+        XCTAssertTrue(releaseRow.waitForExistence(timeout: 6), "merged chat inside Shipped")
+        let releaseLabel = labelOf(releaseRow)
+        XCTAssertFalse(releaseLabel.contains("Checks") || releaseLabel.contains("lines added") || releaseLabel.contains("checks"), "s-release gains nothing: \(releaseLabel)")
+        XCTAssertTrue(releaseLabel.contains("Merged #23"), releaseLabel)
+        for _ in 0..<3 where !row(app, "s-garden").isHittable { app.swipeDown(velocity: .slow) }
 
         // The card: the pull request's title, and where it merges.
         tapPRMark(app, "s-garden")
@@ -404,43 +409,59 @@ extension SessionsTests {
         XCTAssertTrue(row(app, "s-garden").waitForExistence(timeout: 15))
         ensureAppCoding(app)
 
-        // Healthy project (PRs already matching): zero health banner; `?` sits cleanly in the PR filter bar.
-        // Count matches the exact 2 displayed unknown rows (s-shortcuts in Active + s-old in Done; never phantom outside rows).
-        let unknown = app.buttons["sessions.projectPage.pr.unknown"]
-        XCTAssertTrue(unknown.waitForExistence(timeout: 15), "? filter pill for unmatched chat")
-        XCTAssertTrue(waitUntil(10) { unknown.label.contains("2 loaded chats") }, unknown.label)
+        // Calm 4-bucket shipping pipeline: zero health banner on healthy project; Ready, Needs You, In Flight, Shipped stats match 1-to-1.
+        let needsTile = app.buttons["sessions.projectPage.pipeline.needsYou"]
+        let inFlightTile = app.buttons["sessions.projectPage.pipeline.inFlight"]
+        let shippedTile = app.buttons["sessions.projectPage.pipeline.shipped"]
+        XCTAssertTrue(needsTile.waitForExistence(timeout: 15), "Needs You pipeline stat")
+        XCTAssertTrue(waitUntil(15) { needsTile.label.contains("1 chat") && inFlightTile.label.contains("1 chat") && shippedTile.label.contains("2 chats") },
+                      "\(needsTile.label) / \(inFlightTile.label) / \(shippedTile.label)")
         XCTAssertFalse(app.descendants(matching: .any)["sessions.projectPage.codingHealth"].firstMatch.exists,
                        "no health banner when PRs are already matching")
-        shot(app, "CR6-header-unknown-pill")
-        // Tapping `?` rings it ("2 Unknown") and filters the project list to the exact 2 unmatched chats.
-        unknown.tap()
-        XCTAssertTrue(waitUntil(10) { unknown.isSelected && self.row(app, "s-shortcuts").exists && self.row(app, "s-old").exists && !self.row(app, "s-garden").exists })
-        shot(app, "CR6-unknown-filter-active")
-        unknown.tap()
-        XCTAssertTrue(waitUntil(10) { !unknown.isSelected && self.row(app, "s-garden").exists })
+        shot(app, "CR6-pipeline-overview")
 
-        // Unified Project Settings now includes Coding Project + Repository row.
+        // Tapping Needs You filters straight to the failing PR row; tapping again restores all sections.
+        needsTile.tap()
+        XCTAssertTrue(waitUntil(10) { needsTile.isSelected && self.row(app, "s-garden").exists && !self.row(app, "s-shortcuts").exists })
+        shot(app, "CR6-pipeline-needs-filtered")
+        needsTile.tap()
+        XCTAssertTrue(waitUntil(10) { !needsTile.isSelected && self.row(app, "s-shortcuts").exists })
+
+        // Unified Project Settings includes Coding Project + Repository row.
         openProjectSettings(app)
         XCTAssertTrue(projectSetting(app, "sessions.projectSettings.coding").waitForExistence(timeout: 5))
         XCTAssertTrue(projectSetting(app, "sessions.projectSettings.repository").waitForExistence(timeout: 5))
         shot(app, "CR6-project-settings-coding")
         closeProjectSettings(app)
 
-        // PR card: Refresh toolbar button, Open Chat, Mark as Closed, failing-checks merge warning, and check run summaries.
+        // PR card: Refresh toolbar button, pinned Fix Checks + Open Chat bottom bar, Mark as Closed, failing-checks merge warning, and check run summaries.
         tapPRMark(app, "s-garden")
         XCTAssertTrue(app.navigationBars["Pull Request"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.buttons["prcard.refresh"].waitForExistence(timeout: 5), "Refresh button")
         let checks = app.descendants(matching: .any)["prcard.checks"].firstMatch
         XCTAssertTrue(checks.waitForExistence(timeout: 15))
-        app.swipeUp(velocity: .slow)
-        let openChatBtn = app.buttons["prcard.openChat"]
-        for _ in 0..<3 where !openChatBtn.exists { app.swipeUp(velocity: .slow) }
-        XCTAssertTrue(openChatBtn.exists, "Open Chat in PR card")
-        XCTAssertTrue(app.buttons["prcard.markClosed"].exists, "Mark as Closed in PR card")
-        shot(app, "CR6-card-actions")
+        XCTAssertTrue(app.buttons["prcard.openChat"].exists, "Pinned Open Chat button")
+        XCTAssertTrue(app.buttons["prcard.askToFixChecks"].exists, "Pinned Fix Checks button")
+        shot(app, "CR6-card-pinned-bar")
+
+        // Tap changed file → interactive diff → tap line 11 to expand inline comment composer!
+        let fileRow = app.descendants(matching: .any)["prcard.file.0"].firstMatch
+        XCTAssertTrue(fileRow.waitForExistence(timeout: 8))
+        fileRow.tap()
+        XCTAssertTrue(app.navigationBars["Reconnect.swift"].waitForExistence(timeout: 5))
+        let diffLine = app.buttons["prcard.diffLine.added.11"]
+        XCTAssertTrue(diffLine.waitForExistence(timeout: 5), "tappable diff line")
+        diffLine.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["prcard.diffComment"].firstMatch.waitForExistence(timeout: 5), "inline comment composer")
+        shot(app, "CR6-diff-line-comment")
+        app.navigationBars["Reconnect.swift"].buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.navigationBars["Pull Request"].waitForExistence(timeout: 5))
 
         // Asking to merge while checks fail surfaces an explicit warning title!
+        app.swipeUp(velocity: .slow)
         let merge = app.buttons["prcard.askToMerge"]
+        for _ in 0..<3 where !merge.exists { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(app.buttons["prcard.markClosed"].exists, "Mark as Closed in PR card")
         merge.tap()
         let alert = app.alerts.firstMatch
         XCTAssertTrue(alert.waitForExistence(timeout: 5))
@@ -456,14 +477,5 @@ extension SessionsTests {
         shot(app, "CR6-checks-summary")
         app.navigationBars["Checks"].buttons.element(boundBy: 0).tap()
         app.buttons["sheet.close"].firstMatch.tap()
-
-        // Unmatched `?` card explains why instead of showing an empty "Status Unknown" dead end.
-        XCTAssertTrue(row(app, "s-shortcuts").waitForExistence(timeout: 8))
-        tapPRMark(app, "s-shortcuts")
-        XCTAssertTrue(app.navigationBars["Branch"].waitForExistence(timeout: 8))
-        XCTAssertTrue(app.descendants(matching: .any)["prcard.unknownNotice"].firstMatch.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["prcard.retry"].exists)
-        XCTAssertTrue(app.buttons["prcard.linkRepository"].exists)
-        shot(app, "CR6-unknown-card")
     }
 }

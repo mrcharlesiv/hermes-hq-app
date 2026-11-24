@@ -147,6 +147,7 @@ extension SessionStore {
         guard device.codingProjects[key] != enabled else { return }
         if !enabled {
             if projectPRFilter?.key == key { projectPRFilter = nil }
+            if projectPipelineFilter?.key == key { projectPipelineFilter = nil }
             prAutoLinkFailed.remove(key)
         }
         device.codingProjects[key] = enabled
@@ -377,7 +378,9 @@ extension SessionStore {
                                                     projectsByStatus: Set(device.projectSorts.filter { $0.value == ProjectPageSort.byStatus.rawValue }.keys),
                                                     keptProjects: keptProjects, projectAutoDone: projectAutoDoneRules,
                                                     botNames: botNames, statusChip: statusChip,
+                                                    codingProjects: Set(device.codingProjects.filter(\.value).keys),
                                                     projectPRState: projectPRFilter.flatMap { view.projectFilter == [$0.key] && isCodingProject($0.key) ? $0.state : nil },
+                                                    projectPipelineBucket: projectPipelineFilter.flatMap { view.projectFilter == [$0.key] && isCodingProject($0.key) ? $0.bucket : nil },
                                                     liveUnderProjects: projectRowsOpenPages, now: now, calendar: calendar))
     }
 

@@ -420,7 +420,7 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
             config.leadingSwipeActionsConfigurationProvider = { [weak self] indexPath in
                 guard let self, let organizer = self.organizer, let item = self.dataSource.itemIdentifier(for: indexPath),
                       !self.busy.contains(Self.realKey(item)), let session = self.sessionsByID[item] else { return nil }
-                return organizer.leadingActions(for: session)
+                return organizer.leadingActions(for: session, quickPR: self.codingQuickSwipeAction(for: session))
             }
             config.trailingSwipeActionsConfigurationProvider = { [weak self] indexPath in
                 guard let self, let organizer = self.organizer, let item = self.dataSource.itemIdentifier(for: indexPath),
@@ -529,8 +529,9 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
             // Group By Recent offers; the cards follow it there too).
             let fresh: SessionRowView.Fresh? = self.freshPinnedKeys.contains(id) ? .pinned : self.freshKeys.contains(id) ? .recent : nil
             let pinnedPile = self.pagePinnedKeys.contains(id)   // [page-pinned-no-pin]
-            // [coding-pr-review] A coding project's page: the row's PR mark opens the PR card.
-            let onPR: (() -> Void)? = coding && (session.pullRequest?.drawsMark == true)
+            // [coding-pr-review] A coding project's page: the row's PR mark opens the PR card (unmatched chats stay plain chats).
+            let prHasRowMark = session.pullRequest.map { $0.drawsMark && !($0.state == .unknown && $0.unknownReason == .unmatched) } ?? false
+            let onPR: (() -> Void)? = coding && prHasRowMark
                 ? { [weak self] in self?.presentPRCard(session) } : nil
             let faces = !(self.freshLayout || self.projectLayout) || (self.store?.view.botFaces ?? true)   // [projects-switch]
             // [mac-pane] The Mac: under the "Yesterday" heading a row says when ("5:31 PM"), not "Yesterday" again down
@@ -608,6 +609,7 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
                 },
                 onNewChatWith: { [weak self] in self?.organizer?.newChat(inProject: key, profile: nil, asks: true) })
             let prCounts = self.projectPRCounts(key)
+            let pipelineCounts = self.projectPipelineCounts(key)
             let codingHealth = self.projectCodingHealth(key)
             // [project-header-repo] The folder its Repository… page points at, when one is linked.
             let place = ProjectPageHeader.place(key: key, linked: self.store?.prRepo(forProject: key)?.path, branch: group.branch)
@@ -624,7 +626,19 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
                     Haptics.play(.selection)
                     let picking = !(store.projectPRFilter?.key == key && store.projectPRFilter?.state == state)
                     if picking, store.statusChip != nil { store.setStatusChip(nil) }
+                    if picking { store.projectPipelineFilter = nil }
                     store.projectPRFilter = picking ? (key, state) : nil
+                    self.reload(animated: false)
+                },
+                pipelineCounts: pipelineCounts,
+                selectedBucket: self.store?.projectPipelineFilter.flatMap { $0.key == key ? $0.bucket : nil },
+                onBucketPick: { [weak self] bucket in
+                    guard let self, let store = self.store else { return }
+                    Haptics.play(.selection)
+                    let picking = !(store.projectPipelineFilter?.key == key && store.projectPipelineFilter?.bucket == bucket)
+                    if picking, store.statusChip != nil { store.setStatusChip(nil) }
+                    if picking { store.projectPRFilter = nil }
+                    store.projectPipelineFilter = picking ? (key, bucket) : nil
                     self.reload(animated: false)
                 },
                 onCodingChange: { [weak self] enabled in
@@ -1665,9 +1679,11 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
             } ?? ""
             let prSign = page.pageKey.map { key in
                 let counts = projectPRCounts(key)
+                let pipe = projectPipelineCounts(key)
                 let health = projectCodingHealth(key).map { "\($0.message)|\($0.actionTitle ?? "")" } ?? ""
-                return "\(store?.isCodingProject(key) ?? false):\(store?.prManageAvailable ?? false):\(store?.projectPRFilter?.key == key ? store?.projectPRFilter?.state.rawValue ?? "" : ""):" +
-                    [SessionPRStatus.State.none, .draft, .open, .merged, .closed].map { "\(counts[$0, default: 0])" }.joined(separator: ",") + ":\(health)"
+                return "\(store?.isCodingProject(key) ?? false):\(store?.prManageAvailable ?? false):\(store?.projectPRFilter?.key == key ? store?.projectPRFilter?.state.rawValue ?? "" : ""):\(store?.projectPipelineFilter?.key == key ? store?.projectPipelineFilter?.bucket.rawValue ?? "" : ""):" +
+                    [SessionPRStatus.State.none, .draft, .open, .merged, .closed, .unknown].map { "\(counts[$0, default: 0])" }.joined(separator: ",") + ":" +
+                    CodingPipelineBucket.allCases.map { "\(pipe[$0, default: 0])" }.joined(separator: ",") + ":\(health)"
             } ?? ""
             let sign = [page.pageKey ?? "", page.latestTitle ?? "", page.branch ?? "", page.profiles.joined(separator: ","), usual,
                         "\(page.needs)|\(page.ready)|\(page.busy)|\(page.total)|\(Theme.isDesktop)|\(store?.statusChip?.rawValue ?? "")", prSign,
@@ -2043,7 +2059,10 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
     /// Working pill narrows it (Needs You and New are both New's); tapped while lit, every chat is back.
     func pickPageCount(_ count: String) {
         let chip: SessionStatusChip = count == "working" ? .working : .new
-        if store?.statusChip != chip, store?.projectPRFilter != nil { store?.projectPRFilter = nil }
+        if store?.statusChip != chip {
+            if store?.projectPRFilter != nil { store?.projectPRFilter = nil }
+            if store?.projectPipelineFilter != nil { store?.projectPipelineFilter = nil }
+        }
         pickStatus(store?.statusChip == chip ? nil : chip)
     }
 
@@ -2313,7 +2332,10 @@ extension SessionsViewController {
         guard var state = filterStateNow() else { return }
         guard state.prefs.pills != pills else { goHome(state); return }
         Haptics.play(.selection)
-        if pills == .bots { store?.projectPRFilter = nil }
+        if pills == .bots {
+            store?.projectPRFilter = nil
+            store?.projectPipelineFilter = nil
+        }
         homePageBot = nil   // [bot-home] the bot is the Bots side's own again (`projectPageReturn`)
         if pills == .projects { groupBeforeProjects = state.prefs.groupBy }
         let group: SessionGroupBy = pills == .projects ? .project : (groupBeforeProjects == .project ? .date : groupBeforeProjects)
@@ -2388,6 +2410,7 @@ extension SessionsViewController {
         // project, another project's pill) the swipe goes back there, not to the Bots side.
         projectPageReturn = nil
         store?.projectPRFilter = nil
+        store?.projectPipelineFilter = nil
         state.prefs.projectFilter = picked
         // [bot-home] From a bot's Home to a project's page (or every project): the bot goes, or it would narrow them
         // with nothing on screen saying so.

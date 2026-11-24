@@ -85,14 +85,21 @@ struct PullRequestRunsPage: View {
     }
 }
 
-/// One file's diff, in the steps sheet's panel, on a scrolling page titled with the file's name.
+/// One file's diff on a scrolling page titled with the file's name. Tapping any code line opens an inline comment
+/// composer that sends a targeted `file:line` comment straight to the chat's bot.
 final class PullRequestDiffPage: UIViewController {
     private let patch: String
     private let path: String
+    private let fileName: String
+    private let botName: String?
+    private let onComment: ((String) -> Void)?
 
-    init(name: String, path: String, patch: String) {
+    init(name: String, path: String, patch: String, botName: String? = nil, onComment: ((String) -> Void)? = nil) {
+        self.fileName = name
         self.patch = patch
         self.path = path
+        self.botName = botName
+        self.onComment = onComment
         super.init(nibName: nil, bundle: nil)
         title = name
         navigationItem.largeTitleDisplayMode = .never
@@ -103,34 +110,185 @@ final class PullRequestDiffPage: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .clear
-        let scroll = UIScrollView()
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        scroll.alwaysBounceVertical = true
-        scroll.accessibilityIdentifier = "prcard.diffPage"
-        view.addSubview(scroll)
-        let stack = UIStackView()
-        stack.axis = .vertical
-        stack.spacing = 8
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        scroll.addSubview(stack)
-        let folder = UILabel()
-        folder.text = path
-        folder.font = UIFontMetrics(forTextStyle: .footnote).scaledFont(for: HQFont.mono(ofSize: 13, weight: .regular))
-        folder.adjustsFontForContentSizeCategory = true
-        folder.textColor = HQPalette.label2
-        folder.numberOfLines = 0
-        stack.addArrangedSubview(folder)
-        stack.addArrangedSubview(DiffPanel(lines: StepRules.diffLines(patch)))
-        let margin: CGFloat = DeviceWord.isMac ? 16 : 20
+        let host = UIHostingController(rootView: InteractivePullRequestDiffView(
+            fileName: fileName,
+            path: path,
+            lines: PullRequestDiffLines.parse(patch),
+            botName: botName,
+            onComment: onComment
+        ))
+        host.view.backgroundColor = .clear
+        host.view.translatesAutoresizingMaskIntoConstraints = false
+        addChild(host)
+        view.addSubview(host.view)
         NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: view.topAnchor),
-            scroll.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 12),
-            stack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -24),
-            stack.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: margin),
-            stack.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -margin),
+            host.view.topAnchor.constraint(equalTo: view.topAnchor),
+            host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            host.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
+        host.didMove(toParent: self)
+    }
+}
+
+private struct InteractivePullRequestDiffView: View {
+    let fileName: String
+    let path: String
+    let lines: [PullRequestDiffLines.Line]
+    let botName: String?
+    let onComment: ((String) -> Void)?
+
+    @State private var selectedLineID: Int? = nil
+    @State private var draftNote = ""
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(verbatim: path)
+                    .font(Font.hq(.footnote).monospaced())
+                    .foregroundStyle(Color.hqLabel2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, DeviceWord.isMac ? 16 : 20)
+
+                if let botName, onComment != nil {
+                    HStack(spacing: 6) {
+                        Image(systemName: "hand.tap")
+                            .font(Font.hq(.caption))
+                            .foregroundStyle(Color.hqTintText)
+                            .accessibilityHidden(true)
+                        Text("Tap any line to send a comment to \(botName).")
+                            .font(Font.hq(.caption))
+                            .foregroundStyle(Color.hqLabel2)
+                    }
+                    .padding(.horizontal, DeviceWord.isMac ? 16 : 20)
+                }
+
+                VStack(spacing: 0) {
+                    ForEach(lines) { line in
+                        diffRow(line)
+                    }
+                }
+                .background(Color.hqGroupedCard)
+                .clipShape(RoundedRectangle(cornerRadius: HQShape.radius(12, .control), style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: HQShape.radius(12, .control), style: .continuous).strokeBorder(Color.hqStroke.opacity(0.6), lineWidth: 0.5))
+                .padding(.horizontal, DeviceWord.isMac ? 16 : 14)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("step.diff")
+            }
+            .padding(.top, 12)
+            .padding(.bottom, 28)
+        }
+        .accessibilityIdentifier("prcard.diffPage")
+    }
+
+    @ViewBuilder private func diffRow(_ line: PullRequestDiffLines.Line) -> some View {
+        let canComment = onComment != nil && line.kind != .hunk && line.number != nil
+        let isSelected = selectedLineID == line.id
+        let rowBg: Color = switch line.kind {
+        case .added: Color.hqGreen.opacity(0.14)
+        case .removed: Color.hqRed.opacity(0.14)
+        case .hunk: Color.hqTint.opacity(0.08)
+        case .context: .clear
+        }
+        let textColor: Color = switch line.kind {
+        case .added: Color.hqGreen
+        case .removed: Color.hqRed
+        case .hunk: Color.hqTintText
+        case .context: Color.hqLabel
+        }
+
+        VStack(alignment: .leading, spacing: 0) {
+            let content = HStack(alignment: .top, spacing: 8) {
+                Text(verbatim: line.number.map(String.init) ?? "···")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(Color.hqLabel3)
+                    .frame(width: 28, alignment: .trailing)
+                Text(verbatim: line.text)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(textColor)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                if canComment {
+                    Image(systemName: isSelected ? "bubble.left.fill" : "plus.bubble")
+                        .font(.system(size: 11))
+                        .foregroundStyle(isSelected ? Color.hqTint : Color.hqLabel3.opacity(0.6))
+                        .padding(.top, 2)
+                        .accessibilityHidden(true)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(isSelected ? Color.hqTint.opacity(0.16) : rowBg)
+            .contentShape(Rectangle())
+
+            if canComment {
+                Button {
+                    Haptics.play(.selection)
+                    withAnimation(HQMotion.swiftUI(.snappy(duration: 0.2))) {
+                        if selectedLineID == line.id {
+                            selectedLineID = nil
+                        } else {
+                            selectedLineID = line.id
+                            draftNote = ""
+                        }
+                    }
+                } label: { content }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("prcard.diffLine.\(line.kind).\(line.number ?? line.id)")
+            } else {
+                content
+            }
+
+            if isSelected, let lineNum = line.number, let onComment {
+                let targetBot = botName ?? "Bot"
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 6) {
+                        Text(verbatim: "\(fileName):\(lineNum)")
+                            .font(Font.hq(.caption2).monospaced().weight(.semibold))
+                            .foregroundStyle(Color.hqTintText)
+                        Spacer()
+                        Button("Cancel") {
+                            withAnimation(HQMotion.swiftUI(.snappy(duration: 0.2))) { selectedLineID = nil }
+                        }
+                        .font(Font.hq(.caption).weight(.medium))
+                        .foregroundStyle(Color.hqLabel2)
+                    }
+
+                    TextField("Ask \(targetBot) about this line…", text: $draftNote, axis: .vertical)
+                        .font(Font.hq(.subheadline))
+                        .padding(9)
+                        .background(Color.hqPage, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Color.hqTint.opacity(0.45), lineWidth: 1))
+                        .accessibilityIdentifier("prcard.diffComment.field")
+
+                    HStack {
+                        Spacer()
+                        let trimmed = draftNote.trimmingCharacters(in: .whitespacesAndNewlines)
+                        Button {
+                            guard !trimmed.isEmpty else { return }
+                            Haptics.play(.selection)
+                            let msg = PullRequestDiffLines.commentMessage(path: path, lineNumber: lineNum, codeLine: line.text, note: trimmed)
+                            selectedLineID = nil
+                            draftNote = ""
+                            onComment(msg)
+                        } label: {
+                            Label("Send to \(targetBot)", systemImage: "paperplane.fill")
+                                .font(Font.hq(.caption).weight(.bold))
+                                .foregroundStyle(Color.hqOnTint)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .background(trimmed.isEmpty ? Color.hqLabel3 : Color.hqTint, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(trimmed.isEmpty)
+                        .accessibilityIdentifier("prcard.diffComment.send")
+                    }
+                }
+                .padding(10)
+                .background(Color.hqTint.opacity(0.08))
+                .overlay(alignment: .leading) { Rectangle().fill(Color.hqTint).frame(width: 3) }
+                .accessibilityIdentifier("prcard.diffComment")
+            }
+        }
     }
 }

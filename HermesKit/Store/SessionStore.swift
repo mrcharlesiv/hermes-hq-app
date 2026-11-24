@@ -357,6 +357,8 @@ final class SessionStore {
     var statusChip: SessionStatusChip?
     /// Ephemeral, scoped to the project whose header selected it.
     var projectPRFilter: (key: String, state: SessionPRStatus.State)?
+    /// Ephemeral coding pipeline bucket filter (Ready / Needs You / In Flight / Shipped), scoped to one coding project.
+    var projectPipelineFilter: (key: String, bucket: CodingPipelineBucket)?
     /// [sessions-ux] Where the pills are the projects (iPhone, iPad), a project's row opens its page as its pill does,
     /// so under Group By Project no project is drawn open in the list. The Mac, which has no pills, leaves this off:
     /// its rows open and close in place.

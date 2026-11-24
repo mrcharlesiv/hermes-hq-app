@@ -182,6 +182,7 @@ nonisolated final class PhoneCallsTests: XCTestCase {
         XCTAssertEqual(interruption["enable"] as? Bool, true)
         let telephony = try XCTUnwrap(body["telephony_settings"] as? [String: Any])
         XCTAssertEqual(telephony["noise_suppression"] as? String, "aicoustics")
+        XCTAssertEqual(telephony["greeting_delay_ms"] as? Int, 400)
         XCTAssertEqual(telephony["user_idle_timeout_secs"] as? Int, 180)
         XCTAssertEqual(telephony["user_idle_reply_secs"] as? Int, 5)
         XCTAssertEqual((telephony["recording_settings"] as? [String: Any])?["enabled"] as? Bool, false)
@@ -201,6 +202,7 @@ nonisolated final class PhoneCallsTests: XCTestCase {
         let telephony = try XCTUnwrap(sent["telephony_settings"] as? [String: Any])
         XCTAssertEqual(telephony["default_texml_app_id"] as? String, "texml-1", "preserves existing keys")
         XCTAssertEqual(telephony["noise_suppression"] as? String, "aicoustics")
+        XCTAssertEqual(telephony["greeting_delay_ms"] as? Int, 400)
         XCTAssertEqual(telephony["user_idle_reply_secs"] as? Int, 5)
         XCTAssertEqual((telephony["recording_settings"] as? [String: Any])?["enabled"] as? Bool, false)
         XCTAssertEqual((telephony["recording_settings"] as? [String: Any])?["channels"] as? String, "dual")
@@ -249,8 +251,12 @@ nonisolated final class PhoneCallsTests: XCTestCase {
         let script = Script()
         samplehostStub.reset(script.route)
         let calls = try controller()
-        let id = try await calls.place(sessionID: "s1", to: "+15550100002", purpose: "Book a table for two", name: "Corner Bistro")
+        let id = try await calls.place(sessionID: "s1", to: "+15550100002", purpose: "Book a table for two",
+                                       name: "Corner Bistro", botName: "Otto")
         XCTAssertEqual(id, Self.callID)
+        let autoOptimize = try XCTUnwrap(samplehostStub.seen.first { $0.method == "POST" && $0.path == "/v2/ai/assistants/assistant-1" })
+        XCTAssertEqual((autoOptimize.json["telephony_settings"] as? [String: Any])?["noise_suppression"] as? String, "aicoustics",
+                       "existing suboptimal assistant is auto-tuned before dialing")
         let dial = try XCTUnwrap(samplehostStub.seen.first { $0.path == "/v2/calls" })
         XCTAssertEqual(dial.method, "POST")
         let body = dial.json
@@ -265,13 +271,17 @@ nonisolated final class PhoneCallsTests: XCTestCase {
         XCTAssertFalse((body["command_id"] as? String ?? "").isEmpty)
         let assistant = try XCTUnwrap(body["assistant"] as? [String: Any])
         XCTAssertEqual(assistant["id"] as? String, "assistant-1")
-        XCTAssertEqual(assistant["greeting"] as? String, "", "empty greeting lets the called party answer first")
+        let greeting = assistant["greeting"] as? String ?? ""
+        XCTAssertTrue(greeting.contains("Hi there, this is Otto."), "warm immediate greeting with bot name: \(greeting)")
+        XCTAssertTrue(greeting.contains("book a table for two"), "context right in the pickup greeting: \(greeting)")
+        XCTAssertFalse(greeting.localizedCaseInsensitiveContains("the owner"))
         XCTAssertFalse(String(decoding: dial.body ?? Data(), as: UTF8.self).contains("60 seconds"))
         let instructions = assistant["instructions"] as? String ?? ""
         XCTAssertTrue(instructions.contains("Book a table for two"))
         XCTAssertTrue(instructions.contains("You are calling Corner Bistro."))
         XCTAssertTrue(instructions.contains("Current local time:"))
         XCTAssertTrue(instructions.contains("ask_owner"))
+        XCTAssertEqual(calls.calls.first?.botName, "Otto")
         let tools = try XCTUnwrap(assistant["tools"] as? [[String: Any]])
         XCTAssertEqual(tools.map { $0["type"] as? String }, ["webhook", "hangup"])
         let webhook = try XCTUnwrap(tools[0]["webhook"] as? [String: Any])

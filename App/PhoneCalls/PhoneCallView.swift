@@ -16,6 +16,8 @@ struct PhoneCallView: View {
     var proposal: PhoneProposal? = nil
     var callID: String? = nil
     var matchingSessions: Set<String> = []
+    var botName: String? = nil
+    var chatContext: String? = nil
 
     private var controller: PhoneCallController { .shared(for: accountID) }
     private var mine: [PhoneCallRecord] {
@@ -41,7 +43,9 @@ struct PhoneCallView: View {
                             let who = [call.name, phoneShown(call.to)].compactMap { $0 }.joined(separator: " · ")
                             PhoneScreenHeader(title: "Transcript", subtitle: who,
                                               back: { path.removeLast() })
-                            PhoneConversation(lines: call.shownLines, catchingUp: false, readOnly: true)
+                            PhoneConversation(lines: call.shownLines, catchingUp: false, readOnly: true,
+                                              botName: call.botName, calleeName: call.name,
+                                              callingOwner: call.callingOwner == true)
                         }
                         .phonePage()
                         .toolbar(.hidden, for: .navigationBar)
@@ -49,8 +53,10 @@ struct PhoneCallView: View {
                 case .again(let id, let leave):
                     if let call = controller.call(id) {
                         newCall(prefill: PhoneProposal(to: call.to, goal: call.purpose,
-                                                       voicemail: leave ? .leaveMessage : call.voicemailChoice, name: call.name),
-                                suggested: false, session: call.sessionID, profile: call.profile, canGoBack: true)
+                                                       voicemail: leave ? .leaveMessage : call.voicemailChoice,
+                                                       name: call.name, callingOwner: call.callingOwner == true),
+                                suggested: false, session: call.sessionID, profile: call.profile,
+                                botName: call.botName ?? botName, canGoBack: true)
                     }
                 }
             }
@@ -63,8 +69,9 @@ struct PhoneCallView: View {
     }
 
     private func newCall(prefill: PhoneProposal?, suggested: Bool, session: String? = nil, profile: String? = nil,
-                         canGoBack: Bool = false) -> some View {
+                         botName: String? = nil, canGoBack: Bool = false) -> some View {
         PhoneNewCallView(controller: controller, sessionID: session ?? sessionID, profile: profile ?? self.profile,
+                         botName: botName ?? self.botName, chatContext: chatContext,
                          recent: mine.filter { !$0.active }.reversed(), prefill: prefill, suggested: suggested,
                          close: { dismiss() }, back: canGoBack ? { path.removeLast() } : nil,
                          open: { path.append(.call($0)) })
@@ -76,6 +83,8 @@ private struct PhoneNewCallView: View {
     let controller: PhoneCallController
     let sessionID: String
     let profile: String?
+    let botName: String?
+    let chatContext: String?
     let recent: [PhoneCallRecord]
     let suggested: Bool
     let close: () -> Void
@@ -85,6 +94,11 @@ private struct PhoneNewCallView: View {
     @State private var name: String
     @State private var goal: String
     @State private var voicemail: PhoneVoicemailChoice
+    @State private var callingOwner: Bool
+    @State private var userPickedCallingOwner = false
+    @State private var includeChatContext: Bool
+    @State private var userPickedChatContext = false
+    @State private var customGreeting: String
     @State private var error: String?
     @State private var confirming = false
     @State private var busy = false
@@ -92,19 +106,37 @@ private struct PhoneNewCallView: View {
     @FocusState private var editing: Field?
     private enum Field: Hashable { case number, name, goal }
 
-    init(controller: PhoneCallController, sessionID: String, profile: String?, recent: [PhoneCallRecord],
-         prefill: PhoneProposal?, suggested: Bool, close: @escaping () -> Void, back: (() -> Void)?,
-         open: @escaping (String) -> Void) {
-        self.controller = controller; self.sessionID = sessionID; self.profile = profile; self.recent = recent
+    init(controller: PhoneCallController, sessionID: String, profile: String?, botName: String?, chatContext: String?,
+         recent: [PhoneCallRecord], prefill: PhoneProposal?, suggested: Bool, close: @escaping () -> Void,
+         back: (() -> Void)?, open: @escaping (String) -> Void) {
+        self.controller = controller; self.sessionID = sessionID; self.profile = profile
+        self.botName = botName; self.chatContext = chatContext; self.recent = recent
         self.suggested = suggested; self.close = close; self.back = back; self.open = open
-        _to = State(initialValue: prefill?.to ?? "")
-        _name = State(initialValue: prefill?.name ?? "")
-        _goal = State(initialValue: prefill?.goal ?? "")
+        let initialTo = prefill?.to ?? ""
+        let initialName = prefill?.name ?? ""
+        let initialGoal = prefill?.goal ?? ""
+        let initialSelf = prefill?.callingOwner == true
+            || PhoneAskOwner.infersCallingOwner(ownerName: controller.setup?.name ?? "", calleeName: initialName,
+                                                purpose: initialGoal)
+        _to = State(initialValue: initialTo)
+        _name = State(initialValue: initialName)
+        _goal = State(initialValue: initialGoal)
         _voicemail = State(initialValue: prefill?.voicemail ?? .hangUp)
+        _callingOwner = State(initialValue: initialSelf)
+        _includeChatContext = State(initialValue: initialSelf && chatContext != nil)
+        _customGreeting = State(initialValue: prefill?.greeting ?? "")
     }
 
     private var destination: String { phoneDestination(to, from: controller.setup?.fromNumber) }
     private var purpose: String { goal.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var activeChatContext: String? { includeChatContext ? chatContext : nil }
+    private var callerBotName: String { PhoneAskOwner.normalizedBotName(botName) }
+    private var openingLinePreview: String {
+        PhoneAskOwner.greeting(botName: botName ?? "", ownerName: controller.setup?.name ?? "",
+                               calleeName: name.trimmingCharacters(in: .whitespacesAndNewlines),
+                               callingOwner: callingOwner, purpose: purpose, customGreeting: customGreeting,
+                               hasChatContext: activeChatContext != nil, recorded: controller.setup?.records == true)
+    }
 
     var body: some View {
         VStack(spacing: 10) {
@@ -118,8 +150,15 @@ private struct PhoneNewCallView: View {
                         review
                     } else if controller.ready {
                         fields
-                        Text("The voice assistant only knows what you enter here (not your chat history). Calling from \(phoneShown(controller.setup?.fromNumber ?? "your samplehost number")). \(PhoneLimits.stayCopy) Calls are billed to your samplehost account.")
+                        let contextCopy = activeChatContext != nil
+                            ? "Includes a brief summary of recent messages from this chat."
+                            : "The voice assistant only knows what you enter here."
+                        Text("\(contextCopy) Calling from \(phoneShown(controller.setup?.fromNumber ?? "your samplehost number")). \(PhoneLimits.stayCopy) Calls are billed to your samplehost account.")
                             .font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
+                        if !callingOwner, (controller.setup?.name ?? "").isEmpty {
+                            Text("Tip: Add your name in Settings › Phone Calls (Beta) so \(callerBotName) can say who it's calling for.")
+                                .font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
+                        }
                         if !to.isEmpty && !phoneIsE164(destination) {
                             Text("Enter the full phone number, including the country code for international calls.")
                                 .foregroundStyle(Color.hqRed).accessibilityIdentifier("phone.to.hint")
@@ -152,9 +191,21 @@ private struct PhoneNewCallView: View {
             .scrollDismissesKeyboard(.interactively)
         }
         .phonePage()
+        .onChange(of: name) { _, _ in syncAutoCallingOwner() }
+        .onChange(of: goal) { _, _ in syncAutoCallingOwner() }
     }
 
-    /// The review step: who, why, and what the call will do, then the one button that dials.
+    private func syncAutoCallingOwner() {
+        guard !userPickedCallingOwner else { return }
+        let inferred = PhoneAskOwner.infersCallingOwner(ownerName: controller.setup?.name ?? "",
+                                                        calleeName: name, purpose: goal)
+        if inferred != callingOwner {
+            callingOwner = inferred
+            if !userPickedChatContext { includeChatContext = inferred && chatContext != nil }
+        }
+    }
+
+    /// The review step: who, why, what the assistant will say on pickup, and the one button that dials.
     private var review: some View {
         let who = name.trimmingCharacters(in: .whitespacesAndNewlines)
         return VStack(alignment: .leading, spacing: 12) {
@@ -172,9 +223,22 @@ private struct PhoneNewCallView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading).padding(14).phoneCard(radius: 18)
             .accessibilityElement(children: .combine).accessibilityIdentifier("phone.review.goal")
+            VStack(alignment: .leading, spacing: 6) {
+                Text("OPENING LINE").font(Font.hq(.caption).weight(.semibold)).foregroundStyle(Color.hqLabel2)
+                Text("“\(openingLinePreview)”").fixedSize(horizontal: false, vertical: true)
+                Text("Spoken right when they answer").font(Font.hq(.caption)).foregroundStyle(Color.hqLabel2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading).padding(14).phoneCard(radius: 18)
+            .accessibilityElement(children: .combine).accessibilityIdentifier("phone.review.greeting")
             VStack(spacing: 8) {
-                if let owner = controller.setup?.name, !owner.isEmpty {
+                reviewRow("Calling as", callerBotName)
+                if callingOwner {
+                    reviewRow("Calling", "You directly")
+                } else if let owner = controller.setup?.name, !owner.isEmpty {
                     reviewRow("Calling for", owner)
+                }
+                if activeChatContext != nil {
+                    reviewRow("Chat context", "Included")
                 }
                 reviewRow("From", phoneShown(controller.setup?.fromNumber ?? ""))
                 reviewRow("If voicemail answers", voicemail.title)
@@ -209,12 +273,33 @@ private struct PhoneNewCallView: View {
     }
 
     private var fields: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let whoBinding = Binding<Bool>(
+            get: { callingOwner },
+            set: { next in
+                userPickedCallingOwner = true
+                callingOwner = next
+                if !userPickedChatContext { includeChatContext = next && chatContext != nil }
+            }
+        )
+        let contextBinding = Binding<Bool>(
+            get: { includeChatContext },
+            set: { next in
+                userPickedChatContext = true
+                includeChatContext = next
+            }
+        )
+        return VStack(alignment: .leading, spacing: 8) {
             if suggested {
                 Label("Suggested by your agent", systemImage: "sparkles")
                     .font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
                     .accessibilityIdentifier("phone.suggested")
             }
+            Picker("Who is being called", selection: whoBinding) {
+                Text("Someone else").tag(false)
+                Text("Myself").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("phone.calling-who")
             TextField("To", text: $to)
                 .keyboardType(.phonePad).textContentType(.telephoneNumber).focused($editing, equals: .number)
                 .accessibilityIdentifier("phone.to")
@@ -225,6 +310,12 @@ private struct PhoneNewCallView: View {
             TextField("Purpose, context, and what to say or ask", text: $goal, axis: .vertical)
                 .focused($editing, equals: .goal).accessibilityIdentifier("phone.purpose")
                 .padding(12).frame(minHeight: 48).background(Color.hqGroupedPage, in: .rect(cornerRadius: 12))
+            if chatContext != nil {
+                Toggle("Share recent chat context", isOn: contextBinding)
+                    .font(Font.hq(.subheadline))
+                    .padding(.horizontal, 12).frame(minHeight: 44)
+                    .accessibilityIdentifier("phone.include-context")
+            }
             let voicemailLayout = typeSize.isAccessibilitySize
                 ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0)) : AnyLayout(HStackLayout(spacing: 8))
             voicemailLayout {
@@ -250,11 +341,18 @@ private struct PhoneNewCallView: View {
         busy = true; error = nil
         let number = destination, words = purpose, choice = voicemail
         let place = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(PhoneProposal.maxName))
+        let isSelf = callingOwner
+        let greetingOverride = customGreeting.trimmingCharacters(in: .whitespacesAndNewlines)
+        let context = activeChatContext
+        let bot = botName
         Task {
             defer { busy = false }
             let result = await Result.of {
                 try await controller.place(sessionID: sessionID, profile: profile, to: number, purpose: words,
-                                           voicemail: choice, suggested: suggested, name: place.isEmpty ? nil : place)
+                                           voicemail: choice, suggested: suggested, name: place.isEmpty ? nil : place,
+                                           botName: bot, callingOwner: isSelf,
+                                           greeting: greetingOverride.isEmpty ? nil : greetingOverride,
+                                           chatContext: context)
             }
             switch result {
             case .success(let id): open(id)

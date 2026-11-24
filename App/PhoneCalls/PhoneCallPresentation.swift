@@ -119,10 +119,20 @@ nonisolated enum PhoneCallPresentation {
     }
 
     static func speaker(_ line: PhoneTranscript.Line) -> String {
+        speaker(line, botName: nil, calleeName: nil, callingOwner: false)
+    }
+
+    static func speaker(_ line: PhoneTranscript.Line, botName: String?, calleeName: String?, callingOwner: Bool) -> String {
         switch line.speaker {
-        case .assistant: "Assistant"
-        case .them: "Them"
-        case .you: line.isAnswer == true ? "You answered" : "You told it"
+        case .assistant:
+            let named = botName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return named.isEmpty ? "Assistant" : named
+        case .them:
+            if callingOwner { return "You (phone)" }
+            let named = calleeName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return named.isEmpty ? "Them" : named
+        case .you:
+            return line.isAnswer == true ? "You answered" : "You told it"
         }
     }
 

@@ -11,6 +11,9 @@ struct PhoneStartIntent: Equatable {
     let session: String, destination: String, goal: String
     var voicemail: PhoneVoicemailChoice = .hangUp
     var name: String?
+    var callingOwner: Bool = false
+    var greeting: String? = nil
+    var chatContext: String? = nil
 }
 struct PhoneStartRetry {
     private(set) var pending: (intent: PhoneStartIntent, id: String)?
@@ -103,6 +106,9 @@ nonisolated struct PhoneCallRecord: Identifiable, Equatable, Codable, Sendable {
     var pendingYou: [String] = []
     var pendingAnswers: [Int]? = nil
     var name: String? = nil
+    var botName: String? = nil
+    var callingOwner: Bool? = nil
+    var openingGreeting: String? = nil
     var summary: String? = nil
     var summaryFinished: Bool? = nil
     var messageLeft: Bool {
@@ -115,7 +121,8 @@ nonisolated struct PhoneCallRecord: Identifiable, Equatable, Codable, Sendable {
         case id, sessionID, profile, to, purpose, placedAt, hangupCommandID, legID, samplehostSessionID, recorded,
              voicemailChoice, suggested, state, conversationID, liveAt, answeredAt, endedAt, overAt, duration, ringSeconds,
              voicemail, outcome, settled, settledAt, localEnd, endNote, seenAlive, events, lines, transcriptChangedAt,
-             question, answered, asked, result, resultFingerprint, pendingYou, pendingAnswers, name, summary, summaryFinished
+             question, answered, asked, result, resultFingerprint, pendingYou, pendingAnswers, name, botName,
+             callingOwner, openingGreeting, summary, summaryFinished
     }
 
     var active: Bool { state != .ended }
@@ -232,11 +239,14 @@ nonisolated struct PhoneCallRecord: Identifiable, Equatable, Codable, Sendable {
 
     // MARK: Dial
 
-    /// Dials after the owner confirmed. First makes the assistant's recording match Settings (a failure blocks the
-    /// call). Throws a readable failure; a retry of the same intent reuses its command_id.
+    /// Dials after the owner confirmed. First makes the assistant's recording match Settings (and auto-tunes suboptimal
+    /// voice settings; a recording mismatch blocks the call). Throws a readable failure; a retry of the same intent
+    /// reuses its command_id.
     @discardableResult
     func place(sessionID: String, profile: String? = nil, to: String, purpose: String,
-               voicemail: PhoneVoicemailChoice = .hangUp, suggested: Bool = false, name: String? = nil) async throws -> String {
+               voicemail: PhoneVoicemailChoice = .hangUp, suggested: Bool = false, name: String? = nil,
+               botName: String? = nil, callingOwner: Bool = false, greeting: String? = nil,
+               chatContext: String? = nil) async throws -> String {
         guard let setup, setup.ready, let from = setup.fromNumber, let connection = setup.connectionID,
               let assistant = setup.assistantID else {
             throw samplehostError.provider("Phone Calls isn't set up. Connect samplehost in Settings first.")
@@ -245,14 +255,21 @@ nonisolated struct PhoneCallRecord: Identifiable, Equatable, Codable, Sendable {
         guard !hasActiveCall else { throw samplehostError.provider("Another call is still going. Hang it up first.") }
         placing = true
         defer { placing = false }
-        let matched = await Result.of { try await api.matchRecording(assistantID: assistant, on: setup.records) }
-        if case .failure(let error) = matched {
+        let prepared = await Result.of { try await api.prepareAssistantForCall(assistantID: assistant, recording: setup.records) }
+        if case .failure(let error) = prepared {
             throw samplehostError.refused("The call wasn't placed: couldn't make the assistant's recording match Settings. " + phoneMessage(error))
         }
-        let commandID = dialRetry.id(for: PhoneStartIntent(session: sessionID, destination: to, goal: purpose, voicemail: voicemail, name: name))
+        let effectiveSelf = callingOwner
+            || PhoneAskOwner.infersCallingOwner(ownerName: setup.name, calleeName: name ?? "", purpose: purpose)
+        let commandID = dialRetry.id(for: PhoneStartIntent(session: sessionID, destination: to, goal: purpose,
+                                                           voicemail: voicemail, name: name, callingOwner: effectiveSelf,
+                                                           greeting: greeting, chatContext: chatContext))
         let request = PhoneDialRequest(to: to, from: from, connectionID: connection, assistantID: assistant,
                                        purpose: purpose, commandID: commandID, ownerName: setup.name,
-                                       calleeName: name ?? "", recorded: setup.records, voicemail: voicemail)
+                                       calleeName: name ?? "", botName: botName ?? "", callingOwner: effectiveSelf,
+                                       greeting: greeting ?? "", chatContext: chatContext ?? "",
+                                       recorded: setup.records, voicemail: voicemail)
+        let spokenGreeting = PhoneAskOwner.greeting(for: request)
         let dialed = try await api.dial(request, now: now())
         dialRetry.completed()
         let id = dialed.call_control_id
@@ -263,6 +280,9 @@ nonisolated struct PhoneCallRecord: Identifiable, Equatable, Codable, Sendable {
             record.samplehostSessionID = dialed.call_session_id
             record.recorded = setup.records
             record.name = name
+            record.botName = botName.flatMap { let t = $0.trimmingCharacters(in: .whitespacesAndNewlines); return t.isEmpty ? nil : t }
+            record.callingOwner = effectiveSelf
+            record.openingGreeting = spokenGreeting
             record.voicemailChoice = voicemail
             record.suggested = suggested
             calls.append(record)

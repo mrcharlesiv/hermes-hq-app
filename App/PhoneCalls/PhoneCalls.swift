@@ -125,7 +125,7 @@ struct PhoneSettingsView: View {
                             .disabled(!controller.calls.contains { !$0.active })
                             .accessibilityIdentifier("phone.settings.clear-history")
                     } footer: {
-                        Text("Optimize updates your chosen samplehost assistant to use fast turn-taking speech recognition, natural interruptions, noise suppression, and clean pickup timing.")
+                        Text("Hermes HQ automatically tunes your assistant for fast turn-taking, natural interruptions, noise suppression, and prompt pickup before your next call. Use this button to apply those settings right away.")
                     }
                 }
             }
@@ -244,7 +244,7 @@ struct PhoneSettingsView: View {
         let api = samplehostAPI(key: next.apiKey), on = next.records
         Task {
             defer { busy = false }
-            let matched = await Result.of { try await api.matchRecording(assistantID: assistantID, on: on) }
+            let matched = await Result.of { try await api.prepareAssistantForCall(assistantID: assistantID, recording: on) }
             if case .failure(let failure) = matched {
                 error = "Saved, but the assistant's recording couldn't be set to \(on ? "on" : "off"). Calls won't go out until it can. " + phoneMessage(failure)
             }

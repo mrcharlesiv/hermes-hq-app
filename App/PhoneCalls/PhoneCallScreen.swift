@@ -129,7 +129,9 @@ struct PhoneCallScreen: View {
                             VStack(spacing: 8) {
                                 status(call)
                                 if call.question == nil && editing == nil { goal(call) }
-                                PhoneConversation(lines: call.shownLines, catchingUp: call.question == nil)
+                                PhoneConversation(lines: call.shownLines, catchingUp: call.question == nil,
+                                                  botName: call.botName, calleeName: call.name,
+                                                  callingOwner: call.callingOwner == true)
                                     .frame(height: 300)
                                     .opacity(call.question == nil ? 1 : 0.55)
                                 if let question = call.question {
@@ -150,7 +152,9 @@ struct PhoneCallScreen: View {
                 } else {
                     status(call)
                     if call.question == nil && editing == nil { goal(call) }
-                    PhoneConversation(lines: call.shownLines, catchingUp: call.question == nil)
+                    PhoneConversation(lines: call.shownLines, catchingUp: call.question == nil,
+                                      botName: call.botName, calleeName: call.name,
+                                      callingOwner: call.callingOwner == true)
                         .opacity(call.question == nil ? 1 : 0.55)
                         .frame(minHeight: 40)
                     if let question = call.question {
@@ -229,8 +233,9 @@ struct PhoneCallScreen: View {
     private func questionCard(_ question: PhoneTranscript.Question, call: PhoneCallRecord) -> some View {
         let sending = call.sendingAnswer != nil
         let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: typeSize.isAccessibilitySize ? 1 : 2)
+        let asker = call.botName.flatMap { $0.isEmpty ? nil : $0 } ?? "The assistant"
         return VStack(alignment: .leading, spacing: 8) {
-            Text("THE ASSISTANT ASKS YOU").font(Font.hq(.caption).weight(.bold)).foregroundStyle(Color.hqOrange)
+            Text("\(asker.uppercased()) ASKS YOU").font(Font.hq(.caption).weight(.bold)).foregroundStyle(Color.hqOrange)
             Text(question.text).font(Font.hq(.title3).weight(.semibold))
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("phone.question")
@@ -281,10 +286,11 @@ struct PhoneCallScreen: View {
     }
 
     private func dock(_ call: PhoneCallRecord) -> some View {
-        HStack(spacing: 10) {
+        let targetName = call.botName.flatMap { $0.isEmpty ? nil : $0 } ?? "the assistant"
+        return HStack(spacing: 10) {
             HStack(spacing: 6) {
                 TextField("Tell the assistant", text: $message,
-                          prompt: Text("Tell the assistant…").foregroundStyle(Color.hqLabel2))
+                          prompt: Text("Tell \(targetName)…").foregroundStyle(Color.hqLabel2))
                     .font(Font.hq(.subheadline))
                     .focused($editing, equals: .message)
                     .submitLabel(.send)
@@ -393,6 +399,9 @@ struct PhoneConversation: View {
     let lines: [PhoneTranscript.Line]
     var catchingUp: Bool
     var readOnly = false
+    var botName: String? = nil
+    var calleeName: String? = nil
+    var callingOwner: Bool = false
     @State private var following = true
     @State private var position = ScrollPosition(edge: .bottom)
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -456,7 +465,7 @@ struct PhoneConversation: View {
     private func bubble(_ line: PhoneTranscript.Line, width: CGFloat) -> some View {
         let owner = line.speaker == .you
         let assistant = line.speaker == .assistant
-        let speaker = PhoneCallPresentation.speaker(line)
+        let speaker = PhoneCallPresentation.speaker(line, botName: botName, calleeName: calleeName, callingOwner: callingOwner)
         let alignment: HorizontalAlignment = owner ? .center : assistant ? .trailing : .leading
         return VStack(alignment: alignment, spacing: 3) {
             if !owner {
@@ -514,7 +523,9 @@ private struct PhoneCallSummary: View {
                         card(call.shownLines.count > preview.count ? "RECENT CONVERSATION" : "CONVERSATION") {
                             VStack(alignment: .leading, spacing: 6) {
                                 ForEach(preview) { line in
-                                    Text("\(Text(PhoneCallPresentation.speaker(line) + ": ").fontWeight(.semibold))\(line.text)")
+                                    let who = PhoneCallPresentation.speaker(line, botName: call.botName, calleeName: call.name,
+                                                                            callingOwner: call.callingOwner == true)
+                                    Text("\(Text(who + ": ").fontWeight(.semibold))\(line.text)")
                                         .foregroundStyle(Color.hqLabel)
                                         .lineLimit(3)
                                 }

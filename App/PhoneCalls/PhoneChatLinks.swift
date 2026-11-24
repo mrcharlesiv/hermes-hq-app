@@ -172,9 +172,24 @@ nonisolated struct PhoneResultCard: Equatable, Sendable {
 // MARK: - The note on a sent message (item 13a)
 
 nonisolated enum PhoneChatNote {
-    /// The note, with the app's own link scheme. Tells the agent that the phone voice assistant cannot read chat
-    /// history, so every needed detail must go into `goal` (and `&name=` when known).
+    /// The note, with the app's own link scheme. Tells the agent to pass full context in `goal`, include `&self=1`
+    /// when calling the user themselves, and craft a warm `&greeting=` spoken right on pickup.
     static func text(scheme: String = AppIdentity.current.urlScheme) -> String {
+        "(Hermes HQ: this person can place AI phone calls from the app. The voice assistant on the phone cannot see your "
+            + "full chat history or memory, so pack every needed detail into goal. To propose a call, put a markdown link "
+            + "on its own line in your reply: [Call +12125550142](\(scheme)://phone-call?to=%2B12125550142&name="
+            + "<URL-encoded person or place name>&goal=<URL-encoded full context and instructions in plain words>"
+            + "&greeting=<URL-encoded warm natural opening line>). Use the full number with %2B and country code. Always "
+            + "include &name= when known. If calling this person directly (not a third party), add &self=1. In &greeting=, "
+            + "write a brief, warm, natural opening line using your own name that eases smoothly into why you are calling "
+            + "(never say \"calling on behalf of the owner\"). In &goal=, include relevant facts, dates, times, "
+            + "preferences, and what to cover. Optional &voicemail=leave to leave a message if voicemail answers. They "
+            + "approve it with a tap and the call's result comes back as their next message. Never say a call was made "
+            + "before that result arrives. If you don't have the number, ask for it or look it up first.)"
+    }
+
+    /// Older note shapes kept only for stripping historical user bubbles cleanly.
+    static func legacyRound1Text(scheme: String = AppIdentity.current.urlScheme) -> String {
         "(Hermes HQ: this person can place AI phone calls from the app. The voice assistant on the phone cannot see this "
             + "chat history or memory, so pack every needed detail into goal. To propose a call, put a markdown link on "
             + "its own line in your reply: [Call +12125550142](\(scheme)://phone-call?to=%2B12125550142&name="
@@ -187,7 +202,6 @@ nonisolated enum PhoneChatNote {
             + "the number, ask for it or look it up first.)"
     }
 
-    /// Older note shapes kept only for stripping historical user bubbles cleanly.
     static func legacyText(scheme: String = AppIdentity.current.urlScheme, includesName: Bool = true) -> String {
         "(Hermes HQ: this person can place AI phone calls from the app. To propose one, put a markdown link on its own "
             + "line in your reply: [Call +12125550142](\(scheme)://phone-call?to=%2B12125550142&goal=<URL-encoded goal in "
@@ -212,11 +226,63 @@ nonisolated enum PhoneChatNote {
     /// The stored message without the note (nil when it has none): what the owner's bubble shows.
     static func stripped(_ stored: String, scheme: String = AppIdentity.current.urlScheme) -> String? {
         let trimmed = stored.trimmingCharacters(in: .whitespacesAndNewlines)
-        let notes = [text(scheme: scheme), legacyText(scheme: scheme, includesName: true),
-                     legacyText(scheme: scheme, includesName: false)]
+        let notes = [text(scheme: scheme), legacyRound1Text(scheme: scheme),
+                     legacyText(scheme: scheme, includesName: true), legacyText(scheme: scheme, includesName: false)]
         guard let note = notes.first(where: trimmed.hasSuffix) else { return nil }
         let words = String(trimmed.dropLast(note.count)).trimmingCharacters(in: .whitespacesAndNewlines)
         return words.isEmpty ? nil : words
+    }
+}
+
+/// Condenses recent messages from the open chat into a brief, clean background snippet for the voice assistant.
+nonisolated enum PhoneChatContext {
+    static let maxMessages = 6
+    static let maxPerMessage = 260
+    static let maxTotal = 1200
+
+    static func summarize(_ messages: [ChatMessage], botName: String? = nil) -> String? {
+        let bot = PhoneAskOwner.normalizedBotName(botName)
+        var lines: [String] = []
+        for message in messages.reversed() {
+            guard message.role == .user || message.role == .assistant, !message.silentNote,
+                  message.phoneResultText == nil else { continue }
+            var raw = message.plainText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !raw.isEmpty else { continue }
+            if message.role == .user {
+                if raw.hasPrefix(PhoneResultMessage.header) { continue }
+                raw = PhoneChatText.shown(raw)
+            } else {
+                raw = stripProposalLinks(raw)
+            }
+            let flat = raw.replacingOccurrences(of: "—", with: ", ")
+                .components(separatedBy: .whitespacesAndNewlines)
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+            guard !flat.isEmpty else { continue }
+            let clipped = flat.count > maxPerMessage ? String(flat.prefix(maxPerMessage - 1)) + "…" : flat
+            let prefix = message.role == .user ? "User: " : "\(bot): "
+            lines.append(prefix + clipped)
+            if lines.count >= maxMessages { break }
+        }
+        guard !lines.isEmpty else { return nil }
+        let chronological = lines.reversed()
+        var out: [String] = []
+        var total = 0
+        for line in chronological.reversed() {
+            let extra = line.count + (out.isEmpty ? 0 : 1)
+            if total + extra > maxTotal && !out.isEmpty { break }
+            out.append(line)
+            total += extra
+        }
+        let joined = out.reversed().joined(separator: "\n")
+        return joined.isEmpty ? nil : joined
+    }
+
+    private static let proposalLinkRegex = try! NSRegularExpression(pattern: #"\[[^\]\n]*\]\([A-Za-z][A-Za-z0-9+.-]*://phone-call[^)\s]*\)"#)
+
+    private static func stripProposalLinks(_ text: String) -> String {
+        let range = NSRange(location: 0, length: (text as NSString).length)
+        return proposalLinkRegex.stringByReplacingMatches(in: text, range: range, withTemplate: "")
     }
 }
 
@@ -248,10 +314,13 @@ nonisolated struct PhoneProposal: Equatable, Sendable {
     let goal: String
     let voicemail: PhoneVoicemailChoice
     var name: String? = nil
+    var callingOwner: Bool = false
+    var greeting: String? = nil
 
     static let kind = "phone-call"
     static let maxGoal = 2000
     static let maxName = 120
+    static let maxGreeting = PhoneAskOwner.maxGreetingLength
 
     /// One of the app's links (its scheme, or `hermes`) whose host is `phone-call`, valid or not.
     static func isLink(_ url: URL, scheme: String = AppIdentity.current.urlScheme) -> Bool {
@@ -265,7 +334,8 @@ nonisolated struct PhoneProposal: Equatable, Sendable {
 
     /// A valid proposal: `to` dialable after `phoneDestination` (also tolerating an unencoded `+` decoded as a leading
     /// space or an 11-digit North American `1NXX…` number when `from` isn't known at render time), a goal of 1 to
-    /// `maxGoal` characters, optional `name` and `voicemail=leave`. Unknown query items are ignored; anything invalid is nil.
+    /// `maxGoal` characters, optional `name`, `self=1`, `greeting`, and `voicemail=leave`. Unknown query items are
+    /// ignored; anything invalid is nil.
     static func parse(_ url: URL, from: String? = nil, scheme: String = AppIdentity.current.urlScheme) -> PhoneProposal? {
         guard isLink(url, scheme: scheme), let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
               parts.path.isEmpty || parts.path == "/", parts.user == nil, parts.password == nil, parts.port == nil else { return nil }
@@ -286,8 +356,17 @@ nonisolated struct PhoneProposal: Equatable, Sendable {
         guard (1...maxGoal).contains(goal.count), !goal.unicodeScalars.contains(where: { $0.value < 0x20 && $0 != "\n" }) else { return nil }
         let name = (value("name") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard name.count <= maxName, !name.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else { return nil }
+        let rawSelf = (value("self") ?? value("calling_owner"))?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let callingOwner = rawSelf == "1" || rawSelf == "true" || rawSelf == "yes"
+        let rawGreeting = (value("greeting") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let greeting: String?
+        if rawGreeting.isEmpty || rawGreeting.unicodeScalars.contains(where: { $0.value < 0x20 && $0 != "\n" }) {
+            greeting = nil
+        } else {
+            greeting = String(rawGreeting.prefix(maxGreeting))
+        }
         return PhoneProposal(to: to, goal: goal, voicemail: value("voicemail")?.lowercased() == "leave" ? .leaveMessage : .hangUp,
-                             name: name.isEmpty ? nil : name)
+                             name: name.isEmpty ? nil : name, callingOwner: callingOwner, greeting: greeting)
     }
 
     /// What VoiceOver reads for a reply: each valid proposal link `[text](…phone-call?…)` becomes the words the bubble
@@ -352,12 +431,16 @@ nonisolated struct PhoneProposal: Equatable, Sendable {
 
     static func present(account: String, session: String, profile: String?, proposal: PhoneProposal? = nil,
                         callID: String? = nil, from host: UIViewController) {
-        let live = (host as? ChatViewController)?.session as? LiveChatSession
+        let chat = host as? ChatViewController
+        let live = chat?.session as? LiveChatSession
+        let botName = live?.botName ?? chat?.botName
+        let chatContext = live.flatMap { PhoneChatContext.summarize($0.messages, botName: botName) }
         let ids = Set([session, live?.storedSessionId, live?.resolvedStoredId, live?.runtimeSessionId].compactMap { $0 })
         let controller = PhoneCallController.shared(for: account)
         let current = controller.calls.last { $0.active && ids.contains($0.sessionID) }
         let screen = PhoneCallView(accountID: account, sessionID: session, profile: profile, proposal: proposal,
-                                   callID: callID ?? current?.id, matchingSessions: ids)
+                                   callID: callID ?? current?.id, matchingSessions: ids, botName: botName,
+                                   chatContext: chatContext)
         let sheet = UIHostingController(rootView: screen)
         if host.traitCollection.horizontalSizeClass == .compact {
             sheet.modalPresentationStyle = .fullScreen

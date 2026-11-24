@@ -208,22 +208,79 @@ struct PhoneTranscriptReaderTests {
 }
 
 struct PhoneWordsTests {
-    @Test func dialGreetingWaitsForPickup() {
-        #expect(PhoneAskOwner.dialGreeting == "")
+    @Test func warmGreetingForSelfThirdPartyAndCustom() {
+        #expect(PhoneAskOwner.storedGreeting == "")
+
+        // Self-call with no ownerName set: warm, uses bot name, never says "on behalf of the owner".
+        let selfTest = PhoneAskOwner.greeting(botName: "Otto", ownerName: "", callingOwner: true,
+                                              purpose: "Just testing the phone call")
+        #expect(selfTest.contains("Hey, it's Otto!"))
+        #expect(selfTest.contains("quick test call"))
+        #expect(!selfTest.localizedCaseInsensitiveContains("the owner"))
+        #expect(!selfTest.contains("—"))
+
+        // Self-call with ownerName and clean action purpose.
+        let selfNamed = PhoneAskOwner.greeting(botName: "Otto", ownerName: "Alex Mercer", callingOwner: true,
+                                               purpose: "Go over today's schedule")
+        #expect(selfNamed.contains("Hey Alex, it's Otto!"))
+        #expect(selfNamed.contains("go over today's schedule"))
+
+        // Third-party call with ownerName + clean purpose + recording enabled.
+        let bistro = PhoneAskOwner.greeting(botName: "Hermes", ownerName: "Alex", calleeName: "Corner Bistro",
+                                            callingOwner: false, purpose: "Book a table for two tonight at 7",
+                                            recorded: true)
+        #expect(bistro.contains("Hi there, this is Hermes calling for Alex."))
+        #expect(bistro.contains("this call is being recorded"))
+        #expect(bistro.contains("book a table for two tonight at 7"))
+
+        // Third-party call with blank ownerName and third-person pronoun ("they"): never says "the owner" or echoes "they".
+        let noOwner = PhoneAskOwner.greeting(botName: "", ownerName: "", calleeName: "Corner Bistro",
+                                             callingOwner: false, purpose: "Ask if they have patio seating")
+        #expect(noOwner.contains("Hi there, this is Hermes."))
+        #expect(!noOwner.localizedCaseInsensitiveContains("the owner"))
+        #expect(!noOwner.localizedCaseInsensitiveContains("if they"))
+
+        // Custom agent-supplied greeting passes through cleanly and appends recording notice when recorded.
+        let custom = PhoneAskOwner.greeting(botName: "Otto", ownerName: "Alex", callingOwner: true,
+                                            purpose: "Weekend trip",
+                                            customGreeting: "Hey Alex, it's Otto! Ready to talk through the weekend trip?",
+                                            recorded: true)
+        #expect(custom.hasPrefix("Hey Alex, it's Otto! Ready to talk through the weekend trip?"))
+        #expect(custom.contains("this call is being recorded"))
+    }
+
+    @Test func infersCallingOwnerEvenWithoutOwnerName() {
+        #expect(PhoneAskOwner.infersCallingOwner(ownerName: "", calleeName: "Me", purpose: "Check in"))
+        #expect(PhoneAskOwner.infersCallingOwner(ownerName: "", calleeName: "myself", purpose: "Hi"))
+        #expect(PhoneAskOwner.infersCallingOwner(ownerName: "", calleeName: "", purpose: "Call me to test the voice"))
+        #expect(PhoneAskOwner.infersCallingOwner(ownerName: "", calleeName: "", purpose: "Check in with me about today"))
+        #expect(PhoneAskOwner.infersCallingOwner(ownerName: "Alex Mercer", calleeName: "Alex", purpose: "Schedule"))
+        #expect(!PhoneAskOwner.infersCallingOwner(ownerName: "Alex", calleeName: "Corner Bistro", purpose: "Ask them to call me back"))
+        #expect(!PhoneAskOwner.infersCallingOwner(ownerName: "", calleeName: "", purpose: "Ask if they can call me back"))
+        #expect(!PhoneAskOwner.infersCallingOwner(ownerName: "", calleeName: "", purpose: "Have the dentist call me"))
+        #expect(!PhoneAskOwner.infersCallingOwner(ownerName: "", calleeName: "", purpose: "Book a table for two at 7"))
     }
 
     @Test func instructionsPieces() {
         let fixed = Date(timeIntervalSince1970: 1_763_995_200)
+        let spoken = PhoneAskOwner.greeting(botName: "Otto", ownerName: "Alex", calleeName: "Bright Dental",
+                                            purpose: "Move the cleaning to next week", recorded: true)
         let text = PhoneAskOwner.instructions(purpose: "Move the cleaning to next week", ownerName: "Alex",
-                                              calleeName: "Bright Dental", recorded: true, voicemail: .hangUp, now: fixed)
-        for piece in ["on behalf of Alex", "You are calling Bright Dental.", "Current local time:",
-                      "Why you are calling, in Alex's words: Move the cleaning to next week",
-                      "Wait for the person who answers to speak first",
-                      "immediately state why you are calling in one clear, plain sentence",
+                                              calleeName: "Bright Dental", botName: "Otto", greeting: spoken,
+                                              chatContext: "User: Move my cleaning please.", recorded: true,
+                                              voicemail: .hangUp, now: fixed)
+        for piece in ["You are Otto, an AI voice assistant placing an outbound phone call for Alex.",
+                      "You are calling Bright Dental.", "Current local time:",
+                      "Opening line already spoken when they picked up:",
+                      "Do not repeat that opening line word for word",
+                      "Purpose of the call: Move the cleaning to next week",
+                      "Recent chat context for background",
+                      "User: Move my cleaning please.",
+                      "Be warm, relaxed, polite, and socially natural",
                       "Stay on the call until the goal is done", "Do not end the call just because it is taking long",
                       "call the ask_owner tool once", "its result is a receipt, never the answer",
                       "never call ask_owner twice for the same question", "starting with \"The owner answered\"",
-                      "\"Message from the owner\"", "briefly mention in your very first turn that the call is recorded",
+                      "\"Message from the owner\"", "call is being recorded",
                       "hang up right away using the hangup tool without saying anything"] {
             #expect(text.contains(piece), "\(piece)")
         }
@@ -232,18 +289,19 @@ struct PhoneWordsTests {
         #expect(!text.contains("call back"), "hang up says nothing, so no call-back rule")
 
         let callingOwner = PhoneAskOwner.instructions(purpose: "Go over today's schedule", ownerName: "Alex",
-                                                      calleeName: "alex", recorded: false, voicemail: .leaveMessage, now: fixed)
-        #expect(callingOwner.contains("calling Alex directly on the phone"))
-        #expect(!callingOwner.contains("The person who answers is not Alex"))
+                                                      calleeName: "alex", botName: "Otto", recorded: false,
+                                                      voicemail: .leaveMessage, now: fixed)
+        #expect(callingOwner.contains("You are Otto, Alex's personal AI voice assistant, calling Alex directly on the phone."))
+        #expect(callingOwner.contains("Never say you are \"calling on behalf of\" anyone"))
         #expect(!callingOwner.contains("—"), "no em dashes")
 
         let plain = PhoneAskOwner.instructions(purpose: "p", ownerName: "", recorded: false, voicemail: .leaveMessage, now: fixed)
-        #expect(plain.contains("on behalf of the owner"))
+        #expect(plain.contains("never say \"the owner\" or \"calling on behalf of the owner\" aloud"))
         #expect(!plain.contains("recorded"))
-        for piece in ["leave one short message, then hang up", "the reason in one plain sentence of your own",
-                      "never read the owner's words out as written", "fix any typos or shorthand",
-                      "Do not ask anyone to call back unless the owner's words ask for a call back",
-                      "say it is a test call and that no reply is needed"] {
+        for piece in ["leave one short friendly message, then hang up", "one plain sentence of your own",
+                      "never read notes or typos out as written",
+                      "Do not ask anyone to call back unless the purpose asks for a call back",
+                      "say it is a quick test call and that no reply is needed"] {
             #expect(plain.contains(piece), "\(piece)")
         }
         #expect(PhoneLimits.stayCopy == "The assistant stays on until the job is done. Safety stop at 30 minutes.")
@@ -335,14 +393,17 @@ struct PhoneChatTextTests {
     @Test func callNoteTextAndStripping() throws {
         let note = PhoneChatNote.text(scheme: "hermeshq")
         #expect(note.hasPrefix("(Hermes HQ: this person can place AI phone calls from the app."))
-        #expect(note.contains("cannot see this chat history or memory"))
+        #expect(note.contains("cannot see your full chat history or memory"))
         #expect(note.contains("hermeshq://phone-call?to=%2B12125550142&name="))
+        #expect(note.contains("&self=1"))
+        #expect(note.contains("&greeting="))
         #expect(note.hasSuffix("If you don't have the number, ask for it or look it up first.)"))
         let sent = "Call the dentist and move my appointment" + "\n\n" + note
         #expect(PhoneChatNote.stripped(sent, scheme: "hermeshq") == "Call the dentist and move my appointment")
         #expect(PhoneChatNote.stripped("Call the dentist", scheme: "hermeshq") == nil)
         #expect(PhoneChatNote.note(for: sent, ready: true, scheme: "hermeshq") == nil, "never twice")
-        // Legacy notes also strip cleanly.
+        // Legacy notes (v1, v2, and Round 1) also strip cleanly.
+        #expect(PhoneChatNote.stripped("Call them\n\n" + PhoneChatNote.legacyRound1Text(scheme: "hermeshq"), scheme: "hermeshq") == "Call them")
         #expect(PhoneChatNote.stripped("Call them\n\n" + PhoneChatNote.legacyText(scheme: "hermeshq", includesName: true), scheme: "hermeshq") == "Call them")
         #expect(PhoneChatNote.stripped("Call them\n\n" + PhoneChatNote.legacyText(scheme: "hermeshq", includesName: false), scheme: "hermeshq") == "Call them")
         // The chat's stored rows: the bubble shows the words as typed, also inside a task's wrapped text.
@@ -355,6 +416,24 @@ struct PhoneChatTextTests {
         let result = PhoneResultMessage(Self.ended([]))
         #expect(titles.title(forStored: result.text) == result.display)
     }
+
+    @Test func chatContextSummarizesRecentTurnsWithoutLinksOrNotes() {
+        let scheme = AppIdentity.current.urlScheme
+        let messages = [
+            ChatMessage(id: "m1", role: .user, parts: [.text("Let's plan Saturday's hike")], timestamp: nil, rowId: nil),
+            ChatMessage(id: "m2", role: .assistant, parts: [.text("Sounds great! Do you want an early start?")], timestamp: nil, rowId: nil),
+            ChatMessage(id: "m3", role: .user, parts: [.text("Call me to talk through it\n\n" + PhoneChatNote.text(scheme: scheme))], timestamp: nil, rowId: nil),
+            ChatMessage(id: "m4", role: .assistant, parts: [.text("Sure thing!\n[Call +12125550142](hermes://phone-call?to=%2B12125550142&goal=Hike)")], timestamp: nil, rowId: nil),
+            ChatMessage(id: "m5", role: .system, parts: [.text("internal system row")], timestamp: nil, rowId: nil),
+        ]
+        let summary = PhoneChatContext.summarize(messages, botName: "Otto") ?? ""
+        #expect(summary.contains("User: Let's plan Saturday's hike"))
+        #expect(summary.contains("Otto: Sounds great! Do you want an early start?"))
+        #expect(summary.contains("User: Call me to talk through it"))
+        #expect(!summary.contains("Hermes HQ: this person can place"))
+        #expect(!summary.contains("hermes://phone-call"))
+        #expect(!summary.contains("internal system row"))
+    }
 }
 
 struct PhoneProposalTests {
@@ -365,10 +444,12 @@ struct PhoneProposalTests {
         let p = try #require(PhoneProposal.parse(Self.url("hermeshq://phone-call?to=%2B12125550142&goal=Move%20my%20cleaning%20to%20Tuesday&utm=x"),
                                                  from: "+12125550100", scheme: Self.scheme))
         #expect(p == PhoneProposal(to: "+12125550142", goal: "Move my cleaning to Tuesday", voicemail: .hangUp), "unknown items ignored")
-        let leave = PhoneProposal.parse(Self.url("hermes://phone-call?to=212%20555%200142&goal=Ask&voicemail=leave"), from: "+12125550100",
+        let leave = PhoneProposal.parse(Self.url("hermes://phone-call?to=212%20555%200142&goal=Ask&voicemail=leave&self=1&greeting=Hey%20there!"), from: "+12125550100",
                                         scheme: Self.scheme)
         #expect(leave?.to == "+12125550142", "after phoneDestination")
         #expect(leave?.voicemail == .leaveMessage)
+        #expect(leave?.callingOwner == true)
+        #expect(leave?.greeting == "Hey there!")
     }
 
     @Test(arguments: ["hermeshq://phone-call?goal=Ask", "hermeshq://phone-call?to=12345&goal=Ask", "hermeshq://phone-call?to=%2B12125550142",

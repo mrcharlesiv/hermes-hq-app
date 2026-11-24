@@ -186,6 +186,7 @@ nonisolated struct samplehostAssistantDetail: Sendable, Equatable {
     var interruptionEnabled: Bool?
     var userIdleTimeoutSecs: Int?
     var userIdleReplySecs: Int?
+    var greetingDelayMs: Int?
     var noiseSuppression: String?
 
     /// `telephony_settings.recording_settings.enabled`. samplehost's default is true (update-an-assistant reference).
@@ -210,6 +211,9 @@ nonisolated struct samplehostAssistantDetail: Sendable, Equatable {
         if let reply = userIdleReplySecs, reply > 6 {
             issues.append("silent-pickup wait is \(reply)s")
         }
+        if let delay = greetingDelayMs, delay > 1000 {
+            issues.append("greeting delay is \(delay)ms")
+        }
         if let noise = noiseSuppression, !noise.isEmpty, noise != "aicoustics" {
             issues.append("noise suppression uses \(noise) instead of aicoustics")
         }
@@ -228,6 +232,7 @@ nonisolated struct samplehostAssistantDetail: Sendable, Equatable {
         interruptionEnabled = (json["interruption_settings"] as? [String: Any])?["enable"] as? Bool
         userIdleTimeoutSecs = telephonyDict?["user_idle_timeout_secs"] as? Int
         userIdleReplySecs = telephonyDict?["user_idle_reply_secs"] as? Int
+        greetingDelayMs = telephonyDict?["greeting_delay_ms"] as? Int
         noiseSuppression = telephonyDict?["noise_suppression"] as? String
     }
 }
@@ -271,10 +276,18 @@ nonisolated struct PhoneDialRequest: Sendable, Equatable {
     let purpose: String
     /// dial `command_id`: samplehost ignores another Dial with the same one, so a retry never places a second call.
     let commandID: String
-    /// Said on calls ("calling on behalf of Alex"); empty: no name.
+    /// Said on calls ("calling for Alex"); empty: no name.
     var ownerName: String = ""
     /// Who is being called (person or business name, when known).
     var calleeName: String = ""
+    /// The chat bot's display name (e.g. "Hermes" or "Otto"), so the voice assistant knows who it is.
+    var botName: String = ""
+    /// True when calling the user themselves directly rather than a third party.
+    var callingOwner: Bool = false
+    /// Optional custom opening line (from an agent proposal or user edit). Empty synthesizes a warm default.
+    var greeting: String = ""
+    /// Optional condensed recent chat context so the voice assistant knows what the user was just discussing.
+    var chatContext: String = ""
     /// The assistant's recording setting, as made to match the switch just before dialing.
     var recorded: Bool = false
     var voicemail: PhoneVoicemailChoice = .hangUp
@@ -321,10 +334,10 @@ nonisolated enum PhoneAskOwner {
     /// The prefix of the message an unprompted owner message goes in (wire-proven 2026-11-21).
     static let ownerMessagePrefix = "Message from the owner, sent during the call: "
 
-    /// Empty greeting on dial and assistant creation: tells samplehost to wait for the person who answers to speak first
-    /// instead of playing a context-free canned line over their "Hello?". Combined with `user_idle_reply_secs`, the
-    /// assistant opens naturally and immediately with full context once they pick up (or after brief pickup silence).
-    static let dialGreeting = ""
+    /// Stored greeting on assistant creation/optimization: kept empty because every outbound call placed by the app
+    /// supplies its own warm, context-aware opening line on `POST /v2/calls`.
+    static let storedGreeting = ""
+    static let maxGreetingLength = 360
 
     /// Recommended samplehost transcription settings for fluid telephony turn-taking (`deepgram/flux`, CreateAssistantRequest).
     static var recommendedTranscription: [String: Any] {
@@ -348,10 +361,12 @@ nonisolated enum PhoneAskOwner {
         ]
     }
 
-    /// Recommended samplehost telephony settings (`aicoustics` STT-optimized noise suppression, responsive pickup check-in).
+    /// Recommended samplehost telephony settings (`aicoustics` STT-optimized noise suppression, brief pickup delay so the
+    /// opening syllable isn't clipped, and responsive mid-call silence check-in).
     static func recommendedTelephony(recording: Bool) -> [String: Any] {
         [
             "noise_suppression": "aicoustics",
+            "greeting_delay_ms": 400,
             "time_limit_secs": PhoneLimits.callSeconds,
             "user_idle_timeout_secs": 180,
             "user_idle_reply_secs": 5,
@@ -359,69 +374,250 @@ nonisolated enum PhoneAskOwner {
         ]
     }
 
-    static func instructions(purpose: String, ownerName: String = "", calleeName: String = "",
-                             recorded: Bool = false, voicemail: PhoneVoicemailChoice = .hangUp,
-                             now: Date = Date()) -> String {
+    /// The voice assistant's spoken name: the chat's bot name when known, else "Hermes".
+    static func normalizedBotName(_ raw: String?) -> String {
+        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Hermes" }
+        let lower = trimmed.lowercased()
+        if ["chat", "new chat", "default", "assistant", "the assistant"].contains(lower) { return "Hermes" }
+        return trimmed
+    }
+
+    /// Detects when a call is aimed directly at the user themselves (even if `ownerName` is unset in Settings).
+    static func infersCallingOwner(ownerName: String = "", calleeName: String = "", purpose: String = "") -> Bool {
         let given = ownerName.trimmingCharacters(in: .whitespacesAndNewlines)
         let callee = calleeName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let owner = given.isEmpty ? "the owner" : given
-        let callingOwnerDirectly = !given.isEmpty && !callee.isEmpty
-            && given.caseInsensitiveCompare(callee) == .orderedSame
+        let calleeLower = callee.lowercased()
+        if !callee.isEmpty {
+            if ["me", "myself", "self", "owner", "my phone", "my cell", "my mobile"].contains(calleeLower) {
+                return true
+            }
+            if !given.isEmpty {
+                if given.caseInsensitiveCompare(callee) == .orderedSame { return true }
+                let firstOwner = given.split(whereSeparator: \.isWhitespace).first.map(String.init) ?? ""
+                let firstCallee = callee.split(whereSeparator: \.isWhitespace).first.map(String.init) ?? ""
+                if !firstOwner.isEmpty, firstOwner.caseInsensitiveCompare(callee) == .orderedSame { return true }
+                if !firstCallee.isEmpty, firstCallee.caseInsensitiveCompare(given) == .orderedSame { return true }
+            }
+        }
+        // Only infer from purpose when callee isn't clearly a distinct third party.
+        guard callee.isEmpty else { return false }
+        let cleaned = purpose.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return false }
+        if cleaned.contains(/\b(?:have|ask|tell|let|get)\s+(?:\w+\s+){1,3}(?:to\s+)?(?:call|ring|phone)\s+me\b/.ignoresCase()) { return false }
+        if cleaned.contains(/\bcall(?:ing)?\s+me\s+back\b/.ignoresCase()) { return false }
+        return cleaned.contains(/\b(?:call|calling|ring|ringing|phone|phoning|reach|test(?:ing)?(?:\s+(?:a\s+)?call)?(?:\s+to)?|check(?:ing)?\s+in\s+with|chat\s+with|talk\s+to|speak\s+with|wake(?:\s+up)?|remind)\s+(?:me|myself|the\s+owner|the\s+user)\b/.ignoresCase())
+            || cleaned.contains(/\bcalling\s+(?:you|the\s+owner|this\s+person)\s+directly\b/.ignoresCase())
+    }
+
+    /// Warm, natural spoken opening line sent on `POST /v2/calls` so the voice assistant speaks promptly on pickup
+    /// with zero LLM startup dead air and eases naturally into the conversation.
+    static func greeting(botName: String = "", ownerName: String = "", calleeName: String = "",
+                         callingOwner: Bool = false, purpose: String = "", customGreeting: String = "",
+                         hasChatContext: Bool = false, recorded: Bool = false) -> String {
+        let recordedSuffix = " Just a quick heads up, this call is being recorded."
+        let cleanedCustom = customGreeting
+            .replacingOccurrences(of: "—", with: ", ")
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        if !cleanedCustom.isEmpty {
+            let base = String(cleanedCustom.prefix(maxGreetingLength))
+            if recorded, !base.localizedCaseInsensitiveContains("record") {
+                return base + recordedSuffix
+            }
+            return base
+        }
+
+        let bot = normalizedBotName(botName)
+        let given = ownerName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let callee = calleeName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isSelf = callingOwner || infersCallingOwner(ownerName: given, calleeName: callee, purpose: purpose)
+        let firstName = given.split(whereSeparator: \.isWhitespace).first.map(String.init) ?? ""
+        let trimmedPurpose = purpose.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isTestCall = trimmedPurpose.count <= 90
+            && trimmedPurpose.contains(/\btest(?:ing)?\b/.ignoresCase())
+            && !trimmedPurpose.contains(/\b(?:blood|lab|driving|covid|medical|school|exam)\s+test\b/.ignoresCase())
+        let recordedInsert = recorded ? recordedSuffix : ""
+
+        if isSelf {
+            let hi = firstName.isEmpty ? "Hey, it's \(bot)!" : "Hey \(firstName), it's \(bot)!"
+            if isTestCall {
+                return "\(hi) Thanks for picking up.\(recordedInsert) Just giving you a quick test call to make sure everything sounds good on your end. How am I coming through?"
+            }
+            if let topic = naturalReasonClause(from: trimmedPurpose, callingOwner: true) {
+                return "\(hi) Thanks for picking up, how's it going?\(recordedInsert) \(topic)"
+            }
+            if hasChatContext {
+                return "\(hi) Thanks for picking up, how's it going?\(recordedInsert) I'm calling to catch up on what we were just talking about whenever you're ready."
+            }
+            return "\(hi) Thanks for picking up, how's your day going?\(recordedInsert) I wanted to check in with you for a quick minute."
+        }
+
+        let intro = given.isEmpty
+            ? "Hi there, this is \(bot)."
+            : "Hi there, this is \(bot) calling for \(given)."
+        if isTestCall {
+            return "\(intro) Thanks for picking up.\(recordedInsert) I'm just making a quick test call to check the line. How's it sounding on your end?"
+        }
+        if let topic = naturalReasonClause(from: trimmedPurpose, callingOwner: false) {
+            return "\(intro) Hope you're having a good day.\(recordedInsert) \(topic)"
+        }
+        return "\(intro) Hope I caught you at a good time.\(recordedInsert) I just had a quick question for you."
+    }
+
+    static func greeting(for request: PhoneDialRequest) -> String {
+        greeting(botName: request.botName, ownerName: request.ownerName, calleeName: request.calleeName,
+                 callingOwner: request.callingOwner, purpose: request.purpose, customGreeting: request.greeting,
+                 hasChatContext: !request.chatContext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                 recorded: request.recorded)
+    }
+
+    /// Turns a clean, simple user-entered purpose into a natural first-person spoken sentence for the pickup greeting.
+    /// Returns nil when the purpose uses third-person phrasing ("ask if they..."), multiple sentences, URLs, or
+    /// ambiguous pronouns so the LLM can paraphrase it naturally on turn 1 instead of speaking awkward grammar.
+    private static func naturalReasonClause(from raw: String, callingOwner: Bool) -> String? {
+        var text = raw.replacingOccurrences(of: "—", with: ", ")
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        guard !text.isEmpty, text.count <= 110, !text.contains("http://"), !text.contains("https://"),
+              !text.contains("://") else { return nil }
+        // Strip trailing terminal punctuation for clean re-assembly.
+        while let last = text.last, ".!?".contains(last) { text.removeLast() }
+        // Avoid multi-sentence walls in the opening line.
+        guard !text.contains(". "), !text.contains("? "), !text.contains("! ") else { return nil }
+        // Strip polite/meta lead-ins ("please ", "can you ", "just ", "call me to ").
+        let prefixes = [
+            "please ", "can you ", "could you ", "i want you to ", "i need you to ", "just ",
+            "call me to ", "call me and ", "calling me to ", "calling to ", "call to ",
+        ]
+        var changed = true
+        while changed {
+            changed = false
+            let lower = text.lowercased()
+            for prefix in prefixes where lower.hasPrefix(prefix) {
+                text = String(text.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+                changed = true
+                break
+            }
+        }
+        guard text.count >= 4 else { return nil }
+        // Third-party calls must not echo third-person pronouns ("ask if they are open") directly to the callee.
+        if !callingOwner,
+           text.contains(/\b(?:they|them|their|theirs|he|him|his|she|her|hers|i|my|mine|me)\b/.ignoresCase()) {
+            return nil
+        }
+        if callingOwner, text.contains(/\b(?:i|my|mine|me|myself)\b/.ignoresCase()) {
+            return nil
+        }
+        let firstWord = text.split(separator: " ").first.map { $0.lowercased() } ?? ""
+        let lowerFirst = text.prefix(1).lowercased() + text.dropFirst()
+        if firstWord == "to" {
+            return "I'm calling \(lowerFirst)."
+        }
+        let baseVerbs: Set<String> = [
+            "ask", "book", "cancel", "catch", "chat", "check", "confirm", "coordinate", "discuss", "find", "follow",
+            "get", "go", "help", "make", "move", "order", "pick", "plan", "remind", "reschedule", "reserve",
+            "review", "schedule", "see", "set", "talk", "update", "verify", "walk", "work",
+        ]
+        if baseVerbs.contains(firstWord) {
+            return "I'm calling to \(lowerFirst)."
+        }
+        return nil
+    }
+
+    static func instructions(purpose: String, ownerName: String = "", calleeName: String = "",
+                             botName: String = "", callingOwner: Bool = false,
+                             greeting: String = "", chatContext: String = "",
+                             recorded: Bool = false, voicemail: PhoneVoicemailChoice = .hangUp,
+                             now: Date = Date()) -> String {
+        let bot = normalizedBotName(botName)
+        let given = ownerName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let callee = calleeName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isSelf = callingOwner || infersCallingOwner(ownerName: given, calleeName: callee, purpose: purpose)
+        let spokenGreeting = greeting.trimmingCharacters(in: .whitespacesAndNewlines)
+        let context = chatContext.trimmingCharacters(in: .whitespacesAndNewlines)
+
         let roleBlock: String
-        if callingOwnerDirectly {
+        if isSelf {
+            let who = given.isEmpty ? "your user" : given
             roleBlock = """
-            You are \(owner)'s AI voice assistant calling \(owner) directly on the phone. Speak warmly and directly to \
-            \(owner) as their own assistant: never say you are "calling on behalf of \(owner)".
+            You are \(bot), \(given.isEmpty ? "their" : "\(given)'s") personal AI voice assistant, calling \(who) \
+            directly on the phone. Speak warmly, naturally, and directly to them as their own assistant, like a helpful \
+            companion checking in. Never say you are "calling on behalf of" anyone, and never call them "the owner" aloud.
+            """
+        } else if !given.isEmpty {
+            let targetLine = callee.isEmpty ? "" : " You are calling \(callee)."
+            roleBlock = """
+            You are \(bot), an AI voice assistant placing an outbound phone call for \(given).\(targetLine) Usually the \
+            person who answers is not \(given) (\(given) can follow a live transcript and send you messages). However, \
+            if \(given) themselves answers, switch naturally to speaking directly with them as their own assistant.
             """
         } else {
             let targetLine = callee.isEmpty ? "" : " You are calling \(callee)."
             roleBlock = """
-            You are an AI voice assistant placing an outbound phone call on behalf of \(owner).\(targetLine) Usually \
-            the person who answers is not \(owner) (\(owner) can follow a live transcript and send you messages). \
-            However, if the goal below is to call \(owner) directly, or if \(owner) themselves answers, speak directly \
-            to them as their assistant instead of saying you are calling on their behalf.
+            You are \(bot), an AI voice assistant placing an outbound phone call.\(targetLine) No caller name was set \
+            for this call: introduce yourself simply as \(bot), and never say "the owner" or "calling on behalf of the \
+            owner" aloud. Usually the person who answers is not the user who placed this call (that user can follow a \
+            live transcript and send you messages). However, if the person who placed this call answers directly, speak \
+            warmly and directly to them as their own assistant.
             """
         }
+
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "EEEE, MMMM d, yyyy 'at' h:mm a"
         let localTime = formatter.string(from: now)
+
+        let greetingBlock = spokenGreeting.isEmpty ? "" : """
+
+        Opening line already spoken when they picked up: "\(spokenGreeting)"
+        Do not repeat that opening line word for word on your next turn. Pick up naturally from how they respond.
+        """
+        let contextBlock = context.isEmpty ? "" : """
+
+        Recent chat context for background (use only what helps the call, and never read private notes aloud verbatim):
+        \(context)
+        """
+        let ownerLabel = given.isEmpty ? "the user" : given
         let recordedRule = recorded
-            ? "\n- This call is recorded: briefly mention in your very first turn that the call is recorded."
+            ? "\n- This call is recorded: if your opening line did not already mention it, briefly and politely let them know right away that the call is being recorded."
             : ""
+        let vmIntro = given.isEmpty ? "as \(bot)" : "as \(bot) calling for \(given)"
         let onVoicemail = voicemail == .hangUp
             ? "hang up right away using the hangup tool without saying anything"
-            : "wait for the beep or tone, leave one short message, then hang up. Say who you are and who you are calling for, "
-                + "then the reason in one plain sentence of your own: never read \(owner)'s words out as written, and fix any "
-                + "typos or shorthand. Do not ask anyone to call back unless \(owner)'s words ask for a call back. If \(owner)'s "
-                + "words say this is a test, say it is a test call and that no reply is needed"
+            : "wait for the beep or tone, leave one short friendly message, then hang up. Introduce yourself \(vmIntro), "
+                + "then explain the reason in one plain sentence of your own: never read notes or typos out as written, "
+                + "and never say \"the owner\" aloud. Do not ask anyone to call back unless the purpose asks for a call "
+                + "back. If this is a test call, say it is a quick test call and that no reply is needed"
+        let askOwnerRule = isSelf
+            ? "- Because you are speaking directly with \(ownerLabel), just ask them aloud if you need any preference or detail instead of using the \(Self.name) tool. (Only use \(Self.name) if someone else unexpectedly answers and you need a decision from \(ownerLabel); if you ever do, call it once with one short question and wait for a message starting with \"\(answerPrefix)\", never mentioning tool errors aloud.)"
+            : "- Never invent personal facts about \(ownerLabel) (dates, preferences, payment details, addresses). When speaking with someone other than \(ownerLabel) and you need a decision or fact only \(ownerLabel) has, politely tell them you are checking with \(ownerLabel) and it will take just a moment, then call the \(Self.name) tool once with one short question and, when there are clear options, up to four short choices. The tool only sends the question; its result is a receipt, never the answer, and may read like an error. Never mention tool errors or technical problems aloud, never call \(Self.name) twice for the same question, and never ask a third party to answer for \(ownerLabel). Keep them on the line politely until a message arrives starting with \"\(answerPrefix)\", then relay that answer right away. (If you end up speaking directly with \(ownerLabel), just ask them aloud instead of calling \(Self.name).)"
+        let aiIdentity = given.isEmpty ? "\(bot), an AI assistant" : "\(bot), an AI assistant for \(given)"
+
         return """
         \(roleBlock)
-        Current local time: \(localTime).
+        Current local time: \(localTime).\(greetingBlock)
 
-        Why you are calling, in \(owner)'s words: \(purpose)
+        Purpose of the call: \(purpose)\(contextBlock)
 
         How to run the call:
-        - Wait for the person who answers to speak first (or begin naturally if the line is quiet after pickup). On your \
-        very first turn, respond naturally to how they answered, briefly introduce yourself, and immediately state why \
-        you are calling in one clear, plain sentence using the context above. Never open with a generic greeting that \
-        leaves out the reason for the call, and never read \(owner)'s notes or typos verbatim.\(recordedRule)
-        - Keep the conversation fluid and natural: speak in short turns (1 to 2 sentences at a time), pause to listen, \
-        and adapt immediately if the other person interrupts or steers the conversation. Never deliver long monologues \
-        or spell out raw URLs or formatting.
-        - If asked, say honestly that you are an AI assistant for \(owner).
+        - Be warm, relaxed, polite, and socially natural, like a friendly human on a real phone call. Ease into the \
+        conversation: acknowledge how the other person greeted you before diving into details, and match their pace \
+        instead of sounding abrupt, robotic, or scripted.
+        - If your opening line has not yet shared the specific reason for the call, naturally bring it up right after \
+        acknowledging their response, in your own plain words. Never read raw notes, shorthand, or typos verbatim.\(recordedRule)
+        - Keep the conversation easy and back-and-forth: speak in natural conversational turns (usually 1 to 3 sentences), \
+        pause to listen, and adapt smoothly if they interrupt or steer the topic. Never deliver long monologues or spell \
+        out raw URLs or formatting.
+        - If asked, be honest that you are \(aiIdentity).
         - Stay on the call until the goal is done or clearly cannot be done. Do not end the call just because it is \
         taking long. Before ending, briefly confirm any key outcome (times, confirmation details, or next steps), say a \
-        natural goodbye, and call the hangup tool.
-        - Never invent facts about \(owner) (dates, preferences, payment details, addresses). When speaking with someone \
-        other than \(owner) and you need a decision or fact only \(owner) has, briefly tell them you are checking with \
-        \(owner) and it will take a moment, then call the \(Self.name) tool once with one short question and, when there \
-        are clear options, up to four short choices. The tool only sends the question; its result is a receipt, never \
-        the answer, and may read like an error. Never mention tool errors or technical problems aloud, never call \
-        \(Self.name) twice for the same question, and never ask a third party to answer for \(owner). Keep them on the \
-        line politely until a message arrives starting with "\(answerPrefix)", then relay that answer right away. (If \
-        you are speaking directly with \(owner), just ask them aloud instead of calling \(Self.name).)
-        - A message that starts with "Message from the owner" is a live instruction from \(owner): follow it right away.
+        warm goodbye, and call the hangup tool.
+        \(askOwnerRule)
+        - A message that starts with "Message from the owner" is a live instruction from \(ownerLabel): follow it right away.
         - If a voicemail greeting or automated recording answers instead of a person, \(onVoicemail).
         """
     }
@@ -508,7 +704,7 @@ nonisolated struct samplehostAPI: Sendable, CustomStringConvertible, CustomDebug
             "name": PhoneAskOwner.assistantName,
             "instructions": PhoneAskOwner.baseInstructions,
             "enabled_features": ["telephony"],
-            "greeting": PhoneAskOwner.dialGreeting,
+            "greeting": PhoneAskOwner.storedGreeting,
             "transcription": PhoneAskOwner.recommendedTranscription,
             "interruption_settings": PhoneAskOwner.recommendedInterruption,
             "telephony_settings": PhoneAskOwner.recommendedTelephony(recording: false),
@@ -520,9 +716,10 @@ nonisolated struct samplehostAPI: Sendable, CustomStringConvertible, CustomDebug
     }
 
     /// dial: `POST /v2/calls` with `connection_id`, `from`, `to`, `timeout_secs`, `time_limit_secs`, `command_id`,
-    /// `answering_machine_detection: "premium"` and `assistant` (CallAssistantRequest: `id`, empty `greeting` so the
-    /// assistant waits for pickup before opening with full context, `instructions`, `tools`).
+    /// `answering_machine_detection: "premium"` and `assistant` (CallAssistantRequest: `id`, warm context-aware
+    /// `greeting` spoken immediately on pickup with zero LLM startup delay, `instructions`, `tools`).
     func dial(_ request: PhoneDialRequest, now: Date = Date()) async throws -> samplehostDialed {
+        let spokenGreeting = PhoneAskOwner.greeting(for: request)
         let body: [String: Any] = [
             "connection_id": request.connectionID,
             "from": request.from,
@@ -533,9 +730,11 @@ nonisolated struct samplehostAPI: Sendable, CustomStringConvertible, CustomDebug
             "answering_machine_detection": "premium",
             "assistant": [
                 "id": request.assistantID,
-                "greeting": PhoneAskOwner.dialGreeting,
+                "greeting": spokenGreeting,
                 "instructions": PhoneAskOwner.instructions(purpose: request.purpose, ownerName: request.ownerName,
-                                                           calleeName: request.calleeName, recorded: request.recorded,
+                                                           calleeName: request.calleeName, botName: request.botName,
+                                                           callingOwner: request.callingOwner, greeting: spokenGreeting,
+                                                           chatContext: request.chatContext, recorded: request.recorded,
                                                            voicemail: request.voicemail, now: now),
                 "tools": PhoneAskOwner.tools,
             ] as [String: Any],
@@ -671,15 +870,42 @@ nonisolated struct samplehostAPI: Sendable, CustomStringConvertible, CustomDebug
         return true
     }
 
+    /// Prepares the assistant before dialing: guarantees `recording_settings.enabled` matches `recording` (failing
+    /// strictly if it cannot), and automatically upgrades any suboptimal voice/telephony settings (`callQualityIssues`)
+    /// on a best-effort basis so existing assistants get fluid turn-taking without needing a manual Settings tap.
+    func prepareAssistantForCall(assistantID: String, recording: Bool) async throws {
+        let detail = try await assistant(id: assistantID)
+        guard var telephony = detail.telephony else {
+            throw samplehostError.provider("The assistant has no telephony settings. Turn on telephony for it in the samplehost portal.")
+        }
+        let needsRecording = detail.recordingOn != recording
+        let needsQuality = !detail.callQualityIssues.isEmpty
+        guard needsRecording || needsQuality else { return }
+        if needsQuality {
+            let optimized = await Result.of { try await applyOptimization(detail: detail, assistantID: assistantID, recording: recording) }
+            if case .success = optimized { return }
+            guard needsRecording else { return }
+        }
+        var rec = telephony["recording_settings"] as? [String: Any] ?? [:]
+        rec["enabled"] = recording
+        telephony["recording_settings"] = rec
+        try await updateTelephony(assistantID: assistantID, telephony: telephony)
+    }
+
     /// Upgrades an existing assistant with fluid telephony defaults (`deepgram/flux` turn-taking, interruptions,
-    /// `aicoustics` noise suppression, responsive pickup check-in, empty greeting) while keeping existing
-    /// `telephony_settings` keys (such as `default_texml_app_id`) and matching `recording`.
+    /// `aicoustics` noise suppression, clean pickup delay, responsive silence check-in) while keeping existing
+    /// `telephony_settings` keys (such as `default_texml_app_id`), model, and voice settings, and matching `recording`.
     func optimizeAssistant(id assistantID: String, recording: Bool) async throws {
         let detail = try await assistant(id: assistantID)
+        try await applyOptimization(detail: detail, assistantID: assistantID, recording: recording)
+    }
+
+    private func applyOptimization(detail: samplehostAssistantDetail, assistantID: String, recording: Bool) async throws {
         var features = detail.enabledFeatures
         if !features.contains("telephony") { features.append("telephony") }
         var telephony = detail.telephony ?? [:]
         telephony["noise_suppression"] = "aicoustics"
+        telephony["greeting_delay_ms"] = 400
         telephony["time_limit_secs"] = PhoneLimits.callSeconds
         telephony["user_idle_timeout_secs"] = 180
         telephony["user_idle_reply_secs"] = 5
@@ -688,7 +914,7 @@ nonisolated struct samplehostAPI: Sendable, CustomStringConvertible, CustomDebug
         telephony["recording_settings"] = rec
         let body: [String: Any] = [
             "enabled_features": features,
-            "greeting": PhoneAskOwner.dialGreeting,
+            "greeting": PhoneAskOwner.storedGreeting,
             "transcription": PhoneAskOwner.recommendedTranscription,
             "interruption_settings": PhoneAskOwner.recommendedInterruption,
             "telephony_settings": telephony,

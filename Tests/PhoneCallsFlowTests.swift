@@ -92,11 +92,13 @@ extension PhoneCallsTests {
         let dial = try XCTUnwrap(order.firstIndex(of: "POST /v2/calls"))
         XCTAssertLessThan(update, dial, "recording matches before the dial")
         let assistant = try XCTUnwrap(samplehostStub.seen[dial].json["assistant"] as? [String: Any])
-        XCTAssertEqual(assistant["greeting"] as? String, "")
+        let greeting = assistant["greeting"] as? String ?? ""
+        XCTAssertTrue(greeting.contains("calling for Alex"), greeting)
+        XCTAssertTrue(greeting.contains("this call is being recorded"), greeting)
         let instructions = assistant["instructions"] as? String ?? ""
-        XCTAssertTrue(instructions.contains("briefly mention in your very first turn that the call is recorded"))
-        XCTAssertTrue(instructions.contains("leave one short message, then hang up"))
-        XCTAssertTrue(instructions.contains("on behalf of Alex"))
+        XCTAssertTrue(instructions.contains("call is being recorded"))
+        XCTAssertTrue(instructions.contains("leave one short friendly message, then hang up"))
+        XCTAssertTrue(instructions.contains("placing an outbound phone call for Alex."))
         XCTAssertTrue(instructions.contains("You are calling Dental Office."))
         let call = try XCTUnwrap(calls.calls.first)
         XCTAssertTrue(call.recorded)

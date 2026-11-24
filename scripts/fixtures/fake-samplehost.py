@@ -53,6 +53,7 @@ def empty():
             'assistant_config': {'greeting': '', 'transcription': {'model': 'deepgram/flux', 'language': 'auto'},
                                  'interruption_settings': {'enable': True}},
             'telephony': {'default_texml_app_id': 'texml-sim', 'noise_suppression': 'aicoustics',
+                          'greeting_delay_ms': 400,
                           'time_limit_secs': 1800, 'user_idle_timeout_secs': 180, 'user_idle_reply_secs': 5,
                           'recording_settings': {'enabled': False, 'channels': 'dual', 'format': 'mp3'}}}
 state = empty()
@@ -184,8 +185,11 @@ def check_dial(body):
                      ('time_limit_secs', body.get('time_limit_secs') == 1800), ('timeout_secs', body.get('timeout_secs') == 45),
                      ('answering_machine_detection', body.get('answering_machine_detection') == 'premium'),
                      ('command_id', bool(body.get('command_id'))), ('assistant.id', assistant.get('id') == ASSISTANT),
-                     ('assistant.greeting', assistant.get('greeting') == ''),
-                     ('assistant.instructions', 'ask_owner' in instructions and '60 seconds' not in instructions and 'Current local time:' in instructions),
+                     ('assistant.greeting', bool((assistant.get('greeting') or '').strip())
+                      and 'on behalf of the owner' not in (assistant.get('greeting') or '').lower()
+                      and '—' not in (assistant.get('greeting') or '')),
+                     ('assistant.instructions', 'ask_owner' in instructions and '60 seconds' not in instructions
+                      and 'Current local time:' in instructions and '—' not in instructions),
                      ('ask_owner tool', webhook.get('name') == 'ask_owner' and webhook.get('url', '').endswith('.invalid/hermes-hq'))]:
         if not ok: problem('dial ' + name)
 
@@ -246,7 +250,7 @@ def route(method, path, query, body, headers=None):
                 return error(422, '90000', 'Busy', 'A simulated call is already going.')
             assistant = (body or {}).get('assistant') or {}
             state['dials'].append({'to': (body or {}).get('to'), 'greeting': assistant.get('greeting'),
-                                   'leaves_message': 'leave one short message' in (assistant.get('instructions') or '')})
+                                   'leaves_message': 'leave one short friendly message' in (assistant.get('instructions') or '')})
             suffix = '' if not calls else '-%d' % (len(calls) + 1)
             call = {'id': CALL + suffix, 'leg': LEG + suffix, 'session': 'session-sim' + suffix,
                     'conversation': CONVERSATION + suffix, 'command_id': (body or {}).get('command_id'),

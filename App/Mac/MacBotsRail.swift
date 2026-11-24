@@ -886,6 +886,7 @@ final class MacSidebarChat: UIControl {
         var tint: Color
         var last: Bool
         var style: BotChatsStyle
+        var showsPin = false
     }
 
     /// The bot whose chats these are.
@@ -999,7 +1000,7 @@ private struct MacSidebarChatContent: View {
         HStack(spacing: 6) {
             switch look.kind {
             case .chat(let session):
-                if session.pinned {
+                if look.showsPin {
                     Image(systemName: "pin.fill").font(Font(MacSidebar.font(MacSidebar.tidy ? 12 : 10.5) as CTFont)).foregroundStyle(Color.hqLabel3)
                 }
                 Text(SessionRowView.title(session))   // [Mac AAA 2026-11-16] never a blank title

@@ -107,6 +107,11 @@ nonisolated enum BotChatsUnder {
     /// Pinned (or active) chats shown at most, so one bot doesn't take the page.
     static let maxPinned = 5
 
+    /// Only another chat under this bot calls for a pin icon; the “N more” link isn't a chat.
+    static func showsPin(for session: SessionSummary, among shown: [SessionSummary]) -> Bool {
+        session.pinned && shown.count > 1
+    }
+
     /// Working, waiting for an answer, or unread.
     static func isActive(_ session: SessionSummary) -> Bool {
         session.isRunning || session.unread || session.status == .needsInput || session.status == .working
@@ -257,6 +262,7 @@ struct BotChatsLine: View {
 struct BotChatRowView: View {
     var session: SessionSummary
     var last: Bool
+    var showsPin = false
     /// The bot's own colour (its line in the tint style).
     var tint: Color = .hqStroke
     var style: BotChatsStyle = .saved
@@ -265,7 +271,7 @@ struct BotChatRowView: View {
     var body: some View {
         let time = ListTime.string(session.lastActive)
         HStack(spacing: 8) {
-            if session.pinned {
+            if showsPin {
                 Image(systemName: "pin.fill").font(Font.hq(.caption2)).foregroundStyle(Color.hqLabel3).accessibilityHidden(true)
             }
             // [Mac AAA rest 2026-11-17] A chat with no title yet was a blank row with only its time: it is named as its

@@ -1,6 +1,7 @@
 // [chats-under] Each bot's chats under its row, end to end against the Sessions fixture's everyday list
 // (scripts/fixtures/sessions-gateway.py --seed everyday). Run with scripts/e2e-chats-under.sh <SIM>.
 
+import Vision
 import XCTest
 
 final class ChatsUnderBotsTests: XCTestCase {
@@ -152,6 +153,45 @@ final class ChatsUnderBotsTests: XCTestCase {
         row.tap()
         XCTAssertTrue(app.tables["chat.table"].waitForExistence(timeout: 15), "the chat opens")
         shot(app, "9-chat-opens")
+    }
+
+    /// The same pinned row also has an “N more” beneath it in both modes. Check the drawn title, not the
+    /// accessibility label: VoiceOver should still know it is pinned when the picture goes away.
+    @MainActor func testPinOnlyTakesSpaceBesideOtherShownChats() throws {
+        let app = launch()
+        openFilterSubmenu(app)
+        item(app, "Off").tap()
+        let row = app.cells["bot-chat-e-01"]
+
+        func pick(_ mode: String) {
+            app.cells["bot-row-otto"].press(forDuration: 1)
+            item(app, "Chats Under Otto").tap()
+            item(app, mode).tap()
+        }
+        defer { pick("Same as All Bots") }
+        func titleStart(_ mode: String) throws -> CGFloat {
+            pick(mode)
+            XCTAssertTrue(row.waitForExistence(timeout: 20))
+            XCTAssertTrue(app.cells["bot-chats-more-otto"].exists)
+            let picture = row.screenshot()
+            let attachment = XCTAttachment(screenshot: picture)
+            attachment.name = mode
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            let request = VNRecognizeTextRequest()
+            request.usesLanguageCorrection = false
+            try VNImageRequestHandler(cgImage: XCTUnwrap(picture.image.cgImage)).perform([request])
+            let text = try XCTUnwrap(request.results?.compactMap { $0.topCandidates(1).first }
+                .first { $0.string.localizedCaseInsensitiveContains("together") }, "the fixture chat title is on screen")
+            let range = try XCTUnwrap(text.string.range(of: "together", options: .caseInsensitive))
+            return try XCTUnwrap(text.boundingBox(for: range)).boundingBox.minX * row.frame.width
+        }
+
+        let multiple = try titleStart("Pinned + Recent")
+        let single = try titleStart("Pinned Only")
+        let restored = try titleStart("Pinned + Recent")
+        XCTAssertLessThan(single + 8, multiple, "the single chat reclaims the pin and its spacing")
+        XCTAssertEqual(restored, multiple, accuracy: 2, "the pin returns when a second chat is shown")
     }
 
     /// Settings › Appearance › Chats Under Bots: the style's page, a pick, and the Bots page drawn in it.

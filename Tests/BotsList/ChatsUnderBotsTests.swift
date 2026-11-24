@@ -46,6 +46,21 @@ struct ChatsUnderBotsTests {
         #expect(picked.more == 4)
     }
 
+    @Test func pinIconCountsOnlyChatsShownUnderThisBot() {
+        let pin = chat("pin", hoursAgo: 2, pinned: true), other = chat("other", hoursAgo: 1)
+        let rows = [pin, other, chat("elsewhere", "otto", hoursAgo: 1, pinned: true)]
+        let choice = BotChatsChoice(mode: .pinned, count: 2)
+        let solo = BotChatsUnder.pick(rows, bot: "default", choice: choice)
+        #expect(solo.shown == [pin] && solo.more == 1)
+        #expect(!BotChatsUnder.showsPin(for: pin, among: solo.shown))
+        #expect(BotChatRowView.label(pin, time: "") == "pin, Pinned")
+
+        let withShortcut = BotChatsUnder.pick(rows, bot: "default", choice: choice, shortcuts: [other])
+        #expect(withShortcut.shown.map { BotChatsUnder.showsPin(for: $0, among: withShortcut.shown) } == [false, true])
+        let twoPins = BotChatsUnder.pick(list, bot: "default", choice: choice)
+        #expect(twoPins.shown.map { BotChatsUnder.showsPin(for: $0, among: twoPins.shown) } == [true, true])
+    }
+
     @Test func offListsNothing() {
         let picked = BotChatsUnder.pick(list, bot: "default", choice: BotChatsChoice(mode: .off, count: 2))
         #expect(picked.shown.isEmpty)

@@ -349,6 +349,9 @@ Sort (`V/store/sidebar-sort.ts`), ties always broken by recency (newest first), 
   stays in its project. The shortcut is not a pin: Recent, Pinned, the chat strip, search and unread rules are unchanged.
   Use **Remove Shortcut Under [bot name]** on either row to undo it without touching the chat. Shortcuts follow the
   account's `sessions` document by bot and session lineage; archived or deleted chats are not shown.
+- **Pin icons under a bot.** In Bots and the open Mac sidebar, a pinned chat shows its pin icon only when at least
+  one other chat is listed under that same bot. A shortcut counts as a chat; the “N more” link does not. Hiding the
+  icon does not unpin the chat or change its VoiceOver label.
 - **DECISION (2026-11-21, owner): quiet chats can move to Done on a project's page** [project-auto-done]. Move Quiet
   Chats to Done: Never, After 3, 7 or 14 Days, and in a coding project a switch, When the Pull Request Merges
   (`projectAutoDone`, `ProjectAutoDone`). On that page a live chat that is quiet, not pinned (either kind), not read

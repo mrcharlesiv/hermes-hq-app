@@ -918,6 +918,9 @@ struct SessionsScopeMenuButton: UIViewRepresentable {
         let button = UIButton(type: .custom)
         button.showsMenuAsPrimaryAction = true
         button.accessibilityIdentifier = "pages.scope"
+        #if targetEnvironment(macCatalyst)
+        MacHover.drawsOwnHover(button)   // SwiftUI draws the pill's hover via onHover
+        #endif
         button.addGestureRecognizer(UIHoverGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.hovered)))
         return button
     }

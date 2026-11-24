@@ -224,10 +224,12 @@ private struct KanbanChipShape: ViewModifier {
     var selected: Bool
     func body(content: Content) -> some View {
         if Theme.isDesktop {
+            let shape = RoundedRectangle(cornerRadius: 3)
             content
-                .background(selected ? Color(uiColor: HQPalette.cellPressed) : Color.clear, in: RoundedRectangle(cornerRadius: 3))
-                .overlay(RoundedRectangle(cornerRadius: 3).strokeBorder(selected ? Color.hqTintText : Color.hqStroke, lineWidth: HQShape.hairline))
-                .contentShape(RoundedRectangle(cornerRadius: 3))
+                .background(selected ? Color(uiColor: HQPalette.cellPressed) : Color.clear, in: shape)
+                .overlay(shape.strokeBorder(selected ? Color.hqTintText : Color.hqStroke, lineWidth: HQShape.hairline))
+                .hqPointerFill(shape, on: !selected)
+                .contentShape(shape)
         } else if let paper = Theme.paperPills, paper != .glass {
             // [paper-pills] As every pill in a flat-pill skin (`Theme.PaperPills`).
             let picked: Color = paper == .soft ? Color(uiColor: HQPalette.iconTile) : .hqTint
@@ -235,11 +237,13 @@ private struct KanbanChipShape: ViewModifier {
             content
                 .background(Capsule().fill(selected ? picked : rest))
                 .overlay(Capsule().strokeBorder(Color.hqStroke, lineWidth: selected || paper != .outlined ? 0 : 1))
+                .hqPointerFill(Capsule(), on: !selected)
                 .contentShape(Capsule())
         } else {
             content
                 // [paper-glass] An ink skin's picked chip is the solid ink: its 16 % wash vanished on Paper's ink.
                 .background(Capsule().fill(selected ? (Theme.inkIcons != nil ? Color.hqTint : Color.hqTint.opacity(0.16)) : Color.hqFill3))
+                .hqPointerFill(Capsule(), on: !selected)
                 .contentShape(Capsule())
         }
     }

@@ -753,6 +753,7 @@ final class StepLineCell: UITableViewCell {
     private let emoji = UILabel()
     private let railUp = UIView()
     private let railDown = UIView()
+    private let hoverFill = UIView()
     private let text = UILabel()
     private let meta = UILabel()
     private let chevron = UIImageView()
@@ -832,19 +833,35 @@ final class StepLineCell: UITableViewCell {
         column.spacing = 8
         column.setCustomSpacing(6, after: code)
 
-        for v in [card, railUp, railDown, badge, badgeWash, emoji, column] as [UIView] {
+        for v in [card, hoverFill, railUp, railDown, badge, badgeWash, emoji, column] as [UIView] {
             v.translatesAutoresizingMaskIntoConstraints = false
         }
+        hoverFill.isUserInteractionEnabled = false
+        hoverFill.alpha = 0
+        card.clipsToBounds = true
         badge.addSubview(badgeWash)
         badge.addSubview(emoji)
         contentView.addSubview(railUp)
         contentView.addSubview(railDown)
         contentView.addSubview(badge)
         contentView.addSubview(card)
+        card.addSubview(hoverFill)
         card.addSubview(column)
+        #if targetEnvironment(macCatalyst)
+        hoverFill.backgroundColor = MacHover.rowFill
+        MacHover.ownsHover(self) { [weak self] on in
+            UIView.animate(withDuration: on ? 0 : HQMotion.hover, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {   // motion-ok: opacity only
+                self?.hoverFill.alpha = on ? 1 : 0
+            }
+        }
+        #endif
         let margins = contentView.layoutMarginsGuide
         let pad = Self.cardPadding
         NSLayoutConstraint.activate([
+            hoverFill.topAnchor.constraint(equalTo: card.topAnchor),
+            hoverFill.bottomAnchor.constraint(equalTo: card.bottomAnchor),
+            hoverFill.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            hoverFill.trailingAnchor.constraint(equalTo: card.trailingAnchor),
             badge.widthAnchor.constraint(equalToConstant: side),
             badge.heightAnchor.constraint(equalTo: badge.widthAnchor),
             badge.leadingAnchor.constraint(equalTo: margins.leadingAnchor),
@@ -877,6 +894,11 @@ final class StepLineCell: UITableViewCell {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        hoverFill.alpha = 0
+    }
 
     /// The code's first lines (blank ones at either end dropped), each to be cut at the edge so a path or a long
     /// command reads as code, not as a paragraph wrapped mid-word; and how many lines are left out.

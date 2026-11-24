@@ -97,6 +97,41 @@ import UIKit
         let fill = try #require(tab.subviews.first { $0.backgroundColor == MacHover.rowFill })
         #expect(fill.frame == tab.bounds && fill.layer.cornerRadius == 6 && fill.alpha == 1)
     }
+
+    @Test func rowHoverMatchesRoundedZeroInsetCardsTableCellsAndDrawsOwnHover() throws {
+        // Rounded card cell with zero insets (Artifacts grid cards, Quick Actions tiles): keeps card corner radius.
+        let collection = UICollectionView(frame: CGRect(x: 0, y: 0, width: 200, height: 120), collectionViewLayout: UICollectionViewFlowLayout())
+        let cardCell = UICollectionViewCell(frame: CGRect(x: 0, y: 0, width: 160, height: 80))
+        collection.addSubview(cardCell)
+        var cardBg = UIBackgroundConfiguration.clear()
+        cardBg.cornerRadius = 10
+        cardCell.backgroundConfiguration = cardBg
+        MacHover.debugHover(collection, row: cardCell)
+        let cardFill = try #require(cardCell.subviews.first { $0.backgroundColor == MacHover.rowFill })
+        #expect(cardFill.frame == cardCell.bounds && cardFill.layer.cornerRadius == 10)
+
+        // UITableViewCell with inset rounded backgroundConfiguration (Composer Drawer): hover matches insets and corners.
+        let table = UITableView(frame: CGRect(x: 0, y: 0, width: 240, height: 80), style: .plain)
+        let rowCell = UITableViewCell(style: .default, reuseIdentifier: nil)
+        rowCell.frame = CGRect(x: 0, y: 0, width: 240, height: 40)
+        table.addSubview(rowCell)
+        var rowBg = UIBackgroundConfiguration.clear()
+        rowBg.cornerRadius = 8
+        rowBg.backgroundInsets = NSDirectionalEdgeInsets(top: 1, leading: 6, bottom: 1, trailing: 6)
+        rowCell.backgroundConfiguration = rowBg
+        MacHover.debugHover(table, row: rowCell)
+        let rowFill = try #require(rowCell.subviews.first { $0.backgroundColor == MacHover.rowFill })
+        #expect(rowFill.frame == CGRect(x: 6, y: 1, width: 228, height: 38) && rowFill.layer.cornerRadius == 8)
+
+        // A table that draws its own hover (BotChatsPanel, MacPickPanel) never gets a duplicate MacHover fill.
+        let ownTable = UITableView(frame: CGRect(x: 0, y: 0, width: 240, height: 80), style: .plain)
+        let ownCell = UITableViewCell(style: .default, reuseIdentifier: nil)
+        ownCell.frame = CGRect(x: 0, y: 0, width: 240, height: 40)
+        ownTable.addSubview(ownCell)
+        MacHover.drawsOwnHover(ownTable)
+        MacHover.debugHover(ownTable, row: ownCell)
+        #expect(ownCell.subviews.first { $0.backgroundColor == MacHover.rowFill } == nil)
+    }
     #endif
 
     @Test func anOwnOutlineWinsWhateverTheControlsSize() throws {
@@ -110,5 +145,45 @@ import UIKit
         #expect(PointerEffects.hasOwnOutline(header))
         // The path the iPad's highlight is cut to is that box, not the tap area.
         #expect(PointerEffects.path(outline).bounds == CGRect(x: 0, y: 5, width: 150, height: 34))
+    }
+
+    @Test func nonSelectableListsReturnNoHoverCell() throws {
+        final class StaticTableSource: NSObject, UITableViewDataSource {
+            func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { 1 }
+            func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+                let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
+                cell.selectionStyle = .default
+                return cell
+            }
+        }
+        let tableSource = StaticTableSource()
+        let table = UITableView(frame: CGRect(x: 0, y: 0, width: 240, height: 100), style: .plain)
+        table.rowHeight = 44
+        table.dataSource = tableSource
+        table.allowsSelection = false
+        table.reloadData()
+        table.layoutIfNeeded()
+        #expect(RowPointer.cell(table, at: CGPoint(x: 40, y: 20)) == nil)
+        table.allowsSelection = true
+        #expect(RowPointer.cell(table, at: CGPoint(x: 40, y: 20)) != nil)
+
+        final class StaticCollectionSource: NSObject, UICollectionViewDataSource {
+            func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int { 1 }
+            func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
+                collectionView.dequeueReusableCell(withReuseIdentifier: "c", for: indexPath)
+            }
+        }
+        let layout = UICollectionViewFlowLayout()
+        layout.itemSize = CGSize(width: 200, height: 44)
+        let collectionSource = StaticCollectionSource()
+        let collection = UICollectionView(frame: CGRect(x: 0, y: 0, width: 240, height: 100), collectionViewLayout: layout)
+        collection.register(UICollectionViewCell.self, forCellWithReuseIdentifier: "c")
+        collection.dataSource = collectionSource
+        collection.allowsSelection = false
+        collection.reloadData()
+        collection.layoutIfNeeded()
+        #expect(RowPointer.cell(collection, at: CGPoint(x: 40, y: 20)) == nil)
+        collection.allowsSelection = true
+        #expect(RowPointer.cell(collection, at: CGPoint(x: 40, y: 20)) != nil)
     }
 }

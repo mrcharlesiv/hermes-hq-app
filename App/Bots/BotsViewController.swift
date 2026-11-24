@@ -318,10 +318,13 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
         lookObserver = NotificationCenter.default.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] note in
             let look = note.userInfo?["look"] as? Bool == true
             MainActor.assumeIsolated {
+                guard let self else { return }
                 let edgeChanged = TopEdgeStyle.current != edge
                 edge = TopEdgeStyle.current
+                // Chat rows' highlight insets track the bot face's column (`BotChatsMetrics.textX`), which moves with look, density and UI scale.
+                for cell in self.collectionView.visibleCells { cell.setNeedsUpdateConfiguration() }
                 guard look || edgeChanged else { return }
-                self?.collectionView.collectionViewLayout.invalidateLayout()
+                self.collectionView.collectionViewLayout.invalidateLayout()
             }
         }
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (vc: BotsViewController, previous) in
@@ -671,7 +674,21 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
                 .minSize(height: BackdropCards.live ? 0 : nil)   // [soft-cards] on a card the name is 34 pt, under a list row's 44 pt least
                 if case .hidden = id { cell.accessibilityIdentifier = "section-header-hidden" }      // settings stream (UI tests)
             }
+            #if targetEnvironment(macCatalyst)
+            // Fit the section header's hover box below its top spacing (matching `BotSectionHeaderView`) and aligned with the rows below.
+            cell.configurationUpdateHandler = { cell, _ in
+                if cell.focusEffect != nil { cell.focusEffect = nil }
+                var background = UIBackgroundConfiguration.clear()
+                let topGap: CGFloat = Theme.isDesktop ? 10 : BackdropCards.live ? 0 : Density.compact ? 4 : 8
+                var insets = MacSelection.insets
+                insets.top += topGap
+                background.backgroundInsets = insets
+                background.cornerRadius = MacSelection.radius
+                cell.backgroundConfiguration = background
+            }
+            #else
             cell.backgroundConfiguration = .clear()
+            #endif
         }
         let hintRegistration = UICollectionView.CellRegistration<SoftCardListCell, String> { cell, _, id in
             if id.hasPrefix("group:") {   // [groups] an empty room sub-block while a room is dragged
@@ -711,15 +728,31 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
             cell.backgroundConfiguration = .clear()
             cell.accessibilityIdentifier = "bots.notice.\(kind)"
         }
-        // [chats-under] A bot's chat, and its "N more", pressed as a row is.
-        let pressed: (UICollectionViewCell, UICellConfigurationState) -> Void = { cell, state in
-            #if targetEnvironment(macCatalyst)
-            if DeviceWord.isMac { cell.backgroundConfiguration = MacListFocus.background(cell, state); return }
-            #endif
-            if Theme.isDesktop { cell.backgroundConfiguration = DesktopLayout.rowBackground(state); return }
-            var background = UIBackgroundConfiguration.clear()
-            background.backgroundColor = state.isHighlighted || state.isSelected ? HQPalette.cellPressed : .clear
-            cell.backgroundConfiguration = background
+        // [chats-under] A bot's chat, and its "N more", pressed as a row is, with the mark fitted to the text column
+        // (clear of the connector line) and stopped above the last row's tail.
+        let chatBackground: (Bool) -> (UICollectionViewCell, UICellConfigurationState) -> Void = { last in
+            { cell, state in
+                let insets = BotChatsMetrics.highlightInsets(last: last)
+                #if targetEnvironment(macCatalyst)
+                if DeviceWord.isMac {
+                    var background = MacListFocus.background(cell, state)
+                    background.backgroundInsets = insets
+                    cell.backgroundConfiguration = background
+                    return
+                }
+                #endif
+                if Theme.isDesktop {
+                    var background = DesktopLayout.rowBackground(state)
+                    background.backgroundInsets = insets
+                    cell.backgroundConfiguration = background
+                    return
+                }
+                var background = UIBackgroundConfiguration.clear()
+                background.backgroundInsets = insets
+                background.cornerRadius = 8
+                background.backgroundColor = state.isHighlighted || state.isSelected ? HQPalette.cellPressed : .clear
+                cell.backgroundConfiguration = background
+            }
         }
         let chatRegistration = UICollectionView.CellRegistration<SoftCardListCell, String> { [weak self] cell, _, key in
             guard let self, let row = self.chatRows[key] else { return }
@@ -728,7 +761,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
                 .margins(.all, 0)
                 .minSize(height: 0)   // the row's own height, so its line meets the next row's
             cell.accessibilityIdentifier = "bot-chat-\(row.session.id)"
-            cell.configurationUpdateHandler = pressed
+            cell.configurationUpdateHandler = chatBackground(row.last)
         }
         let moreRegistration = UICollectionView.CellRegistration<SoftCardListCell, String> { [weak self] cell, _, id in
             guard let self, let count = self.moreCounts[id] else { return }
@@ -738,7 +771,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
                 .margins(.all, 0)
                 .minSize(height: 0)
             cell.accessibilityIdentifier = "bot-chats-more-\(id)"
-            cell.configurationUpdateHandler = pressed
+            cell.configurationUpdateHandler = chatBackground(true)
         }
         dataSource = UICollectionViewDiffableDataSource<Section, Item>(collectionView: collectionView) { collectionView, indexPath, item in
             switch item {

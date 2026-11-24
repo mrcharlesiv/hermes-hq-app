@@ -842,6 +842,7 @@ final class TileMaker {
 @MainActor
 final class TileMakingCell: UICollectionViewCell {
     private let card = UIView()
+    private let hoverFill = UIView()
     private let icon = UIImageView(image: UIImage(systemName: "sparkles"))
     private let title = UILabel()
     private let detail = UILabel()
@@ -880,14 +881,30 @@ final class TileMakingCell: UICollectionViewCell {
         row.spacing = 12
         row.setCustomSpacing(4, after: spinner)
         row.setCustomSpacing(6, after: stopButton)
-        [card, row].forEach { $0.translatesAutoresizingMaskIntoConstraints = false }
+        [card, hoverFill, row].forEach { $0.translatesAutoresizingMaskIntoConstraints = false }
+        hoverFill.isUserInteractionEnabled = false
+        hoverFill.alpha = 0
+        card.clipsToBounds = true
         contentView.addSubview(card)
+        card.addSubview(hoverFill)
         card.addSubview(row)
+        #if targetEnvironment(macCatalyst)
+        hoverFill.backgroundColor = MacHover.rowFill
+        MacHover.ownsHover(self) { [weak self] on in
+            UIView.animate(withDuration: on ? 0 : HQMotion.hover, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {   // motion-ok: opacity only
+                self?.hoverFill.alpha = on ? 1 : 0
+            }
+        }
+        #endif
         NSLayoutConstraint.activate([
             card.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 4),
             card.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -4),
             card.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 20),
             card.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -20),
+            hoverFill.topAnchor.constraint(equalTo: card.topAnchor),
+            hoverFill.bottomAnchor.constraint(equalTo: card.bottomAnchor),
+            hoverFill.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            hoverFill.trailingAnchor.constraint(equalTo: card.trailingAnchor),
             row.topAnchor.constraint(equalTo: card.topAnchor, constant: 12),
             row.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -12),
             row.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14),
@@ -901,6 +918,11 @@ final class TileMakingCell: UICollectionViewCell {
     }
 
     @MainActor required dynamic init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        hoverFill.alpha = 0
+    }
 
     func show(what: String, detail words: String, changing: Bool = false, onStop: (() -> Void)? = nil) {
         self.onStop = onStop

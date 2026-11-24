@@ -304,6 +304,7 @@ import UIKit
         table.register(MacPickRowCell.self, forCellReuseIdentifier: MacPickRowCell.reuse)
         table.register(MacPickHeader.self, forHeaderFooterViewReuseIdentifier: MacPickHeader.reuse)
         table.register(MenusSkeletonCell.self, forCellReuseIdentifier: MenusSkeletonCell.reuse)
+        MacHover.drawsOwnHover(table)   // hovered(_:) moves the accent mark itself; no duplicate row fill
         let hover = UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:)))
         table.addGestureRecognizer(hover)
         panel.addSubview(table)

@@ -438,6 +438,12 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
                     return
                 }
                 #endif
+                if Theme.isDesktop {
+                    var s = state
+                    s.isSelected = false
+                    (cell as! UICollectionViewListCell).backgroundConfiguration = DesktopLayout.rowBackground(s)
+                    return
+                }
                 var background = UIBackgroundConfiguration.clear()
                 background.backgroundColor = state.isHighlighted ? HQPalette.cellPressed : .clear
                 (cell as! UICollectionViewListCell).backgroundConfiguration = background
@@ -507,6 +513,9 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
                 GoalCard(model: card) { [weak self] task in self?.toggleDone(task) }
             }.margins(.all, 0)
             cell.backgroundConfiguration = .clear()
+            #if targetEnvironment(macCatalyst)
+            MacHover.ownsHover(cell) { _ in }   // GoalCard paints its own rounded card hover via hqPointerFill
+            #endif
             cell.accessibilityIdentifier = "goal-cell-\(card.title)"
         }
         let newGoalCell = UICollectionView.CellRegistration<UICollectionViewListCell, Item> { cell, _, _ in

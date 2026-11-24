@@ -185,6 +185,7 @@ struct GoalShelfCardView: View {
             .background {
                 shape.fill(Color.hqGroupedCard).overlay { shape.strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline) }
             }
+            .hqPointerFill(shape)
             .contentShape(shape)
         }
         .buttonStyle(GoalShelfPress())
@@ -238,9 +239,17 @@ struct GoalShelfRowView: View {
                     name.frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
+            #if targetEnvironment(macCatalyst)
+            .padding(.horizontal, max(0, 20 - MacSelection.insets.leading))
+            .padding(.vertical, 7)
+            .contentShape(Rectangle())
+            .hqPointerFill(RoundedRectangle(cornerRadius: MacSelection.radius, style: .continuous))
+            .padding(.horizontal, MacSelection.insets.leading)
+            #else
             .padding(.horizontal, 20)
             .padding(.vertical, 7)
             .contentShape(Rectangle())
+            #endif
         }
         .buttonStyle(GoalShelfPress())
         .help(card.next.helpWords)
@@ -272,6 +281,6 @@ private extension GoalShelfNext {
 /// A card dims while pressed (no motion, so nothing to turn off under Reduce Motion).
 private struct GoalShelfPress: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.opacity(configuration.isPressed ? 0.6 : 1)
+        configuration.label.opacity(PointerEffects.dim(configuration.isPressed, to: 0.6))
     }
 }

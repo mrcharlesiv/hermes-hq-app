@@ -134,8 +134,8 @@ final class MacFileRowCell: UITableViewCell {
 
     override func updateConfiguration(using state: UICellConfigurationState) {
         #if targetEnvironment(macCatalyst)
-        var background = MacSelection.listRow(state)
-        if !state.isSelected, !state.isHighlighted, striped {
+        var background = MacListFocus.background(self, state)
+        if !state.isSelected, !state.isHighlighted, !state.isFocused, striped {
             background.backgroundColor = MacFilesTable.stripe
             background.backgroundInsets = MacSelection.insets
             background.cornerRadius = MacSelection.radius

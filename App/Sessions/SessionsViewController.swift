@@ -670,6 +670,14 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
             cell.accessibilityIdentifier = "sessions.showMore"
             cell.configurationUpdateHandler = { cell, state in
                 if inCard { cell.backgroundConfiguration = ProjectCard.background(.middle, state); return }
+                #if targetEnvironment(macCatalyst)
+                if DeviceWord.isMac {
+                    var s = state
+                    s.isSelected = false
+                    cell.backgroundConfiguration = MacListFocus.background(cell, s)
+                    return
+                }
+                #endif
                 if Theme.isDesktop { cell.backgroundConfiguration = DesktopLayout.rowBackground(state); return }
                 var background = UIBackgroundConfiguration.clear()
                 background.backgroundColor = state.isHighlighted ? HQPalette.cellPressed : .clear

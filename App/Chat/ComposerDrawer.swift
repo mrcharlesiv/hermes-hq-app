@@ -864,6 +864,11 @@ final class ComposerDrawerCell: UITableViewCell {
 
     override func updateConfiguration(using state: UICellConfigurationState) {
         var background = UIBackgroundConfiguration.clear()
+        #if targetEnvironment(macCatalyst)
+        // Keep the inset rounded shape even at rest so MacHover matches the marked row's geometry.
+        background.cornerRadius = MacSelection.radius
+        background.backgroundInsets = NSDirectionalEdgeInsets(top: 1, leading: 6, bottom: 1, trailing: 6)
+        #endif
         if state.isHighlighted || marked {
             background.backgroundColor = ChatPalette.fill3
             background.cornerRadius = Theme.isDesktop ? 4 : 10

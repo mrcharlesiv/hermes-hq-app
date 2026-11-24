@@ -748,6 +748,17 @@ struct ProjectCardHeader: View {
         .padding(.leading, ProjectCard.lead)
         .padding(.trailing, ProjectCard.pageTrailing)
         .frame(maxWidth: .infinity, alignment: .leading)
+        #if targetEnvironment(macCatalyst)
+        .background {
+            if !carded && over && (opensPage || folds) {
+                RoundedRectangle(cornerRadius: MacSelection.radius, style: .continuous)
+                    .fill(Color(uiColor: MacHover.rowFill))
+                    .padding(.leading, MacSelection.insets.leading)
+                    .padding(.trailing, MacSelection.insets.trailing)
+                    .allowsHitTesting(false)
+            }
+        }
+        #endif
         // [project-unfold] Both always there, faded in and out: only the fade animates (a removed piece faded where it
         // stood while its row moved), the move down is the list's.
         .background(alignment: .topLeading) {

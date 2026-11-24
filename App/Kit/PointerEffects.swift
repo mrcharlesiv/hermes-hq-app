@@ -236,11 +236,11 @@ final class RowPointer: NSObject, UIPointerInteractionDelegate {
 
     /// The tappable row at `point` (a header, a skeleton or a plain text row gets no effect).
     static func cell(_ view: UIView?, at point: CGPoint) -> UIView? {
-        if let list = view as? UICollectionView, let path = list.indexPathForItem(at: point), let cell = list.cellForItem(at: path) {
+        if let list = view as? UICollectionView, list.allowsSelection, let path = list.indexPathForItem(at: point), let cell = list.cellForItem(at: path) {
             let allowed = list.delegate?.collectionView?(list, shouldHighlightItemAt: path) ?? true
             return allowed ? cell : nil
         }
-        if let table = view as? UITableView, let path = table.indexPathForRow(at: point), let cell = table.cellForRow(at: path) {
+        if let table = view as? UITableView, table.allowsSelection, let path = table.indexPathForRow(at: point), let cell = table.cellForRow(at: path) {
             let allowed = table.delegate?.tableView?(table, shouldHighlightRowAt: path) ?? (cell.selectionStyle != .none)
             return allowed ? cell : nil
         }
@@ -437,6 +437,10 @@ private final class ButtonPointer: NSObject, UIPointerInteractionDelegate {
     private func show(_ cell: UIView?) {
         let row = cell.flatMap { ($0 as? UICollectionViewCell)?.isSelected == true || ($0 as? UITableViewCell)?.isSelected == true ? nil : $0 }
         let ownsRow = Self.own(row) != nil
+        if row === hovered, let row, !ownsRow, fill.superview === row {
+            applyFillGeometry(for: row)
+            return
+        }
         guard row !== hovered || (ownsRow ? false : fill.superview !== row) else { return }
         if let old = hovered, old !== row { Self.own(old)?.changed(false) }
         hovered = row
@@ -454,28 +458,40 @@ private final class ButtonPointer: NSObject, UIPointerInteractionDelegate {
         }
         fill.layer.removeAllAnimations()
         fill.alpha = 1
-        fill.frame = row.bounds
-        fill.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        // The row's own rounding (an inset group's first and last rows), from the background view that draws it.
-        let shape = row.subviews.first { $0 !== fill && $0.layer.cornerRadius > 0 }?.layer
-        fill.layer.cornerRadius = shape?.cornerRadius ?? 0
-        fill.layer.maskedCorners = shape?.maskedCorners ?? [.layerMinXMinYCorner, .layerMaxXMinYCorner, .layerMinXMaxYCorner, .layerMaxXMaxYCorner]
-        // [Mac AAA 2026-11-16] A plain list's row whose selection is an inset rounded box (`MacSelection.listRow`): the
-        // hover is that box too (it was a square band across the list, which the click then turned into the box).
-        if let background = (row as? UICollectionViewCell)?.backgroundConfiguration, background.cornerRadius > 0,
-           background.backgroundInsets != .zero {
-            let inset = background.backgroundInsets
-            fill.frame = row.bounds.inset(by: UIEdgeInsets(top: inset.top, left: inset.leading, bottom: inset.bottom, right: inset.trailing))
-            fill.layer.cornerRadius = background.cornerRadius
-            fill.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner, .layerMinXMaxYCorner, .layerMaxXMaxYCorner]
-        }
-        fill.layer.cornerCurve = .continuous
+        applyFillGeometry(for: row)
         // Over the row's background, under its text.
         if let content = (row as? UICollectionViewCell)?.contentView ?? (row as? UITableViewCell)?.contentView {
             row.insertSubview(fill, belowSubview: content)
         } else {
             row.addSubview(fill)
         }
+    }
+
+    private func applyFillGeometry(for row: UIView) {
+        fill.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        // [Mac AAA 2026-11-16] A list row or card whose background defines insets or rounded corners (`MacSelection.listRow`,
+        // Artifacts grid cards, Quick Actions tiles, Composer Drawer): hover matches that exact shape and insets.
+        let background = (row as? UICollectionViewCell)?.backgroundConfiguration ?? (row as? UITableViewCell)?.backgroundConfiguration
+        if let background, background.cornerRadius > 0 || background.backgroundInsets != .zero {
+            let inset = background.backgroundInsets
+            let rtl = row.effectiveUserInterfaceLayoutDirection == .rightToLeft
+            let box = row.bounds.inset(by: UIEdgeInsets(
+                top: inset.top,
+                left: rtl ? inset.trailing : inset.leading,
+                bottom: inset.bottom,
+                right: rtl ? inset.leading : inset.trailing
+            ))
+            fill.frame = box.width >= 0 && box.height >= 0 ? box : row.bounds
+            fill.layer.cornerRadius = background.cornerRadius
+            fill.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner, .layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+        } else {
+            fill.frame = row.bounds
+            // The row's own rounding (an inset group's first and last rows), from the background view that draws it.
+            let shape = row.subviews.first { $0 !== fill && $0.layer.cornerRadius > 0 }?.layer
+            fill.layer.cornerRadius = shape?.cornerRadius ?? 0
+            fill.layer.maskedCorners = shape?.maskedCorners ?? [.layerMinXMinYCorner, .layerMaxXMinYCorner, .layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+        }
+        fill.layer.cornerCurve = .continuous
     }
 }
 

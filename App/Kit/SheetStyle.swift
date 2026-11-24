@@ -851,18 +851,49 @@ extension UISheetPresentationController {
     static func apply(_ sheet: UISheetPresentationController) {
         let page = sheet.presentedViewController
         followWindow(sheet)
-        guard objc_getAssociatedObject(page, appliedKey) == nil, objc_getAssociatedObject(page, fullBleedKey) == nil,
+        guard objc_getAssociatedObject(page, fullBleedKey) == nil,
               !(page is UIAlertController), page.modalPresentationStyle != .popover else { return }
-        // Only the app's own pages: the system's (Quick Look, pickers, Share) lay themselves out.
-        let first = (page as? UINavigationController)?.viewControllers.first ?? page
-        // (A SwiftUI page's hosting controller is SwiftUI's class, named for the app's view inside it.)
-        guard Bundle(for: type(of: first)) == Bundle.main || NSStringFromClass(type(of: first)).contains(module) else { return }
-        // A navigation controller whose first page is full bleed.
-        if objc_getAssociatedObject(first, fullBleedKey) != nil { return }
-        objc_setAssociatedObject(page, appliedKey, true, .OBJC_ASSOCIATION_RETAIN)
-        page.additionalSafeAreaInsets.left += side
-        page.additionalSafeAreaInsets.right += side
-        page.additionalSafeAreaInsets.bottom += foot
+        if objc_getAssociatedObject(page, appliedKey) == nil {
+            // Only the app's own pages: the system's (Quick Look, pickers, Share) lay themselves out.
+            let first = (page as? UINavigationController)?.viewControllers.first ?? page
+            // (A SwiftUI page's hosting controller is SwiftUI's class, named for the app's view inside it.)
+            guard Bundle(for: type(of: first)) == Bundle.main || NSStringFromClass(type(of: first)).contains(module) else { return }
+            // A navigation controller whose first page is full bleed.
+            if objc_getAssociatedObject(first, fullBleedKey) != nil { return }
+            objc_setAssociatedObject(page, appliedKey, true, .OBJC_ASSOCIATION_RETAIN)
+            page.additionalSafeAreaInsets.left += side
+            page.additionalSafeAreaInsets.right += side
+            page.additionalSafeAreaInsets.bottom += foot
+        }
+        if let root = page.viewIfLoaded { pinScrollBarsToEdge(in: root) }
+    }
+
+    /// `additionalSafeAreaInsets` pushes UIScrollView's vertical scroll bar `side` pt inward from the sheet's edge,
+    /// right up against grouped cards. Pull full-width vertical scroll indicators back out to the sheet edge.
+    private static func pinScrollBarsToEdge(in root: UIView) {
+        let rightEdge = root.bounds.maxX
+        let leftEdge = root.bounds.minX
+        guard rightEdge - leftEdge > 1 else { return }
+        func walk(_ view: UIView) {
+            if let scroll = view as? UIScrollView, scroll.isScrollEnabled, scroll.showsVerticalScrollIndicator,
+               scroll.automaticallyAdjustsScrollIndicatorInsets, !scroll.isHidden {
+                let frame = scroll.convert(scroll.bounds, to: root)
+                let rtl = scroll.effectiveUserInterfaceLayoutDirection == .rightToLeft
+                if rtl {
+                    if frame.minX <= leftEdge + 2, scroll.safeAreaInsets.left >= side - 0.5,
+                       abs(scroll.verticalScrollIndicatorInsets.left - (-side)) > 0.5 {
+                        scroll.verticalScrollIndicatorInsets.left = -side
+                    }
+                } else {
+                    if frame.maxX >= rightEdge - 2, scroll.safeAreaInsets.right >= side - 0.5,
+                       abs(scroll.verticalScrollIndicatorInsets.right - (-side)) > 0.5 {
+                        scroll.verticalScrollIndicatorInsets.right = -side
+                    }
+                }
+            }
+            for child in view.subviews { walk(child) }
+        }
+        walk(root)
     }
 
     /// [macpass-popups r3] A sheet's size was worked out once, from the window it opened over: one opened in a tall

@@ -176,6 +176,16 @@ enum BotChatsMetrics {
     static var rowHeight: CGFloat { Theme.isDesktop ? 34 : Density.ios(34, 28) }
     /// Under the last row, before the next bot.
     static let tail: CGFloat = 6
+
+    /// The hover, press and selection box for a chat row (or "N more"): starts beside the title column so the
+    /// connector line stays whole outside it (as `MacSidebarChat` does), and stops above the last row's `tail` so the
+    /// text and branch arm sit centred in the box.
+    static func highlightInsets(last: Bool) -> NSDirectionalEdgeInsets {
+        var inset = DesktopRows.pressInset
+        inset.leading = max(inset.leading, textX - 6)
+        if last { inset.bottom += tail }
+        return inset
+    }
 }
 
 /// How the line down a bot's chats looks (owner 2026-11-08: "all of those options for the line down … so that the person

@@ -234,7 +234,20 @@ final class JobsViewController: UIViewController, UICollectionViewDelegate, UISe
         let completedCell = UICollectionView.CellRegistration<SoftCardListCell, Int> { cell, _, count in
             cell.contentConfiguration = UIHostingConfiguration { ShowCompletedRowView(count: count) }.margins(.all, 0)
             cell.accessibilityIdentifier = "jobs.show-completed"
-            cell.backgroundConfiguration = .clear()
+            cell.configurationUpdateHandler = { cell, state in
+                #if targetEnvironment(macCatalyst)
+                if DeviceWord.isMac {
+                    var s = state
+                    s.isSelected = false
+                    cell.backgroundConfiguration = MacListFocus.background(cell, s)
+                    return
+                }
+                #endif
+                if Theme.isDesktop { cell.backgroundConfiguration = DesktopLayout.rowBackground(state); return }
+                var background = UIBackgroundConfiguration.clear()
+                background.backgroundColor = state.isHighlighted ? HQPalette.cellPressed : .clear
+                cell.backgroundConfiguration = background
+            }
         }
         let countCell = UICollectionView.CellRegistration<SoftCardListCell, String> { cell, _, text in
             cell.contentConfiguration = UIHostingConfiguration { PageCountView(text: text) }.margins(.all, 0)
@@ -268,6 +281,7 @@ final class JobsViewController: UIViewController, UICollectionViewDelegate, UISe
                 #if targetEnvironment(macCatalyst)
                 if DeviceWord.isMac { cell.backgroundConfiguration = MacListFocus.background(cell, state); return }   // [mac] Stress test 2026-10-28 #54
                 #endif
+                if Theme.isDesktop { cell.backgroundConfiguration = DesktopLayout.rowBackground(state); return }
                 var background = UIBackgroundConfiguration.clear()
                 background.backgroundColor = state.isHighlighted || state.isSelected ? HQPalette.cellPressed : .clear
                 cell.backgroundConfiguration = background
@@ -585,6 +599,11 @@ final class JobsViewController: UIViewController, UICollectionViewDelegate, UISe
         case .skeleton?, .slow?, .count?, .emptyNote?: return false
         default: return true
         }
+    }
+
+    func collectionView(_ collectionView: UICollectionView, shouldHighlightItemAt indexPath: IndexPath) -> Bool {
+        guard DeviceWord.isMac else { return true }
+        return self.collectionView(collectionView, shouldSelectItemAt: indexPath)
     }
 
     // MARK: [m9/ipad] Two panes (App/Root/PaneRouter.swift)

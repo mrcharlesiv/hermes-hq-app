@@ -381,6 +381,10 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
             cell.contentConfiguration = UIHostingConfiguration { KanbanChipView(status: status, count: count, selected: selected, height: height) }
                 .margins(.all, 0)
             cell.accessibilityIdentifier = "kanban.chip.\(status)"
+            #if targetEnvironment(macCatalyst)
+            MacHover.ownsHover(cell) { _ in }   // KanbanChipView paints its own pill/box hover via hqPointerFill
+            cell.backgroundConfiguration = .clear()
+            #endif
         }
         let taskCell = UICollectionView.CellRegistration<SoftCardListCell, String> { [weak self] cell, _, id in
             guard let self, let row = self.rowModels[id] else { return }
@@ -933,6 +937,11 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
         case .chip?, .task?: return true
         default: return false
         }
+    }
+
+    func collectionView(_ collectionView: UICollectionView, shouldHighlightItemAt indexPath: IndexPath) -> Bool {
+        guard DeviceWord.isMac else { return true }
+        return self.collectionView(collectionView, shouldSelectItemAt: indexPath)
     }
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {

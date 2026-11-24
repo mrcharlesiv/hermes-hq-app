@@ -156,6 +156,7 @@ struct GoalCard: View {
                 shape.fill(Color.hqGroupedCard).overlay { shape.strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline) }
             }
         }
+        .hqPointerFill(shape)
         .contentShape(shape)
         .padding(.horizontal, 16)
         .padding(.vertical, 5)

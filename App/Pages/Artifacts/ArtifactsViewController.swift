@@ -968,6 +968,20 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
             guard let self, let record = self.records[id] else { return }
             self.configureTile(cell, record)
         }
+        let actionRowBackground: (UICollectionViewCell, UICellConfigurationState) -> Void = { cell, state in
+            #if targetEnvironment(macCatalyst)
+            if DeviceWord.isMac {
+                var s = state
+                s.isSelected = false
+                cell.backgroundConfiguration = MacListFocus.background(cell, s)
+                return
+            }
+            #endif
+            if Theme.isDesktop { cell.backgroundConfiguration = DesktopLayout.rowBackground(state); return }
+            var background = UIBackgroundConfiguration.clear()
+            background.backgroundColor = state.isHighlighted ? HQPalette.cellPressed : .clear
+            cell.backgroundConfiguration = background
+        }
         let showAllCell = UICollectionView.CellRegistration<SoftCardListCell, Int> { cell, _, count in
             var content = UIListContentConfiguration.cell().hqScaled()
             content.text = "Show All \(count) Images"
@@ -975,7 +989,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
             cell.contentConfiguration = content
             cell.accessories = [Self.showAllChevron]
             cell.accessibilityIdentifier = "artifacts.show-all-images"
-            cell.backgroundConfiguration = .clear()
+            cell.configurationUpdateHandler = actionRowBackground
         }
         let rowCell = UICollectionView.CellRegistration<SoftCardListCell, String> { [weak self] cell, _, id in
             guard let self, let record = self.records[id] else { return }
@@ -1010,7 +1024,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
                 cell.accessibilityLabel = "Unavailable, \(count)"
                 cell.accessibilityTraits = [.button]
                 cell.accessibilityValue = (self?.unavailableOpen ?? false) ? "open" : "closed"
-                cell.backgroundConfiguration = .clear()
+                cell.configurationUpdateHandler = actionRowBackground
                 return
             }
             // Mac pass round 3: an outline disclosure turns only for a section snapshot's own folding; this group folds
@@ -1025,7 +1039,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
             cell.accessibilityIdentifier = "artifacts.unavailable"
             cell.accessibilityTraits = [.button]
             cell.accessibilityValue = (self?.unavailableOpen ?? false) ? "open" : "closed"
-            cell.backgroundConfiguration = .clear()
+            cell.configurationUpdateHandler = actionRowBackground
         }
         let moreCell = UICollectionView.CellRegistration<SoftCardListCell, String> { cell, _, _ in
             cell.contentConfiguration = UIHostingConfiguration { ProgressView().frame(maxWidth: .infinity).padding(.vertical, 12) }
@@ -1055,7 +1069,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
             cell.contentConfiguration = content
             cell.accessories = [Self.showAllChevron]
             cell.accessibilityIdentifier = "artifacts.all-pins"
-            cell.backgroundConfiguration = .clear()
+            cell.configurationUpdateHandler = actionRowBackground
         }
         let skeletonCell = UICollectionView.CellRegistration<SoftCardListCell, Int> { cell, _, _ in
             cell.contentConfiguration = UIHostingConfiguration { PageSkeletonRow(tile: true) }.margins(.all, 0)
@@ -1200,6 +1214,10 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         cell.accessibilityLabel = (hosted ? "\(record.label), on another site, \(record.sessionTitle)" : "\(record.label), \(record.sessionTitle)")
             + (pinned ? ", pinned" : "")
         cell.accessibilityTraits = .button
+        #if targetEnvironment(macCatalyst)
+        MacHover.ownsHover(cell) { _ in }   // ArtifactTileView paints its own clipped hover via hqPointerFill
+        cell.backgroundConfiguration = .clear()
+        #endif
     }
 
     #if DEBUG
@@ -1377,8 +1395,9 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         cell.accessibilityCustomActions = liveButtonActions(pin) + pinAccessibilityActions(pin)
         cell.configurationUpdateHandler = { cell, state in
             #if targetEnvironment(macCatalyst)
-            if DeviceWord.isMac { cell.backgroundConfiguration = MacSelection.listRow(state); return }
+            if DeviceWord.isMac { cell.backgroundConfiguration = MacListFocus.background(cell, state); return }
             #endif
+            if Theme.isDesktop { cell.backgroundConfiguration = DesktopLayout.rowBackground(state); return }
             var background = UIBackgroundConfiguration.clear()
             background.backgroundColor = state.isHighlighted || state.isSelected ? HQPalette.cellPressed : .clear
             cell.backgroundConfiguration = background
@@ -1969,8 +1988,9 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
                 cell.backgroundConfiguration = background
                 return
             }
-            if DeviceWord.isMac { cell.backgroundConfiguration = MacSelection.listRow(state); return }   // [mac] Stress test 2026-10-28 #54
+            if DeviceWord.isMac { cell.backgroundConfiguration = MacListFocus.background(cell, state); return }   // [mac] Stress test 2026-10-28 #54
             #endif
+            if Theme.isDesktop { cell.backgroundConfiguration = DesktopLayout.rowBackground(state); return }
             var background = UIBackgroundConfiguration.clear()
             background.backgroundColor = state.isHighlighted || state.isSelected ? HQPalette.cellPressed : .clear
             cell.backgroundConfiguration = background
@@ -2458,6 +2478,11 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
             return false
         }
         return opens(dataSource.itemIdentifier(for: indexPath))
+    }
+
+    func collectionView(_ collectionView: UICollectionView, shouldHighlightItemAt indexPath: IndexPath) -> Bool {
+        guard DeviceWord.isMac else { return true }
+        return self.collectionView(collectionView, shouldSelectItemAt: indexPath)
     }
 
     /// Whether an item does something when chosen (a picture, row, tile or link; not the empty state or a count).
@@ -3213,6 +3238,7 @@ struct ArtifactTileView: View {
 
     var body: some View {
         GeometryReader { geo in
+            let tileShape = RoundedRectangle(cornerRadius: rounded ? HQShape.radius(10, .card) : 0, style: .continuous)
             ZStack {
                 Rectangle().fill(Color.hqFill3)
                 if let image {
@@ -3221,7 +3247,8 @@ struct ArtifactTileView: View {
                     Image(systemName: hosted ? "globe" : "photo.badge.exclamationmark").font(Font.hq(.title2)).foregroundStyle(Color.hqLabel3)
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: rounded ? HQShape.radius(10, .card) : 0, style: .continuous))   // Mac polish #118: the look's 4 pt
+            .clipShape(tileShape)   // Mac polish #118: the look's 4 pt
+            .hqPointerFill(tileShape)
             .overlay(alignment: .topTrailing) {
                 if pinned {
                     Image(systemName: "pin.fill").hqSymbolFont(10, weight: .semibold, cap: 14).foregroundStyle(.white)

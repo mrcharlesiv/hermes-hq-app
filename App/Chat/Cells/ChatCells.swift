@@ -1510,6 +1510,7 @@ final class ChatToolCell: ChatBaseCell, UIContextMenuInteractionDelegate {
         // row stays folded.
         rowButton.addInteraction(UIContextMenuInteraction(delegate: self))
         #if targetEnvironment(macCatalyst)
+        MacHover.drawsOwnHover(rowButton)
         rowButton.addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:))))
         #endif
         card.backgroundColor = ChatPalette.fill4

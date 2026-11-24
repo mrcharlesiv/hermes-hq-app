@@ -892,6 +892,7 @@ final class MoreWorkspaceController: UITableViewController {
                 config.image = UIImage(systemName: "arrow.turn.left.up")
                 config.imageProperties.tintColor = HQPalette.label2
                 cell.hqDisclosure()   // [mac] Stress test 2026-10-28 #51 (round 6): the quiet Mac chevron
+                cell.selectionStyle = .default
                 cell.accessibilityIdentifier = "workspace.parent"
             } else if isChooser && entries.isEmpty {
                 config.text = "No folders here"
@@ -1034,6 +1035,7 @@ final class MoreWorkspaceController: UITableViewController {
         // table cell's layout margins, which put the label and menu 4 pt further in than on the other pages.
         .margins(.horizontal, 0)
         cell.accessoryView = nil
+        cell.selectionStyle = .none
         cell.accessibilityIdentifier = "workspace.bot"
         return cell
         #else

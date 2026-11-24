@@ -1353,7 +1353,7 @@ private extension View {
 /// pane's edge, beside the rounded mark of the selected row. The ring is off; a focused row that isn't the selected one
 /// gets the same rounded box inset in its row, in the grey a press and an unfocused selection use.
 @MainActor enum MacListFocus {
-    static func background(_ cell: UICollectionViewCell, _ state: UICellConfigurationState) -> UIBackgroundConfiguration {
+    static func background(_ cell: UIView, _ state: UICellConfigurationState) -> UIBackgroundConfiguration {
         if cell.focusEffect != nil { cell.focusEffect = nil }
         var state = state
         if state.isFocused, !state.isSelected { state.isHighlighted = true }

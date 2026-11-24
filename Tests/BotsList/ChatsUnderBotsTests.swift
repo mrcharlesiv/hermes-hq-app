@@ -2,6 +2,7 @@
 
 import Foundation
 import Testing
+import UIKit
 @testable import HermesHQNative
 
 @MainActor
@@ -253,5 +254,50 @@ struct ChatsUnderBotsTests {
         BotChatsPrefs.all = .standard
         #expect(BotChatsPrefs.inUse)
         #expect(heard.count == 5)
+    }
+
+    /// A chat row's hover/selection box starts beside its title (leaving the branch connector whole) and stops above
+    /// the last row's `tail` so the text and branch arm sit vertically centred in the box.
+    @Test func chatHighlightInsetsClearBranchAndCenterContent() {
+        let mid = BotChatsMetrics.highlightInsets(last: false)
+        let last = BotChatsMetrics.highlightInsets(last: true)
+        let branchEnd = BotChatsMetrics.lineX - BotChatsLine.width / 2 + BotChatsLine.branch
+        #expect(mid.leading == BotChatsMetrics.textX - 6)
+        #expect(mid.leading > branchEnd, "highlight starts past the horizontal branch tip")
+        #expect(mid.trailing == DesktopRows.pressInset.trailing)
+        #expect(mid.top == DesktopRows.pressInset.top)
+        #expect(mid.bottom == DesktopRows.pressInset.bottom)
+        #expect(last.leading == mid.leading && last.trailing == mid.trailing && last.top == mid.top)
+        #expect(last.bottom == mid.bottom + BotChatsMetrics.tail)
+
+        // Vertical centre of the highlight box matches the content height's centre on both non-last and last rows.
+        let contentHeight = BotChatsMetrics.rowHeight
+        let midBox = CGRect(x: 0, y: 0, width: 320, height: contentHeight)
+            .inset(by: UIEdgeInsets(top: mid.top, left: mid.leading, bottom: mid.bottom, right: mid.trailing))
+        let lastBox = CGRect(x: 0, y: 0, width: 320, height: contentHeight + BotChatsMetrics.tail)
+            .inset(by: UIEdgeInsets(top: last.top, left: last.leading, bottom: last.bottom, right: last.trailing))
+        #expect(midBox.height == lastBox.height)
+        #expect(midBox.midY == contentHeight / 2)
+        #expect(lastBox.midY == contentHeight / 2)
+
+        #if targetEnvironment(macCatalyst)
+        let list = UICollectionView(frame: CGRect(x: 0, y: 0, width: 320, height: 120), collectionViewLayout: UICollectionViewFlowLayout())
+        let cell = UICollectionViewCell(frame: CGRect(x: 0, y: 0, width: 320, height: contentHeight + BotChatsMetrics.tail))
+        list.addSubview(cell)
+        var bg = UIBackgroundConfiguration.clear()
+        bg.cornerRadius = MacSelection.radius
+        bg.backgroundInsets = last
+        cell.backgroundConfiguration = bg
+        MacHover.debugHover(list, row: cell)
+        let fill = cell.subviews.first { $0.backgroundColor == MacHover.rowFill }
+        #expect(fill?.frame == lastBox)
+
+        // When the row is no longer last, re-hovering updates the fill frame in place without removing it.
+        cell.frame.size.height = contentHeight
+        bg.backgroundInsets = mid
+        cell.backgroundConfiguration = bg
+        MacHover.debugHover(list, row: cell)
+        #expect(fill?.frame == midBox)
+        #endif
     }
 }

@@ -165,6 +165,9 @@ struct KanbanBoardColumn: Equatable {
         list.contentInsetAdjustmentBehavior = .never
         list.translatesAutoresizingMaskIntoConstraints = false
         list.accessibilityIdentifier = "kanban.column.\(status).cards"
+        #if targetEnvironment(macCatalyst)
+        MacHover.drawsOwnHover(list)   // KanbanCardView paints its own shape-fitted hover via hqPointerFill
+        #endif
         addSubview(list)
 
         empty.text = "No tasks"

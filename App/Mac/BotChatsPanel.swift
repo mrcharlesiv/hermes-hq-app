@@ -82,6 +82,7 @@ final class BotChatsPanel: UIViewController, UITableViewDataSource, UITableViewD
         table.sectionHeaderTopPadding = 0
         table.contentInset = UIEdgeInsets(top: 2, left: 0, bottom: 12, right: 0)
         table.accessibilityIdentifier = "mac.inspector.chats"
+        MacHover.drawsOwnHover(table)   // BotChatCell paints its own inset rounded hover pill
         table.addInteraction(UIDropInteraction(delegate: fileDropInteraction))   // [spring-drop]
         table.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(table)

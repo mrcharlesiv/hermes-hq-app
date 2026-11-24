@@ -389,7 +389,12 @@ final class UpdateCardCell: UITableViewCell, UIContextMenuInteractionDelegate {
         more.accessibilityIdentifier = "updates.more"
         more.addAction(UIAction { [weak self] _ in self?.onMore?() }, for: .touchUpInside)
         #if targetEnvironment(macCatalyst)
-        PointerEffects.surface(more)
+        PointerEffects.outline(more) { [weak more] in
+            guard let more, !more.bounds.isEmpty else { return nil }
+            let box = more.titleLabel.flatMap { $0.bounds.isEmpty ? nil : $0.convert($0.bounds, to: more).insetBy(dx: -6, dy: -2) }
+                ?? more.bounds.insetBy(dx: -6, dy: 0)
+            return PointerEffects.Outline(rect: box, radius: MacSelection.radius, strong: false)
+        }
         #endif
 
         rows.axis = .vertical
@@ -816,7 +821,18 @@ final class UpdateStepRow: UIControl {
         accessibilityTraits = .button
         accessibilityIdentifier = "updates.step"
         #if targetEnvironment(macCatalyst)
-        PointerEffects.surface(self)
+        // Extend 8 pt past the icon and chevron into the card's 14 pt padding so the highlight breathes evenly.
+        PointerEffects.outline(self) { [weak self] in
+            guard let self, !self.bounds.isEmpty else { return nil }
+            return PointerEffects.Outline(rect: self.bounds.insetBy(dx: -8, dy: 1), radius: MacSelection.radius, strong: false)
+        }
+        #endif
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        #if targetEnvironment(macCatalyst)
+        PointerEffects.outlineDidLayout(self)
         #endif
     }
 
@@ -851,6 +867,6 @@ final class UpdateStepRow: UIControl {
     }
 
     override var isHighlighted: Bool {
-        didSet { alpha = isHighlighted ? 0.45 : 1 }
+        didSet { alpha = PointerEffects.dim(isHighlighted, to: 0.45) }
     }
 }

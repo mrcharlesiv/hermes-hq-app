@@ -158,6 +158,7 @@ final class MacThinkingSteps: UIControl {
         accessibilityLabel = "Thinking"
         accessibilityTraits = .adjustable
         accessibilityIdentifier = "model.panel.thinking"
+        MacHover.drawsOwnHover(self)
         let hover = UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:)))
         addGestureRecognizer(hover)
         registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (bar: MacThinkingSteps, _) in bar.recolor() }
@@ -924,6 +925,7 @@ final class MacFactsLine: UIView {
         override init(frame: CGRect) {
             super.init(frame: frame)
             titleLabel?.lineBreakMode = .byTruncatingTail
+            MacHover.drawsOwnHover(self)
             addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:))))
         }
         required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }

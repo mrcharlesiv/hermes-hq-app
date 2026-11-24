@@ -1,0 +1,2 @@
+# [shipped-work] Commits a build carried that later builds may leave out on purpose (scripts/check-shipped-work.py).
+# One per line: <sha> <why, with the owner's say-so and date>. Anything not here must reach main before the next build.

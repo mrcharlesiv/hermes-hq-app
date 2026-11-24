@@ -66,7 +66,7 @@ struct TaskPlainView: View {
                         TimelineView(.periodic(from: .now, by: 1)) { context in TaskTeammate(model: model, task: task, part: .foot, tick: context.date) }
                     }
                 }
-                .padding(.bottom, 16)
+                .padding(.bottom, 16 + (showsMessageLine ? model.shelfRoom : 0))   // clear of the chat's chips
                 .frame(maxWidth: .infinity, alignment: .leading)
                 // What the page draws, said at once and on every change (the scroll view's own geometry said nothing
                 // until something changed, so a page that drew right the first time kept its starting height). Not once

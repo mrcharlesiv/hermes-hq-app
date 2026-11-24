@@ -138,6 +138,7 @@ enum GoalChatPage {
         let apply: (Bool) -> Void = { [weak chat, weak page] animated in
             guard let chat, let page else { return }
             mark.tintColor = UIColor((page.goal?.tint ?? .blue).ink)
+            chat.coverFootHeight = page.goal?.lead == nil ? 0 : TaskMessageLine.height
             chat.transcriptCovered = !page.tucked
             chat.titleOverride = page.tucked ? nil : "Goal"
             chat.titleAccessoryView = page.tucked ? face : mark
@@ -148,6 +149,7 @@ enum GoalChatPage {
             }
         }
         page.onTuckChange = { apply(true) }
+        chat.onShelfRoom = { [weak page] room in page?.shelfRoom = room }
         host.onKeysChanged = { apply(false) }
         host.onBarHeight = { if page.tucked { apply(true) } }
         chat.suppressesTalkTip = true

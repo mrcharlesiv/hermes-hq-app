@@ -182,6 +182,18 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
             statusPill.isHidden = transcriptCovered
             if transcriptCovered { earlierPill.set(.hidden) }
             updateJumpButton()
+            activity.coverChanged()   // [tasks-first] the shelf stands on the cover's own message box
+        }
+    }
+    /// [tasks-first] The room the activity shelf takes over the box it stands on (0 with no chips): a task's or goal's
+    /// view leaves that much at its foot so its last lines scroll clear of the chips.
+    var onShelfRoom: ((CGFloat) -> Void)? { didSet { onShelfRoom?(activity.lastShelfRoom) } }   // chips already up count
+    /// [tasks-first] While `transcriptCovered`: the height of the cover's own message box at the composer's foot
+    /// (`TaskMessageLine`), which the shelf stands on in place of the hidden composer; 0 when it shows none.
+    var coverFootHeight: CGFloat = 0 {
+        didSet {
+            guard abs(coverFootHeight - oldValue) > 0.25, isViewLoaded else { return }
+            activity.coverChanged()
         }
     }
     /// The bar (and the status line under it while one shows), as one element of the top scroll edge, from the push's

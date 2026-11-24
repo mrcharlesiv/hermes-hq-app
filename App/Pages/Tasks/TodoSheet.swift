@@ -32,6 +32,9 @@ final class TodoSheetModel {
     @ObservationIgnored private(set) var tuckReason: TuckReason?
     /// [tasks] The brief is taller than its cap: it scrolls inside its panel.
     var briefScrolls = false
+    /// [tasks-first] The chat's activity chips over the view's message box (`ChatViewController.onShelfRoom`): the view
+    /// leaves that much at its foot.
+    var shelfRoom: CGFloat = 0
     /// [tasks] The brief gives up room before it scrolls: the bot's words keep to three lines and Next to two, and an
     /// empty "+ Add notes" leaves (⋯ › Details has it). Nothing hides behind a tap:
     /// the task's view has the screen and scrolls, its move and the chat's line staying at its foot (two states, 2026-11-08).

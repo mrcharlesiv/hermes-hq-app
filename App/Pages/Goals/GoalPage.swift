@@ -43,6 +43,8 @@ final class GoalPageModel {
 
     // [goals step 3] A goal with a lead: its own chat under the page (GoalChatPage), or beside it on the Mac.
     @ObservationIgnored var embedded = false
+    /// [tasks-first] The chat's activity chips over the view's message box: the view leaves that much at its foot.
+    var shelfRoom: CGFloat = 0
     @ObservationIgnored weak var chat: ChatViewController?
     /// The Mac's pane chat, kept by the page (`chat` is weak).
     @ObservationIgnored var keptChat: ChatViewController?

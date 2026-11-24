@@ -55,8 +55,12 @@ final class BrowserChatCard {
         let row = BrowserCard.row(scope.drivenRow(in: service.activity.rows), showing: showing, turnRunning: chat.session.isRunning)
         let changed = row?.id != showing?.id
         showing = row
-        let chip = row.map { (words: BrowserCard.words($0, name: scope.title.isEmpty ? "This bot" : scope.title),
+        var chip = row.map { (words: BrowserCard.words($0, name: scope.title.isEmpty ? "This bot" : scope.title),
                               asking: $0.ask != nil && $0.control == .bot) }
+        #if DEBUG
+        // UI tests: the chip with no browser in use (testTasks_ShelfOnMessageLine).
+        if let words = UserDefaults.standard.string(forKey: "HQDebugBrowserChip"), !words.isEmpty { chip = (words: words, asking: false) }
+        #endif
         if chip?.words != chat.activity.browserChip?.words || chip?.asking != chat.activity.browserChip?.asking {
             if changed { AppLog.note("browser", row == nil ? "chat card gone" : "chat card shown") }
             chat.activity.browserChip = chip

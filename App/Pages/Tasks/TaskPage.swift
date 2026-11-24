@@ -128,6 +128,7 @@ enum TaskPage {
                 }
             }
             sheet.briefScrolls = !sheet.tucked && drawn > cap + 0.5
+            chat.coverFootHeight = sheet.gone || sheet.editingBrief ? 0 : TaskMessageLine.height
             chat.transcriptCovered = !sheet.tucked
             // [tasks-first] Over the task's view the bar names the task's list (a menu, to move it), with no face; over
             // its chat, the chat's own title (the task, its bot under it), whose tap brings the task back.
@@ -148,6 +149,7 @@ enum TaskPage {
             apply(true)
         }
         sheet.onBriefLayoutChange = { apply(true) }
+        chat.onShelfRoom = { [weak sheet] room in sheet?.shelfRoom = room }
         sheet.onTuckChange = { apply(true) }
         chat.suppressesTalkTip = true
         chat.onEngage = { [weak sheet] engagement in

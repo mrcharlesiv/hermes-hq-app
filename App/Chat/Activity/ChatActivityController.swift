@@ -1076,7 +1076,7 @@ import UIKit
         #if DEBUG
         if changed { motionProbe?.note("shelf \(shelfHeight?.constant ?? 0) → \(height) present=\(present.map(\.rawValue).sorted())") }
         #endif
-        shelfHeight?.constant = height
+        setShelfConstant(height)
         updateJumpButton(shelfHeight: height)
         let apply = {
             self.shelfChanging = true
@@ -1108,7 +1108,7 @@ import UIKit
         shelfSides.forEach { $0.constant = side }
         let height = shelf.height(for: shelfWidth)
         if abs((shelfHeight?.constant ?? 0) - height) > 0.25 {
-            shelfHeight?.constant = height
+            setShelfConstant(height)
             updateJumpButton(shelfHeight: height)
         }
         shelf.setNeedsLayout()
@@ -1120,7 +1120,7 @@ import UIKit
         let view = chat.view!
         guard let base = shelfBase, base.frame.maxY > 0 else { return .greatestFiniteMagnitude }
         let limit = view.safeAreaInsets.top - 4 + ChatMetrics.statusLineHeight + 6 + Self.minTranscript
-        return max(0, base.frame.minY - shelfGap - limit)
+        return max(0, base.frame.minY + shelfFootConstant - limit)
     }
 
     /// About three lines of the transcript's text (at most 160 pt): with several live pieces, large text or the keyboard
@@ -1148,7 +1148,9 @@ import UIKit
     /// pass, so the card shrinks with the keyboard's own animation instead of ending under the bar and snapping later.
     func layoutChanged() {
         // UX study #230: folded chips follow the room too (they keep to one line, then scroll).
-        guard installed, !inLayoutChange, shelf.hasActivity else { return }
+        guard installed, !inLayoutChange else { return }
+        placeShelfFoot()                 // [tasks-first] the composer moved under a task's view: the shelf follows
+        guard shelf.hasActivity else { return }
         let cap = maxCardHeight(), room = shelfRoom()
         guard abs(cap - shelf.maxCardHeight) > 0.5 || abs(room - shelf.maxHeight) > 0.5 else { return }
         inLayoutChange = true
@@ -1157,7 +1159,7 @@ import UIKit
         shelf.maxHeight = room
         let height = shelf.height(for: shelfWidth)
         guard abs((shelfHeight?.constant ?? 0) - height) > 0.25 else { shelf.setNeedsLayout(); shelf.layoutIfNeeded(); return }
-        shelfHeight?.constant = height
+        setShelfConstant(height)
         updateJumpButton(shelfHeight: height)
         shelfChanging = true
         chat.view.layoutIfNeeded()
@@ -1196,7 +1198,7 @@ import UIKit
         // Use the new width, not the previous frame (especially when collapsing an expanded overview).
         let crowded = estimatedChipsCrowd(jumpLeading: jumpLeading)
         let above = shelfHeight > 0 && (shelf.hasOpenCard || queueShown || ShelfText.isLarge || crowded)
-        if abs((shelfBottom?.constant ?? 0) + shelfGap) > 0.25 { shelfBottom?.constant = -shelfGap }
+        placeShelfFoot()
         guard DeviceWord.isMac else {
             jumpBottom.constant = -ChatMetrics.jumpAboveComposer - (above ? shelfHeight + ActivityShelfView.gap : 0) - jumpLift
             return
@@ -1205,6 +1207,41 @@ import UIKit
         // over the pill's glass (not its tap area) when it goes above it.
         let pill = above ? shelfGap + shelfHeight - (shelf.expanded ? 0 : ActivityShelfView.pillMargin) : 0
         jumpBottom.constant = -(ChatMetrics.macFloatGap - chat.jumpCircleInset) - pill - jumpLift
+    }
+
+    /// [tasks-first] Owner 2026-11-23 ("This looks a little high"): over a task's or goal's view the chat's own message
+    /// box stands aside (alpha 0, still laid out) and the view's one-line box (`TaskMessageLine`, shorter) sits at the
+    /// composer's foot. The shelf stood on the hidden box and the queue card, so a chip like "Browsing example.com"
+    /// floated about 50 pt over the visible box, across the page's last lines. While covered it stands on the cover's
+    /// own box (`coverFootHeight` over the composer's foot) instead.
+    private var shelfFootConstant: CGFloat {
+        guard chat.transcriptCovered, let base = shelfBase, base.superview != nil, chat.composer.frame.maxY > 0 else { return -shelfGap }
+        let baseTop = base.convert(base.bounds, to: chat.view).minY
+        let floor = chat.composer.frame.maxY - chat.coverFootHeight
+        return -shelfGap + max(0, floor - baseTop)
+    }
+
+    private func placeShelfFoot() {
+        let foot = shelfFootConstant
+        if abs((shelfBottom?.constant ?? 0) - foot) > 0.25 { shelfBottom?.constant = foot }
+    }
+
+    /// The shelf's height constraint, and what it takes over the box it stands on (`ChatViewController.onShelfRoom`).
+    private func setShelfConstant(_ height: CGFloat) {
+        shelfHeight?.constant = height
+        let room = height > 0.5 ? (height + shelfGap).rounded(.up) : 0
+        if abs(room - lastShelfRoom) > 0.5 {
+            lastShelfRoom = room
+            chat.onShelfRoom?(room)
+        }
+    }
+    /// What the shelf takes over its box now (0 with no chips).
+    private(set) var lastShelfRoom: CGFloat = 0
+
+    /// The chat's transcript was covered or uncovered (a task's or goal's view), or the cover's box changed height.
+    func coverChanged() {
+        guard installed else { return }
+        placeShelfFoot()
     }
 
     /// The shelf's foot over what it sits on. [Mac AAA 2026-11-17] On the Mac the pill's glass (5 pt inside its 44 pt

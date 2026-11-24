@@ -366,6 +366,7 @@ actor AsyncLimiter {
     /// the failure, to say the copy may be old.
     func file(path: String, name: String, context: MediaContext, progressKey: String, fresh: Bool = false,
               keptOnFailure: Bool = true) async throws -> URL {
+        let name = MediaStore.fileName(name, path: path)
         #if DEBUG
         if context.accountId == MediaContext.demoAccount {   // -HQDemoPage: this Mac's file, or a local server's (the Mac app's sandbox)
             guard path.hasPrefix("http"), let remote = URL(string: path) else { return URL(fileURLWithPath: path) }

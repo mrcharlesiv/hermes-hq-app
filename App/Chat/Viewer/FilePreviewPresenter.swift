@@ -53,6 +53,7 @@ import AVFoundation
 
     private func fetch(path: String, name: String, context: MediaContext, from vc: UIViewController, row: FileRowView?,
                        share: Delivery) {
+        let name = MediaStore.fileName(name, path: path)   // a label without the file's type kept it from opening
         let key = Self.progressKey(path)
         if downloads[key] != nil {
             // Share… while it downloads to open (or the reverse) changes what it does when it lands (review: it cancelled).

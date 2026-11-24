@@ -29,6 +29,10 @@ def chunk(t, d): return struct.pack('>I', len(d)) + t + d + struct.pack('>I', zl
 open(sys.argv[1], 'wb').write(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0))
                               + chunk(b'IDAT', zlib.compress(rows, 6)) + chunk(b'IEND', b''))
 PY
+# A 2 s test movie for the labelled-video preview (test27; skipped without ffmpeg).
+if command -v ffmpeg >/dev/null 2>&1; then
+  ffmpeg -v error -y -f lavfi -i testsrc=size=320x240:rate=30 -t 2 -pix_fmt yuv420p -c:v libx264 "$FIX/media/demo.mov" || true
+fi
 rm -f $FIX/e2e-activity.json
 HQN_ACTIVITY_MEDIA=$PWD/$FIX/media python3 scripts/fixtures/activity-gateway.py --port $PORT --credentials $FIX/e2e-activity.json > $FIX/e2e-activity.log 2>&1 &
 FIXTURE_PID=$!

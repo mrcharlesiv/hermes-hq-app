@@ -33,6 +33,19 @@ nonisolated final class MediaStore: @unchecked Sendable {
     static func gatewayKey(accountId: String, profile: String, path: String) -> String { "g|\(accountId)|\(profile)|\(path)" }
     static func remoteKey(_ url: URL) -> String { "r|\(url.absoluteString)" }
 
+    /// The name a gateway file is kept under: the name it was opened by, with the path's own type when that name lacks
+    /// it. A bot's label ("Demo video" for /…/demo.mp4) or a pin's title otherwise lands as a file with no type, which
+    /// Quick Look can't show (a video went to the share sheet instead of playing).
+    static func fileName(_ name: String, path: String) -> String {
+        let own = MediaTags.displayName(path)
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return own }
+        let type = (own as NSString).pathExtension
+        guard !type.isEmpty, !type.contains(" "),
+              (trimmed as NSString).pathExtension.lowercased() != type.lowercased() else { return name }
+        return trimmed + "." + type
+    }
+
     static func hash(_ key: String) -> String {
         SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
     }

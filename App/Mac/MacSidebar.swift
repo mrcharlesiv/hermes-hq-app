@@ -304,10 +304,9 @@ final class MacSidebar: UIView {
     private var tools: MacSidebarTools?
     /// The head whose chat is on show beside the rail, by `MacBotsRail.Item.key` (`MainTabController.paneSelectionChanged`).
     private var openHead: String?
-    /// [rail-more] The gateway switcher at the rail's top (more than one gateway), and its watch on the gateways.
-    private var railGateway: MacRailGateway?
+    /// Watch on the saved gateways for the foot's gateway line and switcher.
     private var gatewayWatch: (token: UUID, gateways: any GatewayAccounts)?
-    /// Where Search and New Chat sit: `topRoom` down, or under the rail's gateway switcher (`placeRailGateway`).
+    /// Where Search and New Chat sit: `topRoom` down (`placeTopTools`).
     private var toolsTop: NSLayoutConstraint?
     private var badgeWatch: [NSKeyValueObservation] = []
     /// [sidebar-light] The watch on the panes beside the strip (`neighbourMayChange`).
@@ -813,7 +812,7 @@ final class MacSidebar: UIView {
         }
         addTools(toolRows, folded: folded, into: nav)
         if showsBots { botsChanged() }
-        placeRailGateway()
+        placeTopTools()
         showGateway()
         // A gap above the button, rows at the foot or not. [sidebar-intent] Open, a section's break more: the bar is
         // not one of the rows above it.
@@ -1289,37 +1288,15 @@ final class MacSidebar: UIView {
     /// on the rail the two buttons and two heads), the places and Tools scrolling below it.
     static var botsMinHeight: CGFloat { ((isCollapsed ? 220 : 180) * chrome).rounded() }
 
-    // MARK: The gateway switcher ([rail-more])
+    // MARK: Top tools & gateway watch
 
-    /// More than one gateway and the rail folded: the Bots title's switcher at the rail's top (the title is hidden while
-    /// the list is folded into the rail). Otherwise the heads start under the window's buttons as before.
-    private func placeRailGateway() {
+    /// Search and New Chat start at `topRoom` (no top-of-sidebar globe gateway switcher; switching stays in the
+    /// open sidebar's foot and the folded rail's context menu).
+    private func placeTopTools() {
         watchGateways()
-        let wanted = railGatewayWanted
-        let namedSwitcher = !Self.isCollapsed || Self.railNamed
-        // Recreate on rebuild / UI Scale change as well as named-mode switches so MacRailGateway scales cleanly.
-        if railGateway != nil {
-            railGateway?.removeFromSuperview()
-            railGateway = nil
-        }
-        if wanted {
-            let button = MacRailGateway(named: namedSwitcher) { [weak self] in
-                self?.tabs?.botsViewController.gatewaySwitcher?.menu([])
-            }
-            button.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(button)
-            NSLayoutConstraint.activate([
-                button.topAnchor.constraint(equalTo: topAnchor, constant: Self.topRoom - 8),
-                button.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
-                button.trailingAnchor.constraint(equalTo: scroll.trailingAnchor),
-            ])
-            railGateway = button
-        }
-        // [rail-top] Search and New Chat (and the rows under them) start right under the switcher; else at `topRoom`.
         toolsTop?.isActive = false
         if let tools {
-            toolsTop = railGateway.map { tools.topAnchor.constraint(equalTo: $0.bottomAnchor, constant: 4) }
-                ?? tools.topAnchor.constraint(equalTo: topAnchor, constant: Self.topRoom - tools.levelShift)
+            toolsTop = tools.topAnchor.constraint(equalTo: topAnchor, constant: Self.topRoom - tools.levelShift)
             toolsTop?.isActive = true
         }
         gatewaysChanged()
@@ -1330,18 +1307,12 @@ final class MacSidebar: UIView {
         guard gatewayWatch == nil, let gateways = tabs?.botsViewController.gatewaySwitcher?.gateways else { return }
         let token = gateways.observe { [weak self] in
             guard let self else { return }
-            // The switcher turns on or off with a second gateway: the rail's top follows (after the title's own refresh).
-            DispatchQueue.main.async { if (self.railGateway != nil) != self.railGatewayWanted { self.placeRailGateway() } else { self.gatewaysChanged() } }
+            DispatchQueue.main.async { self.gatewaysChanged() }
         }
         gatewayWatch = (token, gateways)
     }
 
-    private var railGatewayWanted: Bool {
-        // [gateway-foot] The folded rail only: open, the foot's gateway line is the switcher (owner 2026-11-16).
-        Self.isCollapsed && switcherActive
-    }
-
-    /// More than one gateway saved: the Bots title's switcher (and so the rail's and the foot's) is on.
+    /// More than one gateway saved: the Bots title's switcher (and so the foot's) is on.
     private var switcherActive: Bool { tabs?.botsViewController.gatewaySwitcher?.isActive ?? false }
 
     /// [sidebar-tidy] The foot's gateway line: the current gateway's name and a dot for the connection (green
@@ -1405,11 +1376,6 @@ final class MacSidebar: UIView {
 
     private func gatewaysChanged() {
         showGateway()
-        guard let railGateway, let gateways = gatewayWatch?.gateways else { return }
-        let rows = gateways.accounts
-        let switching = gateways.switchingTo.flatMap { id in rows.first { $0.id == id }?.title }
-        let title = switching.map { "Switching to \($0)…" } ?? rows.first(where: \.isCurrent)?.title ?? ""
-        railGateway.show(title: title, news: gateways.otherNews > 0 && switching == nil, busy: switching != nil)
     }
 
 
@@ -1510,18 +1476,13 @@ final class MacSidebar: UIView {
         if drop { railDrop(bot, landing); dropLine.isHidden = true }
         return "\(bot.id) → \(landing.block) at \(landing.index) of \(landing.rows)"
     }
-    /// [rail-more] The gateway switcher at the rail's top, and the items its menu offers.
-    var debugRailGateway: String {
-        guard let railGateway else { return "no switcher" }
-        let items = tabs?.botsViewController.gatewaySwitcher?.menu([]).children.flatMap { ($0 as? UIMenu)?.children ?? [$0] } ?? []
-        return "switcher \(railGateway.accessibilityLabel ?? "") frame \(railGateway.frame.integral): "
-            + items.compactMap { ($0 as? UIAction).map { $0.title + ($0.state == .on ? " ✓" : "") } }.joined(separator: ", ")
-    }
-    /// [gateway-foot] The foot's gateway line and its switcher (hidden or not, frame, the menu's items), the rail's
-    /// top switcher, and where Search and New Chat start.
+    /// [rail-more] Kept for debug tour log compatibility (top-of-rail gateway switcher was removed).
+    var debugRailGateway: String { "no switcher" }
+    /// [gateway-foot] The foot's gateway line and its switcher (hidden or not, frame, the menu's items),
+    /// and where Search and New Chat start.
     var debugFootGateway: String {
         let items = gatewayButton.isHidden ? [] : (tabs?.botsViewController.gatewaySwitcher?.menu([]).children.flatMap { ($0 as? UIMenu)?.children ?? [$0] } ?? [])
-        return "collapsed \(Self.isCollapsed) top-switcher \(railGateway == nil ? "none" : "\(railGateway!.frame.integral)")"
+        return "collapsed \(Self.isCollapsed) top-switcher none"
             + " tools-top \(tools.map { "\($0.frame.minY)" } ?? "-")\n"
             + "foot line hidden \(gatewayLine.isHidden) text \"\(gatewayName.text ?? "")\" arrows \(!gatewayArrows.isHidden) news \(!gatewayNews.isHidden)\n"
             + "foot switcher hidden \(gatewayButton.isHidden) enabled \(gatewayButton.isEnabled) frame \(gatewayButton.frame.integral) label \"\(gatewayButton.accessibilityLabel ?? "")\": "
@@ -1796,7 +1757,7 @@ final class MacSidebar: UIView {
             // which started just under the panel's top (or the gateway switcher). Now that they sit above it, the
             // list takes that much less, so the foot keeps the room it had (the folded rail in a short window lost
             // its Tools button to the bots' list, and "+" showed where it hadn't).
-            let startedAt = railGateway.map { $0.frame.maxY + 4 } ?? Self.glassTop + 8
+            let startedAt = Self.glassTop + 8
             let lead = max(0, (tools?.frame.maxY ?? startedAt) + stack.spacing - startedAt)
             var room = max(Self.botsMinHeight - lead, min(content, (bounds.height * 0.5).rounded() - lead))
             // [Mac AAA 2026-11-16] Open, a list too long for its room ends on a whole bot's row, not part way into the
@@ -1958,7 +1919,6 @@ final class MacSidebar: UIView {
         rows.forEach { $0.recolor() }
         foldedTools?.recolor()
         toolsHeading?.recolor()
-        railGateway?.recolor()
         heads.values.forEach { $0.recolor() }   // [bots-rail]
         chatRows.values.forEach { $0.recolor() }   // [chats-under]
         railAdd?.recolor()

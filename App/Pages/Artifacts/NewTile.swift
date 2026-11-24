@@ -181,6 +181,30 @@ struct NewTileView: View {
                 Text("The bot makes a live tile that fits any size and keeps it up to date. It pins itself here when it’s ready.")
             } }
             .hqSheetRows()
+            Section {
+                Group {
+                #if targetEnvironment(macCatalyst)
+                // [Mac AAA 2026-11-16] A plain mouse's wheel can't turn a sideways strip: with more bots than the sheet
+                // is wide, the last ones were out of reach. On the Mac they wrap onto more lines, as Marketplace's chips.
+                PagesFlowLayout(spacing: 4, lineSpacing: 4) {
+                    ForEach(model.bots, id: \.id) { bot in botButton(bot) }
+                }
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                #else
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 4) {
+                        ForEach(model.bots, id: \.id) { bot in botButton(bot) }
+                    }
+                    .padding(.vertical, 6)
+                }
+                #endif
+                }
+                .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
+            } header: { HQSectionLabel { Text("Made By") } } footer: { HQSectionFooter {
+                Text("Pick a bot that can reach the data, for example one signed in to your mail or calendar.")
+            } }
+            .hqSheetRows()
             if model.what.pgTrim.isEmpty {
                 Section {
                     let all = model.rankedIdeas
@@ -242,30 +266,6 @@ struct NewTileView: View {
                     .accessibilityIdentifier("tile.new.page")
                 }
             } header: { HQSectionLabel { Text("Layout & Updates") } }
-            Section {
-                Group {
-                #if targetEnvironment(macCatalyst)
-                // [Mac AAA 2026-11-16] A plain mouse's wheel can't turn a sideways strip: with more bots than the sheet
-                // is wide, the last ones were out of reach. On the Mac they wrap onto more lines, as Marketplace's chips.
-                PagesFlowLayout(spacing: 4, lineSpacing: 4) {
-                    ForEach(model.bots, id: \.id) { bot in botButton(bot) }
-                }
-                .padding(.vertical, 6)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                #else
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(alignment: .top, spacing: 4) {
-                        ForEach(model.bots, id: \.id) { bot in botButton(bot) }
-                    }
-                    .padding(.vertical, 6)
-                }
-                #endif
-                }
-                .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
-            } header: { HQSectionLabel { Text("Made By") } } footer: { HQSectionFooter {
-                Text("Pick a bot that can reach the data, for example one signed in to your mail or calendar.")
-            } }
-            .hqSheetRows()
         }
         .hqGroupedPage()
         .onAppear { focused = true }

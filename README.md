@@ -85,7 +85,7 @@ everywhere else.
 
 ### Stay in the loop
 
-<img src=".github/readme/approval.png" align="right" width="36%" alt="A bot waiting for approval to restart a web server">
+<img src=".github/readme/approval.png" align="right" width="36%" alt="A bot waiting for approval to run git push origin v2.4">
 
 - **Lock-screen notifications** when a reply is ready, a bot needs you, a turn fails or a background task finishes.
 - **Approve once or deny** from the notification itself, without opening the app.
@@ -102,7 +102,7 @@ everywhere else.
 <p align="center">
   <img src=".github/readme/sessions.png" width="31%" alt="Sessions grouped by date">
   <img src=".github/readme/jobs.png" width="31%" alt="Scheduled jobs">
-  <img src=".github/readme/task.png" width="31%" alt="A running Kanban task">
+  <img src=".github/readme/task.png" width="31%" alt="A blocked Kanban task waiting on you, with an Unblock button">
 </p>
 
 - **Sessions**: every chat by date, with bot chips, projects, full-text search, archive and chats from Telegram,
@@ -117,11 +117,20 @@ everywhere else.
 - **More**: Usage charts, Spawn Tree (live subagents), Star Map (what a bot has learned), webhooks,
   Status & Maintenance (logs, restart, Update Hermes) and messaging setup.
 
+### Threads, projects and goals
+
+- **Threads**: follow up on a message in a bot chat without losing your place in the main conversation.
+- **Projects**: switch between Chats and Projects in Sessions to find the work and conversations you need.
+- **Tasks and Goals**: keep shared tasks and goals alongside your bots' work. Tasks uses the optional push add-on;
+  Kanban is a separate gateway-dependent board.
+- **Community**: find the Hermes HQ Discord in More. If you dismiss the invitation card, the link remains at the
+  bottom of More.
+
 ### Make it yours
 
 <p align="center">
-  <img src=".github/readme/faces.png" width="31%" alt="Bot faces, light">
-  <img src=".github/readme/desktop-look.png" width="31%" alt="The Desktop Look">
+  <img src=".github/readme/faces.png" width="31%" alt="Edit Head: face themes, shapes and colours for a bot">
+  <img src=".github/readme/desktop-look.png" width="31%" alt="A chat in the Desktop Look with the Catppuccin theme">
   <img src=".github/readme/dark.png" width="31%" alt="Dark mode">
 </p>
 

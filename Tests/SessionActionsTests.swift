@@ -475,6 +475,22 @@ import Testing
         store.stop()
     }
 
+    /// [archived-pins] Owner 2026-11-23 ("chats that I have archived in a project are showing here"): the gateway's
+    /// recents back-fill pinned chats even when archived. Such a chat is not live: it leaves the list (and Pinned) and
+    /// is listed with the archived ones, before any archived read.
+    @Test func aPinnedArchivedChatInTheRecentsIsNotLive() async throws {
+        let gateway = Gateway([Self.srow("a"), Self.srow("pin", pinned: true), Self.srow("pinArchived", pinned: true, archived: true)])
+        let store = await store(gateway)
+        #expect(Set(store.sessions.map(\.id)) == ["a", "pin"])
+        #expect(store.archivedSessions.map(\.id) == ["pinArchived"] && store.archivedSessions.allSatisfy { $0.archived })
+        // The archived read lists it too: once.
+        gateway.lock.withLock { gateway.archived = [Self.srow("pinArchived", pinned: true, archived: true)] }
+        await store.loadArchived()
+        #expect(store.archivedSessions.map(\.id) == ["pinArchived"])
+        #expect(!store.sessions.contains { $0.id == "pinArchived" })
+        store.stop()
+    }
+
     @Test func deleteSendsTheOwnerAndDropsTheRow() async throws {
         let gateway = Gateway([Self.srow("a", profile: "research"), Self.srow("b")])
         let store = await store(gateway)

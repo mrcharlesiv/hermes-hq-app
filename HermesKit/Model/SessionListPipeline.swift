@@ -150,11 +150,13 @@ nonisolated enum SessionListPipeline {
     static func isFresh(_ prefs: SessionsViewPrefs) -> Bool { prefs.groupBy == .date && !isFlat(prefs) }
 
     /// [project-keep] A kept project's chat that stays off the lists outside Sessions (the bots' chats under their rows,
-    /// the strip over a chat, the Mac's Chats tab), as `listed` keeps it out of Recent: shown anyway when pinned
-    /// everywhere or while it waits on the owner (`needsInput`).
+    /// the strip over a chat, the Mac's Chats tab), as `listed` keeps it out of Recent and Pinned: shown anyway
+    /// while it waits on the owner (`needsInput`).
     static func isKeptAway(_ session: SessionSummary, kept: Set<String>,
                            projectsByProfile: [String: [SessionProject]]) -> Bool {
-        guard !kept.isEmpty, !session.pinned, session.status != .needsInput else { return false }
+        // [project-keep] Owner 2026-11-23 ("chats hidden outside that project … are still showing"): a chat pinned
+        // everywhere is kept on its project's page too; only one waiting on the owner comes out.
+        guard !kept.isEmpty, session.status != .needsInput else { return false }
         return kept.contains(SessionProjects.key(cwd: session.cwd, profile: session.profile, projectsByProfile: projectsByProfile))
     }
 
@@ -191,9 +193,10 @@ nonisolated enum SessionListPipeline {
         return counts
     }
 
-    /// [project-pills] The archived projects the list leaves out: with project pills and Show › Archived off.
+    /// [project-pills] The archived projects the list leaves out while Show › Archived is off. Owner 2026-11-23: under
+    /// the Chats (bot) pills too, not only the project pills.
     static func hiddenProjects(_ input: SessionListInput) -> Set<String> {
-        input.prefs.pills == .projects && !input.prefs.showArchived ? input.archivedProjects : []
+        !input.prefs.showArchived ? input.archivedProjects : []
     }
 
     static func groups(_ input: SessionListInput) -> [SessionGroup] {
@@ -317,7 +320,8 @@ nonisolated enum SessionListPipeline {
         // not read yet).
         let fresh = lifts ? sort(rows.filter { isNew($0, keep: input.keepNew) && (!keptAway($0) || asks($0)) }, by: .updated) : []
         let lifted = Set(fresh.map(key))
-        let pinned = ranked(sorted.filter { $0.pinned && !lifted.contains(key($0)) })
+        // [project-keep] A kept project's pinned chat is on its page alone (unless it waits on the owner).
+        let pinned = ranked(sorted.filter { $0.pinned && !lifted.contains(key($0)) && (!keptAway($0) || asks($0)) })
         // A project keeps its new chats to count them (`folded` leaves them out of its rows).
         let keepsNew = prefs.groupBy == .project
         let rest = sorted.filter { !$0.pinned && (keepsNew || !lifted.contains(key($0))) }

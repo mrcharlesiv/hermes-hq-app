@@ -1984,8 +1984,18 @@ final class SessionStore {
         let showRuns = device.showBackgroundRuns
         var nextWords: [String: RowWords] = [:]
         // Pinned resolves from the unfiltered rows: a pinned run stays.
-        let visible = recents.filter { !SessionRules.isBotChat($0) && (showRuns || $0.pinned == true || !SessionRules.isBackgroundRun($0))
+        // [archived-pins] Owner 2026-11-23 ("chats that I have archived in a project are showing here"): the gateway's
+        // recents back-fill every pinned chat, archived ones too (a pin is a keep there). An archived chat is not a live
+        // one, pinned or not: it is listed with the archived (Show › Archived, a project's Done), never in the list.
+        let visible = recents.filter { !SessionRules.isBotChat($0) && $0.archived != true
+            && (showRuns || $0.pinned == true || !SessionRules.isBackgroundRun($0))
             && !leaving.contains(Self.writeKey(id: $0.id, profile: $0.profile)) }
+        let archivedPool: [SidebarSessionRow] = {
+            let pinnedArchived = recents.filter { $0.archived == true }
+            guard !pinnedArchived.isEmpty else { return archivedRows }
+            let known = Set(archivedRows.map { Self.writeKey(id: $0.id, profile: $0.profile) })
+            return archivedRows + pinnedArchived.filter { !known.contains(Self.writeKey(id: $0.id, profile: $0.profile)) }
+        }()
         let ordered = visible.enumerated().sorted { a, b in
             let pa = a.element.pinned == true, pb = b.element.pinned == true
             if pa != pb { return pa }
@@ -2006,7 +2016,7 @@ final class SessionStore {
         // Show › Archived adds these to the list, so they keep its rules: a run only with Background Runs (or pinned),
         // a chat from outside the recents (Telegram, a cron job, …) only with Outside Chats.
         let showOutside = device.showOutsideChats
-        let nextArchived = archivedRows.filter { !SessionRules.isBotChat($0) && !leaving.contains(Self.writeKey(id: $0.id, profile: $0.profile))
+        let nextArchived = archivedPool.filter { !SessionRules.isBotChat($0) && !leaving.contains(Self.writeKey(id: $0.id, profile: $0.profile))
             && (showRuns || $0.pinned == true || !(SessionRules.isBackgroundRun($0) || Self.isScheduledRun($0)))
             && (showOutside || SessionRules.isBackgroundRun($0) || Self.isScheduledRun($0) || !Self.recentsExcluded.contains($0.source ?? "")) }
             .sorted { $0.recency > $1.recency }

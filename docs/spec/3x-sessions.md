@@ -329,13 +329,21 @@ Sort (`V/store/sidebar-sort.ts`), ties always broken by recency (newest first), 
 - **DECISION (2026-11-21, owner): a project can keep its chats on its page** [project-keep]. Keep Chats in This
   Project (`projectKeep`, `SessionStore.setProjectKept`, never Home): its chats leave Recent and the days, Group By
   Status, Group By Bot, a flat sort and the Working pill (`SessionListPipeline.listed`, `SessionListInput.keptProjects`).
-  Still shown: its page, its own row or card and their counts, Pinned for a chat pinned everywhere, and, only while
-  the chat waits on the owner (`needsInput`), New for You and the New pill, whose count follows (`chipCounts`). A
+  Still shown: its page, its own row or card and their counts, and, only while the chat waits on the owner
+  (`needsInput`), New for You, Pinned and the New pill, whose count follows (`chipCounts`). Owner 2026-11-23 ("chats
+  hidden outside that project … are still showing"): a chat pinned everywhere no longer comes out to Pinned. A
   reply not read yet does not bring one back. Search is unchanged. Under Group By Recent there is no New for You, so
   such a chat is under the New pill and in its project. Owner 2026-11-22 ("I don't believe it's working"): the lists
   outside Sessions follow the same rule (`SessionListPipeline.isKeptAway`, `SessionStore.sessionsOutsideKeptProjects`):
   the chats under each bot's row and the Mac rail's, the strip over a chat and its All sheet, and the Mac's Chats tab.
-  Pinned everywhere and waiting on the owner still show; the chat on screen always stays in its strip.
+  Waiting on the owner still shows; the chat on screen always stays in its strip.
+- **DECISION (2026-11-23, owner): an archived chat is never live, pinned or not** [archived-pins]. "Chats that I have
+  archived in a project are showing here": the gateway's recents back-fill every pinned chat, archived ones too, and
+  the list drew them in Pinned with the archive mark. `SessionStore.rebuild` keeps a recents row stamped archived out
+  of `sessions` and lists it with the archived (Show › Archived, a project's Done), whether or not the archived read
+  has run. Same day, owner ("yes" to hiding an archived project's chats under Chats too): an archived project's chats
+  leave the list under either pills while Show › Archived is off (`SessionListPipeline.hiddenProjects`); before, only
+  the project pills hid them.
 - **Show Under [bot name]** [bot-chat-shortcut]. Hold a chat on its project page or in Sessions (right-click on Mac)
   to put a shortcut under its own bot in Bots and in the open Mac sidebar, even with Chats Under Bots off. The chat
   stays in its project. The shortcut is not a pin: Recent, Pinned, the chat strip, search and unread rules are unchanged.

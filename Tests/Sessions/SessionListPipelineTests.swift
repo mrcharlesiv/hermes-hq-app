@@ -540,7 +540,7 @@ import Testing
         #expect(groups(.bots)[Self.today] == ["a", "c"])
     }
 
-    /// [project-pills] A project's state comes from its chats; an archived project's chats leave the list (project
+    /// [project-pills] A project's state comes from its chats; an archived project's chats leave the list (any
     /// pills, Show › Archived off) and its counts, unless it is the picked pill.
     @Test func projectStatesAndArchivedProjects() {
         let entries = SessionProjects.menuEntries(Self.projects, order: ["default"])
@@ -558,7 +558,7 @@ import Testing
         #expect(Set(listed { _ in }) == ["c", "d"])
         #expect(Set(listed { $0.prefs.showArchived = true }) == ["a", "b", "c", "d"])
         #expect(Set(listed { $0.prefs.projectFilter = ["/home/hermes/site"] }) == ["a", "b"])
-        #expect(Set(listed { $0.prefs.pills = .bots }) == ["a", "b", "c", "d"])                 // bot pills: nothing hidden
+        #expect(Set(listed { $0.prefs.pills = .bots }) == ["c", "d"])                 // bot pills too (owner 2026-11-23)
         // Group By Project's cards in the pills' order: what needs the owner first, Home last.
         let cards = Self.run(rows) {
             $0.projectsByProfile = Self.projects; $0.projects = entries; $0.prefs.groupBy = .project
@@ -1117,7 +1117,7 @@ extension SessionListPipelineTests {
 
     /// [project-keep] Owner 2026-11-22 ("I don't believe the keep chats in this project feature is working"): the bots'
     /// rows, the strip over a chat and the Mac's Chats tab listed a kept project's chats too. They leave those as they
-    /// leave Recent: still shown when pinned everywhere or waiting on the owner.
+    /// leave Recent: still shown while waiting on the owner. Owner 2026-11-23: pinned everywhere no longer brings one out.
     @Test func aKeptProjectsChatsLeaveTheBotsRows() {
         var asks = Self.chat("asks", ago: 50, status: .needsInput, cwd: Self.site)
         asks.unread = false
@@ -1125,21 +1125,23 @@ extension SessionListPipelineTests {
                     Self.chat("busy", ago: 30, status: .working, cwd: Self.site), asks,
                     Self.chat("pin", ago: 70, pinned: true, cwd: Self.site), Self.chat("home", ago: 60)]
         let away = Set(rows.filter { SessionListPipeline.isKeptAway($0, kept: [Self.site], projectsByProfile: Self.projects) }.map(\.id))
-        #expect(away == ["quiet", "unread", "busy"])
+        #expect(away == ["quiet", "unread", "busy", "pin"])
         #expect(!rows.contains { SessionListPipeline.isKeptAway($0, kept: [], projectsByProfile: Self.projects) })
         #expect(!rows.contains { SessionListPipeline.isKeptAway($0, kept: ["/elsewhere"], projectsByProfile: Self.projects) })
 
-        // Under the bot's row (Pinned + 2 Recent): before, the project's newest two; kept, Home's chat and the asking one.
+        // Under the bot's row (Pinned + 2 Recent): before, the pin and the project's newest two; kept, the asking one and
+        // Home's chat (the pin stays on the project's page).
         let before = BotChatsUnder.pick(rows, bot: "default", choice: BotChatsChoice(mode: .recent, count: 2))
         #expect(before.shown.map(\.id) == ["pin", "quiet", "unread"])
         let listed = rows.filter { !away.contains($0.id) }
         let after = BotChatsUnder.pick(listed, bot: "default", choice: BotChatsChoice(mode: .recent, count: 2))
-        #expect(after.shown.map(\.id) == ["pin", "asks", "home"] && after.more == 0)
+        #expect(after.shown.map(\.id) == ["asks", "home"] && after.more == 0)
     }
 
     /// [project-keep] Owner 2026-11-20: a kept project's chats leave Recent, the days, Group By Status, Group By Bot,
-    /// a flat sort and the status chips; they stay in their project (page, row, counts), in Pinned when pinned
-    /// everywhere, and in New for You and under the New chip only while they wait on the owner.
+    /// a flat sort and the status chips; they stay in their project (page, row, counts), and in New for You and under
+    /// the New chip only while they wait on the owner. Owner 2026-11-23 ("chats hidden outside that project … are still
+    /// showing"): Pinned leaves them out too, unless one waits on the owner.
     @Test func aKeptProjectsChatsStayOnItsPage() {
         let entries = SessionProjects.menuEntries(Self.projects, order: ["default"])
         var asks = Self.chat("asks", ago: 50, status: .needsInput, cwd: Self.site)
@@ -1157,11 +1159,18 @@ extension SessionListPipelineTests {
         }
         func sessions(_ groups: [SessionGroup], _ id: String) -> [String] { groups.first { $0.id == id }?.sessions.map(\.id) ?? [] }
 
-        // Group By Recent: the days hold Home's chats alone; Pinned keeps the chat pinned everywhere.
+        // Group By Recent: the days hold Home's chats alone; Pinned leaves the project's pin on its page.
         #expect(Set(Self.recent(run(false))) == ["quiet", "unread", "busy", "asks", "home", "homeNew"])
         let fresh = run(true)
         #expect(Self.recent(fresh) == ["homeNew", "home"])
-        #expect(sessions(fresh, "pinned") == ["pin"])
+        #expect(sessions(fresh, "pinned").isEmpty && sessions(run(false), "pinned") == ["pin"])
+        // A pinned chat of the project that waits on the owner still shows (New for You lifts it above Pinned).
+        var pinAsks = Self.chat("pinAsks", ago: 30, status: .needsInput, pinned: true, cwd: Self.site)
+        pinAsks.unread = false
+        let asking = Self.run(rows + [pinAsks]) {
+            $0.projectsByProfile = Self.projects; $0.projects = entries; $0.keptProjects = [Self.site]; $0.prefs.groupBy = .bot
+        }
+        #expect(sessions(asking, SessionListPipeline.newId).contains("pinAsks") && sessions(asking, "pinned").isEmpty)
         // With Show › Projects the project's own row still counts every one of its chats.
         let shown = run(true) { $0.prefs.showProjects = true }
         #expect(shown.first { $0.id == "project-" + Self.site }?.total == 5)
@@ -1172,14 +1181,14 @@ extension SessionListPipelineTests {
         let status = run(true) { $0.prefs.groupBy = .status }
         #expect(sessions(status, SessionListPipeline.newId) == ["homeNew", "asks"])
         #expect(sessions(status, "status-working").isEmpty && sessions(status, "status-done") == ["home"])
-        #expect(sessions(status, "pinned") == ["pin"])
+        #expect(sessions(status, "pinned").isEmpty)
         #expect(Set(sessions(run(false) { $0.prefs.groupBy = .status }, SessionListPipeline.newId)) == ["homeNew", "asks", "unread"])
 
         // Group By Bot and a flat sort: Home's alone (and Pinned).
         let bots = run(true) { $0.prefs.groupBy = .bot }
         #expect(sessions(bots, "bot-default") == ["home"])
         let flat = run(true) { $0.prefs.sortBy = .tokens }
-        #expect(sessions(flat, SessionListPipeline.flatId) == ["homeNew", "home"] && sessions(flat, "pinned") == ["pin"])
+        #expect(sessions(flat, SessionListPipeline.flatId) == ["homeNew", "home"] && sessions(flat, "pinned").isEmpty)
 
         // The chips: New lists the asking chat, not the unread one; Working lists none of the project's. The counts
         // say the same.

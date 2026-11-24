@@ -85,7 +85,7 @@ extension SessionsTests {
         XCTAssertTrue(app.navigationBars["Website"].waitForExistence(timeout: 8), "the sheet is titled with the project's name")
         let keep = app.switches["sessions.projectSettings.keep"], pins = app.switches["sessions.projectPage.localPins"]
         XCTAssertTrue(keep.waitForExistence(timeout: 5) && pins.exists, "Chats: Keep Chats in This Project, Pins Stay in Project")
-        let keepHelp = "Unpinned chats leave Recent. Chats that need you still show in New for You. To keep a shortcut under a bot, choose Show Under in the chat’s menu."
+        let keepHelp = "Its chats leave Recent and Pinned. Chats that need you still show in New for You. To keep a shortcut under a bot, choose Show Under in the chat’s menu."
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label == %@", keepHelp)).firstMatch.exists)
         XCTAssertTrue(projectSetting(app, "sessions.projectSettings.autoDone").exists, "Move Quiet Chats to Done")
         XCTAssertTrue(app.staticTexts["Only on this page. Nothing is archived."].exists)

@@ -340,7 +340,7 @@ extension SessionStore {
     /// [project-pills] Projects the owner archived (keys).
     var archivedProjects: Set<String> { Set(device.archivedProjects) }
 
-    /// [project-pills] Archive Project / Unarchive Project: out of the pills and the list (project pills) until Show ›
+    /// [project-pills] Archive Project / Unarchive Project: out of the pills and the list (either pills) until Show ›
     /// Archived. Kept with the other hand-picked parts (synced). Archiving the picked project lets the list go back to
     /// every project.
     func setArchivedProject(_ key: String, _ on: Bool) {

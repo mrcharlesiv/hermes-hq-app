@@ -150,6 +150,14 @@ nonisolated enum TimelineNotes {
                     out![index].parts = [.text(helperTitle(t))]
                     out![index].report = Hydration.asyncResultBody(t)
                     out![index].helperReport = HelperReport.parse(t)
+                } else if let wake = scheduledWake(t) {
+                    // [wake] An automated session wake injected as a prompt: one centred clock line, with the trigger
+                    // prompt opening under it instead of a user bubble.
+                    if out == nil { out = messages }
+                    out![index].role = .system
+                    out![index].parts = [.text(wake.title)]
+                    out![index].job = wake.title
+                    out![index].report = wake.detail
                 }
             case .assistant:
                 guard m.sender == nil, !m.isStreaming, m.error == nil else { continue }
@@ -278,5 +286,68 @@ nonisolated enum TimelineNotes {
     static func holdsBack(streamingText text: String) -> Bool {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return !t.isEmpty && t.count <= 8 && "[SILENT]".hasPrefix(t)
+    }
+
+    // MARK: Automated session wakes
+
+    private static let bracketedWake = TRx(
+        #"^\[(?:(Scheduled|Automatic)\s+(?:wake|wakeup|check|run|trigger)(?::\s*([^\]\n]{1,120}))?|Loop\s+wakeup(?:\s+#(\d+))?(?::\s*([^\]\n]{1,120}))?)\][ \t]*(?:\r?\n|$)"#,
+        [.caseInsensitive]
+    )
+    private static let selfDeclaredWake = TRx(
+        #"^(?:(Scheduled|Automatic)\s+)?([^\n(.]{2,80}?)(?:\s*\(([^)\n]{3,80})\))?[.:]?\s+This is an automatic (?:check|wake|wakeup|run|trigger)\b[^\n.]*\bnot a message from\b[^\n.]*[.!]?[ \t\r\n]*"#,
+        [.caseInsensitive]
+    )
+    private static let genericWakeNouns: Set<String> = ["check", "wake", "wakeup", "run", "trigger", "task", "job"]
+
+    static func isScheduledWake(_ text: String) -> Bool { scheduledWake(text) != nil }
+
+    /// An automated session wake injected as a prompt (a bracketed `[Scheduled wake: …]` / `[Loop wakeup …]` header, or
+    /// a self-declared `"Scheduled <label> (<id>). This is an automatic check for this session, not a message from …."`
+    /// prompt): its short line title and the clean prompt body that opens under it. Nil for ordinary user messages.
+    static func scheduledWake(_ text: String) -> (title: String, detail: String)? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("["), let g = bracketedWake.groups(trimmed), let whole = g[0] {
+            let body = String(trimmed.dropFirst(whole.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            let title: String
+            if let explicit = (g[2] ?? g[4])?.trimmingCharacters(in: .whitespacesAndNewlines), !explicit.isEmpty {
+                title = uppercaseFirst(explicit)
+            } else if let n = g[3], !n.isEmpty {
+                title = "Loop wakeup #\(n)"
+            } else if g[1] == nil {
+                title = "Loop wakeup"
+            } else {
+                title = "Scheduled check"
+            }
+            return (title, body.isEmpty ? trimmed : body)
+        }
+        guard trimmed.range(of: "not a message from", options: .caseInsensitive) != nil,
+              let g = selfDeclaredWake.groups(trimmed), let whole = g[0], let rawLabel = g[2] else { return nil }
+        let label = rawLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !label.isEmpty else { return nil }
+        let prefix = g[1]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title: String
+        if let prefix, genericWakeNouns.contains(label.lowercased()) {
+            title = uppercaseFirst(prefix.lowercased()) + " " + label.lowercased()
+        } else {
+            title = uppercaseFirst(label)
+        }
+        let id = g[3]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = String(trimmed.dropFirst(whole.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        let detail: String
+        if !body.isEmpty {
+            detail = (id?.isEmpty == false) ? "\(body)\n\nID: \(id!)" : body
+        } else if let id, !id.isEmpty {
+            detail = "ID: \(id)"
+        } else {
+            detail = trimmed
+        }
+        return (title, detail)
+    }
+
+    private static func uppercaseFirst(_ s: String) -> String {
+        guard let first = s.first else { return s }
+        return first.uppercased() + s.dropFirst()
     }
 }

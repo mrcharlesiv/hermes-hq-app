@@ -307,7 +307,7 @@ nonisolated enum Hydration {
     // MARK: Timeline notices
 
     static let noticeKinds: Set<String> = ["model_switch", "async_delegation_complete", "process_complete", "auto_continue",
-                                           "personality_switch", "failed_turn"]
+                                           "personality_switch", "failed_turn", "scheduled_wake", "loop_wakeup"]
     static let silentRunText = "Nothing to report — this run was silent"
     /// A turn Hermes picked up again after a restart; the chat draws nothing for it.
     static let autoContinueText = "resumed interrupted turn"
@@ -389,6 +389,10 @@ nonisolated enum Hydration {
             return metadata?["display_text"]?.nonEmptyString ?? "background process finished"
         case "failed_turn":
             return failedTurnWords(content, metadata: metadata)
+        case "scheduled_wake", "loop_wakeup":
+            if let t = metadata?["display_text"]?.nonEmptyString ?? metadata?["title"]?.nonEmptyString { return t }
+            if let wake = TimelineNotes.scheduledWake(content) { return wake.title }
+            return kind == "loop_wakeup" ? "Loop wakeup" : "Scheduled check"
         default:
             if role == "assistant", kind != "hidden", isSilentRun(rawContent) { return silentRunText }
             return content
@@ -576,6 +580,7 @@ nonisolated private struct HMessage {
     var systemNotice = false
     var asyncResult: String?
     var helperReport: HelperReport?
+    var job: String?
     var attachmentRefs: [String] = []
     var firstRowId: Int?
     var attachments: [MessageAttachment] = []   // [attachments]
@@ -925,6 +930,12 @@ nonisolated private struct Folder {
                 let body = Hydration.displayContent(role: role, content: row["content"].flatMap { $0.isTruthy ? $0 : nil } ?? content)
                 message.asyncResult = Hydration.asyncResultBody(body)
                 message.helperReport = HelperReport.parse(body)
+            } else if kind == "scheduled_wake" || kind == "loop_wakeup" {
+                let body = Hydration.displayContent(role: role, content: row["content"].flatMap { $0.isTruthy ? $0 : nil } ?? content)
+                let parsed = TimelineNotes.scheduledWake(body)
+                let detail = parsed?.detail ?? ChatText.trimmed(body)
+                message.asyncResult = detail.isEmpty ? nil : detail
+                message.job = shown
             }
             if row["_synthetic"] == .bool(true) { message.serverRowSpan = 0 }
             result.append(message)
@@ -983,6 +994,7 @@ nonisolated private struct Folder {
                                       timestamp: h.timestamp.map { Date(timeIntervalSince1970: $0) }, rowId: h.rowId)
             message.reactions = h.reactions
             message.helperReport = h.helperReport
+            message.job = h.job
             if let row = h.mineReactionRow ?? h.reactionRow, row != h.rowId { message.reactionRow = row }
             messages.append(message)
             if !meta.isDefault { metas[h.id] = meta }

@@ -462,8 +462,9 @@ nonisolated enum ChatRowBuilder {
             // [activity] In Header (and tool progress off) draw no steps: the status line says what runs (§10.4).
             // [toolnow] It stays under a reply that is still working (a step runs, or it thinks between steps), and names
             // the newest step; it goes once the reply is writing.
-            if last.role == .user || (last.role == .assistant && (!replyVisible || ToolNowRows.working(last))
-                                      && !ActivityRows.suppressesWaiting(last, input: input)) {
+            if last.role == .user || (last.role == .system && last.job != nil)
+                || (last.role == .assistant && (!replyVisible || ToolNowRows.working(last))
+                    && !ActivityRows.suppressesWaiting(last, input: input)) {
                 rows.append(waitingRow(input: input))
                 owners.append(-1)
             }
@@ -507,7 +508,8 @@ nonisolated enum ChatRowBuilder {
     }
 
     private static func waitingRow(input: Input) -> ChatRow {
-        let turn = input.messages.last(where: { $0.role == .user })?.id ?? input.messages.first?.id ?? "pending"
+        let turn = input.messages.last(where: { $0.role == .user || ($0.role == .system && $0.job != nil) })?.id
+            ?? input.messages.first?.id ?? "pending"
         // [thinking] The bot by name, not the model (owner, 2026-10-27: "Waiting for <model>" said nothing useful).
         // [toolnow] The newest step, in a few words ("Ivy is reading package.json…"), else "is thinking…" (before the first).
         let call = ToolNowRows.latest(input.messages.last)
@@ -521,7 +523,7 @@ nonisolated enum ChatRowBuilder {
         var row = WaitingRow(label: label, since: TurnClock.start(turn))
         // Only a running step keeps its own words past 60 s; a finished one held through a long think doesn't.
         row.doing = call?.state == .running
-        let turnStart = (input.messages.lastIndex(where: { $0.role == .user }) ?? -1) + 1
+        let turnStart = (input.messages.lastIndex(where: { $0.role == .user || ($0.role == .system && $0.job != nil) }) ?? -1) + 1
         row.opensSteps = input.messages[turnStart...].contains { m in
             m.role == .assistant && m.parts.contains { if case .tool(let c) = $0 { return !ChatRunSummary.isSilent(c.name) } else { return false } }
         }
@@ -563,8 +565,12 @@ nonisolated enum ChatRowBuilder {
                                     gapAbove: ChatMetrics.turnGap, variant: expanded ? 1 : 0))
                 return
             }
+            // A silent run says nothing, and a turn Hermes picked up again after a restart needs no note ([updates] owner,
+            // 2026-10-27; was: only a silent run that didn't answer you, 2026-10-18).
+            if text.hasSuffix(Hydration.silentRunText) || text == Hydration.autoContinueText { return }   // "<job>: Nothing to report…" too
             let stored = input.backgroundResults[m.id]
-            if !text.isEmpty, let result = stored ?? m.report.map(BackgroundResults.log) {
+            let report = stored ?? m.report.map(BackgroundResults.log)
+            if !text.isEmpty, let result = report ?? (m.job != nil ? "" : nil) {
                 let id = "\(m.id)|bg"
                 let expanded = input.expanded.contains(id)
                 var h = Hasher()
@@ -574,6 +580,7 @@ nonisolated enum ChatRowBuilder {
                 var row = BackgroundResultRow(title: BackgroundResults.plainTitle(text), result: result,
                                               process: BackgroundResults.isProcess(text), expanded: expanded)
                 row.note = text == TimelineNotes.restatedTitle
+                row.cron = m.job != nil
                 // [updates] Another bot's message filed as an update: the line names the bot, the card opens on its words.
                 if let bot = BackgroundResults.fromBot(result) {
                     // [botdm] With that bot's face and roster name, as a delivery's line.
@@ -582,16 +589,15 @@ nonisolated enum ChatRowBuilder {
                     row.title = "From " + BackgroundResults.botName(sender?.name ?? bot.name)
                     row.result = bot.body
                     row.delivery = true
+                    row.cron = false
                     row.face = sender
                     h.combine(sender)
                 }
+                if row.cron { h.combine(true) }
                 rows.append(ChatRow(id: id, messageId: m.id, scope: input.scope, fingerprint: h.finalize(), kind: .backgroundResult(row),
                                     gapAbove: ChatMetrics.turnGap, variant: expanded ? 1 : 0))
                 return
             }
-            // A silent run says nothing, and a turn Hermes picked up again after a restart needs no note ([updates] owner,
-            // 2026-10-27; was: only a silent run that didn't answer you, 2026-10-18).
-            if text.hasSuffix(Hydration.silentRunText) || text == Hydration.autoContinueText { return }   // "<job>: Nothing to report…" too
             if !text.isEmpty {
                 rows.append(ChatRow(id: "\(m.id)|notice", messageId: m.id, scope: input.scope, fingerprint: RowHash.of(text),
                                     kind: .notice(text), gapAbove: ChatMetrics.turnGap, variant: 0))

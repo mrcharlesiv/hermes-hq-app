@@ -174,7 +174,8 @@ nonisolated struct TranscriptEntry: Sendable, Equatable {
         w.optionalDouble(m.timestamp?.timeIntervalSince1970)
         w.optionalInt(m.rowId)
         let reacted = !m.reactions.isEmpty || m.reactionRow != nil
-        w.byte((m.interrupted ? 1 : 0) | (reacted ? 2 : 0) | (m.helperReport != nil ? 4 : 0))
+        let scheduledWake = m.role == .system && m.job != nil
+        w.byte((m.interrupted ? 1 : 0) | (reacted ? 2 : 0) | (m.helperReport != nil ? 4 : 0) | (scheduledWake ? 8 : 0))
         w.optionalString(m.error)
         if let report = m.helperReport { w.json(report.json) }
         if reacted {
@@ -279,6 +280,7 @@ nonisolated struct TranscriptEntry: Sendable, Equatable {
         message.helperReport = helperReport
         message.reactions = reactions
         message.reactionRow = reactionRow
+        if role == .system, flags & 8 != 0 { message.job = message.plainText }
         guard try r.bool() else { return (message, nil) }
         var meta = MessageMeta()
         meta.serverRowSpan = try r.int()

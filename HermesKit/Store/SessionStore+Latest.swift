@@ -62,9 +62,10 @@ nonisolated enum SessionLatestRules {
         }.map(\.element)
         for row in ordered {
             guard let role = row["role"]?.string, role == "user" || role == "assistant" else { continue }
+            if let kind = row["display_kind"]?.string, kind == "scheduled_wake" || kind == "loop_wakeup" { continue }
             // The words the chat shows: a compaction carrier's `content` is Hermes's whole summary.
             var raw = words(row["display_content"]?.string != nil ? row["display_content"] : row["content"])
-            if role == "user", TimelineNotes.isTaskSnapshot(raw) { continue }
+            if role == "user", TimelineNotes.isTaskSnapshot(raw) || TimelineNotes.isScheduledWake(raw) { continue }
             // [restated] Your request restated after a compaction repeats one already in the chat.
             if role == "user", let restated = TimelineNotes.restatedRequest(raw) { raw = restated.before }
             if role == "user", raw.contains("(Task id "), let asked = TodoWords.askShown(raw) { raw = asked }   // [tasks]
@@ -87,7 +88,7 @@ extension SessionStore {
     /// The newest message to show for `row`, else nil (the gateway's preview stands).
     func latestText(_ row: SidebarSessionRow) -> String? {
         guard let text = device.latest[Self.writeKey(id: row.id, profile: row.profile)]?.text,
-              !TimelineNotes.isTaskSnapshot(text) else { return nil }
+              !TimelineNotes.isTaskSnapshot(text), !TimelineNotes.isScheduledWake(text) else { return nil }
         return text
     }
 
@@ -128,7 +129,8 @@ extension SessionStore {
             let cached = device.latest[key]
             let stale = latestStale.contains(key)
             let sameCount = cached?.count == nil || row.messageCount == nil || cached?.count == row.messageCount
-            let current = !stale && cached?.at == row.recency && sameCount && cached?.role != nil && !TimelineNotes.isTaskSnapshot(cached?.text ?? "")
+            let current = !stale && cached?.at == row.recency && sameCount && cached?.role != nil
+                && !TimelineNotes.isTaskSnapshot(cached?.text ?? "") && !TimelineNotes.isScheduledWake(cached?.text ?? "")
             if current || latestReads.contains(key) || latestQueue.contains(where: { $0.id == row.id && $0.profile == row.profile }) { continue }
             latestStale.remove(key)
             latestQueue.append(row)
@@ -155,7 +157,7 @@ extension SessionStore {
     /// A chat just seen or answered on this device: its row says so before the next read.
     func noteLatest(profile: String, sessionId: String, text: String, role: String? = nil) {
         let line = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        guard !line.isEmpty, !Hydration.isSilentWords(line), !TimelineNotes.isTaskSnapshot(line),
+        guard !line.isEmpty, !Hydration.isSilentWords(line), !TimelineNotes.isTaskSnapshot(line), !TimelineNotes.isScheduledWake(line),
               let row = rowsById[sessionId], row.profile == profile else { return }
         let key = Self.writeKey(id: sessionId, profile: profile)
         let clipped = line.count > 200 ? String(line.prefix(200)) : line

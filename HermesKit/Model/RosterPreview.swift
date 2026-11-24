@@ -81,6 +81,7 @@ nonisolated enum RosterPreview {
             return stripped.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         if kanbanDispatch.test(value) { return "Kanban task" }
+        if let wake = TimelineNotes.scheduledWake(value) { return wake.title }
         if machineTag.test(value) {
             return machineTagPair.replaceAll(value, "").trimmingCharacters(in: .whitespacesAndNewlines)
         }

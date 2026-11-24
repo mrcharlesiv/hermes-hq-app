@@ -320,7 +320,7 @@ final class MarketplaceController: SearchPageHost<HQScaledRoot<MarketplaceView>>
         let box = UIView()
         box.addSubview(bar)
         // The minimal bar keeps a few points round its field: the box's end less those meets the cards' edge.
-        let trailing = Self.searchEndInset
+        let trailing = Self.searchEndInset + ScrollBarLane.listTrailing
         NSLayoutConstraint.activate([
             bar.leadingAnchor.constraint(equalTo: box.leadingAnchor),
             bar.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -trailing),
@@ -499,7 +499,10 @@ struct MarketplaceView: View {
                 }
                 // [Mac AAA 2026-11-16] Narrow (a listing open beside it) the cards stood 4 pt in from "Marketplace" over
                 // them: on the title's edge, the Tools' one side inset.
-                .padding(.horizontal, wide ? 24 : MacInset.side)
+                // [mac] Trailing keeps the scroller's lane (`ScrollBarLane.listTrailing`) so the vertical scroll bar runs
+                // beside the segments, Featured carousel and cards rather than over them.
+                .padding(.leading, wide ? 24 : MacInset.side)
+                .padding(.trailing, (wide ? 24 : MacInset.side) + ScrollBarLane.listTrailing)
                 .padding(.top, wide ? 20 : 10)
                 .padding(.bottom, 32)
             }
@@ -549,7 +552,9 @@ struct MarketplaceView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 12).padding(.vertical, 16)
+                .padding(.leading, 12)
+                .padding(.trailing, 12 + ScrollBarLane.listTrailing)
+                .padding(.vertical, 16)
             }
             if model.bots.count > 1 {
                 HQHairline()
@@ -679,7 +684,7 @@ struct MarketplaceView: View {
 
     /// This week's pick large, with its picture whole, and the other picks down its right side.
     private func storeHero(_ picks: [PluginCatalogEntry]) -> some View {
-        let heroContentWidth = max(0, pageWidth - 264 - 48)
+        let heroContentWidth = max(0, pageWidth - 264 - 48 - ScrollBarLane.listTrailing)
         let sideWidth = min(400, max(280, (heroContentWidth * 0.42).rounded()))
         let stackSide = heroContentWidth < 760
         let pickH = Self.sidePickHeight
@@ -732,6 +737,7 @@ struct MarketplaceView: View {
                             }
                         }
                     }
+                    .scrollIndicators(.never)
                     .frame(width: sideWidth)
                 }
                 .frame(height: heroH)
@@ -778,7 +784,7 @@ struct MarketplaceView: View {
     /// A shelf's picks in whole rows: four picks in three columns show three, not a fourth alone on its own row.
     private func wholeRows<T>(_ items: [T]) -> [T] {
         guard pageWidth >= Self.sideAt else { return items }
-        let columns = max(1, Int((pageWidth - 265 - 48 + 12) / (350 + 12)))
+        let columns = max(1, Int((pageWidth - 265 - 48 - ScrollBarLane.listTrailing + 12) / (350 + 12)))
         return items.count > columns ? Array(items.prefix(items.count - items.count % columns)) : items
     }
 
@@ -1870,7 +1876,8 @@ struct MarketplaceCarousel: View {
                 Spacer()
                 rowArrow("chevron.right", label: "Next", enabled: at < entries.count - 1) { step(to: at + 1) }
             }
-            .padding(.horizontal, -12)
+            // [mac] Kept inside the carousel's bounds so the trailing arrow never overhangs into the vertical scroll bar lane.
+            .padding(.horizontal, 8)
         }
         #endif
     }
@@ -1898,6 +1905,8 @@ struct MarketplaceCarousel: View {
 
     var body: some View {
         if row {
+            // [mac] Clipped to the column (no `scrollClipDisabled`) with a soft edge fade so peeking cards stay clear
+            // of the outer pane's vertical scroll bar lane instead of bleeding underneath it.
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: 14) {
                     ForEach(entries) { entry in card(entry).frame(width: 340, height: 318).id(entry.id) }
@@ -1905,7 +1914,8 @@ struct MarketplaceCarousel: View {
                 .scrollTargetLayout()
             }
             .scrollPosition(id: $shown, anchor: .leading)
-            .scrollClipDisabled()
+            .scrollIndicators(.never)
+            .hqScrollEdgeFade(width: 24)
             .overlay { rowArrows }
             .accessibilityIdentifier("marketplace.featured")
         } else {

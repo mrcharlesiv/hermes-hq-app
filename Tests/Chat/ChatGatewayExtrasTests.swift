@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import UIKit
 @testable import HermesHQNative
 
 /// The context estimate, running commands and Tapback reactions (ChatGatewayExtras.swift, polish sweep 2026-10-24).
@@ -187,6 +188,84 @@ struct ChatGatewayExtrasTests {
         #expect(BackgroundJobWords.agent("codex exec -m gpt-5 'Tidy the docs'")?.prompt == "Tidy the docs", "a flag's value is not the prompt")
         #expect(BackgroundJobWords.withoutLeadIn("Now the app's own test gate") == "The app's own test gate")
         #expect(BackgroundJobWords.withoutLeadIn("Running it") == "Running it", "too little left: keep the sentence")
+    }
+
+    /// [background] Richer process details: inline script labels, ANSI/progress-bar cleaning, extra process.list fields,
+    /// transcript full-command/context recovery, live elapsed ticking, and the master-detail shelf body.
+    @Test func backgroundProcessDetailsAndLiveBody() throws {
+        // Inline scripts get clean names; named scripts stay intact.
+        #expect(BackgroundJobWords.friendlyProgram("python3 -") == "Python script")
+        #expect(BackgroundJobWords.friendlyProgram("python3 -u -") == "Python script")
+        #expect(BackgroundJobWords.friendlyProgram("bash -c 'sleep 5'") == "Shell script")
+        #expect(BackgroundJobWords.friendlyProgram("node -e 'setInterval(()=>{},1000)'") == "Node script")
+        #expect(BackgroundJobWords.friendlyProgram("python3 scripts/ship.py archive") == "python3 scripts/ship.py archive")
+
+        let heredoc = "# Shipping beta build\ncd ~/Projects/app-wt/release-job && python3 - <<'PY'\nimport time\nprint('ok')\nPY"
+        let heredocJob = BackgroundProcess(id: "p_py", command: heredoc, status: "running", uptimeSeconds: 120, exitCode: nil, tail: "")
+        #expect(heredocJob.headline == "Shipping beta build")
+        #expect(heredocJob.detailLine == "Python script · release-job")
+
+        // ANSI escape sequences and carriage-return progress overwrites are cleaned cleanly.
+        let dirtyTail = "\n\u{1B}[32m[05:24]\u{1B}[0m Checking build 42\r\nDownloading 10%\rDownloading 100%\n\u{1B}[1mWaiting on review\u{1B}[0m\n\n"
+        let cleaned = BackgroundProcess.cleanOutput(dirtyTail)
+        #expect(cleaned == "[05:24] Checking build 42\nDownloading 100%\nWaiting on review")
+        let withTail = BackgroundProcess(id: "p_tail", command: "make", status: "running", uptimeSeconds: 60, exitCode: nil, tail: dirtyTail)
+        #expect(withTail.lastLine == "Waiting on review")
+        #expect(withTail.earlierPreviewLines == ["[05:24] Checking build 42", "Downloading 100%"])
+
+        // Extra process.list fields decode leniently.
+        let answer: JSONValue = ["processes": [[
+            "session_id": "proc_rich",
+            "command": "python3 - <<'PY'\nprint('hi')\nPY",
+            "cwd": "/Users/me/Projects/release-job",
+            "pid": 4211,
+            "status": "running",
+            "uptime_seconds": 300,
+            "started_at": "2026-10-13T02:14:26Z",
+            "last_output_at": "2026-10-13T02:19:10Z",
+            "watch_patterns": ["READY_FOR_SALE", "FAILED"],
+            "watch_hit": "READY_FOR_SALE",
+            "output_tail": "line 1\nline 2\nline 3\n",
+        ]]]
+        let rich = try #require(BackgroundProcess.list(answer).first)
+        #expect(rich.pid == 4211)
+        #expect(rich.cwd == "/Users/me/Projects/release-job")
+        #expect(rich.startedAt != nil)
+        #expect(rich.lastOutputAt != nil)
+        #expect(rich.watchPatterns == ["READY_FOR_SALE", "FAILED"])
+        #expect(rich.watchHit == "READY_FOR_SALE")
+        #expect(BackgroundProcess.parseTimestamp(.string("2026-10-13T02:14:26")) != nil)
+        #expect(rich.elapsedSeconds(observedAt: 1000, now: 1045) == 345)
+        #expect(BackgroundProcess.freshnessWords(since: 1000, now: 1003) == "Updated just now")
+        #expect(BackgroundProcess.freshnessWords(since: 1000, now: 1075) == "Updated 1m ago")
+
+        // Transcript match recovers full command past process.list's 200-char clip and fuller bot context.
+        let longCmd = "cd ~/Projects/release && python3 - <<'PY'\n" + String(repeating: "x = 1\n", count: 50) + "PY"
+        let clipped = String(longCmd.prefix(200))
+        let args = String(data: try JSONSerialization.data(withJSONObject: ["command": longCmd, "background": true]), encoding: .utf8)
+        let messages = [
+            ChatMessage(id: "a1", role: .assistant, parts: [
+                .text("Build 41 is still waiting for review, so the script will poll every five minutes and submit build 42 once it clears. Starting the release watcher now."),
+                .tool(ToolCall(id: "t1", name: "terminal", title: "terminal", argsText: args, summary: nil, state: .done)),
+            ]),
+        ]
+        let matched = try #require(BackgroundJobWords.match(for: clipped, in: messages))
+        #expect(matched.botWords == "The release watcher now")
+        #expect(matched.botNote?.contains("poll every five minutes") == true)
+        #expect(matched.fullCommand == longCmd)
+
+        // Shelf body: list view -> detail view -> wide split view without crashing or breaking layout.
+        let body = BackgroundTasksBody()
+        let timing = ["proc_rich": BackgroundTaskTiming(observedAt: 1000, outputChangedAt: 990)]
+        body.update([rich], selected: nil, stopping: [], timing: timing, wide: false, width: 350, now: 1010)
+        let listRev = body.layoutRevision
+        body.update([rich], selected: "proc_rich", stopping: [], timing: timing, wide: false, width: 350, now: 1010)
+        #expect(body.layoutRevision != listRev)
+        body.tick(now: 1020)
+        body.update([rich], selected: "proc_rich", stopping: [], timing: timing, wide: true, width: 700, now: 1020)
+        let size = body.systemLayoutSizeFitting(CGSize(width: 700, height: UIView.layoutFittingCompressedSize.height),
+                                                withHorizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel)
+        #expect(size.height > 100)
     }
 
     @Test func runningCommandsListsAndStopsOne() async throws {

@@ -57,11 +57,23 @@ import UIKit
     private lazy var goalBody = GoalBody()
     /// [background] The chat's running background commands (`process.list`), the Background tasks chip's rows.
     private(set) var backgroundTasks: [BackgroundProcess] = []
+    /// [background] The job whose detail page is open inside the Background card (nil: list view).
+    private var selectedBackground: String?
+    /// [background] Observed poll timing and output freshness per job id.
+    private var backgroundTiming: [String: BackgroundTaskTiming] = [:]
+    /// [background] The last raw output tail seen for each job, to detect live output updates across polls.
+    private var backgroundLastTails: [String: String] = [:]
     /// [background] Commands whose Stop went out (their row says "Stopping…" until the list drops them).
     private var backgroundStopping: Set<String> = []
     private var backgroundPoll: Task<Void, Never>?
     private lazy var backgroundBody: BackgroundTasksBody = {
         let body = BackgroundTasksBody()
+        body.onSelect = { [weak self] id in
+            guard let self else { return }
+            self.selectedBackground = id
+            self.updateShelf(animated: true)
+            if id != nil { DispatchQueue.main.async { [weak self] in self?.revealSelectedBackground() } }
+        }
         body.onStop = { [weak self] id in self?.stopBackground(id) }
         return body
     }()
@@ -179,6 +191,7 @@ import UIKit
             self.subagentsBody.endEditing(true)
             self.openPieces.removeAll()
             self.selectedSubagent = nil
+            self.selectedBackground = nil
             self.shelf.expanded = false
             self.updateShelf(animated: true)
         }
@@ -282,12 +295,37 @@ import UIKit
         // Each job is named by the bot's own words before the call that started it, read from this chat's transcript
         // (its newest 300 messages: a job started further back is named from its command).
         let messages = Array(chat.session.messages.suffix(300))
+        let now = Date().timeIntervalSince1970
         let list = fetched.map { job -> BackgroundProcess in
             var job = job
-            job.botWords = BackgroundJobWords.botWords(for: job.command, in: messages)
+            if let matched = BackgroundJobWords.match(for: job.command, in: messages) {
+                job.botWords = matched.botWords
+                job.botNote = matched.botNote
+                job.fullCommand = matched.fullCommand
+            }
             return job
         }
-        backgroundStopping.formIntersection(list.map(\.id))
+        let ids = Set(list.map(\.id))
+        var freshnessChanged = false
+        for job in list {
+            let priorTail = backgroundLastTails[job.id]
+            let priorChanged = backgroundTiming[job.id]?.outputChangedAt
+            let changedAt: Double?
+            if let serverAt = job.lastOutputAt {
+                changedAt = serverAt
+            } else if let priorTail, job.tail != priorTail, !job.tail.isEmpty {
+                changedAt = now
+            } else {
+                changedAt = priorChanged
+            }
+            if changedAt != priorChanged { freshnessChanged = true }
+            backgroundLastTails[job.id] = job.tail
+            backgroundTiming[job.id] = BackgroundTaskTiming(observedAt: now, outputChangedAt: changedAt)
+        }
+        backgroundLastTails = backgroundLastTails.filter { ids.contains($0.key) }
+        backgroundTiming = backgroundTiming.filter { ids.contains($0.key) }
+        backgroundStopping.formIntersection(ids)
+        if let sel = selectedBackground, !ids.contains(sel) { selectedBackground = nil }
         if let live = chat.session as? LiveChatSession, let store = provider?.activityStore,
            let rid = provider?.activityRuntimeId ?? live.runtimeSessionId {
             // The Bots and Sessions rows say Working… while it runs, after the chat closes too (the stale check
@@ -295,7 +333,7 @@ import UIKit
             store.setProcessClaims(runtimeId: rid, profile: live.profile, storedId: live.storedSessionId,
                                    list.map { ProcessClaim(id: $0.id, running: true) })
         }
-        guard list != backgroundTasks else { return }
+        guard list != backgroundTasks || freshnessChanged else { return }
         if backgroundTasks.count != list.count, !list.isEmpty || !backgroundTasks.isEmpty {
             AppLog.trace("jobs", "background tasks on screen: \(backgroundTasks.count) -> \(list.count)")
         }
@@ -942,7 +980,15 @@ import UIKit
             let piece = pieceView(.background)
             piece.header.set(words: "Background", value: "\(backgroundTasks.count) running",
                              spoken: BackgroundProcess.chipWords(backgroundTasks) ?? "Background task", spinner: ChatPalette.label2)
-            backgroundBody.update(backgroundTasks, stopping: backgroundStopping)
+            if let sel = selectedBackground, !backgroundTasks.contains(where: { $0.id == sel }) { selectedBackground = nil }
+            let wide = shelfWidth >= BackgroundTasksBody.wideWidth
+            if wide, openPieces.contains(.background), selectedBackground == nil {
+                selectedBackground = backgroundTasks.first?.id
+            }
+            backgroundBody.update(backgroundTasks, selected: selectedBackground, stopping: backgroundStopping,
+                                  timing: backgroundTiming, wide: wide, width: shelfWidth - 12, now: now)
+        } else {
+            selectedBackground = nil
         }
         if present.contains(.previousTasks) {
             let piece = pieceView(.previousTasks)
@@ -1037,11 +1083,15 @@ import UIKit
             shelf.summary.entries.removeAll()
             shelf.expanded = false
         }
-        // Timers tick while the subagents card is open.
-        if openPieces.contains(.subagents) && present.contains(.subagents) {
+        // Timers tick while the subagents or background card is open.
+        let subagentsOpen = openPieces.contains(.subagents) && present.contains(.subagents)
+        let backgroundOpen = openPieces.contains(.background) && present.contains(.background)
+        if subagentsOpen || backgroundOpen {
             ActivityClock.shared.subscribe(self) { [weak self] in
                 guard let self else { return }
-                self.subagentsBody.tick(now: Date().timeIntervalSince1970)
+                let now = Date().timeIntervalSince1970
+                if self.openPieces.contains(.subagents) { self.subagentsBody.tick(now: now) }
+                if self.openPieces.contains(.background) { self.backgroundBody.tick(now: now) }
             }
         } else {
             ActivityClock.shared.unsubscribe(self)
@@ -1138,7 +1188,8 @@ import UIKit
         let visible = max(200, chat.composer.frame.minY - top)
         let keyboardUp = view.keyboardLayoutGuide.layoutFrame.height > view.safeAreaInsets.bottom + 20
             || (subagentsBody.isEditingSteer && !DeviceWord.isMac)
-        let detailOpen = openPieces.contains(.subagents) && selectedSubagent != nil
+        let detailOpen = (openPieces.contains(.subagents) && selectedSubagent != nil)
+            || (openPieces.contains(.background) && selectedBackground != nil)
         // Wide (the Mac, iPad) has the room: the list and its page take up to 70 %.
         let open: CGFloat = shelfWidth >= SubagentsBody.wideWidth ? 0.7 : 0.6
         return (visible * (detailOpen && !keyboardUp ? open : 0.4)).rounded()
@@ -1276,6 +1327,21 @@ import UIKit
         #if DEBUG
         motionProbe?.note("steer row \(row) scroll bounds=\(piece.scroll.bounds) content=\(piece.scroll.contentSize) piece=\(piece.bounds)")
         #endif
+    }
+
+    /// A tapped background job's row or detail back row comes into sight inside the card's scroller.
+    private func revealSelectedBackground() {
+        guard let piece = shelf.pieces[.background], piece.isOpen else { return }
+        piece.layoutIfNeeded()
+        piece.scroll.layoutIfNeeded()
+        guard let frame = backgroundBody.selectedFrame(in: piece.scroll) else { return }
+        let scroll = piece.scroll
+        let visible = scroll.bounds.height
+        var y = scroll.contentOffset.y
+        if frame.maxY + 8 > y + visible { y = frame.maxY + 8 - visible }
+        if frame.minY - 8 < y { y = frame.minY - 8 }
+        y = max(0, min(y, scroll.contentSize.height - visible))
+        if abs(y - scroll.contentOffset.y) > 0.5 { scroll.setContentOffset(CGPoint(x: 0, y: y), animated: !HQMotion.reduced) }
     }
 
     /// A tapped child's row and its detail (right under it) come into sight inside the card's one scroller: the row's

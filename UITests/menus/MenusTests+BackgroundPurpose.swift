@@ -44,4 +44,75 @@ extension MenusTests {
         XCTAssertTrue(quiet.contains("Writing to archive.log"), "\(quiet)")
         shot(app, "background-purpose")
     }
+
+    @MainActor func test33c_BackgroundDetailShowsLiveOutputAndCommand() throws {
+        let (account, app) = try start()
+        let script = """
+        # Shipping the beta invite to public TestFlight
+        cd ~/Projects/app-wt/release-job && python3 - <<'PY'
+        import time
+        while True:
+            print("checking")
+            time.sleep(300)
+        PY
+        """
+        let lines = (1...15).map { "[05:\(String(format: "%02d", $0))] Build 1246 still waiting for review (check \($0)/15)" }
+            + ["Waiting for earlier builds to clear before submitting build 1254"]
+        try account.control("/__menus/mode", [
+            "jobTurns": [["text": "Build 1246 is still in review, so this watcher checks Apple every five minutes and submits 1254 as soon as it clears. Starting the public beta release watcher.", "command": script]],
+            "processes": [[
+                "session_id": "proc_rel",
+                "command": String(script.prefix(200)),
+                "cwd": "/Users/me/Projects/app-wt/release-job",
+                "pid": 4211,
+                "status": "running",
+                "uptime_seconds": 28740,
+                "started_at": "2026-10-13T02:14:26Z",
+                "watch_patterns": ["READY_FOR_SALE", "INVALID_BINARY"],
+                "output_tail": lines.joined(separator: "\n") + "\n",
+            ]],
+        ])
+        openBotChat(app)
+        let chip = app.activityCategory("background")
+        XCTAssertTrue(chip.waitForExistence(timeout: 10))
+        chip.tap()
+
+        let title = app.descendants(matching: .any)["chat.background.title"].firstMatch
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        XCTAssertTrue(title.label.hasPrefix("Shipping the beta invite to public TestFlight, running"), title.label)
+        let detail = app.descendants(matching: .any)["chat.background.detail"].firstMatch
+        XCTAssertEqual(detail.label, "Python script · release-job")
+        let rowOutput = app.descendants(matching: .any)["chat.background.output"].firstMatch
+        XCTAssertEqual(rowOutput.label, "Waiting for earlier builds to clear before submitting build 1254")
+        shot(app, "background-list-improved")
+
+        // Tap the row to drill into the full detail page.
+        title.tap()
+        let detailTitle = app.descendants(matching: .any)["chat.background.detail.title"].firstMatch
+        XCTAssertTrue(detailTitle.waitForExistence(timeout: 5), "tapping a row opens its detail page")
+        XCTAssertEqual(detailTitle.label, "Shipping the beta invite to public TestFlight")
+        let detailOutput = app.descendants(matching: .any)["chat.background.detail.output"].firstMatch
+        XCTAssertTrue(detailOutput.label.contains("Build 1246 still waiting for review"), detailOutput.label)
+        XCTAssertTrue(detailOutput.label.contains("Waiting for earlier builds to clear"), detailOutput.label)
+        let meta = app.descendants(matching: .any)["chat.background.detail.meta"].firstMatch
+        XCTAssertTrue(meta.label.contains("PID 4211"), meta.label)
+        XCTAssertTrue(meta.label.contains("Started"), meta.label)
+        XCTAssertTrue(app.buttons["chat.background.copy-output"].exists)
+        XCTAssertTrue(app.buttons["chat.background.copy-command"].exists)
+        XCTAssertTrue(app.buttons["chat.background.output-toggle"].exists, "long output offers Show All")
+        shot(app, "background-detail-view")
+
+        // Back returns to the list; tapping again and stopping sends process.kill.
+        let back = app.buttons["chat.background.back"]
+        XCTAssertTrue(back.exists)
+        back.tap()
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        title.tap()
+        let stop = app.buttons["chat.background.detail.stop"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 5))
+        stop.tap()
+        XCTAssertTrue(waitUntil(timeout: 8) {
+            self.calls(account, "process.kill").contains { ($0["process_id"] as? String) == "proc_rel" }
+        }, "Stop from detail sends process.kill")
+    }
 }

@@ -50,28 +50,45 @@ nonisolated struct BackgroundProcess: Hashable, Sendable, Identifiable {
     var tail: String
     /// [background] The folder it runs in (`process.list`'s `cwd`), for the row's detail when its command has no `cd`.
     var cwd: String? = nil
+    /// [background] When the process started (epoch seconds parsed from `process.list`'s `started_at`).
+    var startedAt: Double? = nil
+    /// [background] OS process id when `process.list` reports it.
+    var pid: Int? = nil
+    /// [background] Patterns the gateway is watching this job's output for (`watch_patterns`).
+    var watchPatterns: [String] = []
+    /// [background] The watch pattern that matched, if any (`watch_hit`).
+    var watchHit: String? = nil
+    /// [background] When the job last printed output (epoch seconds), if the gateway reports `last_output_at`.
+    var lastOutputAt: Double? = nil
     /// [background] The bot's own sentence before the call that started it (`BackgroundJobWords.botWords`), filled in
     /// by the chat from its transcript; nil when the bot said nothing or the call is out of the loaded history.
     var botWords: String? = nil
+    /// [background] Fuller context from the bot's paragraph before starting the job, when longer than `botWords`.
+    var botNote: String? = nil
+    /// [background] The full command recovered from the chat's `terminal` tool call when `process.list` clipped it.
+    var fullCommand: String? = nil
 
     var isRunning: Bool { status == "running" }
 
+    /// The fullest command available: the transcript's untruncated command when recovered, else `process.list`'s.
+    var effectiveCommand: String { fullCommand ?? command }
+
     /// [background] The row's name: the bot's # comment, its own words, an agent's prompt, or the program and folder.
-    var headline: String { BackgroundJobWords.headline(command: command, botWords: botWords) }
+    var headline: String { BackgroundJobWords.headline(command: effectiveCommand, botWords: botWords) }
     /// [background] Who runs it and where ("Claude Code · goals-2"); nil when the name says it all.
-    var detailLine: String? { BackgroundJobWords.detail(command: command, cwd: cwd, headline: headline) }
+    var detailLine: String? { BackgroundJobWords.detail(command: effectiveCommand, cwd: cwd, headline: headline) }
     /// [background] The newest output line, else an honest quiet line ("No output for 1h 22m").
-    var statusLine: String { lastLine.isEmpty ? BackgroundJobWords.quietLine(command: command, uptimeSeconds: uptimeSeconds) : lastLine }
+    var statusLine: String { lastLine.isEmpty ? BackgroundJobWords.quietLine(command: effectiveCommand, uptimeSeconds: uptimeSeconds) : lastLine }
 
     /// The job's name (`BackgroundTaskText.title`): its leading `# comment`, else the program it runs and its folder
     /// ("npm test", "make · app" for `cd ~/app && make`), not a bare `cd …`; "Background command" when it has none.
     var title: String {
-        let name = BackgroundTaskText.title(command: command)
+        let name = BackgroundTaskText.title(command: effectiveCommand)
         return name == "background process" ? "Background command" : name
     }
 
     /// [background] The row's line while the job has printed nothing: where its output goes when it writes to a file.
-    var quietLine: String { BackgroundTaskText.quietLine(command: command) }
+    var quietLine: String { BackgroundTaskText.quietLine(command: effectiveCommand) }
 
     /// "Running · 3m" (or "Running" while the time is unknown).
     var detail: String {
@@ -79,10 +96,26 @@ nonisolated struct BackgroundProcess: Hashable, Sendable, Identifiable {
         return uptimeSeconds.map { "Running · \(Self.duration($0))" } ?? "Running"
     }
 
+    /// `tail` with ANSI escape sequences stripped, carriage-return overwrites collapsed, and outer blank lines trimmed.
+    var cleanedTail: String { Self.cleanOutput(tail) }
+
+    /// Non-empty trimmed lines from `cleanedTail`, in order.
+    var outputLines: [String] {
+        cleanedTail.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
     /// The last two lines it printed, each at most 160 characters.
     var tailLines: String {
-        let lines = tail.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        return lines.suffix(2).map { $0.count > 160 ? String($0.prefix(159)) + "…" : $0 }.joined(separator: "\n")
+        outputLines.suffix(2).map { $0.count > 160 ? String($0.prefix(159)) + "…" : $0 }.joined(separator: "\n")
+    }
+
+    /// [background] Up to two non-empty lines immediately before `lastLine`, for the list row's multi-line preview.
+    var earlierPreviewLines: [String] {
+        let lines = outputLines
+        guard lines.count > 1 else { return [] }
+        return lines.dropLast().suffix(2).map { $0.count > 160 ? String($0.prefix(159)) + "…" : $0 }
     }
 
     /// [background] The shelf chip's words: "Background task · 6m" for one (its time while known), "2 background tasks"
@@ -97,9 +130,31 @@ nonisolated struct BackgroundProcess: Hashable, Sendable, Identifiable {
 
     /// [background] The newest line it printed (for the shelf's row), at most 160 characters; "" when it printed none.
     var lastLine: String {
-        let lines = tail.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        guard let last = lines.last else { return "" }
+        guard let last = outputLines.last else { return "" }
         return last.count > 160 ? String(last.prefix(159)) + "…" : last
+    }
+
+    /// Live elapsed seconds: `uptime_seconds` counted forward locally from `observedAt`, else `started_at` fallback.
+    func elapsedSeconds(observedAt: Double?, now: Double) -> Int? {
+        if let uptime = uptimeSeconds {
+            guard let observedAt else { return uptime }
+            return max(0, uptime + max(0, Int((now - observedAt).rounded(.down))))
+        }
+        if let startedAt { return max(0, Int((now - startedAt).rounded(.down))) }
+        return nil
+    }
+
+    /// When this job started: `started_at` when reported, else derived from `uptime_seconds` at `observedAt`.
+    func startDate(observedAt: Double?) -> Date? {
+        if let startedAt { return Date(timeIntervalSince1970: startedAt) }
+        if let uptime = uptimeSeconds, let observedAt { return Date(timeIntervalSince1970: observedAt - Double(uptime)) }
+        return nil
+    }
+
+    /// Short freshness phrase for when output last changed ("Updated just now", "Updated 2m ago").
+    static func freshnessWords(since timestamp: Double, now: Double) -> String {
+        let age = max(0, Int((now - timestamp).rounded(.down)))
+        return age < 5 ? "Updated just now" : "Updated \(duration(age)) ago"
     }
 
     static func duration(_ seconds: Int) -> String {
@@ -110,6 +165,48 @@ nonisolated struct BackgroundProcess: Hashable, Sendable, Identifiable {
         return m == 0 ? "\(s / 3600)h" : "\(s / 3600)h \(m)m"
     }
 
+    /// Strips ANSI CSI/OSC escape sequences, normalizes progress-bar `\r` overwrites, and trims outer blank lines.
+    static func cleanOutput(_ raw: String) -> String {
+        guard !raw.isEmpty else { return "" }
+        var text = raw.replacingOccurrences(of: "\r\n", with: "\n")
+        if text.contains("\u{1B}") {
+            text = ansiEscape.replacingMatches(in: text, with: "")
+        }
+        if text.contains("\r") {
+            text = text.split(separator: "\n", omittingEmptySubsequences: false).map { line -> String in
+                guard line.contains("\r") else { return String(line) }
+                let parts = line.split(separator: "\r", omittingEmptySubsequences: true)
+                return parts.last.map(String.init) ?? ""
+            }.joined(separator: "\n")
+        }
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        while let first = lines.first, first.trimmingCharacters(in: .whitespaces).isEmpty { lines.removeFirst() }
+        while let last = lines.last, last.trimmingCharacters(in: .whitespaces).isEmpty { lines.removeLast() }
+        return lines.joined(separator: "\n")
+    }
+
+    private static let ansiEscape = try! NSRegularExpression(pattern: #"\x1B(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\)|[@-Z\\-_])"#)
+
+    /// Parses a numeric epoch or ISO 8601 date-time string (with or without timezone and fractional seconds).
+    static func parseTimestamp(_ value: JSONValue?) -> Double? {
+        guard let value else { return nil }
+        if case .number(let n) = value, n.isFinite, n > 0 { return n }
+        guard let raw = value.nonEmptyString?.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
+        let isoFrac = ISO8601DateFormatter()
+        isoFrac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = isoFrac.date(from: raw) { return d.timeIntervalSince1970 }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime]
+        if let d = iso.date(from: raw) { return d.timeIntervalSince1970 }
+        let local = DateFormatter()
+        local.locale = Locale(identifier: "en_US_POSIX")
+        for format in ["yyyy-MM-dd'T'HH:mm:ss.SSSSSS", "yyyy-MM-dd'T'HH:mm:ss.SSS", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd HH:mm:ss"] {
+            local.dateFormat = format
+            if let d = local.date(from: raw) { return d.timeIntervalSince1970 }
+        }
+        return nil
+    }
+
     /// `process.list`'s `processes`; rows without an id are left out.
     static func list(_ json: JSONValue?) -> [BackgroundProcess] {
         (json?["processes"]?.array ?? json?.array ?? []).compactMap { entry in
@@ -118,11 +215,23 @@ nonisolated struct BackgroundProcess: Hashable, Sendable, Identifiable {
                 guard case .number(let n)? = entry["uptime_seconds"], n.isFinite, n >= 0 else { return nil }
                 return Int(n)
             }()
+            let patterns = entry["watch_patterns"]?.array?.compactMap(\.nonEmptyString) ?? []
             return BackgroundProcess(id: id, command: entry["command"]?.string ?? "", status: entry["status"]?.string ?? "running",
                                      uptimeSeconds: uptime, exitCode: entry["exit_code"]?.int,
                                      tail: entry["output_tail"]?.string ?? entry["output_preview"]?.string ?? "",
-                                     cwd: entry["cwd"]?.nonEmptyString)
+                                     cwd: entry["cwd"]?.nonEmptyString,
+                                     startedAt: parseTimestamp(entry["started_at"]),
+                                     pid: entry["pid"]?.int,
+                                     watchPatterns: patterns,
+                                     watchHit: entry["watch_hit"]?.nonEmptyString,
+                                     lastOutputAt: parseTimestamp(entry["last_output_at"]))
         }
+    }
+}
+
+private nonisolated extension NSRegularExpression {
+    func replacingMatches(in string: String, with template: String) -> String {
+        stringByReplacingMatches(in: string, range: NSRange(string.startIndex..., in: string), withTemplate: template)
     }
 }
 

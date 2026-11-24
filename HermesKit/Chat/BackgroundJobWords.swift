@@ -48,9 +48,16 @@ nonisolated enum BackgroundJobWords {
         return nil
     }
 
-    /// The bot's words about the job: the last sentence of its text just before the terminal call that ran `command`,
-    /// in the same turn. `command` may be cut short (`process.list` sends its first 200 characters).
-    static func botWords(for command: String, in messages: [ChatMessage]) -> String? {
+    /// What the chat's transcript knows about the `terminal` call that started `command`.
+    struct TranscriptMatch: Hashable, Sendable {
+        var botWords: String?
+        var botNote: String?
+        var fullCommand: String?
+    }
+
+    /// The bot's words and full command from the `terminal` call that started `command`, in the same turn.
+    /// `command` may be cut short (`process.list` sends its first 200 characters).
+    static func match(for command: String, in messages: [ChatMessage]) -> TranscriptMatch? {
         let wanted = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !wanted.isEmpty else { return nil }
         for message in messages.reversed() where message.role == .assistant {
@@ -62,13 +69,22 @@ nonisolated enum BackgroundJobWords {
                 case .tool(let call):
                     guard call.name == "terminal", let ran = terminalCommand(call.argsText),
                           ran.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(wanted) else { continue }
-                    return before.flatMap { lastSentence($0, limit: 90) }
+                    let words = before.flatMap { lastSentence($0, limit: 90) }
+                    let note = before.flatMap { contextParagraph($0, headline: words) }
+                    let full = ran.trimmingCharacters(in: .whitespacesAndNewlines).count > wanted.count ? ran : nil
+                    return TranscriptMatch(botWords: words, botNote: note, fullCommand: full)
                 case .reasoning:
                     continue
                 }
             }
         }
         return nil
+    }
+
+    /// The bot's words about the job: the last sentence of its text just before the terminal call that ran `command`,
+    /// in the same turn. `command` may be cut short (`process.list` sends its first 200 characters).
+    static func botWords(for command: String, in messages: [ChatMessage]) -> String? {
+        match(for: command, in: messages)?.botWords
     }
 
     /// The `command` argument of a terminal call's JSON arguments.
@@ -96,10 +112,48 @@ nonisolated enum BackgroundJobWords {
         if let agent = agent(command) {
             parts.append(agent.name)
         } else if let program = BackgroundTaskText.program(command: command), !headline.hasPrefix(program) {
-            parts.append(program.count > 48 ? String(program.prefix(47)) + "…" : program)
+            let label = friendlyProgram(program)
+            parts.append(label.count > 48 ? String(label.prefix(47)) + "…" : label)
         }
         if let folder, !headline.contains(folder) { parts.append(folder) }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// Turns opaque stdin/inline-script commands (`python3 -`, `bash -c …`, `node -e …`) into plain labels,
+    /// leaving named scripts (`python3 scripts/ship.py archive`) untouched.
+    static func friendlyProgram(_ program: String) -> String {
+        let words = shellWords(program)
+        guard let first = words.first else { return program }
+        let bin = (first.split(separator: "/").last.map(String.init) ?? first).lowercased()
+        let second = words.count > 1 ? words[1] : nil
+        if bin == "python" || bin == "python3" || bin.hasPrefix("python3.") {
+            if second == nil || second == "-" || second == "-c" || (second == "-u" && (words.count == 2 || words[2] == "-" || words[2] == "-c")) {
+                return "Python script"
+            }
+        }
+        if ["bash", "sh", "zsh"].contains(bin) {
+            if second == nil || second == "-" || second == "-c" || second == "-s" || second == "-lc" || second == "-ec" {
+                return "Shell script"
+            }
+        }
+        if ["node", "bun"].contains(bin), second == nil || second == "-" || second == "-e" || second == "--eval" {
+            return bin == "bun" ? "Bun script" : "Node script"
+        }
+        if bin == "ruby", second == nil || second == "-" || second == "-e" { return "Ruby script" }
+        if bin == "osascript", second == nil || second == "-" || second == "-e" { return "AppleScript" }
+        return program
+    }
+
+    /// The bot's fuller paragraph before the call, kept only when it carries meaningful context beyond `headline`.
+    private static func contextParagraph(_ text: String, headline: String?) -> String? {
+        let paragraphs = text.components(separatedBy: "\n\n")
+            .map { plain($0) }
+            .filter { !$0.isEmpty }
+        guard var last = paragraphs.last else { return nil }
+        while let first = last.first, "-*#>".contains(first) { last = String(last.dropFirst()).trimmingCharacters(in: .whitespaces) }
+        let clipped = last.count > 360 ? String(last.prefix(359)).trimmingCharacters(in: .whitespaces) + "…" : last
+        if let headline, clipped.count <= headline.count + 16 { return nil }
+        return clipped.count >= 24 ? clipped : nil
     }
 
     /// The line while it has printed nothing: where its output goes, what an agent does, or how long it has been quiet.

@@ -85,6 +85,7 @@ final class MainTabController: UITabBarController, UITabBarControllerDelegate {
         NotificationCenter.default.addObserver(self, selector: #selector(tabOrderChanged), name: TabOrder.didChange, object: nil)   // [taborder]
         #if targetEnvironment(macCatalyst)
         MacWindow.tabLabels(tabBar)   // [mac]
+        NotificationCenter.default.addObserver(self, selector: #selector(botsInSidebarChanged), name: MacSidebar.botsInSidebarChanged, object: nil)
         #endif
     }
 
@@ -432,6 +433,11 @@ final class MainTabController: UITabBarController, UITabBarControllerDelegate {
     private func reportShownTab() {
         AppLog.note("screen", "tab \(selectedIndex): \(selectedViewController.map { ($0 as? UINavigationController)?.viewControllers.first ?? $0 }.map { String(describing: type(of: $0)) } ?? "none")")
         services.setSessionsListShown(shownTab == .sessions)
+        #if targetEnvironment(macCatalyst)
+        services.setBotsListShown(shownTab == .bots || MacSidebar.botsInSidebar)
+        #else
+        services.setBotsListShown(shownTab == .bots)
+        #endif
         PresenceHooks.askTabShown?(showsAskTab)   // [presence] UX study #135
         pages?.noteSelected(selectedViewController?.tabBarItem.tag)     // [m2/pages] tab restore + a deferred Kanban/Artifacts swap
         noteLaunchScreen()                   // [restore]
@@ -449,6 +455,12 @@ final class MainTabController: UITabBarController, UITabBarControllerDelegate {
         }
         #endif
     }
+
+    #if targetEnvironment(macCatalyst)
+    @objc private func botsInSidebarChanged() {
+        services.setBotsListShown(shownTab == .bots || MacSidebar.botsInSidebar)
+    }
+    #endif
 
     /// [presence] Sessions or More is on show: nothing there opens the browser plugin's list, so the presence centre
     /// listens for a bot's browser ask itself (UX study #135).

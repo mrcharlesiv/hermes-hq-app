@@ -45,6 +45,8 @@ nonisolated enum BotSaidRules {
     /// What a row is handed when the bot's chat holds none of its words: read as "the bot has spoken, nothing to show"
     /// (`RosterPreview.botPreview` draws the role line, never "No messages yet").
     static let nothingShown = "[SILENT]"
+    /// Coalescing delay before flushing a partial batch of preview updates so fast answers never wait on a slow sibling.
+    static let flushDelay: Duration = .milliseconds(120)
 
     /// Everything the roster says of a chat that moves when a message is stored: its activity time, its counts and its
     /// newest line. A chat whose mark differs from the one it was read at is read again.
@@ -161,19 +163,72 @@ extension BotStore {
 
     /// The bot just said `text` to you in its Bot Chat, seen by this device (`BotSaidRules.shown` picked it from the
     /// chat's own messages): its row shows it before the next read. True when the kept words changed (the caller
-    /// rebuilds).
+    /// rebuilds). `serverTime`: true when `at` came from a stored server timestamp (`seenThrough`), advancing `newest`
+    /// so a lagging heartbeat on the next roster never moves the row's time backwards.
     @discardableResult
-    func noteBotSaid(profile name: String, sessionId: String, text: String, at: Double) -> Bool {
+    func noteBotSaid(profile name: String, sessionId: String, text: String, at: Double, serverTime: Bool = false) -> Bool {
         guard BotSaidRules.isOwnWords(text) else { return false }
         let line = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         var entry = BotSaidEntry(session: sessionId, at: at, text: line.count > 200 ? String(line.prefix(200)) : line,
                                  rule: BotSaidRules.rule)
         if let old = device.botSaid?[name], old.session == sessionId { entry.newest = old.newest }
+        if serverTime, at > (entry.newest ?? 0) { entry.newest = at }
         botSaidSeenAt[name] = .now
         guard device.botSaid?[name] != entry else { return false }
         device.botSaid = (device.botSaid ?? [:]).merging([name: entry]) { $1 }
         persistState()
         return true
+    }
+
+    /// Fetches, parses and folds a Bot Chat tail off the main actor, always with `inline_images=false` (previews never
+    /// draw images, and base64 screenshots made tail reads slow or hit size limits).
+    @concurrent
+    private static func fetchBotSaid(client: any GatewayClient, profile: String, session: String,
+                                     own: DeliveryMessages.Seat, seats: [DeliveryMessages.Seat],
+                                     since: Double?) async -> (rows: [JSONValue]?, text: String?, news: BotNews?) {
+        let path = "/api/sessions/\(HistoryRequest.encodePathSegment(session))/messages"
+        func tail(_ limit: Int) async -> [JSONValue]? {
+            let query = [URLQueryItem(name: "profile", value: profile),
+                         URLQueryItem(name: "limit", value: String(limit)),
+                         URLQueryItem(name: "order", value: "latest"),
+                         URLQueryItem(name: "inline_images", value: "false")]
+            guard let data = try? await client.get(path, query), let root = try? JSONValue.parseFast(data) else { return nil }
+            return root["messages"]?.array ?? []
+        }
+        var rows = await tail(BotSaidRules.tail)
+        var shown = rows.map { BotSaidRules.shown(rows: $0, own: own, seats: seats) }
+        // The newest reply's turn began before these rows (or they hold no reply at all) and the chat goes
+        // further back: what the reply answers is read too, once.
+        if let short = rows, let first = shown, !first.settled, short.count >= BotSaidRules.tail,
+           let deep = await tail(BotSaidRules.deepTail), deep.count > short.count {
+            rows = deep
+            shown = BotSaidRules.shown(rows: deep, own: own, seats: seats)
+        }
+        // [botunread] Every row read is newer than the baseline (a long turn): the rows behind them are read
+        // too, once, so a reply to you under a long talk between bots isn't missed.
+        var asked = rows.map { $0.count > BotSaidRules.tail ? BotSaidRules.deepTail : BotSaidRules.tail } ?? BotSaidRules.tail
+        if let since, let short = rows, asked == BotSaidRules.tail, short.count >= asked,
+           !short.contains(where: { ($0["timestamp"]?.double ?? .infinity) <= since }),
+           let deep = await tail(BotSaidRules.deepTail), deep.count > short.count {
+            rows = deep
+            shown = BotSaidRules.shown(rows: deep, own: own, seats: seats)
+            asked = BotSaidRules.deepTail
+        }
+        var whole = (rows?.count ?? 0) < asked
+        var news = since.flatMap { since in
+            rows.map { BotSaidRules.newsForYou(rows: $0, since: since, own: own, seats: seats, whole: whole) }
+        }
+        // "Nothing for you" from a short tail of a longer chat is checked against more of it, once: whether a
+        // reply was written to another bot hangs on what this bot asked that bot earlier, which a tail that
+        // starts inside a long turn doesn't hold (the reply then read as that bot's own request answered).
+        if let since, news == false, let short = rows, asked == BotSaidRules.tail, short.count >= asked,
+           let deep = await tail(BotSaidRules.deepTail), deep.count > short.count {
+            rows = deep
+            shown = BotSaidRules.shown(rows: deep, own: own, seats: seats)
+            whole = deep.count < BotSaidRules.deepTail
+            news = BotSaidRules.newsForYou(rows: deep, since: since, own: own, seats: seats, whole: whole)
+        }
+        return (rows, shown?.text, since.map { (since: $0, forYou: news ?? true, whole: whole, own: own, seats: seats) })
     }
 
     private func pumpBotSaid() {
@@ -189,50 +244,9 @@ extension BotStore {
             // find the chat's newest row past (`chatActivityRead`).
             let since = device.unread.held(item.profile) ?? device.unread.baselines[item.profile]
             Task { [weak self] in
-                let path = "/api/sessions/\(HistoryRequest.encodePathSegment(item.session))/messages"
-                func tail(_ limit: Int, images: Bool) async -> [JSONValue]? {
-                    var query = [URLQueryItem(name: "profile", value: item.profile),
-                                 URLQueryItem(name: "limit", value: String(limit)),
-                                 URLQueryItem(name: "order", value: "latest")]
-                    if !images { query.append(URLQueryItem(name: "inline_images", value: "false")) }
-                    guard let data = try? await client.get(path, query), let root = try? JSONValue.parse(data) else { return nil }
-                    return root["messages"]?.array ?? []
-                }
-                var rows = await tail(BotSaidRules.tail, images: true)
-                var shown = rows.map { BotSaidRules.shown(rows: $0, own: own, seats: seats) }
-                // The newest reply's turn began before these rows (or they hold no reply at all) and the chat goes
-                // further back: what the reply answers is read too, once.
-                if let short = rows, let first = shown, !first.settled, short.count >= BotSaidRules.tail,
-                   let deep = await tail(BotSaidRules.deepTail, images: false), deep.count > short.count {
-                    rows = deep
-                    shown = BotSaidRules.shown(rows: deep, own: own, seats: seats)
-                }
-                // [botunread] Every row read is newer than the baseline (a long turn): the rows behind them are read
-                // too, once, so a reply to you under a long talk between bots isn't missed.
-                var asked = rows.map { $0.count > BotSaidRules.tail ? BotSaidRules.deepTail : BotSaidRules.tail } ?? BotSaidRules.tail
-                if let since, let short = rows, asked == BotSaidRules.tail, short.count >= asked,
-                   !short.contains(where: { ($0["timestamp"]?.double ?? .infinity) <= since }),
-                   let deep = await tail(BotSaidRules.deepTail, images: false), deep.count > short.count {
-                    rows = deep
-                    shown = BotSaidRules.shown(rows: deep, own: own, seats: seats)
-                    asked = BotSaidRules.deepTail
-                }
-                var whole = (rows?.count ?? 0) < asked
-                var news = since.flatMap { since in
-                    rows.map { BotSaidRules.newsForYou(rows: $0, since: since, own: own, seats: seats, whole: whole) }
-                }
-                // "Nothing for you" from a short tail of a longer chat is checked against more of it, once: whether a
-                // reply was written to another bot hangs on what this bot asked that bot earlier, which a tail that
-                // starts inside a long turn doesn't hold (the reply then read as that bot's own request answered).
-                if let since, news == false, let short = rows, asked == BotSaidRules.tail, short.count >= asked,
-                   let deep = await tail(BotSaidRules.deepTail, images: false), deep.count > short.count {
-                    rows = deep
-                    shown = BotSaidRules.shown(rows: deep, own: own, seats: seats)
-                    whole = deep.count < BotSaidRules.deepTail
-                    news = BotSaidRules.newsForYou(rows: deep, since: since, own: own, seats: seats, whole: whole)
-                }
-                self?.botSaidRead(item, rows: rows, text: shown?.text,
-                                  news: since.map { (since: $0, forYou: news ?? true, whole: whole, own: own, seats: seats) })
+                let result = await Self.fetchBotSaid(client: client, profile: item.profile, session: item.session,
+                                                     own: own, seats: seats, since: since)
+                self?.botSaidRead(item, rows: result.rows, text: result.text, news: result.news)
             }
         }
     }
@@ -272,11 +286,7 @@ extension BotStore {
         guard let rows else {
             AppLog.trace("bots", "bot said \(item.profile): read failed, the next roster tries again")
             settleUnread(item.profile, rows: nil, news: nil, asked: asked, born: false)
-            if botSaidDirty > 0, botSaidQueue.isEmpty, botSaidOut.isEmpty {
-                botSaidDirty = 0
-                persistState()
-                rebuild()
-            }
+            if botSaidDirty > 0 { flushBotSaid(immediate: botSaidQueue.isEmpty && botSaidOut.isEmpty) }
             return
         }
         // Words this device saw arrive after the read was asked for are newer than what it read: they stay, and the next
@@ -301,11 +311,28 @@ extension BotStore {
             device.botSaid = (device.botSaid ?? [:]).merging([item.profile: entry]) { $1 }
             botSaidDirty += 1
         }
-        // One rebuild and one write per few answers, not one per answer.
-        guard botSaidDirty > 0, botSaidDirty >= 6 || (botSaidQueue.isEmpty && botSaidOut.isEmpty) else { return }
-        AppLog.trace("bots", "bot said: \(botSaidDirty) rows updated")
-        botSaidDirty = 0
-        persistState()
-        rebuild()
+        // Batch quick simultaneous answers, but never hold finished rows hostage behind a slow sibling read.
+        guard botSaidDirty > 0 else { return }
+        flushBotSaid(immediate: botSaidDirty >= 6 || (botSaidQueue.isEmpty && botSaidOut.isEmpty))
+    }
+
+    private func flushBotSaid(immediate: Bool) {
+        if immediate {
+            botSaidFlushTask?.cancel()
+            botSaidFlushTask = nil
+            guard botSaidDirty > 0, !stopped else { return }
+            AppLog.trace("bots", "bot said: \(botSaidDirty) rows updated")
+            botSaidDirty = 0
+            persistState()
+            rebuild()
+            return
+        }
+        guard botSaidFlushTask == nil else { return }
+        botSaidFlushTask = Task { [weak self] in
+            try? await Task.sleep(for: BotSaidRules.flushDelay)
+            guard let self, !Task.isCancelled else { return }
+            self.botSaidFlushTask = nil
+            self.flushBotSaid(immediate: true)
+        }
     }
 }

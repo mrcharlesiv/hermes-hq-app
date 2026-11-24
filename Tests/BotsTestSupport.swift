@@ -132,6 +132,11 @@ extension BotStoreTiming {
         t.settle = .zero
         t.onListPoll = .seconds(3600)
         t.offListPoll = .seconds(3600)
+        t.onListChangeGap = .seconds(3600)
+        t.offListChangeGap = .seconds(3600)
+        t.focusedChatChangeGap = .seconds(3600)
+        t.reconnectRefreshGap = .seconds(3600)
+        t.returnRefreshGap = .seconds(3600)
         t.retryDelays = [.milliseconds(20), .milliseconds(40)]
         t.openWait = .milliseconds(300)
         t.confirmWait = .milliseconds(400)

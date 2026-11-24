@@ -745,4 +745,78 @@ import Testing
         store.stop()
         #expect(await BotsTest.waitUntil { client.subscriberCount == 0 })
     }
+
+    @Test func sessionsChangedTriggersThrottledRosterRefresh() async throws {
+        let preview = BotsTestBox("first")
+        let stamp = BotsTestBox(1_791_000_000.0)
+        let client = BotsFakeGatewayClient()
+        client.on("profiles.list") { _ in
+            BotsTest.profilesResult([BotsTest.row("ivy", canonical: BotsTest.session("c", preview: preview.value, lastActive: stamp.value))])
+        }
+        func fullReads() -> Int { client.calls("profiles.list").filter { $0.params["include_sessions"] == nil }.count }
+        var timing = BotStoreTiming.fast
+        timing.onListChangeGap = .milliseconds(80)
+        timing.offListChangeGap = .seconds(30)
+        timing.focusedChatChangeGap = .seconds(60)
+        timing.changeCostFactor = 0
+        let store = makeStore(client, timing: timing)
+        store.setListVisible(true)
+        #expect(await BotsTest.waitUntil { store.phase == .full && fullReads() == 1 })
+
+        // Wait past the minimum gap so the leading edge fires right away on `sessions.changed`.
+        try await Task.sleep(for: .milliseconds(100))
+        preview.value = "second"
+        stamp.value += 10
+        client.emit(GatewayEvent(type: "sessions.changed", sessionId: "", payload: [:]))
+        #expect(await BotsTest.waitUntil { store.bot(named: "ivy")?.preview == "second" })
+        let afterFirst = fullReads()
+        #expect(afterFirst == 2)
+
+        // Rapid burst within the gap coalesces into one trailing refresh.
+        preview.value = "third"
+        stamp.value += 10
+        client.emit(GatewayEvent(type: "sessions.changed", sessionId: "", payload: [:]))
+        client.emit(GatewayEvent(type: "sessions.changed", sessionId: "", payload: [:]))
+        #expect(await BotsTest.waitUntil { store.bot(named: "ivy")?.preview == "third" })
+        #expect(fullReads() == afterFirst + 1)
+
+        // In background, change events are held and do not hit the gateway.
+        store.appDidEnterBackground()
+        try await Task.sleep(for: .milliseconds(100))
+        let paused = fullReads()
+        client.emit(GatewayEvent(type: "sessions.changed", sessionId: "", payload: [:]))
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(fullReads() == paused)
+        store.stop()
+    }
+
+    @Test func reconnectAndReturnFromBackgroundRefreshStaleRoster() async throws {
+        let preview = BotsTestBox("initial")
+        let stamp = BotsTestBox(1_791_000_000.0)
+        let client = BotsFakeGatewayClient()
+        client.on("profiles.list") { _ in
+            BotsTest.profilesResult([BotsTest.row("ivy", canonical: BotsTest.session("c", preview: preview.value, lastActive: stamp.value))])
+        }
+        var timing = BotStoreTiming.fast
+        timing.reconnectRefreshGap = .milliseconds(50)
+        timing.returnRefreshGap = .milliseconds(50)
+        let store = makeStore(client, timing: timing)
+        #expect(await BotsTest.waitUntil { store.phase == .full && store.bot(named: "ivy")?.preview == "initial" })
+
+        // Reconnect while phase == .full refreshes once older than reconnectRefreshGap.
+        try await Task.sleep(for: .milliseconds(80))
+        preview.value = "after reconnect"
+        stamp.value += 10
+        client.emit(GatewayEvent(type: "gateway.ready", sessionId: "", payload: [:]))
+        #expect(await BotsTest.waitUntil { store.bot(named: "ivy")?.preview == "after reconnect" })
+
+        // Returning from background refreshes once older than returnRefreshGap.
+        store.appDidEnterBackground()
+        try await Task.sleep(for: .milliseconds(80))
+        preview.value = "after background"
+        stamp.value += 10
+        store.appDidBecomeActive()
+        #expect(await BotsTest.waitUntil { store.bot(named: "ivy")?.preview == "after background" })
+        store.stop()
+    }
 }

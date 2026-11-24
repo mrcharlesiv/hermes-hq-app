@@ -346,6 +346,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         PresenceHooks.botsListShown?(self, true)
+        if inMore { services.setBotsListShown(true) }
         schedulePeek()
     }
 
@@ -375,6 +376,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         PresenceHooks.botsListShown?(self, false)
+        if inMore { services.setBotsListShown(false) }
     }
 
     override func viewWillAppear(_ animated: Bool) {

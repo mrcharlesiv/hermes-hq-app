@@ -249,6 +249,8 @@ final class LiveChatSession: ChatSessionModel {
     /// pending: once it lands, the gateway's time of the newest stored row it saw (the turn's end). The bot's unread
     /// baseline then covers the user's own exchange even when Back came before the read (spec 02 §6.7).
     var onSeenAfterLeaving: ((Date) -> Void)?
+    /// A tail refresh applied fresh stored messages to this chat: list previews follow without waiting for a poll.
+    var onMessagesSynced: (() -> Void)?
     private var reportedRunning = false
     /// What `onRunningChange` last said (`turn.busy` can be ahead of it until the next flush).
     var reportsRunning: Bool { reportedRunning }

@@ -92,6 +92,116 @@ import Testing
         store.stop()
         RosterDiskWriter.shared.flush()
     }
+
+    @Test func replyStoredAfterHeartbeatMovesMessageCountAndRereads() async throws {
+        let client = BotsFakeGatewayClient()
+        let count = LockedBox(4)
+        let reply = LockedBox("before reply")
+        client.onREST { _, path, query, _ in
+            if path.hasSuffix("/messages") {
+                #expect(query.contains(URLQueryItem(name: "inline_images", value: "false")))
+                let rows: JSONValue = ["messages": [["id": 1, "role": "user", "content": "first thing I asked"],
+                                                    ["id": 2, "role": "assistant", "content": .string(reply.value)]]]
+                return try rows.encoded()
+            }
+            let row: JSONValue = ["id": "s1", "profile": "ivy", "title": "Chat", "preview": "first thing I asked",
+                                  "last_active": 1_791_000_000, "started_at": 1_790_999_940, "message_count": .number(Double(count.value)),
+                                  "source": "desktop", "is_active": false]
+            let root: JSONValue = ["recents": ["sessions": [row]], "cron": ["sessions": []], "messaging": ["sessions": []]]
+            return try root.encoded()
+        }
+        var timing = SessionStoreTiming.fast
+        timing.readsLatest = true
+        let store = SessionStore(client: client, account: .botsTestAccount, cacheDirectory: BotsTest.tempDirectory(), timing: timing)
+        #expect(await BotsTest.waitUntil { store.sessions.first?.preview == "before reply" })
+        #expect(client.restCalls.filter { $0.path.hasSuffix("/messages") }.count == 1)
+
+        // Reply lands without moving `last_active` (same heartbeat), only incrementing `message_count`.
+        reply.value = "after heartbeat reply"
+        count.value = 5
+        await store.refresh()
+        #expect(await BotsTest.waitUntil { store.sessions.first?.preview == "after heartbeat reply" })
+        #expect(client.restCalls.filter { $0.path.hasSuffix("/messages") }.count == 2)
+        store.stop()
+        RosterDiskWriter.shared.flush()
+    }
+
+    @Test func runningToIdleImmediatelyRereadsLatest() async throws {
+        let client = BotsFakeGatewayClient()
+        let reply = LockedBox("old reply")
+        client.onREST { _, path, _, _ in
+            if path.hasSuffix("/messages") {
+                let rows: JSONValue = ["messages": [["id": 1, "role": "assistant", "content": .string(reply.value)]]]
+                return try rows.encoded()
+            }
+            return Self.sidebar(1_791_000_000)
+        }
+        var timing = SessionStoreTiming.fast
+        timing.readsLatest = true
+        let store = SessionStore(client: client, account: .botsTestAccount, cacheDirectory: BotsTest.tempDirectory(), timing: timing)
+        #expect(await BotsTest.waitUntil { store.sessions.first?.preview == "old reply" })
+        #expect(client.restCalls.filter { $0.path.hasSuffix("/messages") }.count == 1)
+
+        // Working -> idle triggers an immediate tail re-read without waiting for a sidebar refresh.
+        store.setRunning(["s1"])
+        reply.value = "finished reply"
+        store.setRunning([])
+        #expect(await BotsTest.waitUntil { store.sessions.first?.preview == "finished reply" })
+        #expect(client.restCalls.filter { $0.path.hasSuffix("/messages") }.count == 2)
+
+        // When on screen, working -> idle skips the redundant tail read.
+        store.setSessionOnScreen("s1")
+        store.setRunning(["s1"])
+        store.setRunning([])
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(client.restCalls.filter { $0.path.hasSuffix("/messages") }.count == 2)
+        store.stop()
+        RosterDiskWriter.shared.flush()
+    }
+
+    @Test func fastLatestReadFlushesWithoutWaitingForSlowSibling() async throws {
+        let client = BotsFakeGatewayClient()
+        let holdSlow = LockedBox(true)
+        client.onREST { _, path, _, _ in
+            if path.contains("slow-s") {
+                while holdSlow.value { try await Task.sleep(for: .milliseconds(10)) }
+                let rows: JSONValue = ["messages": [["id": 1, "role": "assistant", "content": "slow answer"]]]
+                return try rows.encoded()
+            }
+            if path.contains("fast-s") {
+                let rows: JSONValue = ["messages": [["id": 1, "role": "assistant", "content": "fast answer"]]]
+                return try rows.encoded()
+            }
+            let root: JSONValue = [
+                "recents": ["sessions": [Self.row("fast-s", lastActive: 1_791_000_100),
+                                         Self.row("slow-s", lastActive: 1_791_000_050)]],
+                "cron": ["sessions": []], "messaging": ["sessions": []],
+            ]
+            return try root.encoded()
+        }
+        var timing = SessionStoreTiming.fast
+        timing.readsLatest = true
+        let store = SessionStore(client: client, account: .botsTestAccount, cacheDirectory: BotsTest.tempDirectory(), timing: timing)
+        #expect(await BotsTest.waitUntil(.seconds(1)) { store.sessions.first { $0.id == "fast-s" }?.preview == "fast answer" })
+        #expect(store.sessions.first { $0.id == "slow-s" }?.preview != "slow answer")
+        holdSlow.value = false
+        #expect(await BotsTest.waitUntil { store.sessions.first { $0.id == "slow-s" }?.preview == "slow answer" })
+        store.stop()
+        RosterDiskWriter.shared.flush()
+    }
+
+    @Test func appModelLatestSessionPreviewSkipsNoise() {
+        let messages: [ChatMessage] = [
+            ChatMessage(id: "1", role: .user, parts: [.text("hello there")]),
+            ChatMessage(id: "2", role: .assistant, parts: [.text("Here is the  final\nanswer.")]),
+            ChatMessage(id: "3", role: .assistant, parts: [.text(" [SILENT] ")]),
+            ChatMessage(id: "4", role: .assistant, parts: [.text("")], isStreaming: true),
+            ChatMessage(id: "5", role: .system, parts: [.text("compacted")]),
+        ]
+        let picked = AppModel.latestSessionPreview(in: messages)
+        #expect(picked?.text == "Here is the final answer.")
+        #expect(picked?.role == "assistant")
+    }
 }
 
 nonisolated private final class LockedBox<T: Sendable>: @unchecked Sendable {

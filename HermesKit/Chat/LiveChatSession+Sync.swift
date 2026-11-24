@@ -677,6 +677,7 @@ extension LiveChatSession {
         lastSyncIds = messages.map(\.id)
         saveCache()
         reportSeenAfterLeaving()
+        if !turn.busy { onMessagesSynced?() }
         checkExternalWork("new rows")                   // [external-turn] rows written by another process?
     }
 

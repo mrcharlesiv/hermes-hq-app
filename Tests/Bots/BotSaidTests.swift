@@ -384,4 +384,105 @@ import Testing
         store.stop()
         RosterDiskWriter.shared.flush()
     }
+
+    @Test func liveStatusWorkingToIdleImmediatelyRereadsBotSaid() async throws {
+        let client = BotsFakeGatewayClient()
+        let tail = BotsTestBox<[JSONValue]>([
+            ["id": 1, "role": "assistant", "content": "Old answer", "timestamp": 1_791_000_000],
+        ])
+        client.on("profiles.list") { _ in
+            BotsTest.profilesResult([
+                BotsTest.row("ivy", canonical: BotsTest.session("reg", resolved: "tip", preview: "Old answer", lastActive: 1_791_000_000, count: 4)),
+            ])
+        }
+        client.onREST { _, _, _, _ in
+            let root: JSONValue = ["messages": .array(tail.value)]
+            return try root.encoded()
+        }
+        var timing = BotStoreTiming.fast
+        timing.readsBotSaid = true
+        let store = BotStore(client: client, account: .botsTestAccount, cacheDirectory: BotsTest.tempDirectory(), timing: timing,
+                             autoStart: true)
+        #expect(await BotsTest.waitUntil { store.bot(named: "ivy")?.preview == "Old answer" })
+        #expect(client.restCalls.count == 1)
+
+        // Bot starts working, then finishes on the gateway: working -> idle triggers an immediate tail re-read.
+        store.setLiveStatus(working: ["tip"], waiting: [])
+        #expect(store.bot(named: "ivy")?.isWorking == true)
+        tail.value += [["id": 2, "role": "assistant", "content": "Fresh answer", "timestamp": 1_791_000_030]]
+        store.setLiveStatus(working: [], waiting: [])
+        #expect(await BotsTest.waitUntil { store.bot(named: "ivy")?.preview == "Fresh answer" })
+        #expect(client.restCalls.count == 2)
+
+        // When that bot's chat is focused on screen, working -> idle does not issue a duplicate tail read.
+        store.setFocusedChat(profile: "ivy", sessionId: "tip")
+        store.setLiveStatus(working: ["tip"], waiting: [])
+        store.setLiveStatus(working: [], waiting: [])
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(client.restCalls.count == 2)
+        store.stop()
+        RosterDiskWriter.shared.flush()
+    }
+
+    @Test func tailReadDisablesInlineImagesAndFlushesFastAnswersWithoutWaitingForSlowSibling() async throws {
+        let client = BotsFakeGatewayClient()
+        let holdSlow = BotsTestBox(true)
+        client.on("profiles.list") { _ in
+            BotsTest.profilesResult([
+                BotsTest.row("ivy", canonical: BotsTest.session("r1", resolved: "fast-tip", preview: "stale", lastActive: 1_791_000_100)),
+                BotsTest.row("wren", canonical: BotsTest.session("r2", resolved: "slow-tip", preview: "stale", lastActive: 1_791_000_050)),
+            ])
+        }
+        client.onREST { _, path, query, _ in
+            #expect(query.contains(URLQueryItem(name: "inline_images", value: "false")))
+            if path.contains("slow-tip") {
+                while holdSlow.value { try await Task.sleep(for: .milliseconds(10)) }
+                let root: JSONValue = ["messages": [["id": 1, "role": "assistant", "content": "Slow reply"]]]
+                return try root.encoded()
+            }
+            let root: JSONValue = ["messages": [["id": 1, "role": "assistant", "content": "Fast reply"]]]
+            return try root.encoded()
+        }
+        var timing = BotStoreTiming.fast
+        timing.readsBotSaid = true
+        let store = BotStore(client: client, account: .botsTestAccount, cacheDirectory: BotsTest.tempDirectory(), timing: timing,
+                             autoStart: true)
+        // Fast bot updates via coalesced flush while slow bot is still in flight.
+        #expect(await BotsTest.waitUntil(.seconds(1)) { store.bot(named: "ivy")?.preview == "Fast reply" })
+        #expect(store.bot(named: "wren")?.preview != "Slow reply")
+        holdSlow.value = false
+        #expect(await BotsTest.waitUntil { store.bot(named: "wren")?.preview == "Slow reply" })
+        store.stop()
+        RosterDiskWriter.shared.flush()
+    }
+
+    @Test func noteChatActivityWithServerTimeAdvancesNewestAcrossLaggingHeartbeat() async throws {
+        let client = BotsFakeGatewayClient()
+        let heartbeat = 1_791_000_000.0
+        client.on("profiles.list") { _ in
+            BotsTest.profilesResult([
+                BotsTest.row("ivy", canonical: BotsTest.session("reg", resolved: "tip", preview: "Earlier", lastActive: heartbeat, count: 4)),
+            ])
+        }
+        client.onREST { _, _, _, _ in
+            let root: JSONValue = ["messages": [["id": 1, "role": "assistant", "content": "Earlier", "timestamp": .number(heartbeat)]]]
+            return try root.encoded()
+        }
+        var timing = BotStoreTiming.fast
+        timing.readsBotSaid = true
+        let store = BotStore(client: client, account: .botsTestAccount, cacheDirectory: BotsTest.tempDirectory(), timing: timing,
+                             autoStart: true)
+        #expect(await BotsTest.waitUntil { store.bot(named: "ivy")?.preview == "Earlier" })
+
+        let replyTime = Date(timeIntervalSince1970: heartbeat + 42)
+        store.noteChatActivity(profile: "ivy", sessionId: "tip", preview: "Just shipped.", at: replyTime, unseen: false, serverTime: true)
+        #expect(store.bot(named: "ivy")?.preview == "Just shipped.")
+        #expect(store.bot(named: "ivy")?.lastActive == replyTime)
+
+        // A later roster still carrying the older heartbeat keeps the server timestamp.
+        await store.refresh()
+        #expect(store.bot(named: "ivy")?.lastActive == replyTime)
+        store.stop()
+        RosterDiskWriter.shared.flush()
+    }
 }

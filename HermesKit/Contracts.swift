@@ -636,6 +636,9 @@ protocol AppServices: AnyObject {
     /// The roster has answered at least once since sign-in (or its read failed): until then an empty list is still
     /// loading (skeleton rows), not "No Bots Yet".
     var botsLoaded: Bool { get }
+    /// Whether the Bots list (or the Mac sidebar holding the bots) is currently visible: its roster refreshes on the
+    /// on-screen cadence and `LiveStatusWatch` checks at the visible-list pace while it is.
+    func setBotsListShown(_ shown: Bool)
     /// Whether the Sessions tab is the one showing (no chat pushed over it counts separately): its list refreshes on the
     /// on-screen cadence only then (spec 03 §7.7: 10 s on screen, 45 s with a probe first off it).
     func setSessionsListShown(_ shown: Bool)
@@ -649,6 +652,7 @@ protocol AppServices: AnyObject {
 extension AppServices {
     var botsLoaded: Bool { true }
     var sessionsOutsideKeptProjects: [SessionSummary] { sessions }
+    func setBotsListShown(_ shown: Bool) {}
     func setSessionsListShown(_ shown: Bool) {}
     func setListsBesideChat(_ beside: Bool) {}
     func prefetchChat(for bot: Bot) {}

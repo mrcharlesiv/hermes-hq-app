@@ -117,6 +117,9 @@ final class AppModel: AppServices {
     private var stepsPush: Task<Void, Never>?
     /// [sessions-m9] Stored ids of the chats where an approval, a question or a password prompt waits (3x-sessions §3.3).
     private var needsInputSessions: Set<String> = []
+    /// The Bots list (or the Mac sidebar holding the bots) is showing: `BotStore` uses its on-screen cadence and
+    /// `LiveStatusWatch` checks at the visible-list pace while it is.
+    private var botsListShown = true
     /// The Sessions tab is the one showing (its list refreshes on the on-screen cadence only then, spec 03 §7.7).
     private var sessionsListShown = false
     /// [bot-chat-sessions] The Mac's strip under a chat's bar and its Chats tab, while they are drawn: a list of chats
@@ -127,8 +130,7 @@ final class AppModel: AppServices {
         let id = ObjectIdentifier(owner)
         guard chatListsOnShow.contains(id) != shown else { return }
         if shown { chatListsOnShow.insert(id) } else { chatListsOnShow.remove(id) }
-        if focusedChat != nil { showListsBesideChat() }
-        updateLedgerWanted()
+        updateListVisibility()
     }
     /// [m9/ipad] Two panes: the lists stay on screen beside the chat on show.
     private var listsBesideChat = false
@@ -333,25 +335,36 @@ final class AppModel: AppServices {
         return botStore.phase >= .slim
     }
 
+    func setBotsListShown(_ shown: Bool) {
+        guard botsListShown != shown else { return }
+        botsListShown = shown
+        updateListVisibility()
+    }
+
     func setSessionsListShown(_ shown: Bool) {
+        guard sessionsListShown != shown else { return }
         sessionsListShown = shown
-        if focusedChat == nil { sessionStore?.setListVisible(shown) } else if listsBesideChat { showListsBesideChat() }
-        updateLedgerWanted()
+        updateListVisibility()
     }
 
     func setListsBesideChat(_ beside: Bool) {
         guard listsBesideChat != beside else { return }
         listsBesideChat = beside
-        if focusedChat != nil { showListsBesideChat() }
-        updateLedgerWanted()
+        updateListVisibility()
     }
 
-    /// [working-ledger] The gateway's word on which chats run is read while the Sessions list can be seen: its tab is
-    /// showing, no chat covers it (or the list stays beside the chat), and the app is in front.
-    private func updateLedgerWanted() {
-        let visible = (sessionsListShown && (focusedChat == nil || listsBesideChat)) || !chatListsOnShow.isEmpty
-        workingLedger?.setWanted(ledgerAppActive && visible)
-        liveStatus?.setListVisible(visible)
+    /// Keeps `BotStore`, `SessionStore`, `WorkingLedgerWatch` and `LiveStatusWatch` aligned on which list is visible:
+    /// on a phone a pushed chat covers the lists; in two panes the shown list stays visible beside it.
+    private func updateListVisibility() {
+        let chatCovering = focusedChat != nil && !listsBesideChat
+        let botsSeen = botsListShown && !chatCovering
+        let sessionsSeen = (sessionsListShown && !chatCovering) || !chatListsOnShow.isEmpty
+        botStore?.setListVisible(botsSeen)
+        botStore?.setChatFocused(focusedChat != nil && !botsSeen)
+        sessionStore?.setListVisible(sessionsSeen)
+        sessionStore?.setChatFocused(focusedChat != nil && !sessionsSeen)
+        workingLedger?.setWanted(ledgerAppActive && sessionsSeen)
+        liveStatus?.setListVisible(sessionsSeen || botsSeen)
     }
 
     /// The Sessions rows' Working…: turns this app heard, chats holding a live child (§8.4), and what the gateway says
@@ -367,15 +380,6 @@ final class AppModel: AppServices {
         pushRunning()
         pushWaiting()
         botStore?.setLiveStatus(working: liveStatus?.working ?? [], waiting: liveStatus?.waiting ?? [])
-    }
-
-    /// A chat is on show: on a phone the lists are off screen (their reads wait the longer gap); in two panes the
-    /// list beside the chat is still seen, so Sessions keeps its on-screen cadence while its tab is the one showing.
-    private func showListsBesideChat() {
-        let sessionsSeen = (listsBesideChat && sessionsListShown) || !chatListsOnShow.isEmpty
-        botStore?.setListVisible(listsBesideChat)
-        sessionStore?.setListVisible(sessionsSeen)
-        sessionStore?.setChatFocused(!sessionsSeen)   // [perf] the off-screen list reads at the longer gap meanwhile
     }
 
     func prefetchChat(for bot: Bot) {
@@ -612,7 +616,7 @@ final class AppModel: AppServices {
         let live = LiveStatusWatch(client: client)            // [live-status]
         live.onChange = { [weak self] in self?.liveStatusChanged() }
         liveStatus = live
-        updateLedgerWanted()
+        updateListVisibility()
         live.setWanted(ledgerAppActive)
         let warmer = ChatWarmer(client: client, account: account)
         warmer.isOpen = { [weak self] profile in self?.focusedChat?.profile == profile }
@@ -626,8 +630,7 @@ final class AppModel: AppServices {
         #endif
         sessions.profileDisplayNames = Self.displayNames(bots.bots)
         sessions.projectBots = Self.projectBots(bots.bots)
-        bots.setListVisible(true)
-        sessions.setListVisible(sessionsListShown)
+        updateListVisibility()
         bots.start()
         sessions.start()
 
@@ -752,7 +755,7 @@ final class AppModel: AppServices {
             settingsHub.appActive(true)               // settings stream
             ledgerAppActive = true                    // [working-ledger]
             liveStatus?.setWanted(true)               // [live-status]
-            updateLedgerWanted()
+            updateListVisibility()
         }
         focusedChat?.promptsCameOnScreen()   // [questions] answered elsewhere while away? (spec 1x §3.5)
         if returned { groupsHub.appActive(true) }     // [groups] late replies are collected
@@ -783,7 +786,7 @@ final class AppModel: AppServices {
         ledgerAppActive = false                       // [working-ledger]
         viewingBeat.poke()                            // [viewing] no longer in front: taken back
         liveStatus?.setWanted(false)                  // [live-status]
-        updateLedgerWanted()
+        updateListVisibility()
         groupsHub.appActive(false)                    // [groups] the rooms reach the disk and the mirror
         syncHub.wentBackground()                      // [sync] a change made here reaches the gateway
         HistoryFlights.shared.removeAll()
@@ -1163,6 +1166,7 @@ final class AppModel: AppServices {
             if running { self.listStartedChat(chat) }       // [#440] before Working…, which names its row
             self.setWorking(profile: chat.profile, storedId: chat.storedSessionId, running || chat.externalWorking)
             if !running { self.turnSeenEnding(chat) }       // [read-sync]
+            if !running, !chat.externalWorking, self.isChatInView(chat) { self.syncChatPreview(chat) }
             if !running, chat.startsNew, let id = chat.storedSessionId {   // [#440]
                 self.sessionStore?.startedChatSettled(id: id, profile: chat.profile)
             }
@@ -1173,6 +1177,7 @@ final class AppModel: AppServices {
             // [working-ledger] It ended (not just the screen leaving it, after which the gateway's word keeps the row on).
             if !working, !chat.reportsRunning, chat.observing, let id = chat.storedSessionId { self.workingLedger?.turnEnded(id) }
             self.setWorking(profile: chat.profile, storedId: chat.storedSessionId, working || chat.reportsRunning)
+            if !working, !chat.reportsRunning, self.isChatInView(chat) { self.syncChatPreview(chat) }
             if chat.menus.isBotChat { self.threadStore.noteMainExternalWork(profile: chat.profile, working: working, parent: chat) }   // [threads] §9
         }
         // A turn sent before the chat's stored id came back: it counts under the id now, so its end clears Working…
@@ -1213,6 +1218,7 @@ final class AppModel: AppServices {
         chat.onSeenAfterLeaving = { [weak self, weak chat] seen in
             guard let self, let chat, let id = chat.storedSessionId else { return }
             self.botStore?.noteSeenAfterLeaving(profile: chat.profile, sessionId: id, seenThrough: seen)
+            self.syncChatPreview(chat)
             // [read-sync] The reply watched to its end, then Back before its stored row was read (a tester 2026-11-19:
             // "I open the chat and leave it. The unread indicator remains"): leaving wrote nothing, because what had
             // been read then ended before the reply, so the gateway's mark stayed at the open and the next list page
@@ -1220,6 +1226,10 @@ final class AppModel: AppServices {
             if self.ledgerAppActive {
                 self.sessionStore?.shareRead(id: id, profile: chat.profile, through: seen.timeIntervalSince1970)
             }
+        }
+        chat.onMessagesSynced = { [weak self, weak chat] in
+            guard let self, let chat, self.isChatInView(chat) else { return }
+            self.syncChatPreview(chat)
         }
     }
 
@@ -1254,8 +1264,10 @@ final class AppModel: AppServices {
     private func chatCameOnScreen(_ chat: LiveChatSession) {
         // iPad / Mac: a chat can come on screen before the one it replaces says it left. The bot list stops counting
         // that one as watched now (until this one's open settles and claims it), or a roster read meanwhile quietly
-        // acknowledged its new replies.
+        // acknowledged its new replies. Sync its preview before `focusedChat` moves so direct chat-to-chat switches
+        // update the row immediately.
         if let previous = focusedChat, previous !== chat {
+            syncChatPreview(previous)
             botStore?.setFocusedChat(profile: nil, sessionId: nil, seenThrough: previous.seenThrough)
             if let seen = previous.seenThrough, let id = previous.storedSessionId, ledgerAppActive {   // [read-sync]
                 sessionStore?.shareRead(id: id, profile: previous.profile, through: seen.timeIntervalSince1970)
@@ -1263,8 +1275,7 @@ final class AppModel: AppServices {
         }
         focusedChat = chat
         notificationsFocus(runtime: chat.runtimeSessionId, stored: chat.storedSessionId ?? chat.resolvedStoredId)   // [notifications]
-        showListsBesideChat()
-        updateLedgerWanted()                          // [working-ledger]
+        updateListVisibility()
         if let id = chat.storedSessionId { sessionStore?.setFocusedSession(id) }
         sessionStore?.setSessionOnScreen(chat.storedSessionId)   // [read-sync]
     }
@@ -1286,6 +1297,7 @@ final class AppModel: AppServices {
         if let bot = botStore?.bot(named: chat.profile), bot.canonicalSessionId == nil || bot.canonicalSessionId == id {
             botStore?.markRead(bot)
         }
+        syncChatPreview(chat)
     }
 
     private func chatLeft(_ chat: LiveChatSession) {
@@ -1293,32 +1305,17 @@ final class AppModel: AppServices {
         if chat.menus.isBotChat { botStore?.noteBotOpening(chat.profile, false) }   // [botslist] leaving ends the wait
         botStore?.refreshDrafts()            // verify round 3: the row's "Draft:" line follows what was typed
         sessionStore?.refreshPending()       // [sessions-m9] and the Sessions row's
+        syncChatPreview(chat)
         if focusedChat === chat || focusedChat == nil {
             let seen = chat.seenThrough
             botStore?.setFocusedChat(profile: nil, sessionId: nil, seenThrough: seen)
             focusedChat = nil
-            sessionStore?.setChatFocused(false)     // [perf]
             // [read-sync] What the chat showed is read on the gateway too (a bot's own chat: `BotStore.noteLeft` above).
             sessionStore?.setSessionOnScreen(nil)
             if let seen, let id = chat.storedSessionId, ledgerAppActive {
                 sessionStore?.shareRead(id: id, profile: chat.profile, through: seen.timeIntervalSince1970)
             }
-            updateLedgerWanted()                    // [working-ledger] back on the list: read now
             notificationsFocus(runtime: nil, stored: nil)   // [notifications]
-            // Back on the list: the row shows the exchange just seen (the roster may be up to 30 s old).
-            if let seen, let id = chat.storedSessionId, !chat.isRunning,
-               // [restated] Not your request as Hermes restated it after compressing the chat: a repeat.
-               let last = chat.messages.last(where: { ($0.role == .assistant || $0.role == .user) && !$0.plainText.isEmpty
-                   && !($0.role == .user && TimelineNotes.restatedRequest($0.plainText) != nil) }) {
-                // [botsaid] The Bots row shows the bot's newest words to you, as the chat just drew them: not yours, a
-                // run's report, another bot's, nor a reply it wrote to another bot (BotSaidShown.swift).
-                let seats = DeliveryRoster.seats
-                let own = seats.first { $0.profile == chat.profile }
-                    ?? DeliveryMessages.Seat(profile: chat.profile, name: chat.title, head: chat.head)
-                let said = BotSaidRules.shown(Array(chat.messages.suffix(BotSaidRules.deepTail)), own: own, seats: seats)
-                botStore?.noteChatActivity(profile: chat.profile, sessionId: id, preview: said.text, at: seen, unseen: false)
-                sessionStore?.noteLatest(profile: chat.profile, sessionId: id, text: last.plainText, role: last.role.rawValue)
-            }
         }
         // A turn still running is tracked under the id it runs by now, whatever id it started under.
         if chat.reportsRunning, let rid = chat.runtimeSessionId {
@@ -1327,13 +1324,57 @@ final class AppModel: AppServices {
             }
             runningChats[rid] = (chat.profile, chat.storedSessionId)
         }
-        botStore?.setListVisible(true)
-        sessionStore?.setListVisible(sessionsListShown)
+        updateListVisibility()
         // [threads] A thread shown beside its bot chat closed: the bot chat is the one in front again.
         if focusedChat == nil, let parent = threadPanel?.parent.value, parent !== chat, parent.observing {
             threadPanel = nil
             chatCameOnScreen(parent)
         }
+    }
+
+    /// True while `chat` is currently visible to the user (not draining its queue off screen).
+    private func isChatInView(_ chat: LiveChatSession) -> Bool {
+        chat.observing || focusedChat === chat || (chat.runtimeSessionId.map(isBesideThread) ?? false)
+    }
+
+    /// Keeps the Bots and Sessions list previews in sync with what `chat` actually shows (on open, turn end, tail
+    /// refresh, chat switch and leave) instead of waiting for the next roster or sidebar poll.
+    private func syncChatPreview(_ chat: LiveChatSession) {
+        guard !chat.isRunning, let id = chat.storedSessionId else { return }
+        guard let lastMessage = chat.messages.last(where: { ($0.role == .assistant || $0.role == .user) && !$0.plainText.isEmpty }) else { return }
+        let at = chat.seenThrough ?? lastMessage.timestamp ?? Date()
+        let isBotChat = chat.menus.isBotChat || (botStore?.ownChatIds(chat.profile)?.contains(id) == true)
+        if isBotChat {
+            // [botsaid] The Bots row shows the bot's newest words to you, as the chat draws them: not yours, a
+            // run's report, another bot's, nor a reply it wrote to another bot (BotSaidShown.swift).
+            let seats = DeliveryRoster.seats
+            let own = seats.first { $0.profile == chat.profile }
+                ?? DeliveryMessages.Seat(profile: chat.profile, name: chat.title, head: chat.head)
+            let said = BotSaidRules.shown(Array(chat.messages.suffix(BotSaidRules.deepTail)), own: own, seats: seats)
+            if said.text != nil || chat.seenThrough != nil {
+                botStore?.noteChatActivity(profile: chat.profile, sessionId: id, preview: said.text, at: at, unseen: false,
+                                           serverTime: chat.seenThrough != nil)
+            }
+        }
+        if let last = Self.latestSessionPreview(in: chat.messages) {
+            sessionStore?.noteLatest(profile: chat.profile, sessionId: id, text: last.text, role: last.role)
+        }
+    }
+
+    /// The newest human message in `messages` for a Sessions row preview, matching `SessionLatestRules.latestMessage`.
+    static func latestSessionPreview(in messages: [ChatMessage]) -> (text: String, role: String)? {
+        for message in messages.reversed() where message.role == .assistant || message.role == .user {
+            var raw = message.plainText
+            if message.role == .user {
+                if TimelineNotes.isTaskSnapshot(raw) || VoiceChatRecord.isRecord(raw) { continue }
+                if let restated = TimelineNotes.restatedRequest(raw) { raw = restated.before }
+                if raw.contains("(Task id "), let asked = TodoWords.askShown(raw) { raw = asked }
+            }
+            let text = raw.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            if text.isEmpty || (message.role == .assistant && Hydration.isSilentWords(text)) { continue }
+            return (text.count > 200 ? String(text.prefix(200)) : text, message.role.rawValue)
+        }
+        return nil
     }
 
     // MARK: - Chat screen

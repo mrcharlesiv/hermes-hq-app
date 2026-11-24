@@ -452,7 +452,9 @@ final class SessionStore {
     /// The newest-message reads waiting and in the air, and answers not yet drawn (SessionStore+Latest.swift).
     @ObservationIgnored var latestQueue: [SidebarSessionRow] = []
     @ObservationIgnored var latestReads: Set<String> = []
+    @ObservationIgnored var latestStale: Set<String> = []
     @ObservationIgnored var latestDirty = 0
+    @ObservationIgnored var latestFlushTask: Task<Void, Never>?
     @ObservationIgnored var device = SessionsDeviceState()
     /// Only for explicitly chosen chats outside the recents window. Never inserted into `sessions`.
     @ObservationIgnored var offPageShortcuts: [BotChatShortcut: SidebarSessionRow] = [:]
@@ -635,8 +637,8 @@ final class SessionStore {
         prFocusedRow = nil
         started = false
         throttle?.cancel()
-        for task in [eventsTask, readInFlight, pollTask, archivedRefresh] { task?.cancel() }
-        eventsTask = nil; readInFlight = nil; pollTask = nil; archivedRefresh = nil
+        for task in [eventsTask, readInFlight, pollTask, archivedRefresh, latestFlushTask] { task?.cancel() }
+        eventsTask = nil; readInFlight = nil; pollTask = nil; archivedRefresh = nil; latestFlushTask = nil
         shortcutRead?.cancel(); shortcutRead = nil
         shortcutCheckedAt.removeAll(); offPageShortcuts.removeAll()
         readInFlightProbes = false
@@ -647,6 +649,7 @@ final class SessionStore {
         startedRows.removeAll()                         // [#440]
         lastProbeMatchAt = nil
         latestQueue = []
+        latestStale.removeAll()
         resultBindings.removeAll()
     }
 
@@ -719,9 +722,13 @@ final class SessionStore {
     /// Sessions running a turn right now (fed by the chat engine / live statuses).
     func setRunning(_ ids: Set<String>) {
         guard ids != running else { return }
+        let stoppedRunning = running.subtracting(ids)
         running = ids
         shareOnScreenRead()                 // [read-sync] a turn that ended in front of the person is read
         rebuild()
+        if !stoppedRunning.isEmpty, !stopped, timing.readsLatest {
+            rereadLatest(for: stoppedRunning)
+        }
     }
 
     // MARK: - Shared read state [read-sync]
@@ -738,7 +745,7 @@ final class SessionStore {
     }
 
     /// The chat on screen, while the app is in front.
-    private var seenSessionId: String? { appActive ? onScreenSessionId : nil }
+    var seenSessionId: String? { appActive ? onScreenSessionId : nil }
 
     /// A read of `row` through `through` (server seconds; the row's own activity when nil) would tell another device
     /// something: the gateway keeps read state, and its watermark doesn't yet cover that activity.
@@ -2147,6 +2154,7 @@ final class SessionStore {
         if let message = device.latest[key],
            (message.at == row.recency
             || (confirmedReplyRecency[key] == message.at && row.recency >= message.at && row.recency - message.at <= 15)),
+           (message.count == nil || row.messageCount == nil || message.count == row.messageCount || confirmedReplyRecency[key] == message.at),
            !TimelineNotes.isTaskSnapshot(message.text) {
             summary.lastResult = message.codingResult
         } else if row.messageCount == 0 { summary.lastResult = "No activity yet" }
@@ -2246,6 +2254,6 @@ final class SessionStore {
     }
 
     isolated deinit {
-        for task in [eventsTask, readInFlight, pollTask] { task?.cancel() }
+        for task in [eventsTask, readInFlight, pollTask, latestFlushTask] { task?.cancel() }
     }
 }

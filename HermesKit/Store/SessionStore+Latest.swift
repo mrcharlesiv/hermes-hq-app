@@ -12,23 +12,28 @@ nonisolated struct SessionLatestMessage: Codable, Sendable, Hashable {
     var text: String
     /// Absent in older caches and for local updates whose sender is not known.
     var role: String? = nil
+    /// The row's `message_count` when read: `last_active` is Hermes's ~1-minute heartbeat, so a reply stored after
+    /// the last heartbeat moves `message_count` without moving `recency`. Optional for older caches.
+    var count: Int? = nil
     /// Render once on ingest, not on each rebuild of a potentially large list. Optional for old caches.
     var codingResult: String? = nil
 
     // Persist the source, not yesterday's display wording. Reopening an existing chat picks up copy changes.
-    private enum CodingKeys: String, CodingKey { case at, text, role }
+    private enum CodingKeys: String, CodingKey { case at, text, role, count }
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(at, forKey: .at); try c.encode(text, forKey: .text); try c.encodeIfPresent(role, forKey: .role)
+        try c.encode(at, forKey: .at); try c.encode(text, forKey: .text)
+        try c.encodeIfPresent(role, forKey: .role); try c.encodeIfPresent(count, forKey: .count)
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.init(at: try c.decode(Double.self, forKey: .at), text: try c.decode(String.self, forKey: .text),
-                  role: try c.decodeIfPresent(String.self, forKey: .role))
+                  role: try c.decodeIfPresent(String.self, forKey: .role),
+                  count: try c.decodeIfPresent(Int.self, forKey: .count))
     }
 
-    init(at: Double, text: String, role: String? = nil) {
-        self.at = at; self.text = text; self.role = role
+    init(at: Double, text: String, role: String? = nil, count: Int? = nil) {
+        self.at = at; self.text = text; self.role = role; self.count = count
         self.codingResult = CodingSessionSubtitle.result(self)
     }
 }
@@ -42,6 +47,8 @@ nonisolated enum SessionLatestRules {
     static let keep = 400
     /// Rows asked for: enough to step past tool turns and an exact `[SILENT]` reply.
     static let tail = 8
+    /// Coalescing delay before flushing a partial batch so fast answers don't wait on a slow sibling read.
+    static let flushDelay: Duration = .milliseconds(120)
 
     /// The newest user/assistant message with words, skipping an exact `[SILENT]` reply; nil when there is none.
     static func latest(_ rows: [JSONValue]) -> String? { latestMessage(rows)?.text }
@@ -119,8 +126,11 @@ extension SessionStore {
         for row in candidates {
             let key = Self.writeKey(id: row.id, profile: row.profile)
             let cached = device.latest[key]
-            let current = cached?.at == row.recency && cached?.role != nil && !TimelineNotes.isTaskSnapshot(cached?.text ?? "")
+            let stale = latestStale.contains(key)
+            let sameCount = cached?.count == nil || row.messageCount == nil || cached?.count == row.messageCount
+            let current = !stale && cached?.at == row.recency && sameCount && cached?.role != nil && !TimelineNotes.isTaskSnapshot(cached?.text ?? "")
             if current || latestReads.contains(key) || latestQueue.contains(where: { $0.id == row.id && $0.profile == row.profile }) { continue }
+            latestStale.remove(key)
             latestQueue.append(row)
             queued += 1
         }
@@ -128,14 +138,30 @@ extension SessionStore {
         pumpLatest()
     }
 
+    /// A chat stopped running a turn (detected via live status or working ledger): re-read its tail now so the row
+    /// doesn't revert from "Working…" to a pre-reply preview while waiting for the sidebar pass.
+    func rereadLatest(for storedIds: Set<String>) {
+        guard !stopped, timing.readsLatest, !storedIds.isEmpty else { return }
+        var marked = false
+        for row in recents + messaging + archivedRows where !SessionRules.isBotChat(row) {
+            guard row.liveId(where: storedIds.contains) != nil else { continue }
+            if row.id == seenSessionId { continue }
+            latestStale.insert(Self.writeKey(id: row.id, profile: row.profile))
+            marked = true
+        }
+        if marked { refreshLatest() }
+    }
+
     /// A chat just seen or answered on this device: its row says so before the next read.
     func noteLatest(profile: String, sessionId: String, text: String, role: String? = nil) {
         let line = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        guard !line.isEmpty, line != "[SILENT]", let row = rowsById[sessionId], row.profile == profile else { return }
+        guard !line.isEmpty, !Hydration.isSilentWords(line), !TimelineNotes.isTaskSnapshot(line),
+              let row = rowsById[sessionId], row.profile == profile else { return }
         let key = Self.writeKey(id: sessionId, profile: profile)
-        let update = SessionLatestMessage(at: row.recency, text: line, role: role)
+        let clipped = line.count > 200 ? String(line.prefix(200)) : line
+        let update = SessionLatestMessage(at: row.recency, text: clipped, role: role, count: row.messageCount)
         guard device.latest[key] != update else { return }
-        // The row's recency is the one before this message: the next read that moves it reads the gateway's own.
+        // The row's recency and count are the ones before this message: the next read that moves either confirms with the gateway.
         device.latest[key] = update
         AppLog.trace("sessions", "latest preview \(AppLog.tag(sessionId)): set from this device's own send/reply")
         persistState()
@@ -148,12 +174,24 @@ extension SessionStore {
         guard !line.isEmpty, !Hydration.isSilentWords(line),
               let row = (recents + cron + messaging + archivedRows).first(where: { $0.id == sessionId && $0.profile == profile }) else { return }
         let key = Self.writeKey(id: sessionId, profile: profile)
-        let message = SessionLatestMessage(at: row.recency, text: String(line.prefix(200)), role: "assistant")
+        let message = SessionLatestMessage(at: row.recency, text: String(line.prefix(200)), role: "assistant", count: row.messageCount)
         guard device.latest[key] != message else { return }
         device.latest[key] = message
         confirmedReplyRecency[key] = row.recency
         persistState()
         rebuild()
+    }
+
+    @concurrent
+    private static func fetchLatest(client: any GatewayClient, row: SidebarSessionRow) async -> SessionLatestMessage? {
+        let query = [URLQueryItem(name: "profile", value: row.profile),
+                     URLQueryItem(name: "limit", value: String(SessionLatestRules.tail)),
+                     URLQueryItem(name: "order", value: "latest"),
+                     URLQueryItem(name: "inline_images", value: "false")]
+        let path = "/api/sessions/\(HistoryRequest.encodePathSegment(row.id))/messages"
+        guard let data = try? await client.get(path, query), let root = try? JSONValue.parseFast(data),
+              let found = SessionLatestRules.latestMessage(root["messages"]?.array ?? []) else { return nil }
+        return SessionLatestMessage(at: row.recency, text: found.text, role: found.role, count: row.messageCount)
     }
 
     private func pumpLatest() {
@@ -164,15 +202,7 @@ extension SessionStore {
             let client = self.client
             let previous = device.latest[key]
             Task { [weak self] in
-                let query = [URLQueryItem(name: "profile", value: row.profile),
-                             URLQueryItem(name: "limit", value: String(SessionLatestRules.tail)),
-                             URLQueryItem(name: "order", value: "latest")]
-                let path = "/api/sessions/\(HistoryRequest.encodePathSegment(row.id))/messages"
-                let message: SessionLatestMessage? = await {
-                    guard let data = try? await client.get(path, query), let root = try? JSONValue.parse(data),
-                          let found = SessionLatestRules.latestMessage(root["messages"]?.array ?? []) else { return nil }
-                    return SessionLatestMessage(at: row.recency, text: found.text, role: found.role)
-                }()
+                let message = await Self.fetchLatest(client: client, row: row)
                 self?.latestRead(key, row: row, message: message, previous: previous)
             }
         }
@@ -184,8 +214,9 @@ extension SessionStore {
         guard !stopped else { return }
         // A newer list page or local update wins over a slow history response.
         let current = (recents + cron + messaging + archivedRows).first { $0.id == row.id && $0.profile == row.profile }
-        let eligible = current?.recency == row.recency && device.latest[key] == previous
-        if current != nil, current?.recency != row.recency { refreshLatest() }
+        let rowMoved = current != nil && (current?.recency != row.recency || current?.messageCount != row.messageCount)
+        let markedStale = latestStale.contains(key)
+        let eligible = current != nil && !rowMoved && device.latest[key] == previous
         if eligible, let message, device.latest[key] != message {
             device.latest[key] = message
             confirmedReplyRecency[key] = nil
@@ -193,18 +224,37 @@ extension SessionStore {
         } else if eligible && message == nil {
             AppLog.trace("sessions", "latest preview \(AppLog.tag(row.id)): no user/assistant tail, gateway preview stands")
         }
-        // One rebuild and one write per few answers, not one per answer.
-        guard latestDirty > 0, latestDirty >= 6 || (latestQueue.isEmpty && latestReads.isEmpty) else { return }
-        let dirty = latestDirty
-        latestDirty = 0
-        if device.latest.count > SessionLatestRules.keep {
-            let before = device.latest.count
-            let known = Set((recents + cron + messaging + archivedRows).map { Self.writeKey(id: $0.id, profile: $0.profile) })
-            device.latest = device.latest.filter { known.contains($0.key) }
-            AppLog.trace("sessions", "latest preview cache trimmed \(before) -> \(device.latest.count)")
+        // Re-queue after applying the result above so any newly pumped read captures the updated `previous`.
+        if rowMoved || markedStale { refreshLatest() }
+        // Batch quick simultaneous answers, but never hold finished rows hostage behind a slow sibling read.
+        guard latestDirty > 0 else { return }
+        flushLatest(immediate: latestDirty >= 6 || (latestQueue.isEmpty && latestReads.isEmpty))
+    }
+
+    private func flushLatest(immediate: Bool) {
+        if immediate {
+            latestFlushTask?.cancel()
+            latestFlushTask = nil
+            guard latestDirty > 0, !stopped else { return }
+            let dirty = latestDirty
+            latestDirty = 0
+            if device.latest.count > SessionLatestRules.keep {
+                let before = device.latest.count
+                let known = Set((recents + cron + messaging + archivedRows).map { Self.writeKey(id: $0.id, profile: $0.profile) })
+                device.latest = device.latest.filter { known.contains($0.key) }
+                AppLog.trace("sessions", "latest preview cache trimmed \(before) -> \(device.latest.count)")
+            }
+            AppLog.trace("sessions", "latest preview: \(dirty) rows updated, written")
+            persistState()
+            rebuild()
+            return
         }
-        AppLog.trace("sessions", "latest preview: \(dirty) rows updated, written")
-        persistState()
-        rebuild()
+        guard latestFlushTask == nil else { return }
+        latestFlushTask = Task { [weak self] in
+            try? await Task.sleep(for: SessionLatestRules.flushDelay)
+            guard let self, !Task.isCancelled else { return }
+            self.latestFlushTask = nil
+            self.flushLatest(immediate: true)
+        }
     }
 }

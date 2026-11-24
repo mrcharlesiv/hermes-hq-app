@@ -39,6 +39,14 @@ nonisolated struct BotStoreTiming: Sendable {
     var onListPoll: Duration = .seconds(30)
     var offListPoll: Duration = .seconds(120)
     var pollCostFactor: Double = 10
+    /// Throttled roster refresh on `sessions.changed` (leading edge if gap passed, else one trailing pass).
+    var onListChangeGap: Duration = .seconds(10)
+    var offListChangeGap: Duration = .seconds(45)
+    var focusedChatChangeGap: Duration = .seconds(120)
+    var changeCostFactor: Double = 5
+    /// Minimum age before a reconnect (`gateway.ready`) or return from background triggers a full roster refresh.
+    var reconnectRefreshGap: Duration = .seconds(3)
+    var returnRefreshGap: Duration = .seconds(5)
     var openWait: Duration = .seconds(5)
     /// How long a tap on a bot the roster has not yet described (cache or slim rows carry no sessions) waits for the
     /// full answer before giving up rather than minting.
@@ -222,6 +230,8 @@ final class BotStore {
     /// [botsaid] Each Bot Chat's `BotSaidRules.mark` from the last full roster, as the gateway gave it.
     @ObservationIgnored var botSaidMarks: [String: String] = [:]
     @ObservationIgnored var botSaidDirty = 0
+    /// [botsaid] Coalescing timer so fast answers appear quickly instead of waiting for a full batch or a slow sibling.
+    @ObservationIgnored var botSaidFlushTask: Task<Void, Never>?
     /// [botsaid] Bots whose chat is read again whatever the roster says of it (`rereadBotSaid`).
     @ObservationIgnored var botSaidStale: Set<String> = []
     /// [botunread] When each bot began waiting for a read of its chat (`BotUnreadState.pending`): only a read asked
@@ -259,6 +269,9 @@ final class BotStore {
     @ObservationIgnored private(set) var stopped = false
     @ObservationIgnored private var appActive = true
     @ObservationIgnored private var listVisible = false
+    @ObservationIgnored private var chatFocused = false
+    @ObservationIgnored private var wentToBackground = false
+    @ObservationIgnored private var changeThrottle: ChangeThrottle?
     @ObservationIgnored private var chatOpening = false
     /// Opens waiting for a full roster to confirm a bot's Bot Chat: the full read must not wait for them.
     @ObservationIgnored private var opensAwaitingRoster = 0
@@ -298,6 +311,10 @@ final class BotStore {
             lastUpdated = Date(timeIntervalSince1970: cached.at / 1000)
         }
         rebuild(notify: false)
+        changeThrottle = ChangeThrottle(
+            gap: { [weak self] in self?.changeGap() ?? .seconds(45) },
+            allowed: { [weak self] in self.map { $0.started && $0.appActive && !$0.stopped && $0.loadTask == nil && $0.phase == .full } ?? false },
+            action: { [weak self] in await self?.fullReadTask().value })
         if autoStart { start() }
     }
 
@@ -335,9 +352,10 @@ final class BotStore {
         started = false
         lifecycle &+= 1
         fullToken &+= 1
-        for task in [eventsTask, statesTask, loadTask, slimTask, fullTask, pollTask, readLearnTask, readSweepTask] { task?.cancel() }
+        for task in [eventsTask, statesTask, loadTask, slimTask, fullTask, pollTask, readLearnTask, readSweepTask, botSaidFlushTask] { task?.cancel() }
         eventsTask = nil; statesTask = nil; loadTask = nil; slimTask = nil; fullTask = nil; pollTask = nil
-        readLearnTask = nil; readSweepTask = nil; readLearnQueue = []       // [read-sync]
+        readLearnTask = nil; readSweepTask = nil; botSaidFlushTask = nil; readLearnQueue = []       // [read-sync]
+        changeThrottle?.cancel()
         readRoundOpen = false; readQuietRounds = 0
         for task in mintTasks.values { task.cancel() }
         mintTasks = [:]
@@ -358,25 +376,49 @@ final class BotStore {
 
     func appDidBecomeActive() {
         appActive = true
+        let returned = wentToBackground
+        wentToBackground = false
         photos.appDidBecomeActive()       // [photoheads]
         guard started, loadTask == nil else { return }
-        if let ended = lastAttemptEnded, ContinuousClock.now - ended < pollInterval() { schedulePoll() } else { refreshSoon() }
+        if returned, isStale(timing.returnRefreshGap) {
+            refreshSoon()
+        } else if let ended = lastAttemptEnded, ContinuousClock.now - ended < pollInterval() {
+            schedulePoll()
+        } else {
+            refreshSoon()
+        }
+        changeThrottle?.pump()
     }
 
     func appDidEnterBackground() {
         appActive = false
+        wentToBackground = true
         photos.appDidEnterBackground()       // [photoheads]
         pollTask?.cancel()
         pollTask = nil
     }
 
-    /// The Bots or Sessions list is on screen (30 s cadence) or not (120 s). Coming back to the list with data
-    /// older than 30 s refreshes at once without cancelling a read in flight.
+    /// The Bots list (or Mac sidebar) is on screen (30 s poll / 10 s change gap) or not (120 s poll / 45 s change gap).
+    /// Coming back to the list with data older than 30 s refreshes at once without cancelling a read in flight; a
+    /// `sessions.changed` received while away pumps immediately when the gap allows.
     func setListVisible(_ visible: Bool) {
         let wasVisible = listVisible
         listVisible = visible
         guard started, appActive, loadTask == nil else { return }
-        if visible, !wasVisible, isStale(timing.staleOnReturn) { refreshSoon() } else { schedulePoll() }
+        if visible, !wasVisible, isStale(timing.staleOnReturn) {
+            refreshSoon()
+        } else {
+            changeThrottle?.pump()
+            schedulePoll()
+        }
+    }
+
+    /// A chat covers the list (true) or no longer does (false): stretches the off-list `sessions.changed` gap while
+    /// covered, and lets a held-back pass run immediately on return.
+    func setChatFocused(_ focused: Bool) {
+        guard chatFocused != focused else { return }
+        chatFocused = focused
+        changeThrottle?.pump()
     }
 
     /// A chat is opening: a roster read that falls due waits up to 5 s for it.
@@ -446,7 +488,8 @@ final class BotStore {
     ///
     /// [botsaid] `said` is false for a reply known only by its words (a turn that ended off screen): it may be written
     /// to another bot, so the row's words come from a read of the chat instead (`rereadBotSaid`).
-    func noteChatActivity(profile name: String, sessionId: String?, preview: String?, at time: Date, unseen: Bool, said: Bool = true) {
+    func noteChatActivity(profile name: String, sessionId: String?, preview: String?, at time: Date, unseen: Bool, said: Bool = true,
+                          serverTime: Bool = false) {
         guard let i = profiles.firstIndex(where: { $0.name == name }), var canonical = profiles[i].canonicalSession else { return }
         if let sessionId, !profiles[i].canonicalIds.contains(sessionId), mintedChats[name] != sessionId { return }
         var changed = false
@@ -460,7 +503,9 @@ final class BotStore {
             changed = true
         }
         // [botsaid] The row draws the bot's own words: these are kept with the chat until its next read.
-        if said, let preview, noteBotSaid(profile: name, sessionId: canonical.openId, text: preview, at: stamp) { changed = true }
+        if said, let preview, noteBotSaid(profile: name, sessionId: canonical.openId, text: preview, at: stamp, serverTime: serverTime) {
+            changed = true
+        }
         // Only the bot's own chat on screen sees this: one of its side chats on screen doesn't.
         let watched = focus.map { $0.profile == name && isOwnChat($0) } ?? false
         // [botunread] A reply known only by its words may be written to another bot (a tester 2026-11-19: a bot that
@@ -513,9 +558,18 @@ final class BotStore {
     /// it ends), or that it waits for you, though this device never opened that chat. Replaces both sets.
     func setLiveStatus(working: Set<String>, waiting: Set<String>) {
         guard working != liveWorking || waiting != liveWaiting else { return }
+        let stoppedWorking = liveWorking.subtracting(working)
         liveWorking = working
         liveWaiting = waiting
         rebuild()
+        // A bot's chat stopped working on the gateway (turn started on another device, cron, or before launch):
+        // re-read its tail now so the row doesn't flip from "Working…" back to an old preview until the next poll.
+        if !stoppedWorking.isEmpty, !stopped, timing.readsBotSaid {
+            for profile in profiles where !stoppedWorking.isDisjoint(with: storedChatIds(profile)) {
+                if let focus, focus.profile == profile.name, isOwnChat(focus), appActive { continue }
+                rereadBotSaid(profile: profile.name)
+            }
+        }
     }
 
     /// [live-status] Each bot's wait: what this device's own request centre says of its chat, else the gateway's word.
@@ -837,13 +891,19 @@ final class BotStore {
 
     private func handle(_ event: GatewayEvent) {
         // [read-sync] A watermark written on another device is one of the changes this names.
-        if event.type == "sessions.changed", !stopped { readsMayHaveChanged() }
+        if event.type == "sessions.changed", !stopped {
+            readsMayHaveChanged()
+            changeThrottle?.mark()
+        }
         guard event.type == "gateway.ready", !stopped else { return }
         retryOwedReads()                    // [read-sync] what couldn't be sent while the link was down
         readsMayHaveChanged(sweep: true)
         noteSocketOpen()
-        // A gateway that came back after a failed or never-finished load: read now instead of waiting for the poll.
-        if started, appActive, fullTask == nil, loadTask == nil, phase < .full || isFailed { refreshSoon() }
+        // A gateway that came back after a failed/unfinished load, or a real reconnect after `reconnectRefreshGap`: read now.
+        if started, appActive, fullTask == nil, loadTask == nil,
+           phase < .full || isFailed || isStale(timing.reconnectRefreshGap) {
+            refreshSoon()
+        }
     }
 
     private func handle(_ state: ConnectionState) {
@@ -949,6 +1009,7 @@ final class BotStore {
     @discardableResult
     private func fullReadTask() -> Task<Void, Never> {
         if let running = fullTask { return running }
+        changeThrottle?.noteRan()
         pollTask?.cancel()
         pollTask = nil
         fullToken &+= 1
@@ -1106,7 +1167,18 @@ final class BotStore {
     private var lowPower: Bool { PowerState.shared.saving }
 
     /// [offline] §6.9: the power state changed: the poll is armed again with the new period (overdue runs at once).
-    func powerChanged() { schedulePoll() }
+    func powerChanged() {
+        schedulePoll()
+        changeThrottle?.pump()
+    }
+
+    /// Minimum gap between `sessions.changed`-driven roster refreshes: responsive on the Bots list, slower off it,
+    /// and scaled by `lastReadDuration` and power-saving state so a busy gateway is never overloaded.
+    func changeGap() -> Duration {
+        let base = listVisible ? timing.onListChangeGap : (chatFocused ? timing.focusedChatChangeGap : timing.offListChangeGap)
+        let cost = lastReadDuration * timing.changeCostFactor
+        return PowerPolls.period(max(base, cost), floor: .zero, saving: lowPower)
+    }
 
     /// `max(30 s on a list / 120 s elsewhere, 10 × the last full read)`, × 3 in Low Power Mode or when hot. On the list
     /// the 30 s grows half again with each read that found nothing new, up to 60 s, and a change brings it back: the
@@ -1229,7 +1301,7 @@ final class BotStore {
     }
 
     isolated deinit {
-        for task in [eventsTask, statesTask, loadTask, slimTask, fullTask, pollTask, readLearnTask, readSweepTask] { task?.cancel() }
+        for task in [eventsTask, statesTask, loadTask, slimTask, fullTask, pollTask, readLearnTask, readSweepTask, botSaidFlushTask] { task?.cancel() }
         for waiter in readyWaiters.values { waiter.timeout.cancel(); waiter.continuation.resume() }
     }
 }

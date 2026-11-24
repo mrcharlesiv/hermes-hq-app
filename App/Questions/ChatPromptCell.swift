@@ -45,8 +45,11 @@ final class ChatPromptCell: ChatBaseCell {
     private var approval: ApprovalCardRow?
     private var draft: DraftCardRow?                         // [drafts]
     private var draftButtons: [DraftButton: UIButton] = [:]
-    private let paper = UIView()                             // the panel a draft's words sit on
+    private let paper = UIView()                             // the panel an approval or ask card's words sit on
     private let quote = UIView()                             // the bar beside the conversation a draft answers
+    private let bodyBar = UIView()                           // [calm-chat] left accent bar / receipt stem for drafts
+    private let draftDivider = UIView()                      // [calm-chat] subtle hairline above waiting draft buttons
+    private let draftToggle = UIControl()                    // [calm-chat] tap target to expand/collapse settled drafts
     private let threadToggle = UIControl()
     private var settled: SettledClarifyCard?                 // [questions] a settled question card
     private let answerNow = UIButton(type: .system)
@@ -69,6 +72,23 @@ final class ChatPromptCell: ChatBaseCell {
         quote.isUserInteractionEnabled = false; quote.isHidden = true
         quote.layer.cornerRadius = 1.5
         card.addSubview(quote)
+        bodyBar.isUserInteractionEnabled = false; bodyBar.isHidden = true
+        bodyBar.layer.cornerRadius = 1.25
+        card.addSubview(bodyBar)
+        draftDivider.isUserInteractionEnabled = false; draftDivider.isHidden = true
+        draftDivider.backgroundColor = ChatPalette.separator
+        card.addSubview(draftDivider)
+        draftToggle.isHidden = true
+        draftToggle.isAccessibilityElement = true
+        draftToggle.accessibilityTraits = .button
+        draftToggle.accessibilityIdentifier = "draft.toggle"
+        draftToggle.addAction(UIAction { [weak self] _ in
+            guard let self, let draft = self.draft else { return }
+            Haptics.play(.selection)
+            self.handler?.draftCardToggle(rowId: draft.rowId)
+        }, for: .touchUpInside)
+        contentView.addSubview(draftToggle)
+        PointerEffects.surface(draftToggle)
         threadToggle.isHidden = true
         threadToggle.isAccessibilityElement = true
         threadToggle.accessibilityTraits = .button
@@ -152,7 +172,8 @@ final class ChatPromptCell: ChatBaseCell {
             card.frame = frame
             card.layer.cornerRadius = ChatMetrics.insetCardRadius
             card.backgroundColor = ChatPalette.promptCard
-            let panel = l.draft?.paper ?? l.approval?.paper ?? l.ask?.paper   // [asks v2] an ask card's ready reply
+            // [calm-chat] Draft cards render single-surface with `bodyBar` instead of a second nested bordered box.
+            let panel = l.draft != nil ? nil : (l.approval?.paper ?? l.ask?.paper)   // [asks v2] an ask card's ready reply
             paper.isHidden = panel == nil
             if let p = panel {
                 paper.frame = p.offsetBy(dx: -frame.minX, dy: -frame.minY)
@@ -162,11 +183,29 @@ final class ChatPromptCell: ChatBaseCell {
             quote.isHidden = l.draft?.quote == nil
             if let q = l.draft?.quote {
                 quote.frame = q.offsetBy(dx: -frame.minX, dy: -frame.minY)
-                quote.backgroundColor = ChatPalette.tint.withAlphaComponent(0.55)
+                quote.backgroundColor = ChatPalette.separator
+            }
+            bodyBar.isHidden = l.draft?.bodyBar == nil
+            if let bar = l.draft?.bodyBar {
+                bodyBar.frame = bar.offsetBy(dx: -frame.minX, dy: -frame.minY)
+                bodyBar.backgroundColor = (l.draft?.bodyBarTint == true)
+                    ? ChatPalette.tint.withAlphaComponent(0.55)
+                    : ChatPalette.separator
+            }
+            draftDivider.isHidden = l.draft?.footerDivider == nil
+            if let div = l.draft?.footerDivider {
+                let hair = HQShape.pixel(traitCollection.displayScale)
+                draftDivider.frame = CGRect(x: div.minX - frame.minX, y: div.minY - frame.minY, width: div.width, height: hair)
+                draftDivider.backgroundColor = ChatPalette.separator.withAlphaComponent(0.55)
             }
         } else {
             card.isHidden = true
+            paper.isHidden = true
+            quote.isHidden = true
+            bodyBar.isHidden = true
+            draftDivider.isHidden = true
         }
+        placeBacking(l.draft?.backingFrame, radius: (l.draft?.backingFrame?.height ?? 0) / 2)
         placeSymbols(l.symbols)
         placeRules(l.rules)
         baseAccessibility = l.accessibility
@@ -183,9 +222,10 @@ final class ChatPromptCell: ChatBaseCell {
             card.accessibilityLabel = l.accessibility
             stopTicking()
             if case .draft(let d) = spec.kind, let dl = l.draft {
-                configureDraft(d, dl)
+                configureDraft(d, dl, hasCard: l.cardFrame != nil)
             } else {
                 draft = nil
+                draftToggle.isHidden = true
                 showAll.isHidden = true
                 threadToggle.isHidden = true
                 draftButtons.values.forEach { $0.isHidden = true }
@@ -197,6 +237,7 @@ final class ChatPromptCell: ChatBaseCell {
             return
         }
         draft = nil
+        draftToggle.isHidden = true
         draftButtons.values.forEach { $0.isHidden = true }
         threadToggle.isHidden = true
         showAll.accessibilityLabel = "Show All"
@@ -269,6 +310,7 @@ final class ChatPromptCell: ChatBaseCell {
         paper.layer.borderColor = panelEdge.cgColor
         paper.layer.borderWidth = panelEdge.cgColor.alpha > 0 ? hair : 0
         for rule in ruleViews where rule.bounds.height != hair { rule.frame.size.height = hair }
+        if !draftDivider.isHidden && draftDivider.bounds.height != hair { draftDivider.frame.size.height = hair }
     }
 
     private func placeSymbols(_ symbols: [PromptSymbol]) {
@@ -303,6 +345,12 @@ final class ChatPromptCell: ChatBaseCell {
                 // The dock's picked mark: a tint disc with a white check.
                 config = config.applying(UIImage.SymbolConfiguration(paletteColors: [ChatPalette.onTint, ChatPalette.tint]))
                 v.tintColor = ChatPalette.tint
+            case .quiet:
+                v.tintColor = ChatPalette.label2
+            case .success:
+                let checkInk = traitCollection.userInterfaceStyle == .dark ? cardInk : UIColor.white
+                config = config.applying(UIImage.SymbolConfiguration(paletteColors: [checkInk, ChatPalette.green]))
+                v.tintColor = ChatPalette.green
             }
             v.image = UIImage(systemName: symbol.name, withConfiguration: config)
         }
@@ -426,7 +474,7 @@ final class ChatPromptCell: ChatBaseCell {
 
     // MARK: Draft card ([drafts])
 
-    private func configureDraft(_ d: DraftCardRow, _ dl: DraftCardLayout) {
+    private func configureDraft(_ d: DraftCardRow, _ dl: DraftCardLayout, hasCard: Bool) {
         draft = d
         card.accessibilityIdentifier = "draft.card"
         showAll.isHidden = dl.showAllFrame == nil
@@ -435,6 +483,20 @@ final class ChatPromptCell: ChatBaseCell {
         threadToggle.isHidden = dl.threadFrame == nil
         threadToggle.frame = dl.threadFrame ?? .zero
         threadToggle.accessibilityLabel = dl.threadTitle
+        if let toggle = dl.toggleFrame {
+            draftToggle.isHidden = false
+            draftToggle.frame = toggle
+            draftToggle.accessibilityLabel = dl.toggleLabel
+            draftToggle.accessibilityValue = dl.toggleExpanded ? "Expanded" : "Collapsed"
+            if hasCard && !dl.toggleExpanded {
+                PointerEffects.fit(draftToggle, card: card.frame, radius: ChatMetrics.insetCardRadius)
+            } else {
+                draftToggle.layer.cornerRadius = 8
+                PointerEffects.outlineDidLayout(draftToggle)
+            }
+        } else {
+            draftToggle.isHidden = true
+        }
         var shown = Set<DraftButton>()
         var ordered: [UIButton] = []
         for (kind, frame) in dl.buttons {
@@ -448,9 +510,15 @@ final class ChatPromptCell: ChatBaseCell {
             ordered.append(button)
         }
         for (kind, button) in draftButtons where !shown.contains(kind) { button.isHidden = true }
-        // VoiceOver: the card, the conversation's button, Show All, then its buttons with Send first.
+        // VoiceOver: folded rows speak through their toggle button; cards speak through the card + links + buttons.
         let links: [UIView] = (dl.threadFrame != nil ? [threadToggle] : []) + (dl.showAllFrame != nil ? [showAll] : [])
-        contentView.accessibilityElements = [card] + links + (dl.stacked ? ordered : ordered.reversed())
+        if !hasCard, dl.toggleFrame != nil {
+            contentView.accessibilityElements = [draftToggle]
+        } else if dl.toggleFrame != nil {
+            contentView.accessibilityElements = [draftToggle] + links
+        } else {
+            contentView.accessibilityElements = [card] + links + (dl.stacked ? ordered : ordered.reversed())
+        }
     }
 
     private func makeDraftButton(_ kind: DraftButton) -> UIButton {

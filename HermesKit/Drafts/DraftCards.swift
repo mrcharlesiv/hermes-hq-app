@@ -176,6 +176,126 @@ nonisolated enum DraftCards {
         return "square.and.pencil.circle.fill"
     }
 
+    /// [calm-chat] Quiet outline glyph for a folded draft disclosure row.
+    static func quietGlyph(_ draft: Draft) -> String {
+        let kind = name(draft).lowercased()
+        if ["mail", "gmail", "outlook"].contains(where: kind.contains) { return "envelope" }
+        if ["slack", "telegram", "discord", "message", "text", "whatsapp", "sms", "signal", "teams"].contains(where: kind.contains) {
+            return "bubble.left"
+        }
+        return "square.and.pencil"
+    }
+
+    /// [calm-chat] Stable destination key for superseding: a newer draft to the same app + recipient replaces an
+    /// earlier unanswered draft so stale drafts never keep live Send buttons.
+    static func targetKey(_ draft: Draft) -> String {
+        let app = name(draft).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let to = draft.to.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !to.isEmpty { return "\(app)|\(to)" }
+        let subject = draft.subject.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return "\(app)||\(subject)"
+    }
+
+    /// [calm-chat] The row id of a draft call inside `message`, matching `PromptRows.draftRow`.
+    static func rowId(messageId: String, callId: String) -> String { "\(messageId)|draft\(callId)" }
+
+    /// [calm-chat] Draft row ids superseded by a later draft to the same destination (`targetKey`). Only waiting
+    /// drafts are visually superseded (answered drafts keep their sent/skipped state).
+    static func supersededRowIds(_ messages: [ChatMessage]) -> Set<String> {
+        var latestByTarget: [String: String] = [:]
+        var all: [(target: String, rowId: String)] = []
+        for message in messages where message.role == .assistant {
+            for part in message.parts {
+                guard case .tool(let call) = part, call.name == tool, let draft = draft(call) else { continue }
+                let target = targetKey(draft)
+                let id = rowId(messageId: message.id, callId: call.id)
+                latestByTarget[target] = id
+                all.append((target, id))
+            }
+        }
+        guard all.count > 1 else { return [] }
+        var out = Set<String>()
+        for entry in all where latestByTarget[entry.target] != entry.rowId {
+            out.insert(entry.rowId)
+        }
+        return out
+    }
+
+    /// [calm-chat] Lookback for `ChatRowModel.rebuildNewest`: when `messages[from...]` adds a draft or a draft answer,
+    /// reach back to the oldest message at or after `floor` with a matching destination or draft id so an earlier
+    /// waiting draft folds live (or updates to sent/skipped) without waiting for a full rebuild.
+    static func reach(from: Int, floor: Int, in messages: [ChatMessage]) -> Int {
+        guard from > floor, from < messages.count else { return from }
+        var targets = Set<String>()
+        var answeredIds = Set<String>()
+        for message in messages[from...] {
+            switch message.role {
+            case .assistant:
+                for part in message.parts {
+                    guard case .tool(let call) = part, call.name == tool, let draft = draft(call) else { continue }
+                    targets.insert(targetKey(draft))
+                }
+            case .user:
+                for part in message.parts {
+                    guard case .text(let text) = part, let found = answer(in: text) else { continue }
+                    answeredIds.insert(found.id)
+                }
+            case .system:
+                break
+            }
+        }
+        guard !targets.isEmpty || !answeredIds.isEmpty else { return from }
+        var lowest = from
+        var i = from - 1
+        while i >= floor {
+            if messages[i].role == .assistant {
+                for part in messages[i].parts {
+                    guard case .tool(let call) = part, call.name == tool, let draft = draft(call) else { continue }
+                    if targets.contains(targetKey(draft)) || answeredIds.contains(draft.id) {
+                        lowest = i
+                        break
+                    }
+                }
+            }
+            i -= 1
+        }
+        return lowest
+    }
+
+    /// [calm-chat] Whether `messages[index]` is a synthetic draft-card tap (`Send it` / `Don't send it`) immediately
+    /// answering a draft drawn in the preceding non-system message. When adjacent, the card right above already shows
+    /// the settled status, so the duplicate user bubble is omitted.
+    static func isAdjacentAnswerEcho(_ messages: [ChatMessage], at index: Int, draftId: String) -> Bool {
+        var scan = index - 1
+        while scan >= 0 {
+            let prev = messages[scan]
+            if prev.role == .system {
+                scan -= 1
+                continue
+            }
+            guard prev.role == .assistant else { return false }
+            return prev.parts.contains { part in
+                guard case .tool(let call) = part, call.name == tool, let d = draft(call) else { return false }
+                return d.id == draftId
+            }
+        }
+        return false
+    }
+
+    private static let readyBoilerplate = TRx(
+        #"^(?:(?:your|the)\s+(?:(?:revised|updated|new)\s+)?(?:[a-z0-9][a-z0-9&/-]{0,18}(?:\s+[a-z0-9&/-]{1,12})?\s+)?draft(?:\s+(?:for|to)\s+[^.!?\n]{1,60})?\s+is\s+ready(?:\s+(?:to|for)\s+(?:review|send|sending))?[.!]?(?:\s+nothing(?:['’]s|\s+has)\s+been\s+sent(?:\s+yet)?[.!]?)?|nothing(?:['’]s|\s+has)\s+been\s+sent(?:\s+yet)?[.!]?)$"#
+    )
+
+    /// [calm-chat] True only when an assistant message's entire prose alongside a draft card is stock "Your draft is
+    /// ready to review. Nothing's been sent." boilerplate carrying no extra commentary.
+    static func isReadyBoilerplate(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 140, !trimmed.contains(where: \.isNewline),
+              !trimmed.contains("http://"), !trimmed.contains("https://"), !trimmed.contains("`") else { return false }
+        let collapsed = trimmed.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return readyBoilerplate.groups(collapsed) != nil
+    }
+
     /// The button under the preview that opens the conversation a draft answers.
     static func threadTitle(_ draft: Draft) -> String {
         draft.thread.count == 1 ? "Show Whole Message" : "Show Conversation (\(draft.thread.count))"

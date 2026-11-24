@@ -119,9 +119,9 @@ nonisolated enum ChatMetrics {
     static let userMaxFraction: CGFloat = 0.8
     static let runGap: CGFloat = 2
     static let turnGap: CGFloat = 6
-    /// [chat-refine] Between your bubble and the bot's (either order): 10, so a change of speaker reads as one beside
-    /// the 2 pt inside a run (at 6 the two gaps were hard to tell apart). The Mac keeps its 6 (not looked at there).
-    static let speakerGap: CGFloat = DeviceWord.isMac ? 6 : 10
+    /// [calm-chat] Clear breathing room between speakers (including across cards and user replies) so turns separate
+    /// visually beside the 2 pt run gap and 6 pt same-turn gap.
+    static let speakerGap: CGFloat = DeviceWord.isMac ? 18 : 14
     static let runSeconds: TimeInterval = 300
     static let dayGapSeconds: TimeInterval = 1800
     /// Time inside a bubble: 10 pt from the trailing edge, 5 pt from the bottom.

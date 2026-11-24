@@ -58,7 +58,7 @@ nonisolated enum AskCardLayout {
 
     static func make(_ card: AskCardRow, gap: CGFloat, width: CGFloat, category: UIContentSizeCategory) -> RowLayout {
         let a = card.ask
-        let cardW = max(120, width - 2 * side), innerW = cardW - 2 * padH
+        let cardW = PromptLayout.cardWidth(for: width), innerW = cardW - 2 * padH
         let top = gap + 6, x = side + padH
         var texts: [PromptPlacedText] = [], symbols: [PromptSymbol] = [], spoken: [String] = []
 

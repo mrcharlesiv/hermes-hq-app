@@ -42,7 +42,7 @@ nonisolated enum OrderCardLayout {
 
     static func make(_ card: OrderCardRow, gap: CGFloat, width: CGFloat, category: UIContentSizeCategory) -> RowLayout {
         let o = card.order
-        let cardW = max(120, width - 2 * side), innerW = cardW - 2 * padH
+        let cardW = PromptLayout.cardWidth(for: width), innerW = cardW - 2 * padH
         let top = gap + 6, x = side + padH
         let settled = card.state != .waiting
         let head = PromptLayout.noteHeader(title(o), glyph: "bag.circle.fill", dim: card.state == .cancelled || card.state == .replaced,

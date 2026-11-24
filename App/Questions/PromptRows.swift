@@ -183,8 +183,9 @@ nonisolated struct PromptSymbol: Sendable, Equatable {
     var name: String
     var style: Style
     /// `header` label-2; `picked` the dock's picked mark (tint disc, white check); `blank` label-3; `dim` a grey
-    /// disc with a white glyph (a card's header mark when nothing was chosen).
-    enum Style: Sendable { case header, picked, blank, dim }
+    /// disc with a white glyph (a card's header mark when nothing was chosen); `quiet` plain monochrome label-2;
+    /// `success` green disc with contrasting checkmark for settled receipts.
+    enum Style: Sendable { case header, picked, blank, dim, quiet, success }
 }
 
 nonisolated struct PromptRowLayout: @unchecked Sendable {
@@ -242,6 +243,14 @@ nonisolated enum PromptFonts {
 nonisolated enum PromptLayout {
     static let cardSide: CGFloat = 16
     static let headerGap: CGFloat = 8
+    /// [calm-chat] Wide panes (Mac, iPad) keep interactive cards on a calm left-anchored rail instead of stretching
+    /// edge-to-edge across the full 1280 pt Mac column. Narrow phones keep `width - 2 * cardSide`.
+    static var maxCardWidth: CGFloat { DeviceWord.isMac ? 660 : 560 }
+
+    static func cardWidth(for width: CGFloat) -> CGFloat {
+        let available = max(120, width - 2 * cardSide)
+        return min(available, min(TextLayout.replyWidth(width), maxCardWidth))
+    }
 
     static func make(_ prompt: PromptRow, row: ChatRow, width: CGFloat, style: ChatStyle) -> RowLayout {
         switch prompt.kind {
@@ -371,7 +380,7 @@ nonisolated enum PromptLayout {
 
     static func approval(_ a: ApprovalCardRow, gap: CGFloat, width: CGFloat, category: UIContentSizeCategory) -> RowLayout {
         let side = cardSide
-        let cardW = max(120, width - 2 * side)
+        let cardW = cardWidth(for: width)
         let innerX = notePadH
         let innerW = cardW - 2 * innerX
         var texts: [PromptPlacedText] = []
@@ -546,7 +555,7 @@ nonisolated enum PromptLayout {
     private static func noteCard(title: String, glyph: String, detail: String, detailColor: UIColor, gap: CGFloat, width: CGFloat,
                                  category: UIContentSizeCategory, detailLines: Int = 2) -> RowLayout {
         let side = cardSide
-        let cardW = max(120, width - 2 * side), innerW = cardW - 2 * notePadH
+        let cardW = cardWidth(for: width), innerW = cardW - 2 * notePadH
         let top = gap + 6, x = side + notePadH
         let head = noteHeader(title, glyph: glyph, x: x, y: top + notePadV, width: innerW, category: category)
         let (d, _) = clamped(text(detail, PromptFonts.font(.subheadline, category), detailColor), width: innerW, maxLines: detailLines)
@@ -571,7 +580,7 @@ nonisolated enum PromptLayout {
     private static func qa(_ rows: [(question: String, answer: String, unanswered: Bool)], gap: CGFloat, width: CGFloat,
                            category: UIContentSizeCategory, answerNow: Bool = false, title shownTitle: String? = nil) -> RowLayout {
         let side = cardSide
-        let cardW = max(120, width - 2 * side), innerW = cardW - 2 * notePadH
+        let cardW = cardWidth(for: width), innerW = cardW - 2 * notePadH
         let top = gap + 6, x = side + notePadH
         var (title, glyph) = answersTitle(rows)
         if let shownTitle { title = shownTitle }
@@ -645,12 +654,14 @@ nonisolated struct DraftRowsInput: Sendable, Equatable {
     var edits: [String: String] = [:]
     /// The draft whose words are in the message field.
     var editing: String? = nil
+    /// [calm-chat] Draft row ids superseded by a later draft to the same destination; nil computes from `messages`.
+    var superseded: Set<String>? = nil
 }
 
 nonisolated enum DraftButton: Sendable, Hashable { case skip, edit, send }
 
 nonisolated struct DraftCardRow: Sendable, Equatable, Hashable {
-    enum State: Sendable, Hashable { case waiting, sent, skipped }
+    enum State: Sendable, Hashable { case waiting, sent, skipped, superseded }
     var draft: DraftCards.Draft
     var rowId: String
     var messageId: String
@@ -661,8 +672,11 @@ nonisolated struct DraftCardRow: Sendable, Equatable, Hashable {
     var state: State
     /// Its words are in the message field (the buttons wait).
     var editing: Bool
-    /// Show All was tapped.
+    /// Show All was tapped (waiting), or the folded receipt / superseded row was expanded.
     var expanded: Bool
+
+    /// [calm-chat] Collapsed quiet one-line disclosure row (no heavy card chrome).
+    var isQuietFolded: Bool { (state == .superseded || state == .skipped) && !expanded }
 }
 
 nonisolated struct DraftCardLayout: @unchecked Sendable {
@@ -671,8 +685,20 @@ nonisolated struct DraftCardLayout: @unchecked Sendable {
     var buttons: [(DraftButton, CGRect)]
     var buttonFont: UIFont
     var stacked: Bool
-    /// The inset panel the words sit on (a field you can change), in the row's coordinates.
+    /// The draft body region in row coordinates (drawn cleanly with `bodyBar` instead of a nested bordered box).
     var paper: CGRect
+    /// [calm-chat] Left vertical accent bar beside the draft body (or stem aligned under the receipt checkmark).
+    var bodyBar: CGRect? = nil
+    /// [calm-chat] True for an active waiting draft's tint accent bar; false for settled/folded separator bar.
+    var bodyBarTint = false
+    /// [calm-chat] Subtle divider above the waiting draft's action row.
+    var footerDivider: CGRect? = nil
+    /// [calm-chat] Tap target that toggles folding/expansion on settled or superseded drafts.
+    var toggleFrame: CGRect? = nil
+    var toggleLabel = ""
+    var toggleExpanded = false
+    /// [calm-chat] Pill frame for `placeBacking` over a Chat Background when collapsed without a card (`cardFrame == nil`).
+    var backingFrame: CGRect? = nil
     /// "Show Conversation (3)" / "Show Whole Message": its touch frame and title (it opens the sheet); nil when the
     /// bot gave no thread, or the preview already shows all of it.
     var threadFrame: CGRect? = nil
@@ -690,7 +716,7 @@ nonisolated extension PromptRows {
     /// A `draft_message` tool part's row; nil when the call can't be read as a draft (it draws as the step it is).
     static func draftRow(_ call: ToolCall, message: ChatMessage, input: ChatRowBuilder.Input) -> ChatRow? {
         guard let draft = DraftCards.draft(call) else { return nil }
-        let id = "\(message.id)|draft\(call.id)"
+        let id = DraftCards.rowId(messageId: message.id, callId: call.id)
         var card = DraftCardRow(draft: draft, rowId: id, messageId: message.id, body: draft.body, edited: false, state: .waiting,
                                 editing: input.drafts.editing == draft.id, expanded: input.expanded.contains(id))
         switch input.drafts.answers[draft.id] {
@@ -700,7 +726,12 @@ nonisolated extension PromptRows {
         case .skip:
             card.state = .skipped
         case nil:
-            if let edit = input.drafts.edits[draft.id] { card.body = edit }
+            let superseded = input.drafts.superseded ?? DraftCards.supersededRowIds(input.messages)
+            if superseded.contains(id) {
+                card.state = .superseded
+            } else if let edit = input.drafts.edits[draft.id] {
+                card.body = edit
+            }
         }
         card.edited = card.body != draft.body
         if card.state != .waiting { card.editing = false }
@@ -740,50 +771,312 @@ nonisolated extension PromptLayout {
         }
     }
 
-    /// The line under an answered draft.
+    /// The status wording for a settled or superseded draft.
     static func draftStatus(_ d: DraftCardRow) -> String? {
         switch d.state {
         case .waiting: nil
         case .sent: d.edited ? "Approved to send, with your edits" : "Approved to send"
         case .skipped: "Not sent"
+        case .superseded: "Revised below"
         }
     }
 
-    /// The draft card: a filled card (a reply bubble's colour, no outline); a round tint mark for the kind of message
-    /// beside "Email draft", then To, From and Subject as a letter's header, the words on an inset panel (clamped
-    /// until Show All), then Don't Send, Edit and Send, or what you chose.
+    /// [calm-chat] The draft card:
+    /// - `.superseded` / `.skipped`: quiet one-line disclosure row (no live buttons); tap expands read-only text.
+    /// - `.sent`: compact two-line receipt card with a quoted preview stem; tap expands full text.
+    /// - `.waiting`: clean single-surface card on the readable rail with left tint bar and trailing action row.
     static func draft(_ d: DraftCardRow, gap: CGFloat, width: CGFloat, category: UIContentSizeCategory) -> RowLayout {
+        switch d.state {
+        case .superseded, .skipped:
+            return draftFolded(d, gap: gap, width: width, category: category)
+        case .sent:
+            return draftReceipt(d, gap: gap, width: width, category: category)
+        case .waiting:
+            return draftWaiting(d, gap: gap, width: width, category: category)
+        }
+    }
+
+    /// Quiet one-line disclosure for superseded or skipped drafts; tapping opens a muted read-only drawer below it.
+    private static func draftFolded(_ d: DraftCardRow, gap: CGFloat, width: CGFloat, category: UIContentSizeCategory) -> RowLayout {
         let side = cardSide
-        let cardW = max(120, width - 2 * side), innerW = cardW - 2 * notePadH
-        let top = gap + 6, x = side + notePadH
-        let title = DraftCards.heading(d.draft) + (d.state == .waiting && d.edited ? " · Edited" : "")
-        // A round tint mark for the kind of message, and the title in the label colour (every card's header).
-        let head = noteHeader(title, glyph: DraftCards.glyph(d.draft), x: x, y: top + notePadV, width: innerW, category: category)
-        var texts = [head.text]
-        var symbols = [head.symbol]
-        var spoken = [title]
-        var y = head.maxY + 12
-        // To, From, Subject: a letter's header, each on its own line with the labels in one column (at the largest
-        // text sizes the label sits over its value).
+        let cardW = cardWidth(for: width)
+        let status = draftStatus(d) ?? "Not sent"
+        let font = PromptFonts.font(.footnote, category, cap: 22)
+        let strongFont = PromptFonts.font(.footnote, category, weight: .semibold, cap: 22)
+        let iconSide = ceil(min(22, max(15, font.pointSize * 1.1)))
+        let chevW = ceil(min(18, max(11, font.pointSize * 0.85)))
+        let rowH = max(32, ceil(font.lineHeight) + 10)
+        let top = max(0, gap)
+
+        let label = NSMutableAttributedString(attributedString: text(DraftCards.heading(d.draft), strongFont, ChatPalette.label2))
+        var tail = ""
+        if !d.draft.to.isEmpty { tail += " to \(d.draft.to)" }
+        tail += " · \(status)"
+        label.append(text(tail, font, ChatPalette.label2))
+
+        let textX = side + iconSide + 7
+        let maxTextW = max(60, cardW - iconSide - 7 - 6 - chevW)
+        let (lineLayout, _) = clamped(label, width: maxTextW, maxLines: 1)
+        let lineY = top + ((rowH - lineLayout.size.height) / 2).rounded()
+        let textFrame = CGRect(x: textX, y: lineY, width: lineLayout.size.width, height: lineLayout.size.height)
+        let leadSymbol = PromptSymbol(
+            frame: CGRect(x: side, y: top + ((rowH - iconSide) / 2).rounded(), width: iconSide, height: iconSide),
+            name: d.state == .skipped ? "minus.circle" : DraftCards.quietGlyph(d.draft),
+            style: d.state == .skipped ? .blank : .quiet
+        )
+        let chevSymbol = PromptSymbol(
+            frame: CGRect(x: textFrame.maxX + 6, y: top + ((rowH - chevW) / 2).rounded(), width: chevW, height: chevW),
+            name: d.expanded ? "chevron.up" : "chevron.down",
+            style: .blank
+        )
+        let rowWidth = min(cardW, chevSymbol.frame.maxX - side)
+        let tapH = max(44, rowH)
+        let toggleFrame = CGRect(x: side - 6, y: top + (rowH - tapH) / 2, width: rowWidth + 12, height: tapH)
+        let pillH = min(rowH, ceil(max(font.lineHeight, iconSide)) + 8)
+        let backingFrame = CGRect(x: side - 8, y: top + ((rowH - pillH) / 2).rounded(), width: rowWidth + 16, height: pillH)
+
+        var spoken = [DraftCards.heading(d.draft)]
+        if !d.draft.to.isEmpty { spoken.append("To: \(d.draft.to)") }
+        if d.expanded { spoken.append(d.body) }
+        spoken.append(status)
+        let accessibility = spoken.joined(separator: ". ")
+
+        guard d.expanded else {
+            var draft = DraftCardLayout(showAllFrame: nil, showAllTitle: "", buttons: [], buttonFont: PromptFonts.button(category),
+                                        stacked: false, paper: .zero)
+            draft.toggleFrame = toggleFrame
+            draft.toggleLabel = accessibility
+            draft.toggleExpanded = false
+            draft.backingFrame = backingFrame
+            var layout = PromptRowLayout(cardFrame: nil, texts: [PromptPlacedText(text: lineLayout, frame: textFrame)],
+                                         approval: nil, symbols: [leadSymbol, chevSymbol], rules: [], accessibility: accessibility)
+            layout.draft = draft
+            return RowLayout(height: ceil(top + rowH + 2), content: .prompt(layout))
+        }
+
+        // Expanded read-only drawer card right below the quiet toggle line.
+        let innerW = cardW - 2 * notePadH
+        let cardTop = top + rowH + 4
+        let x = side + notePadH
+        var y = cardTop + notePadV
+        var texts = [PromptPlacedText(text: lineLayout, frame: textFrame)]
+        let symbols = [leadSymbol, chevSymbol]
         let fields = DraftCards.fields(d.draft)
         if !fields.isEmpty {
-            let labelFont = PromptFonts.font(.subheadline, category)
-            let over = category.isAccessibilityCategory
-            let labelW = over ? 0 : ceil(fields.map { ($0.label as NSString).size(withAttributes: [.font: labelFont]).width }.max() ?? 0) + 12
-            for field in fields {
-                let label = TextKitLayout(text(field.label, labelFont, ChatPalette.label2), width: nil)
-                texts.append(PromptPlacedText(text: label, frame: CGRect(x: x, y: y, width: label.size.width, height: label.size.height)))
-                if over { y += label.size.height }
-                let valueFont = PromptFonts.font(.subheadline, category, weight: field.strong ? .semibold : nil)
-                let (value, _) = clamped(text(field.value, valueFont, ChatPalette.label, wrapAnywhere: !field.strong), width: innerW - labelW, maxLines: 2)
-                texts.append(PromptPlacedText(text: value, frame: CGRect(x: x + labelW, y: y, width: innerW - labelW, height: value.size.height)))
-                y += max(value.size.height, over ? 0 : label.size.height) + (over ? 8 : 5)
-                spoken.append("\(field.label): \(field.value)")
-            }
-            y += over ? 8 : 11
+            let metaFont = PromptFonts.font(.footnote, category)
+            let metaLine = fields.map { "\($0.label): \($0.value)" }.joined(separator: "  ·  ")
+            let (meta, _) = clamped(text(metaLine, metaFont, ChatPalette.label2), width: innerW, maxLines: 2)
+            texts.append(PromptPlacedText(text: meta, frame: CGRect(x: x, y: y, width: innerW, height: meta.size.height)))
+            y += meta.size.height + 8
         }
-        // The conversation it answers: a short preview beside a bar (the message being answered, and the ones before
-        // it while there is room), then a button that opens all of it in a sheet.
+        let barX = x + 2
+        let wx = x + 14, wordsW = max(60, innerW - 14)
+        let paperTop = y
+        let bodyText = text(d.body, PromptFonts.font(.subheadline, category), ChatPalette.label2)
+        let body = TextKitLayout(bodyText, width: wordsW)
+        texts.append(PromptPlacedText(text: body, frame: CGRect(x: wx, y: y, width: wordsW, height: body.size.height)))
+        y += body.size.height
+        let paper = CGRect(x: x, y: paperTop, width: innerW, height: max(1, y - paperTop))
+        let bodyBar = CGRect(x: barX, y: paperTop + 1, width: 2, height: max(10, body.size.height - 2))
+        let card = CGRect(x: side, y: cardTop, width: cardW, height: ceil(y + notePadV - cardTop))
+
+        var draft = DraftCardLayout(showAllFrame: nil, showAllTitle: "", buttons: [], buttonFont: PromptFonts.button(category),
+                                    stacked: false, paper: paper)
+        draft.bodyBar = bodyBar
+        draft.bodyBarTint = false
+        draft.toggleFrame = toggleFrame
+        draft.toggleLabel = accessibility
+        draft.toggleExpanded = true
+        draft.backingFrame = backingFrame
+        var layout = PromptRowLayout(cardFrame: card, texts: texts, approval: nil, symbols: symbols, rules: [], accessibility: accessibility)
+        layout.draft = draft
+        return RowLayout(height: ceil(card.maxY + 4), content: .prompt(layout))
+    }
+
+    /// Compact two-line receipt card for approved/sent drafts; tapping expands to the full sent message.
+    private static func draftReceipt(_ d: DraftCardRow, gap: CGFloat, width: CGFloat, category: UIContentSizeCategory) -> RowLayout {
+        let side = cardSide
+        let cardW = cardWidth(for: width), innerW = cardW - 2 * notePadH
+        let padV: CGFloat = 11
+        let top = max(0, gap) + 4, x = side + notePadH
+        let status = draftStatus(d) ?? "Approved to send"
+        let headFont = PromptFonts.font(.subheadline, category, weight: .semibold, cap: 24)
+        let subFont = PromptFonts.font(.subheadline, category, cap: 24)
+        let mark = ceil(min(24, max(17, headFont.pointSize * 1.15)))
+        let chevW = ceil(min(18, max(12, headFont.pointSize * 0.8)))
+
+        let headingLead: String = {
+            if !d.draft.to.isEmpty {
+                return d.edited ? "Approved to send (edited) · \(d.draft.to)" : "Approved to send to \(d.draft.to)"
+            }
+            return status
+        }()
+        let headAttr = NSMutableAttributedString(attributedString: text(headingLead, headFont, ChatPalette.label))
+        headAttr.append(text("  ·  \(DraftCards.name(d.draft))", subFont, ChatPalette.label2))
+
+        let titleX = x + mark + 8
+        let titleW = max(60, innerW - mark - 8 - chevW - 8)
+        let (headText, _) = clamped(headAttr, width: titleW, maxLines: category.isAccessibilityCategory ? 2 : 1)
+        let headY = top + padV
+        let firstH = max(mark, headText.size.height)
+        let checkSymbol = PromptSymbol(
+            frame: CGRect(x: x, y: headY + ((firstH - mark) / 2).rounded(), width: mark, height: mark),
+            name: "checkmark.circle.fill",
+            style: .success
+        )
+        let chevSymbol = PromptSymbol(
+            frame: CGRect(x: x + innerW - chevW, y: headY + ((firstH - chevW) / 2).rounded(), width: chevW, height: chevW),
+            name: d.expanded ? "chevron.up" : "chevron.down",
+            style: .blank
+        )
+        var texts = [PromptPlacedText(text: headText, frame: CGRect(x: titleX, y: headY + ((firstH - headText.size.height) / 2).rounded(),
+                                                                    width: headText.size.width, height: headText.size.height))]
+        let symbols = [checkSymbol, chevSymbol]
+        var spoken = [DraftCards.heading(d.draft)]
+        for field in DraftCards.fields(d.draft) { spoken.append("\(field.label): \(field.value)") }
+
+        var y = headY + firstH
+        let stemX = x + ((mark - 2) / 2).rounded()
+        var threadFrame: CGRect?, quote: CGRect?
+        var threadTitle = ""
+        let paperTop: CGFloat
+        let bodyBar: CGRect
+
+        if !d.expanded {
+            y += 6
+            paperTop = y
+            let flatBody = d.body.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }.joined(separator: " ")
+            let previewW = max(60, innerW - mark - 8)
+            let (preview, _) = clamped(text(flatBody, PromptFonts.font(.subheadline, category), ChatPalette.label2), width: previewW, maxLines: 1)
+            texts.append(PromptPlacedText(text: preview, frame: CGRect(x: titleX, y: y, width: previewW, height: preview.size.height)))
+            bodyBar = CGRect(x: stemX, y: y + 1, width: 2, height: max(12, preview.size.height - 2))
+            y += preview.size.height
+            spoken.append(d.body)
+        } else {
+            // Expanded receipt: show extra fields (From/Via/Subject), optional conversation preview, and full sent text.
+            let extraFields = DraftCards.fields(d.draft).filter { $0.label != "To" }
+            if !extraFields.isEmpty {
+                y += 8
+                let labelFont = PromptFonts.font(.footnote, category)
+                let over = category.isAccessibilityCategory
+                let labelW = over ? 0 : ceil(extraFields.map { ($0.label as NSString).size(withAttributes: [.font: labelFont]).width }.max() ?? 0) + 10
+                for field in extraFields {
+                    let lbl = TextKitLayout(text(field.label, labelFont, ChatPalette.label2), width: nil)
+                    texts.append(PromptPlacedText(text: lbl, frame: CGRect(x: titleX, y: y, width: lbl.size.width, height: lbl.size.height)))
+                    if over { y += lbl.size.height }
+                    let valFont = PromptFonts.font(.footnote, category, weight: field.strong ? .semibold : nil)
+                    let valW = max(60, innerW - mark - 8 - labelW)
+                    let (val, _) = clamped(text(field.value, valFont, ChatPalette.label, wrapAnywhere: !field.strong), width: valW, maxLines: 2)
+                    texts.append(PromptPlacedText(text: val, frame: CGRect(x: titleX + labelW, y: y, width: valW, height: val.size.height)))
+                    y += max(val.size.height, over ? 0 : lbl.size.height) + 4
+                }
+            }
+            if !d.draft.thread.isEmpty {
+                y += 8
+                threadTitle = DraftCards.threadTitle(d.draft)
+                let link = TextKitLayout(text(threadTitle, PromptFonts.font(.footnote, category, weight: .medium), ChatPalette.tintText),
+                                         width: max(60, innerW - mark - 8))
+                let frame = CGRect(x: titleX, y: y, width: link.size.width, height: link.size.height)
+                texts.append(PromptPlacedText(text: link, frame: frame))
+                threadFrame = frame.insetBy(dx: -8, dy: -max(0, (44 - frame.height) / 2))
+                y = frame.maxY
+                quote = nil
+            }
+            y += 8
+            paperTop = y
+            let bodyW = max(60, innerW - mark - 8)
+            let body = TextKitLayout(text(d.body, PromptFonts.font(.body, category), ChatPalette.label), width: bodyW)
+            texts.append(PromptPlacedText(text: body, frame: CGRect(x: titleX, y: y, width: bodyW, height: body.size.height)))
+            bodyBar = CGRect(x: stemX, y: y + 2, width: 2, height: max(12, body.size.height - 4))
+            y += body.size.height
+            spoken.append(d.body)
+        }
+
+        spoken.append(status)
+        let accessibility = spoken.joined(separator: ". ")
+        let paper = CGRect(x: x, y: paperTop, width: innerW, height: max(1, y - paperTop))
+        let card = CGRect(x: side, y: top, width: cardW, height: ceil(y + padV - top))
+        let toggleFrame = d.expanded
+            ? CGRect(x: side, y: top, width: cardW, height: max(44, firstH + padV * 2))
+            : card
+
+        var draft = DraftCardLayout(showAllFrame: nil, showAllTitle: "", buttons: [], buttonFont: PromptFonts.button(category),
+                                    stacked: false, paper: paper)
+        draft.bodyBar = bodyBar
+        draft.bodyBarTint = false
+        draft.toggleFrame = toggleFrame
+        draft.toggleLabel = accessibility
+        draft.toggleExpanded = d.expanded
+        draft.threadFrame = threadFrame
+        draft.threadTitle = threadTitle
+        draft.quote = quote
+        var layout = PromptRowLayout(cardFrame: card, texts: texts, approval: nil, symbols: symbols, rules: [], accessibility: accessibility)
+        layout.draft = draft
+        return RowLayout(height: ceil(card.maxY + 4), content: .prompt(layout))
+    }
+
+    /// Clean single-surface active draft card: compact header, left accent bar (no nested box), subtle footer divider,
+    /// and trailing Don't Send / Edit / Send actions.
+    private static func draftWaiting(_ d: DraftCardRow, gap: CGFloat, width: CGFloat, category: UIContentSizeCategory) -> RowLayout {
+        let side = cardSide
+        let cardW = cardWidth(for: width), innerW = cardW - 2 * notePadH
+        let top = max(0, gap) + 4, x = side + notePadH
+        let title = DraftCards.heading(d.draft) + (d.edited ? " · Edited" : "")
+        let fields = DraftCards.fields(d.draft)
+
+        let headFont = PromptFonts.font(.subheadline, category, weight: .semibold, cap: 26)
+        let mark = ceil(min(30, max(22, headFont.pointSize * 1.4)))
+        let textX = x + mark + 8
+        let headTop = top + notePadV
+
+        var texts: [PromptPlacedText] = []
+        var symbols: [PromptSymbol] = []
+        var spoken = [title]
+        var y: CGFloat
+
+        // Simple single-recipient draft: combine kind and "To <recipient>" on one calm header line.
+        if fields.count == 1, fields[0].label == "To", !category.isAccessibilityCategory {
+            let line = NSMutableAttributedString(attributedString: text(title, headFont, ChatPalette.label))
+            line.append(text("  ·  To ", PromptFonts.font(.subheadline, category, cap: 26), ChatPalette.label2))
+            line.append(text(fields[0].value, PromptFonts.font(.subheadline, category, weight: .medium, cap: 26), ChatPalette.label))
+            let (headLayout, _) = clamped(line, width: max(60, innerW - (textX - x)), maxLines: 2)
+            let firstH = max(mark, headLayout.size.height)
+            symbols.append(PromptSymbol(frame: CGRect(x: x, y: headTop + ((firstH - mark) / 2).rounded(), width: mark, height: mark),
+                                        name: DraftCards.glyph(d.draft), style: .picked))
+            texts.append(PromptPlacedText(text: headLayout,
+                                          frame: CGRect(x: textX, y: headTop + ((firstH - headLayout.size.height) / 2).rounded(),
+                                                        width: headLayout.size.width, height: headLayout.size.height)))
+            spoken.append("\(fields[0].label): \(fields[0].value)")
+            y = headTop + firstH + 12
+        } else {
+            let headLayout = TextKitLayout(text(title, headFont, ChatPalette.label), width: max(60, innerW - (textX - x)))
+            let firstH = max(mark, headLayout.size.height)
+            symbols.append(PromptSymbol(frame: CGRect(x: x, y: headTop + ((firstH - mark) / 2).rounded(), width: mark, height: mark),
+                                        name: DraftCards.glyph(d.draft), style: .picked))
+            texts.append(PromptPlacedText(text: headLayout,
+                                          frame: CGRect(x: textX, y: headTop + ((firstH - headLayout.size.height) / 2).rounded(),
+                                                        width: headLayout.size.width, height: headLayout.size.height)))
+            y = headTop + firstH + 10
+            if !fields.isEmpty {
+                let labelFont = PromptFonts.font(.subheadline, category)
+                let over = category.isAccessibilityCategory
+                let labelW = over ? 0 : ceil(fields.map { ($0.label as NSString).size(withAttributes: [.font: labelFont]).width }.max() ?? 0) + 12
+                for field in fields {
+                    let label = TextKitLayout(text(field.label, labelFont, ChatPalette.label2), width: nil)
+                    texts.append(PromptPlacedText(text: label, frame: CGRect(x: x, y: y, width: label.size.width, height: label.size.height)))
+                    if over { y += label.size.height }
+                    let valueFont = PromptFonts.font(.subheadline, category, weight: field.strong ? .semibold : nil)
+                    let (value, _) = clamped(text(field.value, valueFont, ChatPalette.label, wrapAnywhere: !field.strong), width: innerW - labelW, maxLines: 2)
+                    texts.append(PromptPlacedText(text: value, frame: CGRect(x: x + labelW, y: y, width: innerW - labelW, height: value.size.height)))
+                    y += max(value.size.height, over ? 0 : label.size.height) + (over ? 6 : 4)
+                    spoken.append("\(field.label): \(field.value)")
+                }
+                y += over ? 6 : 8
+            }
+        }
+
+        // The conversation it answers: a short preview beside a bar, then a button that opens all of it in a sheet.
         var threadFrame: CGRect?, quote: CGRect?
         var threadTitle = ""
         let thread = d.draft.thread
@@ -794,7 +1087,7 @@ nonisolated extension PromptLayout {
             for message in thread.reversed() {
                 guard left > 0, blocks.count < PromptRows.threadPreviewMessages else { break }
                 let flat = DraftThreadText.flat(message.text)
-                let (words, wasCut) = clamped(text(flat.words, PromptFonts.font(.subheadline, category), ChatPalette.label), width: textW, maxLines: left)
+                let (words, wasCut) = clamped(text(flat.words, PromptFonts.font(.subheadline, category), ChatPalette.label2), width: textW, maxLines: left)
                 left -= max(1, lineCount(words))
                 whole = whole && !wasCut && flat.whole
                 let who = DraftThreadText.head(message, category: category)
@@ -802,7 +1095,7 @@ nonisolated extension PromptLayout {
             }
             let quoteTop = y
             for (i, block) in blocks.enumerated() {
-                if i > 0 { y += 10 }
+                if i > 0 { y += 8 }
                 if let head = block.head {
                     texts.append(PromptPlacedText(text: head, frame: CGRect(x: x + inset, y: y, width: textW, height: head.size.height)))
                     y += head.size.height + 2
@@ -811,9 +1104,9 @@ nonisolated extension PromptLayout {
                 y += block.words.size.height
                 spoken.append([block.message.from, block.message.when, block.words.text.string].filter { !$0.isEmpty }.joined(separator: ", "))
             }
-            quote = CGRect(x: x, y: quoteTop, width: 3, height: y - quoteTop)
+            quote = CGRect(x: x, y: quoteTop, width: 2.5, height: y - quoteTop)
             if !whole || blocks.count < thread.count {
-                y += 10
+                y += 8
                 threadTitle = DraftCards.threadTitle(d.draft)
                 let link = TextKitLayout(text(threadTitle, PromptFonts.font(.subheadline, category, weight: .medium), ChatPalette.tintText), width: innerW)
                 let frame = CGRect(x: x, y: y, width: link.size.width, height: link.size.height)
@@ -821,88 +1114,72 @@ nonisolated extension PromptLayout {
                 threadFrame = frame.insetBy(dx: -8, dy: -max(0, (44 - frame.height) / 2))
                 y = frame.maxY
             }
-            y += 12
+            y += 14
         }
-        // The words sit on an inset panel, as a field you can change.
-        let pad: CGFloat = 12
+
+        // Single-surface body beside a clean tint accent bar (aligned under the header icon).
+        let barX = x + ((mark - 2.5) / 2).rounded()
+        let bodyInset = min(26, mark + 6)
+        let wx = x + bodyInset, wordsW = max(60, innerW - bodyInset)
         let paperTop = y
-        y += pad
-        let wx = x + pad, wordsW = innerW - 2 * pad, outerX = x
-        let bodyText = text(d.body, PromptFonts.font(.body, category), d.state == .skipped ? ChatPalette.label2 : ChatPalette.label)
+        let bodyText = text(d.body, PromptFonts.font(.body, category), ChatPalette.label)
         let (body, cut) = clamped(bodyText, width: wordsW, maxLines: d.expanded ? 0 : PromptRows.draftClampLines)
         texts.append(PromptPlacedText(text: body, frame: CGRect(x: wx, y: y, width: wordsW, height: body.size.height)))
+        let bodyBar = CGRect(x: barX, y: y + 2, width: 2.5, height: max(14, body.size.height - 4))
         y += body.size.height
         spoken.append(d.body)
         var showAllFrame: CGRect?
         let showAllTitle = d.expanded ? "Show Less" : "Show All"
         if cut || d.expanded && lineCount(body) > PromptRows.draftClampLines {
             let more = TextKitLayout(text(showAllTitle, PromptFonts.font(.footnote, category), ChatPalette.tintText), width: nil)
-            let frame = CGRect(x: wx, y: y + 4, width: more.size.width, height: more.size.height)
+            let frame = CGRect(x: wx, y: y + 6, width: more.size.width, height: more.size.height)
             texts.append(PromptPlacedText(text: more, frame: frame))
             showAllFrame = frame.insetBy(dx: -8, dy: -(44 - frame.height) / 2)
             y = frame.maxY
         }
-        y += pad
-        let paper = CGRect(x: outerX, y: paperTop, width: innerW, height: y - paperTop)
-        return draftFoot(d, x: outerX, y: y, innerW: innerW, side: side, top: top, cardW: cardW, category: category, texts: texts, symbols: symbols,
-                         spoken: spoken, showAllFrame: showAllFrame, showAllTitle: showAllTitle, paper: paper) { layout in
-            layout.threadFrame = threadFrame; layout.threadTitle = threadTitle
-            layout.quote = quote
-        }
-    }
+        let paper = CGRect(x: x, y: paperTop, width: innerW, height: max(1, y - paperTop))
 
-    private static func draftFoot(_ d: DraftCardRow, x: CGFloat, y: CGFloat, innerW: CGFloat, side: CGFloat, top: CGFloat, cardW: CGFloat,
-                                  category: UIContentSizeCategory, texts: [PromptPlacedText], symbols: [PromptSymbol],
-                                  spoken: [String], showAllFrame: CGRect?, showAllTitle: String, paper: CGRect,
-                                  thread: (inout DraftCardLayout) -> Void) -> RowLayout {
-        var y = y, texts = texts, symbols = symbols, spoken = spoken
-        var placed: [(DraftButton, CGRect)] = []
+        // Subtle divider above the action row.
+        y += 13
+        let footerDivider = CGRect(x: x, y: y, width: innerW, height: 0)
+        y += 11
+
+        // Actions: one trailing row (Don't Send, Edit, Send), or full width stacked with Send first.
         let font = PromptFonts.button(category)
-        var stacked = false
-        if let status = draftStatus(d) {
-            // Answered: what you chose, beside the question card's marks.
-            let statusFont = PromptFonts.font(.footnote, category, weight: .semibold, cap: 24)
-            let mark = ceil(min(24, max(15, statusFont.pointSize * 1.15)))
-            let lineH = ceil(statusFont.lineHeight), first = max(lineH, mark)
-            y += 10
-            let s = TextKitLayout(text(status, statusFont, ChatPalette.label2), width: innerW - mark - 6)
-            texts.append(PromptPlacedText(text: s, frame: CGRect(x: x + mark + 6, y: y + (first - lineH) / 2, width: s.size.width, height: s.size.height)))
-            symbols.append(PromptSymbol(frame: CGRect(x: x, y: y + (first - mark) / 2, width: mark, height: mark),
-                                        name: d.state == .sent ? "checkmark.circle.fill" : "minus.circle",
-                                        style: d.state == .sent ? .picked : .blank))
-            y += max(first, s.size.height + (first - lineH) / 2)
-            spoken.append(status)
-        } else {
-            // Actions: one trailing row (Don't Send, Edit, Send), or full width stacked with Send first.
-            let order: [DraftButton] = [.skip, .edit, .send]
-            let h = max(44, ceil(font.lineHeight) + 16)
-            let widths = order.map { ceil((draftButtonTitle($0) as NSString).size(withAttributes: [.font: font]).width) + 32 }
-            let rowW = widths.reduce(0, +) + CGFloat(order.count - 1) * 8
-            stacked = category.isAccessibilityCategory || rowW > innerW
-            y += 12
-            if stacked {
-                for b in order.reversed() {
-                    placed.append((b, CGRect(x: x, y: y, width: innerW, height: h)))
-                    y += h + 8
-                }
-                y -= 8
-            } else {
-                var right = x + innerW
-                for (b, w) in zip(order, widths).reversed() {
-                    right -= w
-                    placed.append((b, CGRect(x: right, y: y, width: w, height: h)))
-                    right -= 8
-                }
-                y += h
+        let order: [DraftButton] = [.skip, .edit, .send]
+        let h = max(44, ceil(font.lineHeight) + 16)
+        let widths = order.map { ceil((draftButtonTitle($0) as NSString).size(withAttributes: [.font: font]).width) + 32 }
+        let rowW = widths.reduce(0, +) + CGFloat(order.count - 1) * 8
+        let stacked = category.isAccessibilityCategory || rowW > innerW
+        var placed: [(DraftButton, CGRect)] = []
+        if stacked {
+            for b in order.reversed() {
+                placed.append((b, CGRect(x: x, y: y, width: innerW, height: h)))
+                y += h + 8
             }
+            y -= 8
+        } else {
+            var right = x + innerW
+            for (b, w) in zip(order, widths).reversed() {
+                right -= w
+                placed.append((b, CGRect(x: right, y: y, width: w, height: h)))
+                right -= 8
+            }
+            y += h
         }
+
         let card = CGRect(x: side, y: top, width: cardW, height: ceil(y + notePadV - top))
         var layout = PromptRowLayout(cardFrame: card, texts: texts, approval: nil, symbols: symbols, rules: [],
                                      accessibility: spoken.joined(separator: ". "))
         var draft = DraftCardLayout(showAllFrame: showAllFrame, showAllTitle: showAllTitle, buttons: placed, buttonFont: font, stacked: stacked,
                                     paper: paper)
-        thread(&draft)
+        draft.bodyBar = bodyBar
+        draft.bodyBarTint = true
+        draft.footerDivider = footerDivider
+        draft.threadFrame = threadFrame
+        draft.threadTitle = threadTitle
+        draft.quote = quote
         layout.draft = draft
-        return RowLayout(height: ceil(card.maxY + 6), content: .prompt(layout))
+        return RowLayout(height: ceil(card.maxY + 4), content: .prompt(layout))
     }
 }

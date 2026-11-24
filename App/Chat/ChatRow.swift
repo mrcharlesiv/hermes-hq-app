@@ -693,6 +693,15 @@ nonisolated enum ChatRowBuilder {
                 }
             } else {
                 let id = "\(m.id)|b0"
+                let hasSendIssue = m.error != nil
+                    || (input.room?.undelivered[m.id] != nil)
+                    || (input.room?.retrying.contains(m.id) == true)
+                // [calm-chat] Tapping Send / Don't Send on a draft card right above already updates that card's
+                // settled status; suppress the redundant "Send it" / "Don't send it" user echo bubble when adjacent.
+                if !hasSendIssue, m.reactions.isEmpty, let found = DraftCards.answer(in: text),
+                   DraftCards.isAdjacentAnswerEcho(input.messages, at: index, draftId: found.id) {
+                    return
+                }
                 // [drafts] Your answer to a draft card reads "Send it": the card above shows the words that went.
                 // [questions] A skipped question answered later reads as the answer: the card above shows the question.
                 // [asks] An answer to an ask card reads as the choice ("Yes") or your own words.
@@ -844,6 +853,13 @@ nonisolated enum ChatRowBuilder {
             run = []
         }
 
+        // [calm-chat] Whether this settled message drew a draft card (so stock "Your draft is ready. Nothing's been
+        // sent." boilerplate right beside the card can be omitted without hiding real commentary).
+        let hasDraftCard = !m.isStreaming && m.parts.contains { part in
+            guard case .tool(let c) = part else { return false }
+            return DraftCards.draft(c) != nil
+        }
+
         for (i, part) in m.parts.enumerated() {
             switch part {
             case .text(let raw):
@@ -851,6 +867,7 @@ nonisolated enum ChatRowBuilder {
                 let text = ChatMediaRows.droppingEchoes(raw, generated: input.media.generated[m.id])
                 // Silent: runs chain over it. Words that are only hidden thinking (`<think>…</think>`) draw nothing either.
                 if ReasoningTags.isBlank(text) { continue }
+                if hasDraftCard && DraftCards.isReadyBoilerplate(text) { continue }
                 if notes.contains(i) {
                     // [narration] A note it wrote before going back to work: said on the reply's line, with its steps.
                     thoughts.append(ChatText.trimmed(text))
@@ -1324,8 +1341,41 @@ nonisolated enum ChatRowBuilder {
             // bubbles 2 and 6 pt apart. No gap above it or under it.
             if centredWorkLine(rows[r]) { rows[r].gapAbove = min(rows[r].gapAbove, 0) }
             if centredWorkLine(rows[r - 1]), case .bubble = rows[r].kind { rows[r].gapAbove = 0 }
+            // [calm-chat] Adjacent quiet folded rows stack tightly; speaker changes (including across cards) get full
+            // turn breathing room; a quiet folded stack steps cleanly back from the active turn below it.
+            if isQuietFolded(rows[r - 1]) && isQuietFolded(rows[r]) {
+                rows[r].gapAbove = 2
+            } else if let prevSide = speakerSide(rows[r - 1]), let currSide = speakerSide(rows[r]), prevSide != currSide {
+                rows[r].gapAbove = ChatMetrics.speakerGap
+            } else if isQuietFolded(rows[r - 1]), !isQuietFolded(rows[r]), !centredWorkLine(rows[r]) {
+                rows[r].gapAbove = max(rows[r].gapAbove, 12)
+            }
         }
         ActivityRows.applyBubbleJoins(&rows, messages: messages, from: contextStart)      // [activity] tool bubbles join runs
+    }
+
+    /// [calm-chat] Which side a row speaks for (`true` = user, `false` = assistant/card, `nil` = neutral chrome).
+    private static func speakerSide(_ row: ChatRow) -> Bool? {
+        switch row.kind {
+        case .bubble(let b): return b.mine
+        case .sendState: return true
+        case .reactions(let r): return r.mine
+        case .prompt, .activity, .error, .waiting, .phoneResult, .caption, .stoppedEarly, .actions: return false
+        case .day, .notice, .backgroundResult, .toolRun, .thought, .slashOutput, .thread: return nil
+        }
+    }
+
+    /// [calm-chat] A collapsed quiet disclosure row (superseded/skipped draft or folded older TasksAdded row).
+    private static func isQuietFolded(_ row: ChatRow) -> Bool {
+        switch row.kind {
+        case .prompt(let p):
+            if case .draft(let d) = p.kind { return d.isQuietFolded }
+            return false
+        case .activity(.tasksAdded(let t)):
+            return t.folded && !t.opened
+        default:
+            return false
+        }
     }
 
     /// [chat-refine] A shut work line drawn centred on its own (`UpdateGroups.alone`).

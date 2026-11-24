@@ -364,4 +364,131 @@ struct DraftCardsTests {
         #expect(t.draft?.showAllFrame != nil)
         #expect(tall.height > short.height)
     }
+
+    // MARK: Calm chat readability ([calm-chat])
+
+    @Test func supersededDraftFoldsAndDropsLiveButtons() throws {
+        var firstCall = call(body: "First version of the update.")
+        firstCall.id = "c1"
+        var secondCall = call(body: "Second cleaner version of the update.")
+        secondCall.id = "c2"
+        var otherTargetCall = call(to: "#design", body: "Separate note for design.")
+        otherTargetCall.id = "c3"
+
+        let m1 = ChatMessage(id: "m1", role: .assistant, parts: [.tool(firstCall)], timestamp: nil, rowId: 1)
+        let m2 = ChatMessage(id: "m2", role: .assistant, parts: [.tool(secondCall)], timestamp: nil, rowId: 2)
+        let m3 = ChatMessage(id: "m3", role: .assistant, parts: [.tool(otherTargetCall)], timestamp: nil, rowId: 3)
+        let rows = ChatRowBuilder.build(input([m1, m2, m3]))
+        let drafts = rows.compactMap { row -> DraftCardRow? in
+            if case .prompt(let p) = row.kind, case .draft(let d) = p.kind { return d }
+            return nil
+        }
+        #expect(drafts.map(\.state) == [.superseded, .waiting, .waiting])
+
+        let collapsed = PromptLayout.draft(drafts[0], gap: 6, width: 402, category: .large)
+        guard case .prompt(let cl) = collapsed.content, let cd = cl.draft else { Issue.record("layout"); return }
+        #expect(cl.cardFrame == nil && cd.buttons.isEmpty && cd.toggleFrame != nil)
+        #expect(cl.accessibility.contains("Revised below"))
+        #expect(collapsed.height < 56)
+
+        var openedRow = drafts[0]
+        openedRow.expanded = true
+        let expanded = PromptLayout.draft(openedRow, gap: 6, width: 402, category: .large)
+        guard case .prompt(let el) = expanded.content, let ed = el.draft else { Issue.record("expanded"); return }
+        #expect(el.cardFrame != nil && ed.buttons.isEmpty && ed.toggleExpanded)
+        #expect(expanded.height > collapsed.height)
+
+        // An earlier sent draft keeps its sent state even if another draft to the same channel arrives later.
+        let firstDraft = try #require(DraftCards.draft(firstCall))
+        let sentThenNew = ChatRowBuilder.build(input([m1, you(DraftCards.sendMessage(firstDraft, body: firstDraft.body), id: "u1"), m2]))
+        let states = sentThenNew.compactMap { row -> DraftCardRow.State? in
+            if case .prompt(let p) = row.kind, case .draft(let d) = p.kind { return d.state }
+            return nil
+        }
+        #expect(states == [.sent, .waiting])
+    }
+
+    @Test func sentDraftRendersCompactExpandableReceipt() throws {
+        let multiLine = "Hi Dana,\n\nThe Q3 numbers are ready in the shared folder.\nCan we review them Thursday at 2?\nI added the chart breakdown too."
+        let c = call(body: multiLine)
+        let draft = try #require(DraftCards.draft(c))
+        let messages = [bot(c), you(DraftCards.sendMessage(draft, body: multiLine))]
+        let collapsedRow = try #require(card(messages))
+        #expect(collapsedRow.state == .sent && !collapsedRow.expanded)
+        let collapsed = PromptLayout.draft(collapsedRow, gap: 6, width: 402, category: .large)
+        guard case .prompt(let cl) = collapsed.content, let cd = cl.draft else { Issue.record("layout"); return }
+        #expect(cl.cardFrame != nil && cd.buttons.isEmpty && cd.toggleFrame != nil && cd.bodyBar != nil && !cd.bodyBarTint)
+
+        let expandedRow = try #require(card(messages, expanded: [collapsedRow.rowId]))
+        let expanded = PromptLayout.draft(expandedRow, gap: 6, width: 402, category: .large)
+        guard case .prompt(let el) = expanded.content, let ed = el.draft else { Issue.record("expanded"); return }
+        #expect(el.cardFrame != nil && ed.toggleExpanded && expanded.height > collapsed.height)
+    }
+
+    @Test func wideCardsCapToCalmReadableRail() throws {
+        let row = try #require(card([bot(call())]))
+        let wide = PromptLayout.draft(row, gap: 6, width: 1280, category: .large)
+        guard case .prompt(let dl) = wide.content, let df = dl.cardFrame else { Issue.record("draft"); return }
+        #expect(df.width <= PromptLayout.maxCardWidth && df.width < 1280 - 32)
+        // Narrow phone keeps full width.
+        let phone = PromptLayout.draft(row, gap: 6, width: 402, category: .large)
+        guard case .prompt(let pl) = phone.content, let pf = pl.cardFrame else { Issue.record("phone"); return }
+        #expect(pf.width == 402 - 2 * PromptLayout.cardSide)
+    }
+
+    @Test func adjacentDraftAnswerEchoAndBoilerplateAreSuppressed() throws {
+        var c1 = call(body: "First draft for Dana.")
+        c1.id = "c1"
+        var c2 = call(body: "Revised draft for Dana.")
+        c2.id = "c2"
+        let d2 = try #require(DraftCards.draft(c2))
+        let messages = [
+            ChatMessage(id: "m1", role: .assistant, parts: [.tool(c1), .text("Your Slack draft for #finance is ready to review. Nothing's been sent.")], timestamp: nil, rowId: 1),
+            ChatMessage(id: "m2", role: .assistant, parts: [.tool(c2), .text("Your revised Slack draft for #finance is ready. Nothing's been sent.")], timestamp: nil, rowId: 2),
+            you(DraftCards.sendMessage(d2, body: d2.body), id: "u1"),
+            ChatMessage(id: "m3", role: .assistant, parts: [.text("Sent and verified in #finance.")], timestamp: nil, rowId: 4),
+        ]
+        let rows = ChatRowBuilder.build(input(messages))
+        let bubbleTexts = rows.compactMap { row -> String? in
+            if case .bubble(let b) = row.kind { return b.text }
+            return nil
+        }
+        #expect(bubbleTexts == ["Sent and verified in #finance."])
+
+        // Genuine commentary next to a draft card is never suppressed.
+        let withNote = ChatRowBuilder.build(input([
+            ChatMessage(id: "m4", role: .assistant, parts: [.tool(c2), .text("I left out the Q4 projection until we confirm it.")], timestamp: nil, rowId: 5),
+        ]))
+        #expect(withNote.contains { if case .bubble(let b) = $0.kind { return b.text.contains("Q4 projection") } else { return false } })
+
+        // Non-adjacent draft answer (another message came in between) still shows the user bubble.
+        let nonAdjacent = ChatRowBuilder.build(input([
+            ChatMessage(id: "m2", role: .assistant, parts: [.tool(c2)], timestamp: nil, rowId: 1),
+            you("One quick side question first.", id: "u0"),
+            ChatMessage(id: "m3", role: .assistant, parts: [.text("Sure, go ahead.")], timestamp: nil, rowId: 3),
+            you(DraftCards.sendMessage(d2, body: d2.body), id: "u1"),
+        ]))
+        #expect(nonAdjacent.contains { if case .bubble(let b) = $0.kind { return b.mine && b.text == "Send it" } else { return false } })
+    }
+
+    @Test func partialRebuildFoldsSupersededDraftLive() throws {
+        var c1 = call(body: "First draft.")
+        c1.id = "c1"
+        var c2 = call(body: "Revised draft.")
+        c2.id = "c2"
+        let m1 = ChatMessage(id: "m1", role: .assistant, parts: [.tool(c1)], timestamp: nil, rowId: 1)
+        let m2 = ChatMessage(id: "m2", role: .assistant, parts: [.tool(c2)], timestamp: nil, rowId: 2)
+        var model = ChatRowModel()
+        model.rebuildAll(input([m1]), syncMessages: 160, oldestShown: nil)
+        model.rebuildNewest(input([m1, m2]), touching: ["m2"])
+        let held = Array(model.allRows.reversed())
+        let full = ChatRowBuilder.build(input([m1, m2]))
+        #expect(held.map(\.id) == full.map(\.id))
+        for i in held.indices { #expect(ChatRowDiff.same(held[i], full[i])) }
+        let states = held.compactMap { row -> DraftCardRow.State? in
+            if case .prompt(let p) = row.kind, case .draft(let d) = p.kind { return d.state }
+            return nil
+        }
+        #expect(states == [.superseded, .waiting])
+    }
 }

@@ -95,6 +95,12 @@ struct ChatRowModel {
             let reach = PageOrder.reach(from: lo, floor: builtFrom, in: messages)
             if reach < lo { lo = max(builtFrom, UpdateGroups.widen(reach...reach, input: input).lowerBound) }
         }
+        // [calm-chat] Back to earlier drafts superseded/answered by these messages, and earlier TasksAdded cards now past the newest turn.
+        if lo < messages.count {
+            let reach = min(DraftCards.reach(from: lo, floor: builtFrom, in: messages),
+                            ActivityRows.tasksAddedReach(from: lo, floor: builtFrom, in: messages))
+            if reach < lo { lo = max(builtFrom, UpdateGroups.widen(reach...reach, input: input).lowerBound) }
+        }
         // [chat-refine] A reply's time reads up to minuteReach later messages: rebuild that many earlier ones when
         // any of them changes, not just those in the newest minute. Missing timestamps and edits in an older minute
         // must agree with a full build too. The bounded eight-message reach keeps this cheap.

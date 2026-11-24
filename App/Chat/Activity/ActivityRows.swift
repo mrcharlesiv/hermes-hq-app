@@ -147,6 +147,9 @@ nonisolated struct TasksAddedRow {
     var helping = false
     /// The reply's bot ("Hermes"): its steps' name, and "Ask Hermes to Help".
     var botName = "Hermes"
+    /// [calm-chat] Once the chat moves past this reply, fold to one quiet line that expands on tap.
+    var folded = false
+    var opened = false
 }
 
 nonisolated struct ToolBubbleLine: Hashable {
@@ -482,12 +485,74 @@ nonisolated enum ActivityRows {
         let lines = tasks.map { TodoCardWords.line($0, now: input.now, botName: name) }
         let undone = !helping && tasks.allSatisfy { TodoUndone.contains($0.id) }
         let botName = name(nil)
+        let id = "\(m.id)|tasks"
+        let folded = hasLaterConversation(after: m, in: input.messages)
+        let opened = folded && input.expanded.contains(id)
         var h = Hasher()
         h.combine(tasks); h.combine(lines); h.combine(undone); h.combine(helping); h.combine(botName)
-        return ChatRow(id: "\(m.id)|tasks", messageId: m.id, scope: input.scope, fingerprint: h.finalize(),
+        h.combine(folded); h.combine(opened)
+        return ChatRow(id: id, messageId: m.id, scope: input.scope, fingerprint: h.finalize(),
                        kind: .activity(.tasksAdded(TasksAddedRow(messageId: m.id, tasks: tasks, lines: lines, undone: undone,
-                                                                 helping: helping, botName: botName))),
-                       gapAbove: 8, variant: 0)
+                                                                 helping: helping, botName: botName, folded: folded, opened: opened))),
+                       gapAbove: folded ? 4 : 8, variant: (folded ? 1 : 0) + (opened ? 2 : 0))
+    }
+
+    /// [calm-chat] True once a later user message or a later assistant message with visible prose/cards follows `m`.
+    static func hasLaterConversation(after m: ChatMessage, in messages: [ChatMessage]) -> Bool {
+        guard let at = messages.lastIndex(where: { $0.id == m.id }), at + 1 < messages.count else { return false }
+        for later in messages[(at + 1)...] {
+            switch later.role {
+            case .user:
+                if later.sender == nil { return true }
+            case .assistant:
+                let hasContent = later.parts.contains { part in
+                    switch part {
+                    case .text(let t): return !ReasoningTags.isBlank(t)
+                    case .tool(let c):
+                        return c.name == DraftCards.tool || c.name == AskCards.tool
+                            || ShoppingCards.tools.contains(c.name)
+                            || c.name == "tasks_add" || c.name == "tasks_offer" || c.name == "goals_offer"
+                    case .reasoning: return false
+                    }
+                }
+                if hasContent { return true }
+            case .system:
+                break
+            }
+        }
+        return false
+    }
+
+    /// [calm-chat] Lookback for `ChatRowModel.rebuildNewest`: when a new turn lands, reach back to the most recent
+    /// earlier `tasks_add`/`tasks_update` message at or after `floor` so its card folds live.
+    static func tasksAddedReach(from: Int, floor: Int, in messages: [ChatMessage]) -> Int {
+        guard from > floor, from < messages.count else { return from }
+        let triggersFold = messages[from...].contains { m in
+            if m.role == .user && m.sender == nil { return true }
+            guard m.role == .assistant else { return false }
+            return m.parts.contains { part in
+                switch part {
+                case .text(let t): return !ReasoningTags.isBlank(t)
+                case .tool(let c):
+                    return c.name == DraftCards.tool || c.name == AskCards.tool
+                        || ShoppingCards.tools.contains(c.name)
+                        || c.name == "tasks_add" || c.name == "tasks_offer" || c.name == "goals_offer"
+                case .reasoning: return false
+                }
+            }
+        }
+        guard triggersFold else { return from }
+        var i = from - 1
+        while i >= floor {
+            if messages[i].role == .assistant, messages[i].parts.contains(where: { part in
+                if case .tool(let c) = part, c.name == "tasks_add" || c.name == "tasks_update", case .tasksAdded? = c.card { return true }
+                return false
+            }) {
+                return i
+            }
+            i -= 1
+        }
+        return from
     }
 
     // MARK: A bot's offer ([task-lists], board 4)
@@ -853,6 +918,12 @@ nonisolated struct TasksAddedLayout: @unchecked Sendable {
     var botName = "Hermes"
     /// "✦ Ask Hermes to Help" above the footer, for one task of yours alone.
     var helpFrame: CGRect?
+    /// [calm-chat] Folded older tasks card: a quiet one-line disclosure row that expands the card on tap.
+    var lineFrame: CGRect? = nil
+    var lineText: NSAttributedString? = nil
+    var lineFont: UIFont? = nil
+    var opened = false
+    var cardShown = true
 }
 
 /// [goals step 3] A goal's offer: a kicker (the check-in's "Hermes · Monday check-in"), the goal's mark, name and tag,
@@ -975,8 +1046,12 @@ nonisolated enum ActivityLayouts {
         return min(ceil(box.height), ceil(font.lineHeight) * CGFloat(lines))
     }
 
+    /// [calm-chat] Cohesive compact card width on Mac (360 pt at 77% Catalyst scale felt disproportionately skinny
+    /// beside wider reply cards); iPhone/iPad keep 360 pt.
+    private static var compactCardCap: CGFloat { DeviceWord.isMac ? 480 : 360 }
+
     private static func tasksOffer(_ t: TasksOfferRow, row: ChatRow, width: CGFloat, style: ChatStyle) -> RowLayout {
-        let columnW = min(TextLayout.replyWidth(width), 360)
+        let columnW = min(TextLayout.replyWidth(width), compactCardCap)
         let font = HQFont.face(ofSize: (16 * style.chromeBody / 17).rounded())
         let headFont = HQFont.face(ofSize: font.pointSize, weight: .semibold)
         let detailFont = HQFont.face(ofSize: (13 * style.chromeBody / 17).rounded())
@@ -1035,7 +1110,7 @@ nonisolated enum ActivityLayouts {
     /// The foot holds both buttons on one row when they fit, else one under the other (the largest text sizes); its
     /// words, when answered, get the same height, measured for the longest they can say, so no state moves the card.
     private static func taskClose(_ t: TaskCloseRow, row: ChatRow, width: CGFloat, style: ChatStyle) -> RowLayout {
-        let columnW = min(TextLayout.replyWidth(width), 360)
+        let columnW = min(TextLayout.replyWidth(width), compactCardCap)
         let font = HQFont.face(ofSize: (16 * style.chromeBody / 17).rounded())
         let buttonFont = HQFont.face(ofSize: font.pointSize, weight: .semibold)
         let detailFont = HQFont.face(ofSize: (14 * style.chromeBody / 17).rounded())
@@ -1095,7 +1170,7 @@ nonisolated enum ActivityLayouts {
     // MARK: A goal's offer ([goals step 3])
 
     private static func goalOffer(_ g: GoalOfferRow, row: ChatRow, width: CGFloat, style: ChatStyle) -> RowLayout {
-        let columnW = min(TextLayout.replyWidth(width), 380)
+        let columnW = min(TextLayout.replyWidth(width), DeviceWord.isMac ? 500 : 380)
         let font = HQFont.face(ofSize: (16 * style.chromeBody / 17).rounded())
         let headFont = HQFont.face(ofSize: font.pointSize, weight: .semibold)
         let detailFont = HQFont.face(ofSize: (14 * style.chromeBody / 17).rounded())
@@ -1204,13 +1279,36 @@ nonisolated enum ActivityLayouts {
     // MARK: Added to Tasks ([tasks])
 
     private static func tasksAdded(_ t: TasksAddedRow, row: ChatRow, width: CGFloat, style: ChatStyle) -> RowLayout {
-        let columnW = min(TextLayout.replyWidth(width), 360)
+        let columnW = min(TextLayout.replyWidth(width), compactCardCap)
         let font = HQFont.face(ofSize: (16 * style.chromeBody / 17).rounded())
         let detailFont = HQFont.face(ofSize: (13 * style.chromeBody / 17).rounded())
         let lineH = ceil(font.lineHeight), detailH = ceil(detailFont.lineHeight)
         let pad: CGFloat = 14
         let left = ChatMetrics.sideInset
-        let top = max(0, row.gapAbove)
+        var top = max(0, row.gapAbove)
+        var lineFrame: CGRect?, lineText: NSAttributedString?, lineFont: UIFont?
+        if t.folded {
+            let notice = style.notice
+            let boldNotice = HQFont.face(ofSize: notice.pointSize, weight: .semibold)
+            let rowH = max(32, ceil(notice.lineHeight) + 10)
+            let maxLineW = PromptLayout.cardWidth(for: width)
+            lineFrame = CGRect(x: left, y: top, width: maxLineW, height: rowH)
+            let lead = t.undone ? "Removed from Tasks" : t.helping ? "\(t.botName) Is Helping" : "Added to Tasks"
+            let out = NSMutableAttributedString(string: lead, attributes: [.font: boldNotice, .foregroundColor: ChatPalette.label2])
+            if let first = t.tasks.first?.title, !first.isEmpty {
+                let extra = t.tasks.count > 1 ? " (+\(t.tasks.count - 1) more)" : ""
+                out.append(NSAttributedString(string: " · \(first)\(extra)", attributes: [.font: notice, .foregroundColor: ChatPalette.label2]))
+            }
+            lineText = out
+            lineFont = notice
+            if !t.opened {
+                return RowLayout(height: ceil(top + rowH + 2), content: .activity(.tasksAdded(TasksAddedLayout(
+                    cardFrame: .zero, headerFrame: .zero, undone: t.undone, font: font, detailFont: detailFont,
+                    lines: [], footerFrame: .zero, helping: t.helping, botName: t.botName, helpFrame: nil,
+                    lineFrame: lineFrame, lineText: lineText, lineFont: lineFont, opened: false, cardShown: false))))
+            }
+            top += rowH + 6
+        }
         let headerH = max(40, ceil(font.lineHeight) + 18)
         let headerFrame = CGRect(x: left + pad, y: top, width: columnW - 2 * pad, height: headerH)
         var y = top + headerH
@@ -1260,9 +1358,10 @@ nonisolated enum ActivityLayouts {
         let footerFrame = CGRect(x: left, y: y, width: columnW, height: 46)
         y += 46
         let cardFrame = CGRect(x: left, y: top, width: columnW, height: y - top)
-        return RowLayout(height: ceil(y + 2), content: .activity(.tasksAdded(TasksAddedLayout(
+        return RowLayout(height: ceil(y + 4), content: .activity(.tasksAdded(TasksAddedLayout(
             cardFrame: cardFrame, headerFrame: headerFrame, undone: t.undone, font: font, detailFont: detailFont,
-            lines: lines, footerFrame: footerFrame, helping: t.helping, botName: t.botName, helpFrame: helpFrame))))
+            lines: lines, footerFrame: footerFrame, helping: t.helping, botName: t.botName, helpFrame: helpFrame,
+            lineFrame: lineFrame, lineText: lineText, lineFont: lineFont, opened: t.opened, cardShown: true))))
     }
 
     // MARK: Tool bubble

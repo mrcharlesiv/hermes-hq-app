@@ -331,6 +331,13 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate, LaunchHost {
         #if DEBUG
         if IntentsDebugHooks.handle(url, model: model) { return }   // [intents] <scheme>://debug-intent/<word>
         if AlertDebugHooks.handle(url) { return }                   // [notify] <scheme>://debug-alert/task|chat/<id>
+        // [first-run] <scheme>://debug-found?url=…: the connect link's road for the stand-in gateway, which answers on
+        // http://127.0.0.1 (a real connect link carries https only: `NotificationRules.connectAddress`).
+        if url.host == "debug-found", let onboarding, window?.rootViewController === onboarding.navigationController,
+           let address = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "url" })?.value {
+            onboarding.showForm(address: address)
+            return
+        }
         #endif
         // [phone-calls] A call proposal counts only as a tap inside a chat (ChatViewController.chatCellOpen). From
         // another app, a web page or a widget it is refused, so nothing outside can pre-fill a call.
@@ -567,7 +574,8 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate, LaunchHost {
         let driver = SignInServiceDriver(service: model.signIn)
         self.driver = driver
         var address = prefill?.address ?? ""
-        if let connect = pendingConnect { address = connect; pendingConnect = nil }   // [notifications] hermes://connect
+        var linked = false   // [first-run] the address came by link: the first run shows Found
+        if let connect = pendingConnect { address = connect; pendingConnect = nil; linked = true }   // [notifications] hermes://connect
         #if DEBUG
         if address.isEmpty, let debug = DebugHooks.address { address = debug }
         #endif
@@ -587,7 +595,13 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate, LaunchHost {
             // [offline] §3.2, §3.4: the storage check, then the launch screen covers until a first list has content.
             // [onboarding] The form has already read the gateway's version (§5.14): no second check once the app shows.
             switch outcome {
-            case .enter: self.launch?.signedIn(account, typed: true)
+            case .enter:
+                // [first-run] Hermes is here first, where the first run is drawn (`.update` never gets here: it wins).
+                if let flow = self.onboarding, FirstRunArrival.next(after: outcome, drawn: flow.drawsArrival) == .arrival {
+                    self.arrive(account, flow: flow)
+                } else {
+                    self.launch?.signedIn(account, typed: true)
+                }
             case .update(let info): self.showUpdate(info, account: account, name: name)
             }
         }
@@ -604,11 +618,17 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate, LaunchHost {
                 sheet.dismiss(animated: true) {
                     guard let self else { return }
                     self.driver = nil
-                    self.launch?.signedIn(account, typed: true)
+                    // [first-run] Hermes is here first, where the first run is drawn.
+                    if let flow = self.onboarding, flow.drawsArrival {
+                        self.arrive(account, flow: flow)
+                    } else {
+                        self.launch?.signedIn(account, typed: true)
+                    }
                 }
             }
         }
         onboarding = flow
+        if linked { flow.showFound() }
         #if DEBUG && targetEnvironment(macCatalyst)
         // [Mac AAA 2026-11-16] `-HQDebugGuideTour all|<steps>` with `-HQDebugMacShots <name>`: every first-run screen in
         // one launch (App/Debug/SettingsWindowTour.swift `guideTourIfAsked`).
@@ -635,6 +655,15 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate, LaunchHost {
         }
         #endif
         setRoot(flow.navigationController, animated: !(window?.rootViewController is LaunchViewController))
+    }
+
+    /// [first-run] The first sign-in where the first run is drawn: Hermes is here (App/Onboarding/Arrival/), then the
+    /// app exactly as after the form, opening on the arriving bot's own chat with the keyboard down.
+    private func arrive(_ account: GatewayAccount, flow: OnboardingFlow) {
+        guard let model else { return }
+        flow.arrive(client: model.signIn.client(for: account)) { [weak self] profile in
+            self?.launch?.signedIn(account, typed: true) { ArrivalHost.openChat(profile) }
+        }
     }
 
     /// [onboarding] After a typed sign-in to an older Hermes than this app needs (§5.15): the full screen, before the

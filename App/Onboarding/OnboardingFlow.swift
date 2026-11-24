@@ -51,6 +51,14 @@ final class OnboardingNavigationController: UINavigationController {
             owner = nil
         }
     }
+
+    /// [first-run] The stage's views follow the stack's (ArrivalHost); nil with the first run's switch off.
+    var onLayout: (() -> Void)?
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        onLayout?()
+    }
 }
 
 @MainActor final class OnboardingFlow {
@@ -80,6 +88,11 @@ final class OnboardingNavigationController: UINavigationController {
     private(set) var isBusy = false { didSet { if isBusy != oldValue { applyBusy() } } }
     /// Set once a locked screen (the Update screen in the sheet) is on top: nothing pops it, busy or not.
     private(set) var isLocked = false
+    /// [first-run] The redrawn first run (App/Onboarding/Arrival/), only with `FirstRunArrival` on and only in the
+    /// signed-out root; nil otherwise, and then nothing below changes.
+    private(set) var arrival: ArrivalHost?
+    /// [first-run] A connect link is opening the form: the first run shows Found, not the whole form.
+    private var openingFound = false
 
     /// - Parameters:
     ///   - entry: `.welcome` shows `[welcome]`; `.form` shows `[welcome, connect]` (the form, one Back from the welcome).
@@ -103,6 +116,10 @@ final class OnboardingNavigationController: UINavigationController {
         if case .sheet(let title, _) = mode, title == "Add Gateway" { formModel.heading = OnboardingCopy.addHeading }
         else { formModel.heading = OnboardingCopy.formHeading }
         formModel.onBusyChanged = { [weak self] busy in self?.isBusy = busy }
+        if case .root = mode, FirstRunArrival.applies(on: FirstRunArrival.isOn, root: true) {
+            arrival = ArrivalHost(navigation: navigation)
+            AppLog.note("onboard", "first-run arrival on")
+        }
         switch mode {
         case .root:
             navigation.viewControllers = entry == .welcome ? [make(.welcome)] : [make(.welcome), make(.connect)]
@@ -110,6 +127,7 @@ final class OnboardingNavigationController: UINavigationController {
             navigation.viewControllers = [make(.connect)]
             navigation.owner = self
         }
+        arrival?.start()
     }
 
     /// The steps on the stack, bottom first.
@@ -124,6 +142,8 @@ final class OnboardingNavigationController: UINavigationController {
         let leavingForm = current == .connect
         AppLog.trace("onboard", "onboarding step reached: \(step)")
         if step == .hermes { sawMessage = true }
+        // [first-run] A typed address, "I Have the Address" and the like get today's whole form; a link gets Found.
+        if step == .connect, let arrival, !openingFound { arrival.connect.full = true }
         if let existing = navigationController.viewControllers.first(where: { ($0 as? OnboardingStepController)?.step == step }) {
             // The form popped off for the guide keeps what was typed, except the password (DECISION D7).
             if leavingForm { formModel.leftForGuide() }
@@ -145,9 +165,29 @@ final class OnboardingNavigationController: UINavigationController {
         // Not under a locked screen either: the form is hidden there, and a link must not rewrite it unseen.
         guard !isBusy, navigationController.topViewController is OnboardingStepController else { return false }
         navigationController.presentedViewController?.dismiss(animated: false)   // a share sheet or browser over the guide
+        // [first-run] Found, with the address already in (ArrivalScreens' `ArrivalFoundView`).
+        if let arrival {
+            openingFound = true
+            arrival.connect.full = false
+        }
         go(.connect)
+        openingFound = false
         formModel.fill(address: address)
         return true
+    }
+
+    /// [first-run] Whether this flow draws the first run (`FirstRunArrival`).
+    var drawsArrival: Bool { arrival != nil }
+
+    /// [first-run] The form opened with a link's address already in it (a cold start from the link): Found.
+    func showFound() {
+        guard let arrival, current == .connect, !isBusy else { return }
+        arrival.connect.full = false
+    }
+
+    /// [first-run] Signed in for the first time: Hermes is here, then `sayHello` with the arriving bot's profile name.
+    func arrive(client: LiveGatewayClient, sayHello: @escaping (String) -> Void) {
+        arrival?.arrive(client: client, flow: self, sayHello: sayHello)
     }
 
     /// Another screen takes over the stack's top (the Update screen in the sheet): no Back, no Cancel, no swipe down.
@@ -207,6 +247,7 @@ final class OnboardingNavigationController: UINavigationController {
             guard let self, !self.isBusy else { return }
             self.openCloud?()
         }
+        if let arrival, let screen = buildArrival(step, arrival: arrival, go: go, cloud: cloud) { return screen }
         switch step {
         case .welcome:
             return OnboardingStepController(step: step) { WelcomeView(go: go) }
@@ -251,10 +292,43 @@ final class OnboardingNavigationController: UINavigationController {
         }
     }
 
+    /// [first-run] The redrawn screens (welcome, start, hermes); nil for every other step.
+    private func buildArrival(_ step: OnboardingStep, arrival: ArrivalHost, go: @escaping (OnboardingStep) -> Void,
+                              cloud: (() -> Void)?) -> UIViewController? {
+        let kit = arrival.kit, entrance = arrival.entrance(step)
+        let back: () -> Void = { [weak self] in self?.back() }
+        switch step {
+        case .welcome:
+            return arrival.screen(step) { ArrivalHelloView(kit: kit, entrance: entrance, go: go) }
+        case .start:
+            let access: () -> Void = { [weak self] in
+                guard let self, !self.isBusy else { return }
+                self.formModel.accessOpen = true
+                self.go(.connect)
+            }
+            return arrival.screen(step) { ArrivalWhereView(kit: kit, entrance: entrance, go: go, back: back, cloud: cloud, access: access) }
+        case .hermes:
+            let note = ArrivalNoteModel(actions: actions, reach: reach, kit: kit)
+            return arrival.screen(step) { ArrivalNoteView(kit: kit, entrance: entrance, model: note, go: go, back: back) }
+        default:
+            return nil
+        }
+    }
+
     /// The form is made once and kept: popped off for the guide and shown again, it still holds what was typed.
     private func makeForm() -> UIViewController {
         if let form { return form }
         let model = formModel
+        // [first-run] Found or today's whole form, on one screen (ArrivalConnectView).
+        if let arrival {
+            let kit = arrival.kit, entrance = arrival.entrance(.connect), state = arrival.connect
+            let back: () -> Void = { [weak self] in self?.back() }
+            let controller = arrival.screen(.connect) {
+                ArrivalConnectView(kit: kit, entrance: entrance, model: model, state: state, back: back)
+            }
+            form = controller
+            return controller
+        }
         // UX study #128: no bar title, in the sheet as on the root form. The heading under it ("Add another Hermes.",
         // "Sign in to Hermes.") names the sheet, and VoiceOver reads it as the screen's header; the bar keeps Cancel.
         let controller = OnboardingStepController(step: .connect) { SignInView(model: model) }

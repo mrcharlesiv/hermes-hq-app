@@ -55,6 +55,9 @@ final class SignInModel {
     private(set) var checking = false { didSet { if checking && !oldValue { HQAnnounce.say("Checking the address", priority: .low, coalesce: true) } } }   // [a11y]
     /// The probe could not reach the address: the form stays (the probe can be wrong) and this says so under the field.
     private(set) var note: String?
+    /// [first-run] The latest probe found Hermes answering at the address (`SignInOptions.reachable`): the first run's
+    /// "Found your Hermes." says "Reachable" beside the address only then. Nothing else reads it.
+    private(set) var reachable = false
     /// Why the form is here (an ended session, a sign-in needed before a switch): information, not a failure, so it is
     /// drawn calmly and marks no field (UX study #127). Cleared by the next attempt.
     private(set) var notice: String? {
@@ -168,7 +171,7 @@ final class SignInModel {
         debounce?.cancel()
         let text = address.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.isEmpty {
-            asked = ""; ways = nil; ownLoginTitle = nil; note = nil; checking = false; behindAccess = false
+            asked = ""; ways = nil; ownLoginTitle = nil; note = nil; checking = false; behindAccess = false; reachable = false
             return
         }
         // [mac] A pasted setup link (hermes://connect?url=…, what the setup's QR code holds) becomes the address in it.
@@ -191,10 +194,11 @@ final class SignInModel {
         guard !text.isEmpty, text != asked else { return }
         asked = text
         guard SignInAddress.looksLikeAddress(text) else {
-            ways = .both; ownLoginTitle = nil; note = nil; checking = false; behindAccess = false
+            ways = .both; ownLoginTitle = nil; note = nil; checking = false; behindAccess = false; reachable = false
             return
         }
         checking = true
+        reachable = false
         let normalized = SignInAddress.normalize(text)
         // [cf-access] A gateway saved at this address already has a token: the form starts from it.
         if accessId.isEmpty, accessSecret.isEmpty, let saved = driver.savedAccess(for: normalized) {
@@ -215,6 +219,7 @@ final class SignInModel {
             }
             self.checking = false
             self.ways = SignInWays(options)
+            self.reachable = options.reachable
             self.ownLoginTitle = options.reachable && !options.offersNous ? options.ownLoginTitle : nil
             // [cf-access] Cloudflare Access answered instead of Hermes: the token's fields open and the note says why.
             self.behindAccess = options.behindAccess

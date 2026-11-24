@@ -16,6 +16,10 @@ struct GuideActions {
     var open: (URL) async -> Bool
     /// Says a status line to VoiceOver.
     var announce: (String) -> Void = { text in AccessibilityNotification.Announcement(text).post() }
+    /// [first-run] `share`, and then `done(true)` once the person sent it somewhere or `done(false)` when they closed
+    /// the sheet: the first run's note leaves only on a share that completed. nil where nobody has asked for it
+    /// (`share` alone is used then, as before).
+    var shareReporting: ((String, CGRect?, @escaping (Bool) -> Void) -> Bool)?
 
     /// The real ones, presenting over `presenter` (the flow's navigation controller).
     static func live(presenter: @escaping () -> UIViewController?) -> GuideActions {
@@ -32,28 +36,7 @@ struct GuideActions {
                 if done { Haptics.play(.success) }
                 return done
             },
-            share: { text, anchor in
-                #if DEBUG
-                if GuideDebug.fails("share") { return false }
-                #endif
-                guard let host = presenter().map(Self.top) else { return false }
-                // One sheet at a time: a second tap while one is up (or still rising) changes nothing.
-                if host is UIActivityViewController || host.isBeingPresented || host.isBeingDismissed { return true }
-                let sheet = UIActivityViewController(activityItems: [text], applicationActivities: nil)
-                if let popover = sheet.popoverPresentationController {
-                    popover.sourceView = host.view
-                    if let anchor, !anchor.isEmpty {
-                        popover.sourceRect = host.view.convert(anchor, from: nil)
-                    } else {
-                        popover.sourceRect = CGRect(x: host.view.bounds.midX, y: host.view.bounds.maxY - 80, width: 1, height: 1)
-                    }
-                }
-                host.present(sheet, animated: true)
-                #if DEBUG
-                GuideDebug.record(text, as: "share.txt")
-                #endif
-                return true
-            },
+            share: { text, anchor in presentShare(text, anchor: anchor, presenter: presenter, done: nil) },
             open: { url in
                 guard Self.opens(url) else { return false }
                 #if DEBUG
@@ -70,7 +53,34 @@ struct GuideActions {
                 let browser = SFSafariViewController(url: url)
                 host.present(browser, animated: true)
                 return true
-            })
+            },
+            shareReporting: { text, anchor, done in presentShare(text, anchor: anchor, presenter: presenter, done: done) })
+    }
+
+    /// The share sheet with one text item; `done` (when given) hears whether it was sent or closed.
+    private static func presentShare(_ text: String, anchor: CGRect?, presenter: () -> UIViewController?,
+                                     done: ((Bool) -> Void)?) -> Bool {
+        #if DEBUG
+        if GuideDebug.fails("share") { return false }
+        #endif
+        guard let host = presenter().map(Self.top) else { return false }
+        // One sheet at a time: a second tap while one is up (or still rising) changes nothing.
+        if host is UIActivityViewController || host.isBeingPresented || host.isBeingDismissed { return true }
+        let sheet = UIActivityViewController(activityItems: [text], applicationActivities: nil)
+        if let done { sheet.completionWithItemsHandler = { _, completed, _, _ in done(completed) } }
+        if let popover = sheet.popoverPresentationController {
+            popover.sourceView = host.view
+            if let anchor, !anchor.isEmpty {
+                popover.sourceRect = host.view.convert(anchor, from: nil)
+            } else {
+                popover.sourceRect = CGRect(x: host.view.bounds.midX, y: host.view.bounds.maxY - 80, width: 1, height: 1)
+            }
+        }
+        host.present(sheet, animated: true)
+        #if DEBUG
+        GuideDebug.record(text, as: "share.txt")
+        #endif
+        return true
     }
 
     /// Only plain https links with no sign-in part are ever opened.

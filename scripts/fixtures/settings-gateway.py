@@ -775,9 +775,11 @@ class Client:
                 if not chat:
                     raise RPCFailure(4007, 'session not found')
                 with LOCK:
-                    chat['messages'].append({'role': 'user', 'content': params.get('text', ''), 'timestamp': time.time()})
+                    # [first-run] A hidden turn's row says so, as Hermes's does: history never draws it as a bubble.
+                    hidden = {'display_kind': 'hidden'} if params.get('display_kind') == 'hidden' else {}
+                    chat['messages'].append({'role': 'user', 'content': params.get('text', ''), 'timestamp': time.time(), **hidden})
                     chat['last_active'] = time.time()
-                    S['prompts'].append({'profile': name, 'session': chat['id'], 'text': params.get('text', '')})
+                    S['prompts'].append({'profile': name, 'session': chat['id'], 'text': params.get('text', ''), **hidden})
                     row = len(chat['messages'])
                 reply['result'] = {'status': 'streaming', 'user_row_id': row}
                 self.send(reply)

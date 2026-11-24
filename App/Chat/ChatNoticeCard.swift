@@ -223,6 +223,8 @@ final class ChatNoticeCard: UIView {
         var copyText: String?
         /// [owner-wait] A card that only informs (a waiting send): a grey clock, not the red mark.
         var calm = false
+        /// [first-run] A card that offers something (the first run's pings): a bell in the tint, not the red mark.
+        var bell = false
     }
 
     var onPrimary: (() -> Void)?
@@ -351,9 +353,9 @@ final class ChatNoticeCard: UIView {
 
     private var glyphPointSize: CGFloat = 15
     private func applyGlyph() {
-        let calm = content?.calm ?? false
-        glyph.tintColor = calm ? ChatPalette.label2 : ChatPalette.red
-        glyph.image = UIImage(systemName: calm ? "clock" : "exclamationmark.circle.fill",
+        let calm = content?.calm ?? false, bell = content?.bell ?? false
+        glyph.tintColor = bell ? ChatPalette.tint : calm ? ChatPalette.label2 : ChatPalette.red
+        glyph.image = UIImage(systemName: bell ? "bell.fill" : calm ? "clock" : "exclamationmark.circle.fill",
                               withConfiguration: UIImage.SymbolConfiguration(pointSize: glyphPointSize, weight: .semibold))
     }
 

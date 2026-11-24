@@ -106,6 +106,8 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     private var chipModelState: ChatModelState?
     private var chipLinkReady: Bool?
     private let composerNotices = UIStackView()
+    /// [first-run] Whoever leads the first run's last beat in this chat (App/Onboarding/Arrival/ArrivalFirstWords.swift).
+    var firstWords: ArrivalFirstWords?
     private let problemCard = ChatNoticeCard(identifier: "chat.problem")
     private let sendFailureCard = ChatNoticeCard(identifier: "chat.sendFailure")
     private let ownerWaitCard = ChatNoticeCard(identifier: "chat.ownerWait")   // [owner-wait]
@@ -140,7 +142,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     /// [tasks] The page holds the task's top (the Talk tip waits: its coming moved the newest end, which brought the
     /// jump button, which sent the tip away, round and round under your finger, 2026-11-05). Nor while the task's chat
     /// is empty: the tip lay over where the chat starts.
-    var holdsLeadTop: Bool { suppressesTalkTip || (lead != nil && (!leadPinEnded || rows.isEmpty)) }
+    var holdsLeadTop: Bool { suppressesTalkTip || ArrivalFirstWords.leads(self) || (lead != nil && (!leadPinEnded || rows.isEmpty)) }   // [first-run] no tip over the first words
     /// [tasks] Opens at the newest end, not the task's top: a reply's alert brought you for the reply.
     func opensAtNewest() { leadPinEnded = true }
     /// [tasks] A page's own panel pinned under the bar, outside the transcript (`setTopAccessory`, Pinned Task step 3).
@@ -2676,6 +2678,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         }
         updateQueueCard()
         updateComposerNotices()          // [transcript] the chat's problem card, "Couldn’t Send"
+        firstWords?.changed()            // [first-run] the first run's last beat follows the chat it is in
         // [transcript] §4.2: the link came back: a failed read of earlier messages tries once by itself.
         var linkReady = false
         if case .ready = session.connection { linkReady = true }
@@ -4428,6 +4431,18 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         }
     }
 
+    /// [first-run] One more card above the composer, under the chat's own three: the first run's pings card, then its
+    /// starters (ArrivalFirstWords puts them here and takes them away). nil everywhere else.
+    private(set) var guestCard: UIView?
+
+    func setGuestCard(_ card: UIView?) {
+        guard card !== guestCard else { return }
+        guestCard?.removeFromSuperview()
+        guestCard = card
+        if let card { composerNotices.addArrangedSubview(card) }
+        layoutComposerNotices()
+    }
+
     private func updateComposerNotices() {
         let source = session as? ChatComposerNotices
         let problem = source?.sessionProblem.map(ChatNoticeCard.Content.init)
@@ -4460,12 +4475,18 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         problemCard.shownContent = problem
         sendFailureCard.shownContent = failure
         ownerWaitCard.shownContent = wait
-        let shown = problem != nil || failure != nil || wait != nil
-        let animate = view.window != nil && !HQMotion.reduced
-        if shown && composerNotices.isHidden { composerNotices.alpha = 0; composerNotices.isHidden = false }
         problemCard.isHidden = problem == nil
         sendFailureCard.isHidden = failure == nil
         ownerWaitCard.isHidden = wait == nil
+        layoutComposerNotices()
+    }
+
+    /// The stack above the composer comes or goes with what is in it: the three cards, and a guest ([first-run]).
+    private func layoutComposerNotices() {
+        let shown = problemCard.shownContent != nil || sendFailureCard.shownContent != nil || ownerWaitCard.shownContent != nil
+            || guestCard != nil
+        let animate = view.window != nil && !HQMotion.reduced
+        if shown && composerNotices.isHidden { composerNotices.alpha = 0; composerNotices.isHidden = false }
         composerNoticesCollapsed.isActive = !shown
         composerNoticesGap.constant = shown ? -8 : 0
         let changes = {
@@ -4475,7 +4496,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         }
         let done: (Bool) -> Void = { _ in
             if !shown, self.problemCard.shownContent == nil, self.sendFailureCard.shownContent == nil,
-               self.ownerWaitCard.shownContent == nil { self.composerNotices.isHidden = true }
+               self.ownerWaitCard.shownContent == nil, self.guestCard == nil { self.composerNotices.isHidden = true }
             self.updateInsets()
         }
         if animate {

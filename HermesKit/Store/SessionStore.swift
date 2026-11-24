@@ -109,6 +109,8 @@ nonisolated struct SessionsDeviceState: Codable, Sendable, Hashable {
     var projectPins: [String: [String]] = [:]
     /// Explicit shortcuts, newest choice first. Not a gateway pin or a project pin.
     var botChatShortcuts: [BotChatShortcut] = []
+    /// [threads] Durable links between bot threads and their parent Bot Chat (persisted locally + synced via GatewaySync).
+    var botThreads: [BotThreadLink] = []
     /// [project-sort] Each project page's Sort (key → `ProjectPageSort` raw); absent: Needs Me First.
     var projectSorts: [String: String] = [:]
     /// [project-keep] Projects whose chats stay on their own page (key → on; false kept so sync carries turning it off).
@@ -132,7 +134,7 @@ nonisolated struct SessionsDeviceState: Codable, Sendable, Hashable {
         case unread, showBackgroundRuns, showOutsideChats, colors, view, projects, latest, pins, collapsedGroups
         case chatOrder, projectOrder, projectPillOrder, botGroupOrder, favoriteProjects, openGroups, archivedProjects, botFolders
         case botConfigFolders, projectBots, codingProjects, projectPinsLocal, projectPins, projectSorts
-        case botChatShortcuts
+        case botChatShortcuts, botThreads
         case projectKeep, projectAutoDone, projectNotify, projectNewChat, projectLooks, projectBranchRows
     }
 
@@ -161,6 +163,7 @@ nonisolated struct SessionsDeviceState: Codable, Sendable, Hashable {
         projectPinsLocal = (try? c.decodeIfPresent([String: Bool].self, forKey: .projectPinsLocal)) ?? [:]
         projectPins = (try? c.decodeIfPresent([String: [String]].self, forKey: .projectPins)) ?? [:]
         botChatShortcuts = (try? c.decodeIfPresent([BotChatShortcut].self, forKey: .botChatShortcuts)) ?? []
+        botThreads = (try? c.decodeIfPresent([BotThreadLink].self, forKey: .botThreads)) ?? []
         projectSorts = (try? c.decodeIfPresent([String: String].self, forKey: .projectSorts)) ?? [:]
         projectKeep = (try? c.decodeIfPresent([String: Bool].self, forKey: .projectKeep)) ?? [:]
         projectAutoDone = (try? c.decodeIfPresent([String: String].self, forKey: .projectAutoDone)) ?? [:]
@@ -1138,15 +1141,38 @@ final class SessionStore {
         rebuild()
     }
 
+    /// [threads] Durable links between bot threads and their parent Bot Chats, newest first.
+    var botThreads: [BotThreadLink] { device.botThreads }
+
+    /// [threads] Records a thread's link to its parent Bot Chat so it survives app relaunches and syncs across devices.
+    func recordBotThread(_ link: BotThreadLink) {
+        device.botThreads.removeAll { $0.profile == link.profile && $0.storedId == link.storedId }
+        device.botThreads.insert(link, at: 0)
+        if device.botThreads.count > BotThreadLink.maxKept {
+            device.botThreads = Array(device.botThreads.prefix(BotThreadLink.maxKept))
+        }
+        persistState()
+    }
+
+    /// [threads] Drops a deleted thread's stored parent link.
+    @discardableResult func forgetBotThread(id: String, profile: String) -> Bool {
+        let before = device.botThreads.count
+        device.botThreads.removeAll { $0.profile == profile && $0.storedId == id }
+        guard device.botThreads.count != before else { return false }
+        persistState()
+        return true
+    }
+
     /// MENUS (⋯ › Archive, Delete Chat): the chat leaves every list at once.
     func forget(id: String, profile: String, deleting: Bool = false) {
         let shortcutChanged = forgetBotShortcutRow(id: id, profile: profile, deleting: deleting)
+        let threadChanged = deleting ? forgetBotThread(id: id, profile: profile) : false
         startedRows[Self.writeKey(id: id, profile: profile)] = nil   // [#440]
         let before = recents.count + cron.count + messaging.count
         recents.removeAll { $0.id == id && $0.profile == profile }
         cron.removeAll { $0.id == id && $0.profile == profile }
         messaging.removeAll { $0.id == id && $0.profile == profile }
-        guard recents.count + cron.count + messaging.count != before || shortcutChanged else { return }
+        guard recents.count + cron.count + messaging.count != before || shortcutChanged || threadChanged else { return }
         if selectedSessionId == id { selectedSessionId = nil; selectedLineage = nil }
         if onScreenSessionId == id { onScreenSessionId = nil }
         lastFingerprint = nil

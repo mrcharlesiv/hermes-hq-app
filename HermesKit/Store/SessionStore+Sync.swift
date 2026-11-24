@@ -24,6 +24,7 @@ extension SessionStore: GatewaySynced {
             "projectPinsLocal": .object(device.projectPinsLocal.mapValues { .bool($0) }),            // [project-pins]
             "projectPins": .object(device.projectPins.mapValues { .array($0.map { .string($0) }) }),
             "botChatShortcuts": .array(device.botChatShortcuts.map(\.json)),
+            "botThreads": .array(device.botThreads.map(\.json)),
             "projectSorts": .object(device.projectSorts.mapValues { .string($0) }),                 // [project-sort]
             "projectKeep": .object(device.projectKeep.mapValues { .bool($0) }),                      // [project-keep]
             "projectAutoDone": .object(device.projectAutoDone.mapValues { .string($0) }),            // [project-auto-done]
@@ -42,9 +43,14 @@ extension SessionStore: GatewaySynced {
     func adoptSynced(_ value: JSONValue, merge: GatewaySyncMerge, base: JSONValue?) {
         let oldCodingProjects = device.codingProjects
         let oldShortcuts = device.botChatShortcuts
+        let oldThreads = device.botThreads
         if let remote = BotChatShortcut.decode(value["botChatShortcuts"]) {
             device.botChatShortcuts = BotChatShortcut.merged(local: oldShortcuts, remote: remote,
                 base: BotChatShortcut.decode(base?["botChatShortcuts"]) ?? [], policy: merge)
+        }
+        if let remote = BotThreadLink.decode(value["botThreads"]) {
+            device.botThreads = BotThreadLink.merged(local: oldThreads, remote: remote,
+                base: BotThreadLink.decode(base?["botThreads"]) ?? [], policy: merge)
         }
         func strings(_ key: String) -> [String] { (value[key]?.array ?? []).compactMap(\.string) }
         /// The gateway's order first; this device's chats it doesn't name keep their places after it.
@@ -181,6 +187,7 @@ extension SessionStore: GatewaySynced {
             shortcutCheckedAt = shortcutCheckedAt.filter { kept.contains($0.key) }
             refreshOffPageShortcuts()
         }
-        rebuild(force: shortcutsChanged)
+        let threadsChanged = oldThreads != device.botThreads
+        rebuild(force: shortcutsChanged || threadsChanged)
     }
 }

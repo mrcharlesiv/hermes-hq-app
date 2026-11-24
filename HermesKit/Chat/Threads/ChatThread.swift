@@ -7,6 +7,69 @@
 
 import Foundation
 
+/// [threads] Durable link between a thread session and the Bot Chat it started from, kept in device state and synced
+/// via `GatewaySync` so threads never need `parent_session_id` alongside `messages` on `session.create` (which causes
+/// Hermes's `_seed_branch_row` to title the thread `"Bot Chat #N"` and strip `display_kind: "hidden"` from its seed).
+nonisolated struct BotThreadLink: Codable, Hashable, Sendable {
+    var storedId: String
+    var profile: String
+    var parentId: String
+    var startedAt: Double
+    var anchorRow: Int?
+
+    static let maxKept = 200
+
+    var json: JSONValue {
+        var obj: [String: JSONValue] = [
+            "storedId": .string(storedId),
+            "profile": .string(profile),
+            "parentId": .string(parentId),
+            "startedAt": .number(startedAt),
+        ]
+        if let anchorRow { obj["anchorRow"] = .number(Double(anchorRow)) }
+        return .object(obj)
+    }
+
+    static func decode(_ value: JSONValue?) -> [Self]? {
+        value?.array?.compactMap { item in
+            guard let storedId = RosterText.trimmed(item["storedId"]),
+                  let profile = RosterText.trimmed(item["profile"]),
+                  let parentId = RosterText.trimmed(item["parentId"]),
+                  let startedAt = RosterText.number(item["startedAt"]) else { return nil }
+            return Self(storedId: storedId, profile: profile, parentId: parentId, startedAt: startedAt,
+                        anchorRow: RosterText.count(item["anchorRow"]))
+        }
+    }
+
+    private struct Key: Hashable { var profile: String; var storedId: String }
+    private var key: Key { Key(profile: profile, storedId: storedId) }
+
+    /// Merges synced thread links across devices without dropping newly started local threads or resurrecting deletions.
+    static func merged(local: [Self], remote: [Self], base: [Self], policy: GatewaySyncMerge) -> [Self] {
+        func dedupe(_ items: [Self]) -> [Self] {
+            var seen = Set<Key>()
+            var out: [Self] = []
+            for item in items.sorted(by: { $0.startedAt > $1.startedAt }) {
+                if seen.insert(item.key).inserted { out.append(item) }
+            }
+            return Array(out.prefix(maxKept))
+        }
+        switch policy {
+        case .replace:
+            return dedupe(remote)
+        case .firstContact:
+            return dedupe(remote + local)
+        case .rebase:
+            if local == base { return dedupe(remote) }
+            let baseKeys = Set(base.map(\.key))
+            let localKeys = Set(local.map(\.key))
+            let remoteKeys = Set(remote.map(\.key))
+            let removed = baseKeys.subtracting(localKeys).union(baseKeys.subtracting(remoteKeys))
+            return dedupe((local + remote).filter { !removed.contains($0.key) })
+        }
+    }
+}
+
 /// One thread, as the chat it hangs in draws it.
 nonisolated struct ChatThread: Identifiable, Sendable {
     /// Its key in the chat's list: the stored session id once the gateway made it, a local key until then.
@@ -64,12 +127,21 @@ nonisolated enum ThreadRules {
     /// §9: brief grace window on a first `4090` refusal from a known external holder before handing off to a thread.
     static let busyOwnerGrace: Duration = .milliseconds(1500)
 
-    /// §9: where a thread that took a busy chat's words hangs: under the newest thing said in that chat (yours or the
-    /// bot's), so it stands open at the foot with its answer in view. `localId` is the bubble of the words it took,
+    /// Where the composer's thread button hangs a new thread: under the newest finished message (yours or the bot's),
+    /// skipping any reply still streaming so it sits under your request while the first reply streams, yet never gets
+    /// trapped above an already-finished assistant message (which would fold the thread immediately).
+    static func composerAnchor(in messages: [ChatMessage], running: Bool) -> ChatMessage? {
+        messages.last { $0.role != .system && !$0.isStreaming }
+            ?? messages.last { $0.role != .system }
+    }
+
+    /// §9: where a thread that took a busy chat's words hangs: under the newest finished message in that chat (yours or
+    /// the bot's), so it stands open at the foot with its answer in view. `localId` is the bubble of the words it took,
     /// which leaves the chat. (By time alone it would hang under your last message, above the bot's answer to it, and
     /// fold the moment it finished.)
     static func busyAnchor(in messages: [ChatMessage], leavingOut localId: String?) -> ChatMessage? {
-        messages.last { $0.id != localId && $0.role != .system }
+        messages.last { $0.id != localId && $0.role != .system && !$0.isStreaming }
+            ?? messages.last { $0.id != localId && $0.role != .system }
     }
 
     /// §9: the thread that took a busy chat's words takes the next ones too, for as long as it is reachable and well,
@@ -183,9 +255,21 @@ nonisolated enum ThreadRules {
         return (Array(spoken[lastYours...]), lastYours)
     }
 
+    private static let inheritedBotChatPattern = try! NSRegularExpression(pattern: #"^bot chat(?:\s+#\d+)?$"#, options: [.caseInsensitive])
+
+    /// True when `title` is `"Bot Chat"` or a branch-numbered copy (`"Bot Chat #2"`, `"Bot Chat #3"`, …) inherited
+    /// from the parent Bot Chat rather than a real name for the thread.
+    static func isInheritedBotChatTitle(_ title: String) -> Bool {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let range = NSRange(trimmed.startIndex..., in: trimmed)
+        return inheritedBotChatPattern.firstMatch(in: trimmed, range: range) != nil
+    }
+
     /// "Thread", or its own short title once it has one.
     static func name(_ thread: ChatThread) -> String {
-        guard let title = thread.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty, title != defaultTitle
+        guard let title = thread.title?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !title.isEmpty, title != defaultTitle, !isInheritedBotChatTitle(title)
         else { return defaultTitle }
         // Hermes's first title is the opening words, cut: the app's own short title replaces it a moment later.
         let first = thread.spoken.first(where: { $0.role == .user }).map(ChatTranscript.messageText) ?? ""
@@ -227,16 +311,28 @@ nonisolated enum ThreadFetch {
         var anchorRow: Int?
     }
 
-    /// From its stored rows: the hidden seed gives the anchor and is left out of the messages.
+    /// From its stored rows: the hidden seed gives the anchor and is left out of the messages. Also heals legacy
+    /// threads whose gateway stripped `display_kind: "hidden"` via `_seed_branch_row` by detecting the closing-note
+    /// boundary row and trimming the leaked seed prefix.
     static func read(rows: [JSONValue]) -> Result {
         var anchor: Int?
+        var sawHidden = false
         var visible: [JSONValue] = []
         for row in rows {
             if row["display_kind"]?.string == "hidden" {
+                sawHidden = true
                 if let text = row["content"]?.string, let found = ThreadSeed.anchorRow(in: text) { anchor = found }
                 continue
             }
             visible.append(row)
+        }
+        if !sawHidden, let seedEnd = visible.lastIndex(where: { row in
+            row["role"]?.string == "assistant" && (row["content"]?.string.map(ThreadSeed.isClosingNote) == true)
+        }) {
+            if let text = visible[seedEnd]["content"]?.string, let found = ThreadSeed.anchorRow(in: text) {
+                anchor = found
+            }
+            visible = Array(visible.dropFirst(seedEnd + 1))
         }
         return Result(messages: Hydration.fold(visible).messages, anchorRow: anchor)
     }

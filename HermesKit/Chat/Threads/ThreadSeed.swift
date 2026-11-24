@@ -96,6 +96,13 @@ nonisolated enum ThreadSeed {
         return Int(text[digits])
     }
 
+    /// True when `text` carries one of our thread-seed closing notes (used to heal legacy threads whose gateway
+    /// stripped `display_kind: "hidden"` via `_seed_branch_row`).
+    static func isClosingNote(_ text: String) -> Bool {
+        text.contains("This is a side thread of the same chat: here I answer only what is asked in this thread")
+            || text.contains("This is a side thread of the main chat above: here I answer only what is asked in this thread")
+    }
+
     /// `session.create`'s `messages`: every row hidden, so the thread's transcript holds only what is said in it.
     static func params(_ rows: [Row]) -> [JSONValue] {
         rows.map { .object(["role": .string($0.role.rawValue), "content": .string($0.text), "display_kind": "hidden"]) }

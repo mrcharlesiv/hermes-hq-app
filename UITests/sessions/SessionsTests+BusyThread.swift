@@ -45,8 +45,10 @@ extension SessionsTests {
         XCTAssertEqual(app.textViews["composer.text"].value as? String ?? "", "", "nothing came back to the message box")
         shot(app, "busy-thread-answered")
 
-        // On the wire: the thread was made under the bot's chat, its seed without the question, the question its message.
-        let made = try XCTUnwrap(rpcCalls("session.create").last { $0["parent_session_id"] != nil }, "a thread was made")
+        // On the wire: the thread was made with a hidden seed and NO parent_session_id (so real Hermes gateways take
+        // `_seed_row` instead of `_seed_branch_row`, keeping seed rows hidden and letting auto-titling run).
+        let made = try XCTUnwrap(rpcCalls("session.create").last { $0["messages"] != nil }, "a thread was made")
+        XCTAssertNil(made["parent_session_id"], "thread create must omit parent_session_id to avoid _seed_branch_row")
         let seed = (made["messages"] as? [[String: Any]] ?? []).compactMap { $0["content"] as? String }
         XCTAssertFalse(seed.contains { $0.contains(question) }, "the seed leaves the question out: \(seed)")
         let first = chatsSent(question)
@@ -60,7 +62,7 @@ extension SessionsTests {
         XCTAssertTrue(waitUntil(15) { self.chatsSent("And the gate?").count == 1 }, "the second message went straight to the thread")
         XCTAssertTrue(chatsSent("And the gate?").isSubset(of: first), "it went to the exact same thread, skipping the busy main chat")
         XCTAssertFalse(app.descendants(matching: .any)["chat.ownerWait"].exists, "no second waiting card")
-        XCTAssertEqual(rpcCalls("session.create").filter { $0["parent_session_id"] != nil }.count, 1, "one thread for both")
+        XCTAssertEqual(rpcCalls("session.create").filter { $0["messages"] != nil }.count, 1, "one thread for both")
         // One thread on screen. (Read once the rows settle: mid-update the accessibility tree has counted the
         // thread's row three times while the screen drew one.)
         Thread.sleep(forTimeInterval: 3)               // its answer lands in the same thread (the demo recording ends on it)
@@ -71,7 +73,7 @@ extension SessionsTests {
         // The background task in the main chat finishes: it writes its finished reply and releases the chat.
         // The proactive routing banner clears by itself, the auto-thread folds cleanly, and the next message goes
         // straight back into the main chat carrying the side-thread context note on the wire.
-        let parentId = try XCTUnwrap(made["parent_session_id"] as? String)
+        let parentId = try XCTUnwrap(rpcCalls("session.resume").first { ($0["profile"] as? String) == "research" }?["session_id"] as? String)
         let now = Int(Date().timeIntervalSince1970)
         fixture("/__fixture/mode", ["owned": false, "prompts": "reply",
                                     "answer": "Reminder set for 9:10 AM at Gate B12."])

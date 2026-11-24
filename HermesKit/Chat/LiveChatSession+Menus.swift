@@ -167,7 +167,7 @@ extension LiveChatSession {
 // MARK: - Rename and Share (spec 1x §4.4, §4.5)
 
 extension LiveChatSession: ChatSessionActions {
-    var isBotChat: Bool { menus.isBotChat || title == RosterRules.botChatTitle }
+    var isBotChat: Bool { menus.isBotChat || (!menus.isThread && title == RosterRules.botChatTitle) }
 
     /// Shows a new title in the bar and the Sessions row (nil/"" = cleared).
     func applyTitle(_ newTitle: String, rowTitle: String?) {
@@ -234,8 +234,9 @@ extension LiveChatSession: ChatSessionActions {
         if first.isEmpty, ShortTitle.isFileLine(raw) { return }
         let opening = ShortTitle.isPlaceholder(raw, firstMessage: first)
         // An opening excerpt is no improvement on an existing name, even if its older save was skipped.
-        guard !opening || title.count > ShortTitle.excerptCharacters ||
-                ShortTitle.genericTitles.contains(ShortTitle.normalized(title)) else { return }
+        guard !opening || title.count > ShortTitle.excerptCharacters
+                || ShortTitle.genericTitles.contains(ShortTitle.normalized(title))
+                || (menus.isThread && ThreadRules.isInheritedBotChatTitle(title)) else { return }
         automaticTitleSource = raw
         automaticTitleIsLocal = !alreadyStored
         let short = opening && !first.isEmpty
@@ -264,7 +265,11 @@ extension LiveChatSession: ChatSessionActions {
     }
 
     private var needsShortTitle: Bool {
-        !isBotChat && !titleManuallySet && (greetingTitle || ShortTitle.isPlaceholder(automaticTitleSource ?? title, firstMessage: firstUserText ?? ""))
+        !isBotChat && !titleManuallySet && (
+            greetingTitle
+            || (menus.isThread && ThreadRules.isInheritedBotChatTitle(title))
+            || ShortTitle.isPlaceholder(automaticTitleSource ?? title, firstMessage: firstUserText ?? "")
+        )
     }
 
     /// A gateway's composed name that was cut ("My account has been…"), still open to a better automatic name:

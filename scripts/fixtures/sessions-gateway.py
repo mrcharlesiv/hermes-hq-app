@@ -553,8 +553,8 @@ def run_prompt(sid, text):
         s['running'] = True
         row = len(s['messages'])
         mode = MODE.get('prompts')
-        # [threads] {"threads":"reply"}: a chat with a parent answers even while "hold" keeps the others running.
-        if s.get('parent') and MODE.get('threads') == 'reply': mode = 'reply'
+        # [threads] {"threads":"reply"}: a thread (seeded or parented) answers even while "hold" keeps the others running.
+        if (s.get('parent') or s.get('seeded')) and MODE.get('threads') == 'reply': mode = 'reply'
     def turn():
         time.sleep(0.15)
         emit('message.start', sid, {})
@@ -673,7 +673,7 @@ def rpc(method, params):
                      **({'display_kind': 'hidden'} if m.get('display_kind') == 'hidden' else {})}
                     for m in (params.get('messages') or [])
                     if isinstance(m, dict) and m.get('role') in ('user', 'assistant', 'system') and (m.get('content') or m.get('text') or '').strip()]
-            PENDING_SEED[sid] = {'parent': find_session(params.get('parent_session_id')), 'seed': seed}
+            PENDING_SEED[sid] = {'parent': find_session(params.get('parent_session_id')), 'seed': seed, 'seeded': bool(seed)}
         return {'session_id': runtime(sid), 'stored_session_id': sid, 'message_count': len(seed)}
     if method == 'session.title':
         # Hermes (tui_gateway methods_session.py): a title given before the first prompt writes the row at once.
@@ -694,10 +694,11 @@ def rpc(method, params):
                 seed = [{'id': i + 1, 'timestamp': now(), **m} for i, m in enumerate(made.get('seed') or [])]
                 add_session(live, PENDING.pop(live), None, seed, now())
                 SESSIONS[live]['parent'] = made.get('parent')
+                SESSIONS[live]['seeded'] = bool(made.get('seeded'))
                 SESSIONS[live]['started_at'] = now()
         sid = find_session(params.get('session_id'))
         # [threads] {"owned":true}: another Hermes run holds every chat that is not a thread (3x-threads §9).
-        if MODE.get('owned') and sid and not SESSIONS[sid].get('parent'):
+        if MODE.get('owned') and sid and not (SESSIONS[sid].get('parent') or SESSIONS[sid].get('seeded')):
             raise Fault(4090, 'This chat is open in another Hermes window/terminal. Use it there, or start a new chat here.\n'
                               'Details: session %s opened by cli 0m ago.' % sid)
         if MODE.get('prompts') in ('hold', 'reply') and sid: return run_prompt(sid, params.get('text') or '')

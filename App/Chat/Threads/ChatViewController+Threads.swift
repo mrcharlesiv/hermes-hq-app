@@ -145,8 +145,9 @@ extension ChatViewController {
         guard let host = threadsHost else { return }
         menus?.closeModelPanel()
         let messages = session.messages
-        // Under the request the bot is working on (or, with nothing running, under the newest message).
-        let anchor = session.isRunning ? messages.last(where: { $0.role == .user }) ?? messages.last : messages.last
+        // Under the newest finished message (the request the bot is answering while its first reply streams, or the
+        // finished reply before a later background/tool turn — never trapped above an already-finished assistant reply).
+        let anchor = ThreadRules.composerAnchor(in: messages, running: session.isRunning)
         AppLog.trace("composer", "thread tapped \(logTag): under \(AppLog.tag(anchor?.id)), main chat \(session.isRunning ? "working" : "idle")")
         followNewestEnd()
         voice.threadTip(buttonShown: false, learned: true)   // used: its tip never shows again

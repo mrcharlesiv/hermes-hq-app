@@ -32,9 +32,14 @@ and nothing about it needs the add-on.
 
 ## 3. What a thread starts out knowing (`ThreadSeed`)
 
-`session.create {profile, parent_session_id, messages, cwd, follow_profile_config, idempotency_key}`:
+`session.create {profile, messages, cwd, follow_profile_config, idempotency_key}`:
 
-- `parent_session_id`: the bot chat's id as last resolved (`LiveChatSession.readSessionId`).
+- **No `parent_session_id` alongside `messages`**: real Hermes gateways route `parent_session_id + messages` into
+  `_seed_branch_row` (Desktop `/branch`), which titles the child `"Bot Chat #2"` (locking out auto-titling) and persists
+  the seed with `copy_fields=()`, stripping `display_kind: "hidden"`. Omitting `parent_session_id` hits `_seed_row`,
+  which preserves `display_kind: "hidden"` and lets Hermes auto-title the thread from its first message. The thread's
+  link to its parent Bot Chat (`BotThreadLink`) is kept in `SessionStore` device state and synced across devices via
+  `GatewaySync`.
 - `messages`: the newest part of the bot chat as seed rows, every one `display_kind: "hidden"` (the model reads them,
   no client draws them; Hermes `_coerce_seed_history`). At most 24 rows after merging neighbours of one role, 16,000
   characters in all, 4,000 per row (start and end kept). Yours and the bot's words only: no steps, no thoughts, no

@@ -92,7 +92,7 @@ final class ThreadStore {
         let live = entry.live
         let listed = entry.storedId.flatMap { model?.sessionStore?.row(for: $0) }
         let title = [live?.title, listed?.title ?? entry.rowTitle].compactMap { $0 }
-            .first { !$0.isEmpty && $0 != ThreadRules.defaultTitle }
+            .first { !$0.isEmpty && $0 != ThreadRules.defaultTitle && !ThreadRules.isInheritedBotChatTitle($0) }
         let scope = live?.layoutScope ?? "\(model?.account?.id ?? "")|\(entry.profile)|\(entry.storedId ?? entry.key)"
         return ChatThread(id: entry.key, storedId: live?.storedSessionId ?? entry.storedId, title: title, startedAt: entry.startedAt,
                           anchorMessageId: entry.anchorMessageId, anchorRow: entry.anchorRow,
@@ -103,25 +103,34 @@ final class ThreadStore {
                           problem: live?.threadProblem ?? entry.problem, scope: scope)
     }
 
-    /// The Sessions rows whose parent is this bot chat become threads; a listed thread not live here is read again
-    /// when its row moved.
+    /// Listed Sessions rows that belong to this bot chat (either via durable synced `BotThreadLink` or a gateway
+    /// `parent_session_id` from older builds) become threads; a listed thread not live here is read again when moved.
     private func adoptListed(profile: String, parentIds: Set<String>) {
         guard let store = model?.sessionStore else { return }
-        for row in store.rowsById.values where row.profile == profile && row.archived != true {
-            guard let parent = row.parentSessionId, parentIds.contains(parent) else { continue }
+        func adoptRow(_ row: SidebarSessionRow, parent: String, linkedAnchorRow: Int? = nil, linkedStartedAt: Double? = nil) {
             let entry: Entry
             if let known = entries.first(where: { $0.profile == profile && ($0.storedId == row.id || $0.live?.storedSessionId == row.id) }) {
                 entry = known
                 if entry.storedId == nil { entry.storedId = row.id }
             } else {
+                let at = linkedStartedAt ?? row.startedAt ?? row.lastActive ?? Date().timeIntervalSince1970
                 entry = Entry(key: row.id, profile: profile, parentId: parent, storedId: row.id,
-                              startedAt: Date(timeIntervalSince1970: row.startedAt ?? row.lastActive ?? Date().timeIntervalSince1970))
+                              startedAt: Date(timeIntervalSince1970: at))
                 entries.append(entry)
             }
+            if entry.anchorRow == nil, let linkedAnchorRow { entry.anchorRow = linkedAnchorRow }
             entry.rowTitle = row.title
-            guard entry.live == nil else { continue }
+            guard entry.live == nil else { return }
             let stamp = "\(row.lastActive ?? 0)|\(row.messageCount ?? 0)"
             if entry.readStamp != stamp { read(entry, stamp: stamp) }
+        }
+        for link in store.botThreads where link.profile == profile && parentIds.contains(link.parentId) {
+            guard let row = store.rowsById[link.storedId], row.archived != true else { continue }
+            adoptRow(row, parent: link.parentId, linkedAnchorRow: link.anchorRow, linkedStartedAt: link.startedAt)
+        }
+        for row in store.rowsById.values where row.profile == profile && row.archived != true {
+            guard let parent = row.parentSessionId, parentIds.contains(parent) else { continue }
+            adoptRow(row, parent: parent)
         }
     }
 
@@ -164,8 +173,13 @@ final class ThreadStore {
                                    running: parent.isRunning || parent.externalWorking,
                                    anchorRow: anchor?.rowId, busyReason: busyReason,
                                    isSeedable: { !SideTaskRow.isSideRow($0) })
+        // Never pass `parent_session_id` alongside `messages` on `session.create`: real Hermes gateways route
+        // `parent_session_id + messages` into `_seed_branch_row`, which names the thread `"Bot Chat #N"` (preventing
+        // auto-titling) and persists seed rows with `copy_fields=()` (dropping `display_kind: "hidden"` so the whole
+        // Bot Chat seed dumps visibly into the thread). Sending `messages` without `parent_session_id` takes `_seed_row`,
+        // keeping every seed row hidden and letting Hermes auto-title the thread from its own first message; the
+        // parent Bot Chat link rides in `SessionStore.botThreads` (persisted locally and synced via `GatewaySync`).
         var extra: [String: JSONValue] = [:]
-        if let parentId { extra["parent_session_id"] = .string(parentId) }
         if !seed.isEmpty { extra["messages"] = .array(ThreadSeed.params(seed)) }
         let entry = Entry(key: "thread-\(UUID().uuidString)", profile: bot.id, parentId: parentId, storedId: nil, startedAt: Date())
         entry.anchorMessageId = anchor?.id
@@ -174,6 +188,11 @@ final class ThreadStore {
         let chat = model.freshChat(for: bot, folder: folder, shownTitle: ThreadRules.defaultTitle, extra: extra) { [weak self, weak entry] stored in
             guard let self, let entry else { return }
             entry.storedId = stored
+            if let parentId = entry.parentId {
+                self.model?.sessionStore?.recordBotThread(BotThreadLink(
+                    storedId: stored, profile: entry.profile, parentId: parentId,
+                    startedAt: entry.startedAt.timeIntervalSince1970, anchorRow: entry.anchorRow))
+            }
             if self.busyThreads[entry.profile]?.key == entry.key { self.busyThreads[entry.profile]?.storedId = stored }
             self.changed(entry.profile)
             self.model?.refreshSessions()       // it lists under Sessions too, as any chat with that bot

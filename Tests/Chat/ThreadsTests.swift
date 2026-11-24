@@ -296,4 +296,54 @@ struct ThreadsTests {
         #expect(rows.last?.text.contains("currently busy with a background task") == true)
         #expect(ThreadSeed.anchorRow(in: rows.last?.text ?? "") == 11)
     }
+
+    @Test func composerAnchorNeverTrapsAThreadAboveAFinishedAssistantReply() {
+        // Streaming first reply under u2: hangs under u2 (stays open while a2 streams, folds when a2 finishes).
+        let streaming = main + [bot("a2", "Working…", 65, row: 15, streaming: true)]
+        #expect(ThreadRules.composerAnchor(in: streaming, running: true)?.id == "u2")
+        // Finished assistant reply followed by a newer streaming tool/follow-up turn: hangs under a2 so the thread
+        // does not collapse immediately above a2.
+        let afterFinished = main + [bot("a2", "I finished step one.", 65, row: 15, streaming: false),
+                                    bot("a3", "Running script…", 70, row: 16, streaming: true)]
+        let anchor = ThreadRules.composerAnchor(in: afterFinished, running: true)
+        #expect(anchor?.id == "a2")
+        let hung = thread(at: 75, anchorId: anchor?.id)
+        #expect(ThreadRules.isOpen(hung, anchor: 3, in: afterFinished))
+    }
+
+    @Test func inheritedBotChatBranchTitlesNeverShowAsTheThreadName() {
+        #expect(ThreadRules.isInheritedBotChatTitle("Bot Chat"))
+        #expect(ThreadRules.isInheritedBotChatTitle("Bot Chat #2"))
+        #expect(ThreadRules.isInheritedBotChatTitle("  bot chat #14 "))
+        #expect(!ThreadRules.isInheritedBotChatTitle("Bot Chat migration notes"))
+        #expect(ThreadRules.name(thread(at: 70, title: "Bot Chat")) == "Thread")
+        #expect(ThreadRules.name(thread(at: 70, title: "Bot Chat #3")) == "Thread")
+        #expect(ThreadRules.name(thread(at: 70, title: "Flight on Friday")) == "Flight on Friday")
+    }
+
+    @Test func legacyThreadWhoseGatewayStrippedHiddenSeedRecoversAnchorAndSpokenMessages() {
+        // Mirrors real gateway `_seed_branch_row` (`copy_fields=()`) dropping `display_kind: "hidden"` on older threads.
+        let seed = ThreadSeed.rows(from: main, running: true, anchorRow: 14)
+        var rows: [JSONValue] = seed.enumerated().map { index, row in
+            ["id": .number(Double(index + 1)), "role": .string(row.role.rawValue), "content": .string(row.text), "timestamp": 1_790_000_100]
+        }
+        rows.append(["id": 5, "role": "user", "content": "Quick side question", "timestamp": 1_790_000_200])
+        rows.append(["id": 6, "role": "assistant", "content": "Quick side answer.", "timestamp": 1_790_000_220])
+        let read = ThreadFetch.read(rows: rows)
+        #expect(read.anchorRow == 14)
+        #expect(read.messages.count == 2)
+        #expect(ChatTranscript.messageText(read.messages[0]) == "Quick side question")
+        #expect(ChatTranscript.messageText(read.messages[1]) == "Quick side answer.")
+    }
+
+    @Test func botThreadLinkRoundTripsAndMergesAcrossDevices() {
+        let a = BotThreadLink(storedId: "t1", profile: "default", parentId: "bc1", startedAt: 100, anchorRow: 14)
+        let b = BotThreadLink(storedId: "t2", profile: "default", parentId: "bc1", startedAt: 200, anchorRow: 18)
+        let c = BotThreadLink(storedId: "t3", profile: "research", parentId: "bc2", startedAt: 300, anchorRow: nil)
+        let decoded = BotThreadLink.decode(.array([a.json, b.json, c.json]))
+        #expect(decoded == [a, b, c])
+        // Rebase keeps local additions, merges remote additions, and honors deletions made relative to base.
+        let merged = BotThreadLink.merged(local: [b], remote: [a, c], base: [a], policy: .rebase)
+        #expect(merged.map(\.storedId) == ["t3", "t2"])
+    }
 }

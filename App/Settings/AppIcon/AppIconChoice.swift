@@ -37,9 +37,13 @@ nonisolated struct AppIconChoice: Identifiable, Hashable, Sendable {
 
     /// Every icon, in the picker's order. Add or remove one here and in the asset catalog, nowhere else.
     static let all: [AppIconChoice] = [
-        // Hermes in profile, winged cap, black-and-white ink (the owner's own picture, 2026-11-01: "Add this one"; then
-        // "I want the default icon to be the Hermes guy").
-        AppIconChoice(id: primary, title: "Hermes", art: .picture),
+        // Halo, the flat feather inside an outline of itself (artifacts/hq-icons-finalists pick 48, owner 2026-11-23:
+        // "I want to change the default icon to the feather with the outline around it"). It was the "AppIcon-Halo"
+        // alternate; a phone that had picked that falls back to the app's own icon, the same picture.
+        AppIconChoice(id: primary, title: "Halo", art: .picture),
+        // Hermes in profile, winged cap, black-and-white ink (the owner's own picture, 2026-11-01), the app's own icon
+        // until Halo took its place.
+        AppIconChoice(id: "AppIcon-Hermes", title: "Hermes", art: .picture),
         // The ink feather, the app's own icon until Hermes took its place.
         AppIconChoice(id: "AppIcon-Feather", title: "Feather", art: .picture),
         // The first feather (hermes-ios 653ef6c1, 2026-10-04): three pearl blades on near-black (owner: "the OG
@@ -58,9 +62,8 @@ nonisolated struct AppIconChoice: Identifiable, Hashable, Sendable {
         AppIconChoice(id: "AppIcon-Swoop", title: "Swoop", art: .picture),
         // Two flat feathers from the owner's 50-icon flat round (artifacts/hq-icons-finalists, picks 02 and 48,
         // 2026-11-21: "Add 02 and 48 to the app as additional icon options"): a solid feather, and the same feather
-        // inside an outline of itself.
+        // inside an outline of itself (Halo, now the app's own icon, first above).
         AppIconChoice(id: "AppIcon-Silhouette", title: "Silhouette", art: .picture),
-        AppIconChoice(id: "AppIcon-Halo", title: "Halo", art: .picture),
     ]
 
     /// The name iOS knows the icon by in `look`: "AppIcon-Feather-Dark" for the feather pinned dark.

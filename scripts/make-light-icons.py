@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """[app-icons] Light versions of the app icons drawn as artwork (Hermes, Feather, Original, Black & White).
+The app's own icon (Halo, owner 2026-11-23) came with both looks; only "LaunchIcon" is cut from it here.
 
 Their art is light-on-black, so each set's "-Dark" file keeps it and this writes the set's own (light) file and the
 picker's "-Preview" image sets (both looks) and the light "LaunchIcon" from it: dark ink on the warm paper of the drawn icons' light look (AppIconArt.ground).
@@ -85,7 +86,7 @@ def onyx(src):
 
 
 ICONS = {
-    "AppIcon": ("AppIcon-Dark-512@2x.png", "AppIcon-512@2x.png", hermes),
+    "AppIcon-Hermes": ("AppIcon-Hermes-Dark.png", "AppIcon-Hermes.png", hermes),
     "AppIcon-Feather": ("AppIcon-Feather-Dark.png", "AppIcon-Feather.png", ink_from_light),
     "AppIcon-Pearl": ("AppIcon-Pearl-Dark.png", "AppIcon-Pearl.png", onyx),
     "AppIcon-BlackWhite": ("AppIcon-BlackWhite-Dark.png", "AppIcon-BlackWhite.png", ink_from_light),
@@ -115,15 +116,18 @@ def preview_contents(name):
 """
 
 
-def launch_icon(light):
-    """"LaunchIcon" (the app's own icon inside the app) is the icon cut to its shape: the light one takes the cut of
-    the dark one beside it."""
+def launch_icon():
+    """"LaunchIcon" (the app's own icon inside the app) is the app's own icon in both looks, cut to the icon's shape
+    (the rounded cut the dark one already carries)."""
     folder = CATALOG / "LaunchIcon.imageset"
+    own = CATALOG / "AppIcon.appiconset"
+    looks = {"": own / "AppIcon-512@2x.png", "-dark": own / "AppIcon-Dark-512@2x.png"}
     for scale in (1, 2, 3):
-        cut = Image.open(folder / f"launch-icon-dark@{scale}x.png").convert("RGBA")
-        picture = light.resize(cut.size, Image.LANCZOS).convert("RGBA")
-        picture.putalpha(cut.getchannel("A"))
-        picture.save(folder / f"launch-icon@{scale}x.png", optimize=True)
+        cut = Image.open(folder / f"launch-icon-dark@{scale}x.png").convert("RGBA").getchannel("A")
+        for look, file in looks.items():
+            picture = Image.open(file).convert("RGB").resize(cut.size, Image.LANCZOS).convert("RGBA")
+            picture.putalpha(cut)
+            picture.save(folder / f"launch-icon{look}@{scale}x.png", optimize=True)
 
 
 def main():
@@ -138,9 +142,8 @@ def main():
         light.resize((PREVIEW, PREVIEW), Image.LANCZOS).save(previews / f"{name}-Preview.png", optimize=True)
         dark.resize((PREVIEW, PREVIEW), Image.LANCZOS).save(previews / f"{name}-Preview-Dark.png", optimize=True)
         (previews / "Contents.json").write_text(preview_contents(name))
-        if name == "AppIcon":
-            launch_icon(light)
         print(name)
+    launch_icon()
 
 
 if __name__ == "__main__":

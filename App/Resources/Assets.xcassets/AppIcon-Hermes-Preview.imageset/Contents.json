@@ -1,0 +1,17 @@
+{
+  "images" : [
+    {
+      "filename" : "AppIcon-Hermes-Preview.png",
+      "idiom" : "universal"
+    },
+    {
+      "appearances" : [ { "appearance" : "luminosity", "value" : "dark" } ],
+      "filename" : "AppIcon-Hermes-Preview-Dark.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

@@ -126,6 +126,9 @@ struct AppIconTests {
         #expect(AppIconChoice.choice(named: nil).id == "AppIcon")
         #expect(AppIconChoice.choice(named: "AppIcon-Matrix").title == "Matrix")
         #expect(AppIconChoice.choice(named: "AppIcon-Gone").id == "AppIcon")   // a name an older build had
+        // Halo became the app's own icon (owner 2026-11-23): a phone wearing the old alternate gets the same picture.
+        #expect(AppIconChoice.choice(named: "AppIcon-Halo-Dark").id == "AppIcon")
+        #expect(AppIconChoice.choice(named: "AppIcon-Hermes").title == "Hermes")
     }
 
     // MARK: The drawn faces

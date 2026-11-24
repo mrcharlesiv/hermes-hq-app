@@ -1,13 +1,13 @@
 {
   "images": [
     {
-      "filename": "AppIcon-Halo.png",
+      "filename": "AppIcon-Hermes.png",
       "idiom": "universal",
       "platform": "ios",
       "size": "1024x1024"
     },
     {
-      "filename": "AppIcon-Halo-Dark.png",
+      "filename": "AppIcon-Hermes-Dark.png",
       "idiom": "universal",
       "platform": "ios",
       "size": "1024x1024",
@@ -19,7 +19,7 @@
       ]
     },
     {
-      "filename": "AppIcon-Halo-Tinted.png",
+      "filename": "AppIcon-Hermes-Tinted.png",
       "idiom": "universal",
       "platform": "ios",
       "size": "1024x1024",

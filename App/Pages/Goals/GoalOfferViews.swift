@@ -82,7 +82,7 @@ final class GoalOfferCell: ChatBaseCell {
         for v in [undoButton, quietButton] { contentView.addSubview(v) }
         accessibilityIdentifier = "chat.goal-offer"
         registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (view: GoalOfferCell, _) in
-            view.card.backgroundColor = Self.contentCardFill
+            view.styleChatCard(view.card)
             view.drawFaces()
             view.paint()
         }
@@ -100,7 +100,7 @@ final class GoalOfferCell: ChatBaseCell {
         self.layout = g
         let r = g.row
         card.frame = g.cardFrame
-        card.backgroundColor = Self.contentCardFill   // [backdrop]
+        styleChatCard(card)
         if let frame = g.kickerFrame, let words = r.kicker {
             kicker.isHidden = false
             let side = ceil(g.detailFont.lineHeight * 0.9)

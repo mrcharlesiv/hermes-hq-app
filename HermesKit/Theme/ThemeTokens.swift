@@ -27,6 +27,11 @@ nonisolated struct ThemeTokens: Sendable, Hashable {
     var green: RGBA
     var muted: RGBA
     var botBubble: RGBA
+    /// [cards] A standalone card in the chat (a draft, approval, ask, question, order, product, offer, error, expanded
+    /// tool or phone card): always lifted off `page` with a crisp border (`promptEdge`) so it stands out as its own
+    /// actionable entity in every skin, look and mode.
+    var promptCard: RGBA
+    var promptEdge: RGBA
     var meBubble: RGBA
     var meText: RGBA
     var meTime: RGBA
@@ -73,11 +78,6 @@ nonisolated struct ThemeTokens: Sendable, Hashable {
     var tableHead: RGBA { ownLook?.tableHead ?? fill4 }
     /// The line round a reply's bubble in the iOS look: none unless a skin draws one.
     var replyEdge: RGBA { ownLook?.replyEdge ?? RGBA(unit: 0, 0, 0, 0) }
-    /// [paper-cards] A card in the chat that isn't a reply (a question, a draft, an approval): the reply's own bubble,
-    /// except in a skin whose replies lie on the page (Paper), where it is the skin's raised card inside a hairline
-    /// (owner 2026-11-16: "Shouldn't it stand out a little more since it isn't just part of the normal chat thread?").
-    var promptCard: RGBA { ownLook?.reply != nil ? ownLook?.card ?? botBubble : botBubble }
-    var promptEdge: RGBA { ownLook?.reply != nil ? ownLook?.separator ?? RGBA(unit: 0, 0, 0, 0) : RGBA(unit: 0, 0, 0, 0) }
 }
 
 /// Light and dark tokens plus what is not colour.
@@ -160,6 +160,8 @@ nonisolated enum ThemeResolver {
             alertRed: pick(RGBA(hex: 0xFF3B30), RGBA(hex: 0xFF453A)),
             green: pick(RGBA(hex: 0x248A3D), RGBA(hex: 0x30D158)), muted: RGBA(hex: 0x8E8E93),
             botBubble: pick(RGBA(hex: 0xE9E9EB), RGBA(hex: 0x26282C)),
+            promptCard: pick(RGBA(hex: 0xE9E9EB), RGBA(hex: 0x26282C)),
+            promptEdge: pick(RGBA(60, 60, 67, 0.22), RGBA(255, 255, 255, 0.14)),
             meBubble: pick(RGBA(hex: 0x0053FD), RGBA(hex: 0x3863BF)), meText: .white,
             meTime: pick(RGBA.white.alpha(0.85), RGBA.white.alpha(0.88)),
             codeFill: pick(RGBA(116, 116, 128, 0.08), RGBA(hex: 0x1F2023)),
@@ -216,6 +218,12 @@ nonisolated enum ThemeResolver {
             t.cellPressed = t.page.mix(dark ? 83 : 88, ink)
             // The bot's bubble too (owner 2026-11-01: "the grey doesn't seem like it fits"), and the code card in it.
             t.botBubble = t.page.mix(dark ? 87 : 91, ink)
+            // [cards] Standalone cards keep the bubble's elevation when primary text reads at 4.5:1 on it; otherwise
+            // they lift cleanly off the page (e.g. Everforest light, Solarized dark) with a border in the skin's hue.
+            t.promptCard = t.label.over(t.botBubble).contrast(with: t.botBubble) >= 4.5
+                ? t.botBubble
+                : liftedCard(page: t.page, ink: ink, label: t.label, dark: dark, contrast: false)
+            t.promptEdge = ink.alpha(dark ? 0.16 : 0.14)
             if dark {
                 t.codeFill = t.page.mix(95, ink)
                 t.codeFillOnBubble = t.codeFill
@@ -346,6 +354,8 @@ nonisolated enum ThemeResolver {
     private static func paint(_ t: inout ThemeTokens, _ own: SkinOwnLook, ink: RGBA) {
         t.groupedCard = own.card; t.lifted = own.card; t.editor = own.card; t.elevated = own.card
         t.botBubble = own.reply ?? own.card
+        t.promptCard = own.card
+        t.promptEdge = own.separator
         t.cellPressed = own.pressed
         t.codeFill = own.codeFill; t.codeFillOnBubble = own.codeFill
         t.codeText = ink
@@ -419,6 +429,8 @@ nonisolated enum ThemeResolver {
         t.searchFill = bgTertiary
         t.muted = textQuaternary.over(page)
         t.botBubble = editor
+        t.promptCard = liftedCard(page: page, ink: ink, label: textPrimary, dark: dark, contrast: contrast)
+        t.promptEdge = contrast ? strokePrimary : strokeSecondary
         // Your message is text on a box. Where a skin's box is too close to its text, the text goes toward plain
         // black or white until it reads (the web leaves it; Solarized dark is 4.4:1 there).
         let meGround = meBubble.over(page.over(.white))
@@ -442,5 +454,32 @@ nonisolated enum ThemeResolver {
         t.orange = ThemeMath.readable(t.orange, text: textPrimary, on: page, ratio: 4.5)
         t.green = ThemeMath.readable(t.green, text: textPrimary, on: page, ratio: 4.5)
         return t
+    }
+
+    /// [cards] A standalone chat card's surface: clearly separated from `page` in the skin's own hue while keeping
+    /// `label` at 4.5:1 or better. On tinted light pages, lifts toward white (increasing contrast); on near-white
+    /// light pages and all dark pages, steps toward `ink` without crossing below 4.5:1.
+    static func liftedCard(page: RGBA, ink: RGBA, label: RGBA, dark: Bool, contrast: Bool) -> RGBA {
+        let ground = page.over(.white)
+        if dark {
+            var keep = contrast ? 89.0 : 92.0
+            var card = ground.mix(keep, ink)
+            while keep < 98, label.over(card).contrast(with: card) < 4.5 {
+                keep += 1
+                card = ground.mix(keep, ink)
+            }
+            return card
+        }
+        if ground.labL < 97.5 {
+            let light = RGBA.white.mix(85, ground)
+            if light.labDistance(to: ground) >= 2.2 { return light }
+        }
+        var keep = contrast ? 93.0 : 95.0
+        var card = ground.mix(keep, ink)
+        while keep < 99, label.over(card).contrast(with: card) < 4.5 {
+            keep += 1
+            card = ground.mix(keep, ink)
+        }
+        return card
     }
 }

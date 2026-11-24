@@ -105,20 +105,28 @@ final class PhoneChatCardControl: UIButton {
         isAccessibilityElement = true
         accessibilityTraits = .button
         addAction(UIAction { [weak self] _ in self?.open?() }, for: .primaryActionTriggered)
+        registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (view: PhoneChatCardControl, _) in
+            view.styleCard()
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    private func styleCard() {
+        backgroundColor = ChatPalette.promptCard
+        layer.cornerRadius = HQShape.radius(18, .card)
+        layer.cornerCurve = .continuous
+        let edge = ChatPalette.promptEdge.resolvedColor(with: traitCollection)
+        layer.borderColor = edge.cgColor
+        layer.borderWidth = edge.cgColor.alpha > 0 ? max(HQShape.pixel(traitCollection.displayScale), 1) : 0
+    }
 
     override var isHighlighted: Bool { didSet { alpha = isHighlighted ? 0.72 : 1 } }
 
     func configure(_ card: PhoneChatCardContent, style: ChatStyle) {
         self.card = card
         self.style = style
-        backgroundColor = HQPalette.groupedCard
-        layer.cornerRadius = HQShape.radius(18, .card)
-        layer.cornerCurve = .continuous
-        layer.borderWidth = 1
-        layer.borderColor = HQPalette.cardEdge.resolvedColor(with: traitCollection).cgColor
+        styleCard()
         headlineLabel.font = PhoneChatCardLayout.titleFont(style)
         headlineLabel.textColor = ChatPalette.label
         headlineLabel.text = card.title

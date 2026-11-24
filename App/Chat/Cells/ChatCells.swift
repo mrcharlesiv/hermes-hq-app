@@ -122,9 +122,20 @@ class ChatBaseCell: UITableViewCell {
     /// The pill's frame in the content view's space while it shows (the pointer's fill takes its shape).
     var backingFrame: CGRect? { showsBacking ? backing?.frame : nil }
 
-    /// [backdrop] A card of content under a line (an opened run, a group's members): the faint page fill with no
-    /// picture, the reply bubble's own colour on one (the faint fill all but vanished there; content stays on solid cards).
-    static var contentCardFill: UIColor { Backdrop.chats.shows ? ChatPalette.botBubble : ChatPalette.fill4 }
+    /// [cards] A standalone card in the chat (expanded steps, changed files, diff preview, tasks, offers, errors):
+    /// always uses the elevated card fill so it never blends into the page or a chat picture.
+    static var contentCardFill: UIColor { ChatPalette.promptCard }
+
+    /// [cards] Applies the standalone chat card's fill, corners and crisp border (`ChatPalette.promptCard` /
+    /// `promptEdge`) so every card stands out as its own entity in every skin, look and appearance.
+    func styleChatCard(_ view: UIView, radius: CGFloat = ChatMetrics.insetCardRadius) {
+        view.backgroundColor = ChatPalette.promptCard
+        view.layer.cornerRadius = radius
+        view.layer.cornerCurve = .continuous
+        let edge = ChatPalette.promptEdge.resolvedColor(with: traitCollection)
+        view.layer.borderColor = edge.cgColor
+        view.layer.borderWidth = edge.cgColor.alpha > 0 ? max(HQShape.pixel(traitCollection.displayScale), 1) : 0
+    }
 
     /// A press on a line with a pill: the pill takes the row's press shade, so the pressed shape is the pill's.
     func pressBacking(_ on: Bool) {
@@ -1513,9 +1524,7 @@ final class ChatToolCell: ChatBaseCell, UIContextMenuInteractionDelegate {
         MacHover.drawsOwnHover(rowButton)
         rowButton.addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:))))
         #endif
-        card.backgroundColor = ChatPalette.fill4
-        card.layer.cornerRadius = ChatMetrics.insetCardRadius
-        card.layer.cornerCurve = .continuous
+        styleChatCard(card)
         card.clipsToBounds = true
         contentView.addSubview(card)
         card.addSubview(thoughtText)
@@ -1563,6 +1572,7 @@ final class ChatToolCell: ChatBaseCell, UIContextMenuInteractionDelegate {
         for mark in marks { mark.shape.strokeColor = glyph.strokeColor }
         chevron.strokeColor = (onPill ? ChatPalette.label2 : ChatPalette.label3).resolvedColor(with: traitCollection).cgColor
         caret.strokeColor = chevron.strokeColor
+        styleChatCard(card)
     }
 
     override func configure(_ row: ChatRow, layout: RowLayout) {
@@ -1636,7 +1646,7 @@ final class ChatToolCell: ChatBaseCell, UIContextMenuInteractionDelegate {
         card.isHidden = !t.expanded
         if t.expanded {
             card.frame = t.cardFrame
-            card.backgroundColor = Self.contentCardFill
+            styleChatCard(card)
             if let tk = t.thoughtText {
                 thoughtText.isHidden = false
                 thoughtText.frame = t.thoughtFrame
@@ -2180,11 +2190,10 @@ final class ChatErrorCell: ChatBaseCell, UIContextMenuInteractionDelegate {
     private let retryButton = UIButton(type: .system)
     private var copyText = ""
 
-    /// Tint at 16 % over the cell colour (the page colour in light, the card's in dark: spec 06 §1.2's `#1C1C1E` is
-    /// the default theme's card; a tinted dark theme's card keeps the capsule its own colour, audit 10-16).
+    /// Tint at 16 % over the error card's fill so the Retry capsule always stands out on the card.
     static let retryFill = UIColor { traits in
         let tint = ChatPalette.tint.resolvedColor(with: traits)
-        let cell = (traits.userInterfaceStyle == .dark ? ChatPalette.grouped : ChatPalette.page).resolvedColor(with: traits)
+        let cell = ChatPalette.promptCard.resolvedColor(with: traits)
         var (tr, tg, tb, ta): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
         var (cr, cg, cb, ca): (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
         tint.getRed(&tr, green: &tg, blue: &tb, alpha: &ta)
@@ -2195,9 +2204,7 @@ final class ChatErrorCell: ChatBaseCell, UIContextMenuInteractionDelegate {
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
-        card.backgroundColor = ChatPalette.grouped
-        card.layer.cornerRadius = HQShape.radius(14, .card)
-        card.layer.cornerCurve = .continuous
+        styleChatCard(card, radius: HQShape.radius(14, .card))
         contentView.addSubview(card)
         glyph.fillColor = nil
         glyph.lineWidth = 1.8
@@ -2245,6 +2252,7 @@ final class ChatErrorCell: ChatBaseCell, UIContextMenuInteractionDelegate {
         card.addInteraction(UIContextMenuInteraction(delegate: self))
         card.isAccessibilityElement = false
         registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (cell: ChatErrorCell, _) in
+            cell.styleChatCard(cell.card, radius: HQShape.radius(14, .card))
             cell.glyph.strokeColor = ChatPalette.alertRed.resolvedColor(with: cell.traitCollection).cgColor
         }
     }
@@ -2255,6 +2263,7 @@ final class ChatErrorCell: ChatBaseCell, UIContextMenuInteractionDelegate {
         super.configure(row, layout: layout)
         guard case .error(let e) = layout.content else { return }
         card.frame = e.cardFrame
+        styleChatCard(card, radius: HQShape.radius(14, .card))
         CATransaction.begin(); CATransaction.setDisableActions(true)
         glyph.frame = e.glyphFrame
         glyph.strokeColor = ChatPalette.alertRed.resolvedColor(with: traitCollection).cgColor

@@ -129,12 +129,12 @@ private let allStates: [ThemeState] = SkinCatalog.all.flatMap { skin in
         #expect(set.light.syntax != nil && set.dark.syntax != nil)
         #expect(set.light.iconTile == RGBA(hex: 0xE4E5DD) && set.dark.iconTile.a == 1)
         #expect(ThemeResolver.resolve(.default).light.iconTile.a == 0, "every other skin keeps iOS's tiles")
-        // [paper-cards] Questions, drafts and approvals stand out from the replies on the page: a raised card in a hairline.
+        // [cards] Questions, drafts, approvals and every other chat card stand out from the page in every skin and look.
         for tokens in [set.light, set.dark] {
             #expect(tokens.promptCard != tokens.page && tokens.promptEdge.a > 0)
         }
         let nous = ThemeResolver.resolve(.default).light
-        #expect(nous.promptCard == nous.botBubble && nous.promptEdge.a == 0, "elsewhere a card is the reply's bubble, no edge")
+        #expect(nous.promptCard == nous.botBubble && nous.promptEdge.a > 0, "cards always carry a subtle edge")
     }
 
     /// [paper-links] A reply's link is drawn in the accent; where the accent can't be told from the text it is
@@ -295,6 +295,36 @@ private let allStates: [ThemeState] = SkinCatalog.all.flatMap { skin in
                 }
             }
         }
+        #expect(failures.isEmpty, "\(failures.joined(separator: "\n"))")
+    }
+
+    /// [cards] Every standalone chat card (drafts, approvals, asks, orders, offers, errors, expanded tools, phone cards)
+    /// must read as its own entity across every skin, look, mode and contrast setting: perceptually distinct fill off
+    /// `page`, a visible border off both `page` and `promptCard`, and ≥ 4.5:1 primary text contrast on `promptCard`.
+    @Test func everyStandaloneCardStandsOutFromThePage() {
+        var failures: [String] = []
+        func check(_ tag: String, _ tokens: ThemeTokens) {
+            let page = tokens.page.over(.white)
+            let card = tokens.promptCard.over(page)
+            let edgeOnPage = tokens.promptEdge.over(page)
+            let edgeOnCard = tokens.promptEdge.over(card)
+            let fillDelta = card.labDistance(to: page)
+            let edgePageDelta = edgeOnPage.labDistance(to: page)
+            let edgeCardDelta = edgeOnCard.labDistance(to: card)
+            let labelContrast = tokens.label.over(card).contrast(with: card)
+            if fillDelta < 2.0 { failures.append("\(tag) fillΔE=\(String(format: "%.2f", fillDelta))") }
+            if tokens.promptEdge.a <= 0 { failures.append("\(tag) edgeAlpha=0") }
+            if edgePageDelta < 5.0 { failures.append("\(tag) edgePageΔE=\(String(format: "%.2f", edgePageDelta))") }
+            if edgeCardDelta < 5.0 { failures.append("\(tag) edgeCardΔE=\(String(format: "%.2f", edgeCardDelta))") }
+            if labelContrast < 4.5 - 0.01 { failures.append("\(tag) labelContrast=\(String(format: "%.2f", labelContrast))") }
+        }
+        for state in allStates {
+            let set = ThemeResolver.resolve(state)
+            check("\(state.skinID) light look=\(state.desktopLook) hc=\(state.highContrast)", set.light)
+            check("\(state.skinID) dark look=\(state.desktopLook) hc=\(state.highContrast)", set.dark)
+        }
+        check("standard-increase-contrast light", ThemedColor.increasedLight)
+        check("standard-increase-contrast dark", ThemedColor.increasedDark)
         #expect(failures.isEmpty, "\(failures.joined(separator: "\n"))")
     }
 

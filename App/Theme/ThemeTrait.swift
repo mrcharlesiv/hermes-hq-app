@@ -128,6 +128,7 @@ nonisolated enum ThemedColor {
         // Opaque, and 3:1 against the page and a card (darker than the system's #C6C6C8, which measures 1.7:1 on
         // this skin's near-white page).
         tokens.separator = pick(RGBA(hex: 0x85858A), RGBA(hex: 0x6C6C70))
+        tokens.promptEdge = tokens.separator
         tokens.fill3 = pick(RGBA(118, 118, 128, 0.2), RGBA(118, 118, 128, 0.32))
         tokens.orange = pick(RGBA(hex: 0xA82A00), RGBA(hex: 0xFFB340))
         tokens.red = pick(RGBA(hex: 0xB00012), RGBA(hex: 0xFF6961))

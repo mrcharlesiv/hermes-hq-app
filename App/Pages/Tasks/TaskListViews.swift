@@ -133,16 +133,13 @@ struct TaskCardButtonStyle: ButtonStyle {
     }
 }
 
-/// A card's fill on the Tasks page: a faint wash in the iOS look, the look's outlined card otherwise.
+/// A card's fill and crisp border on the Tasks & Goal pages (offer cards): always stands out from the page.
 struct TaskCardBackground: ViewModifier {
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: Theme.isDesktop ? DesktopRows.radius : 14, style: .continuous)
         content.background {
-            if Theme.isDesktop {
-                shape.fill(Color.hqGroupedCard).overlay { shape.strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline) }
-            } else {
-                shape.fill(Color.hqLabel.opacity(0.06))
-            }
+            shape.fill(Color(uiColor: ChatPalette.promptCard))
+                .overlay { shape.strokeBorder(Color(uiColor: ChatPalette.promptEdge), lineWidth: HQShape.hairline) }
         }
     }
 }

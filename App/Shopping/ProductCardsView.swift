@@ -404,11 +404,19 @@ final class ProductCardsView: UIView, UIScrollViewDelegate {
         seeAllRule.isUserInteractionEnabled = false
         listCard.addSubview(seeAllRule)
         registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (view: ProductCardsView, _) in
-            view.listCard.backgroundColor = ChatPalette.promptCard
+            view.styleListCard()
         }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    private func styleListCard() {
+        listCard.layer.cornerRadius = ChatMetrics.insetCardRadius
+        listCard.backgroundColor = ChatPalette.promptCard
+        let edge = ChatPalette.promptEdge.resolvedColor(with: traitCollection)
+        listCard.layer.borderColor = edge.cgColor
+        listCard.layer.borderWidth = edge.cgColor.alpha > 0 ? max(HQShape.pixel(traitCollection.displayScale), 1) : 0
+    }
 
     func configure(_ row: ProductsCardRow, _ g: ProductCardsGeometry) {
         if rowId != row.rowId { strip.contentOffset = .zero }
@@ -432,7 +440,7 @@ final class ProductCardsView: UIView, UIScrollViewDelegate {
         }
         strip.isHidden = g.mode != .row
         listCard.isHidden = g.mode != .list
-        listCard.backgroundColor = ChatPalette.promptCard
+        styleListCard()
         let host: UIView = g.mode == .row ? strip : (g.mode == .list ? listCard : self)
         for (i, card) in cards.enumerated() {
             guard i < shown, i < products.count else { card.isHidden = true; card.reset(); continue }
@@ -560,9 +568,25 @@ final class ProductCardView: UIControl {
         accessibilityTraits = .button
         accessibilityHint = "Opens the product’s page"
         accessibilityIdentifier = "shopping.card"
+        registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (view: ProductCardView, _) in
+            view.styleCard(list: view.mode == .list)
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    private func styleCard(list: Bool) {
+        backgroundColor = list ? .clear : ChatPalette.promptCard
+        layer.cornerRadius = list ? 0 : ChatMetrics.insetCardRadius
+        if list {
+            layer.borderWidth = 0
+            layer.borderColor = nil
+        } else {
+            let edge = ChatPalette.promptEdge.resolvedColor(with: traitCollection)
+            layer.borderColor = edge.cgColor
+            layer.borderWidth = edge.cgColor.alpha > 0 ? max(HQShape.pixel(traitCollection.displayScale), 1) : 0
+        }
+    }
 
     override var isHighlighted: Bool {
         didSet { alpha = isHighlighted ? 0.6 : 1 }
@@ -572,8 +596,7 @@ final class ProductCardView: UIControl {
         mode = g.mode
         let parts = ProductCardsLayout.parts(g, size: bounds.size, product: p)
         let list = g.mode == .list
-        backgroundColor = list ? .clear : ChatPalette.promptCard
-        layer.cornerRadius = list ? 0 : ChatMetrics.insetCardRadius
+        styleCard(list: list)
         clipsToBounds = !list
         photo.frame = parts.photo
         photo.layer.cornerRadius = g.mode == .pair || g.mode == .row ? 0 : 8

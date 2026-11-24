@@ -150,11 +150,13 @@ final class ChatPromptCell: ChatBaseCell {
         if let frame = l.cardFrame {
             card.isHidden = false
             card.frame = frame
-            card.backgroundColor = ChatPalette.promptCard   // a reply bubble's fill; [paper-cards] its own card in Paper
+            card.layer.cornerRadius = ChatMetrics.insetCardRadius
+            card.backgroundColor = ChatPalette.promptCard
             let panel = l.draft?.paper ?? l.approval?.paper ?? l.ask?.paper   // [asks v2] an ask card's ready reply
             paper.isHidden = panel == nil
             if let p = panel {
                 paper.frame = p.offsetBy(dx: -frame.minX, dy: -frame.minY)
+                paper.layer.cornerRadius = HQShape.radius(12, .card)
                 paper.backgroundColor = ChatPalette.page
             }
             quote.isHidden = l.draft?.quote == nil
@@ -258,10 +260,14 @@ final class ChatPromptCell: ChatBaseCell {
 
     private func updateBorder() {
         let hair = HQShape.pixel(traitCollection.displayScale)
-        // [paper-cards] No edge, except where the cards stand on the page (Paper): a hairline sets them apart.
+        // [cards] Every standalone prompt card (drafts, approvals, asks, orders, questions) carries a crisp edge.
         let edge = ChatPalette.promptEdge.resolvedColor(with: traitCollection)
         card.layer.borderColor = edge.cgColor
         card.layer.borderWidth = edge.cgColor.alpha > 0 ? max(hair, 1) : 0
+        // Inset draft / command / reply panel: a hairline edge keeps it distinct inside the card in every theme.
+        let panelEdge = ChatPalette.separator.resolvedColor(with: traitCollection)
+        paper.layer.borderColor = panelEdge.cgColor
+        paper.layer.borderWidth = panelEdge.cgColor.alpha > 0 ? hair : 0
         for rule in ruleViews where rule.bounds.height != hair { rule.frame.size.height = hair }
     }
 

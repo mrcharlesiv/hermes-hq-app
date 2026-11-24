@@ -279,8 +279,7 @@ final class DelegateCardCell: ChatBaseCell {
 
         override init(frame: CGRect) {
             super.init(frame: frame)
-            border.fillColor = nil
-            border.lineWidth = HQShape.line(0.5)
+            border.lineWidth = max(HQShape.pixel(traitCollection.displayScale), 1)
             layer.addSublayer(border)
             status.contentMode = .scaleAspectFit
             dot.layer.cornerRadius = 3
@@ -295,8 +294,15 @@ final class DelegateCardCell: ChatBaseCell {
             meta.textColor = ChatPalette.label2
             isAccessibilityElement = true
             registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (view: RowView, _) in
-                view.border.strokeColor = ChatPalette.separator.resolvedColor(with: view.traitCollection).cgColor
+                view.paintCard()
             }
+        }
+
+        func paintCard() {
+            let width = max(HQShape.pixel(traitCollection.displayScale), 1)
+            border.lineWidth = width
+            border.fillColor = ChatPalette.promptCard.resolvedColor(with: traitCollection).cgColor
+            border.strokeColor = ChatPalette.promptEdge.resolvedColor(with: traitCollection).cgColor
         }
 
         required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
@@ -333,8 +339,9 @@ final class DelegateCardCell: ChatBaseCell {
             v.isHidden = false
             v.frame = r.frame
             CATransaction.begin(); CATransaction.setDisableActions(true)
-            v.border.path = UIBezierPath(roundedRect: v.bounds.insetBy(dx: 0.25, dy: 0.25), cornerRadius: HQShape.radius(18, .card)).cgPath
-            v.border.strokeColor = ChatPalette.separator.resolvedColor(with: traitCollection).cgColor
+            let inset = max(HQShape.pixel(traitCollection.displayScale), 1) / 2
+            v.border.path = UIBezierPath(roundedRect: v.bounds.insetBy(dx: inset, dy: inset), cornerRadius: HQShape.radius(18, .card)).cgPath
+            v.paintCard()
             CATransaction.commit()
             let live = r.status.isLive
             anyLive = anyLive || live
@@ -651,7 +658,7 @@ final class ChangedFilesCell: ChatBaseCell {
         contentView.addSubview(showAll)
         accessibilityIdentifier = "chat.changed-files"
         registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (view: ChangedFilesCell, _) in
-            view.card.backgroundColor = Self.contentCardFill
+            view.styleChatCard(view.card)
             view.lineColors()
         }
     }
@@ -671,7 +678,7 @@ final class ChangedFilesCell: ChatBaseCell {
             return
         }
         card.frame = c.cardFrame
-        card.backgroundColor = Self.contentCardFill   // [backdrop]
+        styleChatCard(card)
         let hairline = HQShape.pixel(traitCollection.displayScale)
         header.frame = c.headerFrame
         PointerEffects.fit(header, card: c.cardFrame, radius: ChatMetrics.insetCardRadius)
@@ -888,7 +895,7 @@ final class DiffPreviewCell: ChatBaseCell {
         card.addSubview(more)
         accessibilityIdentifier = "chat.diff-preview"
         registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (view: DiffPreviewCell, _) in
-            view.card.backgroundColor = Self.contentCardFill
+            view.styleChatCard(view.card)
         }
     }
 
@@ -898,7 +905,7 @@ final class DiffPreviewCell: ChatBaseCell {
         super.configure(row, layout: layout)
         guard case .activity(.diffPreview(let d)) = layout.content, case .activity(.diffPreview(let spec)) = row.kind else { return }
         call = spec.call
-        card.backgroundColor = Self.contentCardFill   // [backdrop]
+        styleChatCard(card)
         card.frame = d.frame
         header.frame = d.headerFrame.offsetBy(dx: -d.frame.minX, dy: -d.frame.minY)
         header.set(d.header, width: header.frame.width)
@@ -1279,7 +1286,7 @@ final class TasksAddedCell: ChatBaseCell {
         contentView.addSubview(helpButton)
         accessibilityIdentifier = "chat.tasks-added"
         registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (view: TasksAddedCell, _) in
-            view.card.backgroundColor = Self.contentCardFill
+            view.styleChatCard(view.card)
             view.paintHeader()
         }
     }
@@ -1296,7 +1303,7 @@ final class TasksAddedCell: ChatBaseCell {
         super.configure(row, layout: layout)
         guard case .activity(.tasksAdded(let t)) = layout.content else { return }
         card.frame = t.cardFrame
-        card.backgroundColor = Self.contentCardFill   // [backdrop]
+        styleChatCard(card)
         let hairline = HQShape.pixel(traitCollection.displayScale)
         undone = t.undone
         helping = t.helping
@@ -1535,7 +1542,7 @@ final class TasksOfferCell: ChatBaseCell {
         for v in [mainButton, leftButton, rightButton] { contentView.addSubview(v) }
         accessibilityIdentifier = "chat.tasks-offer"
         registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (view: TasksOfferCell, _) in
-            view.card.backgroundColor = Self.contentCardFill
+            view.styleChatCard(view.card)
             view.paint()
         }
         NotificationCenter.default.addObserver(self, selector: #selector(statesChanged), name: TodoOfferStates.changed, object: nil)
@@ -1551,7 +1558,7 @@ final class TasksOfferCell: ChatBaseCell {
         if self.layout?.offer.id != t.offer.id { busy = false }
         self.layout = t
         card.frame = t.cardFrame
-        card.backgroundColor = Self.contentCardFill   // [backdrop]
+        styleChatCard(card)
         badge.frame = t.badgeFrame
         header.font = HQFont.face(ofSize: t.font.pointSize, weight: .semibold)
         header.textColor = ChatPalette.label
@@ -1775,7 +1782,7 @@ final class TaskCloseCell: ChatBaseCell {
         for v in [doneButton, keepButton, undoButton] { contentView.addSubview(v) }
         accessibilityIdentifier = "chat.task-close"
         registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (view: TaskCloseCell, _) in
-            view.card.backgroundColor = Self.contentCardFill
+            view.styleChatCard(view.card)
             view.paint()
         }
     }
@@ -1788,7 +1795,7 @@ final class TaskCloseCell: ChatBaseCell {
         if self.layout?.row.taskId != t.row.taskId || self.layout?.row.state != t.row.state { busy = nil }
         self.layout = t
         card.frame = t.cardFrame
-        card.backgroundColor = Self.contentCardFill   // [backdrop]
+        styleChatCard(card)
         body.frame = t.cardFrame
         PointerEffects.fit(body, card: t.cardFrame, radius: ChatMetrics.insetCardRadius)
         let origin = t.cardFrame.origin

@@ -10,14 +10,10 @@ import UIKit
 enum DesktopFrost {
     /// How much of the page colour lies over the blur: the content reads through, never against the bar's own text.
     static let tintAlpha: CGFloat = 0.3
-    /// [Mac glass 2026-11-17] The bars' and bands' own veil (owner, answering O2: "Give them their own backing"). On the
-    /// Mac a bar's 30 % tint let a black message under it turn the whole bar dark grey (a white one, pale), as the iOS
-    /// look's chat band did; it now carries the pop-overs' 94 % page veil (`ChatPalette.popupVeil`, the iOS look's chat
-    /// band since the same day) over the frost, so a message under it is a faint local shade and the bar keeps its own
-    /// tone. Selection colours and other `tint` users keep `tintAlpha`. [Mac AAA rest 2026-11-17] The iPhone and iPad
-    /// too, at 90 %: the lowest veil at which a black (light), white (dark) or green message under the bar leaves it
-    /// its own tone (at 30 % the bar's right side went grey or green; 80–85 % still left a grey or mint cast); the
-    /// frost stays under it. On the phone it is also the chat's band over the system's hard edge (`ChatEdgeStandIn`).
+    /// [Mac glass 2026-11-17] The bars' and bands' own veil. On the Mac it carries the pop-overs' 94 % page veil over
+    /// the frost. On iPhone and iPad it uses a 72 % skin-tinted veil over `.systemThinMaterial` (Crisp Frosted Chrome):
+    /// genuinely translucent so scrolled rows breathe behind the bar, while preserving dark/colored skin hues and AA
+    /// contrast over bold rows or chat bubbles. Selection colours and other `tint` users keep `tintAlpha`.
     static var barTintAlpha: CGFloat {
         #if targetEnvironment(macCatalyst)
         return 0.94
@@ -28,11 +24,28 @@ enum DesktopFrost {
             return CGFloat(value)
         }
         #endif
-        return 0.9
+        return 0.72
         #endif
     }
+    /// Docked bottom tab bar veil in the Hermes / Desktop Look: slightly denser than the top bar so 10 pt labels and
+    /// badges stay crisp while list rows still diffuse softly behind the bar.
+    static let tabBarTintAlpha: CGFloat = 0.76
+    /// Whisper hairline framing frosted top and bottom bars (falls back to full `separator` under high contrast).
+    static let whisperLine = UIColor { traits in
+        if traits.accessibilityContrast == .high || ThemeTable.current.state.highContrast {
+            return HQPalette.separator.resolvedColor(with: traits)
+        }
+        let alpha: CGFloat = traits.userInterfaceStyle == .dark ? 0.09 : 0.07
+        return HQPalette.label.resolvedColor(with: traits).withAlphaComponent(alpha)
+    }
     /// The blur under the tint (the system's plain blur, light and dark by itself; not glass).
-    static func blur() -> UIBlurEffect { UIBlurEffect(style: .regular) }
+    static func blur() -> UIBlurEffect {
+        #if targetEnvironment(macCatalyst)
+        UIBlurEffect(style: .regular)
+        #else
+        UIBlurEffect(style: .systemThinMaterial)
+        #endif
+    }
 
     /// `base` at the band's alpha, following the trait (light, dark, the skin).
     static func tint(_ base: UIColor, alpha: CGFloat = tintAlpha) -> UIColor {
@@ -43,9 +56,10 @@ enum DesktopFrost {
     static func barAppearance(_ appearance: UINavigationBarAppearance, color: UIColor) {
         // Opaque's configuration, then made see-through: on iOS 26 the default configuration leaves the background to
         // the scroll edge effect and draws neither the effect nor the colour set here.
+        let solid = HQAccessibility.reduceTransparency
         appearance.configureWithOpaqueBackground()
-        appearance.backgroundEffect = blur()
-        appearance.backgroundColor = tint(color, alpha: barTintAlpha)   // [Mac glass 2026-11-17] Mac: 94 %
+        appearance.backgroundEffect = solid ? nil : blur()
+        appearance.backgroundColor = solid ? color : tint(color, alpha: barTintAlpha)
         appearance.shadowColor = .clear
     }
 }

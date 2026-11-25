@@ -50,21 +50,25 @@ private func appearances(_ bar: UINavigationBar) -> [UINavigationBarAppearance?]
         }
     }
 
-    /// [Mac AAA rest 2026-11-17] The look's bars have their own backing on every device (owner, O2: "Give them their
-    /// own backing"): a page veil over the frost strong enough that a black, white or green message under a bar leaves
-    /// its tone (Mac 94 %, iPhone and iPad 90 %), still under 1 so the frost shows. Selections keep the 30 % tint.
+    /// Crisp Frosted Chrome: the look's bars carry a translucent skin-tinted veil over a plain blur (Mac 94 %, iPhone
+    /// and iPad 72 % top bar / 76 % docked bottom tab bar) with a whisper hairline. Selections keep the 30 % tint.
     @Test func theBarsHaveTheirOwnBacking() {
         #if targetEnvironment(macCatalyst)
         #expect(DesktopFrost.barTintAlpha == 0.94)
         #else
-        #expect(DesktopFrost.barTintAlpha == 0.9)
+        #expect(DesktopFrost.barTintAlpha == 0.72)
         #endif
+        #expect(DesktopFrost.tabBarTintAlpha == 0.76)
         #expect(DesktopFrost.tintAlpha == 0.3)
         let appearance = UINavigationBarAppearance()
         DesktopFrost.barAppearance(appearance, color: ChatPalette.page)
         let alpha = appearance.backgroundColor?.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark)).cgColor.alpha ?? 0
         #expect(abs(alpha - DesktopFrost.barTintAlpha) < 0.001)
         #expect(appearance.backgroundEffect != nil, "the frost stays under the veil")
+        let lightWhisper = DesktopFrost.whisperLine.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light)).cgColor.alpha
+        let darkWhisper = DesktopFrost.whisperLine.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark)).cgColor.alpha
+        #expect(lightWhisper > 0.04 && lightWhisper < 0.12)
+        #expect(darkWhisper > 0.05 && darkWhisper < 0.14)
     }
 
     @Test func theFrostIsABlurNotGlassAndStaysThroughTheGlassSweep() {

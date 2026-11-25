@@ -88,6 +88,8 @@ final class DesktopTabBar: UIView {
     fileprivate(set) static var lastInset: CGFloat = 0
 
     private weak var host: UITabBarController?
+    private let desktopFrost = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterial))
+    private let desktopVeil = UIView()
     private let stack = UIStackView()
     private let topHairline = UIView()
     private var buttons: [TabButton] = []
@@ -95,6 +97,7 @@ final class DesktopTabBar: UIView {
     private var bottomConstraint: NSLayoutConstraint?
     private var heightConstraint: NSLayoutConstraint?
     private var themeToken: NSObjectProtocol?
+    private var a11yToken: NSObjectProtocol?
     /// A pushed page that hides the bottom bar (a chat) is on top.
     private(set) var coveredByPage = false
     private(set) var style: Style = .desktop
@@ -112,6 +115,14 @@ final class DesktopTabBar: UIView {
         accessibilityIdentifier = "desktop-tab-bar"
         accessibilityTraits = .tabBar
         accessibilityContainerType = .semanticGroup
+        desktopFrost.accessibilityIdentifier = "desktop-tab-bar.frost"
+        desktopFrost.isUserInteractionEnabled = false
+        desktopFrost.translatesAutoresizingMaskIntoConstraints = false
+        desktopVeil.isUserInteractionEnabled = false
+        desktopVeil.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        desktopVeil.frame = desktopFrost.contentView.bounds
+        desktopFrost.contentView.addSubview(desktopVeil)
+        addSubview(desktopFrost)
         stack.axis = .horizontal
         stack.distribution = .fillEqually
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -120,6 +131,8 @@ final class DesktopTabBar: UIView {
         topHairline.translatesAutoresizingMaskIntoConstraints = false
         addSubview(topHairline)
         NSLayoutConstraint.activate([
+            desktopFrost.leadingAnchor.constraint(equalTo: leadingAnchor), desktopFrost.trailingAnchor.constraint(equalTo: trailingAnchor),
+            desktopFrost.topAnchor.constraint(equalTo: topAnchor), desktopFrost.bottomAnchor.constraint(equalTo: bottomAnchor),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.topAnchor.constraint(equalTo: topAnchor), stack.heightAnchor.constraint(equalToConstant: Self.barHeight),
             topHairline.leadingAnchor.constraint(equalTo: leadingAnchor), topHairline.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -128,7 +141,10 @@ final class DesktopTabBar: UIView {
         themeToken = NotificationCenter.default.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.sync() }
         }
-        registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self, UITraitPreferredContentSizeCategory.self]) {
+        a11yToken = NotificationCenter.default.addObserver(forName: HQAccessibility.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.recolor() }
+        }
+        registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self, UITraitPreferredContentSizeCategory.self, UITraitAccessibilityContrast.self]) {
             (bar: DesktopTabBar, _) in bar.recolor()
         }
     }
@@ -137,6 +153,7 @@ final class DesktopTabBar: UIView {
 
     isolated deinit {
         if let themeToken { NotificationCenter.default.removeObserver(themeToken) }
+        if let a11yToken { NotificationCenter.default.removeObserver(a11yToken) }
     }
 
     /// Shows or removes the bar for the current theme and rebuilds its buttons from the host's tabs. `wanted`: the bar
@@ -379,6 +396,7 @@ final class DesktopTabBar: UIView {
         guard let host else { return }
         if style == .glass {
             backgroundColor = .clear
+            desktopFrost.isHidden = true
             topHairline.isHidden = true
             if let platter {
                 // [paper-solid] Paper's phone bar: its raised card inside a hairline, no glass.
@@ -393,10 +411,20 @@ final class DesktopTabBar: UIView {
             setNeedsLayout()
         } else {
             let dark = traitCollection.userInterfaceStyle == .dark
-            // Subtle strokeTertiary hairline separates the docked bar cleanly on skins where sidebar == page.
-            backgroundColor = dark ? ChatPalette.elevated : ChatPalette.sidebar
+            let surface = dark ? ChatPalette.elevated : ChatPalette.sidebar
+            let solid = HQAccessibility.reduceTransparency
+            // Crisp Frosted Chrome: plain systemThinMaterial blur + 76 % skin-tinted veil + whisper top hairline.
+            backgroundColor = .clear
+            desktopFrost.isHidden = false
+            if solid {
+                if desktopFrost.effect != nil { desktopFrost.effect = nil }
+                desktopVeil.backgroundColor = surface
+            } else {
+                if desktopFrost.effect == nil { desktopFrost.effect = UIBlurEffect(style: .systemThinMaterial) }
+                desktopVeil.backgroundColor = DesktopFrost.tint(surface, alpha: DesktopFrost.tabBarTintAlpha)
+            }
             topHairline.isHidden = false
-            topHairline.backgroundColor = ChatPalette.strokeTertiary
+            topHairline.backgroundColor = DesktopFrost.whisperLine
         }
         for (index, button) in buttons.enumerated() { button.apply(selected: index == host.selectedIndex) }
     }

@@ -159,4 +159,24 @@ import UIKit
         #expect((pill?.frame.maxY ?? 900) <= bar.frame.minY - 7, "\(String(describing: pill?.frame)) vs \(bar.frame)")
         pill?.dismiss(animated: false)
     }
+
+    /// Crisp Frosted Chrome: the docked bottom tab bar carries a non-glass blur + 76 % skin-tinted veil and survives
+    /// the Desktop Look's glass sweep; glass mode hides that backing.
+    @Test func theDockedBarUsesTranslucentFrostBacking() throws {
+        let tabs = host()
+        let bar = DesktopTabBar(host: tabs)
+        bar.sync(wanted: .desktop)
+        tabs.view.layoutIfNeeded()
+        #expect((bar.backgroundColor ?? .clear).cgColor.alpha == 0, "bar root stays clear so rows blur behind it")
+        let frost = try #require(bar.subviews.first { $0.accessibilityIdentifier == "desktop-tab-bar.frost" } as? UIVisualEffectView)
+        #expect(!frost.isHidden)
+        #expect(frost.effect is UIBlurEffect && !(frost.effect is UIGlassEffect))
+        let veilAlpha = frost.contentView.subviews.first?.backgroundColor?.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light)).cgColor.alpha ?? 0
+        #expect(abs(veilAlpha - DesktopFrost.tabBarTintAlpha) < 0.001)
+        ThemeChrome.restyleGlass(in: bar)
+        #expect(frost.effect is UIBlurEffect, "glass sweep leaves plain blur intact")
+
+        bar.sync(wanted: .glass)
+        #expect(frost.isHidden, "glass capsule hides the docked frost backing")
+    }
 }

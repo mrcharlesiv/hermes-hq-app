@@ -384,6 +384,7 @@ private final class EdgeHostScrollView: UIScrollView {
     private let desktopVeil = UIView()
     private var pageColour: UIColor = .clear
     private let desktopLine = UIView()
+    private var a11yToken: NSObjectProtocol?
     /// [backdrop-ink] Owner 2026-11-15 (More scrolled on a night sky, Soft Cards): "I'm not happy with this… Look at top
     /// bar text color." Under the bar the soft edge blurs the pale cards and the dark picture between them into one
     /// middle grey, on which neither ink reads (the title 4.1:1, the gateway's line grey on grey). While the cards are
@@ -392,6 +393,22 @@ private final class EdgeHostScrollView: UIScrollView {
     private let cardBand = UIView()
     private let cardFade = CAGradientLayer()
     private static let cardFadeHeight: CGFloat = 18
+
+    isolated deinit {
+        if let a11yToken { NotificationCenter.default.removeObserver(a11yToken) }
+    }
+
+    private func updateDesktopBandStyle() {
+        let solid = HQAccessibility.reduceTransparency
+        if solid {
+            if desktopBand.effect != nil { desktopBand.effect = nil }
+            desktopVeil.backgroundColor = pageColour
+        } else {
+            if desktopBand.effect == nil { desktopBand.effect = UIBlurEffect(style: .systemThinMaterial) }
+            desktopVeil.backgroundColor = DesktopFrost.tint(pageColour, alpha: DesktopFrost.barTintAlpha)
+        }
+        desktopLine.backgroundColor = DesktopFrost.whisperLine
+    }
     #endif
 
     func watch(_ list: UIScrollView, page: UIColor) {
@@ -424,7 +441,7 @@ private final class EdgeHostScrollView: UIScrollView {
         pageColour = page
         desktopVeil.isUserInteractionEnabled = false
         desktopVeil.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        desktopVeil.backgroundColor = DesktopFrost.tint(page, alpha: DesktopFrost.barTintAlpha)
+        updateDesktopBandStyle()
         desktopBand.contentView.addSubview(desktopVeil)
         desktopBand.contentView.addSubview(desktopLine)
         superview?.insertSubview(desktopBand, aboveSubview: self)   // over the rows, under the strip and the bar
@@ -434,9 +451,12 @@ private final class EdgeHostScrollView: UIScrollView {
         cardFade.colors = [UIColor.black.cgColor, UIColor.black.cgColor, UIColor.clear.cgColor]
         cardBand.layer.mask = cardFade
         superview?.insertSubview(cardBand, aboveSubview: self)
-        registerForTraitChanges([ThemeGenerationTrait.self]) { (host: EdgeHostScrollView, _) in
-            host.desktopVeil.backgroundColor = DesktopFrost.tint(host.pageColour, alpha: DesktopFrost.barTintAlpha)   // the new skin's page
+        registerForTraitChanges([ThemeGenerationTrait.self, UITraitAccessibilityContrast.self]) { (host: EdgeHostScrollView, _) in
+            host.updateDesktopBandStyle()   // the new skin's page & contrast
             host.setNeedsLayout()
+        }
+        a11yToken = NotificationCenter.default.addObserver(forName: HQAccessibility.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateDesktopBandStyle() }
         }
         #endif
         offsetWatch = list.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in
@@ -488,7 +508,7 @@ private final class EdgeHostScrollView: UIScrollView {
             desktopLine.frame = CGRect(x: 0, y: bandFrame.height - line, width: bandFrame.width, height: line)
             CATransaction.commit()
         }
-        desktopLine.backgroundColor = HQPalette.separator
+        desktopLine.backgroundColor = DesktopFrost.whisperLine
         // A fast swipe can put a row under the filters on the first frame. Fade only the hairline:
         // fading the frost and its page tint let the moving row's letters show through until they caught up.
         let hideBand = !desktop || scrolledUnder <= 0

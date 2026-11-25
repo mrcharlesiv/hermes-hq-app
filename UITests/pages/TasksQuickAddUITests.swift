@@ -16,16 +16,11 @@ extension PagesTests {
         XCTAssertTrue(title.waitForExistence(timeout: 10), "the quick add opens with the keys up")
         XCTAssertTrue(app.cells["task-row-Fix the porch light"].firstMatch.exists, "the list is still behind it")
         XCTAssertTrue(app.navigationBars["New Task"].exists, "the native sheet navigation bar is present")
-        let details = app.buttons["tasks.new.details"].firstMatch
-        XCTAssertTrue(details.waitForExistence(timeout: 5))
-        XCTAssertFalse(app.descendants(matching: .any)["tasks.new.due"].firstMatch.exists)
         XCTAssertTrue(app.navigationBars.buttons["tasks.new.add"].firstMatch.exists)
         XCTAssertTrue(app.buttons["sheet.close"].firstMatch.exists)
-        shot("parity-quick-add-empty")
-        details.tap()
         let due = app.descendants(matching: .any)["tasks.new.due"].firstMatch
-        XCTAssertTrue(due.exists && app.buttons["tasks.new.person.you"].firstMatch.exists, "the buttons: date and who")
-        app.swipeUp()
+        XCTAssertTrue(due.waitForExistence(timeout: 5) && app.buttons["tasks.new.person.you"].firstMatch.exists, "date chip and who strip are directly visible")
+        XCTAssertTrue(app.descendants(matching: .any)["tasks.new.notes"].firstMatch.exists, "notes field is directly visible")
         XCTAssertTrue(app.descendants(matching: .any)["tasks.new.priority"].firstMatch.exists, "priority, on an add-on that keeps it")
         XCTAssertEqual(due.label, "Date", "no date yet")
         shot("quick-add-1-empty" + Self.lookName)
@@ -102,10 +97,10 @@ extension PagesTests {
         if !literal.isHittable { app.swipeUp() }
         XCTAssertTrue(literal.waitForExistence(timeout: 5))
         // A tap right after a swipe can only stop the scroll: tap again if the switch hasn't taken.
-        let exact = app.staticTexts["Using your title exactly as typed."].firstMatch
+        let exact = app.staticTexts["Using your title exactly as typed"].firstMatch
         literal.tap()
         if !exact.waitForExistence(timeout: 2) { literal.tap() }
-        XCTAssertTrue(exact.waitForExistence(timeout: 3), "Keep title as typed switches the preview to the exact words")
+        XCTAssertTrue(exact.waitForExistence(timeout: 3), "Keep literal switches the preview to the exact words")
         XCTAssertFalse(requests().contains { $0.method == "POST" && $0.path.hasSuffix("/tasks") })
         app.buttons["tasks.new.add"].firstMatch.tap()
         let posted = { self.requests().first { $0.method == "POST" && $0.path.hasSuffix("/tasks") && ($0.body?["title"] as? String) == "Review P1 #123" } }
@@ -120,21 +115,13 @@ extension PagesTests {
         XCTAssertTrue(plus.waitForExistence(timeout: 20))
         tapView("inbox")
         plus.tap()
-        let title = app.textFields["tasks.new.title"].firstMatch
+        let title = app.textViews["tasks.new.title"].firstMatch.exists ? app.textViews["tasks.new.title"].firstMatch : app.textFields["tasks.new.title"].firstMatch
         XCTAssertTrue(title.waitForExistence(timeout: 10))
-        let details = app.buttons["tasks.new.details"].firstMatch
-        XCTAssertTrue(details.exists)
-        XCTAssertFalse(app.descendants(matching: .any)["tasks.new.notes"].firstMatch.exists)
+        let notes = app.descendants(matching: .any)["tasks.new.notes"].firstMatch
+        XCTAssertTrue(notes.exists, "notes field is directly visible")
         title.typeText("work on first video #content")
         XCTAssertTrue(app.descendants(matching: .any)["tasks.new.read"].firstMatch.waitForExistence(timeout: 5))
-        shot("quick-add-room-collapsed")
-        if !details.isHittable { app.swipeUp() }
-        let notes = app.descendants(matching: .any)["tasks.new.notes"].firstMatch
-        details.tap()
-        if !notes.waitForExistence(timeout: 2) { details.tap() }   // a tap right after a swipe can only stop the scroll
-        XCTAssertTrue(notes.waitForExistence(timeout: 5))
         shot("quick-add-room-expanded")
-        details.tap()
         app.buttons["tasks.new.add"].firstMatch.tap()
         XCTAssertTrue(waitUntil(10) { self.requests().contains { $0.method == "POST" && $0.path.hasSuffix("/tasks") && ($0.body?["title"] as? String) == "work on first video" && ($0.body?["tags"] as? [String]) == ["content"] } })
     }

@@ -217,6 +217,71 @@ struct TasksTriageTests {
         #expect(steps.allSatisfy { $0.object?["done"]?.bool == false })
     }
 
+    // MARK: New Task Sheet (Roomy chips + Tags + Goal + Starts + Repeat + Who Strip)
+
+    @Test func newTodoModelSupportsTagsGoalStartsRepeatAndFaceStrip() async {
+        let posted = Mutex<[[String: JSONValue]]>([])
+        let client = PagesFakeClient { request in
+            if request.method == "GET" {
+                return .object([
+                    "rev": 1,
+                    "fields": true,
+                    "sections": .array([.object(["id": "work", "name": "Work"])]),
+                    "goals": .array([.object(["id": "g1", "title": "Ship v2", "state": "active"])]),
+                    "tasks": .array([]),
+                ])
+            }
+            if request.method == "POST", let body = request.body?.object {
+                posted.withLock { $0.append(body) }
+                return Self.wire(Self.makeTask("t_new", body["title"]?.string ?? ""))
+            }
+            return .object([:])
+        }
+        let store = TasksStore(api: TasksAPI(client: client), account: client.account, directory: nil)
+        await store.refresh()
+        let bots = [Bot(id: "otto", name: "Otto", role: nil, preview: nil, lastActive: nil,
+                        isWorking: false, unread: false, pinned: false, pinOrder: nil, sectionName: nil,
+                        hidden: false, canonicalSessionId: nil, head: nil)]
+        let model = NewTodoModel(store: store, bots: bots, preferredBot: nil, section: "work", dueDay: nil)
+
+        #expect(model.who == TodoWho.me)
+        model.setWho("otto", alone: false)
+        #expect(model.who == TodoWho.together)
+        model.repeatRule = "weekly"
+        model.setWho("otto", alone: true)
+        #expect(model.who == TodoWho.bot && model.repeatNow == nil, "bot-only clears repeat")
+        model.setWho(nil, alone: false)
+
+        // Merged parsed tags + manual tag picker override
+        model.title = "Write release notes #launch"
+        #expect(model.tagsNow == ["launch"])
+        model.setTags(["launch", "q4"])
+        #expect(model.tagsNow == ["launch", "q4"])
+        model.notes = "Include new logbook"
+        model.priority = 2
+        model.repeatRule = "monthly"
+        model.setGoal("g1", milestone: nil)
+        model.setStarts(Self.now)
+
+        let created = Mutex<String?>(nil)
+        model.onCreated = { (task: TodoTask?) in created.withLock { $0 = task?.id } }
+        model.add()
+        for _ in 0..<40 where created.withLock({ $0 }) == nil {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(created.withLock { $0 } == "t_new")
+        let body = posted.withLock { $0.first }
+        #expect(body?["title"]?.string == "Write release notes")
+        #expect(body?["notes"]?.string == "Include new logbook")
+        #expect(body?["section"]?.string == "work")
+        #expect(body?["goal"]?.string == "g1")
+        #expect(body?["repeat"]?.string == "monthly")
+        #expect(body?["tags"]?.array?.compactMap(\.string) == ["launch", "q4"])
+        #expect(ActivityJSON.int(body?["priority"]) == 2)
+        #expect(body?["starts"]?.string == "2026-11-18")
+        #expect(model.title.isEmpty && model.notes.isEmpty && model.tags.isEmpty && model.goal == nil && model.starts == nil && model.section == "work")
+    }
+
     // MARK: Upcoming Multi-Week, Priority/Tag Filters & Completed Logbook
 
     @Test func weekRangeTitleFormatsSingleCrossMonthAndCrossYearRanges() throws {

@@ -42,7 +42,6 @@ extension PagesTests {
         XCTAssertTrue(title.waitForExistence(timeout: 10), "New Task opens")
         XCTAssertFalse(app.descendants(matching: .any)["tasks.new.who"].exists, "no Who Does It switch")
         XCTAssertFalse(app.descendants(matching: .any)["tasks.new.prep"].exists, "no gets-it-ready switch")
-        XCTAssertFalse(app.textViews["tasks.new.notes"].exists, "Details starts closed")
         let helper = app.buttons["tasks.new.person.default"].firstMatch
         XCTAssertTrue(helper.isHittable, "Assign to is available without opening Details")
         title.tap()

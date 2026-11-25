@@ -81,11 +81,14 @@ nonisolated struct MatrixAct: Sendable {
     }
 
     /// The face at a moment of a routine, in whole LEDs: the eyes look (and follow the body as it turns or tips, as on
-    /// something round) a LED aside or up; the lids half shut or shut.
+    /// something round) up to 2 LEDs sideways, 2 LEDs up, or 1 LED down; lids narrow, shut, or perk wide open.
     static func pose(_ body: FaceBody, _ eyes: FaceEyes, design: MatrixDesign) -> MatrixPose {
-        let x = eyes.x + body.turn / 22, y = eyes.y + body.tip / 30
-        let lids = eyes.lids >= 0.75 ? 2 : eyes.lids >= 0.25 ? 1 : 0
-        return MatrixPose(gaze: x > 0.35 ? 1 : x < -0.35 ? -1 : 0, lift: y < -0.35 ? -1 : 0, lids: lids)
+        let x = eyes.x + body.turn / 22, y = eyes.y + body.tip / 28
+        let gaze = x >= 1.15 ? 2 : x >= 0.32 ? 1 : x <= -1.15 ? -2 : x <= -0.32 ? -1 : 0
+        let lift = y <= -1.15 ? -2 : y <= -0.32 ? -1 : y >= 0.38 ? 1 : 0
+        let lids = eyes.lids >= 0.72 ? 2 : eyes.lids >= 0.24 ? 1 : 0
+        let wide = lids == 0 && lift >= -1 && eyes.wide >= 0.45
+        return MatrixPose(gaze: gaze, lift: lift, lids: lids, wide: wide)
     }
 
     /// The faces `loop` goes through, each from when it shows: a new one only where the face changes (failed glitching
@@ -161,7 +164,7 @@ nonisolated struct MatrixActPictures: @unchecked Sendable {
             pictures.masks = [MatrixActMasks.rain(seed: seed, side: pixels, streaks: 13),
                               MatrixActMasks.rain(seed: seed &+ 7, side: pixels, streaks: 8)].compactMap { $0 }
         case .sparkle, .burst:
-            pictures.masks = (0..<3).compactMap { MatrixActMasks.sparkles(design, skip: skip, seed: seed &+ $0 * 31, count: 4, side: pixels) }
+            pictures.masks = (0..<3).compactMap { MatrixActMasks.sparkles(design, skip: skip, seed: seed &+ $0 * 31, count: 5, side: pixels) }
         default: break
         }
         return pictures

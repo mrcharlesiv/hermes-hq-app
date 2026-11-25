@@ -22,6 +22,9 @@ final class HeadView: UIView {
     private let stage = CALayer()
     /// A themed head's still part (frame, tile, a robot's shoulders); the body moves over it, as `.dh-body` does.
     private let groundLayer = CALayer()
+    /// Stationary clip wrapper around `mover`: clips tiled heads (Robot, Pixel, Orb, Glyph, boarded Shapes) to their
+    /// inner tile panel without touching `groundLayer`'s outer frame.
+    private let moverClip = CALayer()
     /// The body and the eyes together: what a working robot sways and a pixel creature bobs.
     private let mover = CALayer()
     private let bodyLayer = CALayer()
@@ -33,6 +36,9 @@ final class HeadView: UIView {
     private var eyeCentre = CGPoint(x: 0.5, y: 0.45)
     /// The box round the eyes, as fractions of the head (how far they can look before they leave the face).
     private var eyeBox = CGRect(x: 0.5, y: 0.45, width: 0, height: 0)
+    /// [moods] A dot-matrix head's dynamic 3D specular glint over its LEDs while acting: hidden at rest.
+    private let sheen = CAGradientLayer()
+    private let sheenMask = CALayer()
     /// [moods] The bot whose doings this face acts out (its row, its tile, its chip, its chat's header), told by
     /// `BotMoods`; nil acts out nothing but `working`.
     private(set) var moodProfile: String?
@@ -44,8 +50,15 @@ final class HeadView: UIView {
     /// [moods] A Shapes head's body drawn as its own outline while it acts, so it can wobble like jelly (FaceJelly), over
     /// the body's picture, which it hides till it's done. Never on a head in a board.
     private let jellyLayer = CAShapeLayer()
+    /// Independent 3D-seated GPU pill layers for a soft Shapes head's normal slit eyes while acting: mathematically
+    /// perfect rounded capsules at every blink/squint openness (no pinched corners), with true near/far depth scale,
+    /// top-down weighted eyelids, subtle gaze convergence, velocity lean, micro-saccades, and 1-frame blink stagger.
+    private let leftEyeLayer = CALayer()
+    private let rightEyeLayer = CALayer()
     /// The head and size the jelly was drawn for: another head drops it at once (a reused row), this one settles it.
     private var jellyKey = ""
+    /// Cached 3D cushion geometry per (head, size) so mood switches start instantly.
+    private static var solidCache: [String: FaceSolid] = [:]
     // [photoheads] The bot this face belongs to when it came through `configure(raw:profile:working:)`: only then may
     // a photo the bot wears be drawn over the head (docs/spec/3x-photoheads.md §4.5).
     private(set) var faceProfile: String?
@@ -70,24 +83,40 @@ final class HeadView: UIView {
             layer.contentsGravity = .resize
             layer.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull(), "hidden": NSNull(), "transform": NSNull()]
         }
+        moverClip.actions = ["bounds": NSNull(), "position": NSNull(), "mask": NSNull()]
         mover.anchorPoint = CGPoint(x: 0.5, y: 0.94)
         stage.addSublayer(groundLayer)
-        stage.addSublayer(mover)
+        stage.addSublayer(moverClip)
+        moverClip.addSublayer(mover)
         mover.addSublayer(bodyLayer)
         mover.addSublayer(gazeLayer)
         gazeLayer.addSublayer(eyesLayer)
+        sheenMask.contentsGravity = .resize
+        sheenMask.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull()]
+        sheen.actions = ["bounds": NSNull(), "position": NSNull(), "hidden": NSNull(), "locations": NSNull(), "colors": NSNull(),
+                         "startPoint": NSNull(), "endPoint": NSNull()]
+        sheen.mask = sheenMask
+        sheen.isHidden = true
+        mover.addSublayer(sheen)
         // [moods]
         flare.contentsGravity = .resize
         flareMask.actions = ["bounds": NSNull(), "position": NSNull(), "sublayers": NSNull()]
         flare.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull(), "hidden": NSNull()]
         flare.mask = flareMask
         flare.isHidden = true
-        mover.addSublayer(flare)
+        mover.insertSublayer(flare, below: sheen)
         jellyLayer.actions = ["path": NSNull(), "transform": NSNull(), "hidden": NSNull(), "fillColor": NSNull(),
                               "strokeColor": NSNull(), "lineWidth": NSNull(), "bounds": NSNull(), "position": NSNull()]
         jellyLayer.isHidden = true
         mover.insertSublayer(jellyLayer, above: bodyLayer)
-        stage.actions = ["bounds": NSNull(), "position": NSNull()]
+        for eye in [leftEyeLayer, rightEyeLayer] {
+            eye.actions = ["bounds": NSNull(), "position": NSNull(), "transform": NSNull(), "cornerRadius": NSNull(),
+                           "opacity": NSNull(), "hidden": NSNull(), "backgroundColor": NSNull()]
+            eye.cornerCurve = .circular
+            eye.isHidden = true
+            gazeLayer.addSublayer(eye)
+        }
+        stage.actions = ["bounds": NSNull(), "position": NSNull(), "transform": NSNull()]
         layer.addSublayer(stage)
         registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self, UITraitDisplayScale.self]) { (view: HeadView, _) in
             view.refresh()
@@ -177,9 +206,9 @@ final class HeadView: UIView {
         return !mood.once && mood != .asking
     }
 
-    /// [moods] A Shapes or Dots head: it acts out its bot's doings with the routines itself (a dot-matrix head does too,
-    /// through its act); the other themes keep their own work motion.
-    private var playsRoutines: Bool { !isMatrix && (head.themed == nil || head.themed?.theme == "dots") }
+    /// [moods] Every non-matrix theme acts out its bot's doings with `FaceRoutines` (Shapes with 3D solid jelly + GPU
+    /// pill eyes, Dots with stepped lamps, Robot/Orb/Pixel/Glyph with theme-tailored motion over their still tile/shoulders).
+    private var playsRoutines: Bool { !isMatrix }
 
     /// The web's per-head offset: `(name.length · 0.7) % 5` seconds.
     static func phase(for name: String) -> Double { (Double(name.count) * 0.7).truncatingRemainder(dividingBy: 5) }
@@ -191,12 +220,15 @@ final class HeadView: UIView {
         stage.bounds = bounds
         stage.position = CGPoint(x: bounds.midX, y: bounds.minY + bounds.height * 0.94)
         groundLayer.frame = stage.bounds
+        moverClip.frame = stage.bounds
         mover.bounds = bounds
         mover.position = CGPoint(x: bounds.midX, y: bounds.minY + bounds.height * 0.94)
         bodyLayer.frame = stage.bounds
         jellyLayer.frame = stage.bounds
         gazeLayer.frame = stage.bounds
         eyesLayer.frame = stage.bounds
+        sheen.frame = stage.bounds
+        sheenMask.frame = sheen.bounds
         flare.frame = stage.bounds
         flareMask.frame = flare.bounds
         layoutPhoto()       // [photoheads]
@@ -297,13 +329,12 @@ final class HeadView: UIView {
         }
         let themed = head.themed != nil
         let working = playsRoutines ? shownMood != nil : busy
-        let layered = !still && (themed ? (working && (themedWorkMotion || playsRoutines)) || moves.blinks
-            : working || moves.blinks || moves.glance > 0)
-        let key = "\(head.cacheKey)|\(side)|\(scale)|\(themed ? false : dark)|\(working)|\(layered)"
+        let layered = !still && (themed ? working || moves.blinks : working || moves.blinks || moves.glance > 0)
+        let state: HeadState = working && !playsRoutines ? .thinking : .idle
+        let key = "\(head.cacheKey)|\(side)|\(scale)|\(themed ? false : dark)|\(state.rawValue)|\(layered)"
         if key != drawnKey {
             drawnKey = key
             let cache = HeadImageCache.shared
-            let state: HeadState = working && !playsRoutines ? .thinking : .idle
             let face = themed ? moves.blinks : true
             let parts: [HeadRenderer.Parts] = !layered ? [.all] : themed ? [.ground, .moving] + (face ? [.face] : []) : [.body, .face]
             let cached = parts.map { cache.cachedImage(for: head, side: side, scale: scale, dark: dark, state: state, parts: $0) }
@@ -339,13 +370,25 @@ final class HeadView: UIView {
             eyesLayer.isHidden = true
         }
         for layer in [groundLayer, bodyLayer, eyesLayer] { layer.contentsScale = scale }
+        if !usesGroundedMover {
+            moverClip.mask = nil
+        } else if bounds.width > 0 {
+            let clip = (moverClip.mask as? CAShapeLayer) ?? CAShapeLayer()
+            clip.frame = moverClip.bounds
+            var scale = CGAffineTransform(scaleX: bounds.width / 1024, y: bounds.height / 1024)
+            clip.path = SVGPathData.path(HeadGeometry.panel).copy(using: &scale)
+            moverClip.mask = clip
+        }
         if jellyKey != "\(head.cacheKey)|\(side)" { dropJelly() }
         gazeLayer.removeAllAnimations()
         // A drawn head's eyes rest over to the right (a Shapes head's are drawn there already).
         let look = state == .idle ? head.themed.map { ThemeHeadSVG.restLook($0, compact: side < 64) * side / 1024 } ?? 0 : 0
         gazeLayer.transform = CATransform3DMakeTranslation(look, 0, 0)
-        // A dot-matrix head shown here before: its swaps go with it.
+        // A dot-matrix head shown here before: its swaps and its light go with it.
         bodyLayer.removeAllAnimations()
+        sheen.removeAllAnimations()
+        sheen.isHidden = true
+        sheenMask.contents = nil
         clearAct()
         updateMotion()
     }
@@ -366,13 +409,19 @@ final class HeadView: UIView {
         // Whatever moved the head shown before (a Shapes head breathing, a robot swaying) stops; `updateMotion` starts
         // this one's.
         stage.removeAllAnimations()
+        stage.transform = CATransform3DIdentity
+        moverClip.mask = nil
         mover.removeAllAnimations()
+        mover.transform = CATransform3DIdentity
         eyesLayer.removeAllAnimations()
         moving = false
         dropJelly()
         bodyLayer.removeAllAnimations()
         bodyLayer.contents = picture
-        bodyLayer.contentsScale = scale
+        sheenMask.contents = picture
+        for layer in [bodyLayer, sheenMask] { layer.contentsScale = scale }
+        sheen.removeAllAnimations()
+        sheen.isHidden = true
     }
 
     /// The head at `pose`, at this view's size, scale and page (drawn once per head, then from the shared cache).
@@ -443,19 +492,35 @@ final class HeadView: UIView {
     /// Whatever an act left: its swaps, its moves, its light. `settle`: the body eases back to standing (not when another
     /// act takes over: that one eases in from where it is).
     private func clearAct(settle: Bool = true) {
-        let moved: [(CALayer, CATransform3D)] = !settle ? [] : [stage, gazeLayer, eyesLayer].compactMap { layer in
-            guard layer.animation(forKey: "act") != nil || layer.animation(forKey: "act.lids") != nil,
+        let moved: [(CALayer, CATransform3D)] = !settle ? [] : [stage, mover, gazeLayer, eyesLayer].compactMap { layer in
+            guard layer.animation(forKey: "act") != nil || layer.animation(forKey: "act.lids") != nil
+                    || layer.animation(forKey: "act.jelly") != nil,
                   let shown = layer.presentation()?.transform else { return nil }
             return (layer, shown)
         }
         actKey = ""
         bodyLayer.removeAnimation(forKey: "act")
-        for layer in [stage, gazeLayer, eyesLayer] {
+        for layer in [stage, mover, gazeLayer, eyesLayer] {
             for key in Self.actKeys { layer.removeAnimation(forKey: key) }
+        }
+        if settle && !isMatrix && bounds.width > 0 {
+            let look = head.themed.map { ThemeHeadSVG.restLook($0, compact: bounds.width < 64) * bounds.width / 1024 } ?? 0
+            gazeLayer.transform = CATransform3DMakeTranslation(look, 0, 0)
+        }
+        if !settle || jellyLayer.isHidden {
+            for eye in [leftEyeLayer, rightEyeLayer] {
+                eye.removeAllAnimations()
+                eye.isHidden = true
+            }
+            if eyesLayer.contents != nil { eyesLayer.isHidden = false }
         }
         flareMask.sublayers?.forEach { $0.removeFromSuperlayer() }
         flare.isHidden = true
         flare.contents = nil
+        if sheen.animation(forKey: "act.glint") != nil {
+            sheen.removeAnimation(forKey: "act.glint")
+            sheen.isHidden = true
+        }
         for (layer, shown) in moved where !CATransform3DEqualToTransform(shown, layer.transform) {
             bridge(layer, "transform", from: NSValue(caTransform3D: shown), to: NSValue(caTransform3D: layer.transform), key: "act.end")
         }
@@ -463,7 +528,7 @@ final class HeadView: UIView {
         if settle { settleJelly() }
     }
 
-    private static let actKeys = ["act", "act.bridge", "act.end", "act.lids", "act.seen"]
+    private static let actKeys = ["act", "act.bridge", "act.end", "act.lids", "act.seen", "act.jelly", "act.glint"]
 
     private func play(_ act: MatrixAct, _ loop: FaceLoop, _ pictures: MatrixActPictures, begin: CFTimeInterval, scale: CGFloat,
                       from shown: CATransform3D?) {
@@ -499,7 +564,76 @@ final class HeadView: UIView {
                 flareMask.addSublayer(layer)
             }
         }
-        moveBody(loop, begin: begin, once: act.once, from: shown)
+        // 60 fps critically damped spring body + subtle 38% elastic follow-through on `mover` + dynamic 3D glint,
+        // so dot-matrix heads move with fluid physical weight while keeping every LED dot razor-crisp.
+        let samples = loop.softSamples(once: act.once)
+        moveBody(loop, samples: samples, begin: begin, once: act.once, from: shown)
+        playMatrixElastic(samples, period: period, begin: begin, once: act.once)
+        playMatrixGlint(samples, period: period, begin: begin, once: act.once)
+    }
+
+    /// Subtle elastic squash & lean follow-through on a dot-matrix head's `mover` layer: gives hops, landings, nods and
+    /// quick turns physical weight without distorting the LEDs into rubber.
+    private func playMatrixElastic(_ samples: [(at: Double, body: FaceBody, eyes: FaceEyes)], period: Double,
+                                   begin: CFTimeInterval, once: Bool) {
+        let wobble = FaceJelly.follow(samples, period: period, once: once)
+        let shownMover = mover.presentation()?.transform
+        mover.removeAnimation(forKey: "act.end")
+        func elastic(_ j: FaceJelly) -> CATransform3D {
+            let sq = j.squash * 0.38, ln = j.lean * 0.36
+            var t = CATransform3DMakeScale(1 + sq, 1 - sq, 1)
+            t.m21 = -ln
+            return t
+        }
+        let anim = CAKeyframeAnimation(keyPath: "transform")   // motion-ok: still under Reduce Motion (syncAct)
+        anim.values = wobble.map { NSValue(caTransform3D: elastic($0)) }
+        anim.keyTimes = samples.map { NSNumber(value: $0.at / period) }
+        settle(anim, period: period, begin: begin, once: once)
+        mover.add(anim, forKey: "act.jelly")
+        if let shownMover, !CATransform3DEqualToTransform(shownMover, CATransform3DIdentity) {
+            let then = Self.sample(in: samples, at: CACurrentMediaTime() + Self.bridgeLength - begin, period: period, once: once)
+            bridge(mover, "transform", from: NSValue(caTransform3D: shownMover),
+                   to: NSValue(caTransform3D: elastic(wobble[min(then, wobble.count - 1)])))
+        }
+    }
+
+    /// Dynamic 3D specular light rolling across a dot-matrix head's LEDs as it turns and tips (masked by `sheenMask`,
+    /// zero extra bitmaps): turning right rolls the highlight left across the dome, giving real 3D physicality.
+    private func playMatrixGlint(_ samples: [(at: Double, body: FaceBody, eyes: FaceEyes)], period: Double,
+                                 begin: CFTimeInterval, once: Bool) {
+        guard sheenMask.contents != nil else { return }
+        let dark = traitCollection.userInterfaceStyle == .dark
+        let peak = UIColor.white.withAlphaComponent(dark ? 0.36 : 0.24).cgColor
+        let clear = UIColor.white.withAlphaComponent(0).cgColor
+        sheen.removeAllAnimations()
+        sheen.type = .radial
+        sheen.colors = [peak, clear]
+        sheen.locations = [0, 1]
+        sheen.isHidden = false
+        let facing = Double(MatrixHead.shownFacing)
+        func spot(_ b: FaceBody) -> (start: CGPoint, end: CGPoint) {
+            let cx = min(max(0.5 + 0.16 * facing - b.turn / 110, 0.12), 0.88)
+            let cy = min(max(0.32 - b.tip / 110, 0.1), 0.78)
+            return (CGPoint(x: cx, y: cy), CGPoint(x: cx + 0.56, y: cy + 0.56))
+        }
+        let points = samples.map { spot($0.body) }
+        let startAnim = CAKeyframeAnimation(keyPath: "startPoint")   // motion-ok: still under Reduce Motion (syncAct)
+        startAnim.values = points.map { NSValue(cgPoint: $0.start) }
+        startAnim.duration = period
+        let endAnim = CAKeyframeAnimation(keyPath: "endPoint")       // motion-ok: still under Reduce Motion (syncAct)
+        endAnim.values = points.map { NSValue(cgPoint: $0.end) }
+        endAnim.duration = period
+        let times = samples.map { NSNumber(value: $0.at / period) }
+        startAnim.keyTimes = times
+        endAnim.keyTimes = times
+        if let first = points.first {
+            sheen.startPoint = first.start
+            sheen.endPoint = first.end
+        }
+        let group = CAAnimationGroup()
+        group.animations = [startAnim, endAnim]
+        settle(group, period: period, begin: begin, once: once)
+        sheen.add(group, forKey: "act.glint")
     }
 
     // MARK: [moods] The body, for every face that plays the routines
@@ -508,7 +642,7 @@ final class HeadView: UIView {
     /// middle with a little depth, then moved. A `solid` body (FaceSolid) turns and tips in its own outline instead.
     private func bodyTransform(_ body: FaceBody, solid: Bool = false) -> CATransform3D {
         let side = bounds.width, middle = side * 0.44   // from where it stands (the stage's anchor) up to its middle
-        let degree = Double.pi / 180, squash = body.squash * (isSoft ? 1.6 : 1)
+        let degree = Double.pi / 180, squash = body.squash * (isSoft && !solid ? 1.4 : 1)
         var depth = CATransform3DIdentity
         depth.m34 = -1 / (side * 2.5)
         let turns = solid ? [] : [CATransform3DMakeRotation(-body.tip * degree, 1, 0, 0), CATransform3DMakeRotation(body.turn * degree, 0, 1, 0)]
@@ -517,20 +651,30 @@ final class HeadView: UIView {
         return steps.dropFirst().reduce(steps[0]) { CATransform3DConcat($0, $1) }
     }
 
-    /// Plays `loop`'s body on the stage from `begin` (as `samples` of it, if given), easing in from `shown` (where the
-    /// last act left it).
-    private func moveBody(_ loop: FaceLoop, samples given: [(at: Double, body: FaceBody, eyes: FaceEyes)]? = nil, begin: CFTimeInterval,
-                          once: Bool, from shown: CATransform3D?, solid: Bool = false) {
+    /// Plays `loop`'s body on `target` (`stage` for bare/Dots heads, `mover` for framed/robot heads whose tile or
+    /// shoulders stay grounded) from `begin`, easing in from `shown`.
+    private func moveBody(_ loop: FaceLoop, samples given: [(at: Double, body: FaceBody, eyes: FaceEyes)]? = nil,
+                          on target: CALayer? = nil, scale: Double = 1, discrete: Bool = false,
+                          begin: CFTimeInterval, once: Bool, from shown: CATransform3D?, solid: Bool = false) {
+        let layer = target ?? stage
         let samples = given ?? loop.samples()
-        stage.removeAnimation(forKey: "act.end")
+        func scaled(_ b: FaceBody) -> FaceBody {
+            guard scale != 1 else { return b }
+            return FaceBody(x: b.x * scale, y: b.y * scale, roll: b.roll * scale, turn: b.turn * scale,
+                            tip: b.tip * scale, squash: b.squash * scale)
+        }
+        layer.removeAnimation(forKey: "act.end")
+        layer.transform = CATransform3DIdentity
         let move = CAKeyframeAnimation(keyPath: "transform")   // motion-ok: still under Reduce Motion (syncAct, syncFace)
-        move.values = samples.map { NSValue(caTransform3D: bodyTransform($0.body, solid: solid)) }
+        move.values = samples.map { NSValue(caTransform3D: bodyTransform(scaled($0.body), solid: solid)) }
         move.keyTimes = samples.map { NSNumber(value: $0.at / loop.period) }
+        if discrete { move.calculationMode = .discrete }
         settle(move, period: loop.period, begin: begin, once: once)
-        stage.add(move, forKey: "act")
+        layer.add(move, forKey: "act")
         if let shown {
             let then = samples[Self.sample(in: samples, at: CACurrentMediaTime() + Self.bridgeLength - begin, period: loop.period, once: once)]
-            bridge(stage, "transform", from: NSValue(caTransform3D: shown), to: NSValue(caTransform3D: bodyTransform(then.body, solid: solid)))
+            bridge(layer, "transform", from: NSValue(caTransform3D: shown),
+                   to: NSValue(caTransform3D: bodyTransform(scaled(then.body), solid: solid)))
         }
     }
 
@@ -603,41 +747,100 @@ final class HeadView: UIView {
             fade.duration = duration
             let both = CAAnimationGroup()
             both.animations = [grow, fade]
+            both.duration = duration
             return (ring, both)
         }
         switch effect {
-        case .orbit, .radar:
-            // A comet round the outline (its lit picture is the edge only), or a radar's sweep over the whole head: a
-            // conic light, bright at its leading edge and fading behind, turning about the middle.
+        case .orbit:
+            // Dual-harmonic comets round the outline: primary bright comet + softer counter-orbiting halo.
+            func comet(tail: Double, duration: Double, reverse: Bool, opacity: Float) -> CAGradientLayer {
+                let sweep = CAGradientLayer()
+                sweep.type = .conic
+                let reach = side * 1.5
+                sweep.frame = CGRect(x: (side - reach) / 2, y: (side - reach) / 2, width: reach, height: reach)
+                sweep.startPoint = CGPoint(x: 0.5, y: 0.5)
+                sweep.endPoint = CGPoint(x: 0.5, y: 0)
+                sweep.colors = reverse ? [white, clear, clear] : [clear, clear, white]
+                sweep.locations = reverse ? [0, NSNumber(value: tail), 1] : [0, NSNumber(value: 1 - tail), 1]
+                sweep.opacity = opacity
+                let turn = CABasicAnimation(keyPath: "transform.rotation.z")   // motion-ok: still under Reduce Motion (syncAct)
+                turn.fromValue = 0
+                turn.toValue = reverse ? -2 * Double.pi : 2 * Double.pi
+                time(turn, duration, 0)
+                sweep.add(turn, forKey: "act")
+                return sweep
+            }
+            return [comet(tail: 0.34, duration: 1.8, reverse: false, opacity: 1),
+                    comet(tail: 0.24, duration: 2.7, reverse: true, opacity: 0.45)]
+        case .radar:
+            // Rotating radar sweep over the head PLUS two crisp target "ping" blips that flare as the beam crosses them.
             let sweep = CAGradientLayer()
             sweep.type = .conic
             let reach = side * 1.5
             sweep.frame = CGRect(x: (side - reach) / 2, y: (side - reach) / 2, width: reach, height: reach)
             sweep.startPoint = CGPoint(x: 0.5, y: 0.5)
             sweep.endPoint = CGPoint(x: 0.5, y: 0)
-            let tail = effect == .orbit ? 0.3 : 0.2
             sweep.colors = [clear, clear, white]
-            sweep.locations = [0, NSNumber(value: 1 - tail), 1]
+            sweep.locations = [0, 0.78, 1]
+            let sweepDuration = 1.4
             let turn = CABasicAnimation(keyPath: "transform.rotation.z")   // motion-ok: still under Reduce Motion (syncAct)
             turn.fromValue = 0
             turn.toValue = 2 * Double.pi
-            time(turn, effect == .orbit ? 1.8 : 1.4, 0)
+            time(turn, sweepDuration, 0)
             sweep.add(turn, forKey: "act")
-            return [sweep]
+            let blips: [CALayer] = [(CGPoint(x: 0.74, y: 0.32), 0.16), (CGPoint(x: 0.28, y: 0.72), 0.62)].map { pos, phase in
+                let dot = CAGradientLayer()
+                dot.type = .radial
+                dot.colors = [white, clear]
+                dot.locations = [0, 1]
+                dot.startPoint = CGPoint(x: 0.5, y: 0.5)
+                dot.endPoint = CGPoint(x: 1, y: 1)
+                dot.bounds = CGRect(x: 0, y: 0, width: side * 0.28, height: side * 0.28)
+                dot.position = CGPoint(x: pos.x * side, y: pos.y * side)
+                dot.opacity = 0
+                let ping = opacity([0, 1, 0.35, 0, 0], at: [0, 0.06, 0.28, 0.62, sweepDuration], over: sweepDuration)
+                time(ping, sweepDuration, phase * sweepDuration)
+                dot.add(ping, forKey: "act")
+                return dot
+            }
+            return [sweep] + blips
         case .scan:
-            // A line of light down the face, a line read.
+            // A soft horizontal reading beam stepping down line by line while a bright focus spot sweeps left-to-right.
             let band = CAGradientLayer()
-            let height = side * 0.32
+            let height = side * 0.28
             band.frame = CGRect(x: 0, y: -height, width: side, height: height)
-            band.colors = [clear, white, clear]
+            band.colors = [clear, UIColor.white.withAlphaComponent(0.65).cgColor, clear]
             band.locations = [0, 0.5, 1]
             let down = CABasicAnimation(keyPath: "position.y")   // motion-ok: still under Reduce Motion (syncAct)
-            down.fromValue = -height / 2
-            down.toValue = side + height / 2
+            down.fromValue = side * 0.2
+            down.toValue = side * 0.85
             down.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            time(down, 1.6, 0)
+            time(down, 3.45, 0)
             band.add(down, forKey: "act")
-            return [band]
+            let spot = CAGradientLayer()
+            spot.type = .radial
+            spot.colors = [white, clear]
+            spot.locations = [0, 1]
+            spot.startPoint = CGPoint(x: 0.5, y: 0.5)
+            spot.endPoint = CGPoint(x: 1, y: 1)
+            spot.bounds = CGRect(x: 0, y: 0, width: side * 0.38, height: side * 0.26)
+            spot.position = CGPoint(x: side * 0.2, y: side * 0.36)
+            let scanPeriod = 3.45
+            let trace = CAKeyframeAnimation(keyPath: "position")   // motion-ok: still under Reduce Motion (syncAct)
+            let rows: [CGFloat] = [0.36, 0.56, 0.74]
+            var pts: [CGPoint] = [], times: [Double] = []
+            for (i, ry) in rows.enumerated() {
+                let t0 = Double(i) * 1.15
+                pts += [CGPoint(x: side * 0.18, y: side * ry), CGPoint(x: side * 0.82, y: side * ry)]
+                times += [t0, t0 + 0.92]
+            }
+            pts.append(pts[0])
+            times.append(scanPeriod)
+            trace.values = pts.map { NSValue(cgPoint: $0) }
+            trace.keyTimes = times.map { NSNumber(value: $0 / scanPeriod) }
+            time(trace, scanPeriod, 0)
+            spot.add(trace, forKey: "act")
+            return [band, spot]
         case .rain:
             // Streaks falling a LED at a time, two speeds; each picture is two heads tall and loops a head's height.
             return pictures.masks.enumerated().map { index, mask in
@@ -651,17 +854,18 @@ final class HeadView: UIView {
                 fall.values = (0..<grid).map { top + CGFloat($0) * pitch }
                 fall.keyTimes = (0...grid).map { NSNumber(value: Double($0) / Double(grid)) }
                 fall.calculationMode = .discrete
-                time(fall, index == 0 ? 1.5 : 2.4, 0)
+                time(fall, index == 0 ? 1.4 : 2.2, 0)
                 drop.add(fall, forKey: "act")
                 return drop
             }
         case .typing:
-            // LED by LED along each line in turn, then both clear (each of writing's routines is two lines and a pause).
+            // LED by LED along each line in turn, with a crisp blinking cursor leading the active tip, then both clear.
             let period = 2 * MatrixAct.lineLength + MatrixAct.typingPause
-            return MatrixActMasks.typingLines(design).enumerated().map { index, line in
+            let lines = MatrixActMasks.typingLines(design)
+            var out: [CALayer] = lines.enumerated().map { index, line in
                 let count = line.last - line.first + 1
                 let bar = CALayer()
-                bar.backgroundColor = white
+                bar.backgroundColor = UIColor.white.withAlphaComponent(0.75).cgColor
                 bar.anchorPoint = CGPoint(x: 0, y: 0.5)
                 bar.frame = CGRect(x: CGFloat(line.first) * pitch, y: CGFloat(line.row) * pitch, width: 0, height: pitch)
                 let start = Double(index) * MatrixAct.lineLength
@@ -673,15 +877,41 @@ final class HeadView: UIView {
                 bar.add(typed, forKey: "act")
                 return bar
             }
+            if let first = lines.first {
+                let cursor = CALayer()
+                cursor.backgroundColor = white
+                cursor.bounds = CGRect(x: 0, y: 0, width: pitch * 1.15, height: pitch * 1.15)
+                cursor.position = CGPoint(x: (CGFloat(first.first) + 0.5) * pitch, y: (CGFloat(first.row) + 0.5) * pitch)
+                var pos: [CGPoint] = [], ks: [Double] = []
+                for (index, line) in lines.enumerated() {
+                    let count = line.last - line.first + 1
+                    let start = Double(index) * MatrixAct.lineLength
+                    for step in 0...count {
+                        let col = min(line.first + step, line.last)
+                        pos.append(CGPoint(x: (CGFloat(col) + 0.5) * pitch, y: (CGFloat(line.row) + 0.5) * pitch))
+                        ks.append((start + Double(step) * MatrixAct.lineLength / Double(count + 1)) / period)
+                    }
+                }
+                let move = CAKeyframeAnimation(keyPath: "position")   // motion-ok: still under Reduce Motion (syncAct)
+                move.values = pos.map { NSValue(cgPoint: $0) }
+                move.keyTimes = ks.map { NSNumber(value: $0) } + [1]
+                move.calculationMode = .discrete
+                time(move, period, 0)
+                let blink = opacity([1, 0.25, 1], at: [0, 0.22, 0.44], over: 0.44)
+                time(blink, 0.44, 0)
+                cursor.add(move, forKey: "act")
+                cursor.add(blink, forKey: "act.blink")
+                out.append(cursor)
+            }
+            return out
         case .pointer:
-            // A spot of light gliding from stop to stop, and a ripple each time it lands (a click); the eyes follow it
-            // (each of browsing's routines goes round the stops once).
+            // A spot of light gliding from stop to stop, and double concentric click ripples each time it lands.
             let stops = MatrixAct.stops.map { CGPoint(x: $0.x * side, y: $0.y * side) }
             let length = MatrixAct.stopLength, travel = 0.35, period = Double(stops.count) * length
             let spot = CAGradientLayer()
             spot.type = .radial
-            spot.colors = [white, UIColor.white.withAlphaComponent(0.55).cgColor, clear]
-            spot.locations = [0, 0.4, 1]
+            spot.colors = [white, UIColor.white.withAlphaComponent(0.6).cgColor, clear]
+            spot.locations = [0, 0.42, 1]
             spot.startPoint = CGPoint(x: 0.5, y: 0.5)
             spot.endPoint = CGPoint(x: 1, y: 1)
             spot.bounds = CGRect(x: 0, y: 0, width: side * 0.42, height: side * 0.42)
@@ -699,59 +929,74 @@ final class HeadView: UIView {
             glide.timingFunctions = Array(repeating: CAMediaTimingFunction(name: .easeInEaseOut), count: points.count - 1)
             time(glide, period, 0)
             spot.add(glide, forKey: "act")
-            let click = CAShapeLayer()
-            let reach = side * 0.24
-            click.bounds = CGRect(x: 0, y: 0, width: reach * 2, height: reach * 2)
-            click.path = CGPath(ellipseIn: click.bounds.insetBy(dx: pitch, dy: pitch), transform: nil)
-            click.fillColor = nil
-            click.strokeColor = white
-            click.lineWidth = pitch * 1.3
-            click.opacity = 0
-            click.position = stops[0]
-            let hops = CAKeyframeAnimation(keyPath: "position")   // motion-ok: still under Reduce Motion (syncAct)
-            hops.values = stops.map { NSValue(cgPoint: $0) }
-            hops.keyTimes = (0...stops.count).map { NSNumber(value: Double($0) / Double(stops.count)) }
-            hops.calculationMode = .discrete
-            time(hops, period, travel)
-            let grow = CAKeyframeAnimation(keyPath: "transform.scale")   // motion-ok: still under Reduce Motion (syncAct)
-            grow.values = [0.25, 1.1, 1.1]
-            grow.keyTimes = [0, 0.55, 1]
-            grow.timingFunctions = [CAMediaTimingFunction(name: .easeOut), CAMediaTimingFunction(name: .linear)]
-            let fade = opacity([0.95, 0, 0], at: [0, 0.55 * length, length], over: length)
-            grow.duration = length
-            fade.duration = length
-            let pop = CAAnimationGroup()
-            pop.animations = [grow, fade]
-            time(pop, length, travel)
-            click.add(hops, forKey: "act.where")
-            click.add(pop, forKey: "act")
-            return [spot, click]
+            let ripples: [CALayer] = [(0.0, 1.0, 0.24), (0.14, 0.65, 0.32)].map { delay, peak, reachShare in
+                let click = CAShapeLayer()
+                let reach = side * reachShare
+                click.bounds = CGRect(x: 0, y: 0, width: reach * 2, height: reach * 2)
+                click.path = CGPath(ellipseIn: click.bounds.insetBy(dx: pitch, dy: pitch), transform: nil)
+                click.fillColor = nil
+                click.strokeColor = white
+                click.lineWidth = pitch * 1.3
+                click.opacity = 0
+                click.position = stops[0]
+                let hops = CAKeyframeAnimation(keyPath: "position")   // motion-ok: still under Reduce Motion (syncAct)
+                hops.values = stops.map { NSValue(cgPoint: $0) }
+                hops.keyTimes = (0...stops.count).map { NSNumber(value: Double($0) / Double(stops.count)) }
+                hops.calculationMode = .discrete
+                time(hops, period, travel + delay)
+                let grow = CAKeyframeAnimation(keyPath: "transform.scale")   // motion-ok: still under Reduce Motion (syncAct)
+                grow.values = [0.22, 1.12, 1.12]
+                grow.keyTimes = [0, 0.55, 1]
+                grow.timingFunctions = [CAMediaTimingFunction(name: .easeOut), CAMediaTimingFunction(name: .linear)]
+                let fade = opacity([peak, 0, 0], at: [0, 0.55 * length, length], over: length)
+                grow.duration = length
+                fade.duration = length
+                let pop = CAAnimationGroup()
+                pop.animations = [grow, fade]
+                time(pop, length, travel + delay)
+                click.add(hops, forKey: "act.where")
+                click.add(pop, forKey: "act")
+                return click
+            }
+            return [spot] + ripples
         case .waves:
-            // Rings from the far side, going out the way the face turns.
+            // Directional transmission rings going out the way the face turns.
             let origin = CGPoint(x: design.facing > 0 ? side * 0.1 : side * 0.9, y: side * 0.5)
             return (0..<3).map { index in
-                let (wave, out) = ring(at: origin, from: pitch, to: side * 1.05, width: pitch * 1.4, over: 1.5)
-                time(out, 1.5, Double(index) * 0.5)
+                let (wave, out) = ring(at: origin, from: pitch, to: side * 1.08, width: pitch * 1.5, over: 1.45)
+                time(out, 1.45, Double(index) * 0.48)
                 wave.add(out, forKey: "act")
                 return wave
             }
         case .sparkle:
-            // Three sets of LEDs twinkling in turn.
-            return pictures.masks.enumerated().map { index, mask in
+            // Three sets of LED constellations twinkling in staggered rhythm + a soft warm breathing core glow.
+            let core = CAGradientLayer()
+            core.type = .radial
+            core.colors = [UIColor.white.withAlphaComponent(0.32).cgColor, clear]
+            core.locations = [0, 1]
+            core.startPoint = CGPoint(x: 0.5, y: 0.5)
+            core.endPoint = CGPoint(x: 1, y: 1)
+            core.frame = CGRect(x: 0, y: 0, width: side, height: side)
+            let breathe = opacity([0.2, 0.9, 0.2], at: [0, 0.9, 1.8], over: 1.8)
+            time(breathe, 1.8, 0)
+            core.add(breathe, forKey: "act")
+            let twinkles: [CALayer] = pictures.masks.enumerated().map { index, mask in
                 let twinkle = CALayer()
                 twinkle.contents = mask
                 twinkle.contentsGravity = .resize
                 twinkle.frame = CGRect(x: 0, y: 0, width: side, height: side)
                 twinkle.opacity = 0
-                let blink = opacity([0, 1, 0, 0], at: [0, 0.2, 0.6, 1.2], over: 1.2)
-                time(blink, 1.2, Double(index) * 0.4)
+                let blink = opacity([0, 1, 0, 0], at: [0, 0.18, 0.58, 1.14], over: 1.14)
+                time(blink, 1.14, Double(index) * 0.38)
                 twinkle.add(blink, forKey: "act")
                 return twinkle
             }
+            return [core] + twinkles
         case .pulse, .flash:
-            // A soft glow over the head as it dips in each nod, or a flash as it lands from each hop (the routines' marks).
+            // Replying: a warm soft glow + gentle voice-ripple ring on each nod beat; Asking: an inquiring beacon ring
+            // + crisp flash on each hop landing.
             let light = whole()
-            let (peak, rise, fall) = effect == .pulse ? (0.3, 0.1, 0.2) : (0.55, 0.03, 0.22)
+            let (peak, rise, fall) = effect == .pulse ? (0.34, 0.1, 0.22) : (0.58, 0.03, 0.22)
             var values = [0.0], seconds = [0.0]
             for mark in loop.marks where mark - rise > seconds[seconds.count - 1] && mark + fall < loop.period {
                 values += [0, peak, 0]
@@ -762,17 +1007,30 @@ final class HeadView: UIView {
             let glow = opacity(values, at: seconds, over: loop.period)
             time(glow, loop.period, 0)
             light.add(glow, forKey: "act")
-            return [light]
+            let middle = CGPoint(x: side * 0.5, y: side * 0.5)
+            let ringDuration = effect == .pulse ? 0.55 : 0.62
+            let beatRings: [CALayer] = loop.marks.prefix(6).map { mark in
+                let (wave, out) = ring(at: middle, from: pitch * 1.4, to: side * 0.72,
+                                       width: pitch * (effect == .pulse ? 1.5 : 1.7), over: ringDuration)
+                let pad = CAAnimationGroup()
+                pad.animations = [out]
+                pad.duration = loop.period
+                out.beginTime = mark
+                time(pad, loop.period, 0)
+                wave.add(pad, forKey: "act")
+                return wave
+            }
+            return [light] + beatRings
         case .burst:
-            // A flash as it jumps, two rings out from the middle, then sparkles.
+            // A bright flash as it jumps, three concentric celebration rings, then staggered sparkles.
             let light = whole()
-            let flash = opacity([0.85, 0], at: [0, 0.45], over: 0.45)
+            let flash = opacity([0.9, 0], at: [0, 0.45], over: 0.45)
             time(flash, 0.45, 0)
             light.add(flash, forKey: "act")
             let middle = CGPoint(x: side * 0.5, y: side * 0.5)
-            let rings: [CALayer] = [0.05, 0.3].map { delay in
-                let (wave, out) = ring(at: middle, from: pitch, to: side * 0.78, width: pitch * 1.6, over: 0.75)
-                time(out, 0.75, delay)
+            let rings: [CALayer] = [0.04, 0.24, 0.52].map { delay in
+                let (wave, out) = ring(at: middle, from: pitch, to: side * 0.84, width: pitch * 1.6, over: 0.72)
+                time(out, 0.72, delay)
                 wave.add(out, forKey: "act")
                 return wave
             }
@@ -782,16 +1040,16 @@ final class HeadView: UIView {
                 twinkle.contentsGravity = .resize
                 twinkle.frame = CGRect(x: 0, y: 0, width: side, height: side)
                 twinkle.opacity = 0
-                let blink = opacity([0, 1, 0], at: [0, 0.2, 0.7], over: 0.7)
-                time(blink, 0.7, 0.5 + Double(index) * 0.28)
+                let blink = opacity([0, 1, 0], at: [0, 0.2, 0.72], over: 0.72)
+                time(blink, 0.72, 0.48 + Double(index) * 0.26)
                 twinkle.add(blink, forKey: "act")
                 return twinkle
             }
             return [light] + rings + sparkles
         case .flicker:
-            // The panel stutters with the glitch.
+            // The panel stutters sharply with the glitch, then dims softly as the bot droops.
             let light = whole()
-            let stutter = opacity([0.7, 0, 0.5, 0, 0.8, 0, 0.4, 0], at: [0, 0.07, 0.14, 0.21, 0.28, 0.35, 0.42, 0.49, loop.period],
+            let stutter = opacity([0.75, 0, 0.55, 0, 0.85, 0, 0.45, 0], at: [0, 0.07, 0.14, 0.21, 0.28, 0.35, 0.42, 0.49, loop.period],
                                   over: loop.period, discrete: true)
             time(stutter, loop.period, 0)
             light.add(stutter, forKey: "act")
@@ -799,11 +1057,11 @@ final class HeadView: UIView {
         }
     }
 
-    // MARK: [moods] A Shapes or Dots face acting it out
+    // MARK: [moods] A Shapes, Dots, or themed face acting it out
 
-    /// Starts, swaps or stops the routines a Shapes or Dots face plays: the body as a dot-matrix head's, the eyes
-    /// gliding about (a Shapes head's) or stepping a lamp at a time (a Dots head's), narrowing and blinking. Always its
-    /// own eyes. Nothing moves under Reduce Motion.
+    /// Starts, swaps or stops the routines a non-matrix face plays: soft Shapes heads use 3D solid jelly + independent
+    /// GPU pill eyes; Dots step a lamp at a time; Robot, Orb, Pixel and Glyph act over their grounded tile/shoulders.
+    /// Nothing moves under Reduce Motion.
     private func syncFace(still: Bool) {
         let side = bounds.width
         guard let mood = shownMood, !still, window != nil, side > 0, !showsPhoto, !drawnKey.isEmpty else {
@@ -812,7 +1070,9 @@ final class HeadView: UIView {
         }
         let key = "\(mood.rawValue)|\(drawnKey)"
         guard key != actKey else { return }
-        let shown = stage.presentation()?.transform, looking = gazeLayer.presentation()?.transform
+        let grounded = usesGroundedMover
+        let shown = (grounded ? mover : stage).presentation()?.transform
+        let looking = gazeLayer.presentation()?.transform
         if !actKey.isEmpty { clearAct(settle: false) }
         actKey = key
         let (begin, seed) = actClock()
@@ -820,20 +1080,51 @@ final class HeadView: UIView {
         playFace(loop, begin: begin, once: mood.once, from: shown, looking: looking)
     }
 
+    /// Framed/tiled themes whose `groundLayer` (tile frame, robot shoulders) stays anchored while `mover` acts inside it.
+    private var usesGroundedMover: Bool {
+        if let theme = head.themed?.theme { return theme != "dots" }
+        return head.tile != .none
+    }
+
     private func playFace(_ loop: FaceLoop, begin: CFTimeInterval, once: Bool, from shown: CATransform3D?, looking: CATransform3D?) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
-        // A Dots face's lamps step; a Shapes head is soft, so it moves on springs (FaceLoop.softSamples).
-        let lamps = head.themed != nil
-        let samples = lamps ? loop.samples() : loop.softSamples(once: once), side = bounds.width, period = loop.period
+        let theme = head.themed?.theme
+        let lamps = theme == "dots"
+        let isPixel = theme == "pixel"
+        let samples = isPixel ? loop.samples(rate: 12) : loop.softSamples(once: once)
+        let side = bounds.width, period = loop.period
         let jelly = playJelly(loop, samples: samples, begin: begin, once: once)
-        moveBody(loop, samples: samples, begin: begin, once: once, from: shown, solid: jelly != nil)
-        guard !eyesLayer.isHidden else { return }
+        let grounded = usesGroundedMover
+        let bodyScale: Double = switch theme {
+        case "robot": 0.65
+        case "pixel": 0.72
+        case "orb": 0.62
+        case "glyph": 0.78
+        case nil: head.tile != .none ? 0.72 : 1.0
+        default: 1.0
+        }
+        moveBody(loop, samples: samples, on: grounded ? mover : stage, scale: bodyScale, discrete: isPixel,
+                 begin: begin, once: once, from: shown, solid: jelly != nil)
+        guard !eyesLayer.isHidden || jelly != nil else { return }
         for layer in [gazeLayer, eyesLayer] { layer.removeAnimation(forKey: "act.end") }
         gazeLayer.transform = CATransform3DIdentity
         func moments(_ times: [Double]) -> [NSNumber] { times.map { NSNumber(value: $0 / period) } }
-        // Where the eyes look (a Dots face's also sliding toward where the body turns and tips, as on something round).
+
+        // Soft Shapes heads: independent 3D-seated GPU pill normal slit eyes! Each eye wraps individually round the 3D
+        // cushion (far eye narrows and slips behind first during turns & pirouettes) with crisp rounded capsules.
+        if let jelly {
+            playVectorEyes(jelly: jelly, samples: samples, period: period, begin: begin, once: once)
+            return
+        }
+        for eye in [leftEyeLayer, rightEyeLayer] {
+            eye.removeAllAnimations()
+            eye.isHidden = true
+        }
+        if eyesLayer.contents != nil { eyesLayer.isHidden = false }
+
+        // Bitmap eyes (Dots lamps, Robot visor, Pixel, Orb, boarded Shapes).
         let look = CAKeyframeAnimation(keyPath: "transform")   // motion-ok: still under Reduce Motion (syncFace)
         if lamps {
             // A lamp at a time, and only across on a small head (a lamp is a big step there).
@@ -852,82 +1143,218 @@ final class HeadView: UIView {
             look.keyTimes = moments(times) + [1]
             look.calculationMode = .discrete
         } else {
-            // Only where they look: a Shapes head is flat, so as it turns its edge comes in toward the eyes already. They
-            // look well across a soft head, as far as its edge allows, and ride its wobble (moved, never squashed: always
-            // its own normal eyes).
-            let reach = (HeadGeometry.layout(head, compact: side < 64, darkPage: nil).placement?.k ?? 1) * moves.glance * side
-            let eyes = CGPoint(x: eyeCentre.x * bounds.width, y: eyeCentre.y * bounds.height)
-            var far = (left: 0.065 * reach, right: 0.065 * reach, up: 0.055 * reach, down: 0.055 * reach)
-            if let jelly {
-                let box = CGRect(x: eyeBox.minX * bounds.width, y: eyeBox.minY * bounds.height,
-                                 width: eyeBox.width * bounds.width, height: eyeBox.height * bounds.height)
-                let room = FaceJelly.room(for: box, in: jelly.outline, margin: 0.055 * side)
-                far = (min(0.13 * reach, room.left), min(0.13 * reach, room.right), min(0.11 * reach, room.up), min(0.11 * reach, room.down))
+            let reachFactor: Double = switch theme {
+            case "robot": 0.048
+            case "pixel": 0.04
+            case "orb": 0.06
+            default: 0.065 * moves.glance * (HeadGeometry.layout(head, compact: side < 64, darkPage: nil).placement?.k ?? 1)
             }
-            // How far a look goes changes smoothly through the middle, so the eyes keep their speed as they cross it even
-            // where one side has less room.
-            func travel(_ v: Double, _ back: Double, _ ahead: Double) -> Double {
-                let k = (v + 0.3) / 0.6, past = k >= 1 ? v : k <= 0 ? 0 : 0.6 * (k * k * k - k * k * k * k / 2)
-                return back * v + (ahead - back) * past
-            }
-            // On a solid body they ride round its front as it turns and tips: across, narrower toward its edge, and
-            // gone round its back. A look turns them a little further round the same front, so they never leave it.
-            // Leading the head round, a look may go a little past all the way (eased to a limit, never cut off at it).
-            func beyond(_ v: Double) -> Double { abs(v) <= 1 ? v : (v < 0 ? -1 : 1) * (1 + 0.35 * tanh((abs(v) - 1) / 0.35)) }
-            let seats = samples.map { sample in
-                jelly.map { jelly in
-                    jelly.solid.seat(eyes, turn: sample.body.turn + beyond(sample.eyes.x) * FaceEyes.across * moves.glance,
-                                     tip: sample.body.tip + beyond(sample.eyes.y) * FaceEyes.down * moves.glance)
-                }
-            }
-            let around = CGPoint(x: eyes.x - bounds.midX, y: eyes.y - bounds.midY)
-            look.values = samples.enumerated().map { i, sample in
+            let rx = reachFactor * side, ry = reachFactor * 0.85 * side
+            look.values = samples.map { sample in
                 let ex = min(max(sample.eyes.x, -1), 1), ey = min(max(sample.eyes.y, -1), 1)
-                var x = jelly == nil ? travel(ex, far.left, far.right) : 0, y = jelly == nil ? travel(ey, far.up, far.down) : 0
-                if let jelly, i < jelly.wobble.count {
-                    let wobble = jelly.wobble[i], dx = eyes.x - jelly.foot.x, dy = eyes.y - jelly.foot.y
-                    x += wobble.squash * dx - wobble.lean * dy
-                    y -= wobble.squash * dy
-                }
-                guard let seat = seats[i] else { return NSValue(caTransform3D: CATransform3DMakeTranslation(x, y, 0)) }
-                let shape = CATransform3DMakeScale(min(max(seat.wide, 0.05), 1.2), min(max(seat.high, 0.05), 1.2), 1)
-                let placed = CATransform3DConcat(CATransform3DMakeTranslation(-around.x, -around.y, 0), shape)
-                return NSValue(caTransform3D: CATransform3DConcat(placed, CATransform3DMakeTranslation(around.x + x + seat.dx, around.y + y + seat.dy, 0)))
+                return NSValue(caTransform3D: CATransform3DMakeTranslation(ex * rx, ey * ry, 0))
             }
             look.keyTimes = moments(samples.map(\.at))
-            if seats.contains(where: { ($0?.facing ?? 1) < 0.3 }) {
-                let seen = CAKeyframeAnimation(keyPath: "opacity")   // motion-ok: still under Reduce Motion (syncFace)
-                seen.values = seats.map { seat in
-                    let k = min(max(((seat?.facing ?? 1) - 0.05) / 0.25, 0), 1)
-                    return k * k * (3 - 2 * k)
-                }
-                seen.keyTimes = look.keyTimes
-                settle(seen, period: period, begin: begin, once: once)
-                gazeLayer.add(seen, forKey: "act.seen")
-            }
+            if isPixel { look.calculationMode = .discrete }
         }
         settle(look, period: period, begin: begin, once: once)
         gazeLayer.add(look, forKey: "act")
-        if let looking, let values = look.values, !values.isEmpty, !lamps {
-            // Into where the eyes will be once the bridge is over.
+        if let looking, let values = look.values, !values.isEmpty, !lamps, !isPixel {
             let then = Self.sample(in: samples, at: CACurrentMediaTime() + Self.bridgeLength - begin, period: period, once: once)
             bridge(gazeLayer, "transform", from: NSValue(caTransform3D: looking), to: values[min(then, values.count - 1)])
         }
-        // Narrowing and blinking, about the eyes' own middle. A Dots face's lamps only shut (squashed for a moment):
-        // lamps held half squashed read as a fault, not a look.
-        let stepped = lamps && head.themed?.pattern == "face"
+        // Narrowing, widening and blinking, about the eyes' own middle.
+        let stepped = (lamps && head.themed?.pattern == "face") || isPixel
         let dx = (eyeCentre.x - 0.5) * bounds.width, dy = (eyeCentre.y - 0.5) * bounds.height
         let lids = CAKeyframeAnimation(keyPath: "transform")   // motion-ok: still under Reduce Motion (syncFace)
         lids.values = samples.map { sample in
             let shut = min(max(sample.eyes.lids, 0), 1)
-            let open = stepped ? (shut >= 0.75 ? 0.08 : 1) : 1 - 0.9 * shut
+            let wideBoost = stepped ? 0 : min(max(sample.eyes.wide, 0), 1) * 0.14
+            let open = stepped ? (shut >= 0.72 ? 0.08 : 1) : max(0.08, (1 + wideBoost) * (1 - 0.9 * shut))
+            let blinkW = stepped ? 1 : 1 + 0.1 * shut
             var t = CATransform3DMakeTranslation(dx, dy, 0)
-            t = CATransform3DScale(t, 1, open, 1)
+            t = CATransform3DScale(t, blinkW, open, 1)
             return NSValue(caTransform3D: CATransform3DTranslate(t, -dx, -dy, 0))
         }
         lids.keyTimes = moments(samples.map(\.at))
+        if stepped { lids.calculationMode = .discrete }
         settle(lids, period: period, begin: begin, once: once)
         eyesLayer.add(lids, forKey: "act.lids")
+    }
+
+    /// Independent 3D-seated GPU pill eyes for a soft Shapes head while acting:
+    /// - True rounded-capsule `bounds` + `cornerRadius = min(w, h) / 2` (never pinched during blinks/squints)
+    /// - Top-down weighted eyelid closure (upper lid drops ~72%, lower lid lifts ~28%)
+    /// - Near/far 3D camera-distance perspective scaling + per-eye cushion wrap & backface hide
+    /// - Subtle stereo convergence when focusing closely vs widening when gazing up/out
+    /// - Organic saccade velocity lean + 3D dome curvature micro-tilt
+    /// - Loop-locked living micro-drift, subtle eye-breath, and 1-frame (~17 ms) natural left/right blink stagger
+    private func playVectorEyes(jelly: (wobble: [FaceJelly], foot: CGPoint, outline: [CGPoint], solid: FaceSolid, layout: ShapeHeadLayout),
+                                samples: [(at: Double, body: FaceBody, eyes: FaceEyes)], period: Double,
+                                begin: CFTimeInterval, once: Bool) {
+        let side = bounds.width
+        let layout = jelly.layout
+        let place = layout.placement ?? HeadPlacement(k: 1, tx: 0, ty: 0), unit = side / 1024
+        let shape = HeadGeometry.form(head.form, seed: head.seed)
+        let (fx, fy, faceSize) = shape.face
+        let s = HeadGeometry.unit * faceSize, bold = side < 64 ? 1.2 : 1.0
+        let gap = 0.2 * s * place.k * unit
+        let eyeW = 0.15 * s * bold * place.k * unit
+        let eyeH = 0.38 * s * place.k * unit
+        let cx = (place.k * (512 + fx * HeadGeometry.unit) + place.tx) * unit
+        let cy = (place.k * (512 + fy * HeadGeometry.unit) + place.ty) * unit
+        let eyeColor = HeadRenderer.color(layout.eyeColor)
+        let scale = traitCollection.displayScale > 0 ? traitCollection.displayScale : 3
+        let times = samples.map { NSNumber(value: $0.at / period) }
+        func beyond(_ v: Double) -> Double { abs(v) <= 1 ? v : (v < 0 ? -1 : 1) * (1 + 0.35 * tanh((abs(v) - 1) / 0.35)) }
+        let glance = moves.glance
+        let count = samples.count
+
+        // Smooth horizontal gaze velocity for natural saccade lean (follow-through into eye darts).
+        let gazeVelX: [Double] = (0..<count).map { i in
+            let prev = once ? max(0, i - 1) : (i - 1 + count) % count
+            let next = once ? min(count - 1, i + 1) : (i + 1) % count
+            let dt = max(abs(samples[next].at - samples[prev].at), 1.0 / 60.0)
+            let dx = (samples[next].eyes.x - samples[prev].eyes.x) + (samples[next].body.turn - samples[prev].body.turn) / FaceEyes.across
+            return dx / dt
+        }
+        // Loop-locked integer harmonics for subtle living micro-drift and eye-breath (zero seam on loop wrap).
+        let driftK1 = once ? 0.0 : max(1, (period / 2.9).rounded())
+        let driftK2 = once ? 0.0 : max(1, (period / 4.7).rounded())
+        let breathK = once ? 0.0 : max(1, (period / 3.4).rounded())
+
+        eyesLayer.isHidden = true
+        let configs: [(CALayer, CGPoint, Double, Int)] = [
+            (leftEyeLayer, CGPoint(x: cx - gap, y: cy), -1, 0),
+            (rightEyeLayer, CGPoint(x: cx + gap, y: cy), 1, 1),   // 1-frame (~17 ms) natural blink stagger
+        ]
+        for (eyeLayer, restPoint, sideSign, blinkLag) in configs {
+            let prevPos = eyeLayer.isHidden ? nil : eyeLayer.presentation()?.position
+            let prevBounds = eyeLayer.isHidden ? nil : eyeLayer.presentation()?.bounds
+            let prevRadius = eyeLayer.isHidden ? nil : eyeLayer.presentation()?.cornerRadius
+            let prevTrans = eyeLayer.isHidden ? nil : eyeLayer.presentation()?.transform
+            eyeLayer.removeAllAnimations()
+            eyeLayer.bounds = CGRect(x: 0, y: 0, width: eyeW, height: eyeH)
+            eyeLayer.cornerRadius = min(eyeW, eyeH) / 2
+            eyeLayer.backgroundColor = eyeColor
+            eyeLayer.contentsScale = scale
+            eyeLayer.position = restPoint
+            eyeLayer.transform = CATransform3DIdentity
+            eyeLayer.opacity = 1
+            eyeLayer.isHidden = false
+
+            // 5-tap Gaussian smoothing on `lids` with 1-frame natural inter-eye stagger.
+            let smoothLids: [Double] = (0..<count).map { i in
+                func lid(_ idx: Int) -> Double {
+                    let sIdx = idx - blinkLag
+                    let j = once ? min(max(sIdx, 0), count - 1) : ((sIdx % count) + count) % count
+                    return min(max(samples[j].eyes.lids, 0), 1)
+                }
+                return 0.12 * lid(i - 2) + 0.22 * lid(i - 1) + 0.32 * lid(i) + 0.22 * lid(i + 1) + 0.12 * lid(i + 2)
+            }
+
+            var positions: [NSValue] = []
+            var boundsList: [NSValue] = []
+            var radii: [Double] = []
+            var transforms: [NSValue] = []
+            var opacities: [Double] = []
+            var needsFade = false
+
+            for (i, sample) in samples.enumerated() {
+                let totalTurn = sample.body.turn + beyond(sample.eyes.x) * FaceEyes.across * glance
+                let totalTip = sample.body.tip + beyond(sample.eyes.y) * FaceEyes.down * glance
+                let seat = jelly.solid.seat(restPoint, turn: totalTurn, tip: totalTip)
+                var wx = 0.0, wy = 0.0
+                if i < jelly.wobble.count {
+                    let w = jelly.wobble[i]
+                    let dx = restPoint.x - jelly.foot.x, dy = restPoint.y - jelly.foot.y
+                    wx = w.squash * dx - w.lean * dy
+                    wy = -w.squash * dy
+                }
+                // Subtle stereo gaze convergence: draw ~5% closer when leaning in closely, widen slightly gazing up.
+                let focus = min(max(sample.body.tip / 20, -0.5), 1.0)
+                let convergeX = -sideSign * gap * 0.055 * focus
+                // Living loop-locked micro-drift & eye-breath (subtle organic life during held poses).
+                let phase = sample.at / max(period, 1e-6)
+                let driftX = once ? 0 : side * 0.005 * sin(2 * Double.pi * driftK1 * phase + 0.35 * sideSign)
+                let driftY = once ? 0 : side * 0.004 * cos(2 * Double.pi * driftK2 * phase)
+                let eyeBreath = once ? 0 : 0.025 * sin(2 * Double.pi * breathK * phase)
+
+                let shut = smoothLids[i]
+                let wideBoost = min(max(sample.eyes.wide, 0), 1) * 0.16
+                let asym = min(max(sample.eyes.tilt, -1), 1) * 0.075 * sideSign
+
+                // True capsule dimensions (near/far perspective depth + foreshortening + volume-preserving blink).
+                let depthScale = seat.scale
+                let baseW = eyeW * min(max(seat.wide * depthScale, 0.12), 1.25)
+                let baseH = eyeH * min(max(seat.high * depthScale, 0.2), 1.25)
+                let w = max(eyeW * 0.22, baseW * (1 + 0.16 * shut - 0.04 * wideBoost))
+                let openFactor = max(0.0, (1 + wideBoost + asym + eyeBreath) * (1 - 0.90 * shut))
+                let h = max(eyeW * 0.42, baseH * openFactor)
+
+                // Top-down weighted eyelid closure: upper lid drops ~72%, lower lid lifts ~28%; perk lifts slightly up.
+                let lidDropY = (baseH - h) * 0.22 * shut - wideBoost * baseH * 0.06
+
+                positions.append(NSValue(cgPoint: CGPoint(x: restPoint.x + seat.dx + wx + convergeX + driftX,
+                                                          y: restPoint.y + seat.dy + wy + lidDropY + driftY)))
+                boundsList.append(NSValue(cgRect: CGRect(x: 0, y: 0, width: w, height: h)))
+                radii.append(min(w, h) / 2)
+
+                // Organic micro-tilt: saccade velocity lean + 3D dome contour alignment + curious asymmetry (clamped ±7°).
+                let saccadeTilt = tanh(gazeVelX[i] * 0.11) * 0.08
+                let domeTilt = 0.045 * min(max(sample.eyes.x, -1), 1) * min(max(sample.eyes.y, -1), 1)
+                let curiousTilt = 0.04 * min(max(sample.eyes.tilt, -1), 1)
+                let angle = min(max(saccadeTilt + domeTilt + curiousTilt, -0.13), 0.13)
+                transforms.append(NSValue(caTransform3D: CATransform3DMakeRotation(angle, 0, 0, 1)))
+
+                let k = min(max((seat.facing - 0.05) / 0.25, 0), 1)
+                let op = k * k * (3 - 2 * k)
+                if op < 0.99 { needsFade = true }
+                opacities.append(op)
+            }
+
+            let posAnim = CAKeyframeAnimation(keyPath: "position")   // motion-ok: still under Reduce Motion (syncFace)
+            posAnim.values = positions
+            posAnim.keyTimes = times
+            posAnim.calculationMode = .cubic
+            settle(posAnim, period: period, begin: begin, once: once)
+            eyeLayer.add(posAnim, forKey: "act")
+
+            let boundsAnim = CAKeyframeAnimation(keyPath: "bounds")  // motion-ok: still under Reduce Motion (syncFace)
+            boundsAnim.values = boundsList
+            boundsAnim.keyTimes = times
+            settle(boundsAnim, period: period, begin: begin, once: once)
+            eyeLayer.add(boundsAnim, forKey: "act.lids")
+
+            let radiusAnim = CAKeyframeAnimation(keyPath: "cornerRadius") // motion-ok: still under Reduce Motion (syncFace)
+            radiusAnim.values = radii
+            radiusAnim.keyTimes = times
+            settle(radiusAnim, period: period, begin: begin, once: once)
+            eyeLayer.add(radiusAnim, forKey: "act.radius")
+
+            let rotAnim = CAKeyframeAnimation(keyPath: "transform")  // motion-ok: still under Reduce Motion (syncFace)
+            rotAnim.values = transforms
+            rotAnim.keyTimes = times
+            settle(rotAnim, period: period, begin: begin, once: once)
+            eyeLayer.add(rotAnim, forKey: "act.tilt")
+
+            if needsFade {
+                let fadeAnim = CAKeyframeAnimation(keyPath: "opacity")   // motion-ok: still under Reduce Motion (syncFace)
+                fadeAnim.values = opacities
+                fadeAnim.keyTimes = times
+                settle(fadeAnim, period: period, begin: begin, once: once)
+                eyeLayer.add(fadeAnim, forKey: "act.seen")
+            }
+
+            if let prevPos, let prevBounds, let prevRadius, let prevTrans {
+                let then = Self.sample(in: samples, at: CACurrentMediaTime() + Self.bridgeLength - begin, period: period, once: once)
+                let idx = min(then, positions.count - 1)
+                bridge(eyeLayer, "position", from: NSValue(cgPoint: prevPos), to: positions[idx], key: "act.bridge")
+                bridge(eyeLayer, "bounds", from: NSValue(cgRect: prevBounds), to: boundsList[idx], key: "act.bridge.bounds")
+                bridge(eyeLayer, "cornerRadius", from: prevRadius, to: radii[idx], key: "act.bridge.radius")
+                bridge(eyeLayer, "transform", from: NSValue(caTransform3D: prevTrans), to: transforms[idx], key: "act.bridge.shape")
+            }
+        }
     }
 
     // MARK: [moods] A soft body (a Shapes head's, while it acts)
@@ -935,12 +1362,20 @@ final class HeadView: UIView {
     /// Whether this head's body is soft: a Shapes head out of a board.
     private var isSoft: Bool { !isMatrix && head.themed == nil && head.tile == .none }
 
+    /// Cached 3D cushion geometry for `(head, side)` so mood transitions never stall recomputing rest rings.
+    private static func cachedSolid(key: String, outline: [CGPoint], side: Double) -> FaceSolid {
+        if let hit = solidCache[key] { return hit }
+        if solidCache.count > 64 { solidCache.removeAll() }
+        let made = FaceSolid(outline: outline, side: side)
+        solidCache[key] = made
+        return made
+    }
+
     /// Shows the body as its outline and starts its jelly: a solid body turning and tipping (FaceSolid), squashing and
-    /// leaning on after each move (FaceJelly). Easing in from where a jelly playing before
-    /// shows, or from the body's picture. The wobble at each of the loop's samples, where it bends from (its foot), its
-    /// outline at rest (this view's points) and the solid, for the eyes to ride and keep inside; nil on a hard head.
+    /// leaning on after each move (FaceJelly). Easing in from where a jelly playing before shows, or from the body's
+    /// picture.
     private func playJelly(_ loop: FaceLoop, samples: [(at: Double, body: FaceBody, eyes: FaceEyes)], begin: CFTimeInterval,
-                           once: Bool) -> (wobble: [FaceJelly], foot: CGPoint, outline: [CGPoint], solid: FaceSolid)? {
+                           once: Bool) -> (wobble: [FaceJelly], foot: CGPoint, outline: [CGPoint], solid: FaceSolid, layout: ShapeHeadLayout)? {
         let side = bounds.width
         let layout = HeadGeometry.layout(head, compact: side < 64, darkPage: traitCollection.userInterfaceStyle == .dark)
         guard isSoft, layout.board == nil, layout.outline.count > 2 else {
@@ -950,7 +1385,9 @@ final class HeadView: UIView {
         let place = layout.placement ?? HeadPlacement(k: 1, tx: 0, ty: 0), unit = side / 1024
         let points = layout.outline.map { CGPoint(x: (place.k * $0.x + place.tx) * unit, y: (place.k * $0.y + place.ty) * unit) }
         let foot = CGPoint(x: points.map(\.x).reduce(0, +) / Double(points.count), y: points.map(\.y).max() ?? side)
-        let solid = FaceSolid(outline: points, side: side), still = HeadRenderer.outlinePath(solid.edge(solid.rest))
+        let solidKey = "\(head.cacheKey)|\(Int((side * 100).rounded()))"
+        let solid = Self.cachedSolid(key: solidKey, outline: points, side: side)
+        let still = HeadRenderer.outlinePath(solid.edge(solid.rest))
         // From the picture, the outline at rest (the same points as every edge it moves through, so one morphs into the next).
         let shownPath = jellyLayer.isHidden ? still : jellyLayer.presentation()?.path
         let shownBend = jellyLayer.isHidden ? CATransform3DIdentity : jellyLayer.presentation()?.transform
@@ -964,9 +1401,13 @@ final class HeadView: UIView {
         jellyLayer.contentsScale = traitCollection.displayScale > 0 ? traitCollection.displayScale : 3
         jellyLayer.isHidden = false
         bodyLayer.isHidden = true
-        // The edge: the solid seen turned and tipped at every sample, smoothed so it never flickers, worked out off the
-        // main thread; till then it shows as it stands.
-        let poses = samples.map { (at: $0.at, turn: $0.body.turn, tip: $0.body.tip) }
+
+        // The edge: the solid seen turned and tipped at 30 keyframes/s (Core Animation interpolates cleanly to 60/120 Hz),
+        // smoothed so it never boils or flickers, worked out off the main thread.
+        let pathSamples: [(at: Double, turn: Double, tip: Double)] = samples.enumerated().compactMap { i, s in
+            (i % 2 == 0 || i == samples.count - 1) ? (at: s.at, turn: s.body.turn, tip: s.body.tip) : nil
+        }
+        let poses = pathSamples
         let act = actKey, period = loop.period
         Task { [weak self] in
             let edges = await Task.detached(priority: .userInitiated) {
@@ -982,7 +1423,6 @@ final class HeadView: UIView {
             self.jellyLayer.removeAnimation(forKey: "act.bridge.path")
             self.jellyLayer.add(turning, forKey: "act.path")
             if let shown {
-                // Into where the act will be once the bridge is over.
                 let soon = CACurrentMediaTime() + Self.bridgeLength - begin
                 var t = once ? min(max(soon, 0), period) : soon.truncatingRemainder(dividingBy: period)
                 if t < 0 { t += period }
@@ -1005,15 +1445,14 @@ final class HeadView: UIView {
         settle(shape, period: loop.period, begin: begin, once: once)
         jellyLayer.add(shape, forKey: "act")
         if let shownPath, let shownBend {
-            // Into where the new act will be once the bridge is over.
             let then = Self.sample(in: samples, at: CACurrentMediaTime() + Self.bridgeLength - begin, period: loop.period, once: once)
             bridge(jellyLayer, "path", from: shownPath, to: still, key: "act.bridge.path")
             bridge(jellyLayer, "transform", from: NSValue(caTransform3D: shownBend), to: NSValue(caTransform3D: bend(wobble[then])))
         }
-        return (wobble, foot, points, solid)
+        return (wobble, foot, points, solid, layout)
     }
 
-    /// The act is over: the jelly eases back to the body's own outline, then the body's picture shows again.
+    /// The act is over: the jelly and GPU pill eyes ease smoothly back to rest, then the body's picture shows again.
     private func settleJelly() {
         guard !jellyLayer.isHidden else { return }
         let shownPath = jellyLayer.presentation()?.path, shownBend = jellyLayer.presentation()?.transform
@@ -1025,6 +1464,24 @@ final class HeadView: UIView {
             bridge(jellyLayer, "transform", from: NSValue(caTransform3D: shownBend), to: NSValue(caTransform3D: CATransform3DIdentity),
                    key: "act.end.bend")
         }
+        for eye in [leftEyeLayer, rightEyeLayer] where !eye.isHidden {
+            let shownPos = eye.presentation()?.position, shownBounds = eye.presentation()?.bounds
+            let shownRadius = eye.presentation()?.cornerRadius, shownTrans = eye.presentation()?.transform
+            eye.removeAllAnimations()
+            if let shownPos {
+                bridge(eye, "position", from: NSValue(cgPoint: shownPos), to: NSValue(cgPoint: eye.position), key: "act.end")
+            }
+            if let shownBounds {
+                bridge(eye, "bounds", from: NSValue(cgRect: shownBounds), to: NSValue(cgRect: eye.bounds), key: "act.end.bounds")
+            }
+            if let shownRadius {
+                bridge(eye, "cornerRadius", from: shownRadius, to: eye.cornerRadius, key: "act.end.radius")
+            }
+            if let shownTrans {
+                bridge(eye, "transform", from: NSValue(caTransform3D: shownTrans), to: NSValue(caTransform3D: CATransform3DIdentity),
+                       key: "act.end.shape")
+            }
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.bridgeLength) { [weak self] in
             guard let self, self.actKey.isEmpty else { return }
             self.dropJelly()
@@ -1035,7 +1492,12 @@ final class HeadView: UIView {
     private func dropJelly() {
         jellyLayer.removeAllAnimations()
         jellyLayer.isHidden = true
+        for eye in [leftEyeLayer, rightEyeLayer] {
+            eye.removeAllAnimations()
+            eye.isHidden = true
+        }
         bodyLayer.isHidden = false
+        if eyesLayer.contents != nil { eyesLayer.isHidden = false }
     }
 
     // MARK: Motion while the bot works

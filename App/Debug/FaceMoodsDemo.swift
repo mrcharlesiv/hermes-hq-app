@@ -37,7 +37,7 @@ private final class FaceMoodsDemoController: UIViewController {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
         let title = UILabel()
-        title.text = theme.map { "What each bot is doing: \($0 == "blob" ? "Blob" : "Dots")" } ?? "What each bot is doing"
+        title.text = theme.map { "What each bot is doing: \($0 == "blob" ? "Blob" : $0.capitalized)" } ?? "What each bot is doing"
         title.font = .systemFont(ofSize: 22, weight: .bold)
         let big = grid(side: 92, columns: 3, label: 13)
         let small = grid(side: 40, columns: 6, label: 10)

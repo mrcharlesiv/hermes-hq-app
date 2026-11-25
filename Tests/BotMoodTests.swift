@@ -474,4 +474,41 @@ struct BotMoodTests {
         #expect(alpha(full, MatrixHead.Cell(10, 10)) > 0)
         #expect(alpha(rim, MatrixHead.Cell(10, 10)) == 0, "the rim leaves the middle out")
     }
+
+    /// Expanded 20×20 dot-matrix eye freedom: full −2…2 across, −2…1 vertically (including looking down), and wide
+    /// 5-LED normal slits all keep a full 1-LED lit ring on every silhouette in both facings.
+    @Test(arguments: MatrixDesign.Silhouette.allCases)
+    func expandedMatrixEyeRangeFitsEverySilhouette(silhouette: MatrixDesign.Silhouette) {
+        for facing in [-1, 1] {
+            let body = MatrixHead.leds(silhouette, facing: facing)
+            func lit(_ col: Int, _ row: Int) -> Bool {
+                (0..<MatrixHead.grid).contains(row) && (0..<MatrixHead.grid).contains(col) && body[row][col]
+            }
+            let design = MatrixDesign(silhouette: silhouette, facing: facing)
+            for gaze in -2...2 {
+                for lift in -2...1 {
+                    let poses = [MatrixPose(gaze: gaze, lift: lift)] + (lift >= -1 ? [MatrixPose(gaze: gaze, lift: lift, wide: true)] : [])
+                    for pose in poses {
+                        let leds = MatrixHead.faceLEDs(design, pose: pose)
+                        #expect(leds.count == (pose.wide ? 10 : 8), "\(silhouette) \(pose.key)")
+                        for cell in leds.keys {
+                            let ring = (-1...1).allSatisfy { dy in (-1...1).allSatisfy { dx in lit(cell.col + dx, cell.row + dy) } }
+                            #expect(ring, "\(silhouette) facing \(facing) at \(pose.key): \(cell.col),\(cell.row)")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Matrix acts now use the wider eye freedom (looking down while reading/running/failing, far sideways while
+    /// searching, and wide perked normal slits on bright moments).
+    @Test func matrixActsUseExpandedRange() {
+        let design = MatrixDesign(silhouette: .round, facing: 1)
+        #expect(MatrixAct.make(.reading, design: design).poses.contains { $0.lift == 1 }, "reading looks down")
+        #expect(MatrixAct.make(.searching, design: design).poses.contains { abs($0.gaze) == 2 }, "searching looks far aside")
+        #expect(MatrixAct.make(.asking, design: design).poses.contains { $0.wide }, "asking perks eyes wide")
+        #expect(MatrixAct.make(.done, design: design).poses.contains { $0.wide }, "done perks eyes wide")
+        #expect(FaceRoutines.clips(.done, facing: 1).contains { $0.body.contains { abs($0.value.turn) >= 359 } }, "done has 3D pirouette")
+    }
 }

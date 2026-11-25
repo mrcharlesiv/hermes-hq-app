@@ -28,17 +28,21 @@ nonisolated struct FaceBody: Hashable, Sendable {
     }
 }
 
-/// Where the eyes look (−1…1 each way, + right and down) and how far shut they are (0 open … 1 shut).
+/// Where the eyes look (−1…1 each way, + right and down), how far shut they are (0 open … 1 shut), how wide/perked
+/// they open (0 normal … 1 wide, still normal slits), and subtle inquisitive asymmetry (−1…1: + right eye slightly
+/// wider than left).
 nonisolated struct FaceEyes: Hashable, Sendable {
-    var x = 0.0, y = 0.0, lids = 0.0
+    var x = 0.0, y = 0.0, lids = 0.0, wide = 0.0, tilt = 0.0
 
     static let rest = FaceEyes()
     /// How far a look all the way across (1) or down turns the eyes round a round body, degrees: the same as the body
     /// turning or tipping that far, so a look and a turn add up to where the face is looking.
-    static let across = 32.0, down = 24.0
+    static let across = 34.0, down = 26.0
 
     func mixed(_ other: FaceEyes, _ k: Double) -> FaceEyes {
-        FaceEyes(x: x + (other.x - x) * k, y: y + (other.y - y) * k, lids: lids + (other.lids - lids) * k)
+        func mix(_ a: Double, _ b: Double) -> Double { a + (b - a) * k }
+        return FaceEyes(x: mix(x, other.x), y: mix(y, other.y), lids: mix(lids, other.lids),
+                        wide: mix(wide, other.wide), tilt: mix(tilt, other.tilt))
     }
 }
 
@@ -51,6 +55,10 @@ nonisolated struct FaceEase: Hashable, Sendable {
     static let glide = FaceEase(x1: 0.42, y1: 0, x2: 0.22, y2: 1)
     /// Quick off, running about 15 % past and settling back: a head swinging round, a landing.
     static let spring = FaceEase(x1: 0.3, y1: 1.6, x2: 0.45, y2: 1.1)
+    /// Livelier overshoot for playful hops and joyful settles.
+    static let bouncy = FaceEase(x1: 0.26, y1: 1.75, x2: 0.42, y2: 1.08)
+    /// Crisp off, soft landing: quick eye saccades and alert snaps.
+    static let snappy = FaceEase(x1: 0.18, y1: 0, x2: 0.12, y2: 1)
     /// Faster and faster: a fall, a push.
     static let drop = FaceEase(x1: 0.55, y1: 0, x2: 0.9, y2: 0.55)
     /// Fast off, slowing to the top: a jump.
@@ -163,11 +171,17 @@ nonisolated struct FaceScript {
         Self.add(&eyes, at, over, ease, to)
     }
 
-    /// The lids drop quickly, stay shut a moment and lift again more slowly (0.26 s).
+    /// The lids drop smoothly, pause briefly shut, and lift again softly (0.28 s).
     mutating func blink(_ at: Double) {
         let open = looking
-        look(at, 0.07, .drop) { $0.lids = 1 }
-        look(at + 0.11, 0.15, to: open)
+        look(at, 0.09, .glide) { $0.lids = 1; $0.wide = 0 }
+        look(at + 0.12, 0.16, .glide, to: open)
+    }
+
+    /// Two quick natural blinks (0.58 s).
+    mutating func doubleBlink(_ at: Double) {
+        blink(at)
+        blink(at + 0.3)
     }
 
     mutating func mark(_ at: Double) { marks.append(at) }
@@ -230,294 +244,486 @@ nonisolated enum FaceRoutines {
 
     /// A hop on the spot from `at` (0.62 s): down, up `height`, a squash as it lands, back where it was. When it lands.
     @discardableResult
-    private static func hop(_ script: inout FaceScript, _ at: Double, height: Double) -> Double {
+    private static func hop(_ script: inout FaceScript, _ at: Double, height: Double, roll: Double = 0) -> Double {
         let from = script.now
-        script.move(at, 0.1) { $0.squash = from.squash + 0.06 }
-        script.move(at + 0.1, 0.16, .rise) { $0.y = from.y - height; $0.squash = from.squash - 0.05 }
-        script.move(at + 0.26, 0.14, .drop) { $0.y = from.y; $0.squash = from.squash + 0.05 }
+        script.move(at, 0.1) { $0.squash = from.squash + 0.08; $0.y = from.y + 0.012 }
+        script.move(at + 0.1, 0.16, .rise) {
+            $0.y = from.y - height; $0.squash = from.squash - 0.07; $0.roll = from.roll + roll
+        }
+        script.move(at + 0.26, 0.14, .drop) {
+            $0.y = from.y + 0.008; $0.squash = from.squash + 0.075; $0.roll = from.roll
+        }
         script.move(at + 0.4, 0.22, .spring, to: from)
         return at + 0.4
     }
 
     /// A nod from `at` (0.5 s): the face dips and comes back up. Marks the dip.
-    private static func nod(_ script: inout FaceScript, _ at: Double, depth: Double = 9) {
+    private static func nod(_ script: inout FaceScript, _ at: Double, depth: Double = 11) {
         let from = script.now
-        script.move(at, 0.16) { $0.tip = from.tip + depth; $0.y = from.y + 0.008 }
-        script.move(at + 0.16, 0.34, .spring, to: from)
-        script.mark(at + 0.16)
+        script.move(at, 0.15, .snappy) { $0.tip = from.tip + depth; $0.y = from.y + 0.016; $0.squash = from.squash + 0.03 }
+        script.move(at + 0.15, 0.35, .spring, to: from)
+        script.mark(at + 0.15)
     }
 
     private static func thinking(_ f: Double) -> [FaceClip] {
-        // Chin up, turned a little to one side, eyes up there: turning something over.
-        let body = FaceBody(roll: 3 * f, turn: 10 * f, tip: -6), eyes = FaceEyes(x: 0.6 * f, y: -0.85)
-        var over = FaceScript(body, eyes)       // slowly round to the other side, and back
-        over.move(1.0, 1.2) { $0.turn = -12 * f; $0.roll = -3 * f; $0.tip = -8 }
-        over.look(1.05, 0.3) { $0.x = -0.6 * f }
-        over.blink(2.7)
-        over.move(3.4, 1.2, to: body)
-        over.look(3.5, 0.3, to: eyes)
-        var hmm = FaceScript(body, eyes)        // settles, squints at it, then perks up: got it
-        hmm.move(0.6, 0.5) { $0.tip = 4; $0.squash = 0.04; $0.turn = 4 * f; $0.roll = 0 }
-        hmm.look(0.6, 0.3) { $0.lids = 0.5; $0.y = 0.1; $0.x = 0.2 * f }
-        hmm.move(2.0, 0.22, .rise) { $0.tip = -10; $0.squash = -0.06; $0.y = -0.03 }
-        hmm.look(2.0, 0.12) { $0.lids = 0; $0.y = -0.5; $0.x = 0 }
-        hmm.move(2.22, 0.5, .spring, to: body)
-        hmm.look(2.9, 0.25, to: eyes)
-        hmm.blink(3.6)
-        var about = FaceScript(body, eyes)      // glances about up there
-        about.look(0.5, 0.14) { $0.x = -0.5 * f; $0.y = -1 }
-        about.move(0.5, 0.5) { $0.turn = -6 * f; $0.roll = 0 }
-        about.look(1.3, 0.14) { $0.x = f; $0.y = -0.6 }
-        about.move(1.3, 0.5, .spring) { $0.turn = 18 * f; $0.roll = 5 * f }
-        about.blink(2.1)
+        // Chin up, turned thoughtfully to one side, eyes up there: turning something over.
+        let body = FaceBody(roll: 5 * f, turn: 14 * f, tip: -8), eyes = FaceEyes(x: 0.65 * f, y: -0.85)
+        var over = FaceScript(body, eyes)       // slowly drifts round to the other side, and back
+        over.look(0.85, 0.22, .snappy) { $0.x = -0.75 * f; $0.y = -0.95; $0.tilt = -0.25 * f }
+        over.move(0.95, 1.25) { $0.turn = -18 * f; $0.roll = -6 * f; $0.tip = -10; $0.x = -0.015 * f }
+        over.blink(2.55)
+        over.look(3.25, 0.25, .snappy, to: eyes)
+        over.move(3.35, 1.3, to: body)
+
+        var hmm = FaceScript(body, eyes)        // leans in, squints in concentration, then lightbulb perk-up!
+        hmm.move(0.45, 0.48) { $0.tip = 6; $0.squash = 0.055; $0.y = 0.018; $0.turn = 6 * f; $0.roll = -2 * f }
+        hmm.look(0.45, 0.26) { $0.lids = 0.55; $0.y = 0.18; $0.x = 0.25 * f; $0.tilt = 0.45 * f }
+        hmm.move(1.75, 0.24, .rise) { $0.tip = -13; $0.squash = -0.08; $0.y = -0.048; $0.turn = 0; $0.roll = 3 * f }
+        hmm.look(1.72, 0.12, .snappy) { $0.lids = 0; $0.wide = 0.85; $0.y = -0.45; $0.x = 0; $0.tilt = 0 }
+        hmm.mark(1.95)
+        hmm.move(2.05, 0.55, .bouncy, to: body)
+        hmm.look(2.55, 0.22, to: eyes)
+        hmm.doubleBlink(3.35)
+
+        var about = FaceScript(body, eyes)      // eyes darting up connecting ideas
+        about.look(0.4, 0.12, .snappy) { $0.x = -0.65 * f; $0.y = -1; $0.wide = 0.2 }
+        about.move(0.45, 0.52, .spring) { $0.turn = -10 * f; $0.roll = -3 * f; $0.tip = -11 }
+        about.look(1.3, 0.12, .snappy) { $0.x = 1 * f; $0.y = -0.55; $0.wide = 0.3 }
+        about.move(1.35, 0.52, .spring) { $0.turn = 22 * f; $0.roll = 7 * f; $0.tip = -6 }
+        about.blink(2.15)
+        about.look(2.65, 0.2, to: eyes)
         about.move(2.7, 0.9, to: body)
-        about.look(2.7, 0.2, to: eyes)
-        return [over.clip(5.2), hmm.clip(4.4), about.clip(4.0)]
+
+        var weigh = FaceScript(body, eyes)      // weighs option A vs option B
+        weigh.look(0.35, 0.16, .snappy) { $0.x = -0.8 * f; $0.y = -0.35; $0.tilt = -0.35 * f }
+        weigh.move(0.4, 0.65, .spring) { $0.roll = -10 * f; $0.turn = -15 * f; $0.tip = -3; $0.y = 0.01 }
+        weigh.look(1.5, 0.16, .snappy) { $0.x = 0.85 * f; $0.y = -0.45; $0.tilt = 0.35 * f }
+        weigh.move(1.55, 0.65, .spring) { $0.roll = 10 * f; $0.turn = 18 * f; $0.tip = -5; $0.y = -0.01 }
+        weigh.blink(2.5)
+        weigh.look(2.95, 0.22, to: eyes)
+        weigh.move(3.0, 0.85, to: body)
+        return [over.clip(5.2), hmm.clip(4.4), about.clip(4.0), weigh.clip(4.2)]
     }
 
     private static func reading() -> [FaceClip] {
-        // Head down to the page, eyes narrowed at the start of a line.
-        let body = FaceBody(turn: -6, tip: 8, squash: 0.02), eyes = FaceEyes(x: -0.8, y: 0.35, lids: 0.35)
-        var lines = FaceScript(body, eyes)      // three lines, the head following each along
+        // Head down to the page, focused narrowed eyes at the start of a line.
+        let body = FaceBody(turn: -8, tip: 10, squash: 0.025), eyes = FaceEyes(x: -0.85, y: 0.32, lids: 0.32)
+        var lines = FaceScript(body, eyes)      // three lines down the page, saccadic rhythm & crisp carriage returns
         for line in 0..<3 {
             let t = Double(line) * 1.15
-            lines.look(t + 0.05, 0.85, .linear) { $0.x = 0.8 }
-            lines.move(t + 0.05, 0.85) { $0.turn = 6 }
-            lines.look(t + 0.95, 0.14) { $0.x = -0.8; $0.y = line < 2 ? 0.35 + 0.15 * Double(line + 1) : 0.35 }
-            lines.move(t + 0.95, 0.18) { $0.turn = -6 }
+            let rowY = 0.32 + 0.23 * Double(line)
+            lines.look(t + 0.04, 0.4, .glide) { $0.x = 0.05; $0.y = rowY }
+            lines.look(t + 0.48, 0.4, .glide) { $0.x = 0.88; $0.y = rowY }
+            lines.move(t + 0.04, 0.84) { $0.turn = 8; $0.tip = 10 + 2.5 * Double(line); $0.roll = 2 }
+            lines.mark(t + 0.92)
+            lines.look(t + 0.92, 0.12, .snappy) { $0.x = -0.85; $0.y = line < 2 ? 0.32 + 0.23 * Double(line + 1) : 0.32 }
+            lines.move(t + 0.92, 0.18, .snappy) { $0.turn = -8; $0.tip = line < 2 ? 10 + 2.5 * Double(line + 1) : 10; $0.roll = 0 }
         }
-        var close = FaceScript(body, eyes)      // leans in to a hard bit
-        close.move(0.2, 0.5) { $0.tip = 14; $0.y = 0.015; $0.squash = -0.02 }
-        close.look(0.2, 0.3) { $0.lids = 0.55 }
-        close.look(0.8, 0.9, .linear) { $0.x = 0.8 }
-        close.move(0.8, 0.9) { $0.turn = 6 }
-        close.look(1.75, 0.14) { $0.x = -0.8 }
-        close.move(1.75, 0.3) { $0.turn = -6 }
-        close.blink(2.3)
-        close.move(2.7, 0.6, to: body)
-        close.look(2.7, 0.3, to: eyes)
-        return [lines.clip(3.6), close.clip(3.8)]
+
+        var close = FaceScript(body, eyes)      // leans in to a dense bit, reads, slow understanding nod
+        close.move(0.18, 0.46) { $0.tip = 16; $0.y = 0.025; $0.squash = -0.025; $0.roll = -3 }
+        close.look(0.18, 0.24) { $0.lids = 0.52; $0.y = 0.5 }
+        close.look(0.75, 0.92, .linear) { $0.x = 0.88 }
+        close.move(0.75, 0.92) { $0.turn = 9; $0.roll = 2 }
+        close.look(1.72, 0.12, .snappy) { $0.x = -0.85; $0.y = 0.65 }
+        close.move(1.72, 0.26) { $0.turn = -8; $0.roll = 0 }
+        nod(&close, 2.05, depth: 8)
+        close.blink(2.6)
+        close.move(2.95, 0.6, to: body)
+        close.look(2.95, 0.25, to: eyes)
+
+        var skim = FaceScript(body, eyes)       // fast vertical skim, catches an interesting detail
+        skim.move(0.2, 0.55) { $0.turn = 0; $0.tip = 6; $0.y = -0.008 }
+        skim.look(0.2, 0.16, .snappy) { $0.x = -0.2; $0.y = 0.1; $0.lids = 0.15 }
+        skim.look(0.65, 0.65, .glide) { $0.x = 0.25; $0.y = 0.82 }
+        skim.move(0.75, 0.65) { $0.tip = 15; $0.y = 0.02 }
+        skim.look(1.45, 0.12, .snappy) { $0.lids = 0; $0.wide = 0.55; $0.x = 0.4; $0.y = 0.6 }
+        skim.move(1.45, 0.28, .spring) { $0.roll = 6; $0.squash = -0.04; $0.tip = 11 }
+        skim.mark(1.55)
+        skim.blink(2.1)
+        skim.move(2.55, 0.65, to: body)
+        skim.look(2.55, 0.22, to: eyes)
+        return [lines.clip(3.6), close.clip(3.8), skim.clip(3.4)]
     }
 
     private static func searching(_ f: Double) -> [FaceClip] {
         let body = FaceBody(tip: -3), eyes = FaceEyes(y: -0.2)
-        var sides = FaceScript(body, eyes)      // a quick look each way, eyes first
-        sides.look(0.2, 0.1) { $0.x = -1 }
-        sides.move(0.22, 0.32, .spring) { $0.turn = -24; $0.x = -0.025; $0.roll = -4 }
-        sides.look(1.0, 0.1) { $0.x = 1 }
-        sides.move(1.02, 0.4, .spring) { $0.turn = 24; $0.x = 0.025; $0.roll = 4 }
-        sides.blink(1.75)
-        sides.move(2.2, 0.4, to: body)
-        sides.look(2.2, 0.12, to: eyes)
-        var peer = FaceScript(body, eyes)       // leans in and looks along
-        peer.move(0.3, 0.4) { $0.tip = 10; $0.y = 0.02; $0.squash = 0.03 }
-        peer.look(0.3, 0.2) { $0.y = 0.3 }
-        peer.look(1.2, 0.12) { $0.x = -0.8 * f }
-        peer.move(1.2, 0.35) { $0.turn = -10 * f }
-        peer.look(1.9, 0.12) { $0.x = 0.8 * f }
-        peer.move(1.9, 0.35) { $0.turn = 10 * f }
-        peer.move(2.7, 0.5, to: body)
-        peer.look(2.7, 0.2, to: eyes)
+        var sides = FaceScript(body, eyes)      // crisp eyes-first look each way
+        sides.look(0.18, 0.09, .snappy) { $0.x = -1; $0.wide = 0.25 }
+        sides.move(0.22, 0.34, .spring) { $0.turn = -28; $0.x = -0.036; $0.roll = -6 }
+        sides.look(1.05, 0.09, .snappy) { $0.x = 1; $0.wide = 0.25 }
+        sides.move(1.09, 0.42, .spring) { $0.turn = 28; $0.x = 0.036; $0.roll = 6 }
+        sides.blink(1.85)
+        sides.look(2.25, 0.12, .snappy, to: eyes)
+        sides.move(2.3, 0.48, to: body)
+
+        var peer = FaceScript(body, eyes)       // leans in and scans along closely
+        peer.move(0.25, 0.42) { $0.tip = 13; $0.y = 0.028; $0.squash = 0.045 }
+        peer.look(0.25, 0.18) { $0.y = 0.48; $0.lids = 0.35 }
+        peer.look(1.05, 0.12, .snappy) { $0.x = -0.9 * f }
+        peer.move(1.1, 0.36, .spring) { $0.turn = -16 * f; $0.roll = -3 * f }
+        peer.look(1.85, 0.12, .snappy) { $0.x = 0.9 * f }
+        peer.move(1.9, 0.38, .spring) { $0.turn = 16 * f; $0.roll = 3 * f }
+        peer.look(2.75, 0.18, to: eyes)
+        peer.move(2.8, 0.52, to: body)
+
         var up = FaceScript(body, eyes)         // scans along the top
-        up.move(0.25, 0.45) { $0.turn = 14 * f; $0.tip = -14 }
-        up.look(0.25, 0.14) { $0.x = 0.7 * f; $0.y = -1 }
-        up.move(1.1, 0.6) { $0.turn = -14 * f; $0.tip = -12 }
-        up.look(1.15, 0.2) { $0.x = -0.7 * f }
-        up.move(2.1, 0.5, to: body)
-        up.look(2.1, 0.15, to: eyes)
-        return [sides.clip(3.0), peer.clip(3.6), up.clip(3.0)]
+        up.look(0.2, 0.12, .snappy) { $0.x = 0.8 * f; $0.y = -1; $0.wide = 0.3 }
+        up.move(0.24, 0.45, .spring) { $0.turn = 18 * f; $0.tip = -16; $0.roll = 4 * f }
+        up.look(1.1, 0.18, .glide) { $0.x = -0.8 * f; $0.y = -0.95 }
+        up.move(1.15, 0.62) { $0.turn = -18 * f; $0.tip = -14; $0.roll = -4 * f }
+        up.look(2.15, 0.15, to: eyes)
+        up.move(2.2, 0.5, to: body)
+
+        var doubleTake = FaceScript(body, eyes) // looks left, starts right, snaps BACK left ("wait—what was that?!")
+        doubleTake.look(0.18, 0.1, .snappy) { $0.x = -0.9 * f }
+        doubleTake.move(0.22, 0.34, .spring) { $0.turn = -20 * f; $0.roll = -4 * f }
+        doubleTake.look(0.85, 0.12, .snappy) { $0.x = 0.6 * f }
+        doubleTake.move(0.88, 0.28) { $0.turn = 10 * f; $0.roll = 2 * f }
+        doubleTake.look(1.24, 0.08, .snappy) { $0.x = -1 * f; $0.y = -0.05; $0.wide = 0.75; $0.tilt = -0.4 * f }
+        doubleTake.move(1.26, 0.3, .bouncy) { $0.turn = -26 * f; $0.roll = -8 * f; $0.y = -0.022; $0.squash = -0.04; $0.tip = 4 }
+        doubleTake.mark(1.42)
+        doubleTake.blink(2.2)
+        doubleTake.look(2.7, 0.16, to: eyes)
+        doubleTake.move(2.75, 0.55, to: body)
+        return [sides.clip(3.1), peer.clip(3.6), up.clip(3.0), doubleTake.clip(3.6)]
     }
 
     private static func running(_ f: Double) -> [FaceClip] {
-        // Head down a little, eyes narrowed on the work.
-        let body = FaceBody(tip: 5), eyes = FaceEyes(y: 0.25, lids: 0.3)
-        var busy = FaceScript(body, eyes)       // working away to a beat, bobbing to it
+        // Head down into the work, focused narrowed eyes, unmistakable kinetic rhythm even at 40 pt.
+        let body = FaceBody(tip: 6), eyes = FaceEyes(y: 0.42, lids: 0.28)
+        var busy = FaceScript(body, eyes)       // working away to an energetic alternating groove
         for beat in 0..<4 {
             let t = Double(beat) * 0.6
-            busy.move(t, 0.3) { $0.y = 0.012; $0.squash = 0.035 }
-            busy.move(t + 0.3, 0.3, to: body)
+            let side = beat % 2 == 0 ? f : -f
+            busy.move(t, 0.26, .drop) { $0.y = 0.038; $0.squash = 0.07; $0.roll = 4.5 * side; $0.tip = 10 }
+            busy.move(t + 0.26, 0.34, .spring, to: body)
+            busy.mark(t + 0.26)
+            if beat == 0 || beat == 2 {
+                busy.look(t + 0.05, 0.14, .snappy) { $0.x = 0.45 * side }
+            }
         }
-        busy.blink(1.5)
-        var check = FaceScript(body, eyes)      // a look at what came out, then back to it
-        check.look(0.4, 0.12) { $0.x = f; $0.lids = 0.1 }
-        check.move(0.4, 0.4, .spring) { $0.turn = 18 * f; $0.roll = 3 * f; $0.tip = 2 }
-        check.blink(1.1)
-        check.look(1.5, 0.12, to: eyes)
-        check.move(1.5, 0.4, to: body)
-        for t in [2.2, 2.7] {
-            check.move(t, 0.25) { $0.y = 0.012; $0.squash = 0.035 }
-            check.move(t + 0.25, 0.25, to: body)
+        busy.look(1.85, 0.16, to: eyes)
+        busy.blink(2.05)
+
+        var check = FaceScript(body, eyes)      // snaps up to check output, satisfied mini-nod, back to work
+        check.look(0.32, 0.1, .snappy) { $0.x = 0.95 * f; $0.y = -0.2; $0.lids = 0; $0.wide = 0.5 }
+        check.move(0.35, 0.38, .spring) { $0.turn = 22 * f; $0.roll = 5 * f; $0.tip = -2; $0.y = -0.015 }
+        check.blink(1.0)
+        nod(&check, 1.25, depth: 7)
+        check.look(1.78, 0.12, .snappy, to: eyes)
+        check.move(1.8, 0.34, to: body)
+        for (i, t) in [2.2, 2.7].enumerated() {
+            let side = i == 0 ? f : -f
+            check.move(t, 0.22, .drop) { $0.y = 0.036; $0.squash = 0.068; $0.roll = 4 * side; $0.tip = 10 }
+            check.move(t + 0.22, 0.28, .spring, to: body)
+            check.mark(t + 0.22)
         }
-        return [busy.clip(2.4), check.clip(3.2)]
+
+        var rev = FaceScript(body, eyes)        // leans in intensely watching rapid logs, then quick perk breath
+        rev.move(0.2, 0.38) { $0.tip = 12; $0.squash = 0.05; $0.y = 0.022 }
+        rev.look(0.2, 0.18) { $0.lids = 0.45; $0.y = 0.55; $0.x = -0.65 * f }
+        rev.look(0.7, 0.22, .snappy) { $0.x = 0.7 * f; $0.y = 0.35 }
+        rev.move(0.72, 0.34) { $0.turn = 10 * f; $0.roll = 3 * f }
+        rev.look(1.18, 0.22, .snappy) { $0.x = -0.55 * f; $0.y = 0.65 }
+        rev.move(1.2, 0.34) { $0.turn = -10 * f; $0.roll = -3 * f }
+        rev.move(1.75, 0.26, .rise) { $0.tip = -1; $0.squash = -0.055; $0.y = -0.028; $0.turn = 0; $0.roll = 0 }
+        rev.look(1.75, 0.14, .snappy) { $0.lids = 0; $0.wide = 0.45; $0.x = 0; $0.y = 0.1 }
+        rev.mark(1.9)
+        rev.move(2.15, 0.52, .spring, to: body)
+        rev.look(2.2, 0.22, to: eyes)
+        return [busy.clip(2.4), check.clip(3.2), rev.clip(2.8)]
     }
 
     private static func writing(_ f: Double) -> [FaceClip] {
-        // Eyes on the start of a line, the head with them: two lines typed, then a look at them in the pause.
-        let body = FaceBody(roll: -2, turn: -6, tip: 6), eyes = FaceEyes(x: -0.8, y: 0.3, lids: 0.3)
+        // Eyes on the start of a line, the head with them: two lines typed with kinetic cadence, then a beat in the pause.
+        let body = FaceBody(roll: -3, turn: -8, tip: 8), eyes = FaceEyes(x: -0.85, y: 0.32, lids: 0.28)
         func typed(tilt: Double) -> FaceScript {
             var script = FaceScript(body, eyes)
             for line in 0..<2 {
                 let t = Double(line) * lineLength
-                script.look(t + 0.05, lineLength - 0.15, .linear) { $0.x = 0.8 }
-                script.move(t + 0.05, lineLength - 0.15) { $0.turn = 6; $0.roll = tilt }
+                let rowY = line == 0 ? 0.32 : 0.65
+                script.look(t + 0.05, lineLength - 0.16, .linear) { $0.x = 0.88; $0.y = rowY }
+                // Mid-line keystroke micro-dip for lively typing rhythm.
+                script.move(t + 0.05, (lineLength - 0.16) * 0.5) { $0.turn = 0; $0.roll = tilt * 0.3; $0.y = 0.014; $0.squash = 0.025 }
+                script.move(t + 0.05 + (lineLength - 0.16) * 0.5, (lineLength - 0.16) * 0.5) {
+                    $0.turn = 9; $0.roll = tilt; $0.y = 0; $0.squash = 0; $0.tip = 8 + Double(line) * 3
+                }
                 guard line == 0 else { continue }
-                // Back to the start of the next line.
-                script.move(t + lineLength - 0.1, 0.1) { $0.turn = -6; $0.roll = -tilt }
-                script.look(t + lineLength - 0.08, 0.08) { $0.x = -0.8; $0.y = 0.55 }
+                // Crisp carriage return to the start of line 2.
+                script.move(t + lineLength - 0.11, 0.11, .snappy) { $0.turn = -8; $0.roll = -tilt * 0.7; $0.tip = 11 }
+                script.look(t + lineLength - 0.09, 0.09, .snappy) { $0.x = -0.85; $0.y = 0.65 }
             }
             return script
         }
         let end = 2 * lineLength
-        var plain = typed(tilt: 2)
-        plain.look(end, 0.16, to: eyes)
-        plain.move(end, 0.3, to: body)
-        var pleased = typed(tilt: 5 * f)        // head on one side, a nod at the end
-        pleased.move(end - 0.05, 0.12) { $0.tip = 12 }
-        pleased.look(end, 0.16, to: eyes)
-        pleased.move(end + 0.07, 0.3, .spring, to: body)
         let length = end + typingPause
-        return [plain.clip(length), pleased.clip(length)]
+
+        var plain = typed(tilt: 3)
+        plain.look(end, 0.16, .snappy, to: eyes)
+        plain.move(end, 0.32, .spring, to: body)
+
+        var pleased = typed(tilt: 6 * f)        // head on one side, widens & nods pleased at the end
+        pleased.look(end - 0.08, 0.1, .snappy) { $0.lids = 0; $0.wide = 0.45 }
+        pleased.move(end - 0.06, 0.12, .snappy) { $0.tip = 15; $0.y = 0.018; $0.squash = 0.035 }
+        pleased.mark(end + 0.04)
+        pleased.look(end + 0.08, 0.18, to: eyes)
+        pleased.move(end + 0.06, 0.3, .spring, to: body)
+
+        var revise = FaceScript(body, eyes)     // starts line 1, brief squint-tilt rethink, brisk finish + line 2
+        revise.look(0.05, 0.42, .linear) { $0.x = 0.05; $0.y = 0.32 }
+        revise.move(0.05, 0.42) { $0.turn = 0; $0.roll = -7 * f }
+        revise.look(0.5, 0.14) { $0.lids = 0.52; $0.tilt = 0.35 * f }
+        revise.look(0.78, 0.5, .snappy) { $0.x = 0.88; $0.lids = 0.28; $0.tilt = 0 }
+        revise.move(0.78, 0.5, .snappy) { $0.turn = 9; $0.roll = 4 * f }
+        revise.move(lineLength - 0.11, 0.11, .snappy) { $0.turn = -8; $0.roll = -3; $0.tip = 11 }
+        revise.look(lineLength - 0.09, 0.09, .snappy) { $0.x = -0.85; $0.y = 0.65 }
+        revise.look(lineLength + 0.05, lineLength - 0.16, .linear) { $0.x = 0.88; $0.y = 0.65 }
+        revise.move(lineLength + 0.05, lineLength - 0.16) { $0.turn = 9; $0.roll = 3; $0.tip = 11 }
+        revise.look(end, 0.16, to: eyes)
+        revise.move(end, 0.32, .spring, to: body)
+        return [plain.clip(length), pleased.clip(length), revise.clip(length)]
     }
 
     private static func browsing() -> [FaceClip] {
         // The eyes on the pointer, the head turning after them.
-        func at(_ stop: CGPoint, turn: Double) -> (FaceBody, FaceEyes) {
+        func at(_ stop: CGPoint, turn: Double, rollScale: Double = 4.5) -> (FaceBody, FaceEyes) {
             let x = (stop.x - 0.5) * 2.6, y = (stop.y - 0.5) * 2.6
-            return (FaceBody(roll: x * 3, turn: x * turn, tip: y * 10), FaceEyes(x: x, y: y))
+            return (FaceBody(roll: x * rollScale, turn: x * turn, tip: y * 13), FaceEyes(x: x, y: y))
         }
         let last = stops[stops.count - 1]
-        var clicks = FaceScript(at(last, turn: 16).0, at(last, turn: 16).1)     // a little peck as it clicks
-        var follows = FaceScript(at(last, turn: 16).0, at(last, turn: 16).1)    // the head swinging after the eyes
+        let home = at(last, turn: 18)
+        var clicks = FaceScript(home.0, home.1)     // crisp tactile click-peck at each stop
+        var follows = FaceScript(home.0, home.1)    // expressive sweeping head following the eyes
+        var inspect = FaceScript(home.0, home.1)    // curious tilt + focused squint before clicking
         for (index, stop) in stops.enumerated() {
             let t = Double(index) * stopLength
-            let (body, eyes) = at(stop, turn: 16)
-            clicks.look(t, 0.3, to: eyes)
-            clicks.move(t, 0.35, to: body)
-            clicks.move(t + 0.35, 0.06, .drop) { $0.squash = 0.04 }
-            clicks.move(t + 0.41, 0.25, .spring, to: body)
-            let (swung, looked) = at(stop, turn: index == stops.count - 1 ? 16 : 24)   // home again at the end
-            follows.look(t, 0.25, to: looked)
-            follows.move(t + 0.05, 0.45, .spring, to: swung)
+            let (body, eyes) = at(stop, turn: 18)
+            clicks.look(t, 0.24, .snappy, to: eyes)
+            clicks.move(t + 0.02, 0.32, .spring, to: body)
+            clicks.move(t + 0.35, 0.07, .drop) { $0.squash = 0.065; $0.tip = body.tip + 7; $0.y = 0.02 }
+            clicks.mark(t + 0.36)
+            clicks.move(t + 0.42, 0.28, .bouncy, to: body)
+
+            let (swung, looked) = at(stop, turn: index == stops.count - 1 ? 18 : 26)
+            follows.look(t, 0.2, .snappy, to: looked)
+            follows.move(t + 0.06, 0.46, .spring, to: swung)
             if index == 1 { follows.blink(t + 0.6) }
+
+            let (tilted, gazed) = at(stop, turn: 18, rollScale: index == stops.count - 1 ? 4.5 : 8.5)
+            inspect.look(t, 0.22, .snappy) {
+                $0 = gazed
+                if index == 1 || index == 2 { $0.lids = 0.32; $0.tilt = 0.35 * (gazed.x >= 0 ? 1 : -1) }
+            }
+            inspect.move(t + 0.04, 0.34, .spring, to: tilted)
+            if index < stops.count - 1 {
+                inspect.look(t + 0.42, 0.1, .snappy) { $0.lids = 0; $0.wide = 0.4; $0.tilt = 0 }
+                inspect.move(t + 0.42, 0.07, .drop) { $0.squash = 0.055; $0.y = 0.015 }
+                inspect.mark(t + 0.43)
+                inspect.move(t + 0.49, 0.28, .spring, to: tilted)
+            }
         }
-        return [clicks.clip(Double(stops.count) * stopLength), follows.clip(Double(stops.count) * stopLength)]
+        let length = Double(stops.count) * stopLength
+        return [clicks.clip(length), follows.clip(length), inspect.clip(length)]
     }
 
     private static func messaging(_ f: Double) -> [FaceClip] {
-        // Turned to the side it's sending to.
-        let body = FaceBody(x: 0.02 * f, roll: 3 * f, turn: 22 * f), eyes = FaceEyes(x: f)
-        var send = FaceScript(body, eyes)       // winds up and sends, twice
-        for t in [0.4, 1.6] {
-            send.move(t, 0.22) { $0.x = -0.005 * f; $0.squash = -0.04; $0.tip = -5 }
-            send.move(t + 0.22, 0.14, .drop) { $0.x = 0.05 * f; $0.squash = 0.045; $0.tip = 6 }
-            send.move(t + 0.36, 0.5, .spring, to: body)
-            send.mark(t + 0.36)
+        // Turned eagerly to the side it's sending to.
+        let body = FaceBody(x: 0.025 * f, roll: 4 * f, turn: 24 * f), eyes = FaceEyes(x: f)
+        var send = FaceScript(body, eyes)       // juicy Pixar anticipation wind-up and energetic fling, twice
+        for t in [0.3, 1.55] {
+            send.move(t, 0.22, .glide) { $0.x = -0.02 * f; $0.turn = 10 * f; $0.squash = -0.06; $0.tip = -7; $0.roll = -3 * f }
+            send.look(t, 0.16) { $0.wide = 0.35 }
+            send.move(t + 0.22, 0.13, .drop) { $0.x = 0.068 * f; $0.turn = 32 * f; $0.squash = 0.065; $0.tip = 8; $0.roll = 7 * f }
+            send.look(t + 0.22, 0.12) { $0.wide = 0; $0.lids = 0.2 }
+            send.mark(t + 0.35)
+            send.move(t + 0.35, 0.5, .bouncy, to: body)
+            send.look(t + 0.38, 0.18, to: eyes)
+            if t < 1.0 { send.blink(1.08) }
         }
-        send.blink(1.2)
-        var back = FaceScript(body, eyes)       // a look back at you, and away again
-        back.move(0.7, 0.45, .spring) { $0.turn = 0; $0.x = 0; $0.roll = 0 }
-        back.look(0.75, 0.15) { $0.x = 0 }
-        back.blink(1.5)
-        back.look(1.95, 0.15, to: eyes)
-        back.move(2.0, 0.5, to: body)
-        return [send.clip(2.8), back.clip(3.0)]
+
+        var back = FaceScript(body, eyes)       // warm glance back at you, friendly blink, and away again
+        back.look(0.62, 0.14, .snappy) { $0.x = 0; $0.wide = 0.4 }
+        back.move(0.66, 0.46, .spring) { $0.turn = 0; $0.x = 0; $0.roll = -3 * f; $0.tip = -2 }
+        back.doubleBlink(1.25)
+        back.look(1.98, 0.14, .snappy, to: eyes)
+        back.move(2.02, 0.52, .spring, to: body)
+
+        var listen = FaceScript(body, eyes)     // leans attentively as if receiving a reply, nods twice, sends back
+        listen.move(0.2, 0.4, .spring) { $0.turn = 28 * f; $0.roll = 9 * f; $0.tip = -4 }
+        listen.look(0.2, 0.18) { $0.wide = 0.35; $0.tilt = 0.25 * f }
+        nod(&listen, 0.7, depth: 8)
+        nod(&listen, 1.32, depth: 7)
+        listen.move(1.95, 0.16, .drop) { $0.x = 0.06 * f; $0.squash = 0.055; $0.tip = 6 }
+        listen.mark(2.1)
+        listen.move(2.12, 0.52, .spring, to: body)
+        listen.look(2.12, 0.2, to: eyes)
+        return [send.clip(2.8), back.clip(3.0), listen.clip(3.0)]
     }
 
     private static func making(_ f: Double) -> [FaceClip] {
-        // Chin up, eyes up at what it's making.
-        let body = FaceBody(tip: -4), eyes = FaceEyes(y: -0.5)
-        var wiggle = FaceScript(body, eyes)     // a happy wiggle
-        wiggle.move(0.3, 0.3) { $0.roll = -8 * f; $0.squash = 0.03 }
-        wiggle.look(0.3, 0.14) { $0.x = -0.5 * f }
-        wiggle.move(0.6, 0.35) { $0.roll = 8 * f; $0.squash = -0.03 }
-        wiggle.look(0.65, 0.14) { $0.x = 0.5 * f }
-        wiggle.move(0.95, 0.3) { $0.roll = -5 * f; $0.squash = 0.02 }
-        wiggle.move(1.25, 0.4, .spring, to: body)
-        wiggle.look(1.3, 0.16, to: eyes)
-        var bounce = FaceScript(body, eyes)     // bounces on the spot
-        for t in [0.2, 1.2] { hop(&bounce, t, height: 0.07) }
-        var admire = FaceScript(body, eyes)     // looks at it from both sides
-        admire.move(0.3, 0.5, .spring) { $0.turn = 20 * f; $0.roll = 4 * f }
-        admire.look(0.3, 0.16) { $0.x = 0.6 * f }
-        admire.move(1.2, 0.6, .spring) { $0.turn = -20 * f; $0.roll = -4 * f }
-        admire.look(1.25, 0.16) { $0.x = -0.6 * f }
-        admire.move(2.1, 0.5, to: body)
-        admire.look(2.1, 0.16, to: eyes)
-        return [wiggle.clip(2.2), bounce.clip(2.4), admire.clip(2.8)]
+        // Chin up, eyes up at what it's creating.
+        let body = FaceBody(tip: -5), eyes = FaceEyes(y: -0.55)
+        var wiggle = FaceScript(body, eyes)     // joyful rhythmic side-to-side dance
+        wiggle.move(0.22, 0.28, .spring) { $0.roll = -13 * f; $0.y = 0.02; $0.squash = 0.045; $0.turn = -8 * f }
+        wiggle.look(0.22, 0.12, .snappy) { $0.x = -0.6 * f; $0.wide = 0.4 }
+        wiggle.move(0.55, 0.34, .spring) { $0.roll = 13 * f; $0.y = -0.022; $0.squash = -0.045; $0.turn = 8 * f }
+        wiggle.look(0.58, 0.12, .snappy) { $0.x = 0.6 * f; $0.wide = 0.45 }
+        wiggle.move(0.95, 0.32, .spring) { $0.roll = -10 * f; $0.y = 0.015; $0.squash = 0.035; $0.turn = -6 * f }
+        wiggle.look(0.98, 0.12, .snappy) { $0.x = -0.4 * f }
+        wiggle.move(1.32, 0.48, .bouncy, to: body)
+        wiggle.look(1.36, 0.18, to: eyes)
+
+        var bounce = FaceScript(body, eyes)     // two lively hops with playful mid-air tilts
+        bounce.look(0.25, 0.14) { $0.wide = 0.6; $0.y = -0.7 }
+        hop(&bounce, 0.18, height: 0.095, roll: 7 * f)
+        bounce.look(0.85, 0.16, to: eyes)
+        bounce.look(1.22, 0.14) { $0.wide = 0.65; $0.y = -0.7 }
+        hop(&bounce, 1.15, height: 0.095, roll: -7 * f)
+        bounce.look(1.85, 0.18, to: eyes)
+
+        var admire = FaceScript(body, eyes)     // steps back and admires from both angles, then bright proud perk
+        admire.move(0.24, 0.5, .spring) { $0.turn = 24 * f; $0.roll = 7 * f; $0.x = 0.02 * f }
+        admire.look(0.24, 0.15, .snappy) { $0.x = 0.75 * f; $0.lids = 0.22; $0.tilt = 0.3 * f }
+        admire.move(1.12, 0.6, .spring) { $0.turn = -24 * f; $0.roll = -7 * f; $0.x = -0.02 * f }
+        admire.look(1.15, 0.15, .snappy) { $0.x = -0.75 * f; $0.lids = 0.22; $0.tilt = -0.3 * f }
+        admire.move(1.98, 0.24, .rise) { $0.turn = 0; $0.roll = 0; $0.x = 0; $0.tip = -11; $0.squash = -0.065; $0.y = -0.028 }
+        admire.look(1.96, 0.14, .snappy) { $0.x = 0; $0.lids = 0; $0.wide = 0.7; $0.tilt = 0 }
+        admire.move(2.28, 0.48, .spring, to: body)
+        admire.look(2.35, 0.2, to: eyes)
+
+        var flourish = FaceScript(body, eyes)   // smooth conducting figure-8 sway
+        flourish.move(0.2, 0.55) { $0.turn = 16 * f; $0.tip = -12; $0.roll = 8 * f; $0.y = -0.02 }
+        flourish.look(0.2, 0.2) { $0.x = 0.6 * f; $0.y = -0.85; $0.wide = 0.35 }
+        flourish.move(0.85, 0.6) { $0.turn = -16 * f; $0.tip = 2; $0.roll = -8 * f; $0.y = 0.015 }
+        flourish.look(0.85, 0.2) { $0.x = -0.6 * f; $0.y = -0.25 }
+        flourish.move(1.55, 0.5) { $0.turn = 10 * f; $0.tip = -10; $0.roll = 5 * f; $0.y = -0.015 }
+        flourish.look(1.55, 0.2) { $0.x = 0.4 * f; $0.y = -0.75 }
+        flourish.move(2.15, 0.5, .spring, to: body)
+        flourish.look(2.15, 0.2, to: eyes)
+        return [wiggle.clip(2.3), bounce.clip(2.4), admire.clip(3.0), flourish.clip(2.8)]
     }
 
     private static func replying(_ f: Double) -> [FaceClip] {
-        // Facing you as it talks.
-        var along = FaceScript()                // nods along
-        for t in [0.15, 0.75, 1.35] { nod(&along, t) }
-        along.blink(2.0)
-        var sway = FaceScript()                 // sways, nods once, glances aside
-        sway.move(0.1, 0.8) { $0.turn = 10 * f; $0.roll = 4 * f }
-        sway.look(0.2, 0.3) { $0.x = 0.4 * f }
-        nod(&sway, 1.1)
-        sway.look(1.6, 0.14) { $0.x = 0.8 * f }
-        sway.move(1.9, 0.8, to: .rest)
-        sway.look(2.0, 0.3, to: .rest)
+        // Facing you warmly as it talks.
+        var along = FaceScript()                // expressive conversational nods of varied depth
+        nod(&along, 0.15, depth: 12)
+        nod(&along, 0.72, depth: 8)
+        nod(&along, 1.3, depth: 11)
+        along.blink(1.98)
+
+        var sway = FaceScript()                 // warm conversational sway, nods, expressive glance aside
+        sway.move(0.12, 0.72) { $0.turn = 14 * f; $0.roll = 6 * f; $0.tip = -2 }
+        sway.look(0.18, 0.24) { $0.x = 0.45 * f; $0.wide = 0.2 }
+        nod(&sway, 1.02, depth: 10)
+        sway.look(1.56, 0.14, .snappy) { $0.x = 0.8 * f }
+        sway.move(1.88, 0.78, .spring, to: .rest)
+        sway.look(1.94, 0.26, to: .rest)
         sway.blink(2.5)
-        var bright = FaceScript()               // perks up at something, then nods
-        bright.look(0.25, 0.12) { $0.y = -0.6 }
-        bright.move(0.25, 0.3, .spring) { $0.squash = -0.05; $0.tip = -6 }
-        bright.move(0.9, 0.35, to: .rest)
-        bright.look(0.95, 0.2, to: .rest)
-        nod(&bright, 1.4)
-        return [along.clip(2.4), sway.clip(3.0), bright.clip(2.2)]
+
+        var bright = FaceScript()               // perks up brightly on an exciting point, then warm emphasis nod
+        bright.look(0.22, 0.12, .snappy) { $0.y = -0.55; $0.wide = 0.75 }
+        bright.move(0.24, 0.32, .bouncy) { $0.squash = -0.075; $0.tip = -9; $0.y = -0.036 }
+        bright.move(0.86, 0.34, to: .rest)
+        bright.look(0.9, 0.18, to: .rest)
+        nod(&bright, 1.32, depth: 12)
+        bright.blink(1.92)
+
+        var explain = FaceScript()              // gestures gently left then right, maintaining warm eye contact
+        explain.move(0.18, 0.55, .spring) { $0.turn = -14 * f; $0.roll = -5 * f; $0.tip = 4 }
+        explain.look(0.2, 0.18) { $0.x = -0.35 * f; $0.wide = 0.2 }
+        explain.mark(0.55)
+        explain.move(1.05, 0.6, .spring) { $0.turn = 14 * f; $0.roll = 5 * f; $0.tip = 3 }
+        explain.look(1.08, 0.18) { $0.x = 0.35 * f; $0.wide = 0.25 }
+        explain.mark(1.45)
+        explain.move(1.92, 0.52, .spring, to: .rest)
+        explain.look(1.95, 0.22, to: .rest)
+        nod(&explain, 2.48, depth: 8)
+        return [along.clip(2.4), sway.clip(3.0), bright.clip(2.3), explain.clip(3.0)]
     }
 
     private static func asking(_ f: Double) -> [FaceClip] {
-        // Head on one side, looking at you.
-        let body = FaceBody(roll: -9 * f, tip: -4), eyes = FaceEyes(y: -0.15)
-        var hops = FaceScript(body, eyes)       // two little hops: well?
-        hops.blink(0.3)
-        for t in [0.8, 1.45] { hops.mark(hop(&hops, t, height: 0.06)) }
-        hops.blink(2.2)
-        var tilt = FaceScript(body, eyes)       // head over to the other side and back
-        tilt.move(0.6, 0.5, .spring) { $0.roll = 9 * f }
-        tilt.look(0.6, 0.2) { $0.x = 0.3 * f }
-        tilt.blink(1.5)
-        tilt.move(2.1, 0.5, .spring, to: body)
-        tilt.look(2.1, 0.2, to: eyes)
-        return [hops.clip(2.6), tilt.clip(3.2)]
+        // Head cocked endearingly to one side, wide expectant look at you.
+        let body = FaceBody(roll: -11 * f, tip: -4), eyes = FaceEyes(y: -0.15, wide: 0.25, tilt: 0.25 * f)
+        var hops = FaceScript(body, eyes)       // two springy hops: well?
+        hops.blink(0.28)
+        hops.look(0.82, 0.14) { $0.wide = 0.75; $0.y = -0.25 }
+        hops.mark(hop(&hops, 0.75, height: 0.085))
+        hops.look(1.48, 0.14) { $0.wide = 0.8; $0.y = -0.28 }
+        hops.mark(hop(&hops, 1.42, height: 0.085))
+        hops.look(2.05, 0.16, to: eyes)
+        hops.blink(2.22)
+
+        var tilt = FaceScript(body, eyes)       // playful curiosity tilt all the way to the other side and back
+        tilt.move(0.55, 0.52, .bouncy) { $0.roll = 12 * f; $0.turn = 10 * f; $0.tip = -6 }
+        tilt.look(0.55, 0.18, .snappy) { $0.x = 0.38 * f; $0.wide = 0.6; $0.tilt = -0.45 * f }
+        tilt.blink(1.45)
+        tilt.move(2.05, 0.55, .bouncy, to: body)
+        tilt.look(2.05, 0.2, to: eyes)
+
+        var curious = FaceScript(body, eyes)    // leans closer expectantly with wide eyes and a gentle double-blink
+        curious.move(0.35, 0.5, .spring) { $0.roll = -15 * f; $0.tip = -9; $0.squash = -0.06; $0.y = -0.028 }
+        curious.look(0.35, 0.18) { $0.wide = 0.85; $0.y = -0.22; $0.tilt = 0.45 * f }
+        curious.doubleBlink(1.15)
+        curious.move(2.05, 0.52, .spring, to: body)
+        curious.look(2.05, 0.22, to: eyes)
+        return [hops.clip(2.6), tilt.clip(3.2), curious.clip(2.8)]
     }
 
     private static func done(_ f: Double) -> [FaceClip] {
-        // Jumps for joy (one way with a cartwheel), eyes up; lands, leans back pleased and blinks twice at you.
-        func jump(cartwheel: Bool) -> FaceClip {
-            let spin = cartwheel ? 360 * f : 0
+        // Celebratory jump (plain, cartwheel, or full 3D pirouette spin), eyes bright and up; juicy landing at 0.66 s,
+        // leans back pleased and blinks twice warmly at you.
+        enum Trick { case plain, cartwheel, pirouette }
+        func jump(_ trick: Trick) -> FaceClip {
+            let spinRoll = trick == .cartwheel ? 360 * f : 0
+            let spinTurn = trick == .pirouette ? 360 * f : 0
             var script = FaceScript()
-            script.look(0.05, 0.15) { $0.y = -0.6 }
-            script.move(0, 0.16) { $0.squash = 0.09 }
-            script.move(0.16, 0.26, .rise) { $0.y = -0.16; $0.squash = -0.08; $0.tip = -8; $0.roll = spin * 0.55 }
-            script.move(0.42, 0.24, .drop) { $0.y = 0; $0.squash = 0.09; $0.tip = 0; $0.roll = spin }
-            script.move(0.66, 0.3, .spring) { $0.squash = 0 }
-            script.move(1.0, 0.35) { $0.tip = -8; $0.roll = spin + 6 * f }
+            script.look(0.04, 0.14, .snappy) { $0.y = -0.65; $0.wide = 0.85 }
+            script.move(0, 0.16, .glide) { $0.squash = 0.11; $0.y = 0.02 }
+            script.move(0.16, 0.26, .rise) {
+                $0.y = -0.19; $0.squash = -0.095; $0.tip = -10; $0.roll = spinRoll * 0.55; $0.turn = spinTurn * 0.55
+            }
+            script.move(0.42, 0.24, .drop) {
+                $0.y = 0; $0.squash = 0.11; $0.tip = 2; $0.roll = spinRoll; $0.turn = spinTurn
+            }
+            script.mark(0.66)
+            script.move(0.66, 0.3, .spring) { $0.squash = 0; $0.tip = 0 }
+            script.move(1.0, 0.36) { $0.tip = -9; $0.roll = spinRoll + 7 * f }
             // Back to rest (a whole turn is rest).
-            script.move(1.9, 0.4) { $0.tip = 0; $0.roll = spin }
-            script.look(0.8, 0.2) { $0.y = 0 }
-            script.blink(1.3)
-            script.blink(1.6)
+            script.move(1.88, 0.42) { $0.tip = 0; $0.roll = spinRoll; $0.turn = spinTurn }
+            script.look(0.78, 0.2, .glide) { $0.y = 0; $0.wide = 0.3 }
+            script.doubleBlink(1.26)
+            script.look(1.9, 0.22, to: .rest)
             return script.clip(BotMood.done.length)
         }
-        return [jump(cartwheel: false), jump(cartwheel: true)]
+        return [jump(.plain), jump(.cartwheel), jump(.pirouette)]
     }
 
     private static func failed(_ f: Double) -> [FaceClip] {
-        // A shake with its eyes screwed shut (no!), then it droops, eyes down and half shut.
-        var script = FaceScript()
-        script.look(0, 0.12) { $0.lids = 0.8 }
-        script.move(0.02, 0.16) { $0.x = -0.025 * f; $0.turn = -16 * f; $0.roll = -4 * f }
-        script.move(0.18, 0.2) { $0.x = 0.025 * f; $0.turn = 14 * f; $0.roll = 4 * f }
-        script.move(0.38, 0.18) { $0.x = -0.012 * f; $0.turn = -7 * f; $0.roll = -2 * f }
-        script.move(0.56, 0.16) { $0.x = 0; $0.turn = 0; $0.roll = 0 }
-        script.move(0.72, 0.4) { $0.tip = 14; $0.y = 0.03; $0.squash = 0.04 }
-        script.look(0.75, 0.3) { $0.y = 0.5; $0.lids = 0.45 }
-        script.move(1.45, 0.4, to: .rest)
-        script.look(1.55, 0.25, to: .rest)
-        return [script.clip(BotMood.failed.length)]
+        // Routine 0: sharp flinch and "no!" head-shake with eyes screwed shut, then a defeated droop.
+        var shake = FaceScript()
+        shake.look(0, 0.1, .drop) { $0.lids = 0.95 }
+        shake.move(0.02, 0.15, .snappy) { $0.x = -0.036 * f; $0.turn = -22 * f; $0.roll = -6 * f }
+        shake.move(0.17, 0.19, .snappy) { $0.x = 0.036 * f; $0.turn = 20 * f; $0.roll = 6 * f }
+        shake.move(0.36, 0.17, .snappy) { $0.x = -0.018 * f; $0.turn = -10 * f; $0.roll = -3 * f }
+        shake.move(0.53, 0.16) { $0.x = 0; $0.turn = 0; $0.roll = 0 }
+        shake.move(0.7, 0.42) { $0.tip = 17; $0.y = 0.045; $0.squash = 0.065 }
+        shake.look(0.72, 0.28) { $0.y = 0.65; $0.lids = 0.52 }
+        shake.move(1.45, 0.4, to: .rest)
+        shake.look(1.52, 0.28, to: .rest)
+
+        // Routine 1: startled recoil hop-back, quick shudder, then weary tilted slump.
+        var recoil = FaceScript()
+        recoil.look(0, 0.09, .drop) { $0.lids = 0.95 }
+        recoil.move(0.02, 0.14, .rise) { $0.y = -0.04; $0.tip = -10; $0.squash = -0.05; $0.x = -0.024 * f; $0.turn = -14 * f }
+        recoil.move(0.16, 0.16, .snappy) { $0.y = 0; $0.tip = 0; $0.squash = 0.03; $0.x = 0.028 * f; $0.turn = 16 * f; $0.roll = 4 * f }
+        recoil.move(0.32, 0.16, .snappy) { $0.x = -0.016 * f; $0.turn = -9 * f; $0.roll = -2 * f; $0.squash = 0 }
+        recoil.move(0.48, 0.16) { $0.x = 0; $0.turn = 0; $0.roll = 0 }
+        recoil.move(0.68, 0.44) { $0.tip = 16; $0.roll = 9 * f; $0.y = 0.042; $0.squash = 0.06 }
+        recoil.look(0.7, 0.28) { $0.y = 0.6; $0.lids = 0.5; $0.tilt = -0.3 * f }
+        recoil.move(1.45, 0.4, to: .rest)
+        recoil.look(1.52, 0.28, to: .rest)
+        return [shake.clip(BotMood.failed.length), recoil.clip(BotMood.failed.length)]
     }
 }
 
@@ -592,9 +798,12 @@ nonisolated struct FaceLoop: Sendable {
     func softSamples(once: Bool, rate: Double = 60) -> [(at: Double, body: FaceBody, eyes: FaceEyes)] {
         let raw = samples(rate: rate)
         guard raw.count > 1 else { return raw }
-        // x, y, roll, turn, tip, squash; where the eyes look across and up, in the world. A whole turn is no jump (a turn
-        // is a turn).
-        var targets = raw.map { [$0.body.x, $0.body.y, $0.body.roll, $0.body.turn, $0.body.tip, $0.body.squash, $0.eyes.x, $0.eyes.y] }
+        // x, y, roll, turn, tip, squash; where the eyes look across and up, in the world; eye wide & tilt.
+        // A whole turn is no jump (a turn is a turn).
+        var targets = raw.map {
+            [$0.body.x, $0.body.y, $0.body.roll, $0.body.turn, $0.body.tip, $0.body.squash,
+             $0.eyes.x, $0.eyes.y, $0.eyes.wide, $0.eyes.tilt]
+        }
         for i in 1..<targets.count {
             for c in 2...4 {
                 while targets[i][c] - targets[i - 1][c] > 180 { targets[i][c] -= 360 }
@@ -605,35 +814,52 @@ nonisolated struct FaceLoop: Sendable {
             targets[i][6] += targets[i][3] / FaceEyes.across
             targets[i][7] += targets[i][4] / FaceEyes.down
         }
-        let wrap = (0..<8).map { targets[targets.count - 1][$0] - targets[0][$0] }
-        // How quickly each follows: a hop's moves up and down and its squash quickly (they're short), turns more slowly, the
-        // eyes quickest of all.
-        let omega = [5.0, 5, 3, 3, 3, 5, 7, 7].map { 2 * Double.pi * $0 }
-        var at = targets[0], speed = [Double](repeating: 0, count: 8)
-        var out: [[Double]] = []
-        let passes = once ? 1 : 3
-        for pass in 0..<passes {
-            if pass > 0 { for c in [2, 3, 4, 6, 7] { at[c] -= wrap[c] } }
-            for i in 0..<(raw.count - 1) {
-                if pass == passes - 1 { out.append(at) }
-                let span = raw[i + 1].at - raw[i].at, steps = max(1, Int((span * 480).rounded(.up))), dt = span / Double(steps)
-                for step in 1...steps {
-                    let k = Double(step) / Double(steps)
-                    for c in 0..<8 {
-                        let target = targets[i][c] + (targets[i + 1][c] - targets[i][c]) * k
-                        speed[c] += (omega[c] * omega[c] * (target - at[c]) - 2 * omega[c] * speed[c]) * dt
-                        at[c] += speed[c] * dt
+        let wrap = (0..<10).map { targets[targets.count - 1][$0] - targets[0][$0] }
+        // Two-stage cascaded critically damped spring (C³ smooth: position, velocity, AND acceleration are all continuous,
+        // so motion flows like liquid butter with zero hard starts, hard stops, or overshoot ringing).
+        let omega = [4.4, 4.4, 2.8, 2.8, 2.8, 4.4, 6.2, 6.2, 5.2, 4.6].map { 2 * Double.pi * $0 }
+        let omega2 = [6.8, 6.8, 4.8, 4.8, 4.8, 6.8, 9.5, 9.5, 8.0, 7.2].map { 2 * Double.pi * $0 }
+        func filter(_ input: [[Double]], freq: [Double]) -> [[Double]] {
+            let wrap = (0..<10).map { input[input.count - 1][$0] - input[0][$0] }
+            var at = input[0], speed = [Double](repeating: 0, count: 10)
+            var res: [[Double]] = []
+            res.reserveCapacity(raw.count)
+            let passes = once ? 1 : 3
+            for pass in 0..<passes {
+                if pass > 0 { for c in [2, 3, 4, 6, 7] { at[c] -= wrap[c] } }
+                let record = pass == passes - 1
+                for i in 0..<(raw.count - 1) {
+                    if record { res.append(at) }
+                    let dt = raw[i + 1].at - raw[i].at
+                    guard dt > 0 else { continue }
+                    let t0 = input[i], t1 = input[i + 1]
+                    for c in 0..<10 {
+                        let w = freq[c], e = exp(-w * dt)
+                        let m = 0.5 * (t0[c] + t1[c])
+                        let dx = at[c] - m
+                        let c2 = speed[c] + w * dx
+                        at[c] = m + (dx + c2 * dt) * e
+                        speed[c] = (speed[c] - w * c2 * dt) * e
                     }
                 }
             }
+            res.append(at)
+            return res
         }
-        out.append(at)
-        // A breath about every 3.4 s (a whole number a loop, so it joins up): a little taller and up, and back.
+        let stage1 = filter(targets, freq: omega)
+        let out = filter(stage1, freq: omega2)
+        // A gentle organic breath about every 3.4 s (a whole number a loop, so it joins up): subtle lift, stretch, and
+        // harmonic float so held moments stay alive.
         let breaths = once ? 0 : max(1, (period / 3.4).rounded())
         return zip(raw, out).map { sample, c in
-            let breath = sin(2 * Double.pi * breaths * sample.at / period)
-            return (sample.at, FaceBody(x: c[0], y: c[1] - 0.0025 * breath, roll: c[2], turn: c[3], tip: c[4], squash: c[5] - 0.012 * breath),
-                    FaceEyes(x: c[6] - c[3] / FaceEyes.across, y: c[7] - c[4] / FaceEyes.down, lids: sample.eyes.lids))
+            let phase = 2 * Double.pi * breaths * sample.at / period
+            let breath = sin(phase)
+            let sway = once ? 0 : sin(phase + 0.65)
+            return (sample.at,
+                    FaceBody(x: c[0], y: c[1] - 0.004 * breath, roll: c[2] + 0.8 * sway, turn: c[3], tip: c[4] - 0.5 * breath,
+                             squash: c[5] - 0.015 * breath),
+                    FaceEyes(x: c[6] - c[3] / FaceEyes.across, y: c[7] - c[4] / FaceEyes.down, lids: sample.eyes.lids,
+                             wide: c[8], tilt: c[9]))
         }
     }
 }
@@ -653,16 +879,28 @@ nonisolated struct FaceJelly: Hashable, Sendable {
     /// starts still and has settled by its end, where it's held.
     static func follow(_ samples: [(at: Double, body: FaceBody, eyes: FaceEyes)], period: Double, once: Bool) -> [FaceJelly] {
         guard samples.count > 1 else { return samples.map { _ in .rest } }
-        let degree = Double.pi / 180, omega = 2 * Double.pi * 2.2, damping = 0.62
-        // How the body moves between each sample and the next: how much it stretches for its speed up or down, how its
-        // squash and nod go, across, and its turns (radians).
-        let speeds: [(stretch: Double, down: Double, across: Double, swing: Double)] = (0..<(samples.count - 1)).map { i in
+        // Silky, high-damping plush spring (0.82 damping: settles smoothly in one creamy motion with zero jitter/ringing).
+        let degree = Double.pi / 180, omega = 2 * Double.pi * 2.0, damping = 0.82
+        let rawSpeeds: [(stretch: Double, down: Double, across: Double, swing: Double)] = (0..<(samples.count - 1)).map { i in
             let a = samples[i], b = samples[i + 1], span = max(b.at - a.at, 1e-6)
-            let stretch = -0.07 * abs(b.body.y - a.body.y) / span
-            let down = ((b.body.squash - a.body.squash) * 1.5 + (b.body.tip - a.body.tip) * degree * 0.6) / span
-            let across = (b.body.x - a.body.x) * 5 / span
-            let swing = ((b.body.roll - a.body.roll) * 2.5 + (b.body.turn - a.body.turn) * 1.2) * degree / span
+            let vy = (b.body.y - a.body.y) / span
+            // Smooth C∞ magnitude (no V-shaped kink at hop apex where vy crosses zero).
+            let stretch = -0.075 * (sqrt(vy * vy + 0.01) - 0.1)
+            let down = ((b.body.squash - a.body.squash) * 1.45 + (b.body.tip - a.body.tip) * degree * 0.55) / span
+            let across = (b.body.x - a.body.x) * 4.5 / span
+            let swing = ((b.body.roll - a.body.roll) * 2.2 + (b.body.turn - a.body.turn) * 1.05) * degree / span
             return (stretch, down, across, swing)
+        }
+        // Light 3-tap smoothing on velocities eliminates finite-difference noise before differentiation.
+        let n = rawSpeeds.count
+        let speeds: [(stretch: Double, down: Double, across: Double, swing: Double)] = (0..<n).map { i in
+            let p = rawSpeeds[once ? max(0, i - 1) : (i - 1 + n) % n]
+            let c = rawSpeeds[i]
+            let q = rawSpeeds[once ? min(n - 1, i + 1) : (i + 1) % n]
+            return (0.25 * p.stretch + 0.5 * c.stretch + 0.25 * q.stretch,
+                    0.25 * p.down + 0.5 * c.down + 0.25 * q.down,
+                    0.25 * p.across + 0.5 * c.across + 0.25 * q.across,
+                    0.25 * p.swing + 0.5 * c.swing + 0.25 * q.swing)
         }
         var squash = (at: 0.0, speed: 0.0), lean = (at: 0.0, speed: 0.0)
         var before = once ? (stretch: 0.0, down: 0.0, across: 0.0, swing: 0.0) : speeds[speeds.count - 1]
@@ -675,7 +913,7 @@ nonisolated struct FaceJelly: Hashable, Sendable {
                 squash.speed -= speed.down - before.down
                 lean.speed -= speed.across - before.across + speed.swing - before.swing
                 before = speed
-                let span = samples[i + 1].at - samples[i].at, steps = max(1, Int((span * 240).rounded(.up))), dt = span / Double(steps)
+                let span = samples[i + 1].at - samples[i].at, steps = max(1, Int((span * 120).rounded(.up))), dt = span / Double(steps)
                 for _ in 0..<steps {
                     squash.speed += (-omega * omega * (squash.at - speed.stretch) - 2 * damping * omega * squash.speed) * dt
                     squash.at += squash.speed * dt
@@ -736,7 +974,7 @@ nonisolated struct FaceSolid: Sendable {
     /// Its view's size: a point nearer you shows bigger, as the stage's perspective had it.
     private let side: Double
 
-    static let bins = 96
+    static let bins = 48
     /// Which way each bin looks from the middle.
     private static let rays = (0..<bins).map { b -> (x: Double, y: Double) in
         let a = 2 * Double.pi * Double(b) / Double(bins)
@@ -755,8 +993,9 @@ nonisolated struct FaceSolid: Sendable {
         self.middle = middle
         self.depth = depth
         self.side = max(side, 1)
-        rings = (0...14).map { k in
-            let a = -Double.pi / 2 + Double.pi * Double(k) / 14, scale = pow(max(cos(a), 0), Self.fullness), z = depth * sin(a)
+        // 24 smooth rings (finer than 15) eliminate silhouette stepping/facets as the cushion turns slowly.
+        rings = (0...24).map { k in
+            let a = -Double.pi / 2 + Double.pi * Double(k) / 24, scale = pow(max(cos(a), 0), Self.fullness), z = depth * sin(a)
             return edge.map { (x: $0.x * scale, y: $0.y * scale, z: z) }
         }
         rest = []
@@ -815,10 +1054,9 @@ nonisolated struct FaceSolid: Sendable {
         return reach
     }
 
-    /// `reach` at each of `poses`: worked out on a 3° grid and blended between, so a routine's hundreds of samples
-    /// share a few dozen outlines (each is about a millisecond's work).
+    /// `reach` at each of `poses`: worked out on a fine 2° grid and blended between so turning is ripple-free.
     func reaches(_ poses: [(turn: Double, tip: Double)]) -> [[Double]] {
-        let grid = 3.0
+        let grid = 2.0
         var known: [Int: [Double]] = [:]
         func at(_ i: Int, _ j: Int) -> [Double] {
             let key = (i + 1000) * 4000 + j + 1000
@@ -851,7 +1089,7 @@ nonisolated struct FaceSolid: Sendable {
             let total = w.reduce(0, +)
             return w.map { $0 / total }
         }
-        let round = kernel(2), along = kernel(1.5), unique = loop ? n - 1 : n
+        let round = kernel(1.6), along = kernel(2.6), unique = loop ? n - 1 : n
         let rounded = reaches.map { reach in
             (0..<bins).map { b in
                 round.enumerated().reduce(0.0) { sum, tap in
@@ -880,9 +1118,9 @@ nonisolated struct FaceSolid: Sendable {
     }
 
     /// Where a face drawn at `point` (facing ahead) goes as the body turns and tips: how far it moves; how wide and
-    /// high it shows (1 facing ahead, less as it goes round toward the edge); and how far it faces you (1 straight
-    /// on, 0 side on, less round the back).
-    func seat(_ point: CGPoint, turn: Double, tip: Double) -> (dx: Double, dy: Double, wide: Double, high: Double, facing: Double) {
+    /// high it shows (1 facing ahead, less as it goes round toward the edge); how far it faces you (1 straight on,
+    /// 0 side on, less round the back); and its perspective distance `scale` (> 1 nearer the camera, < 1 farther away).
+    func seat(_ point: CGPoint, turn: Double, tip: Double) -> (dx: Double, dy: Double, wide: Double, high: Double, facing: Double, scale: Double) {
         let q = (x: point.x - middle.x, y: point.y - middle.y), bins = Double(rest.count)
         var at = atan2(q.y, q.x) / (2 * Double.pi) * bins
         if at < 0 { at += bins }
@@ -890,12 +1128,15 @@ nonisolated struct FaceSolid: Sendable {
         let r = max(rest[low] * (1 - k) + rest[(low + 1) % rest.count] * k, 1e-6)
         let share = min(hypot(q.x, q.y) / r, 0.95)
         let p: Point3 = (q.x, q.y, depth * sqrt(max(0, 1 - pow(share, 2 / Self.fullness))))
-        let c = Self.turning(turn, tip), now = shown(Self.turned(p, c)), then = shown(p)
+        let c = Self.turning(turn, tip), rot = Self.turned(p, c), now = shown(rot), then = shown(p)
+        let restNear = 1 / max(0.2, 1 - p.z / (side * 2.5))
+        let nowNear = 1 / max(0.2, 1 - rot.z / (side * 2.5))
+        let depthScale = min(max(nowNear / restNear, 0.78), 1.18)
         // Facing ahead, its surface there leans out by its normal: across and down along it, and straight out of it.
         var n: Point3 = (q.x / (r * r), q.y / (r * r), p.z / max(depth * depth, 1e-9))
         let length = max(sqrt(n.x * n.x + n.y * n.y + n.z * n.z), 1e-12)
         n = (n.x / length, n.y / length, n.z / length)
         let across = Self.turned((1, 0, -n.x / n.z), c), down = Self.turned((0, 1, -n.y / n.z), c)
-        return (now.x - then.x, now.y - then.y, abs(across.x), abs(down.y), Self.turned(n, c).z)
+        return (now.x - then.x, now.y - then.y, abs(across.x), abs(down.y), Self.turned(n, c).z, depthScale)
     }
 }

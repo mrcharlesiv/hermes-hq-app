@@ -83,14 +83,16 @@ nonisolated extension MatrixDesign.Silhouette {
 /// only where the eyes look and the body act (owner, 2026-10-28: "i don't want mouths. just the body and eyes moving",
 /// then "only one kind of eyes - the normal ones").
 nonisolated struct MatrixPose: Hashable, Sendable {
-    /// Columns the eyes move (−1 left … +1 right).
+    /// LEDs the eyes move sideways on the head's grid (−2 far left … +2 far right).
     var gaze = 0
-    /// Rows the eyes move (−1 up).
+    /// LEDs the eyes move vertically on the head's grid (−2 far up, −1 up, 0 rest, +1 down).
     var lift = 0
     /// 0 open, 1 half shut, 2 shut.
     var lids = 0
     /// A glitch: each band of rows slid sideways a LED or two (0 none; 1… which pattern).
     var glitch = 0
+    /// Alert/perked open normal slits (1 LED taller on the 20×20 grid when open and inside the outline).
+    var wide = false
 
     static let rest = MatrixPose()
     /// How a head rests on screen: its eyes over to the right, at the words beside it (`MatrixHead.shownFacing`).
@@ -104,7 +106,7 @@ nonisolated struct MatrixPose: Hashable, Sendable {
     }
 
     /// What a drawn pose is kept under.
-    var key: String { "\(gaze) \(lift) \(lids) \(glitch)" }
+    var key: String { wide ? "\(gaze) \(lift) \(lids) \(glitch) w" : "\(gaze) \(lift) \(lids) \(glitch)" }
 
     /// LEDs row `row` slides sideways in glitch pattern `glitch`: two or three bands of rows, each a LED or two off.
     static func slide(_ glitch: Int, row: Int) -> Int {
@@ -527,7 +529,10 @@ nonisolated enum MatrixHead {
     /// The face's LEDs on a grid `size` across: on the drawn grid, the face as drawn, LED for LED, its slit eyes two
     /// LEDs wide (one LED was a hairline at mark sizes; review 2026-10-28).
     static func faceLEDs(_ design: MatrixDesign, pose: MatrixPose, size: Int) -> [Cell: MatrixDot.Kind] {
-        size == grid ? faceLEDs(design, pose: pose) : faceCells(design, outline: outline(design), pose: pose, wide: true).kinds
+        if size == grid { return faceLEDs(design, pose: pose) }
+        // On the coarser 15×15 mark grid, clamp eye motion to the range guaranteed to keep a 1-LED lit ring on every outline.
+        let clamped = MatrixPose(gaze: max(-1, min(1, pose.gaze)), lift: max(-1, min(0, pose.lift)), lids: pose.lids, glitch: pose.glitch)
+        return faceCells(design, outline: outline(design), pose: clamped, wide: true).kinds
     }
 
     /// Every LED of `design` at `pose`, lit or not, row by row.
@@ -546,19 +551,35 @@ nonisolated enum MatrixHead {
     }
 
     /// The face on the head's grid. It is worked out on the drawn grid and each part of it (an eye, the mouth, a cheek)
-    /// scaled up on its own, so both eyes come out alike; a glance or a look up moves it whole LEDs, one for each drawn
-    /// one, so it stays inside the outline and reads in even steps. Turned left, it is the face turned right mirrored,
-    /// glancing the other way.
+    /// scaled up on its own, so both eyes come out alike; a glance or a look moves it whole LEDs directly on the 20×20
+    /// grid (−2…2 across, −2…1 vertically), so it reads clearly while staying ringed by lit LEDs on every outline.
+    /// Turned left, it is the face turned right mirrored, glancing the other way.
     static func faceLEDs(_ design: MatrixDesign, pose: MatrixPose) -> [Cell: MatrixDot.Kind] {
         if design.facing < 0 {
             var right = design
             right.facing = 1
             return Dictionary(uniqueKeysWithValues: faceLEDs(right, pose: pose.mirrored).map { (Cell(grid - 1 - $0.key.col, $0.key.row), $0.value) })
         }
-        let face = faceCells(design, outline: outline(design), pose: pose)
+        let gaze = max(-2, min(2, pose.gaze))
+        let lift = max(-2, min(1, pose.lift))
+        // Compute base cells on the 15×15 grid without premature edge clipping (googly keeps its pupil shift clamped).
+        let drawnPose = design.eyes == .googly
+            ? MatrixPose(gaze: max(-1, min(1, gaze)), lift: max(-1, min(0, lift)), lids: pose.lids)
+            : MatrixPose(gaze: 0, lift: 0, lids: pose.lids)
+        let face = faceCells(design, outline: outline(design), pose: drawnPose)
+        let offset = Cell(gaze - drawnPose.gaze, lift - drawnPose.lift)
+        let perk = pose.wide && design.eyes == .slits && pose.lids == 0 && lift >= -1
         var leds: [Cell: MatrixDot.Kind] = [:]
-        for part in face.parts {
-            for (cell, kind) in scaled(part, face.kinds, moved: Cell(pose.gaze, pose.lift)) where leds[cell].map({ faceOrder.firstIndex(of: $0)! > faceOrder.firstIndex(of: kind)! }) ?? true {
+        for (index, part) in face.parts.enumerated() {
+            var partLeds = scaled(part, face.kinds, moved: Cell(drawnPose.gaze, drawnPose.lift))
+            if offset.col != 0 || offset.row != 0 {
+                partLeds = Dictionary(uniqueKeysWithValues: partLeds.map { (Cell($0.key.col + offset.col, $0.key.row + offset.row), $0.value) })
+            }
+            // Perked/wide normal slits: 1 extra LED at the top of each eye (5 LEDs tall), still normal vertical slits.
+            if perk, index < 2, let top = partLeds.keys.map(\.row).min(), let col = partLeds.keys.first?.col {
+                partLeds[Cell(col, top - 1)] = .hole
+            }
+            for (cell, kind) in partLeds where leds[cell].map({ faceOrder.firstIndex(of: $0)! > faceOrder.firstIndex(of: kind)! }) ?? true {
                 leds[cell] = kind
             }
         }

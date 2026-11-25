@@ -167,7 +167,7 @@ struct TodoViewsTests {
     }
 
     @Test func aViewKeepsItsKey() {
-        for view in [TodoView.today, .upcoming, .inbox, .bots, .list("abc")] { #expect(TodoView(key: view.key) == view) }
+        for view in [TodoView.today, .upcoming, .inbox, .goals, .suggested, .bots, .list("abc")] { #expect(TodoView(key: view.key) == view) }
         #expect(TodoView(key: "list:") == nil)
         #expect(TodoView(key: "") == nil)
         #expect(TodoViews.startsToday(.today) && !TodoViews.startsToday(.inbox))

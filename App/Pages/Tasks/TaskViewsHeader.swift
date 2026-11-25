@@ -201,6 +201,7 @@ private struct TaskViewsBand: View {
         case .today: return "sun.max"
         case .upcoming: return "calendar"
         case .inbox: return "tray"
+        case .suggested: return "sparkle"
         case .bots: return "person.2"
         case .list: return pill.icon ?? TodoListIcons.fallback
         }

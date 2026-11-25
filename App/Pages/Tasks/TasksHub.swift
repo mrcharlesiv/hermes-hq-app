@@ -8,6 +8,7 @@ import UserNotifications
 @MainActor
 enum TasksHub {
     private static var store: TasksStore?
+    private static var ideasStore: (store: ObjectIdentifier, ideas: TaskIdeasStore)?
     private static var installed = false
 
     /// This gateway's store (made on first use; a new gateway or sign-in makes a new one).
@@ -16,6 +17,8 @@ enum TasksHub {
             store.readOnlyGateway = context.readOnly
             return store
         }
+        ideasStore?.ideas.forget()
+        ideasStore = nil
         TodoTaskStates.forget()   // [chat-mark-done] the chat's close cards read this gateway's list, not the last one's
         let made = TasksStore(api: TasksAPI(client: context.client), account: context.account,
                               directory: PagesCache.directory(for: context.account))
@@ -29,6 +32,16 @@ enum TasksHub {
         made.onPlanTaken = { [weak made] offer in if let made { GoalPlanTaken.tell(offer, store: made) } }
         store = made
         noteEnabled(made.settings.enabled, account: made.account)
+        return made
+    }
+
+    /// Shared Suggested Tasks (`TaskIdeasStore`) for `store` so Overview and pushed Suggested views stay instantly in sync.
+    static func ideas(for store: TasksStore) -> TaskIdeasStore {
+        let id = ObjectIdentifier(store)
+        if let cached = ideasStore, cached.store == id { return cached.ideas }
+        ideasStore?.ideas.forget()
+        let made = TaskIdeasStore(api: store.api, directory: store.directory)
+        ideasStore = (id, made)
         return made
     }
 
@@ -104,6 +117,8 @@ enum TasksHub {
 
     /// Sign-out: the list and this phone's due reminders go.
     static func signedOut() {
+        ideasStore?.ideas.forget()
+        ideasStore = nil
         store?.forget()
         store = nil
         tapRead = nil

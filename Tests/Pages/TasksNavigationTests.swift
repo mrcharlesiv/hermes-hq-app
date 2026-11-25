@@ -38,6 +38,7 @@ struct TasksNavigationTests {
         #expect(TasksNavigationLayout.title(for: .upcoming, sections: sections) == "Upcoming")
         #expect(TasksNavigationLayout.title(for: .inbox, sections: sections) == "Inbox")
         #expect(TasksNavigationLayout.title(for: .goals, sections: sections) == "Goals")
+        #expect(TasksNavigationLayout.title(for: .suggested, sections: sections) == "Suggested")
         #expect(TasksNavigationLayout.title(for: .bots, sections: sections) == "Bots’ Tasks")
         #expect(TasksNavigationLayout.title(for: .list("s1"), sections: sections) == "House")
         #expect(TasksNavigationLayout.title(for: .list("missing"), sections: sections) == "List")
@@ -46,8 +47,32 @@ struct TasksNavigationTests {
         #expect(TasksNavigationLayout.symbol(for: .upcoming, sections: sections) == "calendar")
         #expect(TasksNavigationLayout.symbol(for: .inbox, sections: sections) == "tray")
         #expect(TasksNavigationLayout.symbol(for: .goals, sections: sections) == "smallcircle.filled.circle")
+        #expect(TasksNavigationLayout.symbol(for: .suggested, sections: sections) == "sparkle")
         #expect(TasksNavigationLayout.symbol(for: .bots, sections: sections) == "person.2")
         #expect(TasksNavigationLayout.symbol(for: .list("s1"), sections: sections) == "house")
         #expect(TasksNavigationLayout.symbol(for: .list("s2"), sections: sections) == TodoListIcons.fallback)
+    }
+
+    @Test func overviewAgentsModelHandlesSuggestedAndBotsIndependently() {
+        #expect(TasksOverviewAgentsModel(suggested: nil, botsCount: nil).isEmpty)
+        let suggestedOnly = TasksOverviewAgentsModel(
+            suggested: TasksOverviewSuggestedRowModel(count: 3, isOn: true, looking: false),
+            botsCount: nil
+        )
+        #expect(!suggestedOnly.isEmpty)
+        #expect(suggestedOnly.suggested?.subtitle == nil)
+        #expect(suggestedOnly.suggested?.spoken == "Suggested, 3 ideas")
+
+        let off = TasksOverviewSuggestedRowModel(count: 0, isOn: false, looking: false)
+        #expect(off.subtitle == "Off")
+        #expect(off.spoken == "Suggested, off")
+
+        let looking = TasksOverviewSuggestedRowModel(count: 1, isOn: true, looking: true)
+        #expect(looking.subtitle == "Looking for ideas…")
+        #expect(looking.spoken == "Suggested, looking for ideas")
+
+        let botsOnly = TasksOverviewAgentsModel(suggested: nil, botsCount: 2)
+        #expect(!botsOnly.isEmpty)
+        #expect(botsOnly.botsSpoken == "Bots’ Tasks, 2 tasks")
     }
 }

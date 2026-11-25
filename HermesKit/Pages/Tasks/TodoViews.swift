@@ -24,6 +24,8 @@ nonisolated enum TodoView: Hashable, Sendable {
     case goals
     /// One of your lists (`TodoUserSection.id`).
     case list(String)
+    /// [task-ideas] Suggested tasks from your bots (dedicated view, plus inline preview on iPhone Overview).
+    case suggested
     case bots
 
     /// As kept on the device ("today", "list:<id>").
@@ -34,6 +36,7 @@ nonisolated enum TodoView: Hashable, Sendable {
         case .inbox: return "inbox"
         case .goals: return "goals"
         case .list(let id): return "list:" + id
+        case .suggested: return "suggested"
         case .bots: return "bots"
         }
     }
@@ -44,6 +47,7 @@ nonisolated enum TodoView: Hashable, Sendable {
         case "upcoming": self = .upcoming
         case "inbox": self = .inbox
         case "goals": self = .goals
+        case "suggested": self = .suggested
         case "bots": self = .bots
         default:
             guard key.hasPrefix("list:"), key.count > 5 else { return nil }
@@ -252,8 +256,8 @@ nonisolated enum TodoViews {
                 })
             }
             add(.done, newestDone(done.filter(botsOwn)))
-        case .goals:
-            break   // the Goals view draws goal cards (GoalViews), not task groups
+        case .goals, .suggested:
+            break   // Goals draws goal cards (GoalViews); Suggested draws task ideas (TaskIdeasViews)
         }
         return out
     }
@@ -507,6 +511,7 @@ nonisolated enum TodoViews {
         case .upcoming: return "Nothing coming up. A task with a date shows here."
         case .inbox: return "Nothing left to file. A task in no list lands here."
         case .list: return "No tasks in \(listName ?? "this list") yet."
+        case .suggested: return "No suggested tasks right now."
         case .bots: return "No bot has a task of its own right now."
         case .goals: return GoalViews.emptyText
         }

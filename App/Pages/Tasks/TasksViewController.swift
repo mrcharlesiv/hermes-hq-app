@@ -16,8 +16,8 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         case goals(GoalGroupKey), goalsFoot
         /// [goals] Step 2: Today's Goals shelf, over everything else in Today.
         case shelf
-        /// Grouped Overview sections (iPhone / compact root): Smart Views 2×2 grid, My Lists, and Agents.
-        case overviewSmart, overviewLists, overviewAgents
+        /// Grouped Overview sections (iPhone / compact root): Smart Views 2×2 grid, inline Suggested preview, My Lists, and Agents.
+        case overviewSmart, overviewSuggested, overviewLists, overviewAgents
     }
     /// [goals] The Goals view's groups (docs/goals.md "The Goals view").
     /// `found`: a search's Goals group (any status), over its To Do and Done.
@@ -34,7 +34,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         case goalOffer(String)
         case ideaHead, idea(String), ideaNote(TaskIdeasNote)
         /// Grouped Overview cells (iPhone / compact root).
-        case overviewSmart, overviewLists, overviewAgents
+        case overviewSmart, overviewSuggested, overviewLists, overviewAgents
     }
 
     /// The page shows somewhere (an add-on without Tasks is asked again on foreground only then).
@@ -54,6 +54,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     private var current: TodoView
     /// Cached Grouped Overview / Mac Sidebar models so cells reconfigure only when counts/lists change.
     private var overviewSmart: [TasksSmartTileModel] = []
+    private var overviewSuggested: TasksOverviewSuggestedModel?
     private var overviewLists: [TasksOverviewListModel] = []
     private var overviewAgents: TasksOverviewAgentsModel?
     /// Mac internal sidebar state (auto-collapses when narrow or when a task detail pane opens beside Tasks).
@@ -92,7 +93,6 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     /// [notify] How long a task opened from outside has waited for the list to name it (`openTask`, half-seconds).
     private var listWait = 0
     private var openWaitToken = 0
-    private var ideasCreated = false
     /// Where a held task would land (section and index): a tick each time it moves to a new place.
     private var dropPlace: String?
     private let scopeItem = ScopeBarItem()
@@ -137,10 +137,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     private var skeletonShown = false
     private var skeletonWork: DispatchWorkItem?
     private var updateAsked = false
-    private lazy var ideas: TaskIdeasStore = {
-        ideasCreated = true
-        return TaskIdeasStore(api: store.api, directory: store.directory)
-    }()
+    private var ideas: TaskIdeasStore { TasksHub.ideas(for: store) }
     private var ideaCards: [String: TaskIdeaCardModel] = [:]
     private var shownGoalCards: [String: GoalCardModel] = [:]
     /// [goals] The Goals view's cards on show, its groups (ids in order), and the folded groups opened.
@@ -369,14 +366,23 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         if !listItems.isEmpty {
             out.append(UIMenu(title: "My Lists", options: .displayInline, children: listItems))
         }
-        if let agents = overviewAgents {
-            let count = agents.count > 0 ? "\(agents.count)" : nil
-            out.append(UIMenu(title: "Agents", options: .displayInline, children: [
-                UIAction(title: "Bots’ Tasks", subtitle: count, image: UIImage(systemName: "person.2"),
-                         state: current == .bots ? .on : .off) { [weak self] _ in
+        if let agents = overviewAgents, !agents.isEmpty {
+            var agentItems: [UIMenuElement] = []
+            if let suggested = agents.suggested {
+                let count = suggested.isOn && suggested.count > 0 ? "\(suggested.count)" : nil
+                agentItems.append(UIAction(title: "Suggested", subtitle: count, image: UIImage(systemName: "sparkle"),
+                                           state: current == .suggested ? .on : .off) { [weak self] _ in
+                    self?.show(.suggested)
+                })
+            }
+            if let botsCount = agents.botsCount {
+                let count = botsCount > 0 ? "\(botsCount)" : nil
+                agentItems.append(UIAction(title: "Bots’ Tasks", subtitle: count, image: UIImage(systemName: "person.2"),
+                                           state: current == .bots ? .on : .off) { [weak self] _ in
                     self?.show(.bots)
-                },
-            ]))
+                })
+            }
+            out.append(UIMenu(title: "Agents", options: .displayInline, children: agentItems))
         }
         return out
     }
@@ -428,10 +434,11 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         store.onChange = {
             for page in TasksViewController.live.allObjects { page.setNeedsReload() }
         }
-        ideas.onChange = { [weak self] in
-            guard let self else { return }
-            if let page = self.ideas.page { self.store.ideasRead(page.on ? self.ideas.shown.count : 0) }
-            self.setNeedsReload()
+        ideas.onChange = { [weak store] in
+            guard let store else { return }
+            let ideas = TasksHub.ideas(for: store)
+            if let page = ideas.page { store.ideasRead(page.on ? ideas.shown.count : 0) }
+            for page in TasksViewController.live.allObjects { page.setNeedsReload() }
         }
         ideas.onNotice = { [weak self] text in self?.notices.show(text, seconds: 4) }
         store.onNotice = { [weak self] text in
@@ -517,7 +524,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         reload(animated: false)
         startMinuteClock()
         Task { await store.refresh() }
-        if current == .inbox { readIdeas() }
+        if isOverviewRoot || current == .suggested || DeviceWord.isMac { readIdeas() }
         for path in collectionView.indexPathsForSelectedItems ?? [] where dataSource.itemIdentifier(for: path) != onShowTask.map(Item.task) {
             collectionView.deselectItem(at: path, animated: animated)
         }
@@ -530,10 +537,13 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
-        Self.onScreen = false
         minuteTimer?.invalidate()
         minuteTimer = nil
-        if ideasCreated { ideas.stopPolling() }
+        let anyVisible = Self.live.allObjects.contains { $0 !== self && $0.viewIfLoaded?.window != nil }
+        if !anyVisible {
+            Self.onScreen = false
+            ideas.stopPolling()
+        }
     }
 
     // MARK: Layout
@@ -755,6 +765,21 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
             }.margins(.all, 0)
             cell.backgroundConfiguration = .clear()
         }
+        let overviewSuggestedCell = UICollectionView.CellRegistration<SoftCardListCell, Item> { [weak self] cell, _, _ in
+            guard let self, let suggested = self.overviewSuggested else { return }
+            let enabled = !self.store.readOnlyGateway
+            cell.contentConfiguration = UIHostingConfiguration {
+                TasksOverviewSuggestedCard(
+                    model: suggested,
+                    open: self.ideaOpen,
+                    enabled: enabled,
+                    onToggle: { [weak self] id in self?.toggleOverviewIdea(id) },
+                    onAdd: { [weak self] id, start in self?.addIdea(id, start: start) },
+                    onDismiss: { [weak self] id in self?.dismissIdea(id) }
+                )
+            }.margins(.all, 0)
+            cell.backgroundConfiguration = .clear()
+        }
         let overviewListsCell = UICollectionView.CellRegistration<SoftCardListCell, Item> { [weak self] cell, _, _ in
             guard let self else { return }
             let edits = !self.store.readOnlyGateway && self.store.sectionsSupported
@@ -768,7 +793,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         let overviewAgentsCell = UICollectionView.CellRegistration<SoftCardListCell, Item> { [weak self] cell, _, _ in
             guard let self, let agents = self.overviewAgents else { return }
             cell.contentConfiguration = UIHostingConfiguration {
-                TasksOverviewAgentsCard(agents: agents) { [weak self] in self?.show(.bots) }
+                TasksOverviewAgentsCard(agents: agents) { [weak self] view in self?.show(view) }
             }.margins(.all, 0)
             cell.backgroundConfiguration = .clear()
         }
@@ -796,6 +821,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
             case .goalsEmpty: return cv.dequeueConfiguredReusableCell(using: goalsEmptyCell, for: path, item: item)
             case .shelf: return cv.dequeueConfiguredReusableCell(using: shelfCell, for: path, item: item)
             case .overviewSmart: return cv.dequeueConfiguredReusableCell(using: overviewSmartCell, for: path, item: item)
+            case .overviewSuggested: return cv.dequeueConfiguredReusableCell(using: overviewSuggestedCell, for: path, item: item)
             case .overviewLists: return cv.dequeueConfiguredReusableCell(using: overviewListsCell, for: path, item: item)
             case .overviewAgents: return cv.dequeueConfiguredReusableCell(using: overviewAgentsCell, for: path, item: item)
             }
@@ -845,7 +871,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     }
 
     private func hasHeader(_ section: Section) -> Bool {
-        if section == .overviewLists || section == .overviewAgents { return true }
+        if section == .overviewSuggested || section == .overviewLists || section == .overviewAgents { return true }
         if case .goals(let key) = section { return key != .active }   // [goals] Someday, Achieved, Let Go
         guard case .group(let kind) = section else { return false }
         return heading(kind) != nil
@@ -861,6 +887,15 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     private var searching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
 
     private func configureHeader(_ header: UICollectionViewListCell, _ section: Section) {
+        if section == .overviewSuggested {
+            let count = overviewSuggested?.totalCount ?? 0
+            header.contentConfiguration = UIHostingConfiguration {
+                TasksOverviewSuggestedHeader(count: count) { [weak self] in self?.show(.suggested) }
+            }.margins(.all, 0)
+            header.backgroundConfiguration = .clear()
+            header.accessibilityIdentifier = "tasks.section.Suggested"
+            return
+        }
         if section == .overviewLists {
             let edits = !store.readOnlyGateway && store.sectionsSupported && !overviewLists.isEmpty
             header.contentConfiguration = UIHostingConfiguration {
@@ -938,6 +973,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         // Build Grouped Overview / Mac Sidebar models from the currently scoped tasks.
         let navTasks = isOverviewRoot ? all : TodoSections.filtered(all, scope: scoped, query: "", goals: store.goals, priority: activePriority, tag: activeTag)
         let previousSmart = overviewSmart
+        let previousSuggested = overviewSuggested
         let previousLists = overviewLists
         let previousAgents = overviewAgents
         buildNavigationModels(navTasks, allTasks: all, now: now)
@@ -1021,15 +1057,31 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
             goalCards = [:]
             goalGroups = []
             ideaCards = [:]
+            if store.ideasCount != nil, ideas.page?.on == true, !ideas.shown.isEmpty {
+                let top = Array(ideas.shown.prefix(TasksNavigationLayout.overviewSuggestedLimit))
+                let cards = top.map { idea in
+                    TaskIdeaCardModel(idea: idea, botName: botName(idea.bot), head: heads[idea.bot] ?? nil,
+                                      busy: addingIdeas.contains(idea.id))
+                }
+                if let open = openIdea, !cards.contains(where: { $0.idea.id == open }) { openIdea = nil }
+                overviewSuggested = TasksOverviewSuggestedModel(cards: cards, totalCount: ideas.shown.count)
+            } else {
+                overviewSuggested = nil
+                openIdea = nil
+            }
             if !waiting.isEmpty {
                 snapshot.appendSections([.offers])
                 snapshot.appendItems(waiting.map { .offer($0.id) }, toSection: .offers)
             }
             snapshot.appendSections([.overviewSmart])
             snapshot.appendItems([.overviewSmart], toSection: .overviewSmart)
+            if overviewSuggested != nil {
+                snapshot.appendSections([.overviewSuggested])
+                snapshot.appendItems([.overviewSuggested], toSection: .overviewSuggested)
+            }
             snapshot.appendSections([.overviewLists])
             snapshot.appendItems([.overviewLists], toSection: .overviewLists)
-            if overviewAgents != nil {
+            if let agents = overviewAgents, !agents.isEmpty {
                 snapshot.appendSections([.overviewAgents])
                 snapshot.appendItems([.overviewAgents], toSection: .overviewAgents)
             }
@@ -1038,6 +1090,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
                 snapshot.appendItems([.ideaNote(.noTasks(text: Self.nothingText(scope: PagesScope.all, botName: ""), imports: true))], toSection: .empty)
             }
         } else if listShown {
+            overviewSuggested = nil
             if (activePriority != nil || activeTag != nil), !searching {
                 snapshot.appendSections([.filters])
                 snapshot.appendItems([.filters], toSection: .filters)
@@ -1078,21 +1131,22 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
             // [goals-addon] Not on an add-on without goals: its Goals view is the update state alone.
             let goalsShown = current == .goals && !searching && store.goalsSupported
             if goalsShown { appendGoals(to: &snapshot, now: now) } else if !goalsFound { goalCards = [:]; goalGroups = [] }
-            // No tasks at all: every view says so, with New Task (and Inbox's ideas still under it).
+            // No tasks at all: every task view says so, with New Task.
             // [goals-addon] Goals on an add-on without them: the update state alone (updateEmptyState), no task lines.
+            let ideasView = current == .suggested && !searching
             let goalsLocked = current == .goals && !searching && !store.goalsSupported
-            let nothing = groups.isEmpty && !searching && !goalsShown && !goalsLocked
+            let nothing = groups.isEmpty && !searching && !goalsShown && !goalsLocked && !ideasView
             if nothing, all.isEmpty {
                 snapshot.appendSections([.empty])
                 snapshot.appendItems([.ideaNote(.noTasks(text: Self.nothingText(scope: PagesScope.all, botName: ""), imports: true))], toSection: .empty)
             }
-            if current == .inbox, !searching, !selecting {
+            if ideasView, !selecting {
                 ideasShown = appendIdeas(to: &snapshot, scope: scoped, heads: heads)
             } else {
                 ideaCards = [:]
             }
             // A view with nothing in it says so in one line.
-            if nothing, !all.isEmpty, !ideasShown {
+            if (nothing && !all.isEmpty && !ideasShown) || (ideasView && ideas.page != nil && !ideasShown) {
                 snapshot.appendSections([.empty])
                 snapshot.appendItems([.viewEmpty(emptyText(scope: scoped))], toSection: .empty)
             }
@@ -1113,6 +1167,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
             switch item {
             case .filters, .week, .ideaHead, .more: return true
             case .overviewSmart: return previousSmart != overviewSmart
+            case .overviewSuggested: return previousSuggested != overviewSuggested
             case .overviewLists: return previousLists != overviewLists
             case .overviewAgents: return previousAgents != overviewAgents
             case .offer(let id): return previousOffers[id] != nil && previousOffers[id] != offerCards[id]
@@ -1179,6 +1234,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         var gone = false
         switch current {
         case .list(let id) where !store.sections.contains { $0.id == id }: gone = true
+        case .suggested where store.ideasCount == nil: gone = true
         case .bots where !TodoViews.showsBots(tasks): gone = true
         case .goals where !store.goalsSupported && !store.goalsNeedAddOn: gone = true
         default: break
@@ -1215,13 +1271,13 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         goalOfferKept = nil
         if !DeviceWord.isMac { title = TasksNavigationLayout.title(for: current, sections: store.sections) }
         guard isViewLoaded else { return }
-        if view == .inbox { readIdeas() }
+        if view == .suggested { readIdeas() }
         reload(animated: false)
         collectionView.setContentOffset(CGPoint(x: 0, y: -collectionView.adjustedContentInset.top), animated: false)
     }
 
     /// Builds the three cleanly separated groups for both the iPhone Grouped Overview and the Mac Sidebar:
-    /// Smart Views (Today, Upcoming, Inbox, Goals), My Lists, and Agents (Bots' own tasks).
+    /// Smart Views (Today, Upcoming, Inbox, Goals), My Lists, and Agents (Suggested + Bots' own tasks).
     private func buildNavigationModels(_ scopedTasks: [TodoTask], allTasks: [TodoTask], now: Date) {
         func count(_ view: TodoView) -> Int { TodoViews.openCount(scopedTasks, view: view, sections: store.sections, now: now) }
         var smart: [TasksSmartTileModel] = [
@@ -1251,11 +1307,15 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
             )
         }
 
-        if TodoViews.showsBots(allTasks) {
-            overviewAgents = TasksOverviewAgentsModel(count: count(.bots))
-        } else {
-            overviewAgents = nil
+        let suggestedRow: TasksOverviewSuggestedRowModel? = store.ideasCount.map { fallbackCount in
+            let isOn = ideas.page?.on ?? (fallbackCount > 0 || store.settings.ideas == true)
+            let looking = ideas.page?.looking ?? false
+            let liveCount = ideas.page.map { $0.on ? ideas.shown.count : 0 } ?? fallbackCount
+            return TasksOverviewSuggestedRowModel(count: liveCount, isOn: isOn, looking: looking)
         }
+        let botsCount: Int? = TodoViews.showsBots(allTasks) ? count(.bots) : nil
+        let agents = TasksOverviewAgentsModel(suggested: suggestedRow, botsCount: botsCount)
+        overviewAgents = agents.isEmpty ? nil : agents
     }
 
     private func listName(_ id: String?) -> String? { id.flatMap { id in store.sections.first { $0.id == id }?.name } }
@@ -1471,7 +1531,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     private func pulledToRefresh() {
         refreshStarted = Date()
         Task { await store.refresh(force: true) }
-        if current == .inbox { Task { await ideas.refresh(force: true) } }
+        if isOverviewRoot || current == .suggested || DeviceWord.isMac { Task { await ideas.refresh(force: true) } }
         DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
             self?.refreshStarted = nil
             self?.collectionView.refreshControl?.endRefreshing()
@@ -1510,7 +1570,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
             return out
         }
         var filters: [UIMenuElement] = []
-        if store.fieldsSupported {
+        if store.fieldsSupported && current != .suggested && current != .goals {
             let priSubtitle = priorityFilter.map { TodoViews.priorityWord($0) }
             let priChoices: [(Int?, String)] = [(nil, "Any Priority"), (1, "High"), (2, "Medium"), (3, "Low")]
             filters.append(UIMenu(title: "Priority", subtitle: priSubtitle, image: UIImage(systemName: "flag"),
@@ -1554,9 +1614,11 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
                 }
             }))
         }
-        organize.append(UIAction(title: "Select Tasks", image: UIImage(systemName: "checkmark.circle")) { [weak self] _ in
-            self?.setSelecting(true)
-        })
+        if current != .suggested && current != .goals {
+            organize.append(UIAction(title: "Select Tasks", image: UIImage(systemName: "checkmark.circle")) { [weak self] _ in
+                self?.setSelecting(true)
+            })
+        }
         organize.append(UIAction(title: "Completed Logbook…", image: UIImage(systemName: "book.closed")) { [weak self] _ in
             self?.openLogbook()
         })
@@ -1990,19 +2052,11 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         }
     }
 
-    // MARK: Ideas ([task-ideas], at Inbox's foot)
+    // MARK: Ideas ([task-ideas], dedicated Suggested view + inline Overview preview)
 
-    /// Inbox opens (`-HQPagesTasksIdeas`, PagesDebug), scrolled to its foot where the ideas are ([Mac UI check
-    /// 2026-11-13]: the tour's picture showed Inbox's tasks, the ideas out of sight below them).
+    /// Opens the dedicated Suggested view (`-HQPagesTasksIdeas`, PagesDebug).
     func showIdeas() {
-        show(.inbox)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-            let target = (self?.navigationController?.topViewController as? TasksViewController) ?? self
-            guard let list = target?.collectionView else { return }
-            list.layoutIfNeeded()
-            let bottom = list.contentSize.height + list.adjustedContentInset.bottom - list.bounds.height
-            list.setContentOffset(CGPoint(x: list.contentOffset.x, y: max(-list.adjustedContentInset.top, bottom)), animated: false)
-        }
+        show(.suggested)
     }
 
     private func readIdeas() {
@@ -2010,7 +2064,16 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         Task { await ideas.refresh() }
         // The list was last read whole before the add-on had Ideas (`ideas` absent), and `?since=` has said
         // "unchanged" ever since: read it whole again, or an add-on updated outside the app never shows Ideas.
-        if store.ideasCount == nil { Task { await store.refresh(force: true) } }
+        if store.hasList && store.ideasCount == nil { Task { await store.refresh(force: true) } }
+    }
+
+    private func toggleOverviewIdea(_ id: String) {
+        PagesHaptics.selection()
+        ideaOpen.id = openIdea == id ? nil : id
+        var snapshot = dataSource.snapshot()
+        guard snapshot.itemIdentifiers.contains(.overviewSuggested) else { return }
+        snapshot.reconfigureItems([.overviewSuggested])
+        dataSource.apply(snapshot, animatingDifferences: !HQMotion.reduced)
     }
 
     /// Under Inbox's tasks: "Suggested by <Bot>" and one short row per idea (the bar's Filter and search apply), or

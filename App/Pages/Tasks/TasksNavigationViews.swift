@@ -14,6 +14,8 @@ nonisolated enum TasksNavigationLayout {
     static let sidebarMinPaneWidth: CGFloat = 640
     /// Minimum collection view width on Mac to render the multi-column table layout (`TodoTable`).
     static let tableMinContentWidth: CGFloat = 760
+    /// Maximum number of suggested tasks shown inline on the iPhone Grouped Overview before tapping "See all".
+    static let overviewSuggestedLimit = 3
 
     static func shouldShowMacSidebar(isMac: Bool, paneWidth: CGFloat, userCollapsed: Bool, hasList: Bool, needsAddOn: Bool) -> Bool {
         isMac && hasList && !needsAddOn && !userCollapsed && paneWidth >= sidebarMinPaneWidth
@@ -29,6 +31,7 @@ nonisolated enum TasksNavigationLayout {
         case .upcoming: return "Upcoming"
         case .inbox: return "Inbox"
         case .goals: return "Goals"
+        case .suggested: return "Suggested"
         case .bots: return "Bots’ Tasks"
         case .list(let id): return sections.first { $0.id == id }?.name ?? "List"
         }
@@ -40,6 +43,7 @@ nonisolated enum TasksNavigationLayout {
         case .upcoming: return "calendar"
         case .inbox: return "tray"
         case .goals: return "smallcircle.filled.circle"
+        case .suggested: return "sparkle"
         case .bots: return "person.2"
         case .list(let id): return sections.first { $0.id == id }?.icon ?? TodoListIcons.fallback
         }
@@ -92,10 +96,41 @@ struct TasksOverviewListModel: Identifiable, Hashable {
     }
 }
 
-struct TasksOverviewAgentsModel: Hashable {
+struct TasksOverviewSuggestedRowModel: Hashable {
     var count: Int
-    var identifier: String { "tasks.view.bots" }
-    var spoken: String { "Bots’ Tasks, \(count) \(count == 1 ? "task" : "tasks")" }
+    var isOn: Bool
+    var looking: Bool
+
+    var identifier: String { "tasks.view.suggested" }
+
+    var subtitle: String? {
+        if looking { return "Looking for ideas…" }
+        if !isOn { return "Off" }
+        return nil
+    }
+
+    var spoken: String {
+        if looking { return "Suggested, looking for ideas" }
+        if !isOn { return "Suggested, off" }
+        return "Suggested, \(count) \(count == 1 ? "idea" : "ideas")"
+    }
+}
+
+struct TasksOverviewSuggestedModel: Hashable {
+    var cards: [TaskIdeaCardModel]
+    var totalCount: Int
+}
+
+struct TasksOverviewAgentsModel: Hashable {
+    var suggested: TasksOverviewSuggestedRowModel?
+    var botsCount: Int?
+
+    var isEmpty: Bool { suggested == nil && botsCount == nil }
+    var botsIdentifier: String { "tasks.view.bots" }
+    var botsSpoken: String {
+        let count = botsCount ?? 0
+        return "Bots’ Tasks, \(count) \(count == 1 ? "task" : "tasks")"
+    }
 }
 
 // MARK: - iPhone Grouped Overview Views
@@ -353,54 +388,360 @@ struct TasksOverviewListsCard: View {
     }
 }
 
-/// Agents card on iPhone Overview (Bots' own tasks, cleanly separated from user lists).
-struct TasksOverviewAgentsCard: View {
-    var agents: TasksOverviewAgentsModel
-    var onPick: () -> Void
+/// Section header for the inline Suggested Tasks preview on iPhone Overview.
+struct TasksOverviewSuggestedHeader: View {
+    var count: Int
+    var onSeeAll: () -> Void
+
+    var body: some View {
+        let _ = Theme.touch()
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "sparkle")
+                .font(Font.hq(.caption2).weight(.bold))
+                .foregroundStyle(Color.hqOrange)
+                .accessibilityHidden(true)
+            Text("Suggested · \(count)")
+                .font(Font.hq(.footnote).weight(.semibold))
+                .monospacedDigit()
+                .foregroundStyle(Color.hqLabel2)
+                .textCase(.uppercase)
+                .accessibilityAddTraits(.isHeader)
+            Spacer(minLength: 8)
+            Button {
+                PagesHaptics.selection()
+                onSeeAll()
+            } label: {
+                HStack(spacing: 3) {
+                    Text("See all")
+                        .font(Font.hq(.footnote).weight(.semibold))
+                    Image(systemName: "chevron.right")
+                        .font(Font.hq(.caption2).weight(.bold))
+                        .accessibilityHidden(true)
+                }
+                .foregroundStyle(Color.hqTintText)
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("tasks.overview.suggested.see-all")
+        }
+        .padding(.horizontal, ListGutter.side + 2)
+        .padding(.top, 14)
+        .padding(.bottom, 6)
+    }
+}
+
+/// Inline card showing the top pending suggested tasks right on iPhone Overview, with 1-tap Add / × and tap-to-expand details.
+struct TasksOverviewSuggestedCard: View {
+    var model: TasksOverviewSuggestedModel
+    var open: TaskIdeaOpen
+    var enabled: Bool
+    var onToggle: (String) -> Void
+    var onAdd: (String, Bool) -> Void
+    var onDismiss: (String) -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @ScaledMetric(relativeTo: .footnote) private var faceSize: CGFloat = 18
 
     var body: some View {
         let _ = Theme.touch()
         let radius: CGFloat = Theme.isDesktop ? DesktopRows.radius : 14
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-        Button {
-            PagesHaptics.selection()
-            onPick()
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "person.2")
-                    .font(Font.hq(.subheadline).weight(.semibold))
-                    .foregroundStyle(Color.hqLabel2)
-                    .frame(width: 30, height: 30)
-                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.hqFill3))
-                    .accessibilityHidden(true)
-                Text("Bots’ Tasks")
-                    .font(Font.hq(.body).weight(.medium))
-                    .foregroundStyle(Color.hqLabel)
-                    .lineLimit(1)
-                Spacer(minLength: 8)
-                Text("\(agents.count)")
-                    .font(Font.hq(.subheadline))
-                    .monospacedDigit()
-                    .foregroundStyle(Color.hqLabel2)
-                Image(systemName: "chevron.right")
-                    .font(Font.hq(.caption).weight(.semibold))
-                    .foregroundStyle(Color.hqLabel3)
-                    .accessibilityHidden(true)
+        VStack(spacing: 0) {
+            ForEach(Array(model.cards.enumerated()), id: \.element.idea.id) { idx, card in
+                let isOpen = open.id == card.idea.id
+                rowContent(card, expanded: isOpen)
+                    .contentShape(Rectangle())
+                    .onTapGesture { onToggle(card.idea.id) }
+                    .contextMenu {
+                        if enabled {
+                            Button { onAdd(card.idea.id, false) } label: { Label("Add to Tasks", systemImage: "plus.circle") }
+                            if card.idea.botHelps {
+                                Button { onAdd(card.idea.id, true) } label: {
+                                    Label("Add & Let \(card.botName) Start", systemImage: "play.circle")
+                                }
+                            }
+                            Divider()
+                            Button(role: .destructive) { onDismiss(card.idea.id) } label: { Label("Dismiss", systemImage: "xmark.circle") }
+                        }
+                    }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("tasks.overview.idea.\(card.idea.title)")
+
+                if idx < model.cards.count - 1 {
+                    Rectangle()
+                        .fill(Color.hqStroke)
+                        .frame(height: HQShape.hairline)
+                        .padding(.leading, 14)
+                }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .frame(minHeight: 48)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(TasksOverviewRowButtonStyle())
+        .background {
+            shape.fill(Color.hqGroupedCard)
+                .overlay { shape.strokeBorder(Color.hqOrange.opacity(0.28), lineWidth: HQShape.hairline) }
+        }
+        .clipShape(shape)
+        .padding(.horizontal, ListGutter.side)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("tasks.overview.suggested")
+    }
+
+    private func subtitle(for card: TaskIdeaCardModel) -> String {
+        let idea = card.idea
+        if idea.botHelps {
+            let can = idea.who == "bot" ? "can do this" : "can help"
+            return idea.help.isEmpty ? "\(card.botName) \(can)" : "\(card.botName) \(can): \(idea.help)"
+        }
+        if !idea.why.isEmpty { return idea.why }
+        return idea.source
+    }
+
+    private func helpLine(for card: TaskIdeaCardModel) -> Text {
+        let idea = card.idea
+        let name = Text(card.botName).fontWeight(.semibold).foregroundStyle(Color.hqLabel)
+        let can = Text(idea.who == "bot" ? " can do this" : " can help").foregroundStyle(Color.hqLabel)
+        guard !idea.help.isEmpty else { return Text("\(name)\(can)") }
+        return Text("\(name)\(can)\(Text(" · \(idea.help)").foregroundStyle(Color.hqLabel2))")
+    }
+
+    @ViewBuilder
+    private func rowContent(_ card: TaskIdeaCardModel, expanded: Bool) -> some View {
+        let idea = card.idea
+        let large = typeSize.isAccessibilitySize
+        VStack(alignment: .leading, spacing: expanded ? 8 : 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(idea.title.isEmpty ? "Untitled Idea" : idea.title)
+                    .font(Font.hq(.callout).weight(.semibold))
+                    .foregroundStyle(Color.hqLabel)
+                    .lineLimit(expanded ? nil : (large ? 4 : 2))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if !expanded {
+                    Button { onAdd(idea.id, false) } label: {
+                        HStack(spacing: 4) {
+                            if card.busy { ProgressView().controlSize(.mini) }
+                            Text("Add")
+                        }
+                        .font(Font.hq(.footnote).weight(.semibold))
+                        .foregroundStyle(Color.hqTintText)
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(Color.hqTint.opacity(0.14)))
+                        .contentShape(Rectangle().inset(by: -8))
+                        .padding(.vertical, -3)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!enabled || card.busy)
+                    .accessibilityLabel("Add to Tasks")
+                    .accessibilityIdentifier("tasks.overview.idea.add.\(idea.title)")
+                }
+                Button { onDismiss(idea.id) } label: {
+                    Image(systemName: "xmark")
+                        .font(Font.hq(.footnote).weight(.semibold))
+                        .foregroundStyle(Color.hqLabel3)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle().inset(by: -10))
+                }
+                .buttonStyle(.plain)
+                .disabled(!enabled || card.busy)
+                .hqIconLabel("Dismiss")
+                .accessibilityIdentifier("tasks.overview.idea.dismiss.\(idea.title)")
+            }
+
+            if expanded {
+                if !idea.why.isEmpty {
+                    Text(idea.why)
+                        .font(Font.hq(.footnote))
+                        .foregroundStyle(Color.hqLabel2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if idea.botHelps {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        let size = min(26, faceSize).rounded()
+                        HeadImage(raw: card.head, profile: idea.bot, size: size)
+                            .frame(width: size, height: size)
+                            .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + HQFont.preferred(.footnote).capHeight / 2 }
+                            .accessibilityHidden(true)
+                        helpLine(for: card)
+                            .font(Font.hq(.footnote))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                if !idea.source.isEmpty {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Image(systemName: "text.bubble")
+                            .accessibilityHidden(true)
+                        Text(idea.source)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(Font.hq(.caption))
+                    .foregroundStyle(Color.hqLabel3)
+                }
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { expandedButtons(card) }
+                    VStack(alignment: .leading, spacing: 8) { expandedButtons(card) }
+                }
+                .disabled(!enabled || card.busy)
+                .padding(.top, 2)
+            } else {
+                let line = subtitle(for: card)
+                if !line.isEmpty {
+                    Text(line)
+                        .font(Font.hq(.footnote))
+                        .foregroundStyle(Color.hqLabel2)
+                        .lineLimit(large ? 4 : 2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func expandedButtons(_ card: TaskIdeaCardModel) -> some View {
+        let idea = card.idea
+        Button { onAdd(idea.id, false) } label: {
+            HStack(spacing: 5) {
+                if card.busy { ProgressView().controlSize(.mini) } else { Image(systemName: "plus") }
+                Text("Add")
+            }
+            .font(Font.hq(.footnote).weight(.semibold))
+            .foregroundStyle(Color.hqTintText)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(Color.hqTint.opacity(0.15)))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Add to Tasks")
+        .accessibilityIdentifier("tasks.overview.idea.add.\(idea.title)")
+
+        if idea.botHelps {
+            Button { onAdd(idea.id, true) } label: {
+                Text("Add & Let \(card.botName) Start")
+                    .font(Font.hq(.footnote).weight(.semibold))
+                    .foregroundStyle(Color.hqTintText)
+                    .lineLimit(1)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Capsule().fill(Color.hqFill3))
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("tasks.overview.idea.start.\(idea.title)")
+        }
+    }
+}
+
+/// Agents card on iPhone Overview (Suggested tasks + Bots' own tasks, cleanly separated from user lists).
+struct TasksOverviewAgentsCard: View {
+    var agents: TasksOverviewAgentsModel
+    var onPick: (TodoView) -> Void
+
+    var body: some View {
+        let _ = Theme.touch()
+        let radius: CGFloat = Theme.isDesktop ? DesktopRows.radius : 14
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        VStack(spacing: 0) {
+            if let suggested = agents.suggested {
+                Button {
+                    PagesHaptics.selection()
+                    onPick(.suggested)
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "sparkle")
+                            .font(Font.hq(.subheadline).weight(.semibold))
+                            .foregroundStyle(Color.hqOrange)
+                            .frame(width: 30, height: 30)
+                            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.hqOrange.opacity(0.14)))
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Suggested")
+                                .font(Font.hq(.body).weight(.medium))
+                                .foregroundStyle(Color.hqLabel)
+                                .lineLimit(1)
+                            if let subtitle = suggested.subtitle {
+                                Text(subtitle)
+                                    .font(Font.hq(.footnote))
+                                    .foregroundStyle(Color.hqLabel2)
+                                    .lineLimit(1)
+                            }
+                        }
+                        Spacer(minLength: 8)
+                        if suggested.isOn {
+                            Text("\(suggested.count)")
+                                .font(Font.hq(.subheadline))
+                                .monospacedDigit()
+                                .foregroundStyle(Color.hqLabel2)
+                        }
+                        Image(systemName: "chevron.right")
+                            .font(Font.hq(.caption).weight(.semibold))
+                            .foregroundStyle(Color.hqLabel3)
+                            .accessibilityHidden(true)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .frame(minHeight: 48)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(TasksOverviewRowButtonStyle())
+                .accessibilityLabel(suggested.spoken)
+                .accessibilityIdentifier(suggested.identifier)
+            }
+
+            if agents.suggested != nil && agents.botsCount != nil {
+                Rectangle()
+                    .fill(Color.hqStroke)
+                    .frame(height: HQShape.hairline)
+                    .padding(.leading, 54)
+            }
+
+            if let botsCount = agents.botsCount {
+                Button {
+                    PagesHaptics.selection()
+                    onPick(.bots)
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "person.2")
+                            .font(Font.hq(.subheadline).weight(.semibold))
+                            .foregroundStyle(Color.hqLabel2)
+                            .frame(width: 30, height: 30)
+                            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.hqFill3))
+                            .accessibilityHidden(true)
+                        Text("Bots’ Tasks")
+                            .font(Font.hq(.body).weight(.medium))
+                            .foregroundStyle(Color.hqLabel)
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text("\(botsCount)")
+                            .font(Font.hq(.subheadline))
+                            .monospacedDigit()
+                            .foregroundStyle(Color.hqLabel2)
+                        Image(systemName: "chevron.right")
+                            .font(Font.hq(.caption).weight(.semibold))
+                            .foregroundStyle(Color.hqLabel3)
+                            .accessibilityHidden(true)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .frame(minHeight: 48)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(TasksOverviewRowButtonStyle())
+                .accessibilityLabel(agents.botsSpoken)
+                .accessibilityIdentifier(agents.botsIdentifier)
+            }
+        }
         .background {
             shape.fill(Color.hqGroupedCard)
                 .overlay { shape.strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline) }
         }
         .clipShape(shape)
         .padding(.horizontal, ListGutter.side)
-        .accessibilityLabel(agents.spoken)
-        .accessibilityIdentifier(agents.identifier)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("tasks.overview.agents")
     }
 }
 
@@ -506,24 +847,43 @@ struct TasksSidebarView: View {
                     .padding(.top, 2)
                 }
 
-                if let agents = model.agents {
+                if let agents = model.agents, !agents.isEmpty {
                     sectionHeading("Agents")
                         .padding(.top, 12)
-                    let isPicked = model.picked == .bots
-                    sidebarRow(
-                        title: "Bots’ Tasks",
-                        count: agents.count,
-                        picked: isPicked,
-                        spoken: agents.spoken,
-                        identifier: agents.identifier,
-                        icon: {
-                            Image(systemName: "person.2")
-                                .font(Font.hq(.footnote).weight(.medium))
-                                .foregroundStyle(isPicked ? Color.hqOnTint : Color.hqLabel2)
-                                .frame(width: 18)
-                        },
-                        action: { onPick(.bots) }
-                    )
+                    if let suggested = agents.suggested {
+                        let isPicked = model.picked == .suggested
+                        sidebarRow(
+                            title: "Suggested",
+                            count: suggested.isOn ? suggested.count : nil,
+                            picked: isPicked,
+                            spoken: suggested.spoken,
+                            identifier: suggested.identifier,
+                            icon: {
+                                Image(systemName: "sparkle")
+                                    .font(Font.hq(.footnote).weight(.semibold))
+                                    .foregroundStyle(isPicked ? Color.hqOnTint : Color.hqOrange)
+                                    .frame(width: 18)
+                            },
+                            action: { onPick(.suggested) }
+                        )
+                    }
+                    if let botsCount = agents.botsCount {
+                        let isPicked = model.picked == .bots
+                        sidebarRow(
+                            title: "Bots’ Tasks",
+                            count: botsCount,
+                            picked: isPicked,
+                            spoken: agents.botsSpoken,
+                            identifier: agents.botsIdentifier,
+                            icon: {
+                                Image(systemName: "person.2")
+                                    .font(Font.hq(.footnote).weight(.medium))
+                                    .foregroundStyle(isPicked ? Color.hqOnTint : Color.hqLabel2)
+                                    .frame(width: 18)
+                            },
+                            action: { onPick(.bots) }
+                        )
+                    }
                 }
             }
             .padding(.horizontal, 10)

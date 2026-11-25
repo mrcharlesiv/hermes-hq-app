@@ -22,7 +22,9 @@ and nothing about it needs the add-on.
 - **Any time**: hold a message › **Reply in Thread** (`message.thread`). A banner over the field ("Reply in Thread",
   one line of that message, ✕) marks the next send; that send starts the thread under the held message and opens the
   thread's own chat.
-- Only in a bot's own chat. Sessions, rooms and task chats have neither.
+- Available in bot chats and regular session chats (never nested inside a thread itself, and never in rooms or hidden
+  task/goal/tile chats). On regular sessions, only explicitly recorded `BotThreadLink` threads are shown inline so
+  manual "Branch in New Chat" sessions stay separate.
 
 ## 3. What a thread starts out knowing (`ThreadSeed`)
 

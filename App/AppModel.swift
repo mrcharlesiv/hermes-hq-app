@@ -210,8 +210,18 @@ final class AppModel: AppServices {
         chat.botName = bot.name
         chat.modelName = botStore.profile(named: bot.id)?.model
         chat.menus.isBotChat = true             // MENUS (spec 1x §4.1): a bot's own chat offers no Rename
-        // [threads] §9: messages this chat cannot take now go on in a thread instead of coming back, and sends made
-        // while the chat is already known to be busy route straight into the thread with zero wait.
+        wireThreads(on: chat)                   // [threads] §9
+        chat.activityLink.store = activityStore       // [activity]
+        wire(chat)
+        chat.keepQueue()                        // verify round 3: a queue left in this chat comes back
+        chat.adoptEarlierDraft()                // the row's "Draft:" words are the ones the field opens with
+        chat.readAhead()                        // [smooth-open]
+        return chat
+    }
+
+    /// [threads] §9: messages a bot chat or regular session cannot take now go on in a side thread instead of waiting
+    /// or coming back, and sends made while the chat is already known to be busy route straight into the thread.
+    private func wireThreads(on chat: LiveChatSession) {
         chat.onBusyThread = { [weak self, weak chat] text, localId in
             guard let self, let chat, let bot = self.botStore?.bot(named: chat.profile) else { return false }
             return self.threadStore.takeBusySend(text, from: chat, bot: bot, leavingOut: localId)
@@ -222,26 +232,20 @@ final class AppModel: AppServices {
         }
         chat.shouldRouteToBusyThread = { [weak self, weak chat] in
             guard let self, let chat else { return false }
-            return self.threadStore.shouldRouteToBusyThread(for: chat, botId: chat.profile)
+            return self.threadStore.shouldRouteToBusyThread(for: chat)
         }
         chat.consumeThreadContextNote = { [weak self, weak chat] in
             guard let self, let chat else { return nil }
-            return self.threadStore.consumeReconciliationNote(profile: chat.profile)
+            return self.threadStore.consumeReconciliationNote(for: chat)
         }
         chat.restoreThreadContextNote = { [weak self, weak chat] note in
             guard let self, let chat else { return }
-            self.threadStore.restoreReconciliationNote(profile: chat.profile, note: note)
+            self.threadStore.restoreReconciliationNote(for: chat, note: note)
         }
         chat.onMainReplyLanded = { [weak self, weak chat] in
             guard let self, let chat else { return }
-            self.threadStore.noteMainReplyLanded(profile: chat.profile, parent: chat)
+            self.threadStore.noteMainReplyLanded(for: chat)
         }
-        chat.activityLink.store = activityStore       // [activity]
-        wire(chat)
-        chat.keepQueue()                        // verify round 3: a queue left in this chat comes back
-        chat.adoptEarlierDraft()                // the row's "Draft:" words are the ones the field opens with
-        chat.readAhead()                        // [smooth-open]
-        return chat
     }
 
     func chat(for session: SessionSummary) -> ChatSessionModel {
@@ -259,6 +263,11 @@ final class AppModel: AppServices {
         chat.modelName = botStore?.profile(named: session.profile)?.model
         if let cwd = session.cwd?.trimmingCharacters(in: .whitespacesAndNewlines), !cwd.isEmpty {
             chat.menus.cwd = cwd
+        }
+        if threadStore.isThreadSession(storedId: session.id, profile: session.profile) {
+            chat.menus.isThread = true
+        } else {
+            wireThreads(on: chat)
         }
         chat.activityLink.store = activityStore       // [activity]
         sessionStore?.markOpened(session)
@@ -302,6 +311,7 @@ final class AppModel: AppServices {
     }
 
     func freshChat(for bot: Bot, folder: String?, shownTitle: String, extra: [String: JSONValue],
+                           allowsThreads: Bool = true,
                            created: (@MainActor (String) -> Void)?) -> ChatSessionModel {
         guard let client, let account, let botStore else { return UnavailableChat(title: shownTitle, profile: bot.id, head: bot.head) }
         botStore.noteChatOpening(true)
@@ -325,6 +335,7 @@ final class AppModel: AppServices {
             chat.menus.cwd = folder   // [new-chat-project] known on frame 0 before session.create / session.resume answers
         }
         chat.listsWhenStarted = extra["hidden"]?.bool != true   // [#440] a task's or a tile's chat stays off the lists
+        if allowsThreads, chat.listsWhenStarted { wireThreads(on: chat) }
         chat.activityLink.store = activityStore       // [activity]
         wire(chat)
         chat.keepQueue()
@@ -1214,7 +1225,7 @@ final class AppModel: AppServices {
             if !working, !chat.reportsRunning, chat.observing, let id = chat.storedSessionId { self.workingLedger?.turnEnded(id) }
             self.setWorking(profile: chat.profile, storedId: chat.storedSessionId, working || chat.reportsRunning)
             if !working, !chat.reportsRunning, self.isChatInView(chat) { self.syncChatPreview(chat) }
-            if chat.menus.isBotChat { self.threadStore.noteMainExternalWork(profile: chat.profile, working: working, parent: chat) }   // [threads] §9
+            if chat.supportsThreads { self.threadStore.noteMainExternalWork(for: chat, working: working) }   // [threads] §9
         }
         // A turn sent before the chat's stored id came back: it counts under the id now, so its end clears Working…
         // (TurnWorking.resolved), and its off-screen end names the id too.
@@ -1436,8 +1447,8 @@ final class AppModel: AppServices {
         // [threads] A thread is still that bot's chat: its face stays beside the thread's own title.
         let thread = (model as? LiveChatSession)?.menus.isThread == true
         if (model as? ChatSessionActions)?.isBotChat == true || thread { screen.titleAccessoryView = head }
-        // [threads] A bot's own chat draws its threads in place and offers the thread button.
-        if let live = model as? LiveChatSession, live.menus.isBotChat { screen.threadsHost = BotChatThreads(model: self, chat: live) }
+        // [threads] Bot chats and regular sessions draw their threads in place and route busy sends into threads.
+        if let live = model as? LiveChatSession, live.supportsThreads { screen.threadsHost = BotChatThreads(model: self, chat: live) }
         screen.onSignInAgain = { [weak self] in self?.offlineHub.signInAgain() }   // UX study #121
         openChatScreens.removeAll { $0.screen.value == nil }
         openChatScreens.append((WeakBox(screen), WeakBox(head)))

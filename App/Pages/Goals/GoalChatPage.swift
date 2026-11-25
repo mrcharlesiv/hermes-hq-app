@@ -48,6 +48,7 @@ enum GoalChats {
             }
         }
         if let live = model as? LiveChatSession {
+            live.disableThreads()
             if link == nil { live.pendingScope = "goal." + goal.id }
             var first = link == nil
             let id = goal.id

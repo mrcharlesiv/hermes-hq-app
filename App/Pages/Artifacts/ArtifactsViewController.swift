@@ -1828,8 +1828,10 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
 
     static func tileOwnChat(_ pin: ArtifactPin, bot: Bot, services: PagesServices) -> any ChatSessionModel {
         guard !pin.sessionId.isEmpty else { return services.tileChat(for: bot) }
-        return services.chat(for: SessionSummary(id: pin.sessionId, profile: pin.profile, title: pin.sessionTitle, preview: nil,
-                                                 lastActive: nil, source: nil, unread: false, isRunning: false))
+        let chat = services.chat(for: SessionSummary(id: pin.sessionId, profile: pin.profile, title: pin.sessionTitle, preview: nil,
+                                                     lastActive: nil, source: nil, unread: false, isRunning: false))
+        (chat as? LiveChatSession)?.disableThreads()
+        return chat
     }
 
     /// [tile-chats] The tile has a chat to open: the one its bot made or last changed it in, or the one it works in now.

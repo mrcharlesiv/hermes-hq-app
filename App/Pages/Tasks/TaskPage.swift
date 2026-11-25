@@ -250,6 +250,7 @@ enum TaskPage {
             }
         }
         if let live = model as? LiveChatSession {
+            live.disableThreads()
             if link == nil { live.pendingScope = "task." + task.id }   // its draft is this task's, not the bot's
             // Derive "first" from whether any user message exists in the session (excluding an in-flight voice memo),
             // so a failed first send retains task context on retry and a first voice memo receives task context too.

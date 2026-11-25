@@ -22,6 +22,20 @@ extension LiveChatSession {
     /// The hold ends: off screen it stops listening once its reply has ended (`endAwayDrainIfDone`).
     func endThreadHold() { threadHold = false }
 
+    /// Whether this chat can host side threads (bot chats and regular sessions; never threads themselves or hidden
+    /// task/goal/tile chats).
+    var supportsThreads: Bool { !menus.isThread && onBusyThreadSend != nil }
+
+    /// Opts this chat out of hosting threads (called for threads themselves and hidden task/goal/tile chats).
+    func disableThreads() {
+        onBusyThread = nil
+        onBusyThreadSend = nil
+        shouldRouteToBusyThread = nil
+        consumeThreadContextNote = nil
+        restoreThreadContextNote = nil
+        onMainReplyLanded = nil
+    }
+
     /// §9: routes a send to the app's thread handler (rich `onBusyThreadSend` first, legacy `onBusyThread` fallback).
     func deliverToBusyThread(_ payload: BusyThreadPayload) -> Bool {
         if let rich = onBusyThreadSend { return rich(payload) }

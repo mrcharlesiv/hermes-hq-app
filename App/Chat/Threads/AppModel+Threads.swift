@@ -16,18 +16,16 @@ final class BotChatThreads: ChatThreadsHost {
         }
     }
 
-    /// Every id the bot's chat goes by: the one it was opened with, the one the gateway resolved it to (its newest
-    /// part after a compression), and the roster's. A thread names whichever was current when it began.
+    /// Every id this parent chat goes by: the one it was opened with, the one the gateway resolved it to (its newest
+    /// part after a compression), and (for bot chats only) the roster's canonical session id.
     private var parentIds: Set<String> {
-        guard let chat else { return [] }
-        var ids = Set([chat.storedSessionId, chat.readSessionId, chat.resolvedStoredId].compactMap { $0 })
-        if let roster = model?.botStore?.bot(named: chat.profile)?.canonicalSessionId { ids.insert(roster) }
-        return ids
+        guard let chat, let model else { return [] }
+        return model.threadStore.parentIds(for: chat)
     }
 
     func threads() -> [ChatThread] {
         guard let chat, let model else { return [] }
-        return model.threadStore.threads(profile: chat.profile, parentIds: parentIds)
+        return model.threadStore.threads(profile: chat.profile, parentIds: parentIds, isBotChat: chat.menus.isBotChat)
     }
 
     func start(text: String, under anchor: ChatMessage?) -> String? {
@@ -45,12 +43,12 @@ final class BotChatThreads: ChatThreadsHost {
 
     func busyRoutingBanner() -> ThreadBusyBanner? {
         guard let chat, let model else { return nil }
-        return model.threadStore.busyBanner(for: chat, botId: chat.profile, botName: chat.botName)
+        return model.threadStore.busyBanner(for: chat, botName: chat.botName)
     }
 
     func optOutBusyRouting() {
         guard let chat else { return }
-        model?.threadStore.optOutBusyRouting(profile: chat.profile)
+        model?.threadStore.optOutBusyRouting(for: chat)
     }
 
     var tint: ThreadTint {

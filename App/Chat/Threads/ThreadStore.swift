@@ -17,7 +17,9 @@ final class ThreadStore {
         /// Stable for the run: the stored id for a listed thread, a local key for one started here.
         let key: String
         let profile: String
-        /// The bot chat's id it was started under (nil when that chat had no stored id yet).
+        /// Scope key of the parent chat (`bot:<profile>` or `session:<id>`) that owns this thread's busy latch.
+        let parentScope: String
+        /// The parent chat's id it was started under (nil when a bot chat had no stored id yet).
         var parentId: String?
         var storedId: String?
         var live: LiveChatSession?
@@ -32,12 +34,45 @@ final class ThreadStore {
         var reading = false
         var problem: String?
         var lastChange = Date()
-        /// What the bot chat last drew of it (a change in any of these redraws it).
+        /// What the parent chat last drew of it (a change in any of these redraws it).
         var drawn: Int = 0
 
-        init(key: String, profile: String, parentId: String?, storedId: String?, startedAt: Date) {
-            self.key = key; self.profile = profile; self.parentId = parentId; self.storedId = storedId; self.startedAt = startedAt
+        init(key: String, profile: String, parentScope: String, parentId: String?, storedId: String?, startedAt: Date) {
+            self.key = key; self.profile = profile; self.parentScope = parentScope
+            self.parentId = parentId; self.storedId = storedId; self.startedAt = startedAt
         }
+    }
+
+    /// Stable scope key for a parent chat's busy latch, opt-out, availability probe, and reconciliation queue:
+    /// bot chats share one scope per profile across compressions/reopens; regular sessions scope by their own id.
+    static func scopeKey(for parent: LiveChatSession) -> String {
+        if parent.menus.isBotChat { return "bot:\(parent.profile)" }
+        if let id = parent.storedSessionId ?? parent.readSessionId, !id.isEmpty { return "session:\(id)" }
+        return "ephemeral:\(ObjectIdentifier(parent).hashValue)"
+    }
+
+    /// Known parent session ids for `parent` (only bot chats include the bot's canonical session id).
+    func parentIds(for parent: LiveChatSession) -> Set<String> {
+        var ids = Set([parent.storedSessionId, parent.readSessionId, parent.resolvedStoredId].compactMap { $0 })
+        if parent.menus.isBotChat, let roster = model?.botStore?.bot(named: parent.profile)?.canonicalSessionId {
+            ids.insert(roster)
+        }
+        return ids
+    }
+
+    /// True when `storedId` is already a thread session (so opening it from Sessions never nests threads inside it).
+    func isThreadSession(storedId: String, profile: String) -> Bool {
+        if entries.contains(where: { $0.profile == profile && ($0.storedId == storedId || $0.live?.storedSessionId == storedId) }) {
+            return true
+        }
+        if model?.sessionStore?.botThreads.contains(where: { $0.profile == profile && $0.storedId == storedId }) == true {
+            return true
+        }
+        if let canonical = model?.botStore?.bot(named: profile)?.canonicalSessionId,
+           model?.sessionStore?.row(for: storedId)?.parentSessionId == canonical {
+            return true
+        }
+        return false
     }
 
     private weak var model: AppModel?
@@ -74,17 +109,17 @@ final class ThreadStore {
 
     // MARK: Reading
 
-    /// The threads of the bot chat known by `parentIds`, oldest first.
-    func threads(profile: String, parentIds: Set<String>) -> [ChatThread] {
-        adoptListed(profile: profile, parentIds: parentIds)
-        return entries.filter { $0.profile == profile && belongs($0, to: parentIds) }
+    /// The threads of the parent chat known by `parentIds`, oldest first.
+    func threads(profile: String, parentIds: Set<String>, isBotChat: Bool = true) -> [ChatThread] {
+        adoptListed(profile: profile, parentIds: parentIds, isBotChat: isBotChat)
+        return entries.filter { $0.profile == profile && belongs($0, to: parentIds, isBotChat: isBotChat) }
             .sorted { $0.startedAt < $1.startedAt }
             .map(thread)
     }
 
-    /// One started here before its bot chat had a stored id belongs to that profile's bot chat.
-    private func belongs(_ entry: Entry, to parentIds: Set<String>) -> Bool {
-        guard let parent = entry.parentId else { return true }
+    /// One started here before its bot chat had a stored id belongs only to that profile's bot chat.
+    private func belongs(_ entry: Entry, to parentIds: Set<String>, isBotChat: Bool) -> Bool {
+        guard let parent = entry.parentId else { return isBotChat }
         return parentIds.contains(parent)
     }
 
@@ -103,9 +138,9 @@ final class ThreadStore {
                           problem: live?.threadProblem ?? entry.problem, scope: scope)
     }
 
-    /// Listed Sessions rows that belong to this bot chat (either via durable synced `BotThreadLink` or a gateway
-    /// `parent_session_id` from older builds) become threads; a listed thread not live here is read again when moved.
-    private func adoptListed(profile: String, parentIds: Set<String>) {
+    /// Listed Sessions rows that belong to this chat (via durable synced `BotThreadLink`; bot chats also accept
+    /// legacy gateway `parent_session_id` rows from older builds, while regular sessions keep manual branches separate).
+    private func adoptListed(profile: String, parentIds: Set<String>, isBotChat: Bool) {
         guard let store = model?.sessionStore else { return }
         func adoptRow(_ row: SidebarSessionRow, parent: String, linkedAnchorRow: Int? = nil, linkedStartedAt: Double? = nil) {
             let entry: Entry
@@ -114,7 +149,8 @@ final class ThreadStore {
                 if entry.storedId == nil { entry.storedId = row.id }
             } else {
                 let at = linkedStartedAt ?? row.startedAt ?? row.lastActive ?? Date().timeIntervalSince1970
-                entry = Entry(key: row.id, profile: profile, parentId: parent, storedId: row.id,
+                let scope = isBotChat ? "bot:\(profile)" : "session:\(parent)"
+                entry = Entry(key: row.id, profile: profile, parentScope: scope, parentId: parent, storedId: row.id,
                               startedAt: Date(timeIntervalSince1970: at))
                 entries.append(entry)
             }
@@ -128,6 +164,7 @@ final class ThreadStore {
             guard let row = store.rowsById[link.storedId], row.archived != true else { continue }
             adoptRow(row, parent: link.parentId, linkedAnchorRow: link.anchorRow, linkedStartedAt: link.startedAt)
         }
+        guard isBotChat else { return }
         for row in store.rowsById.values where row.profile == profile && row.archived != true {
             guard let parent = row.parentSessionId, parentIds.contains(parent) else { continue }
             adoptRow(row, parent: parent)
@@ -181,11 +218,13 @@ final class ThreadStore {
         // parent Bot Chat link rides in `SessionStore.botThreads` (persisted locally and synced via `GatewaySync`).
         var extra: [String: JSONValue] = [:]
         if !seed.isEmpty { extra["messages"] = .array(ThreadSeed.params(seed)) }
-        let entry = Entry(key: "thread-\(UUID().uuidString)", profile: bot.id, parentId: parentId, storedId: nil, startedAt: Date())
+        let scope = Self.scopeKey(for: parent)
+        let entry = Entry(key: "thread-\(UUID().uuidString)", profile: bot.id, parentScope: scope, parentId: parentId,
+                          storedId: nil, startedAt: Date())
         entry.anchorMessageId = anchor?.id
         entry.anchorRow = anchor?.rowId
         let folder = parent.menus.cwd.flatMap { $0.isEmpty ? nil : $0 }
-        let chat = model.freshChat(for: bot, folder: folder, shownTitle: ThreadRules.defaultTitle, extra: extra) { [weak self, weak entry] stored in
+        let chat = model.freshChat(for: bot, folder: folder, shownTitle: ThreadRules.defaultTitle, extra: extra, allowsThreads: false) { [weak self, weak entry] stored in
             guard let self, let entry else { return }
             entry.storedId = stored
             if let parentId = entry.parentId {
@@ -193,7 +232,7 @@ final class ThreadStore {
                     storedId: stored, profile: entry.profile, parentId: parentId,
                     startedAt: entry.startedAt.timeIntervalSince1970, anchorRow: entry.anchorRow))
             }
-            if self.busyThreads[entry.profile]?.key == entry.key { self.busyThreads[entry.profile]?.storedId = stored }
+            if self.busyThreads[entry.parentScope]?.key == entry.key { self.busyThreads[entry.parentScope]?.storedId = stored }
             self.changed(entry.profile)
             self.model?.refreshSessions()       // it lists under Sessions too, as any chat with that bot
         }
@@ -223,28 +262,30 @@ final class ThreadStore {
         weak var parent: LiveChatSession?
     }
 
-    /// By profile: the thread that last took its bot chat's words while busy.
+    /// By parent chat scope: the thread that last took that chat's words while busy.
     private var busyThreads: [String: BusyLatch] = [:]
-    /// Profiles where the user tapped "Use Main" for the current busy stretch.
-    private var optedOutProfiles: Set<String> = []
-    /// Per-profile background probe watching for the main chat to become free when the ledger isn't tracking it.
+    /// Parent chat scopes where the user tapped "Use Main" for the current busy stretch.
+    private var optedOutScopes: Set<String> = []
+    /// Per-parent background probe watching for the parent chat to become free when the ledger isn't tracking it.
     private var availabilityProbes: [String: Task<Void, Never>] = [:]
-    /// Auto-thread keys per profile whose settled exchange should be bridged onto the next main-chat prompt.
+    /// Auto-thread keys per parent scope whose settled exchange should be bridged onto the next main-chat prompt.
     private var pendingReconciliation: [String: [String]] = [:]
-    /// A reconciliation note restored after a main-chat send failed or fell back to a thread.
+    /// A reconciliation note restored after a parent-chat send failed or fell back to a thread.
     private var restoredReconciliation: [String: String] = [:]
 
     /// True when the app already knows `parent` is unavailable and sends should route straight into a thread (0 ms wait).
-    func shouldRouteToBusyThread(for parent: LiveChatSession, botId: String, now: Date = Date()) -> Bool {
-        guard !optedOutProfiles.contains(botId) else { return false }
+    func shouldRouteToBusyThread(for parent: LiveChatSession, now: Date = Date()) -> Bool {
+        let scope = Self.scopeKey(for: parent)
+        guard !optedOutScopes.contains(scope) else { return false }
         if parent.externalWorking { return true }
-        return activeBusyEntry(for: parent, botId: botId, now: now) != nil
+        return activeBusyEntry(for: parent, scope: scope, now: now) != nil
     }
 
     /// Calm banner shown above the composer whenever the next send will proactively route into a thread.
-    func busyBanner(for parent: LiveChatSession, botId: String, botName: String, now: Date = Date()) -> ThreadBusyBanner? {
-        guard shouldRouteToBusyThread(for: parent, botId: botId, now: now) else { return nil }
-        if let active = activeBusyEntry(for: parent, botId: botId, now: now) {
+    func busyBanner(for parent: LiveChatSession, botName: String, now: Date = Date()) -> ThreadBusyBanner? {
+        let scope = Self.scopeKey(for: parent)
+        guard shouldRouteToBusyThread(for: parent, now: now) else { return nil }
+        if let active = activeBusyEntry(for: parent, scope: scope, now: now) {
             let title = ThreadRules.name(thread(active.entry))
             return ThreadRules.proactiveBanner(botName: botName, activeTitle: title, threadKey: active.entry.key,
                                                reason: active.latch.reason ?? (parent.externalWorking ? .backgroundTask : nil))
@@ -253,23 +294,24 @@ final class ThreadStore {
                                            reason: parent.externalWorking ? .backgroundTask : nil)
     }
 
-    /// User tapped "Use Main" on the proactive busy-thread strip: switch sends back to the main chat immediately.
-    func optOutBusyRouting(profile: String) {
-        optedOutProfiles.insert(profile)
-        busyThreads[profile] = nil
-        availabilityProbes.removeValue(forKey: profile)?.cancel()
-        changed(profile)
+    /// User tapped "Use Main" on the proactive busy-thread strip: switch sends back to the parent chat immediately.
+    func optOutBusyRouting(for parent: LiveChatSession) {
+        let scope = Self.scopeKey(for: parent)
+        optedOutScopes.insert(scope)
+        busyThreads[scope] = nil
+        availabilityProbes.removeValue(forKey: scope)?.cancel()
+        changed(parent.profile)
     }
 
-    /// Releases a busy-thread latch automatically when the main chat frees up, notifying the visible chat quietly.
-    private func autoUnlatch(profile: String, parent: LiveChatSession?, why: String) {
-        optedOutProfiles.remove(profile)
-        availabilityProbes.removeValue(forKey: profile)?.cancel()
-        guard let latch = busyThreads.removeValue(forKey: profile) else {
+    /// Releases a busy-thread latch automatically when the parent chat frees up, notifying the visible chat quietly.
+    private func autoUnlatch(scope: String, profile: String, parent: LiveChatSession?, why: String) {
+        optedOutScopes.remove(scope)
+        availabilityProbes.removeValue(forKey: scope)?.cancel()
+        guard let latch = busyThreads.removeValue(forKey: scope) else {
             changed(profile)
             return
         }
-        AppLog.note("threads", "auto-thread unlatched for profile \(profile): \(why)")
+        AppLog.note("threads", "auto-thread unlatched for \(scope): \(why)")
         changed(profile)
         let chat = parent ?? latch.parent
         if let chat, chat.observing {
@@ -277,47 +319,50 @@ final class ThreadStore {
         }
     }
 
-    /// External work in the main bot chat started or ended: ending unlatches any busy thread and clears an opt-out.
-    func noteMainExternalWork(profile: String, working: Bool, parent: LiveChatSession? = nil) {
+    /// External work in a thread-hosting chat started or ended: ending unlatches any busy thread and clears an opt-out.
+    func noteMainExternalWork(for parent: LiveChatSession, working: Bool) {
+        let scope = Self.scopeKey(for: parent)
         if !working {
-            autoUnlatch(profile: profile, parent: parent, why: "external work finished")
+            autoUnlatch(scope: scope, profile: parent.profile, parent: parent, why: "external work finished")
         } else {
-            changed(profile)
+            changed(parent.profile)
         }
     }
 
-    /// A newer finished assistant reply landed in the main chat (e.g. a background job or CLI turn finished writing):
-    /// unlatch any busy thread so the next message goes back into the main chat even on gateways without the ledger.
-    func noteMainReplyLanded(profile: String, parent: LiveChatSession) {
-        guard busyThreads[profile] != nil || optedOutProfiles.contains(profile) else { return }
-        autoUnlatch(profile: profile, parent: parent, why: "main reply landed")
+    /// A newer finished assistant reply landed in the parent chat (e.g. a background job or CLI turn finished writing):
+    /// unlatch any busy thread so the next message goes back into the parent chat even on gateways without the ledger.
+    func noteMainReplyLanded(for parent: LiveChatSession) {
+        let scope = Self.scopeKey(for: parent)
+        guard busyThreads[scope] != nil || optedOutScopes.contains(scope) else { return }
+        autoUnlatch(scope: scope, profile: parent.profile, parent: parent, why: "main reply landed")
     }
 
     /// Gentle 5 s watch while a busy thread is latched on screen without an active ledger watch.
-    private func startAvailabilityProbe(profile: String, parent: LiveChatSession, reason: OwnerWait?) {
-        availabilityProbes.removeValue(forKey: profile)?.cancel()
-        availabilityProbes[profile] = Task { [weak self, weak parent] in
+    private func startAvailabilityProbe(scope: String, profile: String, parent: LiveChatSession, reason: OwnerWait?) {
+        availabilityProbes.removeValue(forKey: scope)?.cancel()
+        availabilityProbes[scope] = Task { [weak self, weak parent] in
             let checkServer = reason == .runningReply
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(5))
-                guard let self, let parent, !Task.isCancelled, self.busyThreads[profile] != nil else { break }
+                guard let self, let parent, !Task.isCancelled, self.busyThreads[scope] != nil else { break }
                 guard parent.observing else { continue }
                 if !parent.externalWorking { parent.checkExternalWork("busy thread watch") }
                 let idle = await parent.probeMainAvailability(checkServerRunning: checkServer)
-                guard !Task.isCancelled, self.busyThreads[profile] != nil else { break }
+                guard !Task.isCancelled, self.busyThreads[scope] != nil else { break }
                 if idle {
-                    self.autoUnlatch(profile: profile, parent: parent, why: "main session idle")
+                    self.autoUnlatch(scope: scope, profile: profile, parent: parent, why: "main session idle")
                     break
                 }
             }
-            self?.availabilityProbes[profile] = nil
+            self?.availabilityProbes[scope] = nil
         }
     }
 
-    /// Compact summary of auto-threads that settled while the main chat was busy, consumed once on the next main send.
-    func consumeReconciliationNote(profile: String) -> String? {
-        if let restored = restoredReconciliation.removeValue(forKey: profile) { return restored }
-        guard let keys = pendingReconciliation[profile], !keys.isEmpty else { return nil }
+    /// Compact summary of auto-threads that settled while the parent chat was busy, consumed once on the next send.
+    func consumeReconciliationNote(for parent: LiveChatSession) -> String? {
+        let scope = Self.scopeKey(for: parent)
+        if let restored = restoredReconciliation.removeValue(forKey: scope) { return restored }
+        guard let keys = pendingReconciliation[scope], !keys.isEmpty else { return nil }
         var settled: [(title: String?, messages: [ChatMessage])] = []
         var stillRunning: [String] = []
         for key in keys {
@@ -326,17 +371,17 @@ final class ThreadStore {
             if view.running { stillRunning.append(key); continue }
             if !view.spoken.isEmpty { settled.append((ThreadRules.name(view), view.spoken)) }
         }
-        pendingReconciliation[profile] = stillRunning.isEmpty ? nil : stillRunning
+        pendingReconciliation[scope] = stillRunning.isEmpty ? nil : stillRunning
         return ThreadContextNote.format(threads: settled)
     }
 
-    func restoreReconciliationNote(profile: String, note: String) {
+    func restoreReconciliationNote(for parent: LiveChatSession, note: String) {
         guard !note.isEmpty else { return }
-        restoredReconciliation[profile] = note
+        restoredReconciliation[Self.scopeKey(for: parent)] = note
     }
 
-    private func activeBusyEntry(for parent: LiveChatSession, botId: String, now: Date) -> (latch: BusyLatch, entry: Entry)? {
-        guard let latch = busyThreads[botId],
+    private func activeBusyEntry(for parent: LiveChatSession, scope: String, now: Date) -> (latch: BusyLatch, entry: Entry)? {
+        guard let latch = busyThreads[scope],
               let entry = entries.first(where: { $0.key == latch.key || (latch.storedId != nil && $0.storedId == latch.storedId) })
         else { return nil }
         let reachable = entry.live != nil || entry.storedId != nil
@@ -344,7 +389,7 @@ final class ThreadStore {
         guard ThreadRules.takesNextBusySend(heldAt: latch.heldAt, accepted: parent.acceptedSends, reachable: reachable,
                                             problem: problem, mainIdleSinceHold: latch.mainIdleSinceHold,
                                             lastActivity: latch.lastActivity, now: now) else {
-            busyThreads[botId] = nil
+            busyThreads[scope] = nil
             return nil
         }
         return (latch, entry)
@@ -366,12 +411,13 @@ final class ThreadStore {
         takeBusySend(BusyThreadPayload(text: text, localId: localId), from: parent, bot: bot)
     }
 
-    /// `parent` (a bot's own chat) cannot take `payload` now: a thread takes it as its message. The same thread takes
-    /// follow-ups until the chat takes a send itself, external work finishes, or the thread goes stale. Reopens an
-    /// evicted idle thread by `storedId` rather than spawning a duplicate. False when no thread could be started.
+    /// `parent` (a bot chat or regular session) cannot take `payload` now: a thread takes it as its message. The same
+    /// thread takes follow-ups until the chat takes a send itself, external work finishes, or the thread goes stale.
+    /// Reopens an evicted idle thread by `storedId` rather than spawning a duplicate. False when no thread could start.
     func takeBusySend(_ payload: BusyThreadPayload, from parent: LiveChatSession, bot: Bot) -> Bool {
         let now = Date()
-        if let active = activeBusyEntry(for: parent, botId: bot.id, now: now) {
+        let scope = Self.scopeKey(for: parent)
+        if let active = activeBusyEntry(for: parent, scope: scope, now: now) {
             let live: LiveChatSession?
             if let existing = active.entry.live {
                 live = existing
@@ -381,10 +427,10 @@ final class ThreadStore {
             }
             if let live {
                 live.send(payload.text, display: payload.display, attachments: payload.attachments)
-                busyThreads[bot.id]?.lastActivity = now
-                if let reason = payload.reason { busyThreads[bot.id]?.reason = reason }
-                trackReconciliation(key: active.entry.key, profile: bot.id)
-                AppLog.note("threads", "busy chat's send went on in its thread (profile \(bot.id), proactive=\(payload.proactive))")
+                busyThreads[scope]?.lastActivity = now
+                if let reason = payload.reason { busyThreads[scope]?.reason = reason }
+                trackReconciliation(key: active.entry.key, scope: scope)
+                AppLog.note("threads", "busy chat's send went on in its thread (\(scope), proactive=\(payload.proactive))")
                 changed(bot.id)
                 return true
             }
@@ -402,18 +448,18 @@ final class ThreadStore {
             return false
         }
         let latchReason = payload.reason ?? (parent.externalWorking ? .backgroundTask : nil)
-        busyThreads[bot.id] = BusyLatch(key: key, storedId: entry.storedId, heldAt: parent.acceptedSends,
-                                        lastActivity: now, reason: latchReason, parent: parent)
-        optedOutProfiles.remove(bot.id)
-        trackReconciliation(key: key, profile: bot.id)
-        startAvailabilityProbe(profile: bot.id, parent: parent, reason: latchReason)
+        busyThreads[scope] = BusyLatch(key: key, storedId: entry.storedId, heldAt: parent.acceptedSends,
+                                       lastActivity: now, reason: latchReason, parent: parent)
+        optedOutScopes.remove(scope)
+        trackReconciliation(key: key, scope: scope)
+        startAvailabilityProbe(scope: scope, profile: bot.id, parent: parent, reason: latchReason)
         // Only hand back the initial unconfirmed auto-thread send if the thread fails off-screen; never clobber the
         // main chat's draft after the user opens the thread or after the thread has already accepted sends.
         live.onDraftReturned = { [weak self, weak parent, weak live, weak entry] text, reason in
             guard let live, !live.observing, live.acceptedSends == 0 else { return }
             if let entry, entry.storedId == nil {
                 self?.entries.removeAll { $0.key == entry.key }
-                if self?.busyThreads[entry.profile]?.key == entry.key { self?.busyThreads[entry.profile] = nil }
+                if self?.busyThreads[entry.parentScope]?.key == entry.key { self?.busyThreads[entry.parentScope] = nil }
                 self?.changed(entry.profile)
             }
             parent?.threadSendCameBack(text, reason: reason)
@@ -421,11 +467,11 @@ final class ThreadStore {
         return true
     }
 
-    private func trackReconciliation(key: String, profile: String) {
-        var list = pendingReconciliation[profile] ?? []
+    private func trackReconciliation(key: String, scope: String) {
+        var list = pendingReconciliation[scope] ?? []
         if !list.contains(key) { list.append(key) }
         if list.count > 4 { list.removeFirst(list.count - 4) }
-        pendingReconciliation[profile] = list
+        pendingReconciliation[scope] = list
     }
 
     /// Keeps idle thread runtimes lean when spinning up a new auto-thread.
@@ -440,6 +486,7 @@ final class ThreadStore {
     private func adopt(_ live: LiveChatSession, for entry: Entry) {
         entry.live = live
         live.menus.isThread = true
+        live.disableThreads()
         live.threadHold = true
         live.onThreadChange = { [weak self, weak entry, weak live] in
             guard let self, let entry, let live, entry.live === live else { return }
@@ -478,11 +525,15 @@ final class ThreadStore {
         entries.first(where: { $0.key == key }).map { ThreadRules.name(thread($0)) }
     }
 
-    /// The thread whose stored chat is `storedId`, when the bot chat showing it is the one on screen: its reply is read
-    /// there, so it raises no alert.
+    /// The thread whose stored chat is `storedId`, when the parent chat showing it is the one on screen: its reply is
+    /// read there, so it raises no alert.
     func isDrawn(storedId: String?, profile: String, in focused: LiveChatSession?) -> Bool {
-        guard let storedId, let focused, focused.menus.isBotChat, focused.profile == profile else { return false }
-        return entries.contains { $0.profile == profile && ($0.storedId == storedId || $0.live?.storedSessionId == storedId) }
+        guard let storedId, let focused, focused.supportsThreads, focused.profile == profile else { return false }
+        let ids = parentIds(for: focused)
+        return entries.contains {
+            $0.profile == profile && belongs($0, to: ids, isBotChat: focused.menus.isBotChat)
+                && ($0.storedId == storedId || $0.live?.storedSessionId == storedId)
+        }
     }
 
     /// These threads stand open in the bot chat on screen: a finished reply in them is read there.
@@ -520,7 +571,7 @@ final class ThreadStore {
         for entry in entries { entry.live?.onThreadChange = nil; entry.live?.threadHold = false }
         entries = []
         busyThreads = [:]
-        optedOutProfiles = []
+        optedOutScopes = []
         for task in availabilityProbes.values { task.cancel() }
         availabilityProbes = [:]
         pendingReconciliation = [:]

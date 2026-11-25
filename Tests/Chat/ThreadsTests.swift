@@ -346,4 +346,52 @@ struct ThreadsTests {
         let merged = BotThreadLink.merged(local: [b], remote: [a, c], base: [a], policy: .rebase)
         #expect(merged.map(\.storedId) == ["t3", "t2"])
     }
+
+    @Test func sessionChatsHaveIsolatedThreadScopesAndDisableThreadsTurnsThemOff() throws {
+        let h1 = try ChatHarness(stored: "bot-chat-1")
+        let botChat = h1.make()
+        botChat.menus.isBotChat = true
+        let h2 = try ChatHarness(stored: "sess-a")
+        let sessionA = h2.make()
+        let h3 = try ChatHarness(stored: "sess-b")
+        let sessionB = h3.make()
+
+        #expect(ThreadStore.scopeKey(for: botChat) == "bot:default")
+        #expect(ThreadStore.scopeKey(for: sessionA) == "session:sess-a")
+        #expect(ThreadStore.scopeKey(for: sessionB) == "session:sess-b")
+
+        // Wiring busy-thread send enables threads; disabling or marking as a thread itself turns them off.
+        #expect(!sessionA.supportsThreads)
+        sessionA.onBusyThreadSend = { (_: BusyThreadPayload) in true }
+        #expect(sessionA.supportsThreads)
+        sessionA.menus.isThread = true
+        #expect(!sessionA.supportsThreads)
+        sessionA.menus.isThread = false
+        sessionA.disableThreads()
+        #expect(!sessionA.supportsThreads)
+        #expect(sessionA.onBusyThreadSend == nil)
+        #expect(sessionA.shouldRouteToBusyThread == nil)
+    }
+
+    @Test func sessionOptOutAndReconciliationStayIsolatedFromBotChat() throws {
+        let model = AppModel()
+        let store = ThreadStore(model: model)
+        let hBot = try ChatHarness(stored: "bot-chat-1")
+        let botChat = hBot.make()
+        botChat.menus.isBotChat = true
+        let hSess = try ChatHarness(stored: "sess-a")
+        let sessionA = hSess.make()
+
+        // Opting out in a regular session does not affect the bot chat's own scope, and notes stay per-scope.
+        store.restoreReconciliationNote(for: botChat, note: "bot note")
+        store.restoreReconciliationNote(for: sessionA, note: "session note")
+        #expect(store.consumeReconciliationNote(for: sessionA) == "session note")
+        #expect(store.consumeReconciliationNote(for: botChat) == "bot note")
+
+        // Opting out of busy routing in sessionA leaves botChat unaffected (and vice versa).
+        store.optOutBusyRouting(for: sessionA)
+        #expect(!store.shouldRouteToBusyThread(for: sessionA))
+        #expect(store.parentIds(for: sessionA) == ["sess-a"])
+        #expect(store.parentIds(for: botChat).contains("bot-chat-1"))
+    }
 }

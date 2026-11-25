@@ -196,6 +196,9 @@ import Foundation
     /// [preview-tab] Answers `preview.read` for a session (its runtime id) with the open Browser tab's page as JSON, or
     /// nil when no tab of that chat is open in this app. Set by the app (App/Browser/PreviewTab.swift).
     var previewReader: ((_ session: String, _ params: JSONValue) async -> String?)?
+    /// [preview-tab] Answers `preview.act` (`drive_preview` / `annotate_preview`) for a session with the action result
+    /// JSON, or nil when no tab of that chat is open here. Set by the app (App/Browser/PreviewTab.swift).
+    var previewActor: ((_ session: String, _ params: JSONValue) async -> String?)?
 
     // MARK: Chats
 
@@ -371,6 +374,20 @@ import Foundation
             // page's text as Hermes Desktop answers it (`{value: JSON}`). No tab here: declined as before.
             Task { [weak self] in
                 let value = await previewReader(session, params)
+                guard let self, !self.shutDown else { return }
+                if let value {
+                    self.sendResult(id, .object(["value": .string(value)]))
+                } else if self.answerer?.declinesNotShown == true {
+                    self.sendError(id, code: Self.notShownCode, message: Self.notShownMessage)
+                }
+            }
+            return
+        }
+        if method == "preview.act", let previewActor {
+            // [preview-tab] The bot drives or annotates the open in-app Browser tab (`drive_preview` /
+            // `annotate_preview`). No tab here: declined as before so another open desktop window can answer.
+            Task { [weak self] in
+                let value = await previewActor(session, params)
                 guard let self, !self.shutDown else { return }
                 if let value {
                     self.sendResult(id, .object(["value": .string(value)]))

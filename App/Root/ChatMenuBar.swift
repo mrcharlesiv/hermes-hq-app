@@ -26,7 +26,9 @@ import UIKit
     /// from anywhere in a chat. ⇧⌘M stays Mute Talk (owner's answer); ⌥⌘M is Window › Minimize All in this app's own
     /// menu, so the key is ⌃⌘M.
     static let chooseModel = #selector(AppDelegate.hqChooseModel(_:))
-    static let actions: Set<Selector> = [chatRow, attach, memo, dictate, talk, muteTalk, endTalk, readReplies, tool, chooseModel]
+    /// [preview-tab] Chat › In-App Browser (⌥⌘B): toggles the collaborative browser pane beside the chat.
+    static let inAppBrowser = #selector(AppDelegate.hqInAppBrowser(_:))
+    static let actions: Set<Selector> = [chatRow, attach, memo, dictate, talk, muteTalk, endTalk, readReplies, tool, chooseModel, inAppBrowser]
 
     private static func item(_ title: String, _ action: Selector, _ input: String? = nil, _ flags: UIKeyModifierFlags = [],
                              row: ChatMenuItemID? = nil, attributes: UIMenuElement.Attributes = []) -> UICommand {
@@ -64,6 +66,7 @@ import UIKit
             UICommand(title: "Model Prices", action: tool, propertyList: ChatMenus.ToolRow.prices.rawValue),
         ]
         #if targetEnvironment(macCatalyst)
+        tools.insert(item("In-App Browser", inAppBrowser, "b", [.command, .alternate]), at: 0)   // [preview-tab]
         tools.insert(item("Choose Model…", chooseModel, "m", [.command, .control]), at: 0)   // [Mac model selector]
         #endif
         let more: [UIMenuElement] = [
@@ -191,6 +194,12 @@ extension AppDelegate {
             command.state = TalkController.readsRepliesAloud ? .on : .off
         case ChatMenuBar.chooseModel:
             enabled = chat?.menus?.canChooseModel == true
+        case ChatMenuBar.inAppBrowser:
+            enabled = chat?.onToggleInAppBrowser != nil
+            #if targetEnvironment(macCatalyst)
+            let open = chat.flatMap { MacInspector.beside($0)?.isShowingBrowser } == true
+            command.title = open ? "Hide In-App Browser" : "Show In-App Browser"
+            #endif
         case ChatMenuBar.tool:
             if let row = (command.propertyList as? String).flatMap(ChatMenus.ToolRow.init(rawValue:)) {
                 enabled = chat?.menus?.canOpen(row) == true
@@ -268,6 +277,13 @@ extension AppDelegate {
         guard let menus = ChatMenuBar.chat?.menus, menus.canChooseModel else { return }
         AppLog.note("keys", "chat menu: choose model")
         menus.presentModelPanel()
+    }
+
+    /// [preview-tab] Chat › In-App Browser (⌥⌘B): toggles the collaborative browser beside the chat.
+    @objc func hqInAppBrowser(_ sender: Any?) {
+        guard let toggle = ChatMenuBar.chat?.onToggleInAppBrowser else { return }
+        AppLog.note("keys", "chat menu: in-app browser")
+        toggle()
     }
 
     @objc func hqReadReplies(_ sender: Any?) {

@@ -10,15 +10,19 @@ extension PagesTests {
 
     @MainActor func testTasks_Views() throws {
         app = launchSignedIn(Self.look + ["-HQPagesTab", "4", "-HQPagesMore", "tasks"])
+        // Flow 1: Tasks opens on the Grouped Overview (Smart Views 2×2 grid, My Lists, Agents).
         let today = app.buttons["tasks.view.today"].firstMatch
-        XCTAssertTrue(today.waitForExistence(timeout: 20), "the views sit under the bar")
-        XCTAssertTrue(today.isSelected, "the page opens on Today")
+        XCTAssertTrue(today.waitForExistence(timeout: 20), "Tasks opens on Grouped Overview")
+        XCTAssertTrue(app.buttons["tasks.view.upcoming"].firstMatch.exists, "Upcoming tile")
+        XCTAssertTrue(app.buttons["tasks.view.inbox"].firstMatch.exists, "Inbox tile")
         XCTAssertFalse(app.buttons["tasks.chip.all"].exists, "no bot pills")
         XCTAssertFalse(app.descendants(matching: .any)["tasks.mode"].exists, "no To Do | Ideas switch")
+        settleViews(); shot("first-0-overview" + Self.lookName)
 
         // Today: your day first, then what a bot is stuck on you for.
+        today.tap()
         let cleaning = app.cells["task-row-Pick up dry cleaning"].firstMatch
-        XCTAssertTrue(cleaning.waitForExistence(timeout: 10), "your own task for today is on the first screen")
+        XCTAssertTrue(cleaning.waitForExistence(timeout: 10), "your own task for today is on Today")
         XCTAssertTrue(cleaning.isHittable)
         XCTAssertTrue(app.descendants(matching: .any)["tasks.section.Today"].firstMatch.exists)
         XCTAssertTrue(app.descendants(matching: .any)["tasks.section.Waiting on You"].firstMatch.exists)
@@ -27,21 +31,18 @@ extension PagesTests {
         XCTAssertTrue(app.cells["task-row-Find 3 venues for the party"].firstMatch.exists, "until it waits on you")
         settleViews(); shot("first-1-today" + Self.lookName)
 
-        // Upcoming: each coming day under the week. Its pill says how many before it is tapped, so it keeps its width
-        // (it grew as it was picked and ran into Inbox; owner 2026-11-12).
+        // Upcoming: step back to Overview, tap Upcoming.
+        backToTasksOverview()
         let upcoming = app.buttons["tasks.view.upcoming"].firstMatch
-        XCTAssertTrue(upcoming.label.contains("task"), "Upcoming says how many while another view is on show: \(upcoming.label)")
-        let widthBefore = upcoming.frame.width
+        XCTAssertTrue(upcoming.label.contains("task"), "Upcoming tile says its count: \(upcoming.label)")
         upcoming.tap()
         XCTAssertTrue(app.descendants(matching: .any)["tasks.section.Tomorrow"].firstMatch.waitForExistence(timeout: 5))
-        XCTAssertEqual(upcoming.frame.width, widthBefore, accuracy: 1, "the pill keeps its width when picked")
         let contract = app.cells["task-row-Follow up with Ivy on the contract"].firstMatch
         XCTAssertTrue(contract.exists)
         XCTAssertFalse(cleaning.exists, "today's tasks are not coming up")
         settleViews(); shot("first-2-upcoming" + Self.lookName)
 
-        // Every day on the week answers a tap (the days with no tasks did nothing; owner 2026-11-12): the list holds
-        // that day alone. The picked day again shows every coming day.
+        // Every day on the week answers a tap: the list holds that day alone. The picked day again shows every coming day.
         func weekDay(_ offset: Int) -> XCUIElement {
             let date = Calendar.current.date(byAdding: .day, value: offset, to: Calendar.current.startOfDay(for: Date()))!
             let parts = Calendar.current.dateComponents([.year, .month, .day], from: date)
@@ -69,27 +70,22 @@ extension PagesTests {
         XCTAssertTrue(app.cells["task-row-Fix the porch light"].firstMatch.waitForExistence(timeout: 5))
         settleViews(); shot("first-3-inbox" + Self.lookName)
 
-        // Bots: what each does by itself.
-        // [goals-addon] The fixture's add-on keeps no goals, so a Goals pill leads the row and Bots can sit past its end.
+        // Bots: in its own Agents section on Overview.
         tapView("bots")
         XCTAssertTrue(app.cells["task-row-Summarize October invoices"].firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["tasks.section.Finance"].firstMatch.exists, "grouped by bot")
         settleViews(); shot("first-4-bots" + Self.lookName)
 
-        // A list of your own, from the row's +; a task moved into it shows there.
-        let rail = app.descendants(matching: .any)["tasks.views"].firstMatch
-        rail.swipeLeft()
+        // A list of your own, from My Lists on Overview; a task moved into it shows there.
+        backToTasksOverview()
         app.buttons["tasks.view.new-list"].firstMatch.tap()
         let name = app.textFields["tasks.list-name"].firstMatch
         XCTAssertTrue(name.waitForExistence(timeout: 5))
         name.typeText("Home")
         app.alerts.buttons["Add"].tap()
-        let home = app.buttons["tasks.view.list.Home"].firstMatch
-        XCTAssertTrue(home.waitForExistence(timeout: 5), "the new list is a pill")
-        XCTAssertTrue(home.isSelected, "and is on show")
+        XCTAssertTrue(app.navigationBars["Home"].waitForExistence(timeout: 5), "the new list is pushed on show")
         XCTAssertTrue(app.descendants(matching: .any)["tasks.view-empty"].firstMatch.waitForExistence(timeout: 5))
         settleViews(); shot("first-5-list-empty" + Self.lookName)
-        rail.swipeRight()
         tapView("inbox")
         let porch = app.cells["task-row-Fix the porch light"].firstMatch
         XCTAssertTrue(porch.waitForExistence(timeout: 5))
@@ -97,24 +93,21 @@ extension PagesTests {
         app.buttons["Move To"].firstMatch.tap()
         app.buttons["Home"].firstMatch.tap()
         XCTAssertTrue(porch.waitForNonExistence(timeout: 5), "filed, it leaves Inbox")
-        rail.swipeLeft()
-        home.tap()
+        tapView("list.Home")
         XCTAssertTrue(porch.waitForExistence(timeout: 5), "and is in its list")
         settleViews(); shot("first-6-list" + Self.lookName)
     }
 }
 
 extension PagesTests {
-    /// The bots are the bar's Filter (they were pills under the bar until the views took that row): one bot's tasks,
-    /// your own under Me, every one under All Bots. The views' counts follow the filter.
+    /// The bots are the bar's Filter inside a view: one bot's tasks, your own under Me, every one under All Bots.
     @MainActor func testTasks_FilterByBot() throws {
         app = launchSignedIn(Self.look + ["-HQPagesTab", "4", "-HQPagesMore", "tasks"])
+        tapView("today")
         let dentist = app.cells["task-row-Call the dentist"].firstMatch
         XCTAssertTrue(dentist.waitForExistence(timeout: 20), "Hermes' task is listed")
         let filter = app.buttons["pages.scope"].firstMatch
         XCTAssertTrue(filter.exists, "Filter in the bar")
-        let rail = app.descendants(matching: .any)["tasks.views"].firstMatch
-        XCTAssertGreaterThan(dentist.frame.minY, rail.frame.maxY - 1, "the list starts under the views")
 
         // Research: only Research's task.
         filter.tap()

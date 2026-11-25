@@ -40,9 +40,18 @@ extension AppModel {
         } : nil)
     }
 
-    /// The chat screen's browser pieces: the card on the shelf and ⋯ › Watch Browser.
+    /// The chat screen's browser pieces: the collaborative In-App Browser, the card on the shelf, and ⋯ › Watch Browser.
     func installBrowser(on screen: ChatViewController, menus: ChatMenus) {
-        previewTabs?.register(screen)   // [preview-tab] a bot's Browser tab opens over its chat
+        previewTabs?.register(screen)   // [preview-tab] a bot's Browser tab opens beside/over its chat
+        screen.isInAppBrowserOpen = { [weak self, weak screen] in
+            guard let self, let screen else { return false }
+            return self.previewTabs?.isOpen(for: screen) == true
+        }
+        screen.onToggleInAppBrowser = { [weak self, weak screen] in
+            guard let self, let screen else { return }
+            self.previewTabs?.toggleBrowser(for: screen)
+            screen.refreshInAppBrowserButton()
+        }
         guard let browser else { return }
         let model = screen.session
         let fallback = browserScope(for: model)
@@ -56,16 +65,23 @@ extension AppModel {
         }
         menus.slotItems[.browser] = { [weak self, weak screen, weak menus] in
             guard let self, let screen else { return [] }
+            let inAppOpen = self.previewTabs?.isOpen(for: screen) == true
+            let inApp = UIAction(title: inAppOpen ? "Hide In-App Browser" : "In-App Browser",
+                                 image: UIImage(systemName: "globe")) { [weak self, weak screen] _ in
+                guard let self, let screen else { return }
+                self.previewTabs?.toggleBrowser(for: screen)
+            }
+            inApp.accessibilityIdentifier = "chat.more.in-app-browser"
             // [presence] Greyed with "Offline" under it while the link is not ready (spec 3x-presence §9); the menu is
             // built again on every open, so the state is fresh.
             let rule = BrowserMenuRule.chatItem(offline: menus?.offline ?? false)
-            let item = UIAction(title: BrowserMenuRule.title, subtitle: rule.subtitle, image: UIImage(systemName: "safari"),
-                                attributes: rule.disabled ? .disabled : []) { [weak self, weak screen] _ in
+            let watch = UIAction(title: BrowserMenuRule.title, subtitle: rule.subtitle, image: UIImage(systemName: "safari"),
+                                 attributes: rule.disabled ? .disabled : []) { [weak self, weak screen] _ in
                 guard let self, let screen else { return }
                 self.openBrowser(self.browserScope(for: screen.session), from: screen)
             }
-            item.accessibilityIdentifier = "chat.more.browser"
-            return [item]
+            watch.accessibilityIdentifier = "chat.more.browser"
+            return [inApp, watch]
         }
     }
 

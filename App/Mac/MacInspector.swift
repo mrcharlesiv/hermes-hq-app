@@ -33,7 +33,11 @@ final class MacInspector: UIViewController {
     static let defaultWidth: CGFloat = 380
     static let narrowest: CGFloat = 340
     static let widest: CGFloat = 640
+    /// [preview-tab] The docked In-App Browser gets a wider default and drag range beside the chat.
+    static let browserDefaultWidth: CGFloat = 540
+    static let browserWidest: CGFloat = 880
     private static let widthKey = "HQMacInspectorWidth"
+    private static let browserWidthKey = "HQMacBrowserPaneWidth"
     /// The width the person left it at.
     static var chosenWidth: CGFloat {
         get {
@@ -42,6 +46,18 @@ final class MacInspector: UIViewController {
         }
         set { UserDefaults.standard.set(Double(min(max(newValue, narrowest), widest)), forKey: widthKey) }
     }
+    /// The width the person left the docked In-App Browser at.
+    static var browserChosenWidth: CGFloat {
+        get {
+            let stored = UserDefaults.standard.double(forKey: browserWidthKey)
+            return stored > 0 ? min(max(CGFloat(stored), narrowest), browserWidest) : browserDefaultWidth
+        }
+        set { UserDefaults.standard.set(Double(min(max(newValue, narrowest), browserWidest)), forKey: browserWidthKey) }
+    }
+    /// Whether the panel is currently showing the docked collaborative In-App Browser.
+    var isShowingBrowser: Bool { browserView != nil && !Self.taskMode }
+    /// The preferred width for whatever mode the panel is in now.
+    var activeChosenWidth: CGFloat { isShowingBrowser ? Self.browserChosenWidth : Self.chosenWidth }
     /// The edge was dragged: the split lays the panes out again, at once.
     var onWidthChange: (() -> Void)?
     private let grip = UIView()
@@ -129,6 +145,64 @@ final class MacInspector: UIViewController {
             followLook()
             fill()
         }
+    }
+
+    /// [preview-tab] Collaborative In-App Browser docked beside the chat in place of the tabs; Pop Out moves it into
+    /// its own window, ✕ closes it back to chat (restoring whether the inspector was open before).
+    private var browserView: PreviewTabController?
+    private var inspectorWasShownBeforeBrowser = false
+    private let browserRow = UIStackView()
+    private let browserTitle = UILabel()
+    var shownBrowser: PreviewTabController? { browserView }
+    var onBrowserClosed: (() -> Void)?
+
+    func showBrowser(_ next: PreviewTabController, title: String) {
+        let alreadyBrowser = browserView != nil
+        if !alreadyBrowser {
+            inspectorWasShownBeforeBrowser = Self.isShown
+        }
+        clear()
+        if threadChat != nil {
+            threadChat = nil
+            onThreadClosed?()
+        }
+        browserView = next
+        browserTitle.text = title
+        if !Self.isShown {
+            Self.isShown = true
+            if takesRoom?() == false { _ = makeRoom?() }
+            onShownChange?()
+        } else {
+            if takesRoom?() == false { _ = makeRoom?() }
+            onShownChange?()
+        }
+        if isViewLoaded {
+            followLook()
+            fill()
+        }
+    }
+
+    func renameBrowser(_ title: String) {
+        if browserView != nil { browserTitle.text = title }
+    }
+
+    @objc func popOutBrowser() {
+        browserView?.onPopOutRequested?()
+    }
+
+    @objc func closeBrowser() {
+        guard browserView != nil else { return }
+        clear()
+        browserView = nil
+        let restore = inspectorWasShownBeforeBrowser
+        inspectorWasShownBeforeBrowser = false
+        Self.isShown = restore
+        onShownChange?()
+        if isViewLoaded {
+            followLook()
+            if restore { fill() }
+        }
+        onBrowserClosed?()
     }
 
     private var content: UIViewController?
@@ -241,6 +315,36 @@ final class MacInspector: UIViewController {
         threadRow.isHidden = true
         for part in [mark, threadTitle, close] { threadRow.addArrangedSubview(part) }
         tabsRow.addArrangedSubview(threadRow)
+        // [preview-tab] Collaborative In-App Browser header: globe, title, Pop Out, and ✕.
+        let globe = UIImageView(image: UIImage(systemName: "globe",
+                                               withConfiguration: UIImage.SymbolConfiguration(textStyle: .subheadline, scale: .medium)))
+        globe.tintColor = HQPalette.label2
+        globe.setContentHuggingPriority(.required, for: .horizontal)
+        browserTitle.font = HQFont.preferred(.subheadline).pagesWeight(.semibold)
+        browserTitle.textColor = HQPalette.label
+        browserTitle.lineBreakMode = .byTruncatingTail
+        browserTitle.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        browserTitle.accessibilityIdentifier = "mac.inspector.browser-title"
+        var popLook = UIButton.Configuration.plain()
+        popLook.image = UIImage(systemName: "arrow.up.right.square", withConfiguration: UIImage.SymbolConfiguration(textStyle: .footnote, scale: .medium))
+        popLook.baseForegroundColor = HQPalette.label2
+        popLook.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 4)
+        let popOut = UIButton(configuration: popLook, primaryAction: UIAction { [weak self] _ in self?.popOutBrowser() })
+        popOut.accessibilityLabel = "Open Browser in Separate Window"
+        popOut.accessibilityIdentifier = "mac.inspector.browser-popout"
+        popOut.toolTip = "Open in Separate Window"
+        popOut.setContentHuggingPriority(.required, for: .horizontal)
+        let closeBrowserBtn = UIButton(configuration: closeLook, primaryAction: UIAction { [weak self] _ in self?.closeBrowser() })
+        closeBrowserBtn.accessibilityLabel = "Close In-App Browser"
+        closeBrowserBtn.accessibilityIdentifier = "mac.inspector.browser-close"
+        closeBrowserBtn.toolTip = "Close Browser"
+        closeBrowserBtn.setContentHuggingPriority(.required, for: .horizontal)
+        browserRow.axis = .horizontal
+        browserRow.alignment = .center
+        browserRow.spacing = 6
+        browserRow.isHidden = true
+        for part in [globe, browserTitle, popOut, closeBrowserBtn] { browserRow.addArrangedSubview(part) }
+        tabsRow.addArrangedSubview(browserRow)
         empty.isHidden = true
         grip.addGestureRecognizer(MacGripPan(target: self, action: #selector(dragged(_:))))
         grip.addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:))))
@@ -279,7 +383,7 @@ final class MacInspector: UIViewController {
             rule.leadingAnchor.constraint(equalTo: edge.trailingAnchor),
             rule.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             rule.heightAnchor.constraint(equalToConstant: pixel),
-            holder.topAnchor.constraint(equalTo: rule.bottomAnchor, constant: 8),
+            holderTop,
             holder.leadingAnchor.constraint(equalTo: edge.trailingAnchor),
             holder.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             holder.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -302,6 +406,7 @@ final class MacInspector: UIViewController {
         fill()
     }
 
+    private lazy var holderTop = holder.topAnchor.constraint(equalTo: rule.bottomAnchor, constant: 8)
     private lazy var segmentsHeight = tabs.heightAnchor.constraint(equalToConstant: 28)
     /// [Mac AAA 2026-11-16] The segments follow UI Scale (View › Make Text Bigger) as the chat's bar beside them does:
     /// their titles were sized once, when the panel was made (`DesktopSegments.macTitles`), and the control stayed 28 pt,
@@ -337,14 +442,18 @@ final class MacInspector: UIViewController {
             host.didMove(toParent: self)
             strip = host
         }
-        let thread = threadChat != nil && !Self.taskMode   // [threads]
-        tabs.isHidden = desktop || Self.taskMode || thread
+        let browser = browserView != nil && !Self.taskMode   // [preview-tab]
+        let thread = threadChat != nil && !Self.taskMode && !browser   // [threads]
+        browserTitle.font = HQFont.preferred(.subheadline).pagesWeight(.semibold)
+        tabs.isHidden = desktop || Self.taskMode || thread || browser
         threadRow.isHidden = !thread
+        browserRow.isHidden = !browser
         taskTitle.isHidden = !Self.taskMode
+        holderTop.constant = browser ? 0 : 8
         band.isHidden = !desktop
         band.backgroundColor = HQPalette.page
         bandFrost.color = HQPalette.page
-        strip?.view.isHidden = !desktop || Self.taskMode || thread
+        strip?.view.isHidden = !desktop || Self.taskMode || thread || browser
     }
 
     // MARK: Its width
@@ -357,14 +466,16 @@ final class MacInspector: UIViewController {
         case .changed:
             let moved = (pan as? MacGripPan)?.travel(in: view.superview).x ?? pan.translation(in: view.superview).x   // [rest-hands 2026-11-17]
             let wider = view.effectiveUserInterfaceLayoutDirection == .rightToLeft ? moved : -moved
-            Self.chosenWidth = dragStart + wider
+            if isShowingBrowser { Self.browserChosenWidth = dragStart + wider } else { Self.chosenWidth = dragStart + wider }
             MacWindow.cursor("resizeLeftRightCursor")
             onWidthChange?()
         default:
             dragging = false
             MacWindow.cursor("arrowCursor")
             // What the window had room for, not a wider ask it never showed.
-            if view.bounds.width >= Self.narrowest { Self.chosenWidth = view.bounds.width }
+            if view.bounds.width >= Self.narrowest {
+                if isShowingBrowser { Self.browserChosenWidth = view.bounds.width } else { Self.chosenWidth = view.bounds.width }
+            }
         }
     }
 
@@ -387,6 +498,17 @@ final class MacInspector: UIViewController {
             threadChat = nil
             onThreadClosed?()
             if isViewLoaded { followLook() }
+        }
+        // [preview-tab] The docked In-App Browser belonged to the previous chat; restore inspector's prior open state.
+        if browserView != nil {
+            clear()
+            browserView = nil
+            let restore = inspectorWasShownBeforeBrowser
+            inspectorWasShownBeforeBrowser = false
+            Self.isShown = restore
+            if isViewLoaded { followLook() }
+            onShownChange?()
+            onBrowserClosed?()
         }
         // [bot-chat-sessions] The Chats tab stays as it is while one of its rows opens (its place in the list, no
         // flash): it takes the chat now beside it and marks that row.
@@ -414,7 +536,15 @@ final class MacInspector: UIViewController {
 
     /// Shows the panel on `tab` (the title, ⋯ › Info, the thinking row).
     func show(_ tab: Tab) {
-        let changed = tab != self.shownTab || content == nil
+        let leavingBrowser = browserView != nil
+        if leavingBrowser {
+            clear()
+            browserView = nil
+            inspectorWasShownBeforeBrowser = false
+            if isViewLoaded { followLook() }
+            onBrowserClosed?()
+        }
+        let changed = tab != self.shownTab || content == nil || leavingBrowser
         self.shownTab = tab
         UserDefaults.standard.set(tab.rawValue, forKey: Self.tabKey)
         if isViewLoaded, tabs.selectedSegmentIndex != tab.rawValue { tabs.selectedSegmentIndex = tab.rawValue }
@@ -428,6 +558,7 @@ final class MacInspector: UIViewController {
             // Kept open from before but with no room (a laptop-size window beside Sessions): asked for again, it makes
             // some, instead of the click doing nothing.
             if takesRoom?() == false, makeRoom?() == true { onShownChange?() }
+            else if leavingBrowser { onShownChange?() }
             if changed { fill() }
         }
     }
@@ -435,6 +566,13 @@ final class MacInspector: UIViewController {
     /// ⌘I and the bar's ◨: open on the last tab, or close. Open but with no room counts as closed, so the key shows it.
     func toggle() {
         if isVisible {
+            if browserView != nil {
+                clear()
+                browserView = nil
+                inspectorWasShownBeforeBrowser = false
+                if isViewLoaded { followLook() }
+                onBrowserClosed?()
+            }
             Self.isShown = false
             onShownChange?()
             if !slidingOut { clear() }   // [mac-feel] sliding out keeps its content until it is off the window
@@ -450,9 +588,10 @@ final class MacInspector: UIViewController {
 
     private func clear() {
         guard let content else { return }
-        // The task's chat outlives the pane's stack (the pane closes and opens again around it).
+        // The task's chat, thread, and in-app browser outlive the pane's stack.
         if let stack = content as? UINavigationController, let taskChat, stack.viewControllers.contains(taskChat) { stack.viewControllers = [] }
         if let stack = content as? UINavigationController, let threadChat, stack.viewControllers.contains(threadChat) { stack.viewControllers = [] }   // [threads]
+        if let stack = content as? UINavigationController, let browserView, stack.viewControllers.contains(browserView) { stack.viewControllers = [] }   // [preview-tab]
         content.willMove(toParent: nil)
         content.view.removeFromSuperview()
         content.removeFromParent()
@@ -464,13 +603,13 @@ final class MacInspector: UIViewController {
         clear()
         guard Self.isShown else { return }
         var (made, note) = make(shownTab)
-        if let taskChat { made = taskChat } else if let threadChat { made = threadChat }   // [threads]
+        if let taskChat { made = taskChat } else if let browserView { made = browserView } else if let threadChat { made = threadChat }   // [preview-tab] [threads]
         empty.set(symbol: note.symbol, title: note.title, hint: note.hint)
         empty.isHidden = made != nil
         guard let made else { return }
         // A stack of its own: Info's rows and a step's page push inside the panel.
         let stack = UINavigationController(rootViewController: made)
-        rootHidesBar = (made.navigationItem.title == nil && made.title == nil) || made === taskChat || made === threadChat
+        rootHidesBar = (made.navigationItem.title == nil && made.title == nil) || made === taskChat || made === threadChat || made === browserView
         stack.setNavigationBarHidden(rootHidesBar, animated: false)
         stack.delegate = self
         fitPage(made, root: true)

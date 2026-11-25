@@ -627,18 +627,27 @@ extension PagesTests {
 
     @MainActor func goalShelfHeading() -> XCUIElement { app.buttons["goals.shelf.heading"].firstMatch }
 
-    /// [goals-addon] Taps a view's pill (`tasks.view.<key>`), first sliding the row of pills until it is on screen: a
-    /// Goals pill leads the row (also on an add-on without goals, which offers the update there), so Inbox, a list or
-    /// Bots can start past the screen's edge on a phone.
+    /// Opens a Tasks view (`tasks.view.<key>`) from the Grouped Overview (stepping back to Tasks Overview first if currently drilled into another view).
     @MainActor func tapView(_ key: String) {
-        let pill = app.buttons["tasks.view.\(key)"].firstMatch
-        _ = pill.waitForExistence(timeout: 20)
-        let screen = app.windows.firstMatch.frame
-        for _ in 0..<4 where pill.exists && !screen.contains(pill.frame) {
-            app.descendants(matching: .any)["tasks.views"].firstMatch.swipeLeft()
-            RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        let button = app.buttons["tasks.view.\(key)"].firstMatch
+        if !button.exists {
+            let back = app.navigationBars.buttons["Tasks"].firstMatch
+            if back.exists && back.isHittable { back.tap() }
         }
-        pill.tap()
+        _ = button.waitForExistence(timeout: 20)
+        for _ in 0..<3 where button.exists && !button.isHittable {
+            app.collectionViews["tasks.list"].firstMatch.swipeUp()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        }
+        button.tap()
+    }
+
+    @MainActor func backToTasksOverview() {
+        let smart = app.descendants(matching: .any)["tasks.overview.smart"].firstMatch
+        guard !smart.exists else { return }
+        let back = app.navigationBars.buttons["Tasks"].firstMatch
+        if back.waitForExistence(timeout: 5) { back.tap() }
+        _ = smart.waitForExistence(timeout: 10)
     }
 
     @MainActor func shelfCard(_ title: String) -> XCUIElement { app.buttons["goal-shelf-\(title)"].firstMatch }

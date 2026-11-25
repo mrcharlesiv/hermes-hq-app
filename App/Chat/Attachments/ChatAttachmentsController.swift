@@ -237,6 +237,11 @@ private extension AttachmentPrepareError {
 
     var hasAttachments: Bool { count > 0 }
 
+    /// [preview-tab] Attach a live screenshot from the collaborative In-App Browser directly into the composer tray.
+    func attachSnapshot(_ image: UIImage) {
+        importSources([.camera(image)])
+    }
+
     // MARK: Importing
 
     private func importSources(_ sources: [AttachmentPickerCoordinator.PickedSource]) {

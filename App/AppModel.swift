@@ -521,11 +521,32 @@ final class AppModel: AppServices {
             serverRequests = center
             promptSheets = sheets
         }
-        // [preview-tab] The Browser tab a bot opens with `desktop_preview`; it also answers the bot's reads of it.
+        // [preview-tab] The collaborative In-App Browser beside a chat: opens via toolbar / ⌥⌘B / `desktop_preview`,
+        // answers `preview.read`, and executes `preview.act` (`drive_preview` / `annotate_preview` / `vault`).
         let previewTabs = PreviewTabCenter(client: client, accountId: account.id)
+        previewTabs.isLocalGateway = account.baseURL.host.map(PreviewTarget.isLoopback) ?? false
+        previewTabs.openWatchBrowser = { [weak self] screen in
+            guard let self else { return }
+            self.openBrowser(self.browserScope(for: screen.session), from: screen)
+        }
+        previewTabs.hasLiveWatchBrowser = { [weak self] screen in
+            guard let self, let browser = self.browser else { return false }
+            return self.browserScope(for: screen.session).row(in: browser.activity.rows) != nil
+        }
+        previewTabs.openPasswordsSettings = { [weak self] presenter in
+            guard let self else { return }
+            SettingsScreens.presentSettings(from: presenter, services: self) { nav in
+                if let root = nav.viewControllers.first as? SettingsRootController {
+                    SettingsNavigator.openRoot("vault", router: root.router)
+                }
+            }
+        }
         self.previewTabs = previewTabs
         serverRequests?.previewReader = { [weak previewTabs] session, params in
             await previewTabs?.read(session: session, params: params)
+        }
+        serverRequests?.previewActor = { [weak previewTabs] session, params in
+            await previewTabs?.act(session: session, params: params)
         }
         // [attachments] drafts restored and their uploads resumed, chat on screen or not (docs/spec/1x-attachments.md §6.3)
         let attachments = AttachmentCenter.center(for: account, client: client)

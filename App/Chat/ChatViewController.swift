@@ -64,6 +64,18 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     var updatesRefreshQueued = false
     /// [mac-layout] The Chat Info rows for the Mac's inspector (set where the Info sheet is made).
     var makeInfoContent: (() -> UIViewController?)?
+    /// [preview-tab] Toggles the collaborative In-App Browser beside/over this chat.
+    var onToggleInAppBrowser: (() -> Void)? { didSet { updateMoreButton() } }
+    /// [preview-tab] Whether this chat's collaborative In-App Browser is currently visible (for toolbar active tint).
+    var isInAppBrowserOpen: (() -> Bool)?
+
+    func refreshInAppBrowserButton() {
+        #if targetEnvironment(macCatalyst)
+        guard let item = navigationItem.rightBarButtonItems?.first(where: { $0.accessibilityIdentifier == "chat.in-app-browser" }) else { return }
+        let open = isInAppBrowserOpen?() == true
+        item.tintColor = open ? ChatPalette.tint : nil
+        #endif
+    }
     /// MENUS: Find in chat, made on first use (App/Chat/Find/ChatFindController.swift).
     private(set) var findController: ChatFindController?
     /// MENUS: the find bar's room under the status line (0 while it is closed).
@@ -1880,6 +1892,17 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         item.accessibilityIdentifier = "chat.inspector"
         return item
     }
+
+    /// [preview-tab] Globe button beside the inspector: toggles the collaborative In-App Browser (⌥⌘B).
+    private func makeInAppBrowserButton() -> UIBarButtonItem {
+        let item = UIBarButtonItem(image: Self.barImage("globe"), primaryAction: UIAction { [weak self] _ in
+            self?.onToggleInAppBrowser?()
+        })
+        item.accessibilityLabel = "In-App Browser"
+        item.accessibilityIdentifier = "chat.in-app-browser"
+        if isInAppBrowserOpen?() == true { item.tintColor = ChatPalette.tint }
+        return item
+    }
     #endif
 
     /// The bar's ⋯, where Share and Delete Chat were picked: their sheet and question point at it. [mac] Mac polish #82:
@@ -1910,7 +1933,8 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
             filesButtonShown = showsFilesButton
             #if targetEnvironment(macCatalyst)
             readAloudButtonShown = showsReadAloudButton
-            navigationItem.rightBarButtonItems = [makeInspectorButton()] + items + (readAloudButtonShown ? [makeReadAloudButton()] : [])
+            let browserItem = onToggleInAppBrowser != nil ? [makeInAppBrowserButton()] : []
+            navigationItem.rightBarButtonItems = [makeInspectorButton()] + browserItem + items + (readAloudButtonShown ? [makeReadAloudButton()] : [])
             tipHeader()
             #else
             navigationItem.rightBarButtonItems = items

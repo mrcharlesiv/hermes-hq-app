@@ -199,13 +199,15 @@ final class RootSplitController: UIViewController {
         guard MacInspector.isShown, PaneLayout.inspectorFits(panes: panes, inspector: MacInspector.narrowest, listFolded: listFolded)
         else { return 0 }
         // [mac-ui-issues] As wide as it was dragged, or what this window has room for beside the panes.
-        var width = MacInspector.chosenWidth
+        var width = inspector.activeChosenWidth
         while width > MacInspector.narrowest, !PaneLayout.inspectorFits(panes: panes, inspector: width, listFolded: listFolded) {
             width = max(MacInspector.narrowest, width - 10)
         }
         // [mac-ui-issues] Owner 2026-11-09: in a narrow window (the list folded away) the panel kept the width it was
-        // dragged to and the chat was left about half the room. The chat keeps at least 60 % there.
-        if listFolded { width = max(MacInspector.narrowest, min(width, (panes.width * 0.4).rounded())) }
+        // dragged to and the chat was left about half the room. The chat keeps at least 60 % there (44 % beside a
+        // docked In-App Browser so web pages stay comfortable to work in).
+        let share: CGFloat = inspector.isShowingBrowser ? 0.56 : 0.4
+        if listFolded { width = max(MacInspector.narrowest, min(width, (panes.width * share).rounded())) }
         return width
     }
     /// Inside `applyLayout`: the inspector following a chat this pass moved waits for the next pass, never a layout

@@ -431,6 +431,7 @@ extension PhoneCallsTests {
     @MainActor func testSummaryArrivingAfterDeliveryUpdatesHistoryWithoutSendingTwice() async throws {
         let script = Script()
         script.summary = nil
+        script.summaryPending = true
         script.alive = false
         script.duration = 30
         script.events = Self.events(answered: true, talk: 30)
@@ -442,9 +443,9 @@ extension PhoneCallsTests {
         calls.chatSender = { _ in { sent.append($0) } }
         try await calls.place(sessionID: "s1", to: "+12125550142", purpose: "Book a table")
         await calls.refresh(Self.callID)
-        clock = clock.addingTimeInterval(19)
+        clock = clock.addingTimeInterval(7)
         await calls.refresh(Self.callID)
-        XCTAssertTrue(sent.isEmpty)
+        XCTAssertTrue(sent.isEmpty, "waits briefly while samplehost reports a pending insight")
         clock = clock.addingTimeInterval(1)
         await calls.refresh(Self.callID)
         XCTAssertEqual(sent.count, 1)
@@ -457,9 +458,58 @@ extension PhoneCallsTests {
         XCTAssertEqual(sent.count, 1)
     }
 
+    @MainActor func testEmptyInsightDeliversToChatQuicklyWithoutWaitingForPendingLimit() async throws {
+        let script = Script()
+        script.summary = nil
+        script.summaryPending = false
+        script.alive = false
+        script.duration = 25
+        script.events = Self.events(answered: true, talk: 25)
+        samplehostStub.reset(script.route)
+        var clock = Date(timeIntervalSince1970: 20_000)
+        let calls = try controller()
+        calls.now = { clock }
+        var sent: [PhoneResultMessage] = []
+        calls.chatSender = { _ in { sent.append($0) } }
+        try await calls.place(sessionID: "s1", to: "+12125550142", purpose: "Check in")
+        await calls.refresh(Self.callID)
+        XCTAssertTrue(sent.isEmpty)
+        clock = clock.addingTimeInterval(2.1)
+        await calls.refresh(Self.callID)
+        XCTAssertEqual(sent.count, 1, "empty insights deliver in ~2s instead of stalling for pending summary wait")
+    }
+
+    @MainActor func testAnsweredCallSettlesQuicklyFromCallDurationWhenEventLogLags() async throws {
+        let script = Script()
+        script.summary = nil
+        script.summaryPending = false
+        script.events = []   // samplehost event log is lagging behind
+        samplehostStub.reset(script.route)
+        var clock = Date(timeIntervalSince1970: 25_000)
+        let calls = try controller()
+        calls.now = { clock }
+        var sent: [PhoneResultMessage] = []
+        calls.chatSender = { _ in { sent.append($0) } }
+        try await calls.place(sessionID: "s1", to: "+12125550142", purpose: "Check in")
+        await calls.refresh(Self.callID)
+        XCTAssertEqual(calls.calls.first?.state, .live)
+        script.alive = false
+        script.duration = 42
+        await calls.refresh(Self.callID)
+        XCTAssertEqual(calls.calls.first?.state, .ended)
+        XCTAssertEqual(calls.calls.first?.duration, 42, "call_duration is captured immediately from the first ended status read")
+        XCTAssertFalse(calls.calls.first?.settled ?? true)
+        clock = clock.addingTimeInterval(5)
+        await calls.refresh(Self.callID)
+        XCTAssertTrue(calls.calls.first?.settled ?? false, "answered calls settle after answeredEventsGiveUp without waiting 60s")
+        XCTAssertEqual(calls.calls.first?.outcome, .finished)
+        XCTAssertEqual(sent.count, 1, "transcript was already quiet since overAt, so chat populates immediately on settle")
+    }
+
     @MainActor func testSummaryPollingStopsWhenItNeverArrives() async throws {
         let script = Script()
         script.summary = nil
+        script.summaryPending = true
         script.alive = false
         script.events = Self.events(answered: true)
         samplehostStub.reset(script.route)
@@ -468,7 +518,7 @@ extension PhoneCallsTests {
         calls.now = { clock }
         try await calls.place(sessionID: "s1", to: "+12125550142", purpose: "Book a table")
         await calls.refresh(Self.callID)
-        clock = clock.addingTimeInterval(44)
+        clock = clock.addingTimeInterval(29)
         await calls.refresh(Self.callID)
         XCTAssertFalse(calls.calls.first?.done ?? true)
         let attempts = samplehostStub.seen.filter { $0.path.hasSuffix("/conversations-insights") }.count

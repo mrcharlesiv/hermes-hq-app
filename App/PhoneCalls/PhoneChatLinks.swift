@@ -433,6 +433,9 @@ nonisolated struct PhoneProposal: Equatable, Sendable {
                         callID: String? = nil, from host: UIViewController) {
         let chat = host as? ChatViewController
         let live = chat?.session as? LiveChatSession
+        if let live, live.observing, live.openSettled || live.openFinished {
+            PhoneChatDelivery.chatReady(live)
+        }
         let botName = live?.botName ?? chat?.botName
         let chatContext = live.flatMap { PhoneChatContext.summarize($0.messages, botName: botName) }
         let ids = Set([session, live?.storedSessionId, live?.resolvedStoredId, live?.runtimeSessionId].compactMap { $0 })

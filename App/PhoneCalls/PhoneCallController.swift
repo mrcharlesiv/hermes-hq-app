@@ -116,6 +116,8 @@ nonisolated struct PhoneCallRecord: Identifiable, Equatable, Codable, Sendable {
     }
     var watchIssue: String? = nil
     var sendingMessage = false
+    /// In-memory status of samplehost's optional insights endpoint so empty results don't stall chat delivery.
+    var insightState: samplehostInsightStatus? = nil
 
     nonisolated enum CodingKeys: String, CodingKey {
         case id, sessionID, profile, to, purpose, placedAt, hangupCommandID, legID, samplehostSessionID, recorded,
@@ -166,20 +168,24 @@ nonisolated struct PhoneCallRecord: Identifiable, Equatable, Codable, Sendable {
     /// The client for a key (tests swap in a stubbed URLSession).
     var makeAPI: (String) -> samplehostAPI = { samplehostAPI(key: $0) }
     var now: () -> Date = { Date() }
-    var pollInterval: Duration = .milliseconds(1500)
-    var afterEndInterval: Duration = .seconds(3)
+    var pollInterval: Duration = .milliseconds(900)
+    var afterEndInterval: Duration = .milliseconds(1200)
+    var afterDeliveredInterval: Duration = .seconds(3)
     /// The controller watches each call by itself (tests drive `refresh` by hand instead).
     var autoPoll = true
     /// How often the lagging event log is read while the call is on, and after it ended.
-    var eventsEvery: TimeInterval = 5
-    var eventsAfterEndEvery: TimeInterval = 3
-    /// After the end the event log is read until `call.hangup` shows, at most this long.
-    var eventsGiveUp: TimeInterval = 60
-    /// Item 9: the result waits for the transcript to stop changing this long, or at most `resultDeadline`.
-    var resultQuiet: TimeInterval = 6
-    var resultDeadline: TimeInterval = 30
-    var summaryResultWait: TimeInterval = 20
-    var summaryDeadline: TimeInterval = 45
+    var eventsEvery: TimeInterval = 3
+    var eventsAfterEndEvery: TimeInterval = 1.5
+    /// After the end, answered calls settle quickly if samplehost's event log lags; unanswered calls wait longer for cause.
+    var answeredEventsGiveUp: TimeInterval = 5
+    var eventsGiveUp: TimeInterval = 20
+    /// Item 9: the result waits briefly for the transcript to stop changing after the call ends, or at most `resultDeadline`.
+    var resultQuiet: TimeInterval = 2
+    var resultDeadline: TimeInterval = 15
+    /// Empty insight responses (most accounts have no insights configured) release chat delivery quickly; pending runs wait longer.
+    var summaryEmptyWait: TimeInterval = 2
+    var summaryResultWait: TimeInterval = 8
+    var summaryDeadline: TimeInterval = 30
     private var placing = false
     /// The chat a result goes into, when it is open now: a sender for it (PhoneChatDelivery).
     var chatSender: (_ call: PhoneCallRecord) -> ((PhoneResultMessage) -> Void)? = { _ in nil }
@@ -190,6 +196,7 @@ nonisolated struct PhoneCallRecord: Identifiable, Equatable, Codable, Sendable {
     private var dialRetry = PhoneStartRetry()
     @ObservationIgnored private var watchdogs: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var pollers: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var sleepTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var refreshing: Set<String> = []
     @ObservationIgnored private var eventsReadAt: [String: Date] = [:]
     @ObservationIgnored private var alerted: Set<String> = []
@@ -302,61 +309,141 @@ nonisolated struct PhoneCallRecord: Identifiable, Equatable, Codable, Sendable {
                 guard let self, let call = self.call(id), !call.done else { break }
                 await self.refresh(id)
                 guard let after = self.call(id), !after.done else { break }
-                try? await Task.sleep(for: after.active ? self.pollInterval : self.afterEndInterval)
+                let delay: Duration = after.active
+                    ? self.pollInterval
+                    : (after.settled && after.result != .none ? self.afterDeliveredInterval : self.afterEndInterval)
+                let sleeper = Task<Void, Never> { _ = try? await Task.sleep(for: delay) }
+                self.sleepTasks[id] = sleeper
+                await sleeper.value
+                self.sleepTasks[id] = nil
             }
+            self?.sleepTasks[id] = nil
             self?.pollers[id] = nil
             PhoneBackgroundWatch.update()
         }
     }
 
-    /// One look at a call: its conversation (found by call_control_id) and messages, whether it is alive, and the
-    /// lagging event log; then what the app can say about it (PhoneVerdict) and, once settled, its result.
+    /// Cancels any inter-poll sleep so active or settling calls refresh immediately (e.g. returning from the iOS Phone app).
+    func wake(_ id: String? = nil) {
+        if let id {
+            sleepTasks[id]?.cancel()
+            if let call = call(id), !call.done { startPolling(id) }
+        } else {
+            for task in sleepTasks.values { task.cancel() }
+            for call in calls where !call.done { startPolling(call.id) }
+        }
+    }
+
+    /// One look at a call: reads conversation messages, call status, lagging event log, and optional summary in
+    /// parallel, then updates the verdict and delivers the result to its chat as soon as it is ready.
     func refresh(_ id: String) async {
         guard let api, let start = call(id), !start.done, refreshing.insert(id).inserted else { return }
         defer { refreshing.remove(id) }
-        if !(start.state == .ended && start.settled) || (start.summaryFinished == false && start.conversationID == nil) {
-            await readConversation(id, api)
+
+        let shouldReadConversation = !(start.state == .ended && start.settled)
+            || (start.summaryFinished == false && start.conversationID == nil)
+        let shouldReadStatus = start.active || (start.state == .ended && start.duration == nil)
+        let every = start.active ? eventsEvery : eventsAfterEndEvery
+        let eventsDue = start.legID != nil && !start.settled
+            && (eventsReadAt[id].map { now().timeIntervalSince($0) >= every } ?? true)
+        let legForEvents = eventsDue ? start.legID : nil
+        if legForEvents != nil { eventsReadAt[id] = now() }
+
+        let elapsedSinceOver = start.overAt.map { now().timeIntervalSince($0) } ?? 0
+        let shouldReadSummaryNow = start.state == .ended && start.summaryFinished == false
+            && start.conversationID != nil && elapsedSinceOver < summaryDeadline
+        let knownConversation = start.conversationID
+
+        async let conversationTask: (id: Result<String?, Error>, messages: Result<[samplehostMessage], Error>?)? = {
+            guard shouldReadConversation else { return nil }
+            let found: Result<String?, Error>
+            if let known = knownConversation {
+                found = .success(known)
+            } else {
+                found = await Result.of { try await api.conversationID(callControlID: id) }
+            }
+            guard case .success(let conv?) = found else { return (found, nil) }
+            let msgs = await Result.of { try await api.messages(conversationID: conv) }
+            return (found, msgs)
+        }()
+        async let statusTask: Result<samplehostCallStatus?, Error>? = shouldReadStatus
+            ? await Result.of { try await api.callStatus(callControlID: id) } : nil
+        async let eventsTask: Result<[PhoneCallEvent], Error>? = {
+            guard let leg = legForEvents else { return nil }
+            return await Result.of { try await api.callEvents(legID: leg) }
+        }()
+        async let summaryTask: Result<samplehostInsightStatus, Error>? = {
+            guard shouldReadSummaryNow, let conv = knownConversation else { return nil }
+            return await Result.of { try await api.conversationInsightStatus(conversationID: conv) }
+        }()
+
+        let conversationResult = await conversationTask
+        let statusResult = await statusTask
+        let eventsResult = await eventsTask
+        let summaryResult = await summaryTask
+
+        if let conversationResult {
+            await applyConversation(conversationResult.id, messages: conversationResult.messages, to: id, api: api)
         }
-        guard let afterTranscript = call(id) else { return }
+
         var justOver = false
-        if afterTranscript.active {
-            let status = await Result.of { try await api.callStatus(callControlID: id) }
-            guard let i = index(id) else { return }
-            switch status {
+        if let statusResult, let i = index(id) {
+            switch statusResult {
             case .success(let found):
-                if found?.is_alive == true {
-                    calls[i].seenAlive = true
-                } else {
-                    let ringOver = now().timeIntervalSince(calls[i].placedAt) > TimeInterval(PhoneLimits.ringSeconds + 10)
-                    if calls[i].seenAlive || calls[i].conversationID != nil || ringOver { markOver(id, local: nil); justOver = true }
+                if calls[i].active {
+                    if found?.is_alive == true {
+                        calls[i].seenAlive = true
+                    } else {
+                        let ringOver = now().timeIntervalSince(calls[i].placedAt) > TimeInterval(PhoneLimits.ringSeconds + 10)
+                        if calls[i].seenAlive || calls[i].conversationID != nil || ringOver {
+                            if let found, found.call_duration != nil { calls[i].endedStatus = found }
+                            markOver(id, local: nil)
+                            justOver = true
+                        }
+                    }
+                } else if calls[i].duration == nil, let found, found.call_duration != nil {
+                    calls[i].endedStatus = found
+                    save()
                 }
             case .failure(let error):
-                calls[i].watchIssue = phoneMessage(error)
+                if calls[i].active { calls[i].watchIssue = phoneMessage(error) }
             }
         }
-        guard let current = call(id) else { return }
-        if let leg = current.legID, !current.settled {
-            let every = current.active ? eventsEvery : eventsAfterEndEvery
-            let due = justOver || eventsReadAt[id].map { now().timeIntervalSince($0) >= every } ?? true
-            if due {
-                eventsReadAt[id] = now()
-                if case .success(let events) = await Result.of({ try await api.callEvents(legID: leg) }), let i = index(id) {
-                    calls[i].events = events
-                }
-                // Read every time the event log is, until samplehost gives the call's length.
-                if let i = index(id), calls[i].state == .ended, calls[i].duration == nil,
-                   case .success(let status) = await Result.of({ try await api.callStatus(callControlID: id) }),
-                   let j = index(id), let status, status.call_duration != nil {
-                    calls[j].endedStatus = status
-                }
+
+        if let eventsResult, case .success(let events) = eventsResult, let i = index(id) {
+            calls[i].events = events
+        }
+
+        // If the call just transitioned to ended during this refresh, fetch the event log and insight right away.
+        if justOver, let current = call(id), !current.settled {
+            let needFollowUpEvents = legForEvents == nil && current.legID != nil
+            let needFollowUpStatus = current.duration == nil
+            if needFollowUpEvents { eventsReadAt[id] = now() }
+            async let followEvents: Result<[PhoneCallEvent], Error>? = {
+                guard needFollowUpEvents, let leg = current.legID else { return nil }
+                return await Result.of { try await api.callEvents(legID: leg) }
+            }()
+            async let followStatus: Result<samplehostCallStatus?, Error>? = {
+                guard needFollowUpStatus else { return nil }
+                return await Result.of { try await api.callStatus(callControlID: id) }
+            }()
+            if let fetched = await followEvents, case .success(let events) = fetched, let i = index(id) {
+                calls[i].events = events
+            }
+            if let fetched = await followStatus, case .success(let status) = fetched, let status, status.call_duration != nil,
+               let i = index(id) {
+                calls[i].endedStatus = status
             }
         }
+
         judge(id)
         await hangupOrphanedAssistant(id, api)
-        if let overAt = call(id)?.overAt, now().timeIntervalSince(overAt) >= summaryResultWait {
-            await finishResult(id)
+
+        if let summaryResult {
+            applySummary(summaryResult, to: id)
+        } else {
+            await readSummary(id, api)
         }
-        await readSummary(id, api)
         await finishResult(id)
     }
 
@@ -384,33 +471,50 @@ nonisolated struct PhoneCallRecord: Identifiable, Equatable, Codable, Sendable {
             if let i = index(id) { calls[i].summaryFinished = true; save() }
             return
         }
-        guard let conversation = call.conversationID,
-              case .success(let summary?) = await Result.of({ try await api.conversationSummary(conversationID: conversation) }),
-              let i = index(id) else { return }
-        calls[i].summary = summary
-        calls[i].summaryFinished = true
-        save()
+        guard let conversation = call.conversationID else { return }
+        let result = await Result.of { try await api.conversationInsightStatus(conversationID: conversation) }
+        applySummary(result, to: id)
     }
 
-    /// The conversation and its messages. They trail the call, and keep arriving for a while after it ended.
-    private func readConversation(_ id: String, _ api: samplehostAPI) async {
-        guard let call = call(id) else { return }
-        let found: Result<String?, Error>
-        if let known = call.conversationID { found = .success(known) } else {
-            found = await Result.of { try await api.conversationID(callControlID: id) }
+    private func applySummary(_ result: Result<samplehostInsightStatus, Error>, to id: String) {
+        guard let i = index(id), calls[i].state == .ended, calls[i].summaryFinished == false else { return }
+        let elapsed = now().timeIntervalSince(calls[i].overAt ?? calls[i].placedAt)
+        if elapsed >= summaryDeadline {
+            calls[i].summaryFinished = true
+            save()
+            return
         }
+        guard case .success(let status) = result else { return }
+        calls[i].insightState = status
+        switch status {
+        case .completed(let summary):
+            calls[i].summary = summary
+            calls[i].summaryFinished = true
+            save()
+        case .pending:
+            break
+        case .empty:
+            if elapsed >= summaryResultWait {
+                calls[i].summaryFinished = true
+                save()
+            }
+        }
+    }
+
+    private func applyConversation(_ found: Result<String?, Error>, messages read: Result<[samplehostMessage], Error>?,
+                                   to id: String, api: samplehostAPI) async {
         guard case .success(let conversation?) = found else {
             if case .failure(let error) = found, let i = index(id) { calls[i].watchIssue = phoneMessage(error) }
             else if let i = index(id) { calls[i].watchIssue = nil }
             return
         }
-        let read = await Result.of { try await api.messages(conversationID: conversation) }
         guard let i = index(id) else { return }
         var stateChanged = false
         if calls[i].conversationID == nil { calls[i].conversationID = conversation; stateChanged = true }
         if calls[i].liveAt == nil { calls[i].liveAt = now(); stateChanged = true }
         if calls[i].state == .calling { calls[i].state = .live; stateChanged = true }
         if stateChanged { save() }
+        guard let read else { return }
         switch read {
         case .failure(let error): calls[i].watchIssue = phoneMessage(error)
         case .success(let messages):
@@ -494,7 +598,10 @@ nonisolated struct PhoneCallRecord: Identifiable, Equatable, Codable, Sendable {
         guard let idx = index(id) else { return }
         var call = calls[idx]
         let over = call.state == .ended
-        let gaveUp = over && (call.overAt.map { now().timeIntervalSince($0) >= eventsGiveUp } ?? true)
+        let answeredAlready = call.answeredAt != nil || call.liveAt != nil || !call.theirLines.isEmpty
+            || call.conversationID != nil || (call.duration ?? 0) > 0
+        let giveUpLimit = answeredAlready ? answeredEventsGiveUp : eventsGiveUp
+        let gaveUp = over && (call.overAt.map { now().timeIntervalSince($0) >= giveUpLimit } ?? true)
         let verdict = PhoneVerdict.derive(events: call.events, status: call.endedStatus, theirLines: call.theirLines,
                                           ended: over, localEnd: call.localEnd, gaveUp: gaveUp)
         if let answered = verdict.answeredAt { call.answeredAt = answered }
@@ -514,18 +621,19 @@ nonisolated struct PhoneCallRecord: Identifiable, Equatable, Codable, Sendable {
         if changed { save() }
     }
 
-    /// Item 9: once settled and the transcript is quiet (or 30 s passed), the result goes into the call's chat: now if
-    /// that chat is open, else the next time it opens (`deliverPending`). Marked before it is sent, so it is sent at
-    /// most once, also across relaunches.
+    /// Item 9: once settled and the transcript is quiet after the call ended (or `resultDeadline` passed), the result
+    /// goes into the call's chat: now if that chat is open, else the next time it opens (`deliverPending`). Marked
+    /// before it is sent, so it is sent at most once, also across relaunches.
     func finishResult(_ id: String) async {
         guard let i = index(id), calls[i].state == .ended, calls[i].settled, calls[i].result == .none else { return }
         guard setup?.sendsResults != false else { calls[i].result = .off; save(); return }
-        let settledAt = calls[i].settledAt ?? now()
-        let quietSince = max(calls[i].transcriptChangedAt ?? settledAt, settledAt)
-        guard now().timeIntervalSince(quietSince) >= resultQuiet || now().timeIntervalSince(settledAt) >= resultDeadline else { return }
-        let overAt = calls[i].overAt ?? settledAt
-        if calls[i].summaryFinished == false, calls[i].conversationID != nil,
-           now().timeIntervalSince(overAt) < summaryResultWait { return }
+        let overAt = calls[i].overAt ?? calls[i].settledAt ?? now()
+        let quietSince = max(calls[i].transcriptChangedAt ?? overAt, overAt)
+        guard now().timeIntervalSince(quietSince) >= resultQuiet || now().timeIntervalSince(overAt) >= resultDeadline else { return }
+        if calls[i].summaryFinished == false, calls[i].conversationID != nil {
+            let summaryWait = calls[i].insightState == .pending ? summaryResultWait : summaryEmptyWait
+            if now().timeIntervalSince(overAt) < summaryWait { return }
+        }
         let message = PhoneResultMessage(calls[i])
         if let send = chatSender(calls[i]) {
             calls[i].result = .sent
@@ -558,7 +666,10 @@ nonisolated struct PhoneCallRecord: Identifiable, Equatable, Codable, Sendable {
         sheets[sessionID, default: 0] += 1
         for call in calls(for: sessionID) { if let q = call.question { alerted.formUnion(q.ids) } }
     }
-    func sheetDisappeared(_ sessionID: String) { sheets[sessionID] = max(0, (sheets[sessionID] ?? 0) - 1) }
+    func sheetDisappeared(_ sessionID: String) {
+        sheets[sessionID] = max(0, (sheets[sessionID] ?? 0) - 1)
+        for call in calls(for: sessionID) where !call.done { wake(call.id) }
+    }
     func sheetOnScreen(_ sessionID: String) -> Bool { (sheets[sessionID] ?? 0) > 0 && appActive() }
 
     /// A new question while that call's sheet isn't on screen: a local alert (PhoneAlerts), once per question.
@@ -660,20 +771,25 @@ nonisolated struct PhoneCallRecord: Identifiable, Equatable, Codable, Sendable {
     func endAll() async {
         for call in calls where call.active { await hangup(call.id) }
         for task in watchdogs.values { task.cancel() }
+        for task in sleepTasks.values { task.cancel() }
         for task in pollers.values { task.cancel() }
-        watchdogs = [:]; pollers = [:]
+        watchdogs = [:]; sleepTasks = [:]; pollers = [:]
         calls = []
     }
 
     /// Settings › Clear call history: every ended call goes (one still on stays).
     func clearHistory() {
-        for call in calls where !call.active { pollers.removeValue(forKey: call.id)?.cancel() }
+        for call in calls where !call.active {
+            sleepTasks.removeValue(forKey: call.id)?.cancel()
+            pollers.removeValue(forKey: call.id)?.cancel()
+        }
         calls.removeAll { !$0.active }
         if calls.isEmpty { history?.delete(for: accountID) } else { save() }
     }
 
     func deleteCall(_ id: String) {
         guard let i = index(id), !calls[i].active else { return }
+        sleepTasks.removeValue(forKey: id)?.cancel()
         pollers.removeValue(forKey: id)?.cancel()
         eventsReadAt[id] = nil
         calls.remove(at: i)
@@ -697,7 +813,7 @@ nonisolated struct PhoneCallRecord: Identifiable, Equatable, Codable, Sendable {
         calls[i].question = nil
         watchdogs.removeValue(forKey: id)?.cancel()
         save()
-        startPolling(id)
+        wake(id)
     }
 
     /// The app-side backup for `time_limit_secs`: hangs up at `phoneHangupDeadline` while the app runs.
@@ -743,7 +859,15 @@ extension PhoneCallRecord {
             MainActor.assumeIsolated { begin() }
         }
         center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated { end() }
+            MainActor.assumeIsolated {
+                end()
+                for controller in PhoneCallController.all { controller.wake() }
+            }
+        }
+        center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                for controller in PhoneCallController.all { controller.wake() }
+            }
         }
     }
 

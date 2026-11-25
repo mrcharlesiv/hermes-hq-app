@@ -684,10 +684,15 @@ struct PhoneCallPresentationTests {
 
     @Test func insightsOnlyUseCompletedPlainStrings() throws {
         func summary(_ json: String) throws -> String? { try samplehostConversationInsight.summary(in: Data(json.utf8)) }
+        func status(_ json: String) throws -> samplehostInsightStatus { try samplehostConversationInsight.status(in: Data(json.utf8)) }
         #expect(try summary(#"{"data":[]}"#) == nil)
+        #expect(try status(#"{"data":[]}"#) == .empty)
         #expect(try summary(#"{"data":[{"status":"pending","conversation_insights":[{"result":"Early"}]}]}"#) == nil)
+        #expect(try status(#"{"data":[{"status":"pending","conversation_insights":[{"result":"Early"}]}]}"#) == .pending)
         #expect(try summary(#"{"data":[{"status":"completed","conversation_insights":[{"result":{"answer":"yes"}},{"result":42}]}]}"#) == nil)
+        #expect(try status(#"{"data":[{"status":"completed","conversation_insights":[{"result":{"answer":"yes"}},{"result":42}]}]}"#) == .empty)
         #expect(try summary(#"{"data":[{"status":"completed","conversation_insights":[{"result":false},{"result":"  The call finished.  "}]}]}"#) == "The call finished.")
+        #expect(try status(#"{"data":[{"status":"completed","conversation_insights":[{"result":false},{"result":"  The call finished.  "}]}]}"#) == .completed("The call finished."))
     }
 
     @Test @MainActor func proposalCarriesNameAndRendersAsABlock() throws {

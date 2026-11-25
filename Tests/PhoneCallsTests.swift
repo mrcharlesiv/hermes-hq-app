@@ -83,6 +83,7 @@ nonisolated final class PhoneCallsTests: XCTestCase {
         var events: [[String: Any]] = []
         var duration: Int? = nil
         var summary: String? = "The assistant completed the simulated call."
+        var summaryPending = false
         /// The assistant's telephony_settings as get-an-assistant answers them; update-an-assistant replaces them.
         var telephony: [String: Any] = ["default_texml_app_id": "texml-1", "noise_suppression": "krisp",
                                         "recording_settings": ["enabled": false, "channels": "dual", "format": "mp3"]]
@@ -117,9 +118,14 @@ nonisolated final class PhoneCallsTests: XCTestCase {
             case ("GET", "/v2/ai/conversations/conv-1/messages"):
                 return (200, ["data": Array(messages.reversed()), "meta": ["total_pages": 1, "total_results": messages.count, "page_number": 1, "page_size": 100]])
             case ("GET", "/v2/ai/conversations/conv-1/conversations-insights"):
-                let rows: [[String: Any]] = summary.map {
-                    [["status": "completed", "conversation_insights": [["result": $0]]]]
-                } ?? []
+                let rows: [[String: Any]]
+                if let summary {
+                    rows = [["status": "completed", "conversation_insights": [["result": summary]]]]
+                } else if summaryPending {
+                    rows = [["status": "pending", "conversation_insights": []]]
+                } else {
+                    rows = []
+                }
                 return (200, ["data": rows])
             case ("GET", "/v2/calls/\(PhoneCallsTests.callID)"):
                 var data: [String: Any] = ["call_control_id": PhoneCallsTests.callID, "is_alive": alive, "record_type": "call"]

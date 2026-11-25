@@ -111,6 +111,12 @@ private nonisolated struct PagedDataList<T: Decodable>: Decodable {
     var meta: PaginationMeta? = nil
 }
 private nonisolated struct DataOne<T: Decodable>: Decodable { let data: T }
+nonisolated enum samplehostInsightStatus: Equatable, Sendable {
+    case completed(String)
+    case pending
+    case empty
+}
+
 /// get-insights-for-a-conversation: a completed run may contain plain text or structured results.
 nonisolated struct samplehostConversationInsight: Decodable {
     private struct Entry: Decodable {
@@ -127,10 +133,10 @@ nonisolated struct samplehostConversationInsight: Decodable {
     let status: String
     private let conversation_insights: [Entry]?
 
-    static func summary(in data: Data) throws -> String? {
+    static func status(in data: Data) throws -> samplehostInsightStatus {
         let rows = try JSONDecoder().decode(DataList<Self>.self, from: data).data
-        return rows.lazy.filter { $0.status == "completed" }
-            .compactMap { row in
+        if let words = rows.lazy.filter({ $0.status == "completed" })
+            .compactMap({ row in
                 row.conversation_insights?.lazy.compactMap { entry -> String? in
                     guard let words = entry.result?.trimmingCharacters(in: .whitespacesAndNewlines),
                           !words.isEmpty else { return nil }
@@ -138,7 +144,19 @@ nonisolated struct samplehostConversationInsight: Decodable {
                        (try? JSONSerialization.jsonObject(with: Data(words.utf8))) != nil { return nil }
                     return words
                 }.first
-            }.first
+            }).first {
+            return .completed(words)
+        }
+        let activeStatuses: Set<String> = ["pending", "in_progress", "queued", "running"]
+        if rows.contains(where: { activeStatuses.contains($0.status.lowercased()) }) {
+            return .pending
+        }
+        return .empty
+    }
+
+    static func summary(in data: Data) throws -> String? {
+        if case .completed(let words) = try status(in: data) { return words }
+        return nil
     }
 }
 
@@ -769,9 +787,18 @@ nonisolated struct samplehostAPI: Sendable, CustomStringConvertible, CustomDebug
     }
 
     /// get-insights-for-a-conversation: `GET /v2/ai/conversations/{id}/conversations-insights`.
-    func conversationSummary(conversationID: String) async throws -> String? {
+    func conversationInsightStatus(conversationID: String) async throws -> samplehostInsightStatus {
         let data = try await send("GET", ["ai", "conversations", conversationID, "conversations-insights"], timeout: 3)
-        return try samplehostConversationInsight.summary(in: data).map(redact)
+        switch try samplehostConversationInsight.status(in: data) {
+        case .completed(let words): return .completed(redact(words))
+        case .pending: return .pending
+        case .empty: return .empty
+        }
+    }
+
+    func conversationSummary(conversationID: String) async throws -> String? {
+        if case .completed(let words) = try await conversationInsightStatus(conversationID: conversationID) { return words }
+        return nil
     }
 
     /// add-messages-to-ai-assistant: `POST /v2/calls/{id}/actions/ai_assistant_add_messages` with one `tool` message

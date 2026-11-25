@@ -152,7 +152,7 @@ nonisolated struct PhoneVerdict: Equatable, Sendable {
         verdict.answeredAt = answered?.occurredAt
         verdict.endedAt = hangup?.occurredAt
         if let start = initiated?.occurredAt, let pickup = answered?.occurredAt { verdict.ringSeconds = max(0, pickup.timeIntervalSince(start)) }
-        let pickedUp = answered != nil || !theirLines.isEmpty
+        let pickedUp = answered != nil || !theirLines.isEmpty || (status?.call_duration ?? 0) > 0
         if pickedUp {
             if let seconds = status?.call_duration { verdict.duration = seconds }
             else if let pickup = answered?.occurredAt, let end = hangup?.occurredAt { verdict.duration = max(0, Int(end.timeIntervalSince(pickup).rounded())) }

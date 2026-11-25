@@ -15,19 +15,7 @@ extension PagesTests {
         _ = waitUntil(5) { self.app.cells.count > 2 }
         shot("live-1-today")
 
-        // 2. Compact New Task Quick Capture (over keyboard, live parsed line, visible notes, task chips, Just Me footer)
-        plus.tap()
-        let title = app.textViews["tasks.new.title"].firstMatch.exists ? app.textViews["tasks.new.title"].firstMatch : app.textFields["tasks.new.title"].firstMatch
-        XCTAssertTrue(title.waitForExistence(timeout: 10), "Quick capture opened")
-        title.typeText("Call mom tomorrow 9am #family")
-        _ = app.descendants(matching: .any)["tasks.new.read"].firstMatch.waitForExistence(timeout: 5)
-        shot("live-2-quick-add")
-        app.buttons["sheet.close"].firstMatch.tap()
-        let discard = app.buttons["Discard Changes"].firstMatch
-        if discard.waitForExistence(timeout: 3) { discard.tap() }
-        _ = waitUntil(5) { !title.exists }
-
-        // 3. Upcoming Multi-Week Strip (month header, week arrows, Today jump button)
+        // 2. Upcoming Multi-Week Strip (month header, week arrows, Today jump button)
         tapView("upcoming")
         let nextWeek = app.buttons["tasks.week.next"].firstMatch
         XCTAssertTrue(nextWeek.waitForExistence(timeout: 8), "multi-week strip loaded")

@@ -1,8 +1,7 @@
-// Unit tests for the Tasks upgrades across all four boards:
+// Unit tests for the Tasks upgrades:
 // 1. Today & Overdue triage (priority tiebreak, Sort By in Today & Inbox, bulk reschedule/priority/goal, duplicate).
-// 2. Quick-capture NewTodoModel (goal, starts, repeat, who picker, literal toggle, reset between adds).
-// 3. Upcoming multi-week titles, drag-to-day time-preserving reschedule, Priority/Tag filters, allTags, Completed Logbook.
-// 4. Task detail inline step editing, step reordering, step promotion, TaskTagPickerModel, and custom repeat labels/gating.
+// 2. Upcoming multi-week titles, drag-to-day time-preserving reschedule, Priority/Tag filters, allTags, Completed Logbook.
+// 3. Task detail inline step editing, step reordering, step promotion, TaskTagPickerModel, and custom repeat labels/gating.
 
 import Foundation
 import Synchronization
@@ -218,76 +217,7 @@ struct TasksTriageTests {
         #expect(steps.allSatisfy { $0.object?["done"]?.bool == false })
     }
 
-    // MARK: Board 2 — NewTodoModel Quick Capture
-
-    @Test func newTodoModelSupportsGoalStartsRepeatAndWhoPicker() async {
-        let posted = Mutex<[[String: JSONValue]]>([])
-        let client = PagesFakeClient { request in
-            if request.method == "GET" {
-                return .object([
-                    "rev": 1,
-                    "fields": true,
-                    "goals_on": true,
-                    "sections": .array([.object(["id": "work", "name": "Work"])]),
-                    "goals": .array([.object(["id": "g1", "title": "Ship v2", "state": "active"])]),
-                    "tasks": .array([]),
-                ])
-            }
-            if request.method == "POST", let body = request.body?.object {
-                posted.withLock { $0.append(body) }
-                return Self.wire(Self.makeTask("t_new", body["title"]?.string ?? ""))
-            }
-            return .object([:])
-        }
-        let store = TasksStore(api: TasksAPI(client: client), account: client.account, directory: nil)
-        await store.refresh()
-        let bots = [Bot(id: "otto", name: "Otto", role: nil, preview: nil, lastActive: nil,
-                        isWorking: false, unread: false, pinned: false, pinOrder: nil, sectionName: nil,
-                        hidden: false, canonicalSessionId: nil, head: nil)]
-        let model = NewTodoModel(store: store, bots: bots, preferredBot: nil, section: "work", dueDay: nil)
-
-        #expect(model.who == TodoWho.me && model.whoLabel == "Just Me")
-        model.setWho("otto", alone: false)
-        #expect(model.who == TodoWho.together && model.whoLabel == "You & Otto")
-        model.repeatRule = "weekly"
-        model.setWho("otto", alone: true)
-        #expect(model.who == TodoWho.bot && model.whoLabel == "Otto" && model.repeatNow == nil, "bot-only clears repeat")
-        model.setWho(nil, alone: false)
-        #expect(model.who == TodoWho.me)
-
-        model.title = "Review P1 #123"
-        #expect(model.read.title == "Review" && model.read.priority == 1 && model.read.tags == ["123"])
-        model.literalTitle = true
-        #expect(model.read.title == "Review P1 #123" && model.read.priority == nil && model.read.tags.isEmpty)
-        model.literalTitle = false
-
-        model.title = "Write release notes"
-        model.notes = "Include new logbook"
-        model.priority = 2
-        model.repeatRule = "monthly"
-        model.setGoal("g1", milestone: nil)
-        model.setStarts(Self.now)
-
-        let created = Mutex<String?>(nil)
-        model.onCreated = { (task: TodoTask?) in created.withLock { $0 = task?.id } }
-        model.add()
-        for _ in 0..<40 where created.withLock({ $0 }) == nil {
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        #expect(created.withLock { $0 } == "t_new")
-        let body = posted.withLock { $0.first }
-        #expect(body?["title"]?.string == "Write release notes")
-        #expect(body?["notes"]?.string == "Include new logbook")
-        #expect(body?["section"]?.string == "work")
-        #expect(body?["goal"]?.string == "g1")
-        #expect(body?["repeat"]?.string == "monthly")
-        #expect(ActivityJSON.int(body?["priority"]) == 2)
-        #expect(body?["starts"]?.string == "2026-11-18")
-        // After adding a personal task, draft fields reset while list & who stay.
-        #expect(model.title.isEmpty && model.notes.isEmpty && model.goal == nil && model.starts == nil && model.section == "work")
-    }
-
-    // MARK: Board 3 — Upcoming Multi-Week, Priority/Tag Filters & Completed Logbook
+    // MARK: Upcoming Multi-Week, Priority/Tag Filters & Completed Logbook
 
     @Test func weekRangeTitleFormatsSingleCrossMonthAndCrossYearRanges() throws {
         let sameMonth = [

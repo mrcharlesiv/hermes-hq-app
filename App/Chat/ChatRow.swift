@@ -7,6 +7,7 @@ nonisolated struct ChatRow: @unchecked Sendable {
     enum Kind {
         case bubble(BubbleRow)
         case phoneResult(PhoneResultCard, sentAt: Date?)
+        case modelFallback(ModelFallbackRow)
         case toolRun(ToolRunRow)
         case thought(ThoughtRow)
         /// A day separator at this message time; `now` decides "Today" / "Yesterday" (the label is made at layout
@@ -596,6 +597,14 @@ nonisolated enum ChatRowBuilder {
                 if row.cron { h.combine(true) }
                 rows.append(ChatRow(id: id, messageId: m.id, scope: input.scope, fingerprint: h.finalize(), kind: .backgroundResult(row),
                                     gapAbove: ChatMetrics.turnGap, variant: expanded ? 1 : 0))
+                return
+            }
+            if let fallbackSource = m.fallbackText ?? (text.isEmpty ? nil : text),
+               let fallbackRow = ModelFallbackRow.parse(fallbackSource) {
+                var h = Hasher()
+                h.combine(fallbackRow)
+                rows.append(ChatRow(id: "\(m.id)|notice", messageId: m.id, scope: input.scope, fingerprint: h.finalize(),
+                                    kind: .modelFallback(fallbackRow), gapAbove: ChatMetrics.turnGap, variant: 0))
                 return
             }
             if !text.isEmpty {
@@ -1376,7 +1385,7 @@ nonisolated enum ChatRowBuilder {
         case .sendState: return true
         case .reactions(let r): return r.mine
         case .prompt, .activity, .error, .waiting, .phoneResult, .caption, .stoppedEarly, .actions: return false
-        case .day, .notice, .backgroundResult, .toolRun, .thought, .slashOutput, .thread: return nil
+        case .day, .notice, .modelFallback, .backgroundResult, .toolRun, .thought, .slashOutput, .thread: return nil
         }
     }
 

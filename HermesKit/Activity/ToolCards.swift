@@ -390,7 +390,7 @@ nonisolated enum ProviderWait {
                                               "reasoning.available", "reasoning.delta", "tool.complete", "tool.generating", "tool.start"]
 
     private static let fallbackPattern = try! NSRegularExpression(
-        pattern: "model fallback|provider fallback|switched to fallback|switching to fallback", options: [.caseInsensitive])
+        pattern: "model fallback|provider fallback|switched to fallback|switching to fallback|primary model restored", options: [.caseInsensitive])
 
     /// The id prefix of a fallback notice row (`fallback-switch-<seconds>` with M1's client-side "local-" mark).
     static let noticeIdPrefix = "local-fallback-switch-"

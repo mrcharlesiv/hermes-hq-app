@@ -206,7 +206,9 @@ extension LiveChatSession: ChatActivityProviding {
         // drops it, ChatMeta.isLocal); a second notice in the same second gets a suffix.
         var id = "\(ProviderWait.noticeIdPrefix)\(seconds)"
         if indexById[id] != nil { id += "-\(activityLink.noticeKeys.count)" }
-        appendMessage(ChatMessage(id: id, role: .system, parts: [.text(ProviderWait.plainNotice(text))], timestamp: Date(), rowId: nil))
+        var notice = ChatMessage(id: id, role: .system, parts: [.text(ProviderWait.plainNotice(text))], timestamp: Date(), rowId: nil)
+        notice.fallbackText = text
+        appendMessage(notice)
         var meta = MessageMeta()
         meta.systemNotice = true
         meta.serverRowSpan = 0

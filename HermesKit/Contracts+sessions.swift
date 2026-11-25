@@ -278,24 +278,168 @@ nonisolated struct SessionUsage: Hashable, Sendable {
 
 /// The gateway answered with another model (`S/phone-notices.ts:232-237`).
 nonisolated struct ModelFallback: Hashable, Sendable {
+    enum Category: String, Hashable, Sendable {
+        case auth
+        case billing
+        case notFound
+        case rateLimit
+        case busy
+        case timeout
+        case other
+    }
+
     var primary: String
     var fallback: String
     var reason: String?
+    var primaryProvider: String? = nil
+    var fallbackProvider: String? = nil
+    var rawText: String = ""
+    var retryAfterSeconds: Int? = nil
+    var isProviderShape: Bool = false
 
-    private static let model = JSRegex(#"Model fallback:\s*(\S+) via (\S+) unavailable(?: \(([^)]*)\))?; using (\S+) via (\S+?)\.(?:\s|$)"#)
-    private static let provider = JSRegex(#"Provider fallback:\s*(\S+) unavailable; using (\S+) for this response"#)
+    init(primary: String, fallback: String, reason: String? = nil,
+         primaryProvider: String? = nil, fallbackProvider: String? = nil,
+         rawText: String = "", retryAfterSeconds: Int? = nil, isProviderShape: Bool = false) {
+        self.primary = primary
+        self.fallback = fallback
+        self.reason = reason
+        self.primaryProvider = primaryProvider
+        self.fallbackProvider = fallbackProvider
+        self.rawText = rawText
+        self.retryAfterSeconds = retryAfterSeconds
+        self.isProviderShape = isProviderShape
+    }
+
+    private static let modelLead = JSRegex(#"Model fallback:\s*(\S+)\s+via\s+(\S+)\s+"#)
+    private static let usingTail = JSRegex(#"^(\S+)(?:\s+via\s+(\S+?))?(?:\.(?:\s|$)|\s*$)"#)
+    private static let retryIn = JSRegex(#"Primary retry eligible in\s*~?(\d+)\s*s\b"#)
+    private static let provider = JSRegex(#"Provider fallback:\s*(\S+)\s+(?:unavailable|could not respond|failed)(?:\s+\(([\s\S]*)\))?;\s*using\s+(\S+?)(?:\s+for this response|\.|\s|$)"#)
 
     /// The gateway's status line, both shapes; nil for anything else.
+    /// Splits on `; using ` first so reasons containing nested or truncated parentheses still parse cleanly.
     static func parse(_ text: String) -> ModelFallback? {
-        if let groups = model.exec(text)?.groups, groups.count > 4, !groups[1].isEmpty, !groups[4].isEmpty {
-            return ModelFallback(primary: groups[1], fallback: groups[4], reason: groups[3].isEmpty ? nil : groups[3])
+        if let modelRange = text.range(of: "Model fallback:", options: [.caseInsensitive]),
+           let usingRange = text.range(of: "; using ", options: [.caseInsensitive], range: modelRange.upperBound..<text.endIndex) {
+            let left = String(text[modelRange.lowerBound..<usingRange.lowerBound])
+            let right = String(text[usingRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if let lead = modelLead.exec(left), lead.groups.count > 2,
+               let tail = usingTail.exec(right), tail.groups.count > 1,
+               !lead.groups[1].isEmpty, !tail.groups[1].isEmpty {
+                let primary = lead.groups[1]
+                let primaryProvider = lead.groups[2].isEmpty ? nil : lead.groups[2]
+                let fallback = tail.groups[1].trimmingCharacters(in: CharacterSet(charactersIn: ".,;"))
+                let fallbackProviderRaw = tail.groups.count > 2 ? tail.groups[2].trimmingCharacters(in: CharacterSet(charactersIn: ".,;")) : ""
+                let fallbackProvider = fallbackProviderRaw.isEmpty ? nil : fallbackProviderRaw
+                let afterLead = Range(lead.range, in: left)
+                    .map { String(left[$0.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
+                let reason = extractReason(from: afterLead)
+                let retry = retryIn.exec(right).flatMap { $0.groups.count > 1 ? Int($0.groups[1]) : nil }
+                return ModelFallback(primary: primary, fallback: fallback, reason: reason,
+                                     primaryProvider: primaryProvider, fallbackProvider: fallbackProvider,
+                                     rawText: text.trimmingCharacters(in: .whitespacesAndNewlines),
+                                     retryAfterSeconds: retry, isProviderShape: false)
+            }
         }
-        if let groups = provider.exec(text)?.groups, groups.count > 2, !groups[1].isEmpty, !groups[2].isEmpty {
-            return ModelFallback(primary: groups[1], fallback: groups[2], reason: nil)
+        if let groups = provider.exec(text)?.groups, groups.count > 3, !groups[1].isEmpty, !groups[3].isEmpty {
+            let reason = groups[2].trimmingCharacters(in: .whitespacesAndNewlines)
+            let retry = retryIn.exec(text).flatMap { $0.groups.count > 1 ? Int($0.groups[1]) : nil }
+            return ModelFallback(primary: groups[1], fallback: groups[3].trimmingCharacters(in: CharacterSet(charactersIn: ".,;")),
+                                 reason: reason.isEmpty ? nil : reason,
+                                 primaryProvider: nil, fallbackProvider: nil,
+                                 rawText: text.trimmingCharacters(in: .whitespacesAndNewlines),
+                                 retryAfterSeconds: retry, isProviderShape: true)
         }
         return nil
     }
 
+    private static func extractReason(from statusAndReason: String) -> String? {
+        guard let open = statusAndReason.firstIndex(of: "(") else { return nil }
+        var inner = String(statusAndReason[statusAndReason.index(after: open)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        if inner.hasSuffix(")") {
+            inner = String(inner.dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return inner.isEmpty ? nil : inner
+    }
+
     /// "Primary model restored:" ends a fallback.
     static func restores(_ text: String) -> Bool { text.contains("Primary model restored:") }
+
+    /// The model id named after "Primary model restored:"; empty string when none is named; nil for any other line.
+    static func restoredModel(_ text: String) -> String? {
+        guard let range = text.range(of: "Primary model restored:") else { return nil }
+        let id = text[range.upperBound...].split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? ""
+        return id.trimmingCharacters(in: CharacterSet(charactersIn: ".,;"))
+    }
+
+    /// Classifies why the primary model failed so the timeline can separate actionable issues from transient blips.
+    var category: Category {
+        let lower = (reason ?? "").lowercased()
+        if ["auth", "401", "403", "login", "oauth", "api key", "credential", "unauthorized", "setup-token"].contains(where: lower.contains) {
+            return .auth
+        }
+        if ["billing", "quota", "credit", "insufficient", "402", "payment"].contains(where: lower.contains) {
+            return .billing
+        }
+        if ["not found", "404", "unknown model", "does not exist", "invalid model", "unsupported"].contains(where: lower.contains) {
+            return .notFound
+        }
+        if ["rate", "429", "too many requests", "limit"].contains(where: lower.contains) {
+            return .rateLimit
+        }
+        if ["overload", "busy", "529", "503", "capacity"].contains(where: lower.contains) {
+            return .busy
+        }
+        if ["timeout", "timed out", "server error", "500", "502", "504", "connection"].contains(where: lower.contains) {
+            return .timeout
+        }
+        return .other
+    }
+
+    /// Persistent or user-fixable issues warrant a compact inline card; transient blips stay a quiet one-line pill.
+    var isActionable: Bool {
+        switch category {
+        case .auth, .billing, .notFound: return true
+        case .rateLimit, .busy, .timeout: return false
+        case .other: return !extractedCommands.isEmpty
+        }
+    }
+
+    /// An HTTP status code mentioned in the reason (e.g. "HTTP 401"), if any.
+    var httpStatus: String? {
+        guard let reason, let match = Self.httpCode.exec(reason), match.groups.count > 1, !match.groups[1].isEmpty else { return nil }
+        return "HTTP \(match.groups[1])"
+    }
+
+    /// Complete CLI commands enclosed in backticks inside `reason` (skipping truncated `...` snippets).
+    var extractedCommands: [String] {
+        guard let reason, !reason.isEmpty else { return [] }
+        var out: [String] = []
+        var index = reason.startIndex
+        while let open = reason[index...].firstIndex(of: "`") {
+            let start = reason.index(after: open)
+            guard let close = reason[start...].firstIndex(of: "`") else { break }
+            let candidate = String(reason[start..<close]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !candidate.isEmpty, !candidate.hasSuffix("..."), !candidate.hasSuffix("…"), !out.contains(candidate) {
+                out.append(candidate)
+            }
+            index = reason.index(after: close)
+        }
+        return out
+    }
+
+    /// Environment variable names mentioned in the reason (e.g. `CLAUDE_CODE_OAUTH_TOKEN`).
+    var mentionedEnvVars: [String] {
+        guard let reason, !reason.isEmpty else { return [] }
+        let regex = try? NSRegularExpression(pattern: #"\b[A-Z][A-Z0-9_]{4,}\b"#)
+        let range = NSRange(reason.startIndex..., in: reason)
+        var out: [String] = []
+        for match in regex?.matches(in: reason, range: range) ?? [] {
+            guard let swiftRange = Range(match.range, in: reason) else { continue }
+            let token = String(reason[swiftRange])
+            if token.contains("_"), !out.contains(token) { out.append(token) }
+        }
+        return out
+    }
+
+    private static let httpCode = JSRegex(#"\bHTTP\s+(\d{3})\b"#)
 }

@@ -613,6 +613,7 @@ nonisolated struct RowLayout: @unchecked Sendable {
     enum Content {
         case bubble(BubbleLayout)
         case phoneResult(CGRect)
+        case modelFallback(ModelFallbackLayout)
         case tool(ToolRowLayout)
         case line(LineLayout)          // day separator, notice, caption, stopped-early
         case error(ErrorLayout)
@@ -712,6 +713,8 @@ nonisolated enum TextLayout {
             let height = PhoneChatCardLayout.height(for: .result(result), width: cardWidth, style: style)
             return RowLayout(height: gap + height, content: .phoneResult(CGRect(x: ChatMetrics.sideInset, y: gap,
                                                                                 width: cardWidth, height: height)))
+        case .modelFallback(let fallback):
+            return ModelFallbackCardLayout.layout(fallback, width: width, gap: gap, style: style)
         case .toolRun(let t):
             if let line = t.line {                          // Tool Call Style › One Line: the reply's line
                 let failed = t.tools.filter { $0.state == .failed }.count

@@ -478,6 +478,8 @@ nonisolated struct ChatMessage: Identifiable, Hashable, Sendable {
     var report: String? = nil
     /// The full phone result when this user row shows its short title.
     var phoneResultText: String? = nil
+    /// The full gateway fallback line when this system row shows a plain notice.
+    var fallbackText: String? = nil
     /// Structured async report identity, retained before its envelope is removed for display.
     var helperReport: HelperReport? = nil
     /// Tapback reactions on the message (yours and the bot's), from its stored rows or `message.react`'s answer.

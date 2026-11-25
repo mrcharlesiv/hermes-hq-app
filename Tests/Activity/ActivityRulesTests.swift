@@ -452,6 +452,109 @@ struct StepRulesTests {
                 == "Opus 5.5 isn't available, so GPT-6.1-sol is answering for now.")
         #expect(ProviderWait.plainNotice("Primary model restored: claude-opus-5-5.", displayName: names) == "Back to Opus 5.5.")
         #expect(ProviderWait.plainNotice("⚠ Model fallback: switched to fixture-2") == "Model fallback: switched to fixture-2")
+        let nestedAuth = "Model fallback: claude-opus-5-5[1m] via claude-subscription-directsdk-experimental could not respond (authentication failed: HTTP 401: Claude Code is installed but has no usable login in the environment Hermes runs it in. Run `claude auth login` as the user Hermes runs as, set CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-to...); using gpt-6.1-sol via openai-codex."
+        #expect(ProviderWait.plainNotice(nestedAuth, displayName: names) == "Opus 5.5 couldn't sign in, so GPT-6.1-sol is answering for now.")
+        #expect(ProviderWait.fallbackNotice(kind: "status", text: "Primary model restored: claude-opus-5-5.") != nil)
+    }
+
+    @Test func modelFallbackTieredPresentation() throws {
+        let names: (String) -> String = { ["claude-opus-5-5": "Opus 5.5", "gpt-6.1-sol": "GPT-6.1-sol"][$0] ?? $0 }
+
+        // Actionable auth failure with `could not respond` and truncated nested parens -> amber card + copyable fix command
+        let authRaw = "Model fallback: claude-opus-5-5[1m] via claude-subscription-directsdk-experimental could not respond (authentication failed: HTTP 401: Claude Code is installed but has no usable login in the environment Hermes runs it in. Run `claude auth login` as the user Hermes runs as, set CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-to...); using gpt-6.1-sol via openai-codex."
+        let parsedAuth = try #require(ModelFallback.parse(authRaw))
+        #expect(parsedAuth.primary == "claude-opus-5-5[1m]")
+        #expect(parsedAuth.primaryProvider == "claude-subscription-directsdk-experimental")
+        #expect(parsedAuth.fallback == "gpt-6.1-sol")
+        #expect(parsedAuth.fallbackProvider == "openai-codex")
+        #expect(parsedAuth.category == .auth)
+        #expect(parsedAuth.isActionable)
+        #expect(parsedAuth.httpStatus == "HTTP 401")
+        #expect(parsedAuth.extractedCommands == ["claude auth login"])
+        #expect(parsedAuth.mentionedEnvVars == ["CLAUDE_CODE_OAUTH_TOKEN"])
+
+        let authRow = try #require(ModelFallbackRow.parse(authRaw, displayName: names))
+        #expect(authRow.presentation == .card)
+        #expect(authRow.title == "Switched to GPT-6.1-sol")
+        #expect(authRow.subtitle == "Opus 5.5 needs sign-in · Tap to fix")
+        #expect(authRow.detail?.kicker == "Sign-in required · HTTP 401")
+        #expect(authRow.detail?.primaryCommand == "claude auth login")
+        #expect(authRow.detail?.secondaryHint?.contains("CLAUDE_CODE_OAUTH_TOKEN") == true)
+
+        // Billing exhaustion -> actionable card
+        let billingRaw = "⚠️ Model fallback: claude-opus-5-5 via anthropic unavailable (billing or quota exhausted); using gpt-6.1-sol via openai-codex."
+        let billingRow = try #require(ModelFallbackRow.parse(billingRaw, displayName: names))
+        #expect(billingRow.presentation == .card)
+        #expect(billingRow.detail?.category == .billing)
+
+        // Transient rate limit / overloaded -> compact 1-line pill with retry ETA
+        let busyRaw = "⚠️ Model fallback: claude-opus-5-5[1m] via anthropic unavailable (overloaded); using gpt-6.1-sol via openai-codex. Primary retry eligible in ~60 s; recovery is not guaranteed."
+        let busyRow = try #require(ModelFallbackRow.parse(busyRaw, displayName: names))
+        #expect(busyRow.presentation == .pill)
+        #expect(busyRow.title == "Opus 5.5 busy · Using GPT-6.1-sol")
+        #expect(busyRow.detail?.routeStatus == "Retry in ~60s")
+        #expect(busyRow.detail?.isActionable == false)
+
+        // Recovery -> quiet green-dot restored pill
+        let restoredRow = try #require(ModelFallbackRow.parse("Primary model restored: claude-opus-5-5.", displayName: names))
+        #expect(restoredRow.presentation == .restored)
+        #expect(restoredRow.title == "Back to Opus 5.5")
+        #expect(restoredRow.detail == nil)
+
+        // Unrelated system notice stays nil (renders as plain .notice)
+        #expect(ModelFallbackRow.parse("Model changed to Opus 5.5") == nil)
+    }
+
+    @Test func modelFallbackTimelineRowAndLayout() throws {
+        let authRaw = "Model fallback: claude-opus-5-5[1m] via claude-subscription-directsdk-experimental could not respond (authentication failed: HTTP 401: Run `claude auth login`); using gpt-6.1-sol via openai-codex."
+        let busyRaw = "⚠️ Model fallback: claude-opus-5-5 via anthropic unavailable (rate limit); using gpt-6.1-sol via openai-codex."
+        let restoredRaw = "Primary model restored: claude-opus-5-5."
+
+        var liveNotice = ChatMessage(id: "\(ProviderWait.noticeIdPrefix)1", role: .system,
+                                     parts: [.text(ProviderWait.plainNotice(authRaw))], timestamp: Date(), rowId: nil)
+        liveNotice.fallbackText = authRaw
+        let storedBusy = ChatMessage(id: "stored-row-2-system", role: .system, parts: [.text(busyRaw)], timestamp: Date(), rowId: 2)
+        let storedRestored = ChatMessage(id: "stored-row-3-system", role: .system, parts: [.text(restoredRaw)], timestamp: Date(), rowId: 3)
+
+        let input = ChatRowBuilder.Input(messages: [liveNotice, storedBusy, storedRestored], isRunning: false,
+                                         botName: "Ivy", expanded: [], scope: "test")
+        let built = ChatRowBuilder.build(input).filter { if case .day = $0.kind { return false }; return true }
+        #expect(built.count == 3)
+        let style = ChatStyleCache.shared.style(for: .large)
+
+        if case .modelFallback(let card) = built[0].kind {
+            #expect(card.presentation == .card)
+            let layout = TextLayout.layout(built[0], width: 393, style: style)
+            if case .modelFallback(let box) = layout.content {
+                #expect(box.isCard)
+                #expect(box.frame.width == 393 - 2 * ChatMetrics.sideInset)
+                #expect(box.frame.height >= 60)
+            } else {
+                Issue.record("Expected modelFallback layout for card")
+            }
+        } else {
+            Issue.record("Expected modelFallback card row")
+        }
+
+        if case .modelFallback(let pill) = built[1].kind {
+            #expect(pill.presentation == .pill)
+            let layout = TextLayout.layout(built[1], width: 393, style: style)
+            if case .modelFallback(let box) = layout.content {
+                #expect(!box.isCard)
+                #expect(box.frame.width < 393 - 2 * ChatMetrics.sideInset)
+                #expect(box.frame.height >= 32)
+            } else {
+                Issue.record("Expected modelFallback layout for pill")
+            }
+        } else {
+            Issue.record("Expected modelFallback pill row")
+        }
+
+        if case .modelFallback(let restored) = built[2].kind {
+            #expect(restored.presentation == .restored)
+        } else {
+            Issue.record("Expected modelFallback restored row")
+        }
     }
 
     @Test func stepsState() {

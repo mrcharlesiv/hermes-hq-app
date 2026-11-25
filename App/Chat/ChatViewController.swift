@@ -722,6 +722,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         tableView.prefetchDataSource = self
         tableView.register(ChatBubbleCell.self, forCellReuseIdentifier: ChatBubbleCell.reuse)
         tableView.register(PhoneResultCell.self, forCellReuseIdentifier: PhoneResultCell.reuse)
+        tableView.register(ModelFallbackCell.self, forCellReuseIdentifier: ModelFallbackCell.reuse)
         tableView.register(ChatToolCell.self, forCellReuseIdentifier: ChatToolCell.reuse)
         tableView.register(ChatLineCell.self, forCellReuseIdentifier: ChatLineCell.reuse)
         tableView.register(ChatErrorCell.self, forCellReuseIdentifier: ChatErrorCell.reuse)
@@ -2378,6 +2379,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         switch row.kind {
         case .bubble: reuse = ChatBubbleCell.reuse
         case .phoneResult: reuse = PhoneResultCell.reuse
+        case .modelFallback: reuse = ModelFallbackCell.reuse
         case .toolRun, .thought, .backgroundResult: reuse = ChatToolCell.reuse
         case .day, .notice, .caption, .stoppedEarly, .sendState, .slashOutput: reuse = ChatLineCell.reuse
         case .error: reuse = ChatErrorCell.reuse
@@ -4734,6 +4736,35 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
 
     func chatCellOpenPhoneResult(_ result: PhoneResultCard, sentAt: Date?) {
         PhoneCallChat.open(result, sentAt: sentAt, from: self)
+    }
+
+    func chatCellOpenModelFallback(_ detail: ModelFallbackRow.Detail) {
+        let canOpenProviders = MainTabController.current?.services != nil
+        let openProviders: (() -> Void)? = canOpenProviders ? { [weak self] in
+            self?.openProviderSettings()
+        } : nil
+        present(ModelFallbackSheet.make(
+            detail: detail,
+            onChooseModel: { [weak self] in self?.presentModelSheet() },
+            onOpenProviders: openProviders
+        ), animated: true)
+    }
+
+    private func openProviderSettings() {
+        #if targetEnvironment(macCatalyst)
+        if MacSettingsWindow.open(category: .gateway, then: { SettingsNavigator.openRoot("providers", router: $0) }) { return }
+        #endif
+        guard let services = MainTabController.current?.services else { return }
+        let nav = UINavigationController()
+        let router = SettingsRouter(services: services, navigation: nav)
+        let page = SettingsPageController(title: "Providers", ProvidersPageView(router: router))
+        let close = UIBarButtonItem.hqClose(action: UIAction { [weak nav] _ in nav?.dismiss(animated: true) })
+        close.accessibilityIdentifier = "sheet.close"
+        page.navigationItem.hqPlaceClose(close)
+        page.navigationItem.largeTitleDisplayMode = .never
+        nav.viewControllers = [page]
+        SheetStyle.apply(nav, from: nil, detents: [.large()])
+        present(nav, animated: true)
     }
 
     func chatCellOpen(url: URL) {

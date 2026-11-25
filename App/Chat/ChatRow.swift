@@ -696,11 +696,21 @@ nonisolated enum ChatRowBuilder {
                 let hasSendIssue = m.error != nil
                     || (input.room?.undelivered[m.id] != nil)
                     || (input.room?.retrying.contains(m.id) == true)
-                // [calm-chat] Tapping Send / Don't Send on a draft card right above already updates that card's
-                // settled status; suppress the redundant "Send it" / "Don't send it" user echo bubble when adjacent.
-                if !hasSendIssue, m.reactions.isEmpty, let found = DraftCards.answer(in: text),
-                   DraftCards.isAdjacentAnswerEcho(input.messages, at: index, draftId: found.id) {
-                    return
+                // [calm-chat] Tapping Send / Don't Send on a draft card, a choice on an ask card, or Answer Now on a
+                // clarify card right above already updates that card's settled status; omit the redundant adjacent echo.
+                if !hasSendIssue, m.reactions.isEmpty {
+                    if let found = DraftCards.answer(in: text),
+                       DraftCards.isAdjacentAnswerEcho(input.messages, at: index, draftId: found.id) {
+                        return
+                    }
+                    if let found = AskCards.answer(in: text),
+                       AskCards.isAdjacentAnswerEcho(input.messages, at: index, askId: found.id) {
+                        return
+                    }
+                    if let found = ClarifyLate.answer(in: text),
+                       ClarifyLate.isAdjacentAnswerEcho(input.messages, at: index, key: found.key) {
+                        return
+                    }
                 }
                 // [drafts] Your answer to a draft card reads "Send it": the card above shows the words that went.
                 // [questions] A skipped question answered later reads as the answer: the card above shows the question.
@@ -853,11 +863,15 @@ nonisolated enum ChatRowBuilder {
             run = []
         }
 
-        // [calm-chat] Whether this settled message drew a draft card (so stock "Your draft is ready. Nothing's been
-        // sent." boilerplate right beside the card can be omitted without hiding real commentary).
+        // [calm-chat] Whether this settled message drew a draft or ask card (so pure card-ready boilerplate prose
+        // right beside the card can be omitted without ever hiding real commentary).
         let hasDraftCard = !m.isStreaming && m.parts.contains { part in
             guard case .tool(let c) = part else { return false }
             return DraftCards.draft(c) != nil
+        }
+        let hasAskCard = !m.isStreaming && m.parts.contains { part in
+            guard case .tool(let c) = part else { return false }
+            return AskCards.parse(c) != nil
         }
 
         for (i, part) in m.parts.enumerated() {
@@ -868,6 +882,7 @@ nonisolated enum ChatRowBuilder {
                 // Silent: runs chain over it. Words that are only hidden thinking (`<think>…</think>`) draw nothing either.
                 if ReasoningTags.isBlank(text) { continue }
                 if hasDraftCard && DraftCards.isReadyBoilerplate(text) { continue }
+                if hasAskCard && AskCards.isReadyBoilerplate(text) { continue }
                 if notes.contains(i) {
                     // [narration] A note it wrote before going back to work: said on the reply's line, with its steps.
                     thoughts.append(ChatText.trimmed(text))
@@ -1365,13 +1380,21 @@ nonisolated enum ChatRowBuilder {
         }
     }
 
-    /// [calm-chat] A collapsed quiet disclosure row (superseded/skipped draft or folded older TasksAdded row).
+    /// [calm-chat] A collapsed quiet disclosure row (folded draft, stale ask, settled clarify, or folded task card).
     private static func isQuietFolded(_ row: ChatRow) -> Bool {
         switch row.kind {
         case .prompt(let p):
-            if case .draft(let d) = p.kind { return d.isQuietFolded }
-            return false
+            switch p.kind {
+            case .draft(let d): return d.isQuietFolded
+            case .ask(let a): return a.isQuietFolded
+            case .settled(let s): return s.isQuietFolded
+            default: return false
+            }
         case .activity(.tasksAdded(let t)):
+            return t.folded && !t.opened
+        case .activity(.taskClose(let t)):
+            return t.folded && !t.opened
+        case .activity(.tasksOffer(let t)):
             return t.folded && !t.opened
         default:
             return false

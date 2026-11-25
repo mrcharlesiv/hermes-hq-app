@@ -205,4 +205,75 @@ struct UpdateGroupsTests {
         #expect(BackgroundResults.plainTitle("Subagent Tasks Completed: Perform actual call review") == "Helpers finished: Perform actual call review")
         #expect(BackgroundResults.plainTitle("2 Background Processes Finished") == "2 background tasks finished")
     }
+
+    // MARK: Calm chat readability ([calm-chat])
+
+    @Test func recurringNonSilentCronBriefingsFoldEarlierRunsAndKeepNewestOpen() throws {
+        func cron(_ id: String, _ title: String, _ s: Double) -> ChatMessage {
+            var m = note(id, title, s)
+            m.job = title
+            m.report = "Scheduled check triggered."
+            return m
+        }
+        let messages = [
+            you("u1", "Keep watching inbox", 0),
+            cron("c1", "Inbox watch", 60),
+            bot("a1", "Run 1: 2 new messages.", 65),
+            cron("c2", "Inbox watch", 120),
+            bot("a2", "Run 2: 3 new messages.", 125),
+            cron("c3", "Inbox watch", 180),
+            bot("a3", "Run 3: 4 new messages.", 185),
+        ]
+        let rows = ChatRowBuilder.build(input(messages))
+        let botBubbles = rows.compactMap { row -> String? in
+            if case .bubble(let b) = row.kind, !b.mine { return b.text }
+            return nil
+        }
+        #expect(botBubbles == ["Run 3: 4 new messages."], "only the newest briefing stays open")
+        let grouped = try #require(lines(rows).first { $0.0 == "c1|grp" })
+        #expect(grouped.1.title == "Inbox watch")
+        #expect(grouped.1.group?.tail == "2 earlier runs")
+        let sheet = try #require(opened(input(messages), line: "c1|grp"))
+        #expect(sheet.title == "Inbox watch" && sheet.subtitle.contains("2 earlier runs"))
+
+        // A human turn between runs prevents folding across the conversation.
+        let withHuman = [
+            you("u1", "Keep watching inbox", 0),
+            cron("c1", "Inbox watch", 60),
+            bot("a1", "Run 1: 2 new messages.", 65),
+            you("u2", "Thanks, looks good.", 90),
+            cron("c2", "Inbox watch", 120),
+            bot("a2", "Run 2: 3 new messages.", 125),
+        ]
+        let splitBubbles = ChatRowBuilder.build(input(withHuman)).compactMap { row -> String? in
+            if case .bubble(let b) = row.kind, !b.mine { return b.text }
+            return nil
+        }
+        #expect(splitBubbles == ["Run 1: 2 new messages.", "Run 2: 3 new messages."])
+
+        // A different scheduled job never supersedes an earlier job's briefing.
+        let differentJob = [
+            you("u1", "Keep watching", 0),
+            cron("c1", "Inbox watch", 60),
+            bot("a1", "Inbox update.", 65),
+            cron("c2", "Calendar check", 120),
+            bot("a2", "Calendar update.", 125),
+        ]
+        let diffBubbles = ChatRowBuilder.build(input(differentJob)).compactMap { row -> String? in
+            if case .bubble(let b) = row.kind, !b.mine { return b.text }
+            return nil
+        }
+        #expect(diffBubbles == ["Inbox update.", "Calendar update."])
+
+        // Partial rebuild folds Run 1 live when Run 2's reply lands separately from its wake.
+        var model = ChatRowModel()
+        let before = Array(messages.prefix(4))   // u1, c1, a1, c2
+        model.rebuildAll(input(before), syncMessages: 160, oldestShown: nil)
+        let after = Array(messages.prefix(5))    // + a2
+        model.rebuildNewest(input(after), touching: ["a2"])
+        let held = Array(model.allRows.reversed())
+        let full = ChatRowBuilder.build(input(after))
+        #expect(held.map(\.id) == full.map(\.id))
+        for i in held.indices { #expect(ChatRowDiff.same(held[i], full[i])) }
+    }
 }

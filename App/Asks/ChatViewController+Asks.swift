@@ -21,7 +21,8 @@ import UIKit
     private(set) var editing: String?
 
     func rowsInput(_ messages: [ChatMessage], queued: [String] = [], scope: String) -> AskRowsInput {
-        var input = AskRowsInput(answers: AskCards.answers(messages, queued: queued))
+        var input = AskRowsInput(answers: AskCards.answers(messages, queued: queued),
+                                 stale: AskCards.staleRowIds(messages))
         let lead = scope + "|"
         func own(_ key: String) -> String? { key.hasPrefix(lead) ? String(key.dropFirst(lead.count)) : nil }
         if let current { input.answering = own(current) }

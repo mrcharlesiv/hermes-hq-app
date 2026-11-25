@@ -80,6 +80,9 @@ nonisolated struct TaskCloseRow {
     var state: TodoCloseCards.State
     /// The gateway takes no writes: the buttons dimmed, as on the task's page.
     var readOnly: Bool
+    /// [calm-chat] Once settled and followed by later conversation, fold to one quiet line that expands on tap.
+    var folded = false
+    var opened = false
 }
 
 /// [goals step 3] What a reply's `goals_offer` offered, read from the store by its id (the tool's answer is the id
@@ -132,6 +135,9 @@ nonisolated struct TasksOfferRow {
     /// Each line's words and when it's due ("Tomorrow"), at most `shown`, then "+4 more".
     var lines: [(title: String, due: String)]
     var more: Int
+    /// [calm-chat] Once settled and followed by later conversation, fold to one quiet line that expands on tap.
+    var folded = false
+    var opened = false
 
     static let shown = 6
 }
@@ -545,7 +551,9 @@ nonisolated enum ActivityRows {
         var i = from - 1
         while i >= floor {
             if messages[i].role == .assistant, messages[i].parts.contains(where: { part in
-                if case .tool(let c) = part, c.name == "tasks_add" || c.name == "tasks_update", case .tasksAdded? = c.card { return true }
+                guard case .tool(let c) = part else { return false }
+                if (c.name == "tasks_add" || c.name == "tasks_update"), case .tasksAdded? = c.card { return true }
+                if c.name == "tasks_offer", case .tasksOffer? = c.card { return true }
                 return false
             }) {
                 return i
@@ -561,6 +569,7 @@ nonisolated enum ActivityRows {
     static func tasksOfferRows(_ m: ChatMessage, calls: [ToolCall], input: ChatRowBuilder.Input) -> [ChatRow] {
         guard !m.isStreaming else { return [] }
         var seen: Set<String> = []
+        let later = hasLaterConversation(after: m, in: input.messages)
         return calls.compactMap { call -> ChatRow? in
             guard call.state == .done, case .tasksOffer(let offer)? = call.card, seen.insert(offer.id).inserted else { return nil }
             let title = TodoLists.chatTitle(offer, botName: { _ in input.speakerName })
@@ -568,12 +577,18 @@ nonisolated enum ActivityRows {
                 ? offer.move.map { ($0.title, "") }
                 : offer.tasks.map { task in (task.title, TodoDates.due(task.due).map { TodoWords.day($0.date, now: input.now) } ?? "") }
             let lines = Array(all.prefix(TasksOfferRow.shown))
+            let id = "\(m.id)|offer|\(offer.id)"
+            let (shown, past) = TodoOfferStates.shown(offer)
+            let foot = TodoLists.chatFoot(shown, past: past)
+            let folded = foot.main == nil && later
+            let opened = folded && input.expanded.contains(id)
             var h = Hasher()
             h.combine(offer); h.combine(title); h.combine(lines.map(\.due))
-            return ChatRow(id: "\(m.id)|offer|\(offer.id)", messageId: m.id, scope: input.scope, fingerprint: h.finalize(),
+            h.combine(shown.state); h.combine(shown.moveState); h.combine(past); h.combine(folded); h.combine(opened)
+            return ChatRow(id: id, messageId: m.id, scope: input.scope, fingerprint: h.finalize(),
                            kind: .activity(.tasksOffer(TasksOfferRow(messageId: m.id, offer: offer, title: title, lines: lines,
-                                                                     more: all.count - lines.count))),
-                           gapAbove: 8, variant: 0)
+                                                                     more: all.count - lines.count, folded: folded, opened: opened))),
+                           gapAbove: folded ? 4 : 8, variant: (folded ? 1 : 0) + (opened ? 2 : 0))
         }
     }
 
@@ -595,6 +610,7 @@ nonisolated enum ActivityRows {
             if id == own || id.isEmpty { return input.speakerName }
             return input.bots.first { $0.profile == id }?.name ?? (id == "default" ? "Hermes" : id.capitalized)
         }
+        let later = hasLaterConversation(after: m, in: input.messages)
         return found.compactMap { task -> ChatRow? in
             let newest = newestCloseCard(task.id, in: input.messages) == m.id
             let offerAt = task.closeOffer?.at
@@ -607,14 +623,19 @@ nonisolated enum ActivityRows {
             if !states.read || TodoCloseCards.newer(offerAt, than: states.tasks[task.id]?.offer?.at) {
                 TodoTaskStates.want(task.id, at: offerAt)
             }
+            let id = "\(m.id)|close|\(task.id)"
+            let folded = state != .waiting && later
+            let opened = folded && input.expanded.contains(id)
             let row = TaskCloseRow(messageId: m.id, taskId: task.id, title: task.title,
                                    line: task.askedDone ? nil : task.closeOffer.map { TodoLists.closeLine($0, botName: name) },
-                                   asked: task.askedDone, state: state, readOnly: states.readOnly)
+                                   asked: task.askedDone, state: state, readOnly: states.readOnly,
+                                   folded: folded, opened: opened)
             var h = Hasher()
             h.combine(row.taskId); h.combine(row.title); h.combine(row.line); h.combine(row.asked); h.combine(row.state)
-            h.combine(row.readOnly)
-            return ChatRow(id: "\(m.id)|close|\(task.id)", messageId: m.id, scope: input.scope, fingerprint: h.finalize(),
-                           kind: .activity(.taskClose(row)), gapAbove: 8, variant: 0)
+            h.combine(row.readOnly); h.combine(row.folded); h.combine(row.opened)
+            return ChatRow(id: id, messageId: m.id, scope: input.scope, fingerprint: h.finalize(),
+                           kind: .activity(.taskClose(row)), gapAbove: folded ? 4 : 8,
+                           variant: (folded ? 1 : 0) + (opened ? 2 : 0))
         }
     }
 
@@ -991,6 +1012,13 @@ nonisolated struct TasksOfferLayout: @unchecked Sendable {
     var font: UIFont
     var detailFont: UIFont
     var offer: TodoOffer
+    /// [calm-chat] Folded older settled offer card: quiet one-line disclosure row that expands on tap.
+    var foldFrame: CGRect? = nil
+    var foldText: NSAttributedString? = nil
+    var foldFont: UIFont? = nil
+    var foldGood = false
+    var opened = false
+    var cardShown = true
 }
 
 /// [chat-mark-done] A bot's offer to close a task: its line (the task page's words), the task's title, then the foot: the
@@ -1009,6 +1037,12 @@ nonisolated struct TaskCloseLayout: @unchecked Sendable {
     var font: UIFont
     var detailFont: UIFont
     var row: TaskCloseRow
+    /// [calm-chat] Folded older settled close card: quiet one-line disclosure row that expands on tap.
+    var foldFrame: CGRect? = nil
+    var foldText: NSAttributedString? = nil
+    var foldFont: UIFont? = nil
+    var opened = false
+    var cardShown = true
 }
 
 nonisolated enum ActivityLayout: @unchecked Sendable {
@@ -1058,7 +1092,33 @@ nonisolated enum ActivityLayouts {
         let lineH = ceil(font.lineHeight), detailH = ceil(detailFont.lineHeight)
         let pad: CGFloat = 14
         let left = ChatMetrics.sideInset
-        let top = max(0, row.gapAbove)
+        var top = max(0, row.gapAbove)
+        var foldFrame: CGRect?, foldText: NSAttributedString?, foldFont: UIFont?, foldGood = false
+        if t.folded {
+            let notice = style.notice
+            let boldNotice = HQFont.face(ofSize: notice.pointSize, weight: .semibold)
+            let rowH = max(32, ceil(notice.lineHeight) + 10)
+            let maxLineW = PromptLayout.cardWidth(for: width)
+            foldFrame = CGRect(x: left, y: top, width: maxLineW, height: rowH)
+            let (shown, past) = TodoOfferStates.shown(t.offer)
+            let foot = TodoLists.chatFoot(shown, past: past)
+            foldGood = foot.good
+            let lead = foot.line ?? "Answered"
+            let out = NSMutableAttributedString(string: lead, attributes: [.font: boldNotice, .foregroundColor: ChatPalette.label2])
+            if !t.title.isEmpty {
+                out.append(NSAttributedString(string: " · \(t.title)", attributes: [.font: notice, .foregroundColor: ChatPalette.label2]))
+            }
+            foldText = out
+            foldFont = notice
+            if !t.opened {
+                return RowLayout(height: ceil(top + rowH + 2), content: .activity(.tasksOffer(TasksOfferLayout(
+                    cardFrame: .zero, badgeFrame: .zero, titleFrame: .zero, title: t.title, whyFrame: nil, lines: [],
+                    moreFrame: nil, more: t.more, mainFrame: .zero, footFrame: .zero, font: font, detailFont: detailFont,
+                    offer: t.offer, foldFrame: foldFrame, foldText: foldText, foldFont: foldFont, foldGood: foldGood,
+                    opened: false, cardShown: false))))
+            }
+            top += rowH + 6
+        }
         let badge = ceil(headFont.pointSize * 1.15)
         let titleW = max(40, columnW - 2 * pad - badge - 8)
         let titleH = height(t.title, font: headFont, width: titleW, lines: 2)
@@ -1102,7 +1162,9 @@ nonisolated enum ActivityLayouts {
         return RowLayout(height: ceil(y + 2), content: .activity(.tasksOffer(TasksOfferLayout(
             cardFrame: CGRect(x: left, y: top, width: columnW, height: y - top), badgeFrame: badgeFrame, titleFrame: titleFrame,
             title: t.title, whyFrame: whyFrame, lines: lines, moreFrame: moreFrame, more: t.more, mainFrame: mainFrame,
-            footFrame: footFrame, font: font, detailFont: detailFont, offer: t.offer))))
+            footFrame: footFrame, font: font, detailFont: detailFont, offer: t.offer,
+            foldFrame: foldFrame, foldText: foldText, foldFont: foldFont, foldGood: foldGood,
+            opened: t.opened, cardShown: true))))
     }
 
     // MARK: A bot's offer to close a task ([chat-mark-done])
@@ -1117,7 +1179,30 @@ nonisolated enum ActivityLayouts {
         let lineH = ceil(font.lineHeight)
         let pad: CGFloat = 14
         let left = ChatMetrics.sideInset
-        let top = max(0, row.gapAbove)
+        var top = max(0, row.gapAbove)
+        var foldFrame: CGRect?, foldText: NSAttributedString?, foldFont: UIFont?
+        if t.folded {
+            let notice = style.notice
+            let boldNotice = HQFont.face(ofSize: notice.pointSize, weight: .semibold)
+            let rowH = max(32, ceil(notice.lineHeight) + 10)
+            let maxLineW = PromptLayout.cardWidth(for: width)
+            foldFrame = CGRect(x: left, y: top, width: maxLineW, height: rowH)
+            let lead = TodoCloseCards.words(t.state) ?? "Still open"
+            let out = NSMutableAttributedString(string: lead, attributes: [.font: boldNotice, .foregroundColor: ChatPalette.label2])
+            if !t.title.isEmpty {
+                out.append(NSAttributedString(string: " · \(t.title)", attributes: [.font: notice, .foregroundColor: ChatPalette.label2]))
+            }
+            foldText = out
+            foldFont = notice
+            if !t.opened {
+                return RowLayout(height: ceil(top + rowH + 2), content: .activity(.taskClose(TaskCloseLayout(
+                    cardFrame: .zero, markFrame: nil, lineFrame: nil, circleFrame: .zero, titleFrame: .zero,
+                    footFrame: .zero, doneFrame: .zero, keepFrame: .zero, statusFrame: .zero, undoFrame: .zero,
+                    font: font, detailFont: detailFont, row: t,
+                    foldFrame: foldFrame, foldText: foldText, foldFont: foldFont, opened: false, cardShown: false))))
+            }
+            top += rowH + 6
+        }
         let innerW = columnW - 2 * pad
         var y = top + 12
         var markFrame: CGRect?, lineFrame: CGRect?
@@ -1164,7 +1249,8 @@ nonisolated enum ActivityLayouts {
         return RowLayout(height: ceil(y + 2), content: .activity(.taskClose(TaskCloseLayout(
             cardFrame: CGRect(x: left, y: top, width: columnW, height: y - top), markFrame: markFrame, lineFrame: lineFrame,
             circleFrame: circleFrame, titleFrame: titleFrame, footFrame: footFrame, doneFrame: doneFrame, keepFrame: keepFrame,
-            statusFrame: statusFrame, undoFrame: undoFrame, font: font, detailFont: detailFont, row: t))))
+            statusFrame: statusFrame, undoFrame: undoFrame, font: font, detailFont: detailFont, row: t,
+            foldFrame: foldFrame, foldText: foldText, foldFont: foldFont, opened: t.opened, cardShown: true))))
     }
 
     // MARK: A goal's offer ([goals step 3])

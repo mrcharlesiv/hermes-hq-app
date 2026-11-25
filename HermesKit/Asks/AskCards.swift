@@ -219,6 +219,103 @@ nonisolated enum AskCards {
         return "questionmark.circle.fill"
     }
 
+    /// [calm-chat] Quiet outline glyph for a folded stale ask disclosure row.
+    static func quietGlyph(_ ask: Ask) -> String {
+        let kind = ask.app.lowercased()
+        if kind.isEmpty { return "questionmark.circle" }
+        if ["mail", "gmail", "outlook"].contains(where: kind.contains) { return "envelope" }
+        if ["slack", "telegram", "discord", "message", "text", "whatsapp", "sms", "signal", "teams", "chat"].contains(where: kind.contains) {
+            return "bubble.left"
+        }
+        return "questionmark.circle"
+    }
+
+    /// [calm-chat] Row id for an `ask_to_act` tool call, matching `PromptRows.askRow`.
+    static func rowId(messageId: String, callId: String) -> String { "\(messageId)|ask\(callId)" }
+
+    /// [calm-chat] Ask row ids left unanswered after a later normal human turn (voice memo, typed follow-up, phone
+    /// call result) or a later ask card in a subsequent message. Sibling asks in the same message stay live while
+    /// another sibling is answered via button tap.
+    static func staleRowIds(_ messages: [ChatMessage]) -> Set<String> {
+        var lastHumanOrAsk = -1
+        for (idx, m) in messages.enumerated() {
+            if DraftCards.isNormalHumanTurn(m) {
+                lastHumanOrAsk = idx
+            } else if m.role == .assistant, m.parts.contains(where: { part in
+                guard case .tool(let c) = part, c.name == tool else { return false }
+                return parse(c) != nil
+            }) {
+                lastHumanOrAsk = idx
+            }
+        }
+        guard lastHumanOrAsk > 0 else { return [] }
+        var out = Set<String>()
+        for (idx, m) in messages.enumerated() where idx < lastHumanOrAsk && m.role == .assistant {
+            for part in m.parts {
+                guard case .tool(let c) = part, c.name == tool, parse(c) != nil else { continue }
+                out.insert(rowId(messageId: m.id, callId: c.id))
+            }
+        }
+        return out
+    }
+
+    /// [calm-chat] Whether `messages[index]` is a synthetic ask-card tap immediately answering an ask card in the
+    /// preceding non-system assistant message (so the card right above already shows the settled choice).
+    static func isAdjacentAnswerEcho(_ messages: [ChatMessage], at index: Int, askId: String) -> Bool {
+        var scan = index - 1
+        while scan >= 0 {
+            let prev = messages[scan]
+            if prev.role == .system { scan -= 1; continue }
+            guard prev.role == .assistant else { return false }
+            return prev.parts.contains { part in
+                guard case .tool(let c) = part, c.name == tool, let a = parse(c) else { return false }
+                return a.id == askId
+            }
+        }
+        return false
+    }
+
+    private static let readyBoilerplate = TRx(
+        #"^(?:(?:the|your)\s+(?:approval|decision|ask|action|confirmation)\s+card\s+is\s+ready(?:\s+(?:above|below|for\s+review|to\s+review))?[.!]?|waiting\s+(?:on\s+you|for\s+your\s+(?:approval|answer|reply|call|confirmation))[.!]?|let\s+me\s+know\s+(?:how\s+you(?:['’]d|\s+would)\s+like\s+to\s+proceed|what\s+you(?:['’]d|\s+would)\s+like\s+(?:me\s+)?to\s+do)[.!]?)$"#
+    )
+
+    /// [calm-chat] True only when an assistant message's entire prose alongside an ask card is pure card-ready chrome
+    /// carrying no additional context.
+    static func isReadyBoilerplate(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 90, !trimmed.contains(where: \.isNewline),
+              !trimmed.contains("http://"), !trimmed.contains("https://"), !trimmed.contains("`") else { return false }
+        let collapsed = trimmed.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return readyBoilerplate.groups(collapsed) != nil
+    }
+
+    /// [calm-chat] Lookback for `ChatRowModel.rebuildNewest`: when `messages[from...]` adds an ask, an ask answer,
+    /// or a normal human turn, reach back to earlier ask cards at or after `floor` so they fold live.
+    static func reach(from: Int, floor: Int, in messages: [ChatMessage]) -> Int {
+        guard from > floor, from < messages.count else { return from }
+        var triggers = false
+        for m in messages[from...] {
+            if DraftCards.isNormalHumanTurn(m) { triggers = true; break }
+            if m.role == .user, m.parts.contains(where: { if case .text(let t) = $0 { return answer(in: t) != nil } else { return false } }) {
+                triggers = true; break
+            }
+            if m.role == .assistant, m.parts.contains(where: { if case .tool(let c) = $0, c.name == tool { return parse(c) != nil } else { return false } }) {
+                triggers = true; break
+            }
+        }
+        guard triggers else { return from }
+        let scanFloor = max(floor, from - 120)
+        var lowest = from
+        var i = from - 1
+        while i >= scanFloor {
+            if messages[i].role == .assistant, messages[i].parts.contains(where: { if case .tool(let c) = $0, c.name == tool { return parse(c) != nil } else { return false } }) {
+                lowest = i
+            }
+            i -= 1
+        }
+        return lowest
+    }
+
     /// What follows the app on the source line: "Dana Reyes · DM · 11:03 AM" (the parts the bot gave).
     static func sourceDetail(_ ask: Ask) -> String {
         [ask.from, ask.place, ask.when].filter { !$0.isEmpty }.joined(separator: " · ")

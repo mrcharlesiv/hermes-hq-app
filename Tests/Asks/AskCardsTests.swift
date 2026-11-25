@@ -166,10 +166,18 @@ struct AskCardsTests {
         #expect(AskCards.bubbleWords("[Hermes HQ ask a-9cfc6386: 4]\nFour.") == nil)   // 1…3 only
         #expect(AskCards.bubbleWords("[Hermes HQ ask a-9cfc6386: 2]") == "Choice 2")
         #expect(AskCards.status(a, .choice(1, "Yes.")) == "You answered: Yes")
-        // The queue shows the same short words, and the chat bubble too.
+        // The queue shows the same short words; an adjacent answer echo is suppressed because the card right above
+        // already shows the choice, while a non-adjacent answer still draws the short user bubble.
         #expect(ChatQueueCard.rowText(QueuedMessage(id: "q1", text: yes, display: yes)).text == "Yes")
-        let rows = ChatRowBuilder.build(input([bot([call(args)]), you(yes)]))
-        #expect(rows.contains { if case .bubble(let b) = $0.kind { return b.mine && b.text == "Yes" } else { return false } })
+        let adjacent = ChatRowBuilder.build(input([bot([call(args)]), you(yes)]))
+        #expect(!adjacent.contains { if case .bubble(let b) = $0.kind { return b.mine && b.text == "Yes" } else { return false } })
+        let nonAdjacent = ChatRowBuilder.build(input([
+            bot([call(args)]),
+            you("One quick check first.", id: "u0"),
+            ChatMessage(id: "m2", role: .assistant, parts: [.text("Sure, go ahead.")], timestamp: nil, rowId: 3),
+            you(yes),
+        ]))
+        #expect(nonAdjacent.contains { if case .bubble(let b) = $0.kind { return b.mine && b.text == "Yes" } else { return false } })
     }
 
     @Test func theStateIsReadFromTheChatAndTheQueue() throws {
@@ -384,10 +392,17 @@ struct AskCardsTests {
         #expect(AskCards.bubbleWords(send) == "Yes · Send the reply")
         #expect(AskCards.status(a, .sent(1, "Yes.", reply: yesReply)) == "You answered: Yes · Reply approved")
         #expect(AskCards.status(a, .choice(1, "Yes.")) == "You answered: Yes")   // v1
-        // The queue and the chat bubble read the same.
+        // The queue reads the same; an adjacent echo is omitted while a non-adjacent one still draws the short bubble.
         #expect(ChatQueueCard.rowText(QueuedMessage(id: "q1", text: send, display: send)).text == "Yes · Send the reply")
-        let built = ChatRowBuilder.build(input([bot([call(replyArgs)]), you(send)]))
-        #expect(built.contains { if case .bubble(let b) = $0.kind { return b.mine && b.text == "Yes · Send the reply" } else { return false } })
+        let adjacent = ChatRowBuilder.build(input([bot([call(replyArgs)]), you(send)]))
+        #expect(!adjacent.contains { if case .bubble(let b) = $0.kind { return b.mine && b.text == "Yes · Send the reply" } else { return false } })
+        let nonAdjacent = ChatRowBuilder.build(input([
+            bot([call(replyArgs)]),
+            you("Quick check first.", id: "u0"),
+            ChatMessage(id: "m2", role: .assistant, parts: [.text("All clear.")], timestamp: nil, rowId: 3),
+            you(send),
+        ]))
+        #expect(nonAdjacent.contains { if case .bubble(let b) = $0.kind { return b.mine && b.text == "Yes · Send the reply" } else { return false } })
     }
 
     @Test func pickingShowsTheReplyBlock() throws {
@@ -499,5 +514,82 @@ struct AskCardsTests {
         #expect(AskCards.cardsPath == "/asks/cards")
         #expect(PushPolicy.actCardsKnown(["actCards": false]))
         #expect(!PushPolicy.actCardsKnown(["askCards": true]))
+    }
+
+    // MARK: Calm chat readability ([calm-chat])
+
+    @Test func staleUnansweredAskFoldsQuietlyAndDropsLiveButtons() throws {
+        let messages = [bot([call(args)]), you("Let's hold off and check Friday instead.", id: "u2")]
+        let (_, card) = try #require(askRow(messages))
+        #expect(card.stale && !card.waiting && card.isQuietFolded)
+        let collapsed = AskCardLayout.make(card, gap: 6, width: 402, category: .large)
+        guard case .prompt(let cl) = collapsed.content, let cg = cl.ask else { Issue.record("collapsed"); return }
+        #expect(cl.cardFrame == nil && cg.buttons.isEmpty && cg.other == nil && cg.toggleFrame != nil)
+        #expect(cl.accessibility.contains("Unanswered"))
+        #expect(collapsed.height < 56)
+
+        var opened = card
+        opened.expanded = true
+        let expanded = AskCardLayout.make(opened, gap: 6, width: 402, category: .large)
+        guard case .prompt(let el) = expanded.content, let eg = el.ask else { Issue.record("expanded"); return }
+        #expect(el.cardFrame != nil && eg.buttons.isEmpty && eg.other == nil && eg.toggleExpanded)
+        #expect(expanded.height > collapsed.height)
+
+        // A newer ask card also retires an earlier unanswered ask while staying live itself.
+        var newerArgs = args
+        newerArgs["question"] = .string("Share the draft with #design instead?")
+        let twoAsks = ChatRowBuilder.build(input([bot([call(args, id: "c1")], id: "m1"), bot([call(newerArgs, id: "c2")], id: "m2")]))
+        let cards = twoAsks.compactMap { row -> AskCardRow? in
+            if case .prompt(let p) = row.kind, case .ask(let a) = p.kind { return a }
+            return nil
+        }
+        #expect(cards.map(\.stale) == [true, false])
+        #expect(cards.map(\.waiting) == [false, true])
+    }
+
+    @Test func answeredAskRendersCompactExpandableReceipt() throws {
+        let a = try ask(replyArgs)
+        let send = try #require(AskCards.sendMessage(a, index: 0, reply: yesReply))
+        let messages = [bot([call(replyArgs)]), you(send)]
+        let (_, collapsedCard) = try #require(askRow(messages))
+        #expect(collapsedCard.answer != nil && !collapsedCard.expanded)
+        let collapsed = AskCardLayout.make(collapsedCard, gap: 6, width: 402, category: .large)
+        guard case .prompt(let cl) = collapsed.content, let cg = cl.ask else { Issue.record("collapsed"); return }
+        #expect(cl.cardFrame != nil && cg.buttons.isEmpty && cg.toggleFrame != nil && !cg.toggleExpanded)
+        #expect(cg.bodyBar != nil && !cg.bodyBarTint)
+
+        var expandedCard = collapsedCard
+        expandedCard.expanded = true
+        let expanded = AskCardLayout.make(expandedCard, gap: 6, width: 402, category: .large)
+        guard case .prompt(let el) = expanded.content, let eg = el.ask else { Issue.record("expanded"); return }
+        #expect(el.cardFrame != nil && eg.buttons.isEmpty && eg.toggleExpanded)
+        #expect(expanded.height > collapsed.height)
+    }
+
+    @Test func askReadyBoilerplateSuppressedWhileRealProseKept() {
+        let boilerplate = ChatMessage(id: "m1", role: .assistant, parts: [.tool(call(args)), .text("Let me know how you'd like to proceed.")], timestamp: nil, rowId: 1)
+        let boilerRows = ChatRowBuilder.build(input([boilerplate]))
+        #expect(!boilerRows.contains { if case .bubble = $0.kind { return true } else { return false } })
+
+        let commentary = ChatMessage(id: "m2", role: .assistant, parts: [.tool(call(args)), .text("Dana mentioned the client wants this before noon.")], timestamp: nil, rowId: 2)
+        let proseRows = ChatRowBuilder.build(input([commentary]))
+        #expect(proseRows.contains { if case .bubble(let b) = $0.kind { return b.text.contains("before noon") } else { return false } })
+    }
+
+    @Test func partialRebuildFoldsStaleAskLive() throws {
+        let m1 = bot([call(args)], id: "m1")
+        let u2 = you("Let's pause that for now.", id: "u2")
+        var model = ChatRowModel()
+        model.rebuildAll(input([m1]), syncMessages: 160, oldestShown: nil)
+        model.rebuildNewest(input([m1, u2]), touching: ["u2"])
+        let held = Array(model.allRows.reversed())
+        let full = ChatRowBuilder.build(input([m1, u2]))
+        #expect(held.map(\.id) == full.map(\.id))
+        for i in held.indices { #expect(ChatRowDiff.same(held[i], full[i])) }
+        let askCard = held.compactMap { row -> AskCardRow? in
+            if case .prompt(let p) = row.kind, case .ask(let a) = p.kind { return a }
+            return nil
+        }.first
+        #expect(askCard?.stale == true)
     }
 }

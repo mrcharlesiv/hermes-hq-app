@@ -16,6 +16,8 @@ nonisolated struct AskRowsInput: Sendable, Equatable {
     var edits: [String: String] = [:]
     /// [asks v2] The ask whose reply is in the message field ("Editing Reply").
     var editingReply: String? = nil
+    /// [calm-chat] Ask row ids left unanswered after later turns; nil computes from `messages`.
+    var stale: Set<String>? = nil
 
     static func editKey(_ id: String, _ index: Int) -> String { "\(id)|\(index)" }
 }
@@ -37,10 +39,13 @@ nonisolated struct AskCardRow: Sendable, Hashable {
     var edited = false
     /// [asks v2] The reply is in the message field (the buttons wait).
     var editingReply = false
-    /// [asks v2] Show All was tapped on a long reply.
+    /// [asks v2] Show All was tapped on a long reply, or a folded/answered receipt was expanded.
     var expanded = false
+    /// [calm-chat] Unanswered ask left behind by later conversation; drops live buttons and folds quietly.
+    var stale = false
 
-    var waiting: Bool { answer == nil }
+    var waiting: Bool { answer == nil && !stale }
+    var isQuietFolded: Bool { stale && answer == nil && !expanded }
 }
 
 nonisolated extension PromptRows {
@@ -50,11 +55,13 @@ nonisolated extension PromptRows {
     /// An `ask_to_act` tool part's row; nil when the call can't be read (it draws as the step it is).
     static func askRow(_ call: ToolCall, message: ChatMessage, input: ChatRowBuilder.Input) -> ChatRow? {
         guard let ask = AskCards.parse(call) else { return nil }
-        let id = "\(message.id)|ask\(call.id)"
+        let id = AskCards.rowId(messageId: message.id, callId: call.id)
         let answer = input.asks.answers[ask.id]
+        let stale = answer == nil && (input.asks.stale ?? AskCards.staleRowIds(input.messages)).contains(id)
         var card = AskCardRow(ask: ask, rowId: id, messageId: message.id, answer: answer,
-                              answering: answer == nil && input.asks.answering == ask.id, expanded: input.expanded.contains(id))
-        if answer == nil, let index = input.asks.picked[ask.id], let own = AskCards.reply(ask, index: index) {
+                              answering: answer == nil && !stale && input.asks.answering == ask.id,
+                              expanded: input.expanded.contains(id), stale: stale)
+        if answer == nil, !stale, let index = input.asks.picked[ask.id], let own = AskCards.reply(ask, index: index) {
             card.picked = index
             card.reply = input.asks.edits[AskRowsInput.editKey(ask.id, index)] ?? own
             card.edited = card.reply != own

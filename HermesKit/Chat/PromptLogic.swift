@@ -325,4 +325,69 @@ nonisolated enum ClarifyLate {
         }
         return (out, later)
     }
+
+    /// [calm-chat] Whether `messages[index]` is a late clarify answer immediately following the assistant message
+    /// containing that settled clarify card (the card right above already fills in the answer).
+    static func isAdjacentAnswerEcho(_ messages: [ChatMessage], at index: Int, key: String) -> Bool {
+        var scan = index - 1
+        while scan >= 0 {
+            let prev = messages[scan]
+            if prev.role == .system { scan -= 1; continue }
+            guard prev.role == .assistant else { return false }
+            return prev.parts.contains { part in
+                guard case .tool(let c) = part, c.name == "clarify", c.state != .running,
+                      let rows = ClarifySettled.rows(fromSummary: c.summary), !rows.isEmpty else { return false }
+                return Self.key(rows.map(\.question)) == key
+            }
+        }
+        return false
+    }
+
+    /// [calm-chat] True when at least one later normal human turn or later clarify call follows `messageId`, so an
+    /// unanswered clarify card stops displaying a bright live "Answer Now" pill in scrollback.
+    static func hasLaterHumanTurn(after messageId: String, in messages: [ChatMessage]) -> Bool {
+        guard let at = messages.lastIndex(where: { $0.id == messageId }), at + 1 < messages.count else { return false }
+        for m in messages[(at + 1)...] {
+            if DraftCards.isNormalHumanTurn(m) { return true }
+            if m.role == .assistant, m.parts.contains(where: { if case .tool(let c) = $0, c.name == "clarify" { return true } else { return false } }) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// [calm-chat] Lookback for `ChatRowModel.rebuildNewest`: when a later human turn, clarify call, or late answer
+    /// arrives, reach back to earlier settled clarify cards so they fold / drop Answer Now live.
+    static func reach(from: Int, floor: Int, in messages: [ChatMessage]) -> Int {
+        guard from > floor, from < messages.count else { return from }
+        var triggers = false
+        for m in messages[from...] {
+            if DraftCards.isNormalHumanTurn(m) { triggers = true; break }
+            if m.role == .user, m.parts.contains(where: { if case .text(let t) = $0 { return answer(in: t) != nil } else { return false } }) {
+                triggers = true; break
+            }
+            if m.role == .assistant, m.parts.contains(where: { part in
+                switch part {
+                case .text(let t): return !ReasoningTags.isBlank(t)
+                case .tool(let c): return c.name == "clarify"
+                case .reasoning: return false
+                }
+            }) {
+                triggers = true; break
+            }
+        }
+        guard triggers else { return from }
+        let scanFloor = max(floor, from - 120)
+        var lowest = from
+        var i = from - 1
+        while i >= scanFloor {
+            if messages[i].role == .assistant, messages[i].parts.contains(where: {
+                if case .tool(let c) = $0, c.name == "clarify", c.state != .running { return true } else { return false }
+            }) {
+                lowest = i
+            }
+            i -= 1
+        }
+        return lowest
+    }
 }

@@ -417,8 +417,8 @@ nonisolated private struct BlockBuilder {
             let text = inlineText(h.children, ctx)
             if text.length == 0 { return }
             let line = (font.pointSize * 1.3).rounded(.up)
-            appendParagraph(text, font: font, lineHeight: line, before: gapBefore((font.pointSize * 1.1).rounded()),
-                            after: (font.pointSize * 0.35).rounded())
+            appendParagraph(text, font: font, lineHeight: line, before: gapBefore((font.pointSize * 1.2).rounded()),
+                            after: (font.pointSize * 0.4).rounded())
         case let list as UnorderedList:
             appendList(list, ordered: false, start: 1, depth: 0)
         case let list as OrderedList:
@@ -558,7 +558,8 @@ nonisolated private struct BlockBuilder {
                 switch child {
                 case let p as Paragraph:
                     let content = inlineText(p.children, InlineContext())
-                    let gap: CGFloat = (first && firstPara) ? gapBefore(depth == 0 ? style.paragraphGap : 4) : 4
+                    let itemGap: CGFloat = depth == 0 ? 6 : 4
+                    let gap: CGFloat = (first && firstPara) ? gapBefore(depth == 0 ? style.paragraphGap : 4) : itemGap
                     if firstPara {
                         let line = NSMutableAttributedString(string: marker + "\t", attributes: [
                             .font: style.body, .foregroundColor: theme.marker,

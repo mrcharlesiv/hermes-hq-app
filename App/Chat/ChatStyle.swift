@@ -96,7 +96,8 @@ nonisolated struct ChatStyle: @unchecked Sendable {
         bodyItalic = withTraits(body, .traitItalic)
         bodyBoldItalic = withTraits(bodyBold, .traitItalic)
         // [mac] Grok Bot's 22 pt lines for 15 pt text: the Mac reads at arm's length, with room to spare.
-        bodyLineHeight = (body.pointSize * (DeviceWord.isMac ? 1.45 : 1.3)).rounded(.up)
+        // [calm-chat] Slightly roomier 1.36× pitch on iOS/iPad so long structured briefings breathe cleanly.
+        bodyLineHeight = (body.pointSize * (DeviceWord.isMac ? 1.45 : 1.36)).rounded(.up)
         inlineCode = HQFont.monoFace(ofSize: (body.pointSize * 0.9).rounded(), weight: w(.regular))
         let footnote = font(.footnote)
         let chatFootnote = chatFont(footnote)

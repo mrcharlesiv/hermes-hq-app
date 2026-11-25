@@ -49,7 +49,8 @@ final class ChatPromptCell: ChatBaseCell {
     private let quote = UIView()                             // the bar beside the conversation a draft answers
     private let bodyBar = UIView()                           // [calm-chat] left accent bar / receipt stem for drafts
     private let draftDivider = UIView()                      // [calm-chat] subtle hairline above waiting draft buttons
-    private let draftToggle = UIControl()                    // [calm-chat] tap target to expand/collapse settled drafts
+    private let draftToggle = UIControl()                    // [calm-chat] tap target to expand/collapse folded drafts & settled clarifies
+    private var toggleRowId: String?                         // [calm-chat] rowId targeted by `draftToggle`
     private let threadToggle = UIControl()
     private var settled: SettledClarifyCard?                 // [questions] a settled question card
     private let answerNow = UIButton(type: .system)
@@ -83,9 +84,9 @@ final class ChatPromptCell: ChatBaseCell {
         draftToggle.accessibilityTraits = .button
         draftToggle.accessibilityIdentifier = "draft.toggle"
         draftToggle.addAction(UIAction { [weak self] _ in
-            guard let self, let draft = self.draft else { return }
+            guard let self, let id = self.toggleRowId else { return }
             Haptics.play(.selection)
-            self.handler?.draftCardToggle(rowId: draft.rowId)
+            self.handler?.draftCardToggle(rowId: id)
         }, for: .touchUpInside)
         contentView.addSubview(draftToggle)
         PointerEffects.surface(draftToggle)
@@ -141,6 +142,7 @@ final class ChatPromptCell: ChatBaseCell {
         contentView.alpha = 1
         approval = nil
         draft = nil
+        toggleRowId = nil
         settled = nil
         stopTicking()
         resetShopping()   // [shopping]
@@ -172,8 +174,8 @@ final class ChatPromptCell: ChatBaseCell {
             card.frame = frame
             card.layer.cornerRadius = ChatMetrics.insetCardRadius
             card.backgroundColor = ChatPalette.promptCard
-            // [calm-chat] Draft cards render single-surface with `bodyBar` instead of a second nested bordered box.
-            let panel = l.draft != nil ? nil : (l.approval?.paper ?? l.ask?.paper)   // [asks v2] an ask card's ready reply
+            // [calm-chat] Draft and ask cards render single-surface with an accent bar instead of a nested bordered box.
+            let panel = (l.draft != nil || l.ask != nil) ? nil : l.approval?.paper
             paper.isHidden = panel == nil
             if let p = panel {
                 paper.frame = p.offsetBy(dx: -frame.minX, dy: -frame.minY)
@@ -205,7 +207,8 @@ final class ChatPromptCell: ChatBaseCell {
             bodyBar.isHidden = true
             draftDivider.isHidden = true
         }
-        placeBacking(l.draft?.backingFrame, radius: (l.draft?.backingFrame?.height ?? 0) / 2)
+        let backing = l.draft?.backingFrame ?? l.ask?.backingFrame ?? l.foldToggle?.backingFrame
+        placeBacking(backing, radius: (backing?.height ?? 0) / 2)
         placeSymbols(l.symbols)
         placeRules(l.rules)
         baseAccessibility = l.accessibility
@@ -225,18 +228,35 @@ final class ChatPromptCell: ChatBaseCell {
                 configureDraft(d, dl, hasCard: l.cardFrame != nil)
             } else {
                 draft = nil
-                draftToggle.isHidden = true
                 showAll.isHidden = true
                 threadToggle.isHidden = true
                 draftButtons.values.forEach { $0.isHidden = true }
-                card.accessibilityIdentifier = "clarify.note"
-                contentView.accessibilityElements = shoppingAccessibility(card: card)   // [shopping]
-                    ?? askAccessibility(card: card)                                    // [asks]
-                    ?? ([card] + (answerNow.isHidden ? [] : [answerNow]))
+                if let ft = l.foldToggle {
+                    toggleRowId = ft.rowId
+                    draftToggle.isHidden = false
+                    draftToggle.frame = ft.frame
+                    draftToggle.accessibilityIdentifier = "clarify.toggle"
+                    draftToggle.accessibilityLabel = ft.label
+                    draftToggle.accessibilityValue = ft.expanded ? "Expanded" : "Collapsed"
+                    draftToggle.layer.cornerRadius = 8
+                    PointerEffects.outlineDidLayout(draftToggle)
+                    card.accessibilityIdentifier = "clarify.note"
+                    contentView.accessibilityElements = l.cardFrame != nil
+                        ? [draftToggle, card] + (answerNow.isHidden ? [] : [answerNow])
+                        : [draftToggle]
+                } else {
+                    toggleRowId = nil
+                    draftToggle.isHidden = true
+                    card.accessibilityIdentifier = "clarify.note"
+                    contentView.accessibilityElements = shoppingAccessibility(card: card)   // [shopping]
+                        ?? askAccessibility(card: card)                                    // [asks]
+                        ?? ([card] + (answerNow.isHidden ? [] : [answerNow]))
+                }
             }
             return
         }
         draft = nil
+        toggleRowId = nil
         draftToggle.isHidden = true
         draftButtons.values.forEach { $0.isHidden = true }
         threadToggle.isHidden = true
@@ -484,8 +504,10 @@ final class ChatPromptCell: ChatBaseCell {
         threadToggle.frame = dl.threadFrame ?? .zero
         threadToggle.accessibilityLabel = dl.threadTitle
         if let toggle = dl.toggleFrame {
+            toggleRowId = d.rowId
             draftToggle.isHidden = false
             draftToggle.frame = toggle
+            draftToggle.accessibilityIdentifier = "draft.toggle"
             draftToggle.accessibilityLabel = dl.toggleLabel
             draftToggle.accessibilityValue = dl.toggleExpanded ? "Expanded" : "Collapsed"
             if hasCard && !dl.toggleExpanded {
@@ -495,6 +517,7 @@ final class ChatPromptCell: ChatBaseCell {
                 PointerEffects.outlineDidLayout(draftToggle)
             }
         } else {
+            toggleRowId = nil
             draftToggle.isHidden = true
         }
         var shown = Set<DraftButton>()

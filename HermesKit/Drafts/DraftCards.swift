@@ -199,43 +199,95 @@ nonisolated enum DraftCards {
     /// [calm-chat] The row id of a draft call inside `message`, matching `PromptRows.draftRow`.
     static func rowId(messageId: String, callId: String) -> String { "\(messageId)|draft\(callId)" }
 
-    /// [calm-chat] Draft row ids superseded by a later draft to the same destination (`targetKey`). Only waiting
-    /// drafts are visually superseded (answered drafts keep their sent/skipped state).
+    /// [calm-chat] Draft row ids superseded by a later draft to the same destination (`targetKey`), OR by a later
+    /// draft on the same app after an intervening human turn (e.g. a voice memo correcting the recipient). Only
+    /// waiting drafts are visually superseded (answered drafts keep their sent/skipped state).
     static func supersededRowIds(_ messages: [ChatMessage]) -> Set<String> {
         var latestByTarget: [String: String] = [:]
-        var all: [(target: String, rowId: String)] = []
-        for message in messages where message.role == .assistant {
+        var all: [(target: String, app: String, msgIndex: Int, rowId: String)] = []
+        var humanTurnsBefore: [Int] = Array(repeating: 0, count: messages.count)
+        var turns = 0
+        for (idx, message) in messages.enumerated() {
+            humanTurnsBefore[idx] = turns
+            if isNormalHumanTurn(message) { turns += 1 }
+            guard message.role == .assistant else { continue }
             for part in message.parts {
                 guard case .tool(let call) = part, call.name == tool, let draft = draft(call) else { continue }
                 let target = targetKey(draft)
+                let app = name(draft).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 let id = rowId(messageId: message.id, callId: call.id)
                 latestByTarget[target] = id
-                all.append((target, id))
+                all.append((target, app, idx, id))
             }
         }
         guard all.count > 1 else { return [] }
+        // Track the newest human-turn bucket seen for each app so a replacement draft on the same app after a
+        // correction turn supersedes an earlier wrong-recipient draft (without superseding sibling drafts sent in the same turn).
+        var latestAppTurn: [String: Int] = [:]
+        for entry in all where !entry.app.isEmpty {
+            latestAppTurn[entry.app] = max(latestAppTurn[entry.app] ?? -1, humanTurnsBefore[entry.msgIndex])
+        }
         var out = Set<String>()
-        for entry in all where latestByTarget[entry.target] != entry.rowId {
-            out.insert(entry.rowId)
+        for entry in all {
+            if latestByTarget[entry.target] != entry.rowId {
+                out.insert(entry.rowId)
+            } else if !entry.app.isEmpty, let latest = latestAppTurn[entry.app], latest > humanTurnsBefore[entry.msgIndex] {
+                out.insert(entry.rowId)
+            }
         }
         return out
     }
 
-    /// [calm-chat] Lookback for `ChatRowModel.rebuildNewest`: when `messages[from...]` adds a draft or a draft answer,
-    /// reach back to the oldest message at or after `floor` with a matching destination or draft id so an earlier
-    /// waiting draft folds live (or updates to sent/skipped) without waiting for a full rebuild.
+    /// [calm-chat] Draft row ids left unanswered after at least 2 later normal human turns (user moved on).
+    /// Allows a single quick side-question turn without folding the draft prematurely.
+    static func staleRowIds(_ messages: [ChatMessage]) -> Set<String> {
+        var totalHumanTurns = 0
+        for message in messages where isNormalHumanTurn(message) { totalHumanTurns += 1 }
+        guard totalHumanTurns >= 2 else { return [] }
+        var turnsSoFar = 0
+        var out = Set<String>()
+        for message in messages {
+            if isNormalHumanTurn(message) { turnsSoFar += 1; continue }
+            guard message.role == .assistant else { continue }
+            if totalHumanTurns - turnsSoFar < 2 { break }
+            for part in message.parts {
+                guard case .tool(let call) = part, call.name == tool, draft(call) != nil else { continue }
+                out.insert(rowId(messageId: message.id, callId: call.id))
+            }
+        }
+        return out
+    }
+
+    /// [calm-chat] A normal human turn (typed message, voice memo, attachment) — not a bot/cron delivery and not a
+    /// synthetic card tap answer for another card.
+    static func isNormalHumanTurn(_ message: ChatMessage) -> Bool {
+        guard message.role == .user, message.sender == nil, message.job == nil else { return false }
+        let text = message.parts.compactMap { if case .text(let t) = $0 { return t } else { return nil } }
+            .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.hasPrefix(markLead) || text.hasPrefix("[Hermes HQ ask ") || text.hasPrefix("[Hermes HQ question ")
+            || text.hasPrefix("[Hermes HQ order ") { return false }
+        return true
+    }
+
+    /// [calm-chat] Lookback for `ChatRowModel.rebuildNewest`: when `messages[from...]` adds a draft, a draft answer,
+    /// or a human turn, reach back to earlier drafts at or after `floor` so they fold live (superseded / stale / sent).
     static func reach(from: Int, floor: Int, in messages: [ChatMessage]) -> Int {
         guard from > floor, from < messages.count else { return from }
         var targets = Set<String>()
+        var apps = Set<String>()
         var answeredIds = Set<String>()
+        var sawHumanTurn = false
         for message in messages[from...] {
             switch message.role {
             case .assistant:
                 for part in message.parts {
                     guard case .tool(let call) = part, call.name == tool, let draft = draft(call) else { continue }
                     targets.insert(targetKey(draft))
+                    let app = name(draft).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                    if !app.isEmpty { apps.insert(app) }
                 }
             case .user:
+                if isNormalHumanTurn(message) { sawHumanTurn = true }
                 for part in message.parts {
                     guard case .text(let text) = part, let found = answer(in: text) else { continue }
                     answeredIds.insert(found.id)
@@ -244,14 +296,16 @@ nonisolated enum DraftCards {
                 break
             }
         }
-        guard !targets.isEmpty || !answeredIds.isEmpty else { return from }
+        guard !targets.isEmpty || !answeredIds.isEmpty || sawHumanTurn else { return from }
+        let scanFloor = max(floor, from - 120)
         var lowest = from
         var i = from - 1
-        while i >= floor {
+        while i >= scanFloor {
             if messages[i].role == .assistant {
                 for part in messages[i].parts {
                     guard case .tool(let call) = part, call.name == tool, let draft = draft(call) else { continue }
-                    if targets.contains(targetKey(draft)) || answeredIds.contains(draft.id) {
+                    let app = name(draft).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                    if sawHumanTurn || targets.contains(targetKey(draft)) || apps.contains(app) || answeredIds.contains(draft.id) {
                         lowest = i
                         break
                     }
@@ -283,7 +337,7 @@ nonisolated enum DraftCards {
     }
 
     private static let readyBoilerplate = TRx(
-        #"^(?:(?:your|the)\s+(?:(?:revised|updated|new)\s+)?(?:[a-z0-9][a-z0-9&/-]{0,18}(?:\s+[a-z0-9&/-]{1,12})?\s+)?draft(?:\s+(?:for|to)\s+[^.!?\n]{1,60})?\s+is\s+ready(?:\s+(?:to|for)\s+(?:review|send|sending))?[.!]?(?:\s+nothing(?:['’]s|\s+has)\s+been\s+sent(?:\s+yet)?[.!]?)?|nothing(?:['’]s|\s+has)\s+been\s+sent(?:\s+yet)?[.!]?)$"#
+        #"^(?:(?:your|the)\s+(?:(?:revised|updated|new|corrected)\s+)?(?:[a-z0-9][a-z0-9&/-]{0,18}(?:\s+[a-z0-9&/-]{1,12})?\s+)?(?:draft|text|message|email|reply|note)(?:\s+(?:for|to)\s+[^.!?\n]{1,60})?\s+is\s+ready(?:\s+(?:to|for)\s+(?:review|send|sending|your\s+(?:review|approval)))?[.!]?(?:\s+nothing(?:['’]s|\s+has)\s+been\s+sent(?:\s+yet)?[.!]?)?|nothing(?:['’]s|\s+has)\s+been\s+sent(?:\s+yet)?[.!]?)$"#
     )
 
     /// [calm-chat] True only when an assistant message's entire prose alongside a draft card is stock "Your draft is

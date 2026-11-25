@@ -17,7 +17,8 @@ import UIKit
 
     func rowsInput(_ messages: [ChatMessage], queued: [String] = [], scope: String) -> DraftRowsInput {
         var input = DraftRowsInput(answers: DraftCards.answers(messages, queued: queued),
-                                   superseded: DraftCards.supersededRowIds(messages))
+                                   superseded: DraftCards.supersededRowIds(messages),
+                                   stale: DraftCards.staleRowIds(messages))
         let lead = scope + "|"
         for (key, text) in texts where key.hasPrefix(lead) { input.edits[String(key.dropFirst(lead.count))] = text }
         if let editing, editing.hasPrefix(lead) { input.editing = String(editing.dropFirst(lead.count)) }

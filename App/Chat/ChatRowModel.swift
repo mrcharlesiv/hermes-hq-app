@@ -95,10 +95,12 @@ struct ChatRowModel {
             let reach = PageOrder.reach(from: lo, floor: builtFrom, in: messages)
             if reach < lo { lo = max(builtFrom, UpdateGroups.widen(reach...reach, input: input).lowerBound) }
         }
-        // [calm-chat] Back to earlier drafts superseded/answered by these messages, and earlier TasksAdded cards now past the newest turn.
+        // [calm-chat] Back to earlier drafts, asks, settled clarifies, and task cards whose fold/stale state changed.
         if lo < messages.count {
-            let reach = min(DraftCards.reach(from: lo, floor: builtFrom, in: messages),
-                            ActivityRows.tasksAddedReach(from: lo, floor: builtFrom, in: messages))
+            let reach = min(min(DraftCards.reach(from: lo, floor: builtFrom, in: messages),
+                                AskCards.reach(from: lo, floor: builtFrom, in: messages)),
+                            min(ClarifyLate.reach(from: lo, floor: builtFrom, in: messages),
+                                ActivityRows.tasksAddedReach(from: lo, floor: builtFrom, in: messages)))
             if reach < lo { lo = max(builtFrom, UpdateGroups.widen(reach...reach, input: input).lowerBound) }
         }
         // [chat-refine] A reply's time reads up to minuteReach later messages: rebuild that many earlier ones when

@@ -180,4 +180,66 @@ struct PromptUITests {
         #expect(PromptSheetCopy.make(ValuePrompt(id: "", kind: .sudo, params: ["command": "ls"]), botName: "Ivy").text.contains("sent to Ivy"))
         #expect(PromptSheetCopy.make(ValuePrompt(id: "", kind: .vaultCode, params: [:])).text.hasSuffix("the bot never sees it."))
     }
+
+    // MARK: Calm chat readability ([calm-chat])
+
+    @Test func settledClarifyFoldsQuietlyAndExpandsInPlace() throws {
+        let user = ChatMessage(id: "u1", role: .user, parts: [.text("Deploy the release")], timestamp: Date(), rowId: 1)
+        let qa = [ClarifyQA(question: "Which branch?", answer: "main", unanswered: false)]
+        let call = ToolCall(id: "c1", name: "clarify", title: "clarify", argsText: nil,
+                            summary: ClarifySettled.summary(qa), state: .done, durationSeconds: nil)
+        let settled = ChatMessage(id: "a1", role: .assistant, parts: [.tool(call), .text("Using main and starting the build.")],
+                                  timestamp: Date(), rowId: 2)
+        var i = input([user, settled], prompts: nil)
+        i.isRunning = false
+        let row = try #require(ChatRowBuilder.build(i).first { $0.id == "a1|qc1" })
+        guard case .prompt(let pr) = row.kind, case .settled(let card) = pr.kind else { Issue.record("expected settled"); return }
+        #expect(card.folded && !card.expanded && card.isQuietFolded && !card.answerable)
+
+        let collapsed = PromptLayout.settled(card, gap: 6, width: 402, category: .large)
+        guard case .prompt(let cl) = collapsed.content else { Issue.record("collapsed"); return }
+        #expect(cl.cardFrame == nil && cl.foldToggle != nil && cl.foldToggle?.expanded == false)
+        #expect(cl.accessibility.contains("main") && cl.accessibility.contains("Which branch?"))
+        #expect(collapsed.height < 56)
+
+        i.expanded = ["a1|qc1"]
+        let expandedRow = try #require(ChatRowBuilder.build(i).first { $0.id == "a1|qc1" })
+        guard case .prompt(let epr) = expandedRow.kind, case .settled(let expandedCard) = epr.kind else { Issue.record("expanded"); return }
+        #expect(expandedCard.folded && expandedCard.expanded && !expandedCard.isQuietFolded)
+        let expanded = PromptLayout.settled(expandedCard, gap: 6, width: 402, category: .large)
+        guard case .prompt(let el) = expanded.content else { Issue.record("expanded layout"); return }
+        #expect(el.cardFrame != nil && el.foldToggle?.expanded == true && expanded.height > collapsed.height)
+    }
+
+    @Test func staleUnansweredClarifyDropsAnswerNowAndSuppressesAdjacentEcho() throws {
+        let user = ChatMessage(id: "u1", role: .user, parts: [.text("Deploy the release")], timestamp: Date(), rowId: 1)
+        let skipped = [ClarifyQA(question: "Proceed?", answer: "", unanswered: true, choices: ["Yes", "No"])]
+        let call = ToolCall(id: "c1", name: "clarify", title: "clarify", argsText: nil,
+                            summary: ClarifySettled.summary(skipped), state: .done, durationSeconds: nil)
+        let settled = ChatMessage(id: "a1", role: .assistant, parts: [.tool(call)], timestamp: Date(), rowId: 2)
+        let movedOn = ChatMessage(id: "u2", role: .user, parts: [.text("Actually let's work on the docs instead.")], timestamp: Date(), rowId: 3)
+
+        var staleInput = input([user, settled, movedOn], prompts: nil)
+        staleInput.isRunning = false
+        let staleRow = try #require(ChatRowBuilder.build(staleInput).first { $0.id == "a1|qc1" })
+        guard case .prompt(let sp) = staleRow.kind, case .settled(let staleCard) = sp.kind else { Issue.record("stale"); return }
+        #expect(staleCard.staleUnanswered && !staleCard.answerable && staleCard.folded && staleCard.isQuietFolded)
+        let staleLayout = PromptLayout.settled(staleCard, gap: 6, width: 402, category: .large)
+        guard case .prompt(let sl) = staleLayout.content else { Issue.record("stale layout"); return }
+        #expect(sl.cardFrame == nil && sl.accessibility.contains("Question skipped"))
+
+        // Adjacent late answer fills the card and suppresses the redundant user echo bubble.
+        let key = ClarifyLate.key(["Proceed?"])
+        let lateReply = ChatMessage(id: "u3", role: .user, parts: [.text(ClarifyLate.message(key: key, answers: [("Proceed?", "Yes")]))],
+                                    timestamp: Date(), rowId: 4)
+        var adjacentInput = input([user, settled, lateReply], prompts: nil)
+        adjacentInput.isRunning = false
+        adjacentInput.clarifyLate = ClarifyLate.answers(adjacentInput.messages)
+        let adjacentRows = ChatRowBuilder.build(adjacentInput)
+        #expect(!adjacentRows.contains { if case .bubble(let b) = $0.kind { return b.mine && b.text == "Yes" } else { return false } })
+        let filled = try #require(adjacentRows.first { $0.id == "a1|qc1" })
+        if case .prompt(let fp) = filled.kind, case .settled(let fc) = fp.kind {
+            #expect(fc.answeredLater && fc.rows.first?.answer == "Yes")
+        } else { Issue.record("expected filled card") }
+    }
 }

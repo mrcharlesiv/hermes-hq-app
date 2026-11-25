@@ -491,4 +491,91 @@ struct DraftCardsTests {
         }
         #expect(states == [.superseded, .waiting])
     }
+
+    @Test func wrongRecipientSameAppSupersedesAcrossHumanTurnButSiblingsStayLive() {
+        var wrong = call(app: "Slack", to: "#finance", body: "Hey team, ready for Q3.")
+        wrong.id = "c1"
+        var corrected = call(app: "Slack", to: "Dana Reyes", body: "Hey Dana, ready for Q3.")
+        corrected.id = "c2"
+        let correctedThread = ChatRowBuilder.build(input([
+            ChatMessage(id: "m1", role: .assistant, parts: [.tool(wrong)], timestamp: nil, rowId: 1),
+            you("Actually send that to Dana Reyes instead.", id: "u1"),
+            ChatMessage(id: "m2", role: .assistant, parts: [.tool(corrected)], timestamp: nil, rowId: 3),
+        ]))
+        let correctedStates = correctedThread.compactMap { row -> DraftCardRow.State? in
+            if case .prompt(let p) = row.kind, case .draft(let d) = p.kind { return d.state }
+            return nil
+        }
+        #expect(correctedStates == [.superseded, .waiting])
+
+        // Two sibling drafts in the same assistant turn to different people stay live together.
+        var sibA = call(app: "Slack", to: "#finance", body: "Finance note.")
+        sibA.id = "s1"
+        var sibB = call(app: "Slack", to: "#design", body: "Design note.")
+        sibB.id = "s2"
+        let siblingRows = ChatRowBuilder.build(input([
+            ChatMessage(id: "m3", role: .assistant, parts: [.tool(sibA), .tool(sibB)], timestamp: nil, rowId: 1),
+        ]))
+        let siblingStates = siblingRows.compactMap { row -> DraftCardRow.State? in
+            if case .prompt(let p) = row.kind, case .draft(let d) = p.kind { return d.state }
+            return nil
+        }
+        #expect(siblingStates == [.waiting, .waiting])
+
+        // Different apps across a human turn stay live independently.
+        var email = call(app: "Email", to: "dana@example.com", subject: "Q3", body: "Email version.")
+        email.id = "e1"
+        let crossApp = ChatRowBuilder.build(input([
+            ChatMessage(id: "m1", role: .assistant, parts: [.tool(wrong)], timestamp: nil, rowId: 1),
+            you("Also draft an email to Dana.", id: "u1"),
+            ChatMessage(id: "m2", role: .assistant, parts: [.tool(email)], timestamp: nil, rowId: 3),
+        ]))
+        let crossStates = crossApp.compactMap { row -> DraftCardRow.State? in
+            if case .prompt(let p) = row.kind, case .draft(let d) = p.kind { return d.state }
+            return nil
+        }
+        #expect(crossStates == [.waiting, .waiting])
+    }
+
+    @Test func abandonedDraftFoldsAsStaleAfterTwoHumanTurns() throws {
+        let m1 = bot(call())
+        // One side-question keeps the draft live.
+        let oneTurn = try #require(card([m1, you("Did Dana reply yet?", id: "u1")]))
+        #expect(oneTurn.state == .waiting)
+
+        // Two normal human turns fold it quietly as Left unsent.
+        let staleMessages = [m1, you("Did Dana reply yet?", id: "u1"), you("Okay let's check Monday's agenda instead.", id: "u2")]
+        let staleRow = try #require(card(staleMessages))
+        #expect(staleRow.state == .stale && staleRow.isQuietFolded)
+        #expect(PromptLayout.draftStatus(staleRow) == "Left unsent")
+        let collapsed = PromptLayout.draft(staleRow, gap: 6, width: 402, category: .large)
+        guard case .prompt(let cl) = collapsed.content, let cd = cl.draft else { Issue.record("collapsed"); return }
+        #expect(cl.cardFrame == nil && cd.buttons.isEmpty && cd.toggleFrame != nil)
+        #expect(cl.accessibility.contains("Left unsent"))
+        #expect(collapsed.height < 56)
+
+        let opened = try #require(card(staleMessages, expanded: [staleRow.rowId]))
+        let expanded = PromptLayout.draft(opened, gap: 6, width: 402, category: .large)
+        guard case .prompt(let el) = expanded.content, let ed = el.draft else { Issue.record("expanded"); return }
+        #expect(el.cardFrame != nil && ed.buttons.isEmpty && ed.toggleExpanded && expanded.height > collapsed.height)
+
+        // Partial rebuild folds it live when the second human turn lands.
+        var model = ChatRowModel()
+        model.rebuildAll(input([m1, staleMessages[1]]), syncMessages: 160, oldestShown: nil)
+        model.rebuildNewest(input(staleMessages), touching: ["u2"])
+        let held = Array(model.allRows.reversed())
+        let full = ChatRowBuilder.build(input(staleMessages))
+        #expect(held.map(\.id) == full.map(\.id))
+        for i in held.indices { #expect(ChatRowDiff.same(held[i], full[i])) }
+    }
+
+    @Test func broadenedDraftReadyBoilerplateIsSuppressed() {
+        let c1 = call(app: "iMessage", to: "Dana Reyes", body: "See you at 3.")
+        let c2 = call(app: "Email", to: "dana@example.com", subject: "Follow-up", body: "Attached.")
+        let rows = ChatRowBuilder.build(input([
+            ChatMessage(id: "m1", role: .assistant, parts: [.tool(c1), .text("Your text to Dana is ready to send.")], timestamp: nil, rowId: 1),
+            ChatMessage(id: "m2", role: .assistant, parts: [.tool(c2), .text("Your email to Dana is ready for review. Nothing has been sent.")], timestamp: nil, rowId: 2),
+        ]))
+        #expect(!rows.contains { if case .bubble = $0.kind { return true } else { return false } })
+    }
 }

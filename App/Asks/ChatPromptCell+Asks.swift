@@ -20,13 +20,16 @@ extension ChatPromptCell {
         askViews.row = row
         view.isHidden = false
         view.frame = contentView.bounds
-        view.configure(g)
+        view.configure(g, cardFrame: l.cardFrame)
     }
 
     /// VoiceOver's order for an ask row; nil for any other row.
     func askAccessibility(card: UIView) -> [Any]? {
-        guard askViews.row != nil, let view = askViews.view else { return nil }
+        guard let row = askViews.row, let view = askViews.view else { return nil }
         card.accessibilityIdentifier = "ask.card"
+        if row.isQuietFolded || row.answer != nil {
+            return view.ordered
+        }
         return [card] + view.ordered
     }
 
@@ -54,6 +57,11 @@ extension ChatPromptCell {
         }
         view.onShowAll = { [weak self] in
             guard let self, let row = self.askViews.row else { return }
+            self.handler?.draftCardToggle(rowId: row.rowId)
+        }
+        view.onToggle = { [weak self] in
+            guard let self, let row = self.askViews.row else { return }
+            Haptics.play(.selection)
             self.handler?.draftCardToggle(rowId: row.rowId)
         }
         contentView.addSubview(view)

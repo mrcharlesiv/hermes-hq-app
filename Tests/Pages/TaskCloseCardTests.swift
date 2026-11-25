@@ -274,4 +274,38 @@ struct TaskCloseCardTests {
         #expect(addedRows(e).first?.helping == true, "the helping card stays")
         #expect(closeRows(e).map(\.state) == [.waiting], "and the close card is added")
     }
+
+    @Test func settledCloseCardFoldsAfterLaterConversationAndExpands() throws {
+        let style = ChatStyleCache.shared.style(for: .large)
+        let m1 = reply("a", [call("c1", offerCard)])
+        let later = prompt("u2")
+
+        // A waiting offer stays open even after a later turn so Mark Done / Keep Open remain actionable.
+        let waiting = closeRows(rows([prompt("u1"), m1, later], states(["t_1": .init(done: false, offer: offer())])))
+        #expect(waiting.first?.folded == false)
+
+        // A newly settled card with no later conversation stays open as confirmation.
+        let newestDone = closeRows(rows([prompt("u1"), m1], states(["t_1": .init(done: true, offer: nil)])))
+        #expect(newestDone.first?.folded == false)
+
+        // Once settled AND followed by later conversation, it folds to one quiet disclosure line.
+        let foldedRows = rows([prompt("u1"), m1, later], states(["t_1": .init(done: true, offer: nil)]))
+        let foldedChatRow = try #require(foldedRows.first { $0.id == "a|close|t_1" })
+        guard case .activity(.taskClose(let foldedCard)) = foldedChatRow.kind else { Issue.record("close"); return }
+        #expect(foldedCard.folded && !foldedCard.opened)
+        let collapsedLayout = TextLayout.make(foldedChatRow, width: 393, style: style)
+        guard case .activity(.taskClose(let cl)) = collapsedLayout.content else { Issue.record("layout"); return }
+        #expect(!cl.cardShown && cl.foldFrame != nil && collapsedLayout.height < 56)
+
+        // Tapping the disclosure line expands the full card underneath.
+        var a = ActivityRowsInput()
+        a.taskStates = states(["t_1": .init(done: true, offer: nil)])
+        a.profile = "default"
+        let expandedRows = ChatRowBuilder.build(ChatRowBuilder.Input(messages: [prompt("u1"), m1, later], isRunning: false,
+                                                                     botName: "Hermes", expanded: ["a|close|t_1"], scope: "t", activity: a))
+        let expandedChatRow = try #require(expandedRows.first { $0.id == "a|close|t_1" })
+        let expandedLayout = TextLayout.make(expandedChatRow, width: 393, style: style)
+        guard case .activity(.taskClose(let el)) = expandedLayout.content else { Issue.record("expanded"); return }
+        #expect(el.cardShown && el.opened && expandedLayout.height > collapsedLayout.height)
+    }
 }

@@ -34,6 +34,14 @@ nonisolated struct AskCardGeometry: @unchecked Sendable {
     var replyStacked = false
     var showAll: CGRect? = nil
     var showAllTitle = ""
+    /// [calm-chat] Single-surface left accent bar / receipt stem, subtle divider, and tap-to-expand toggle.
+    var bodyBar: CGRect? = nil
+    var bodyBarTint = false
+    var footerDivider: CGRect? = nil
+    var toggleFrame: CGRect? = nil
+    var toggleLabel = ""
+    var toggleExpanded = false
+    var backingFrame: CGRect? = nil
 }
 
 nonisolated enum AskCardLayout {
@@ -57,9 +65,15 @@ nonisolated enum AskCardLayout {
     }
 
     static func make(_ card: AskCardRow, gap: CGFloat, width: CGFloat, category: UIContentSizeCategory) -> RowLayout {
+        if card.stale && card.answer == nil {
+            return makeFolded(card, gap: gap, width: width, category: category)
+        }
+        if let answer = card.answer, !card.expanded {
+            return makeReceipt(card, answer: answer, gap: gap, width: width, category: category)
+        }
         let a = card.ask
         let cardW = PromptLayout.cardWidth(for: width), innerW = cardW - 2 * padH
-        let top = gap + 6, x = side + padH
+        let top = max(0, gap) + 6, x = side + padH
         var texts: [PromptPlacedText] = [], symbols: [PromptSymbol] = [], spoken: [String] = []
 
         // The source line beside the app's round mark (every card's header).
@@ -67,12 +81,20 @@ nonisolated enum AskCardLayout {
         let mark = ceil(min(34, max(26, headFont.pointSize * 1.7)))
         let (sourceText, sourceSpoken) = source(a, category: category)
         let textX = x + mark + 8
-        let (s, _) = PromptLayout.clamped(sourceText, width: x + innerW - textX, maxLines: 2)
+        let chevW: CGFloat = card.answer != nil ? ceil(min(18, max(12, headFont.pointSize * 0.8))) : 0
+        let sourceMaxW = max(60, x + innerW - textX - (chevW > 0 ? chevW + 8 : 0))
+        let (s, _) = PromptLayout.clamped(sourceText, width: sourceMaxW, maxLines: 2)
         let markY = top + padV
         symbols.append(PromptSymbol(frame: CGRect(x: x, y: markY, width: mark, height: mark), name: AskCards.glyph(a), style: .picked))
         texts.append(PromptPlacedText(text: s, frame: CGRect(x: textX, y: markY + max(0, (mark - s.size.height) / 2), width: s.size.width, height: s.size.height)))
+        if chevW > 0 {
+            let firstH = max(mark, s.size.height)
+            symbols.append(PromptSymbol(frame: CGRect(x: x + innerW - chevW, y: markY + ((firstH - chevW) / 2).rounded(), width: chevW, height: chevW),
+                                        name: "chevron.up", style: .blank))
+        }
         spoken.append(sourceSpoken)
         var y = max(markY + mark, markY + s.size.height)
+        let headerBandH = max(44, y - top + padV)
 
         let body = PromptFonts.font(.subheadline, category)
         let small = PromptFonts.font(.footnote, category)
@@ -142,7 +164,7 @@ nonisolated enum AskCardLayout {
         var otherFrame: CGRect?
         var block: ReplyBlock?
         if let answer = card.answer {
-            // Answered: what you chose, beside the question card's mark, on one line.
+            // Expanded answered ask: status + full sent reply.
             let status = AskCards.status(a, answer)
             let statusFont = PromptFonts.font(.footnote, category, weight: .semibold, cap: 24)
             let m = ceil(min(24, max(15, statusFont.pointSize * 1.15)))
@@ -150,14 +172,13 @@ nonisolated enum AskCardLayout {
             y += 10
             let (st, _) = PromptLayout.clamped(PromptLayout.text(status, statusFont, ChatPalette.label2), width: innerW - m - 6, maxLines: 1)
             texts.append(PromptPlacedText(text: st, frame: CGRect(x: x + m + 6, y: y + (first - lineH) / 2, width: innerW - m - 6, height: st.size.height)))
-            symbols.append(PromptSymbol(frame: CGRect(x: x, y: y + (first - m) / 2, width: m, height: m), name: "checkmark.circle.fill", style: .picked))
+            symbols.append(PromptSymbol(frame: CGRect(x: x, y: y + (first - m) / 2, width: m, height: m), name: "checkmark.circle.fill", style: .success))
             y += max(first, st.size.height + (first - lineH) / 2)
             spoken.append(status)
-            // [asks v2] The reply that went, quietly under it (three lines at most).
             if case .sent(_, _, let reply) = answer, !reply.isEmpty {
-                y += 4
+                y += 6
                 let w = innerW - m - 6
-                let (r, _) = PromptLayout.clamped(PromptLayout.text(reply, body, ChatPalette.label2), width: w, maxLines: PromptRows.askSentLines)
+                let r = TextKitLayout(PromptLayout.text(reply, body, ChatPalette.label2), width: w)
                 texts.append(PromptPlacedText(text: r, frame: CGRect(x: x + m + 6, y: y, width: w, height: r.size.height)))
                 y += r.size.height
                 spoken.append(reply)
@@ -203,25 +224,193 @@ nonisolated enum AskCardLayout {
         }
 
         let cardFrame = CGRect(x: side, y: top, width: cardW, height: ceil(y + padV - top))
+        let accessibility = spoken.joined(separator: ". ")
         var geometry = AskCardGeometry(buttons: placed, titles: a.choices, font: font, stacked: stacked, other: otherFrame, link: linkFrame,
                                        linkTitle: linkTitle, quote: quote, chips: chips, disabled: card.answering || card.editingReply)
         geometry.picked = card.picked
+        if card.answer != nil {
+            geometry.toggleFrame = CGRect(x: side, y: top, width: cardW, height: headerBandH)
+            geometry.toggleLabel = accessibility
+            geometry.toggleExpanded = true
+        }
         if let block {
             geometry.paper = block.paper
             geometry.replyButtons = block.buttons
             geometry.replyStacked = block.stacked
             geometry.showAll = block.showAll
             geometry.showAllTitle = block.showAllTitle
+            geometry.bodyBar = block.bodyBar
+            geometry.bodyBarTint = true
+            geometry.footerDivider = block.footerDivider
         }
         var layout = PromptRowLayout(cardFrame: cardFrame, texts: texts, approval: nil, symbols: symbols, rules: [],
-                                     accessibility: spoken.joined(separator: ". "))
+                                     accessibility: accessibility)
         layout.ask = geometry
         return RowLayout(height: ceil(cardFrame.maxY + 6), content: .prompt(layout))
     }
 
-    /// [asks v2] What the reply block placed: its panel, Send and Edit, Show All.
+    /// [calm-chat] Compact two-line receipt for an answered ask card; tapping expands to full context & reply.
+    private static func makeReceipt(_ card: AskCardRow, answer: AskCards.Answer, gap: CGFloat, width: CGFloat,
+                                    category: UIContentSizeCategory) -> RowLayout {
+        let a = card.ask
+        let cardW = PromptLayout.cardWidth(for: width), innerW = cardW - 2 * padH
+        let padV: CGFloat = 11
+        let top = max(0, gap) + 4, x = side + padH
+        let status = AskCards.status(a, answer)
+        let headFont = PromptFonts.font(.subheadline, category, weight: .semibold, cap: 24)
+        let bodyFont = PromptFonts.font(.subheadline, category)
+        let mark = ceil(min(24, max(17, headFont.pointSize * 1.15)))
+        let chevW = ceil(min(18, max(12, headFont.pointSize * 0.8)))
+
+        let titleX = x + mark + 8
+        let titleW = max(60, innerW - mark - 8 - chevW - 8)
+        let (headText, _) = PromptLayout.clamped(PromptLayout.text(status, headFont, ChatPalette.label), width: titleW,
+                                                 maxLines: category.isAccessibilityCategory ? 2 : 1)
+        let headY = top + padV
+        let firstH = max(mark, headText.size.height)
+        let checkSymbol = PromptSymbol(frame: CGRect(x: x, y: headY + ((firstH - mark) / 2).rounded(), width: mark, height: mark),
+                                       name: "checkmark.circle.fill", style: .success)
+        let chevSymbol = PromptSymbol(frame: CGRect(x: x + innerW - chevW, y: headY + ((firstH - chevW) / 2).rounded(), width: chevW, height: chevW),
+                                      name: "chevron.down", style: .blank)
+        var texts = [PromptPlacedText(text: headText, frame: CGRect(x: titleX, y: headY + ((firstH - headText.size.height) / 2).rounded(),
+                                                                    width: headText.size.width, height: headText.size.height))]
+        var y = headY + firstH + 6
+        let previewW = max(60, innerW - mark - 8)
+        let stemX = x + ((mark - 2) / 2).rounded()
+
+        var spoken = [source(a, category: category).1, a.question]
+        let previewText: String
+        let previewLines: Int
+        if case .sent(_, _, let reply) = answer, !reply.isEmpty {
+            previewText = reply
+            previewLines = min(2, PromptRows.askSentLines)
+            spoken.append(reply)
+        } else {
+            let tail = a.app.isEmpty ? "" : " · \(a.app)"
+            previewText = a.question + tail
+            previewLines = 1
+        }
+        spoken.append(status)
+
+        let (preview, _) = PromptLayout.clamped(PromptLayout.text(previewText, bodyFont, ChatPalette.label2), width: previewW, maxLines: previewLines)
+        texts.append(PromptPlacedText(text: preview, frame: CGRect(x: titleX, y: y, width: previewW, height: preview.size.height)))
+        let bodyBar = CGRect(x: stemX, y: y + 1, width: 2, height: max(12, preview.size.height - 2))
+        y += preview.size.height
+
+        let cardFrame = CGRect(x: side, y: top, width: cardW, height: ceil(y + padV - top))
+        let accessibility = spoken.joined(separator: ". ")
+        var geometry = AskCardGeometry(buttons: [], titles: a.choices, font: PromptFonts.button(category), stacked: false,
+                                       other: nil, link: nil, linkTitle: "", quote: nil, chips: [], disabled: false)
+        geometry.bodyBar = bodyBar
+        geometry.bodyBarTint = false
+        geometry.toggleFrame = cardFrame
+        geometry.toggleLabel = accessibility
+        geometry.toggleExpanded = false
+        var layout = PromptRowLayout(cardFrame: cardFrame, texts: texts, approval: nil, symbols: [checkSymbol, chevSymbol],
+                                     rules: [], accessibility: accessibility)
+        layout.ask = geometry
+        return RowLayout(height: ceil(cardFrame.maxY + 4), content: .prompt(layout))
+    }
+
+    /// [calm-chat] Quiet one-line disclosure for an unanswered ask card left behind by later conversation;
+    /// tapping opens a read-only drawer below it with zero live primary buttons.
+    private static func makeFolded(_ card: AskCardRow, gap: CGFloat, width: CGFloat, category: UIContentSizeCategory) -> RowLayout {
+        let a = card.ask
+        let cardW = PromptLayout.cardWidth(for: width)
+        let font = PromptFonts.font(.footnote, category, cap: 22)
+        let strongFont = PromptFonts.font(.footnote, category, weight: .semibold, cap: 22)
+        let iconSide = ceil(min(22, max(15, font.pointSize * 1.1)))
+        let chevW = ceil(min(18, max(11, font.pointSize * 0.85)))
+        let rowH = max(32, ceil(font.lineHeight) + 10)
+        let top = max(0, gap)
+
+        let flatQ = a.question.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }.joined(separator: " ")
+        let label = NSMutableAttributedString(attributedString: PromptLayout.text(flatQ, strongFont, ChatPalette.label2))
+        label.append(PromptLayout.text(" · Unanswered", font, ChatPalette.label2))
+
+        let textX = side + iconSide + 7
+        let maxTextW = max(60, cardW - iconSide - 7 - 6 - chevW)
+        let (lineLayout, _) = PromptLayout.clamped(label, width: maxTextW, maxLines: 1)
+        let lineY = top + ((rowH - lineLayout.size.height) / 2).rounded()
+        let textFrame = CGRect(x: textX, y: lineY, width: lineLayout.size.width, height: lineLayout.size.height)
+        let leadSymbol = PromptSymbol(frame: CGRect(x: side, y: top + ((rowH - iconSide) / 2).rounded(), width: iconSide, height: iconSide),
+                                      name: AskCards.quietGlyph(a), style: .quiet)
+        let chevSymbol = PromptSymbol(frame: CGRect(x: textFrame.maxX + 6, y: top + ((rowH - chevW) / 2).rounded(), width: chevW, height: chevW),
+                                      name: card.expanded ? "chevron.up" : "chevron.down", style: .blank)
+        let rowWidth = min(cardW, chevSymbol.frame.maxX - side)
+        let tapH = max(44, rowH)
+        let toggleFrame = CGRect(x: side - 6, y: top + (rowH - tapH) / 2, width: rowWidth + 12, height: tapH)
+        let pillH = min(rowH, ceil(max(font.lineHeight, iconSide)) + 8)
+        let backingFrame = CGRect(x: side - 8, y: top + ((rowH - pillH) / 2).rounded(), width: rowWidth + 16, height: pillH)
+        let accessibility = [source(a, category: category).1, a.question, "Unanswered"].filter { !$0.isEmpty }.joined(separator: ". ")
+
+        guard card.expanded else {
+            var geometry = AskCardGeometry(buttons: [], titles: a.choices, font: PromptFonts.button(category), stacked: false,
+                                           other: nil, link: nil, linkTitle: "", quote: nil, chips: [], disabled: false)
+            geometry.toggleFrame = toggleFrame
+            geometry.toggleLabel = accessibility
+            geometry.toggleExpanded = false
+            geometry.backingFrame = backingFrame
+            var layout = PromptRowLayout(cardFrame: nil, texts: [PromptPlacedText(text: lineLayout, frame: textFrame)],
+                                         approval: nil, symbols: [leadSymbol, chevSymbol], rules: [], accessibility: accessibility)
+            layout.ask = geometry
+            return RowLayout(height: ceil(top + rowH + 2), content: .prompt(layout))
+        }
+
+        // Expanded read-only drawer below the disclosure line.
+        let innerW = cardW - 2 * padH
+        let cardTop = top + rowH + 4
+        let x = side + padH
+        var y = cardTop + padV
+        var texts = [PromptPlacedText(text: lineLayout, frame: textFrame)]
+        let (srcText, _) = source(a, category: category)
+        let (srcLayout, _) = PromptLayout.clamped(srcText, width: innerW, maxLines: 2)
+        texts.append(PromptPlacedText(text: srcLayout, frame: CGRect(x: x, y: y, width: innerW, height: srcLayout.size.height)))
+        y += srcLayout.size.height + 8
+
+        var quote: CGRect?
+        if !a.quote.isEmpty {
+            let inset: CGFloat = 12
+            let (q, _) = PromptLayout.clamped(PromptLayout.text("“\(a.quote)”", PromptFonts.font(.subheadline, category), ChatPalette.label2),
+                                              width: innerW - inset, maxLines: quoteLines)
+            texts.append(PromptPlacedText(text: q, frame: CGRect(x: x + inset, y: y, width: innerW - inset, height: q.size.height)))
+            quote = CGRect(x: x, y: y, width: 2.5, height: q.size.height)
+            y += q.size.height + 8
+        }
+        var linkFrame: CGRect?
+        var linkTitle = ""
+        if let link = a.link {
+            linkTitle = Self.linkTitle(link)
+            let (l, _) = PromptLayout.clamped(PromptLayout.text(linkTitle, PromptFonts.font(.subheadline, category, weight: .medium), ChatPalette.tintText),
+                                              width: innerW, maxLines: 1)
+            let frame = CGRect(x: x, y: y, width: l.size.width, height: l.size.height)
+            texts.append(PromptPlacedText(text: l, frame: frame))
+            linkFrame = frame.insetBy(dx: -8, dy: -max(0, (44 - frame.height) / 2))
+            y = frame.maxY + 8
+        }
+        let qText = TextKitLayout(PromptLayout.text(a.question, PromptFonts.font(.subheadline, category, weight: .semibold), ChatPalette.label2), width: innerW)
+        texts.append(PromptPlacedText(text: qText, frame: CGRect(x: x, y: y, width: innerW, height: qText.size.height)))
+        y += qText.size.height
+        let cardFrame = CGRect(x: side, y: cardTop, width: cardW, height: ceil(y + padV - cardTop))
+
+        var geometry = AskCardGeometry(buttons: [], titles: a.choices, font: PromptFonts.button(category), stacked: false,
+                                       other: nil, link: linkFrame, linkTitle: linkTitle, quote: quote, chips: [], disabled: false)
+        geometry.toggleFrame = toggleFrame
+        geometry.toggleLabel = accessibility
+        geometry.toggleExpanded = true
+        geometry.backingFrame = backingFrame
+        var layout = PromptRowLayout(cardFrame: cardFrame, texts: texts, approval: nil, symbols: [leadSymbol, chevSymbol],
+                                     rules: [], accessibility: accessibility)
+        layout.ask = geometry
+        return RowLayout(height: ceil(cardFrame.maxY + 4), content: .prompt(layout))
+    }
+
+    /// [asks v2] What the reply block placed: its body region, accent bar, divider, Send and Edit, Show All.
     struct ReplyBlock {
         var paper: CGRect
+        var bodyBar: CGRect
+        var footerDivider: CGRect
         var buttons: [(DraftButton, CGRect)]
         var stacked: Bool
         var showAll: CGRect?
@@ -229,8 +418,7 @@ nonisolated enum AskCardLayout {
     }
 
     /// [asks v2] A picked choice's ready reply, under the buttons: "Reply to Dana Reyes · Slack" (· Edited), the words
-    /// on a draft card's panel in its body style (clamped until Show All), then Edit and Send trailing as a draft
-    /// card's (stacked full width, Send on top, at the largest sizes or when they don't fit).
+    /// beside a clean tint left accent bar (clamped until Show All), subtle divider, then Edit and Send trailing.
     static func replyBlock(_ card: AskCardRow, reply: String, to: AskCards.ReplyTo, x: CGFloat, y: inout CGFloat, innerW: CGFloat,
                            category: UIContentSizeCategory, texts: inout [PromptPlacedText], spoken: inout [String]) -> ReplyBlock {
         y += 14
@@ -238,28 +426,29 @@ nonisolated enum AskCardLayout {
         let heading = AskCards.replyHeading(to) + (card.edited ? " · Edited" : "")
         let (h, _) = PromptLayout.clamped(PromptLayout.text(heading, headFont, ChatPalette.label2), width: innerW, maxLines: 2)
         texts.append(PromptPlacedText(text: h, frame: CGRect(x: x, y: y, width: innerW, height: h.size.height)))
-        y += h.size.height + 6
-        // The words on the inset panel, as a draft's.
-        let pad: CGFloat = 12
+        y += h.size.height + 8
+        let inset: CGFloat = 12
         let paperTop = y
-        y += pad
-        let wx = x + pad, wordsW = innerW - 2 * pad
+        let wx = x + inset, wordsW = max(60, innerW - inset)
         let (words, cut) = PromptLayout.clamped(PromptLayout.text(reply, PromptFonts.font(.body, category), ChatPalette.label), width: wordsW,
                                                 maxLines: card.expanded ? 0 : PromptRows.askReplyLines)
         texts.append(PromptPlacedText(text: words, frame: CGRect(x: wx, y: y, width: wordsW, height: words.size.height)))
+        let bodyBar = CGRect(x: x + 2, y: y + 2, width: 2.5, height: max(14, words.size.height - 4))
         y += words.size.height
         spoken.append(AskCards.replySpoken(to, reply) + (card.edited ? " (edited)" : ""))
         var showAll: CGRect?
         let showAllTitle = card.expanded ? "Show Less" : "Show All"
         if cut || card.expanded && PromptLayout.lineCount(words) > PromptRows.askReplyLines {
             let more = TextKitLayout(PromptLayout.text(showAllTitle, PromptFonts.font(.footnote, category), ChatPalette.tintText), width: nil)
-            let frame = CGRect(x: wx, y: y + 4, width: more.size.width, height: more.size.height)
+            let frame = CGRect(x: wx, y: y + 6, width: more.size.width, height: more.size.height)
             texts.append(PromptPlacedText(text: more, frame: frame))
             showAll = frame.insetBy(dx: -8, dy: -(44 - frame.height) / 2)
             y = frame.maxY
         }
-        y += pad
-        let paper = CGRect(x: x, y: paperTop, width: innerW, height: y - paperTop)
+        let paper = CGRect(x: x, y: paperTop, width: innerW, height: max(1, y - paperTop))
+        y += 12
+        let footerDivider = CGRect(x: x, y: y, width: innerW, height: 0)
+        y += 10
         // Edit and Send.
         let font = PromptFonts.button(category)
         let order: [DraftButton] = [.edit, .send]
@@ -267,7 +456,6 @@ nonisolated enum AskCardLayout {
         let widths = order.map { ceil((PromptLayout.draftButtonTitle($0) as NSString).size(withAttributes: [.font: font]).width) + 32 }
         let stacked = category.isAccessibilityCategory || widths.reduce(0, +) + 8 > innerW
         var placed: [(DraftButton, CGRect)] = []
-        y += 10
         if stacked {
             for b in order.reversed() {
                 placed.append((b, CGRect(x: x, y: y, width: innerW, height: bh)))
@@ -283,7 +471,8 @@ nonisolated enum AskCardLayout {
             }
             y += bh
         }
-        return ReplyBlock(paper: paper, buttons: placed, stacked: stacked, showAll: showAll, showAllTitle: showAllTitle)
+        return ReplyBlock(paper: paper, bodyBar: bodyBar, footerDivider: footerDivider, buttons: placed, stacked: stacked,
+                          showAll: showAll, showAllTitle: showAllTitle)
     }
 }
 
@@ -298,12 +487,18 @@ final class AskCardView: UIView {
     /// [asks v2] The ready reply's Send / Edit, and its Show All.
     var onReply: ((DraftButton) -> Void)?
     var onShowAll: (() -> Void)?
+    /// [calm-chat] Tap on a folded/answered ask receipt to expand or collapse.
+    var onToggle: (() -> Void)?
     private var buttons: [UIButton] = []
     private var replyButtons: [DraftButton: UIButton] = [:]
     private let showAll = UIControl()
     private let other = UIControl()
     private let link = UIControl()
+    private let toggle = UIControl()
     private let bar = UIView()
+    private let replyBar = UIView()
+    private let replyDivider = UIView()
+    private var replyBarTint = false
     private var chipViews: [(UIView, UIImageView)] = []
     /// VoiceOver's order after the card itself: the link, the buttons (the bot's pick first), Something else.
     private(set) var ordered: [UIView] = []
@@ -313,6 +508,20 @@ final class AskCardView: UIView {
         bar.isUserInteractionEnabled = false
         bar.layer.cornerRadius = 1.5
         addSubview(bar)
+        replyBar.isUserInteractionEnabled = false
+        replyBar.isHidden = true
+        replyBar.layer.cornerRadius = 1.25
+        addSubview(replyBar)
+        replyDivider.isUserInteractionEnabled = false
+        replyDivider.isHidden = true
+        addSubview(replyDivider)
+        toggle.isHidden = true
+        toggle.isAccessibilityElement = true
+        toggle.accessibilityTraits = .button
+        toggle.accessibilityIdentifier = "ask.toggle"
+        toggle.addAction(UIAction { [weak self] _ in self?.onToggle?() }, for: .touchUpInside)
+        addSubview(toggle)
+        PointerEffects.surface(toggle)
         for (control, id, label) in [(other, "ask.other", AskCardLayout.otherTitle), (link, "ask.link", ""), (showAll, "ask.showAll", "Show All")] {
             control.isAccessibilityElement = true
             control.accessibilityTraits = .button
@@ -334,9 +543,17 @@ final class AskCardView: UIView {
         return hit === self ? nil : hit
     }
 
-    func configure(_ g: AskCardGeometry) {
+    func configure(_ g: AskCardGeometry, cardFrame: CGRect? = nil) {
         bar.isHidden = g.quote == nil
         bar.frame = g.quote ?? .zero
+        replyBar.isHidden = g.bodyBar == nil
+        replyBar.frame = g.bodyBar ?? .zero
+        replyBarTint = g.bodyBarTint
+        replyDivider.isHidden = g.footerDivider == nil
+        if let div = g.footerDivider {
+            let hair = HQShape.pixel(traitCollection.displayScale)
+            replyDivider.frame = CGRect(x: div.minX, y: div.minY, width: div.width, height: hair)
+        }
         while chipViews.count < g.chips.count {
             let chip = UIView()
             chip.isUserInteractionEnabled = false
@@ -360,6 +577,21 @@ final class AskCardView: UIView {
         }
         while buttons.count < g.buttons.count { buttons.append(make(buttons.count)) }
         ordered = []
+        if let tf = g.toggleFrame {
+            toggle.isHidden = false
+            toggle.frame = tf
+            toggle.accessibilityLabel = g.toggleLabel
+            toggle.accessibilityValue = g.toggleExpanded ? "Expanded" : "Collapsed"
+            if let cardFrame, !g.toggleExpanded {
+                PointerEffects.fit(toggle, card: cardFrame, radius: ChatMetrics.insetCardRadius)
+            } else {
+                toggle.layer.cornerRadius = 8
+                PointerEffects.outlineDidLayout(toggle)
+            }
+            ordered.append(toggle)
+        } else {
+            toggle.isHidden = true
+        }
         if let frame = g.link {
             link.isHidden = false
             link.frame = frame
@@ -404,6 +636,8 @@ final class AskCardView: UIView {
 
     private func recolor() {
         bar.backgroundColor = ChatPalette.tint.withAlphaComponent(0.55)
+        replyBar.backgroundColor = replyBarTint ? ChatPalette.tint.withAlphaComponent(0.55) : ChatPalette.separator
+        replyDivider.backgroundColor = ChatPalette.separator.withAlphaComponent(0.55)
         let edge = ChatPalette.separator.resolvedColor(with: traitCollection)
         for (chip, icon) in chipViews {
             chip.layer.borderColor = edge.cgColor

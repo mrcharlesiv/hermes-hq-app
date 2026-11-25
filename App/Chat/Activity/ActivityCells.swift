@@ -1572,6 +1572,10 @@ final class TasksOfferCell: ChatBaseCell {
         var hidden = false { didSet { for v: UIView in [circle, title, due] { v.isHidden = hidden } } }
     }
 
+    private let foldButton = UIControl()
+    private let foldIcon = UIImageView()
+    private let foldLabel = UILabel()
+    private let foldChevron = UIImageView()
     private let card = UIView()
     private let badge = UIImageView()
     private let header = UILabel()
@@ -1592,6 +1596,22 @@ final class TasksOfferCell: ChatBaseCell {
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
+        foldButton.isHidden = true
+        foldButton.isAccessibilityElement = true
+        foldButton.accessibilityTraits = .button
+        foldButton.accessibilityIdentifier = "chat.tasks-offer.fold"
+        foldButton.addTarget(self, action: #selector(foldTapped), for: .touchUpInside)
+        foldIcon.contentMode = .scaleAspectFit
+        foldIcon.isUserInteractionEnabled = false
+        foldLabel.lineBreakMode = .byTruncatingTail
+        foldLabel.isUserInteractionEnabled = false
+        foldChevron.contentMode = .scaleAspectFit
+        foldChevron.isUserInteractionEnabled = false
+        foldButton.addSubview(foldIcon)
+        foldButton.addSubview(foldLabel)
+        foldButton.addSubview(foldChevron)
+        contentView.addSubview(foldButton)
+        PointerEffects.surface(foldButton, capsule: true)
         card.layer.cornerRadius = ChatMetrics.insetCardRadius
         card.layer.cornerCurve = .continuous
         card.isUserInteractionEnabled = false
@@ -1633,6 +1653,14 @@ final class TasksOfferCell: ChatBaseCell {
         guard case .activity(.tasksOffer(let t)) = layout.content else { return }
         if self.layout?.offer.id != t.offer.id { busy = false }
         self.layout = t
+        configureFoldLine(t)
+        let showsCard = t.cardShown
+        for v: UIView in [card, badge, header, footRule] { v.isHidden = !showsCard }
+        if !showsCard {
+            for v: UIView in [why, more, mainButton, status, statusMark, leftButton, rightButton] { v.isHidden = true }
+            for v in lineViews { v.hidden = true }
+            return
+        }
         card.frame = t.cardFrame
         styleChatCard(card)
         badge.frame = t.badgeFrame
@@ -1683,7 +1711,7 @@ final class TasksOfferCell: ChatBaseCell {
 
     /// The card as the offer stands now: its tasks ticked once they are on your list, and the foot for its state.
     private func paint() {
-        guard let t = layout else { return }
+        guard let t = layout, t.cardShown else { return }
         let (offer, past) = TodoOfferStates.shown(t.offer)
         foot = TodoLists.chatFoot(offer, past: past)
         let added = offer.state == "accepted" && !t.offer.tasks.isEmpty
@@ -1781,6 +1809,52 @@ final class TasksOfferCell: ChatBaseCell {
         }
     }
 
+    private func configureFoldLine(_ t: TasksOfferLayout) {
+        guard let row = t.foldFrame, let text = t.foldText, let font = t.foldFont else {
+            foldButton.isHidden = true
+            placeBacking(nil, radius: 0)
+            return
+        }
+        foldButton.isHidden = false
+        let onPill = Backdrop.chats.shows
+        let words = NSMutableAttributedString(attributedString: text)
+        if onPill {
+            words.addAttribute(.foregroundColor, value: ChatPalette.label, range: NSRange(location: 0, length: words.length))
+        }
+        foldLabel.attributedText = words
+        let iconSide = ceil(min(22, max(15, font.pointSize * 1.1)))
+        let chevSide = ceil(min(18, max(11, font.pointSize * 0.85)))
+        let padX: CGFloat = 8, iconGap: CGFloat = 7, chevGap: CGFloat = 6
+        let room = max(40, row.width - iconSide - iconGap - chevGap - chevSide)
+        let textW = min(ceil(words.size().width), room)
+        let contentW = iconSide + iconGap + textW + chevGap + chevSide
+        let tapH = max(44, row.height)
+        foldButton.frame = CGRect(x: row.minX - padX, y: row.minY + ((row.height - tapH) / 2).rounded(),
+                                  width: contentW + 2 * padX, height: tapH)
+        let midY = tapH / 2
+        foldIcon.frame = CGRect(x: padX, y: (midY - iconSide / 2).rounded(), width: iconSide, height: iconSide)
+        let iconName = t.foldGood ? "checkmark.circle" : "tray.and.arrow.down"
+        foldIcon.image = UIImage(systemName: iconName, withConfiguration: UIImage.SymbolConfiguration(pointSize: iconSide * 0.86, weight: .regular))
+        foldIcon.tintColor = onPill ? ChatPalette.label : ChatPalette.label2
+        let textH = ceil(font.lineHeight)
+        foldLabel.frame = CGRect(x: padX + iconSide + iconGap, y: (midY - textH / 2).rounded(), width: textW, height: textH)
+        foldChevron.frame = CGRect(x: foldLabel.frame.maxX + chevGap, y: (midY - chevSide / 2).rounded(), width: chevSide, height: chevSide)
+        foldChevron.image = UIImage(systemName: t.opened ? "chevron.up" : "chevron.down",
+                                    withConfiguration: UIImage.SymbolConfiguration(pointSize: chevSide * 0.86, weight: .semibold))
+        foldChevron.tintColor = onPill ? ChatPalette.label2 : ChatPalette.label3
+        foldButton.accessibilityLabel = words.string
+        foldButton.accessibilityValue = t.opened ? "Expanded" : "Collapsed"
+        let pillH = min(row.height, ceil(max(font.lineHeight, iconSide)) + 8)
+        placeBacking(CGRect(x: row.minX - padX, y: row.minY + ((row.height - pillH) / 2).rounded(),
+                            width: contentW + 2 * padX, height: pillH), radius: pillH / 2)
+        PointerEffects.outlineDidLayout(foldButton)
+    }
+
+    @objc private func foldTapped() {
+        Haptics.play(.selection)
+        delegate?.chatCellToggle(rowId: rowId)
+    }
+
     @objc private func mainTapped() {
         guard let main = foot.main else { return }
         answer(main.action, list: main.makesList)
@@ -1828,6 +1902,10 @@ final class TaskCloseCell: ChatBaseCell {
         override var isHighlighted: Bool { didSet { alpha = PointerEffects.dim(isHighlighted, to: 0.5) } }   // motion-ok: colour only
     }
 
+    private let foldButton = UIControl()
+    private let foldIcon = UIImageView()
+    private let foldLabel = UILabel()
+    private let foldChevron = UIImageView()
     private let card = UIView()
     private let body = BodyView()
     private let doneButton = UIButton(type: .system)
@@ -1841,6 +1919,22 @@ final class TaskCloseCell: ChatBaseCell {
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
+        foldButton.isHidden = true
+        foldButton.isAccessibilityElement = true
+        foldButton.accessibilityTraits = .button
+        foldButton.accessibilityIdentifier = "chat.task-close.fold"
+        foldButton.addTarget(self, action: #selector(foldTapped), for: .touchUpInside)
+        foldIcon.contentMode = .scaleAspectFit
+        foldIcon.isUserInteractionEnabled = false
+        foldLabel.lineBreakMode = .byTruncatingTail
+        foldLabel.isUserInteractionEnabled = false
+        foldChevron.contentMode = .scaleAspectFit
+        foldChevron.isUserInteractionEnabled = false
+        foldButton.addSubview(foldIcon)
+        foldButton.addSubview(foldLabel)
+        foldButton.addSubview(foldChevron)
+        contentView.addSubview(foldButton)
+        PointerEffects.surface(foldButton, capsule: true)
         card.layer.cornerRadius = ChatMetrics.insetCardRadius
         card.layer.cornerCurve = .continuous
         card.isUserInteractionEnabled = false
@@ -1870,6 +1964,16 @@ final class TaskCloseCell: ChatBaseCell {
         guard case .activity(.taskClose(let t)) = layout.content else { return }
         if self.layout?.row.taskId != t.row.taskId || self.layout?.row.state != t.row.state { busy = nil }
         self.layout = t
+        configureFoldLine(t)
+        let showsCard = t.cardShown
+        card.isHidden = !showsCard
+        body.isHidden = !showsCard
+        if !showsCard {
+            status.isHidden = true
+            statusMark.isHidden = true
+            for button in [doneButton, keepButton, undoButton] { show(button, false) }
+            return
+        }
         card.frame = t.cardFrame
         styleChatCard(card)
         body.frame = t.cardFrame
@@ -1906,7 +2010,7 @@ final class TaskCloseCell: ChatBaseCell {
 
     /// The card for its state: the buttons while the offer waits, else the quiet line (and Undo on a done task).
     private func paint() {
-        guard let t = layout else { return }
+        guard let t = layout, t.cardShown else { return }
         let row = t.row
         let done: Bool
         if case .done = row.state { done = true } else { done = false }
@@ -1998,6 +2102,54 @@ final class TaskCloseCell: ChatBaseCell {
             self.busy = nil
             self.paint()
         }
+    }
+
+    private func configureFoldLine(_ t: TaskCloseLayout) {
+        guard let row = t.foldFrame, let text = t.foldText, let font = t.foldFont else {
+            foldButton.isHidden = true
+            placeBacking(nil, radius: 0)
+            return
+        }
+        foldButton.isHidden = false
+        let onPill = Backdrop.chats.shows
+        let words = NSMutableAttributedString(attributedString: text)
+        if onPill {
+            words.addAttribute(.foregroundColor, value: ChatPalette.label, range: NSRange(location: 0, length: words.length))
+        }
+        foldLabel.attributedText = words
+        let iconSide = ceil(min(22, max(15, font.pointSize * 1.1)))
+        let chevSide = ceil(min(18, max(11, font.pointSize * 0.85)))
+        let padX: CGFloat = 8, iconGap: CGFloat = 7, chevGap: CGFloat = 6
+        let room = max(40, row.width - iconSide - iconGap - chevGap - chevSide)
+        let textW = min(ceil(words.size().width), room)
+        let contentW = iconSide + iconGap + textW + chevGap + chevSide
+        let tapH = max(44, row.height)
+        foldButton.frame = CGRect(x: row.minX - padX, y: row.minY + ((row.height - tapH) / 2).rounded(),
+                                  width: contentW + 2 * padX, height: tapH)
+        let midY = tapH / 2
+        foldIcon.frame = CGRect(x: padX, y: (midY - iconSide / 2).rounded(), width: iconSide, height: iconSide)
+        let isDone: Bool
+        if case .done = t.row.state { isDone = true } else { isDone = false }
+        let iconName = isDone ? "checkmark.circle" : "circle"
+        foldIcon.image = UIImage(systemName: iconName, withConfiguration: UIImage.SymbolConfiguration(pointSize: iconSide * 0.86, weight: .regular))
+        foldIcon.tintColor = onPill ? ChatPalette.label : ChatPalette.label2
+        let textH = ceil(font.lineHeight)
+        foldLabel.frame = CGRect(x: padX + iconSide + iconGap, y: (midY - textH / 2).rounded(), width: textW, height: textH)
+        foldChevron.frame = CGRect(x: foldLabel.frame.maxX + chevGap, y: (midY - chevSide / 2).rounded(), width: chevSide, height: chevSide)
+        foldChevron.image = UIImage(systemName: t.opened ? "chevron.up" : "chevron.down",
+                                    withConfiguration: UIImage.SymbolConfiguration(pointSize: chevSide * 0.86, weight: .semibold))
+        foldChevron.tintColor = onPill ? ChatPalette.label2 : ChatPalette.label3
+        foldButton.accessibilityLabel = words.string
+        foldButton.accessibilityValue = t.opened ? "Expanded" : "Collapsed"
+        let pillH = min(row.height, ceil(max(font.lineHeight, iconSide)) + 8)
+        placeBacking(CGRect(x: row.minX - padX, y: row.minY + ((row.height - pillH) / 2).rounded(),
+                            width: contentW + 2 * padX, height: pillH), radius: pillH / 2)
+        PointerEffects.outlineDidLayout(foldButton)
+    }
+
+    @objc private func foldTapped() {
+        Haptics.play(.selection)
+        delegate?.chatCellToggle(rowId: rowId)
     }
 
     @objc private func doneTapped() { send(.markDone) }

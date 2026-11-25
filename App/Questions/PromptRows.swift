@@ -33,6 +33,15 @@ nonisolated struct SettledClarifyCard: Sendable, Equatable, Hashable {
     var answerable: Bool
     /// An answer came later, in the chat.
     var answeredLater: Bool
+    /// [calm-chat] Row id for tap-to-expand toggle (`<messageId>|q<callId>`).
+    var rowId: String = ""
+    /// [calm-chat] Quiet one-line receipt/disclosure once answered or left behind by later turns.
+    var folded: Bool = false
+    var expanded: Bool = false
+    /// [calm-chat] Unanswered question left behind by later human turns (drops live Answer Now pill).
+    var staleUnanswered: Bool = false
+
+    var isQuietFolded: Bool { folded && !expanded }
 }
 
 nonisolated struct ApprovalCardRow: Sendable, Equatable, Hashable {
@@ -106,15 +115,27 @@ nonisolated enum PromptRows {
     }
 
     /// The settled card: answers you gave later in the chat (after this message) fill its blanks; a blank left over
-    /// offers Answer Now (not in a room, whose sends go to its members).
+    /// offers Answer Now until later human turns move past it (not in a room, whose sends go to its members).
     static func settledCard(_ rows: [ClarifyQA], call: ToolCall, message: ChatMessage, input: ChatRowBuilder.Input) -> SettledClarifyCard {
         let key = ClarifyLate.key(rows.map(\.question))
         var found = input.clarifyLate[key]
         if let f = found, f.index != .max, let at = input.messages.lastIndex(where: { $0.id == message.id }), f.index < at { found = nil }
         let (shown, later) = ClarifyLate.filled(rows, found)
         let blank = shown.contains { $0.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let rowId = "\(message.id)|q\(call.id)"
+        let staleUnanswered = blank && ClarifyLate.hasLaterHumanTurn(after: message.id, in: input.messages)
+        let hasProseAfter = !message.isStreaming && {
+            guard let callIndex = message.parts.firstIndex(where: { if case .tool(let c) = $0 { return c.id == call.id } else { return false } }) else { return false }
+            return message.parts[(callIndex + 1)...].contains { part in
+                if case .text(let t) = part { return !ReasoningTags.isBlank(t) }
+                return false
+            }
+        }()
+        let folded = staleUnanswered || (!blank && (hasProseAfter || ActivityRows.hasLaterConversation(after: message, in: input.messages)))
         return SettledClarifyCard(rows: shown, key: key, messageId: message.id, multi: multiSelect(call.argsText),
-                                  answerable: blank && input.room == nil, answeredLater: later)
+                                  answerable: blank && input.room == nil && !staleUnanswered, answeredLater: later,
+                                  rowId: rowId, folded: folded, expanded: input.expanded.contains(rowId),
+                                  staleUnanswered: staleUnanswered)
     }
 
     /// The questions (on one line) the call asked as multi-select.
@@ -188,6 +209,15 @@ nonisolated struct PromptSymbol: Sendable, Equatable {
     enum Style: Sendable { case header, picked, blank, dim, quiet, success }
 }
 
+/// [calm-chat] Tap target + frosted backing for a folded settled clarify disclosure row.
+nonisolated struct PromptFoldToggle: Sendable, Equatable {
+    var rowId: String
+    var frame: CGRect
+    var label: String
+    var expanded: Bool
+    var backingFrame: CGRect?
+}
+
 nonisolated struct PromptRowLayout: @unchecked Sendable {
     /// The card (a reply bubble's fill, no edge) in row coordinates; nil for no card.
     var cardFrame: CGRect?
@@ -202,6 +232,8 @@ nonisolated struct PromptRowLayout: @unchecked Sendable {
     var shopping: ShoppingRowLayout? = nil
     /// [asks] The ask card's buttons, links, bar and chips (App/Asks/AskCardView.swift).
     var ask: AskCardGeometry? = nil
+    /// [calm-chat] Tap-to-expand toggle for a folded settled clarify card.
+    var foldToggle: PromptFoldToggle? = nil
     /// VoiceOver's reading of the whole card.
     var accessibility: String
     /// A settled question card's Answer Now button (a question went without an answer), in row coordinates.
@@ -526,9 +558,88 @@ nonisolated enum PromptLayout {
     }
 
     static func settled(_ card: SettledClarifyCard, gap: CGFloat, width: CGFloat, category: UIContentSizeCategory) -> RowLayout {
-        qa(card.rows.map { ($0.question, $0.answer.trimmingCharacters(in: .whitespacesAndNewlines), $0.unanswered) },
-           gap: gap, width: width, category: category, answerNow: card.answerable,
-           title: card.answeredLater ? (card.rows.count == 1 ? "Answered later" : "Your answers, some later") : nil)
+        if card.folded {
+            return settledFolded(card, gap: gap, width: width, category: category)
+        }
+        return qa(card.rows.map { ($0.question, $0.answer.trimmingCharacters(in: .whitespacesAndNewlines), $0.unanswered) },
+                  gap: gap, width: width, category: category, answerNow: card.answerable,
+                  title: card.answeredLater ? (card.rows.count == 1 ? "Answered later" : "Your answers, some later") : nil)
+    }
+
+    /// [calm-chat] Quiet one-line disclosure for settled clarify Q&A cards once answered or left behind;
+    /// tapping expands the full Q&A card directly beneath the disclosure line.
+    private static func settledFolded(_ card: SettledClarifyCard, gap: CGFloat, width: CGFloat, category: UIContentSizeCategory) -> RowLayout {
+        let side = cardSide
+        let cardW = cardWidth(for: width)
+        let font = PromptFonts.font(.footnote, category, cap: 22)
+        let strongFont = PromptFonts.font(.footnote, category, weight: .semibold, cap: 22)
+        let iconSide = ceil(min(22, max(15, font.pointSize * 1.1)))
+        let chevW = ceil(min(18, max(11, font.pointSize * 0.85)))
+        let rowH = max(32, ceil(font.lineHeight) + 10)
+        let top = max(0, gap)
+
+        let answeredRows = card.rows.filter { !$0.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let allSkipped = answeredRows.isEmpty
+        let lead: String
+        let detail: String
+        if allSkipped {
+            lead = card.rows.count == 1 ? "Question skipped" : "\(card.rows.count) questions skipped"
+            detail = card.rows.first.map { " · \(ClarifyLate.flat($0.question))" } ?? ""
+        } else if card.rows.count == 1, let only = answeredRows.first {
+            lead = only.answer.trimmingCharacters(in: .whitespacesAndNewlines)
+            detail = " · \(ClarifyLate.flat(only.question))"
+        } else {
+            lead = "Answered \(answeredRows.count) questions"
+            detail = answeredRows.first.map { " · \($0.answer.trimmingCharacters(in: .whitespacesAndNewlines))" } ?? ""
+        }
+
+        let attr = NSMutableAttributedString(attributedString: text(lead, strongFont, allSkipped ? ChatPalette.label2 : ChatPalette.label))
+        if !detail.isEmpty { attr.append(text(detail, font, ChatPalette.label2)) }
+
+        let textX = side + iconSide + 7
+        let maxTextW = max(60, cardW - iconSide - 7 - 6 - chevW)
+        let (lineLayout, _) = clamped(attr, width: maxTextW, maxLines: 1)
+        let lineY = top + ((rowH - lineLayout.size.height) / 2).rounded()
+        let textFrame = CGRect(x: textX, y: lineY, width: lineLayout.size.width, height: lineLayout.size.height)
+        let leadSymbol = PromptSymbol(
+            frame: CGRect(x: side, y: top + ((rowH - iconSide) / 2).rounded(), width: iconSide, height: iconSide),
+            name: allSkipped ? "minus.circle" : "checkmark.circle.fill",
+            style: allSkipped ? .blank : .success
+        )
+        let chevSymbol = PromptSymbol(
+            frame: CGRect(x: textFrame.maxX + 6, y: top + ((rowH - chevW) / 2).rounded(), width: chevW, height: chevW),
+            name: card.expanded ? "chevron.up" : "chevron.down",
+            style: .blank
+        )
+        let rowWidth = min(cardW, chevSymbol.frame.maxX - side)
+        let tapH = max(44, rowH)
+        let toggleFrame = CGRect(x: side - 6, y: top + (rowH - tapH) / 2, width: rowWidth + 12, height: tapH)
+        let pillH = min(rowH, ceil(max(font.lineHeight, iconSide)) + 8)
+        let backingFrame = CGRect(x: side - 8, y: top + ((rowH - pillH) / 2).rounded(), width: rowWidth + 16, height: pillH)
+        let spoken = card.rows.map { r -> String in
+            let ans = r.answer.trimmingCharacters(in: .whitespacesAndNewlines)
+            return "\(r.question): \(ans.isEmpty ? (r.unanswered ? "No answer" : "Skipped") : ans)"
+        }.joined(separator: ". ")
+        let accessibility = "\(lead). \(spoken)"
+        let toggle = PromptFoldToggle(rowId: card.rowId, frame: toggleFrame, label: accessibility, expanded: card.expanded,
+                                      backingFrame: backingFrame)
+
+        guard card.expanded else {
+            var layout = PromptRowLayout(cardFrame: nil, texts: [PromptPlacedText(text: lineLayout, frame: textFrame)],
+                                         approval: nil, symbols: [leadSymbol, chevSymbol], rules: [], accessibility: accessibility)
+            layout.foldToggle = toggle
+            return RowLayout(height: ceil(top + rowH + 2), content: .prompt(layout))
+        }
+
+        // Expanded: draw the full Q&A card directly below the quiet disclosure toggle.
+        let inner = qa(card.rows.map { ($0.question, $0.answer.trimmingCharacters(in: .whitespacesAndNewlines), $0.unanswered) },
+                       gap: top + rowH, width: width, category: category, answerNow: card.answerable,
+                       title: card.answeredLater ? (card.rows.count == 1 ? "Answered later" : "Your answers, some later") : nil)
+        guard case .prompt(var full) = inner.content else { return inner }
+        full.texts.insert(PromptPlacedText(text: lineLayout, frame: textFrame), at: 0)
+        full.symbols.insert(contentsOf: [leadSymbol, chevSymbol], at: 0)
+        full.foldToggle = toggle
+        return RowLayout(height: inner.height, content: .prompt(full))
     }
 
     static let answerNowTitle = "Answer Now"
@@ -656,12 +767,14 @@ nonisolated struct DraftRowsInput: Sendable, Equatable {
     var editing: String? = nil
     /// [calm-chat] Draft row ids superseded by a later draft to the same destination; nil computes from `messages`.
     var superseded: Set<String>? = nil
+    /// [calm-chat] Draft row ids left unanswered after 2+ later human turns; nil computes from `messages`.
+    var stale: Set<String>? = nil
 }
 
 nonisolated enum DraftButton: Sendable, Hashable { case skip, edit, send }
 
 nonisolated struct DraftCardRow: Sendable, Equatable, Hashable {
-    enum State: Sendable, Hashable { case waiting, sent, skipped, superseded }
+    enum State: Sendable, Hashable { case waiting, sent, skipped, superseded, stale }
     var draft: DraftCards.Draft
     var rowId: String
     var messageId: String
@@ -676,7 +789,7 @@ nonisolated struct DraftCardRow: Sendable, Equatable, Hashable {
     var expanded: Bool
 
     /// [calm-chat] Collapsed quiet one-line disclosure row (no heavy card chrome).
-    var isQuietFolded: Bool { (state == .superseded || state == .skipped) && !expanded }
+    var isQuietFolded: Bool { (state == .superseded || state == .skipped || state == .stale) && !expanded }
 }
 
 nonisolated struct DraftCardLayout: @unchecked Sendable {
@@ -727,8 +840,11 @@ nonisolated extension PromptRows {
             card.state = .skipped
         case nil:
             let superseded = input.drafts.superseded ?? DraftCards.supersededRowIds(input.messages)
+            let stale = input.drafts.stale ?? DraftCards.staleRowIds(input.messages)
             if superseded.contains(id) {
                 card.state = .superseded
+            } else if stale.contains(id) {
+                card.state = .stale
             } else if let edit = input.drafts.edits[draft.id] {
                 card.body = edit
             }
@@ -778,16 +894,17 @@ nonisolated extension PromptLayout {
         case .sent: d.edited ? "Approved to send, with your edits" : "Approved to send"
         case .skipped: "Not sent"
         case .superseded: "Revised below"
+        case .stale: "Left unsent"
         }
     }
 
     /// [calm-chat] The draft card:
-    /// - `.superseded` / `.skipped`: quiet one-line disclosure row (no live buttons); tap expands read-only text.
+    /// - `.superseded` / `.skipped` / `.stale`: quiet one-line disclosure row (no live buttons); tap expands read-only text.
     /// - `.sent`: compact two-line receipt card with a quoted preview stem; tap expands full text.
     /// - `.waiting`: clean single-surface card on the readable rail with left tint bar and trailing action row.
     static func draft(_ d: DraftCardRow, gap: CGFloat, width: CGFloat, category: UIContentSizeCategory) -> RowLayout {
         switch d.state {
-        case .superseded, .skipped:
+        case .superseded, .skipped, .stale:
             return draftFolded(d, gap: gap, width: width, category: category)
         case .sent:
             return draftReceipt(d, gap: gap, width: width, category: category)

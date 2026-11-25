@@ -148,15 +148,69 @@ nonisolated enum UpdateGroups {
             return rows
         }
 
-        /// The row folds into a run: a small row, or one of the bot's replies inside a talk with another bot.
-        func small(_ m: Member) -> Bool { UpdateGroups.isSmall(at(m.message)[m.row]) || interim(m) || foldsFiles(m) }
+        /// The row folds into a run: a small row, an interim reply inside bot talk, a superseded recurring cron
+        /// briefing, or a files card on a wordless reply.
+        func small(_ m: Member) -> Bool {
+            UpdateGroups.isSmall(at(m.message)[m.row]) || interim(m) || supersededCron(m) || foldsFiles(m)
+        }
+
+        private var cronSuperseded: [Member: Bool] = [:]
+
+        /// [calm-chat] An earlier non-silent reply to a recurring scheduled job when a newer run of the exact same job
+        /// already replied later with no human turn between them: folds into the update group so only the newest
+        /// briefing stays open in the transcript. Never folds replies to human messages or different jobs.
+        func supersededCron(_ m: Member) -> Bool {
+            if let known = cronSuperseded[m] { return known }
+            let found = findSupersededCron(m)
+            cronSuperseded[m] = found
+            return found
+        }
+
+        private func cronJobKey(_ row: ChatRow) -> String? {
+            guard case .backgroundResult(let b) = row.kind, b.cron else { return nil }
+            let name = UpdateGroups.head(b.title).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return name.isEmpty ? nil : name
+        }
+
+        private func findSupersededCron(_ m: Member) -> Bool {
+            guard input.room == nil, UpdateGroups.isBotsReply(at(m.message)[m.row]) else { return false }
+            // Find the scheduled job delivery that triggered this reply (no human bubble or other reply in between).
+            var jobKey: String?
+            var back = m.message - 1
+            let minBack = max(0, m.message - 8)
+            backScan: while back >= minBack {
+                for row in at(back).reversed() {
+                    if let key = cronJobKey(row) { jobKey = key; break backScan }
+                    if UpdateGroups.isSmall(row) { continue }
+                    return false
+                }
+                back -= 1
+            }
+            guard let jobKey else { return false }
+            // Look ahead for a newer run of the exact same job that also replied, with no human turn in between.
+            var sawLaterSameJob = false
+            let maxAhead = min(input.messages.count, m.message + UpdateGroups.reach + 1)
+            for i in (m.message + 1)..<maxAhead {
+                for row in at(i) {
+                    if case .bubble(let b) = row.kind, b.mine { return false }
+                    if let key = cronJobKey(row), key == jobKey {
+                        sawLaterSameJob = true
+                        continue
+                    }
+                    if sawLaterSameJob, UpdateGroups.isBotsReply(row) { return true }
+                }
+            }
+            return false
+        }
 
         /// [files] The files card of a reply whose other rows all fold (its work line, or nothing at all): it folds too.
         func foldsFiles(_ m: Member) -> Bool {
             let own = at(m.message)
             guard own[m.row].changedFiles != nil else { return false }
             return own.indices.allSatisfy { r in
-                r == m.row || UpdateGroups.isSmall(own[r]) || interim(Member(message: m.message, row: r))
+                r == m.row || UpdateGroups.isSmall(own[r])
+                    || interim(Member(message: m.message, row: r))
+                    || supersededCron(Member(message: m.message, row: r))
             }
         }
 
@@ -511,6 +565,48 @@ nonisolated enum UpdateGroups {
                       rows.at(next).indices.allSatisfy({ rows.small(Member(message: next, row: $0)) }) { next += 1 }
                 answers = min(count - 1, next)
             }
+            // [calm-chat] A new run (or reply) of a recurring scheduled job in `range` can supersede earlier runs of
+            // the same job back to the previous human turn: widen `a` so those earlier runs fold live on partial rebuilds.
+            var newJobs = Set<String>()
+            var hasBotReply = false
+            for i in range {
+                for row in rows.at(i) {
+                    if case .backgroundResult(let b) = row.kind, b.cron {
+                        let name = head(b.title).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                        if !name.isEmpty { newJobs.insert(name) }
+                    }
+                    if isBotsReply(row) { hasBotReply = true }
+                }
+            }
+            if hasBotReply, range.lowerBound > 0 {
+                var trig = range.lowerBound - 1
+                let minTrig = max(0, range.lowerBound - 8)
+                trigScan: while trig >= minTrig {
+                    for row in rows.at(trig).reversed() {
+                        if case .backgroundResult(let b) = row.kind, b.cron {
+                            let name = head(b.title).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                            if !name.isEmpty { newJobs.insert(name) }
+                            break trigScan
+                        }
+                        if isSmall(row) { continue }
+                        break trigScan
+                    }
+                    trig -= 1
+                }
+            }
+            if !newJobs.isEmpty {
+                var back = range.lowerBound - 1
+                cronLook: while back >= 0, range.lowerBound - back <= reach {
+                    for row in rows.at(back).reversed() {
+                        if case .bubble(let b) = row.kind, b.mine { break cronLook }
+                        if case .backgroundResult(let b) = row.kind, b.cron {
+                            let name = head(b.title).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                            if newJobs.contains(name) { a = min(a, back) }
+                        }
+                    }
+                    back -= 1
+                }
+            }
             b = max(b, answers)
         }
         let plan = plan(input, range: a..<(b + 1), rows: rows)
@@ -638,13 +734,14 @@ nonisolated enum UpdateGroups {
             .map(\.element)
         var marks: [UpdatesGroup.Mark] = []
         let talk = talkedWith(all)
+        let cronTitle = talk == nil ? cronRunTitle(all) : nil
         for item in ordered where marks.count < 3 && !marks.contains(where: { same($0, item.mark) }) {
-            // [exchange] The chat's own face isn't one of a talk's marks: the line is about the bots it talked with.
-            if talk != nil, item.original.isBubble { continue }
+            // [exchange] The chat's own face isn't one of a talk's or recurring cron group's marks.
+            if (talk != nil || cronTitle != nil), item.original.isBubble { continue }
             marks.append(item.mark)
         }
         // Only the words before the title's colon show; the rest is in the sheet.
-        var row = BackgroundResultRow(title: short(talk ?? head(ordered[0].title)), result: "", process: false, expanded: false)
+        var row = BackgroundResultRow(title: short(talk ?? cronTitle ?? head(ordered[0].title)), result: "", process: false, expanded: false)
         let titles = all.map { head($0.title).components(separatedBy: " · ")[0] }
         row.group = UpdatesGroup(marks: marks, tail: counts(all, talk: talk).tail, count: all.count, opens: true, titles: titles)
         var h = Hasher()
@@ -654,7 +751,17 @@ nonisolated enum UpdateGroups {
                         kind: .backgroundResult(row), gapAbove: ChatMetrics.turnGap, variant: 0)]
     }
 
-    /// The line's count ("3 more", "4 messages") and the sheet's ("4 updates", "4 messages").
+    /// [calm-chat] When a group consists of superseded runs of one recurring scheduled job, returns that job's title.
+    private static func cronRunTitle(_ all: [Item]) -> String? {
+        let cronItems = all.filter { if case .backgroundResult(let b) = $0.original.kind { return b.cron } else { return false } }
+        let cronReplies = all.filter { $0.original.isBubble }.count
+        guard !cronItems.isEmpty, cronReplies > 0 else { return nil }
+        let keys = Set(cronItems.map { head($0.title).trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
+        guard keys.count == 1, let first = cronItems.first else { return nil }
+        return head(first.title)
+    }
+
+    /// The line's count ("3 more", "4 messages", "3 earlier runs") and the sheet's ("4 updates", "4 messages").
     private static func counts(_ all: [Item], talk: String?) -> (tail: String, whole: String) {
         let titles = all.map { head($0.title).components(separatedBy: " · ")[0] }
         // Every one from (or to) the same bot: "From Hermes · 2 messages", not "· 1 more", which reads as something else.
@@ -662,6 +769,12 @@ nonisolated enum UpdateGroups {
         // [exchange] A talk counts its messages: the bot's replies and the messages between the bots.
         let said = all.filter { $0.original.isBubble || isBotTalk($0.original) }.count
         if talk != nil { return ("\(said) messages", "\(said) messages") }
+        // [calm-chat] Consecutive superseded runs of one recurring scheduled job: name how many earlier runs folded.
+        if cronRunTitle(all) != nil {
+            let cronReplies = all.filter { $0.original.isBubble }.count
+            let label = cronReplies == 1 ? "1 earlier run" : "\(cronReplies) earlier runs"
+            return (label, label)
+        }
         if sameBot { return ("\(all.count) messages", "\(all.count) messages") }
         return ("\(all.count - 1) more", "\(all.count) updates")
     }
@@ -680,9 +793,10 @@ nonisolated enum UpdateGroups {
         let all = items(group, rows: rows)
         guard all.count > 1 else { return nil }
         let talk = talkedWith(all)
+        let cronTitle = talk == nil ? cronRunTitle(all) : nil
         let titles = Set(all.map { head($0.title).components(separatedBy: " · ")[0] })
         let sameBot = all.allSatisfy { $0.rank >= 4 } && titles.count == 1
-        let title = talk ?? (sameBot ? short(head(all[0].title)) : "Updates")
+        let title = talk ?? cronTitle.map { short($0) } ?? (sameBot ? short(head(all[0].title)) : "Updates")
         let dated = days(group, input: input) != nil
         let members = all.map { member($0, dated: dated, input: input) }
         let times = all.compactMap { input.messages[$0.message].timestamp }

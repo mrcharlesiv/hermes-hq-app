@@ -1935,7 +1935,8 @@ private let allStates: [ThemeState] = SkinCatalog.all.flatMap { skin in
     }
 }
 
-/// [plain-replies] Chat Bubbles › Reply Bubbles: off draws a bot's replies with no bubble, full width, in the iOS look.
+/// [plain-replies] Chat Bubbles › Reply Bubbles: off draws a bot's replies with no bubble, full width, in both the iOS
+/// look and Desktop Look High Contrast.
 @Suite struct PlainRepliesTests {
     @Test func bubblesUntilTurnedOffAndStoredOnlyWhenOff() {
         let suite = defaults()
@@ -1954,17 +1955,27 @@ private let allStates: [ThemeState] = SkinCatalog.all.flatMap { skin in
         #expect(SyncedSettingKeys.settings.contains("hqn.theme.plainReplies"), "it follows the owner to the other devices")
     }
 
-    @Test func appliesInTheIOSLookAndTheDesktopLookStaysPlain() {
+    @Test func appliesInTheIOSLookAndDesktopLookHighContrast() {
         var state = ThemeState.default
         #expect(!state.appliedPlainReplies)
         state.plainReplies = true
         #expect(state.appliedPlainReplies)
         #expect(state.layoutSignature != ThemeState.default.layoutSignature, "a change lays the chats out again")
+
         var look = ThemeState.default
         look.desktopLook = true
-        #expect(look.appliedPlainReplies, "the Desktop Look's replies are plain either way")
+        #expect(look.appliedPlainReplies, "the Desktop Look's replies are plain without High Contrast")
+        var lookPlain = look
+        lookPlain.plainReplies = true
+        #expect(lookPlain.appliedPlainReplies)
+        #expect(lookPlain.layoutSignature == look.layoutSignature, "without High Contrast, replies are already plain")
+
         look.highContrast = true
-        #expect(!look.appliedPlainReplies, "High Contrast still boxes them")
+        #expect(!look.appliedPlainReplies, "High Contrast boxes replies when Reply Bubbles is on")
+        var contrastPlain = look
+        contrastPlain.plainReplies = true
+        #expect(contrastPlain.appliedPlainReplies, "turning Reply Bubbles off removes High Contrast's reply bubble")
+        #expect(contrastPlain.layoutSignature != look.layoutSignature, "toggling Reply Bubbles in High Contrast lays the chats out again")
     }
 
     @MainActor @Test func aPlainReplyKeepsNoBubblePadding() {
@@ -1977,6 +1988,29 @@ private let allStates: [ThemeState] = SkinCatalog.all.flatMap { skin in
         }
         ThemeTable.$testSet.withValue(ThemeResolver.resolve(.default)) {
             #expect(!HQShape.plainReplies && TextLayout.sidePad(mine: false) == ChatMetrics.bubblePadH)
+        }
+        // Desktop Look + High Contrast: Reply Bubbles on boxes replies; off strips the box and its padding.
+        var contrast = ThemeState.default
+        contrast.desktopLook = true
+        contrast.highContrast = true
+        ThemeTable.$testSet.withValue(ThemeResolver.resolve(contrast)) {
+            #expect(!HQShape.plainReplies && TextLayout.sidePad(mine: false) == ChatMetrics.bubblePadH)
+            let shape = BubbleShapeView(frame: CGRect(x: 0, y: 0, width: 200, height: 60))
+            shape.isReply = true
+            shape.fill = ChatPalette.botBubble
+            let layer = shape.layer as? CAShapeLayer
+            #expect(layer?.lineWidth == 1 && (layer?.fillColor?.alpha ?? 0) > 0, "High Contrast draws the reply box")
+        }
+        contrast.plainReplies = true
+        ThemeTable.$testSet.withValue(ThemeResolver.resolve(contrast)) {
+            #expect(HQShape.plainReplies)
+            #expect(TextLayout.sidePad(mine: false) == 0)
+            #expect(TextLayout.sidePad(mine: true) == ChatMetrics.bubblePadH, "your own messages keep their box")
+            let shape = BubbleShapeView(frame: CGRect(x: 0, y: 0, width: 200, height: 60))
+            shape.isReply = true
+            shape.fill = ChatPalette.botBubble
+            let layer = shape.layer as? CAShapeLayer
+            #expect(layer?.lineWidth == 0 && (layer?.fillColor?.alpha ?? 1) == 0, "Reply Bubbles off draws no background or border")
         }
     }
 }

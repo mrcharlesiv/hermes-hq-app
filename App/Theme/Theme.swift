@@ -203,7 +203,7 @@ final class Theme {
         reload()
     }
 
-    /// [plain-replies] Chat Bubbles › Reply Bubbles (the iOS look).
+    /// [plain-replies] Chat Bubbles › Reply Bubbles (the iOS look, and High Contrast in the Desktop Look).
     func setPlainReplies(_ on: Bool) {
         store.setPlainReplies(on)
         reload()

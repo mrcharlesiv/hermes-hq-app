@@ -41,10 +41,11 @@ nonisolated struct ThemeState: Sendable, Hashable {
     /// picked (owner 2026-11-11: "keep the blue but make an option for Mac and iOS where you can change the color").
     /// Only with the Desktop Look off: the look keeps its own boxes.
     var messageColour = MessageColour.theme
-    /// [plain-replies] Chat Bubbles › Reply Bubbles off: a bot's reply has no bubble in the iOS look, its words full
-    /// width straight on the page, as in Claude's app (owner 2026-11-15: "turn off the bot's chat bubbles so that their
-    /// responses show full width just plain in the chat"). Your own messages keep theirs. Off unless picked; the
-    /// Desktop Look's replies are plain already (`appliedPlainReplies`).
+    /// [plain-replies] Chat Bubbles › Reply Bubbles off: a bot's reply has no bubble, its words full width straight on
+    /// the page, as in Claude's app (owner 2026-11-15: "turn off the bot's chat bubbles so that their responses show
+    /// full width just plain in the chat"). Your own messages keep theirs. Off unless picked; in the Desktop Look,
+    /// replies are plain already unless High Contrast is on, where turning Reply Bubbles off keeps them plain too
+    /// (`appliedPlainReplies`).
     var plainReplies = false
 
     static let `default` = ThemeState()
@@ -139,9 +140,9 @@ nonisolated struct ThemeState: Sendable, Hashable {
     #if DEBUG
     private static let debugHostile = UserDefaults.standard.bool(forKey: "HQDebugHostile")
     #endif
-    /// [plain-replies] Replies drawn with no bubble: always in the Desktop Look (unless High Contrast boxes them), and in
-    /// the iOS look when Reply Bubbles is off.
-    var appliedPlainReplies: Bool { desktopLook ? !contrastApplies : plainReplies }
+    /// [plain-replies] Replies drawn with no bubble: in the Desktop Look unless High Contrast boxes them while Reply
+    /// Bubbles is on, and in the iOS look when Reply Bubbles is off.
+    var appliedPlainReplies: Bool { desktopLook ? (!contrastApplies || plainReplies) : plainReplies }
     /// Everything a layout depends on (the mode is colours only; High Contrast boxes the look's replies, which then
     /// keep a bubble's padding).
     var layoutSignature: Int {

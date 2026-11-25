@@ -230,14 +230,22 @@ struct ChatBubblesSettingsView: View {
         .listStyle(.insetGrouped)
     }
 
-    /// [desktop-corners] [desktop-composer] The Desktop Look's own Corners for messages and its Text Box style.
+    /// [desktop-corners] [desktop-composer] [plain-replies] The Desktop Look's own Corners for messages, Reply Bubbles
+    /// (when High Contrast is on), and its Text Box style.
     @ViewBuilder private func desktopSection(_ state: ThemeState) -> some View {
         Section {
             BubbleCornersRow(stored: state.desktopCorners, standard: ThemeState.defaultDesktopCorners,
-                             style: .solid, composer: state.boxComposer ? .box : .glass) { points in
+                             style: .solid, composer: state.boxComposer ? .box : .glass,
+                             plainReply: state.appliedPlainReplies) { points in
                 theme.setBubbleCorners(points)
             }
             .hqRowPadding(4)
+
+            replyBubblesRow(
+                state,
+                disabledNote: state.contrastApplies ? nil : "Hermes Look draws replies straight on the page unless High Contrast is on."
+            )
+
             // [mac] The Mac keeps its own message box: no Text Box choice there.
             if !ThemeState.textBoxIsFixed {
                 VStack(alignment: .leading, spacing: 10) {
@@ -257,6 +265,24 @@ struct ChatBubblesSettingsView: View {
         } footer: { HQSectionFooter {
             Text(ThemeSettingsView.desktopChatsNote)
         } }
+    }
+
+    /// [plain-replies] Chat Bubbles › Reply Bubbles toggle, disabled with a note when the look or skin already draws
+    /// replies straight on the page.
+    @ViewBuilder private func replyBubblesRow(_ state: ThemeState, disabledNote: String?) -> some View {
+        let forcedPlain = disabledNote != nil
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle("Reply Bubbles", isOn: Binding(get: { !forcedPlain && !state.plainReplies }, set: { setPlainReplies(!$0) }))
+                .tint(Color.hqTint)
+                .disabled(forcedPlain)
+                .accessibilityIdentifier("theme.replyBubbles")
+            if let disabledNote {
+                Text(disabledNote)
+                    .font(Font.hq(.caption))
+                    .foregroundStyle(Color.hqLabel2)
+                    .accessibilityIdentifier("theme.replyBubblesNote")
+            }
+        }
     }
 
     /// True when the active skin draws replies straight on the page (Paper), so Reply Bubbles is synced off.
@@ -282,18 +308,10 @@ struct ChatBubblesSettingsView: View {
 
             bubbleStylePicker(state)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Toggle("Reply Bubbles", isOn: Binding(get: { !paperPlain && !state.plainReplies }, set: { setPlainReplies(!$0) }))
-                    .tint(Color.hqTint)
-                    .disabled(paperPlain)
-                    .accessibilityIdentifier("theme.replyBubbles")
-                if paperPlain {
-                    Text("\(state.skin.label) draws replies straight on the page.")
-                        .font(Font.hq(.caption))
-                        .foregroundStyle(Color.hqLabel2)
-                        .accessibilityIdentifier("theme.replyBubblesNote")
-                }
-            }
+            replyBubblesRow(
+                state,
+                disabledNote: paperPlain ? "\(state.skin.label) draws replies straight on the page." : nil
+            )
 
             // [message-colour] Mode (Theme | Bot's Face | Custom) split cleanly above the 9 hue presets + custom color well.
             ColourSwatchRow(
@@ -436,7 +454,7 @@ private struct BubbleCornersRow: View {
         VStack(alignment: .leading, spacing: 10) {
             // [tinted-bubbles] On the Chat Background where there is one: the styles are told apart on it.
             if let composer {
-                DesktopCornersPreview(radius: CGFloat(points), composer: composer)
+                DesktopCornersPreview(radius: CGFloat(points), composer: composer, boxedReply: !plainReply)
             } else {
                 ChatGroundPanel { ground in
                     BubbleCornersPreview(radius: CGFloat(points), style: style, ground: ground,
@@ -714,13 +732,12 @@ extension BubbleCornersPreview {
 private struct DesktopCornersPreview: View {
     var radius: CGFloat
     var composer: DesktopComposer
+    /// High Contrast boxes replies unless Reply Bubbles is off (`ChatCells.swift`).
+    var boxedReply = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: ChatMetrics.turnGap + 6) {
-            Text("Your report is ready. It’s in Files, and I can send it to Ivy as well.")
-                .font(Font.hq(.body))
-                .foregroundStyle(Color.hqLabel)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            replyPreview
             Text("Thanks!")
                 .font(Font.hq(.body))
                 .foregroundStyle(Color.hqMeText)
@@ -733,6 +750,23 @@ private struct DesktopCornersPreview: View {
         }
         .padding(.vertical, 4)
         .accessibilityHidden(true)
+    }
+
+    @ViewBuilder private var replyPreview: some View {
+        let text = Text("Your report is ready. It’s in Files, and I can send it to Ivy as well.")
+            .font(Font.hq(.body))
+            .foregroundStyle(Color.hqLabel)
+        if boxedReply {
+            let shape = RoundedRectangle(cornerRadius: radius)
+            text
+                .padding(.horizontal, ChatMetrics.bubblePadH)
+                .padding(.vertical, ChatMetrics.bubblePadV)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.hqBotBubble.opacity(0.5), in: shape)
+                .overlay(shape.strokeBorder(Color.hqLabel.opacity(0.12), lineWidth: HQShape.hairline))
+        } else {
+            text.frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     private func box(height: CGFloat) -> RoundedRectangle { RoundedRectangle(cornerRadius: min(radius, height / 2)) }

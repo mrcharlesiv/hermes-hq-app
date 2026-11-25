@@ -14,6 +14,7 @@
 // - `-HQDebugGlassBubbles YES|NO`   [glass-bubbles] Chat Bubbles › Glass
 // - `-HQDebugBubbleStyle solid|glass|tinted|card`   [tinted-bubbles] [bubble-card] Chat Bubbles › Style
 // - `-HQDebugMessageColour <name | #RRGGBB | theme>`   [message-colour] Chat Bubbles › Colour
+// - `-HQDebugPlainReplies YES|NO`   [plain-replies] Chat Bubbles › Reply Bubbles off
 // - `-HQDebugBotMessageColour <bot>=<face | name | #RRGGBB>[,…]`   [bot-colour] Bot Info › Settings › Colour, by bot
 // - `-HQDebugResetTheme YES`        forget all the `hqn.theme.*` keys first (`-HQDebugResetAccounts YES` does too),
 //                                   and both backgrounds
@@ -72,6 +73,7 @@ enum ThemeDebugHooks {
         if defaults.object(forKey: "HQDebugGlassBubbles") != nil { store.setGlassBubbles(defaults.bool(forKey: "HQDebugGlassBubbles")) }
         if let style = defaults.string(forKey: "HQDebugBubbleStyle").flatMap(BubbleStyle.init(rawValue:)) { store.setBubbleStyle(style) }
         if let colour = defaults.string(forKey: "HQDebugMessageColour") { store.setMessageColour(MessageColour(stored: colour)) }
+        if defaults.object(forKey: "HQDebugPlainReplies") != nil { store.setPlainReplies(defaults.bool(forKey: "HQDebugPlainReplies")) }
         // [bot-colour] -HQDebugBotMessageColour sam=face,default=green
         if let picks = defaults.string(forKey: "HQDebugBotMessageColour") {
             for pick in picks.split(separator: ",") {

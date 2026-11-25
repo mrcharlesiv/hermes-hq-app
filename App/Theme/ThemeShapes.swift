@@ -85,8 +85,8 @@ nonisolated enum HQShape {
 
     /// A reply in the Desktop Look has no bubble: its text sits on the page margin, with no padding kept for a bubble
     /// that is not drawn and no face column beside it (owner, 2026-10-14: the reply looked indented). High Contrast
-    /// boxes it like your own message (owner, 2026-10-26), so it keeps the bubble's padding there. [plain-replies] In
-    /// the iOS look, when Chat Bubbles › Reply Bubbles is off (owner 2026-11-15).
+    /// boxes it like your own message (owner, 2026-10-26) unless Chat Bubbles › Reply Bubbles is off, so it keeps the
+    /// bubble's padding only then. [plain-replies] In the iOS look, when Chat Bubbles › Reply Bubbles is off (owner 2026-11-15).
     static var plainReplies: Bool { ThemeTable.current.state.appliedPlainReplies }
 }
 

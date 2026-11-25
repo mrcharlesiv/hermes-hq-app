@@ -78,21 +78,21 @@ nonisolated enum SessionStripRules {
         }.sorted { ($0.lastActive ?? .distantPast) > ($1.lastActive ?? .distantPast) }
     }
 
-    /// Select by work, unread, then pinned; preserve the positions of surviving names.
+    /// Select up to `most` chats (working, unread, pinned, then newest others to fill the scrollable strip) once at
+    /// least one chat is working, unread, or pinned; preserve the positions of surviving names.
     static func phoneEntries(_ chats: [SessionSummary], order: [String], now: Date = Date()) -> [SessionStripEntry] {
         func rank(_ chat: SessionSummary) -> Int {
             chat.isRunning || chat.status == .working ? 0 : chat.unread ? 1 : chat.pinned ? 2 : 3
         }
+        guard chats.contains(where: { rank($0) < 3 }) else { return [] }
         let previous = Dictionary(order.enumerated().map { ($0.element, $0.offset) }, uniquingKeysWith: { first, _ in first })
-        let candidates = chats.enumerated().filter { _, chat in
-            rank(chat) < 3
-        }.sorted { a, b in
+        let candidates = chats.enumerated().sorted { a, b in
             let ar = rank(a.element), br = rank(b.element)
             if ar != br { return ar < br }
             let ap = previous[a.element.id] ?? Int.max, bp = previous[b.element.id] ?? Int.max
             return ap != bp ? ap < bp : a.offset < b.offset
         }
-        let selected = Array(candidates.prefix(2))
+        let selected = Array(candidates.prefix(most))
         let placed = selected.enumerated().sorted { a, b in
             let ap = previous[a.element.element.id] ?? Int.max, bp = previous[b.element.element.id] ?? Int.max
             return ap != bp ? ap < bp : a.offset < b.offset
@@ -401,15 +401,25 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
     private let newChat = UIButton(configuration: .glass())
     /// [bot-chat-sessions] The Mac's "All N": every chat of the bot's, in the inspector's Chats tab.
     private let allChats = UIButton(configuration: .glass())
-    /// [bot-tabs-seamless] Subtle vertical tick between `All N ›` and `+` on the Mac.
+    /// [bot-tabs-seamless] Subtle vertical tick between `All N ›` and `+` on the Mac, and between the scrollable chat
+    /// titles and `All N ›` on iPhone/iPad.
     private let rightRule = UIView()
+    private let phoneRule = UIView()
+    /// [bot-tabs-seamless] Groups `scroller` + optional `| All N ›` on iPhone/iPad so a short row (1–2 chats where
+    /// everything already fits) centers cleanly under the title instead of hanging lopsided on the left.
+    private let phoneCluster = UIView()
     private var allCount = -1
+    private var phoneShowsAll = false
     private lazy var scrollerToNew = scroller.trailingAnchor.constraint(equalTo: newChat.leadingAnchor, constant: -6)
-    private lazy var scrollerToAll = scroller.trailingAnchor.constraint(equalTo: allChats.leadingAnchor, constant: tabs ? -6 : -4)
-    private var phoneScrollerLeading: NSLayoutConstraint?
-    private var phoneScrollerTop: NSLayoutConstraint?
-    private var phoneScrollerBottom: NSLayoutConstraint?
-    private var phoneAllTrailing: NSLayoutConstraint?
+    private lazy var scrollerToAll = tabs
+        ? scroller.trailingAnchor.constraint(equalTo: allChats.leadingAnchor, constant: -6)
+        : scroller.trailingAnchor.constraint(equalTo: phoneRule.leadingAnchor, constant: -4)
+    private lazy var phoneScrollerToClusterEnd = scroller.trailingAnchor.constraint(equalTo: phoneCluster.trailingAnchor)
+    private lazy var phoneAllToClusterEnd = allChats.trailingAnchor.constraint(equalTo: phoneCluster.trailingAnchor)
+    private var phoneClusterLeading: NSLayoutConstraint?
+    private var phoneClusterTrailing: NSLayoutConstraint?
+    private var phoneClusterTop: NSLayoutConstraint?
+    private var phoneClusterBottom: NSLayoutConstraint?
     private var newChatHeight: NSLayoutConstraint?
     private var newChatWidth: NSLayoutConstraint?
     private var allChatsHeight: NSLayoutConstraint?
@@ -511,10 +521,9 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
     }
 
     private func placeFade() {
-        guard tabs else { return }
         let width = scroller.bounds.width
         guard width > 0 else { return }
-        let reach: CGFloat = 22
+        let reach: CGFloat = min(22, width * 0.25)
         let before = scroller.contentOffset.x > 1
         let after = scroller.contentOffset.x < scroller.contentSize.width - width - 1
         let clear = UIColor.clear.cgColor, solid = UIColor.black.cgColor
@@ -530,9 +539,36 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        if !tabs { (view as? StripView)?.reach = max(0, 44 - stripHeight) }   // follows Dynamic Type
+        if !tabs {
+            (view as? StripView)?.reach = max(0, 44 - stripHeight)   // follows Dynamic Type
+            updatePhoneAllVisibility()
+        }
         fitTabs()
         placeFade()
+    }
+
+    /// On iPhone/iPad, hide the redundant `| All N ›` button when every chat of the bot already fits inside the bar
+    /// (e.g., only 1–2 chats total), leaving the centered titles symmetrical under the bot header; show `| All N ›`
+    /// whenever more chats exist or the row overflows and scrolls.
+    private func updatePhoneAllVisibility() {
+        guard !tabs else { return }
+        let side: CGFloat = Theme.isDesktop ? 12 : 40
+        let maxWidth = max(0, view.bounds.width - side)
+        let contentWidth = row.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize).width + 12
+        let needsAll = allCount > 0 && (allCount > shown.count || (maxWidth > 0 && contentWidth > maxWidth + 1))
+        guard needsAll != phoneShowsAll || allChats.isHidden != !needsAll else { return }
+        phoneShowsAll = needsAll
+        allChats.isHidden = !needsAll
+        phoneRule.isHidden = !needsAll
+        if needsAll {
+            phoneScrollerToClusterEnd.isActive = false
+            scrollerToAll.isActive = true
+            phoneAllToClusterEnd.isActive = true
+        } else {
+            scrollerToAll.isActive = false
+            phoneAllToClusterEnd.isActive = false
+            phoneScrollerToClusterEnd.isActive = true
+        }
     }
 
     /// [bot-tabs-ux] The chats' tabs share the row: each shows its whole title while they all fit, and when they don't
@@ -544,22 +580,7 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
     private var fittedFor: CGFloat = -1
 
     private func fitTabs() {
-        if !tabs {
-            let names = row.arrangedSubviews.compactMap { $0 as? UIButton }
-            let dots = row.arrangedSubviews.compactMap { $0 as? UILabel }
-            let room = scroller.bounds.width - 16
-            guard room > 0, !names.isEmpty else { return }
-            if names.count == 2 {
-                let wants = names.map { max(44, ceil($0.intrinsicContentSize.width)) }
-                let dotWidth = dots.first.map { ceil($0.intrinsicContentSize.width) } ?? 0
-                let hideSecond = wants.reduce(0, +) + dotWidth + row.spacing * 2 > room
-                    || traitCollection.preferredContentSizeCategory.isAccessibilityCategory
-                names[1].isHidden = hideSecond
-                dots.first?.isHidden = hideSecond
-            }
-            if let limit = tabCaps.first?.cap, limit.constant != max(44, room) { limit.constant = max(44, room) }
-            return
-        }
+        guard tabs else { return }
         guard !tabCaps.isEmpty, scroller.bounds.width > 0, scroller.bounds.width != fittedFor else { return }
         fittedFor = scroller.bounds.width
         let wants = tabCaps.map { min(Self.widestTab, ceil($0.tab.intrinsicContentSize.width)) }
@@ -617,19 +638,20 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
         } else {
             iosGlassBar.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(iosGlassBar)
+            phoneCluster.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(phoneCluster)
         }
+        let host: UIView = tabs ? view : phoneCluster
         scroller.showsHorizontalScrollIndicator = false
         scroller.alwaysBounceHorizontal = tabs
         scroller.clipsToBounds = true
         scroller.translatesAutoresizingMaskIntoConstraints = false
         scroller.panGestureRecognizer.addTarget(self, action: #selector(scrolledByPerson))
-        if tabs {
-            scroller.delegate = self
-            fade.startPoint = CGPoint(x: 0, y: 0.5)
-            fade.endPoint = CGPoint(x: 1, y: 0.5)
-            scroller.layer.mask = fade
-        }
-        view.addSubview(scroller)
+        scroller.delegate = self
+        fade.startPoint = CGPoint(x: 0, y: 0.5)
+        fade.endPoint = CGPoint(x: 1, y: 0.5)
+        scroller.layer.mask = fade
+        host.addSubview(scroller)
         configureNewChat()
         newChat.isHidden = !tabs
         newChat.isPointerInteractionEnabled = true
@@ -653,6 +675,11 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
         rightRule.isHidden = true
         rightRule.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(rightRule)
+        phoneRule.backgroundColor = Self.ruleColor
+        phoneRule.isUserInteractionEnabled = false
+        phoneRule.isHidden = true
+        phoneRule.translatesAutoresizingMaskIntoConstraints = false
+        host.addSubview(phoneRule)
         allChats.translatesAutoresizingMaskIntoConstraints = false
         allChats.accessibilityIdentifier = tabs ? "chat.strip.all" : "session-strip.all"
         allChats.isHidden = true
@@ -668,7 +695,7 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
             allChats.widthAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
         }
         allChats.addAction(UIAction { [weak self] _ in self?.showAll() }, for: .primaryActionTriggered)
-        view.addSubview(allChats)
+        host.addSubview(allChats)
         row.axis = .horizontal
         row.spacing = 2
         rule.backgroundColor = Self.ruleColor
@@ -684,28 +711,12 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
         newChatHeight = newH
         let newW = newChat.widthAnchor.constraint(equalToConstant: tabs ? max(28, pillHeight) : 44)
         newChatWidth = newW
-        let scrollerLeading = scroller.leadingAnchor.constraint(equalTo: view.leadingAnchor)
-        let scrollerTop = scroller.topAnchor.constraint(equalTo: view.topAnchor)
-        let scrollerBottom = scroller.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: tabs ? -4 : -4)
-        let allTrailing = tabs ? allChats.trailingAnchor.constraint(equalTo: rightRule.leadingAnchor, constant: -6)
-            : allChats.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -18)
-        if !tabs {
-            phoneScrollerLeading = scrollerLeading
-            phoneScrollerTop = scrollerTop
-            phoneScrollerBottom = scrollerBottom
-            phoneAllTrailing = allTrailing
-        }
         var constraints: [NSLayoutConstraint] = [
-            scrollerLeading,
-            tabs ? scrollerToNew : scrollerToAll,
-            allTrailing,
             allChats.centerYAnchor.constraint(equalTo: scroller.centerYAnchor),
             rightRule.trailingAnchor.constraint(equalTo: newChat.leadingAnchor, constant: -6),
             rightRule.centerYAnchor.constraint(equalTo: scroller.centerYAnchor),
             rightRule.widthAnchor.constraint(equalToConstant: pixel),
             rightRule.heightAnchor.constraint(equalToConstant: 12),
-            scrollerTop,
-            scrollerBottom,
             newChat.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: tabs ? -10 : -14),
             tabs ? newChat.centerYAnchor.constraint(equalTo: scroller.centerYAnchor)
                 : newChat.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: -1),
@@ -715,14 +726,19 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
             rule.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             rule.heightAnchor.constraint(equalToConstant: pixel),
             newH,
-            row.leadingAnchor.constraint(equalTo: scroller.contentLayoutGuide.leadingAnchor, constant: 8),
-            row.trailingAnchor.constraint(equalTo: scroller.contentLayoutGuide.trailingAnchor, constant: -8),
+            row.leadingAnchor.constraint(equalTo: scroller.contentLayoutGuide.leadingAnchor, constant: tabs ? 8 : 6),
+            row.trailingAnchor.constraint(equalTo: scroller.contentLayoutGuide.trailingAnchor, constant: tabs ? -8 : -6),
             row.topAnchor.constraint(equalTo: scroller.contentLayoutGuide.topAnchor),
             row.bottomAnchor.constraint(equalTo: scroller.contentLayoutGuide.bottomAnchor),
             row.centerYAnchor.constraint(equalTo: scroller.frameLayoutGuide.centerYAnchor),
         ]
         if tabs {
             constraints += [
+                scroller.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                scrollerToNew,
+                allChats.trailingAnchor.constraint(equalTo: rightRule.leadingAnchor, constant: -6),
+                scroller.topAnchor.constraint(equalTo: view.topAnchor),
+                scroller.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -4),
                 macDesktopFrost.leadingAnchor.constraint(equalTo: view.leadingAnchor),
                 macDesktopFrost.trailingAnchor.constraint(equalTo: view.trailingAnchor),
                 macDesktopFrost.topAnchor.constraint(equalTo: view.topAnchor),
@@ -733,9 +749,33 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
                 macIOSBand.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             ]
         } else {
+            let clusterLeading = phoneCluster.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 20)
+            let clusterTrailing = phoneCluster.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -20)
+            let clusterTop = phoneCluster.topAnchor.constraint(equalTo: view.topAnchor, constant: 4)
+            let clusterBottom = phoneCluster.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -4)
+            phoneClusterLeading = clusterLeading
+            phoneClusterTrailing = clusterTrailing
+            phoneClusterTop = clusterTop
+            phoneClusterBottom = clusterBottom
+            let hugContent = scroller.widthAnchor.constraint(equalTo: scroller.contentLayoutGuide.widthAnchor)
+            hugContent.priority = UILayoutPriority(740)   // below button compression resistance so titles scroll rather than shrink
             constraints += [
-                iosGlassBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
-                iosGlassBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+                phoneCluster.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+                clusterLeading,
+                clusterTrailing,
+                clusterTop,
+                clusterBottom,
+                scroller.leadingAnchor.constraint(equalTo: phoneCluster.leadingAnchor),
+                scroller.topAnchor.constraint(equalTo: phoneCluster.topAnchor),
+                scroller.bottomAnchor.constraint(equalTo: phoneCluster.bottomAnchor),
+                phoneScrollerToClusterEnd,
+                phoneRule.centerYAnchor.constraint(equalTo: scroller.centerYAnchor),
+                phoneRule.widthAnchor.constraint(equalToConstant: pixel),
+                phoneRule.heightAnchor.constraint(equalToConstant: 11),
+                allChats.leadingAnchor.constraint(equalTo: phoneRule.trailingAnchor, constant: 4),
+                hugContent,
+                iosGlassBar.leadingAnchor.constraint(equalTo: phoneCluster.leadingAnchor, constant: -4),
+                iosGlassBar.trailingAnchor.constraint(equalTo: phoneCluster.trailingAnchor, constant: 4),
                 iosGlassBar.topAnchor.constraint(equalTo: view.topAnchor, constant: 4),
                 iosGlassBar.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -4),
             ]
@@ -831,10 +871,11 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
         iosGlassBar.isHidden = desktop
         rule.isHidden = !desktop
         rule.backgroundColor = Self.ruleColor
-        phoneScrollerLeading?.constant = desktop ? 2 : 18
-        phoneScrollerTop?.constant = desktop ? 0 : 4
-        phoneScrollerBottom?.constant = desktop ? -2 : -4
-        phoneAllTrailing?.constant = desktop ? -10 : -22
+        phoneRule.backgroundColor = Self.ruleColor
+        phoneClusterLeading?.constant = desktop ? 6 : 20
+        phoneClusterTrailing?.constant = desktop ? -6 : -20
+        phoneClusterTop?.constant = desktop ? 0 : 4
+        phoneClusterBottom?.constant = desktop ? -2 : -4
         if !desktop, !Theme.solidChrome {
             if solid {
                 iosGlassBar.effect = nil
@@ -893,29 +934,36 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
             pillEntries[ObjectIdentifier(pill)] = entry
             row.addArrangedSubview(pill)
         }
-        if tabs { DispatchQueue.main.async { [weak self] in self?.view.setNeedsLayout(); self?.view.layoutIfNeeded(); self?.placeFade() } }
+        DispatchQueue.main.async { [weak self] in
+            self?.updatePhoneAllVisibility()
+            self?.view.setNeedsLayout()
+            self?.view.layoutIfNeeded()
+            self?.placeFade()
+        }
         if height > 0, !placedCurrent || !personScrolled {
             placedCurrent = true
             DispatchQueue.main.async { [weak self] in self?.showCurrent() }
         }
     }
 
-    /// [bot-chat-sessions] "All 14" at the strip's end, on the Mac, while the bot has chats besides its own.
+    /// [bot-chat-sessions] "All 14" at the strip's end, while the bot has chats besides its own.
     private func showAllCount(_ count: Int) {
         guard count != allCount else { return }
         allCount = count
         let shows = count > 0
-        allChats.isHidden = !shows
-        rightRule.isHidden = !tabs || !shows
         if tabs {
+            allChats.isHidden = !shows
+            rightRule.isHidden = !shows
             scrollerToNew.isActive = !shows
             scrollerToAll.isActive = shows
+        } else {
+            updatePhoneAllVisibility()
         }
         guard shows else { return }
         var config: UIButton.Configuration = .plain()
         config.cornerStyle = .capsule
         config.contentInsets = tabs ? NSDirectionalEdgeInsets(top: 3, leading: 7, bottom: 3, trailing: 6)
-            : NSDirectionalEdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6)
+            : NSDirectionalEdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 8)
         config.attributedTitle = AttributedString("All \(count)", attributes: AttributeContainer([.font: tabs ? macFont(weight: .medium) : phoneFont(weight: .medium)]))
         let chevronSize: CGFloat = tabs ? (9.5 * max(1, ChatTitleView.macChrome)).rounded() : 9.5
         config.image = UIImage(systemName: "chevron.right",
@@ -1075,9 +1123,11 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
         else if entry.unread { config.image = SessionStrip.dot(SessionStrip.unreadColor, side: 6) }
         config.imagePadding = 6
         let button = UIButton(configuration: config)
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
+        button.setContentHuggingPriority(.required, for: .horizontal)
         button.heightAnchor.constraint(equalToConstant: pillHeight).isActive = true
         button.widthAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
-        let limit = button.widthAnchor.constraint(lessThanOrEqualToConstant: 300)
+        let limit = button.widthAnchor.constraint(lessThanOrEqualToConstant: 220)
         limit.isActive = true
         tabCaps.append((button, limit))
         return button

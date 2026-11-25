@@ -198,7 +198,7 @@ struct SessionStripTests {
         #expect(SessionStripRules.groups(result, now: now).flatMap(\.chats).count == result.count)
     }
 
-    @Test("Phone shows at most two names, prioritizes work then unread then pinned, and keeps survivors in place")
+    @Test("Phone fills up to most chats once live/pinned exists, prioritizes work then unread then pinned then recent, and keeps survivors in place")
     func phonePriorityAndStability() {
         let day: TimeInterval = 86_400
         let recent = chat("recent", ago: 10)
@@ -206,18 +206,22 @@ struct SessionStripTests {
         var unread = chat("unread", ago: 2 * day, unread: true)
         var busy = chat("busy", ago: 2 * day, running: true)
         let first = SessionStripRules.phoneEntries([recent, pinned, unread, busy], order: [], now: now)
-        #expect(first.map(\.id) == ["busy", "unread"])
+        #expect(first.map(\.id) == ["busy", "unread", "pinned", "recent"])
         #expect(first.allSatisfy { !$0.isBotChat && !$0.current })
         busy.isRunning = false
         busy.pinned = true
         unread.isRunning = true
         let next = SessionStripRules.phoneEntries([recent, pinned, unread, busy], order: first.map(\.id), now: now)
-        #expect(next.map(\.id) == ["busy", "unread"])
+        #expect(next.map(\.id) == ["busy", "unread", "pinned", "recent"])
         busy.archived = true
         let eligible = SessionStripRules.phoneChats(bot: bot(), sessions: [recent, pinned, unread, busy],
                                                     profile: "hermes-hq", hidden: [])
         let after = SessionStripRules.phoneEntries(eligible, order: next.map(\.id), now: now)
-        #expect(after.map(\.id) == ["unread", "pinned"])
+        #expect(after.map(\.id) == ["unread", "pinned", "recent"])
         #expect(SessionStripRules.phoneEntries([recent, chat("stale", ago: 2 * day)], order: [], now: now).isEmpty)
+        let many = [pinned] + (0..<12).map { chat("c\($0)", ago: TimeInterval($0 + 1) * 60) }
+        let filled = SessionStripRules.phoneEntries(many, order: [], now: now)
+        #expect(filled.count == SessionStripRules.most)
+        #expect(filled.first?.id == "pinned")
     }
 }

@@ -884,9 +884,15 @@ final class MacSidebarChat: UIControl {
         var kind: Kind
         var botName: String
         var tint: Color
+        var first = false
         var last: Bool
         var style: BotChatsStyle
         var showsPin = false
+    }
+
+    /// Live hover/selection state read by the connector line without rebuilding the hosting configuration.
+    @Observable final class Highlight {
+        var emphasized = false
     }
 
     /// The bot whose chats these are.
@@ -894,6 +900,7 @@ final class MacSidebarChat: UIControl {
     private(set) var look: Look
     var session: SessionSummary? { if case .chat(let session) = look.kind { session } else { nil } }
     private let content: UIView & UIContentView
+    private let highlight = Highlight()
     /// The selection and hover mark, from the title's column: the line down the bot's chats stays whole beside it.
     private let backing = UIView()
     private var height: NSLayoutConstraint!
@@ -906,11 +913,12 @@ final class MacSidebarChat: UIControl {
     /// 14 a chat's time was 10.8 pt, under the sidebar's 11 pt floor and a size of its own.
     static var timeSize: CGFloat { MacSidebar.tidy ? MacSidebar.scheme.time : 12.5 }
     static var lineX: CGFloat { MacSidebar.iconLeading + MacSidebar.iconColumn / 2 }
+    static var branchReach: CGFloat { min(max(BotChatsLine.branch, MacBotsRail.nameLeading - 8 - lineX), 15.5) }
 
     init(bot: String, look: Look) {
         self.bot = bot
         self.look = look
-        content = Self.configuration(look).makeContentView()
+        content = Self.configuration(look, highlight: highlight).makeContentView()
         super.init(frame: .zero)
         isAccessibilityElement = true
         MacHover.drawsOwnHover(self)   // [Mac AAA 2026-11-16] its backing is its hover
@@ -946,7 +954,7 @@ final class MacSidebarChat: UIControl {
     func update(_ next: Look) {
         guard next != look else { return }
         look = next
-        content.configuration = Self.configuration(next)
+        content.configuration = Self.configuration(next, highlight: highlight)
         height.constant = Self.height(next)
         describe()
         recolor()
@@ -954,8 +962,8 @@ final class MacSidebarChat: UIControl {
 
     private static func height(_ look: Look) -> CGFloat { rowHeight + (look.last ? BotChatsMetrics.tail : 0) }
 
-    private static func configuration(_ look: Look) -> UIHostingConfiguration<some View, EmptyView> {
-        UIHostingConfiguration { MacSidebarChatContent(look: look) }.margins(.all, 0)
+    private static func configuration(_ look: Look, highlight: Highlight) -> UIHostingConfiguration<some View, EmptyView> {
+        UIHostingConfiguration { MacSidebarChatContent(look: look, highlight: highlight) }.margins(.all, 0)
     }
 
     private func describe() {
@@ -989,12 +997,20 @@ final class MacSidebarChat: UIControl {
         // The places' own mark (`MacSelection`), as the bot rows take it.
         backing.backgroundColor = MacSelection.fill(selected: isMarked, pressed: isHighlighted, in: .sidebar) ?? (hovered ? MacSidebar.rowHover : .clear)
         backing.layer.cornerRadius = MacSelection.radius
+        let active = isMarked || isHighlighted || hovered
+        if highlight.emphasized != active { highlight.emphasized = active }
     }
 }
 
 /// The row's words and line (`MacSidebarChat`).
 private struct MacSidebarChatContent: View {
     var look: MacSidebarChat.Look
+    var highlight: MacSidebarChat.Highlight
+
+    private var lineStatus: BotChatsLine.NodeStatus {
+        if case .chat(let session) = look.kind { return BotChatsLine.status(of: session) }
+        return .quiet
+    }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -1041,8 +1057,10 @@ private struct MacSidebarChatContent: View {
         .padding(.bottom, look.last ? BotChatsMetrics.tail : 0)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(alignment: .leading) {
-            BotChatsLine(last: look.last, tint: look.tint, lineX: MacSidebarChat.lineX, style: look.style,
-                         more: { if case .more = look.kind { true } else { false } }())
+            BotChatsLine(first: look.first, last: look.last, tint: look.tint, lineX: MacSidebarChat.lineX,
+                         reach: MacSidebarChat.branchReach, style: look.style,
+                         more: { if case .more = look.kind { true } else { false } }(),
+                         status: lineStatus, emphasized: highlight.emphasized)
         }
         .accessibilityHidden(true)   // the control speaks for it
     }

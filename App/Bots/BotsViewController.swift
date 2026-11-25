@@ -83,7 +83,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
     private(set) var groupBy: BotGroupBy = BotGroupBy.saved { didSet { BotGroupBy.saved = groupBy } }
     private var roomsByID: [String: GroupRowModel] = [:]
     /// [chats-under] A chat and its appearance in this bot's list, by item key.
-    private var chatRows: [String: (session: SessionSummary, last: Bool, showsPin: Bool)] = [:]
+    private var chatRows: [String: (session: SessionSummary, first: Bool, last: Bool, showsPin: Bool)] = [:]
     /// [spring-drop] Files dragged in from outside the app: a bot's row (or a chat under it) held under them opens it.
     private(set) lazy var fileDrop: SessionFileDrop = {
         let drop = SessionFileDrop(list: collectionView)
@@ -757,7 +757,9 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
         let chatRegistration = UICollectionView.CellRegistration<SoftCardListCell, String> { [weak self] cell, _, key in
             guard let self, let row = self.chatRows[key] else { return }
             let tint = Self.chatOwner(.chat(key)).flatMap { self.botsByID[$0] }?.chatsTint ?? .hqStroke
-            cell.contentConfiguration = UIHostingConfiguration { BotChatRowView(session: row.session, last: row.last, showsPin: row.showsPin, tint: tint) }
+            cell.contentConfiguration = UIHostingConfiguration {
+                BotChatRowView(session: row.session, first: row.first, last: row.last, showsPin: row.showsPin, tint: tint)
+            }
                 .margins(.all, 0)
                 .minSize(height: 0)   // the row's own height, so its line meets the next row's
             cell.accessibilityIdentifier = "bot-chat-\(row.session.id)"
@@ -1079,7 +1081,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
                 let key = id + "\u{1F}" + session.id
                 guard chatRows[key] == nil else { continue }
                 let last = index == picked.shown.count - 1 && (picked.more == 0 || !Self.sessionsListed)
-                chatRows[key] = (session, last, BotChatsUnder.showsPin(for: session, among: picked.shown))
+                chatRows[key] = (session, index == 0, last, BotChatsUnder.showsPin(for: session, among: picked.shown))
                 out.append(.chat(key))
             }
             if picked.more > 0, Self.sessionsListed {
@@ -1225,6 +1227,7 @@ final class BotsViewController: UIViewController, UICollectionViewDelegate, UISe
             let row = chatRows[key]
             hasher.combine(BotChatsStyle.saved)
             hasher.combine(row?.session)
+            hasher.combine(row?.first)
             hasher.combine(row?.last)
             hasher.combine(row?.showsPin)
             hasher.combine(ListTime.string(row?.session.lastActive))

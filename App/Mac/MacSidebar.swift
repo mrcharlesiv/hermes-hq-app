@@ -987,12 +987,12 @@ final class MacSidebar: UIView {
                 var looks: [(key: String, look: MacSidebarChat.Look)] = picked.shown.enumerated().map { index, session in
                     (bot.id + "\u{1F}" + session.id,
                      MacSidebarChat.Look(kind: .chat(session), botName: bot.name, tint: bot.chatsTint,
-                                         last: index == picked.shown.count - 1 && picked.more == 0, style: style,
+                                         first: index == 0, last: index == picked.shown.count - 1 && picked.more == 0, style: style,
                                          showsPin: BotChatsUnder.showsPin(for: session, among: picked.shown)))
                 }
                 if picked.more > 0 {
                     looks.append((bot.id + "\u{1F}more", MacSidebarChat.Look(kind: .more(picked.more), botName: bot.name,
-                                                                              tint: bot.chatsTint, last: true, style: style)))
+                                                                              tint: bot.chatsTint, first: picked.shown.isEmpty, last: true, style: style)))
                 }
                 for (key, look) in looks {
                     let row = chatRows[key] ?? makeChatRow(bot: bot.id, look: look)

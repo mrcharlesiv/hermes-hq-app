@@ -200,9 +200,14 @@ struct ChatsUnderBotsTests {
         defer { defaults.set(saved, forKey: BotChatsStyle.key) }
         defaults.removeObject(forKey: BotChatsStyle.key)
         #expect(BotChatsStyle.saved == .branch)
-        BotChatsStyle.saved = .dots
-        #expect(BotChatsStyle.saved == .dots)
-        #expect(BotChatsStyle.allCases.map(\.title) == ["Branches", "Dots", "Line", "Dividers", "No Line"])
+        for style in BotChatsStyle.allCases {
+            BotChatsStyle.saved = style
+            #expect(BotChatsStyle.saved == style)
+        }
+        #expect(BotChatsStyle.allCases.map(\.title) == [
+            "Curved Elbows", "Swept Arrows", "Spline Fan", "Tapered Quill", "Metro Track", "Soft Rail",
+            "Line", "Dividers", "No Line",
+        ])
     }
 
     @Test func choicesRoundTrip() {

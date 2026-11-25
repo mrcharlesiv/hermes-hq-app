@@ -188,12 +188,11 @@ enum BotChatsMetrics {
     }
 }
 
-/// How the line down a bot's chats looks (owner 2026-11-08: "all of those options for the line down … so that the person
-/// could pick"): a short branch out to each chat (the default, picked first), a dot on the line at each chat, the line
-/// alone, the line with a thin rule between chats, or nothing. Settings › Appearance › Chats Under Bots (owner: "Shouldn't
-/// the style choice be in the theme areas of Settings?"), kept on this device.
+/// How the connector down a bot's chats looks: curved elbows (the default), swept arrows, spline fan, tapered quill,
+/// metro track, soft rail with return arrows, a plain line, dividers, or nothing. Settings › Appearance › Chats Under
+/// Bots, kept on this device.
 nonisolated enum BotChatsStyle: String, CaseIterable, Sendable {
-    case branch, dots, line, dividers, none
+    case branch, arrows, splines, quill, dots, rail, line, dividers, none
 
     static let key = "hq.bots.chatsUnder.style"
     /// Posted when the style changes: the Bots list redraws its chats.
@@ -208,8 +207,12 @@ nonisolated enum BotChatsStyle: String, CaseIterable, Sendable {
 
     var title: String {
         switch self {
-        case .branch: "Branches"
-        case .dots: "Dots"
+        case .branch: "Curved Elbows"
+        case .arrows: "Swept Arrows"
+        case .splines: "Spline Fan"
+        case .quill: "Tapered Quill"
+        case .dots: "Metro Track"
+        case .rail: "Soft Rail"
         case .line: "Line"
         case .dividers: "Dividers"
         case .none: "No Line"
@@ -220,57 +223,473 @@ nonisolated enum BotChatsStyle: String, CaseIterable, Sendable {
     var symbol: String {
         switch self {
         case .branch: "arrow.turn.down.right"
+        case .arrows: "arrow.uturn.right"
+        case .splines: "point.topleft.down.to.point.bottomright.curvepath"
+        case .quill: "pencil.tip"
         case .dots: "circle.dotted"
+        case .rail: "sidebar.leading"
         case .line: "line.3.horizontal"
         case .dividers: "rectangle.split.1x2"
         case .none: "minus"
         }
     }
 
-    /// The line ends at the last row's mark (a branch or a dot) instead of short of its foot.
-    var marksRows: Bool { self == .branch || self == .dots }
+    /// The line ends at the last row's mark instead of short of its foot.
+    var marksRows: Bool {
+        switch self {
+        case .branch, .arrows, .splines, .quill, .dots, .rail: true
+        case .line, .dividers, .none: false
+        }
+    }
 }
 
-/// The thin line down the bot's chats, in the bot's own colour (owner 2026-11-08: "the same color as the bot"), drawn in
-/// the chosen style. It runs through a row and stops at the last one. `lineX` and `style` come from the row, so a change
-/// of look or style redraws it with the text (read here, the line stayed where the old look put it). [mac] The Mac's
-/// sidebar draws it under its bot rows too (`MacSidebarChat`).
+/// The connector down a bot's chats, in the bot's own colour, drawn in the chosen style with unified-opacity vector
+/// geometry (no overlapping corner dark spots) and a soft top fade on the first row beneath the bot's face.
+/// [mac] The Mac's sidebar draws it under its bot rows too (`MacSidebarChat`).
 struct BotChatsLine: View {
+    enum NodeStatus: Hashable, Sendable {
+        case quiet, unread, waiting, working
+    }
+
+    var first = false
     var last: Bool
     var tint: Color
     var lineX: CGFloat
+    /// Horizontal reach from `lineX` to the connector tip. Defaults to `Self.branch` (clears `highlightInsets`).
+    var reach: CGFloat = BotChatsLine.branch
     var style: BotChatsStyle
-    /// "N more" gets a branch, not a dot.
+    /// "N more" gets a gentle tail or curved hook rather than an arrowhead or status node.
     var more = false
-    static let width: CGFloat = 1
-    static let branch: CGFloat = 11
+    /// Session state for status-aware styles (`splines`, `dots`, `rail`).
+    var status: NodeStatus = .quiet
+    /// Hovered or selected row brightens its own connector.
+    var emphasized = false
+
+    static let width: CGFloat = 1.5
+    static let branch: CGFloat = 11.5
+
+    static func status(of session: SessionSummary) -> NodeStatus {
+        if session.status == .needsInput { return .waiting }
+        if session.isRunning || session.status == .working { return .working }
+        if session.unread { return .unread }
+        return .quiet
+    }
+
     var body: some View {
         if style != .none {
-            GeometryReader { proxy in
-                let content = proxy.size.height - (last ? BotChatsMetrics.tail : 0)
-                let middle = content / 2
-                let end = !last ? proxy.size.height : style.marksRows ? middle + Self.width / 2 : content - 8
-                ZStack(alignment: .topLeading) {
-                    Capsule().fill(tint.opacity(0.85))
-                        .frame(width: Self.width, height: max(0, end))
-                        .offset(x: lineX - Self.width / 2)
-                    if style == .branch || (style == .dots && more) {
-                        Capsule().fill(tint.opacity(0.85))
-                            .frame(width: Self.branch, height: Self.width)
-                            .offset(x: lineX - Self.width / 2, y: middle - Self.width / 2)
-                    } else if style == .dots {
-                        Circle().fill(tint).frame(width: 6, height: 6).offset(x: lineX - 3, y: middle - 3)
-                    }
-                }
+            Canvas(opaque: false, rendersAsynchronously: false) { context, size in
+                draw(in: &context, size: size)
             }
+            .allowsHitTesting(false)
             .accessibilityHidden(true)
         }
+    }
+
+    private func draw(in context: inout GraphicsContext, size: CGSize) {
+        let h = size.height
+        guard h > 0 else { return }
+        let content = max(1, h - (last ? BotChatsMetrics.tail : 0))
+        let middle = content / 2
+        let endX = lineX + reach
+        let fadeTop = min(7, middle * 0.55)
+
+        switch style {
+        case .none:
+            return
+
+        case .branch:
+            let r = min(8.5, reach * 0.72, max(2, middle - 1))
+            let tipX = more ? endX - 2 : endX
+            let alpha: Double = emphasized ? 0.94 : 0.64
+            drawUnified(in: &context, opacity: alpha) { layer in
+                let shade = topFadeShading(height: h, fadeTop: fadeTop, opacity: 1)
+                let trunkEnd = last ? max(0, middle - r) : h
+                if trunkEnd > 0 {
+                    var trunk = Path()
+                    trunk.move(to: CGPoint(x: lineX, y: 0))
+                    trunk.addLine(to: CGPoint(x: lineX, y: trunkEnd))
+                    layer.stroke(trunk, with: shade, style: StrokeStyle(lineWidth: Self.width, lineCap: .butt))
+                }
+                let sy = max(0, middle - r)
+                let cr = middle - sy
+                var arm = Path()
+                arm.move(to: CGPoint(x: lineX, y: sy))
+                arm.addQuadCurve(to: CGPoint(x: lineX + cr, y: middle), control: CGPoint(x: lineX, y: middle))
+                arm.addLine(to: CGPoint(x: tipX, y: middle))
+                layer.stroke(arm, with: shade, style: StrokeStyle(lineWidth: Self.width, lineCap: .round, lineJoin: .round))
+            }
+
+        case .arrows:
+            let r = min(8.5, reach * 0.66, max(2, middle - 1))
+            let tipX = more ? endX - 2.5 : endX
+            let baseAlpha: Double = emphasized ? 0.92 : 0.56
+            let lineW: CGFloat = emphasized ? 1.6 : 1.4
+            drawUnified(in: &context, opacity: baseAlpha) { layer in
+                let shade = topFadeShading(height: h, fadeTop: fadeTop, opacity: 1)
+                let trunkEnd = last ? max(0, middle - r) : h
+                if trunkEnd > 0 {
+                    var trunk = Path()
+                    trunk.move(to: CGPoint(x: lineX, y: 0))
+                    trunk.addLine(to: CGPoint(x: lineX, y: trunkEnd))
+                    layer.stroke(trunk, with: shade, style: StrokeStyle(lineWidth: lineW, lineCap: .butt))
+                }
+                let sy = max(0, middle - r)
+                let cr = middle - sy
+                var arm = Path()
+                arm.move(to: CGPoint(x: lineX, y: sy))
+                arm.addQuadCurve(to: CGPoint(x: lineX + cr, y: middle), control: CGPoint(x: lineX, y: middle))
+                arm.addLine(to: CGPoint(x: tipX, y: middle))
+                layer.stroke(arm, with: shade, style: StrokeStyle(lineWidth: lineW, lineCap: .round, lineJoin: .round))
+            }
+            if !more {
+                let aw: CGFloat = 3.4, ah: CGFloat = 2.9
+                var chevron = Path()
+                chevron.move(to: CGPoint(x: tipX - aw, y: middle - ah))
+                chevron.addLine(to: CGPoint(x: tipX, y: middle))
+                chevron.addLine(to: CGPoint(x: tipX - aw, y: middle + ah))
+                context.stroke(chevron, with: .color(tint.opacity(emphasized ? 1 : 0.88)),
+                               style: StrokeStyle(lineWidth: emphasized ? 1.7 : 1.45, lineCap: .round, lineJoin: .round))
+            }
+
+        case .splines:
+            let sy = max(0, middle - min(12, middle - 1))
+            let tipX = endX - 2
+            let spineEnd = last ? sy : h
+            if spineEnd > 0 {
+                var spine = Path()
+                spine.move(to: CGPoint(x: lineX, y: 0))
+                spine.addLine(to: CGPoint(x: lineX, y: spineEnd))
+                context.stroke(spine, with: topFadeShading(height: h, fadeTop: fadeTop, opacity: 0.4),
+                               style: StrokeStyle(lineWidth: 1.3, lineCap: .butt))
+            }
+            var curve = Path()
+            curve.move(to: CGPoint(x: lineX, y: sy))
+            curve.addCurve(to: CGPoint(x: tipX, y: middle),
+                           control1: CGPoint(x: lineX, y: sy + (middle - sy) * 0.72),
+                           control2: CGPoint(x: lineX + (tipX - lineX) * 0.22, y: middle))
+            let curveOp: Double = emphasized ? 0.96 : more ? 0.44 : 0.62
+            context.stroke(curve, with: .color(tint.opacity(curveOp)),
+                           style: StrokeStyle(lineWidth: emphasized ? 1.7 : 1.35, lineCap: .round))
+            if !more {
+                let isHot = emphasized || status == .unread || status == .waiting
+                let dotColor: Color = status == .waiting ? .hqOrange : tint
+                let rDot: CGFloat = isHot ? 2.5 : 2.0
+                if isHot {
+                    let halo = rDot + 2.2
+                    context.fill(Path(ellipseIn: CGRect(x: tipX - halo, y: middle - halo, width: halo * 2, height: halo * 2)),
+                                 with: .color(dotColor.opacity(0.22)))
+                }
+                context.fill(Path(ellipseIn: CGRect(x: tipX - rDot, y: middle - rDot, width: rDot * 2, height: rDot * 2)),
+                             with: .color(dotColor.opacity(isHot ? 0.98 : 0.78)))
+            }
+
+        case .quill:
+            let r = min(9.5, reach * 0.74, max(2, middle - 1))
+            let sy = max(0, middle - r)
+            let cr = middle - sy
+            let tipX = more ? endX - 2 : endX + 0.5
+            let alpha: Double = emphasized ? 0.94 : more ? 0.56 : 0.74
+            drawUnified(in: &context, opacity: alpha) { layer in
+                let shade = topFadeShading(height: h, fadeTop: fadeTop, opacity: 1)
+                let trunkEnd = last ? max(0, sy + 1.5) : h
+                if trunkEnd > 0 {
+                    let topW: CGFloat = first ? 1.1 : 0.72
+                    let botW: CGFloat = 0.72
+                    var spine = Path()
+                    spine.move(to: CGPoint(x: lineX - topW, y: 0))
+                    spine.addLine(to: CGPoint(x: lineX + topW, y: 0))
+                    spine.addLine(to: CGPoint(x: lineX + botW, y: trunkEnd))
+                    spine.addLine(to: CGPoint(x: lineX - botW, y: trunkEnd))
+                    spine.closeSubpath()
+                    layer.fill(spine, with: shade)
+                }
+                let wStart: CGFloat = 0.86
+                let tipR: CGFloat = 0.35
+                let midTailX = lineX + cr + (tipX - (lineX + cr)) * 0.55
+                var nib = Path()
+                nib.move(to: CGPoint(x: lineX - wStart * 0.78, y: sy))
+                nib.addCurve(to: CGPoint(x: lineX + cr, y: middle + wStart * 0.72),
+                             control1: CGPoint(x: lineX - wStart * 0.78, y: sy + cr * 0.68),
+                             control2: CGPoint(x: lineX + cr * 0.32, y: middle + wStart * 0.92))
+                nib.addQuadCurve(to: CGPoint(x: tipX, y: middle + tipR),
+                                 control: CGPoint(x: midTailX, y: middle + wStart * 0.52))
+                nib.addArc(center: CGPoint(x: tipX, y: middle), radius: tipR,
+                           startAngle: .degrees(90), endAngle: .degrees(-90), clockwise: true)
+                nib.addQuadCurve(to: CGPoint(x: lineX + cr, y: middle - wStart * 0.62),
+                                 control: CGPoint(x: midTailX, y: middle - wStart * 0.52))
+                nib.addCurve(to: CGPoint(x: lineX + wStart * 0.72, y: sy),
+                             control1: CGPoint(x: lineX + cr * 0.45, y: middle - wStart * 0.64),
+                             control2: CGPoint(x: lineX + wStart * 0.72, y: sy + cr * 0.55))
+                nib.closeSubpath()
+                layer.fill(nib, with: shade)
+            }
+
+        case .dots:
+            if more {
+                let stubEnd = max(0, middle - 6)
+                if !first, stubEnd > 0 {
+                    var stub = Path()
+                    stub.move(to: CGPoint(x: lineX, y: 0))
+                    stub.addLine(to: CGPoint(x: lineX, y: stubEnd))
+                    context.stroke(stub, with: .color(tint.opacity(0.42)), style: StrokeStyle(lineWidth: 1.5, lineCap: .butt))
+                }
+                let offsets: [(CGFloat, Double)] = [(-3, 0.55), (0.5, 0.38), (4, 0.22)]
+                for (dy, op) in offsets {
+                    let r: CGFloat = 1.15
+                    context.fill(Path(ellipseIn: CGRect(x: lineX - r, y: middle + dy - r, width: r * 2, height: r * 2)),
+                                 with: .color(tint.opacity(op)))
+                }
+            } else {
+                let isSolid = emphasized || status == .unread || status == .waiting
+                let gapR: CGFloat = isSolid ? 5.0 : 4.2
+                let upperEnd = max(0, middle - gapR)
+                if upperEnd > 0 {
+                    var upper = Path()
+                    upper.move(to: CGPoint(x: lineX, y: 0))
+                    upper.addLine(to: CGPoint(x: lineX, y: upperEnd))
+                    context.stroke(upper, with: topFadeShading(height: h, fadeTop: fadeTop, opacity: 0.44),
+                                   style: StrokeStyle(lineWidth: 1.5, lineCap: .butt))
+                }
+                if !last {
+                    let lowerStart = min(h, middle + gapR)
+                    if lowerStart < h {
+                        var lower = Path()
+                        lower.move(to: CGPoint(x: lineX, y: lowerStart))
+                        lower.addLine(to: CGPoint(x: lineX, y: h))
+                        context.stroke(lower, with: .color(tint.opacity(0.44)),
+                                       style: StrokeStyle(lineWidth: 1.5, lineCap: .butt))
+                    }
+                }
+                let nodeColor: Color = status == .waiting ? .hqOrange : tint
+                if isSolid {
+                    let r: CGFloat = 3.2
+                    context.fill(Path(ellipseIn: CGRect(x: lineX - r, y: middle - r, width: r * 2, height: r * 2)),
+                                 with: .color(nodeColor.opacity(emphasized ? 1 : 0.94)))
+                } else {
+                    let r: CGFloat = 3.2
+                    context.stroke(Path(ellipseIn: CGRect(x: lineX - r, y: middle - r, width: r * 2, height: r * 2)),
+                                   with: .color(tint.opacity(0.82)), lineWidth: 1.6)
+                }
+                let cx = lineX + reach * 0.72
+                var tick = Path()
+                tick.move(to: CGPoint(x: cx - 2.1, y: middle - 2.5))
+                tick.addLine(to: CGPoint(x: cx + 0.9, y: middle))
+                tick.addLine(to: CGPoint(x: cx - 2.1, y: middle + 2.5))
+                context.stroke(tick, with: .color(tint.opacity(emphasized ? 0.96 : 0.55)),
+                               style: StrokeStyle(lineWidth: 1.35, lineCap: .round, lineJoin: .round))
+            }
+
+        case .rail:
+            let barTop: CGFloat = first ? 3 : 0
+            let barBot: CGFloat = last ? min(content, middle + 5) : h
+            if barBot > barTop {
+                let rect = CGRect(x: lineX - 1, y: barTop, width: 2, height: barBot - barTop)
+                let radii = RectangleCornerRadii(topLeading: first ? 1 : 0, bottomLeading: last ? 1 : 0,
+                                                 bottomTrailing: last ? 1 : 0, topTrailing: first ? 1 : 0)
+                let barShade: GraphicsContext.Shading = last
+                    ? .linearGradient(Gradient(colors: [tint.opacity(0.46), tint.opacity(0.18)]),
+                                      startPoint: CGPoint(x: lineX, y: barTop), endPoint: CGPoint(x: lineX, y: barBot))
+                    : .color(tint.opacity(0.46))
+                context.fill(Path(roundedRect: rect, cornerRadii: radii), with: barShade)
+            }
+            if emphasized {
+                let pill = CGRect(x: lineX - 1.15, y: max(barTop, middle - 7), width: 2.3, height: min(14, content))
+                context.fill(Path(roundedRect: pill, cornerRadius: 1.15), with: .color(tint.opacity(0.95)))
+            }
+            let gx = lineX + max(4.2, min(5.5, reach - 7))
+            if more {
+                let r: CGFloat = 1.3
+                context.fill(Path(ellipseIn: CGRect(x: gx + 2.8 - r, y: middle - r, width: r * 2, height: r * 2)),
+                             with: .color(tint.opacity(0.52)))
+            } else {
+                let op: Double = emphasized ? 0.98 : (status == .unread || status == .waiting) ? 0.82 : 0.54
+                drawUnified(in: &context, opacity: op) { layer in
+                    var stem = Path()
+                    stem.move(to: CGPoint(x: gx, y: middle - 4.2))
+                    stem.addLine(to: CGPoint(x: gx, y: middle - 1.5))
+                    stem.addQuadCurve(to: CGPoint(x: gx + 2.1, y: middle + 0.6), control: CGPoint(x: gx, y: middle + 0.6))
+                    stem.addLine(to: CGPoint(x: gx + 6.4, y: middle + 0.6))
+                    var head = Path()
+                    head.move(to: CGPoint(x: gx + 4.2, y: middle - 1.6))
+                    head.addLine(to: CGPoint(x: gx + 6.7, y: middle + 0.6))
+                    head.addLine(to: CGPoint(x: gx + 4.2, y: middle + 2.8))
+                    let stroke = StrokeStyle(lineWidth: 1.35, lineCap: .round, lineJoin: .round)
+                    layer.stroke(stem, with: .color(tint), style: stroke)
+                    layer.stroke(head, with: .color(tint), style: stroke)
+                }
+            }
+
+        case .line, .dividers:
+            let end = last ? max(0, content - 7) : h
+            if end > 0 {
+                var trunk = Path()
+                trunk.move(to: CGPoint(x: lineX, y: 0))
+                trunk.addLine(to: CGPoint(x: lineX, y: end))
+                context.stroke(trunk, with: topFadeShading(height: end, fadeTop: fadeTop, opacity: emphasized ? 0.88 : 0.58),
+                               style: StrokeStyle(lineWidth: Self.width, lineCap: last ? .round : .butt))
+            }
+        }
+    }
+
+    private func drawUnified(in context: inout GraphicsContext, opacity: Double, _ body: (inout GraphicsContext) -> Void) {
+        context.drawLayer { layer in
+            layer.opacity = opacity
+            body(&layer)
+        }
+    }
+
+    private func topFadeShading(height: CGFloat, fadeTop: CGFloat, opacity: Double) -> GraphicsContext.Shading {
+        guard first, height > 0 else { return .color(tint.opacity(opacity)) }
+        let stop = min(1, max(0.05, fadeTop / height))
+        return .linearGradient(
+            Gradient(stops: [
+                .init(color: tint.opacity(0), location: 0),
+                .init(color: tint.opacity(opacity), location: stop),
+                .init(color: tint.opacity(opacity), location: 1),
+            ]),
+            startPoint: CGPoint(x: lineX, y: 0),
+            endPoint: CGPoint(x: lineX, y: height)
+        )
+    }
+}
+
+/// Miniature 2x vector glyph representing each `BotChatsStyle` in Settings.
+struct BotChatsStyleGlyph: View {
+    var style: BotChatsStyle
+    var tint: Color
+
+    var body: some View {
+        Canvas(opaque: false, rendersAsynchronously: false) { context, size in
+            let w = size.width, h = size.height
+            let lx: CGFloat = 8
+            let mid = h / 2
+            let ex = w - 4
+
+            switch style {
+            case .none:
+                var dash = Path()
+                dash.move(to: CGPoint(x: lx + 2, y: mid))
+                dash.addLine(to: CGPoint(x: ex - 4, y: mid))
+                context.stroke(dash, with: .color(tint.opacity(0.45)), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+
+            case .branch:
+                context.drawLayer { layer in
+                    layer.opacity = 0.85
+                    var p = Path()
+                    p.move(to: CGPoint(x: lx, y: 1))
+                    p.addLine(to: CGPoint(x: lx, y: h - 1))
+                    p.move(to: CGPoint(x: lx, y: mid - 6))
+                    p.addQuadCurve(to: CGPoint(x: lx + 6, y: mid), control: CGPoint(x: lx, y: mid))
+                    p.addLine(to: CGPoint(x: ex, y: mid))
+                    layer.stroke(p, with: .color(tint), style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round))
+                }
+
+            case .arrows:
+                context.drawLayer { layer in
+                    layer.opacity = 0.7
+                    var p = Path()
+                    p.move(to: CGPoint(x: lx, y: 1))
+                    p.addLine(to: CGPoint(x: lx, y: h - 1))
+                    p.move(to: CGPoint(x: lx, y: mid - 6))
+                    p.addQuadCurve(to: CGPoint(x: lx + 6, y: mid), control: CGPoint(x: lx, y: mid))
+                    p.addLine(to: CGPoint(x: ex - 1, y: mid))
+                    layer.stroke(p, with: .color(tint), style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+                }
+                var arrow = Path()
+                arrow.move(to: CGPoint(x: ex - 4.8, y: mid - 3.5))
+                arrow.addLine(to: CGPoint(x: ex - 0.8, y: mid))
+                arrow.addLine(to: CGPoint(x: ex - 4.8, y: mid + 3.5))
+                context.stroke(arrow, with: .color(tint), style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round))
+
+            case .splines:
+                var spine = Path()
+                spine.move(to: CGPoint(x: lx, y: 1))
+                spine.addLine(to: CGPoint(x: lx, y: h - 1))
+                context.stroke(spine, with: .color(tint.opacity(0.4)), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+                var curve = Path()
+                curve.move(to: CGPoint(x: lx, y: 2))
+                curve.addCurve(to: CGPoint(x: ex - 3, y: mid), control1: CGPoint(x: lx, y: mid - 1), control2: CGPoint(x: lx + 5, y: mid))
+                context.stroke(curve, with: .color(tint.opacity(0.8)), style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
+                context.fill(Path(ellipseIn: CGRect(x: ex - 6, y: mid - 3, width: 6, height: 6)), with: .color(tint))
+
+            case .quill:
+                context.drawLayer { layer in
+                    layer.opacity = 0.85
+                    var trunk = Path()
+                    trunk.move(to: CGPoint(x: lx - 1.2, y: 1))
+                    trunk.addLine(to: CGPoint(x: lx + 1.2, y: 1))
+                    trunk.addLine(to: CGPoint(x: lx + 0.8, y: h - 1))
+                    trunk.addLine(to: CGPoint(x: lx - 0.8, y: h - 1))
+                    trunk.closeSubpath()
+                    layer.fill(trunk, with: .color(tint))
+                    var nib = Path()
+                    nib.move(to: CGPoint(x: lx - 0.9, y: 2))
+                    nib.addCurve(to: CGPoint(x: lx + 7, y: mid + 1.2), control1: CGPoint(x: lx - 0.9, y: mid), control2: CGPoint(x: lx + 2.5, y: mid + 1.5))
+                    nib.addQuadCurve(to: CGPoint(x: ex, y: mid + 0.4), control: CGPoint(x: ex - 5, y: mid + 0.9))
+                    nib.addArc(center: CGPoint(x: ex, y: mid), radius: 0.4, startAngle: .degrees(90), endAngle: .degrees(-90), clockwise: true)
+                    nib.addQuadCurve(to: CGPoint(x: lx + 7, y: mid - 1.0), control: CGPoint(x: ex - 5, y: mid - 0.9))
+                    nib.addCurve(to: CGPoint(x: lx + 0.9, y: 2), control1: CGPoint(x: lx + 3.2, y: mid - 1.1), control2: CGPoint(x: lx + 0.9, y: mid - 2))
+                    nib.closeSubpath()
+                    layer.fill(nib, with: .color(tint))
+                }
+
+            case .dots:
+                var upper = Path()
+                upper.move(to: CGPoint(x: lx + 2, y: 1))
+                upper.addLine(to: CGPoint(x: lx + 2, y: mid - 4.5))
+                var lower = Path()
+                lower.move(to: CGPoint(x: lx + 2, y: mid + 4.5))
+                lower.addLine(to: CGPoint(x: lx + 2, y: h - 1))
+                context.stroke(upper, with: .color(tint.opacity(0.45)), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                context.stroke(lower, with: .color(tint.opacity(0.45)), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                context.stroke(Path(ellipseIn: CGRect(x: lx - 1.5, y: mid - 3.5, width: 7, height: 7)), with: .color(tint), lineWidth: 1.7)
+                var tick = Path()
+                tick.move(to: CGPoint(x: ex - 6, y: mid - 3))
+                tick.addLine(to: CGPoint(x: ex - 2.5, y: mid))
+                tick.addLine(to: CGPoint(x: ex - 6, y: mid + 3))
+                context.stroke(tick, with: .color(tint.opacity(0.75)), style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+
+            case .rail:
+                context.fill(Path(roundedRect: CGRect(x: lx - 1, y: 2, width: 2.4, height: h - 4), cornerRadius: 1.2), with: .color(tint.opacity(0.62)))
+                var stem = Path()
+                stem.move(to: CGPoint(x: lx + 6, y: mid - 4.5))
+                stem.addLine(to: CGPoint(x: lx + 6, y: mid - 1.2))
+                stem.addQuadCurve(to: CGPoint(x: lx + 8.5, y: mid + 1.2), control: CGPoint(x: lx + 6, y: mid + 1.2))
+                stem.addLine(to: CGPoint(x: ex - 1, y: mid + 1.2))
+                var head = Path()
+                head.move(to: CGPoint(x: ex - 4.2, y: mid - 1.8))
+                head.addLine(to: CGPoint(x: ex - 0.8, y: mid + 1.2))
+                head.addLine(to: CGPoint(x: ex - 4.2, y: mid + 4.2))
+                let stroke = StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round)
+                context.stroke(stem, with: .color(tint), style: stroke)
+                context.stroke(head, with: .color(tint), style: stroke)
+
+            case .line:
+                var p = Path()
+                p.move(to: CGPoint(x: lx + 4, y: 2))
+                p.addLine(to: CGPoint(x: lx + 4, y: h - 2))
+                context.stroke(p, with: .color(tint.opacity(0.78)), style: StrokeStyle(lineWidth: 1.7, lineCap: .round))
+
+            case .dividers:
+                var v = Path()
+                v.move(to: CGPoint(x: lx, y: 2))
+                v.addLine(to: CGPoint(x: lx, y: h - 2))
+                context.stroke(v, with: .color(tint.opacity(0.72)), style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
+                var sep = Path()
+                sep.move(to: CGPoint(x: lx + 5, y: mid))
+                sep.addLine(to: CGPoint(x: ex, y: mid))
+                context.stroke(sep, with: .color(Color.hqStroke), style: StrokeStyle(lineWidth: 1, lineCap: .round))
+            }
+        }
+        .frame(width: 28, height: 20)
+        .accessibilityHidden(true)
     }
 }
 
 /// One of the bot's chats, as the Sessions page draws it: its title, a dot when unread, its time.
 struct BotChatRowView: View {
     var session: SessionSummary
+    var first = false
     var last: Bool
     var showsPin = false
     /// The bot's own colour (its line in the tint style).
@@ -293,7 +712,7 @@ struct BotChatRowView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             // A chat that waits for you is in the middle of its turn: the orange dot outranks the spinner.
             if session.isRunning, session.status != .needsInput {
-                ProgressView().controlSize(.mini).tint(Color.hqTintText).accessibilityHidden(true)
+                ProgressView().controlSize(.mini).accessibilityHidden(true)
             } else if session.unread || session.status == .needsInput {
                 // Orange when it waits for an answer, as the Sessions page marks it.
                 Circle().fill(session.status == .needsInput ? Color.hqOrange : Color.hqTint)
@@ -316,7 +735,10 @@ struct BotChatRowView: View {
             }
         }
         .padding(.bottom, last ? BotChatsMetrics.tail : 0)
-        .background(alignment: .leading) { BotChatsLine(last: last, tint: tint, lineX: BotChatsMetrics.lineX, style: style) }
+        .background(alignment: .leading) {
+            BotChatsLine(first: first, last: last, tint: tint, lineX: BotChatsMetrics.lineX, style: style,
+                         status: BotChatsLine.status(of: session))
+        }
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(BotChatRowView.label(session, time: time))
@@ -337,6 +759,7 @@ struct BotChatRowView: View {
 struct BotChatsMoreView: View {
     var count: Int
     var botName: String
+    var first = false
     var tint: Color = .hqStroke
     var style: BotChatsStyle = .saved
     // [ui-sizing] The chat rows' height (Compact's too) as its own: a fixed 32 stood taller than Compact's 28 pt rows.
@@ -352,7 +775,9 @@ struct BotChatsMoreView: View {
         .padding(.leading, BotChatsMetrics.textX)
         .frame(maxWidth: .infinity, minHeight: height, alignment: .leading)
         .padding(.bottom, BotChatsMetrics.tail)
-        .background(alignment: .leading) { BotChatsLine(last: true, tint: tint, lineX: BotChatsMetrics.lineX, style: style, more: true) }
+        .background(alignment: .leading) {
+            BotChatsLine(first: first, last: true, tint: tint, lineX: BotChatsMetrics.lineX, style: style, more: true)
+        }
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(count) more chats with \(botName)")
@@ -446,18 +871,25 @@ struct BotChatsStyleSettingsView: View {
     static let note = "How the line beside each bot's chats looks on the Bots page. To show chats under your bots, open Bots, tap Filter, then Chats Under Bots."
     #endif
 
-    private static func sample(_ id: String, _ title: String, hoursAgo: Double, unread: Bool = false) -> SessionSummary {
-        SessionSummary(id: id, profile: "preview", title: title, preview: nil, lastActive: Date().addingTimeInterval(-hoursAgo * 3600),
-                       source: "desktop", unread: unread, isRunning: false)
+    private static func sample(_ id: String, _ title: String, hoursAgo: Double, unread: Bool = false,
+                               status: SessionStatus = .idle) -> SessionSummary {
+        var row = SessionSummary(id: id, profile: "preview", title: title, preview: nil,
+                                 lastActive: Date().addingTimeInterval(-hoursAgo * 3600),
+                                 source: "desktop", unread: unread, isRunning: false)
+        row.status = status
+        return row
     }
 
     var body: some View {
         List { Group {
             Section {
                 VStack(spacing: 0) {
-                    BotChatRowView(session: Self.sample("p1", "Draft the weekly newsletter", hoursAgo: 1, unread: true), last: false,
-                                   tint: .hqTint, style: style)
-                    BotChatRowView(session: Self.sample("p2", "Plan next week", hoursAgo: 26), last: false, tint: .hqTint, style: style)
+                    BotChatRowView(session: Self.sample("p1", "Draft the weekly newsletter", hoursAgo: 1, unread: true),
+                                   first: true, last: false, tint: .hqTint, style: style)
+                    BotChatRowView(session: Self.sample("p2", "Review release notes", hoursAgo: 4, status: .needsInput),
+                                   last: false, tint: .hqTint, style: style)
+                    BotChatRowView(session: Self.sample("p3", "Plan next week", hoursAgo: 26),
+                                   last: false, tint: .hqTint, style: style)
                     BotChatsMoreView(count: 3, botName: "your bot", tint: .hqTint, style: style)
                 }
                 .padding(.vertical, 6)
@@ -475,7 +907,7 @@ struct BotChatsStyleSettingsView: View {
                         AppLog.trace("settings", "chats under bots style \(option.rawValue)")
                     } label: {
                         HStack(spacing: 12) {
-                            Image(systemName: option.symbol).frame(width: 24).foregroundStyle(Color.hqTintText)
+                            BotChatsStyleGlyph(style: option, tint: .hqTintText)
                             Text(option.title).foregroundStyle(Color.hqLabel)
                             Spacer(minLength: 8)
                             if option.rawValue == raw { Image(systemName: "checkmark").foregroundStyle(Color.hqTintText).fontWeight(.semibold) }

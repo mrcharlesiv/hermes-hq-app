@@ -1693,6 +1693,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
             widthHeldOffScreen = false
             view.setNeedsLayout()
         }
+        NotificationCenter.default.post(name: Self.topStripLayoutChanged, object: self)
         #endif
         if focusesOnAppear {
             focusesOnAppear = false
@@ -2201,7 +2202,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
             // [Mac AAA 2026-11-16] Chosen by the chat (`updateTopBand`), not left to the system's guess: the system's
             // own background showed its frosted band (ending in a line at the bar's foot) in some short chats with
             // nothing under the bar and not in others, as it judged the flipped list's edge.
-            topBandShown = nil
+            topBandState = nil
             updateTopBand()
             return
         }
@@ -2216,7 +2217,9 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     /// [Mac AAA 2026-11-16] The iOS look's chat bar on the Mac: a light frost ending in the panes' line only while a
     /// message runs under the bar, as the list pane's bar takes its line once rows scroll under it; clear otherwise. Its foot is the
     /// bar's, where the inspector's rule beside it stands. Nil: not chosen yet.
-    private var topBandShown: Bool?
+    /// [bot-tabs-seamless] When the bot chat's strip sits under the bar, `barBandNoLine` drops the mid-bar rule so
+    /// the bar and strip share one continuous surface down to the strip's bottom rule.
+    private var topBandState: (under: Bool, noLine: Bool)?
     private static let barBand: UINavigationBarAppearance = {
         let band = UINavigationBarAppearance()
         band.configureWithTransparentBackground()
@@ -2237,6 +2240,11 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         }
         return band
     }()
+    private static let barBandNoLine: UINavigationBarAppearance = {
+        let band = barBand.copy()
+        band.shadowColor = .clear
+        return band
+    }()
     private static let barClear: UINavigationBarAppearance = {
         let clear = UINavigationBarAppearance()
         clear.configureWithTransparentBackground()
@@ -2250,13 +2258,16 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         let under = tableView.visibleCells.contains { cell in
             !cell.isHidden && cell.bounds.height > 1 && cell.convert(cell.bounds, to: view).minY < foot - 0.5
         }
-        guard topBandShown != under else { return }
-        topBandShown = under
-        let look = under ? Self.barBand : Self.barClear
+        let hasStrip = visibleSessionStripHeight > 0
+        let next = (under: under, noLine: hasStrip)
+        guard topBandState?.under != next.under || topBandState?.noLine != next.noLine else { return }
+        topBandState = next
+        let look = under ? (hasStrip ? Self.barBandNoLine : Self.barBand) : Self.barClear
         navigationItem.standardAppearance = look
         navigationItem.scrollEdgeAppearance = look
         navigationItem.compactAppearance = look
         navigationItem.compactScrollEdgeAppearance = look
+        (topAccessory as? SessionStripController)?.setTopBandShown(under)
     }
     #endif
 
@@ -5174,6 +5185,19 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     #endif
     static let backToBotChatID = "chat.back-to-bot"
 
+    #if targetEnvironment(macCatalyst)
+    /// [bot-tabs-seamless] Posted when the Mac bot chat's top strip appears, disappears or resizes, so the split
+    /// aligns the right inspector's header band and bottom rule to it.
+    static let topStripLayoutChanged = Notification.Name("hq.chat.topStripLayoutChanged")
+
+    /// Height of the visible `SessionStripController` under the navigation bar (0 when absent or hidden).
+    var visibleSessionStripHeight: CGFloat {
+        guard let strip = topAccessory as? SessionStripController, !strip.view.isHidden,
+              let height = topAccessoryHeight?.constant, height > 0.5 else { return 0 }
+        return height
+    }
+    #endif
+
     /// [tasks] The pinned panel's height (the page measures what it draws and caps it); 0 lays it away. `insets`: the
     /// transcript starts under it (a bar); false, it covers the transcript and the chat's layout stays as it is.
     func setTopAccessoryHeight(_ value: CGFloat, insets: Bool = true, animated: Bool) {
@@ -5193,6 +5217,10 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         } else {
             change()
         }
+        #if targetEnvironment(macCatalyst)
+        updateTopBand()
+        NotificationCenter.default.post(name: Self.topStripLayoutChanged, object: self)
+        #endif
     }
 
     /// [tasks] The room between the bar and the composer (the pinned panel keeps some of it for the chat).

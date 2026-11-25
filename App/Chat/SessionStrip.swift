@@ -153,6 +153,11 @@ nonisolated enum SessionStripRules {
         let placed = fresh + old
         return (entries.filter(\.isBotChat) + placed, placed.map(\.id))
     }
+    /// [bot-tabs-seamless] The Mac's strip draws only the bot's other chats (never its own Bot Chat: the header right
+    /// above already names the bot and the strip only lives on Bot Chat).
+    static func macEntries(_ entries: [SessionStripEntry]) -> [SessionStripEntry] {
+        entries.filter { !$0.isBotChat }
+    }
 }
 
 /// [bot-chat-sessions] One group of the Mac's Chats tab.
@@ -374,15 +379,40 @@ private final class StripView: UIView {
 final class SessionStripController: UIViewController, UIScrollViewDelegate {
     private weak var screen: ChatViewController?
     private weak var app: AppModel?
-    private let backing = ChatEdgeStandIn()
+    /// [bot-tabs-seamless] The Mac's strip shares the top bar's exact surface: Desktop Look's 94 % page frost
+    /// (`DesktopFrostView`), and in the iOS look `ChatViewController.barBand`'s `systemUltraThinMaterial` + `popupVeil`
+    /// while messages scroll under it (clear at rest).
+    private let macDesktopFrost = DesktopFrostView()
+    private let macIOSBand = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
+    private let macIOSVeil = UIView()
+    private var topBandShown = false
+    /// [bot-tabs-seamless] On iPhone and iPad in Normal Theming (Liquid Glass), a single slim floating glass capsule
+    /// tucked below the nav bar's pills (Option A). Hidden in Desktop Look, where `ChatViewController.edgeStandIn`
+    /// already extends seamlessly behind the strip down to its bottom hairline.
+    private let iosGlassBar: UIVisualEffectView = {
+        let view = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+        view.cornerConfiguration = .capsule()
+        view.isUserInteractionEnabled = false
+        view.accessibilityIdentifier = "chat.strip.glass"
+        return view
+    }()
     private let scroller = UIScrollView()
     private let row = UIStackView()
     private let newChat = UIButton(configuration: .glass())
     /// [bot-chat-sessions] The Mac's "All N": every chat of the bot's, in the inspector's Chats tab.
     private let allChats = UIButton(configuration: .glass())
+    /// [bot-tabs-seamless] Subtle vertical tick between `All N ›` and `+` on the Mac.
+    private let rightRule = UIView()
     private var allCount = -1
-    private lazy var scrollerToNew = scroller.trailingAnchor.constraint(equalTo: newChat.leadingAnchor, constant: -7)
-    private lazy var scrollerToAll = scroller.trailingAnchor.constraint(equalTo: allChats.leadingAnchor, constant: -7)
+    private lazy var scrollerToNew = scroller.trailingAnchor.constraint(equalTo: newChat.leadingAnchor, constant: -6)
+    private lazy var scrollerToAll = scroller.trailingAnchor.constraint(equalTo: allChats.leadingAnchor, constant: tabs ? -6 : -4)
+    private var phoneScrollerLeading: NSLayoutConstraint?
+    private var phoneScrollerTop: NSLayoutConstraint?
+    private var phoneScrollerBottom: NSLayoutConstraint?
+    private var phoneAllTrailing: NSLayoutConstraint?
+    private var newChatHeight: NSLayoutConstraint?
+    private var newChatWidth: NSLayoutConstraint?
+    private var allChatsHeight: NSLayoutConstraint?
     private var shown: [SessionStripEntry] = []
     private var watches: [NSObjectProtocol] = []
     private var availableHeight: CGFloat = 0
@@ -442,15 +472,43 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
         app?.setChatList(self, shown: false)
     }
 
-    private var font: UIFont {
-        UIFontMetrics(forTextStyle: .subheadline).scaledFont(for: HQFont.system(ofSize: 14, weight: .medium), maximumPointSize: 18)
+    /// Compact iPhone/iPad strip type: subordinate to the chat title above, scaling with Dynamic Type up to 18 pt.
+    private func phoneFont(weight: UIFont.Weight) -> UIFont {
+        UIFontMetrics(forTextStyle: .footnote).scaledFont(for: HQFont.system(ofSize: 13, weight: weight), maximumPointSize: 18)
     }
-    /// [bot-chat-sessions] The Mac's look: words with a line under the chat on screen (pills elsewhere).
+    /// [bot-tabs-seamless] Compact Mac strip type: ~12 pt on screen at 100 % UI Scale (subordinate to the bot's name
+    /// and model above), floored at `HQFont.macSmallest` and following UI Scale.
+    private func macFont(weight: UIFont.Weight) -> UIFont {
+        let grow = max(1, ChatTitleView.macChrome)
+        let raw = HQFont.system(ofSize: HQFont.legibleLiteral(12), weight: weight)
+        let cap = 20 * grow
+        return raw.pointSize > cap ? raw.withSize(cap) : raw
+    }
+    /// [bot-chat-sessions] The Mac's look: seamless plain words on the top bar's own ground (floating glass capsule /
+    /// seamless Desktop Look bar elsewhere).
     private var tabs: Bool { DeviceWord.isMac }
     private let rule = UIView()
     /// The tabs fade out at an edge they run past (words cut square at the row's end read as a fault); none at an
     /// edge with nothing beyond it.
     private let fade = CAGradientLayer()
+
+    /// [bot-tabs-seamless] Solid bottom hairline: composites the pane divider over `ChatPalette.page` so messages
+    /// scrolling underneath never tint it, matching `ChatViewController.barBand` and `MacInspector.rule`.
+    private static var ruleColor: UIColor {
+        UIColor { traits in
+            #if targetEnvironment(macCatalyst)
+            let line = HQPalette.paneLine.resolvedColor(with: traits)
+            #else
+            let line = ChatPalette.separator.resolvedColor(with: traits)
+            #endif
+            let page = ChatPalette.page.resolvedColor(with: traits)
+            var lr: CGFloat = 0, lg: CGFloat = 0, lb: CGFloat = 0, la: CGFloat = 0
+            var pr: CGFloat = 0, pg: CGFloat = 0, pb: CGFloat = 0, pa: CGFloat = 0
+            guard line.getRed(&lr, green: &lg, blue: &lb, alpha: &la),
+                  page.getRed(&pr, green: &pg, blue: &pb, alpha: &pa) else { return line }
+            return UIColor(red: lr * la + pr * (1 - la), green: lg * la + pg * (1 - la), blue: lb * la + pb * (1 - la), alpha: 1)
+        }
+    }
 
     private func placeFade() {
         guard tabs else { return }
@@ -472,7 +530,7 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        if !tabs { (view as? StripView)?.reach = max(0, 44 - pillHeight) }   // follows Dynamic Type
+        if !tabs { (view as? StripView)?.reach = max(0, 44 - stripHeight) }   // follows Dynamic Type
         fitTabs()
         placeFade()
     }
@@ -480,19 +538,24 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
     /// [bot-tabs-ux] The chats' tabs share the row: each shows its whole title while they all fit, and when they don't
     /// the longest give way first, evenly, down to `narrowestTab` (then the row scrolls). A fixed cap cut titles in a
     /// half-empty row.
-    private static let widestTab: CGFloat = 340
-    private static let narrowestTab: CGFloat = 120
+    private static let widestTab: CGFloat = 300
+    private static let narrowestTab: CGFloat = 110
     private var tabCaps: [(tab: UIButton, cap: NSLayoutConstraint)] = []
     private var fittedFor: CGFloat = -1
 
     private func fitTabs() {
         if !tabs {
             let names = row.arrangedSubviews.compactMap { $0 as? UIButton }
-            let room = scroller.bounds.width - 28
+            let dots = row.arrangedSubviews.compactMap { $0 as? UILabel }
+            let room = scroller.bounds.width - 16
             guard room > 0, !names.isEmpty else { return }
             if names.count == 2 {
                 let wants = names.map { max(44, ceil($0.intrinsicContentSize.width)) }
-                names[1].isHidden = wants.reduce(0, +) + row.spacing > room || traitCollection.preferredContentSizeCategory.isAccessibilityCategory
+                let dotWidth = dots.first.map { ceil($0.intrinsicContentSize.width) } ?? 0
+                let hideSecond = wants.reduce(0, +) + dotWidth + row.spacing * 2 > room
+                    || traitCollection.preferredContentSizeCategory.isAccessibilityCategory
+                names[1].isHidden = hideSecond
+                dots.first?.isHidden = hideSecond
             }
             if let limit = tabCaps.first?.cap, limit.constant != max(44, room) { limit.constant = max(44, room) }
             return
@@ -502,7 +565,7 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
         let wants = tabCaps.map { min(Self.widestTab, ceil($0.tab.intrinsicContentSize.width)) }
         let others = row.arrangedSubviews.filter { view in !tabCaps.contains { $0.tab === view } }
             .reduce(CGFloat(0)) { $0 + $1.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize).width }
-        let room = scroller.bounds.width - 28 - others - row.spacing * CGFloat(max(0, row.arrangedSubviews.count - 1))
+        let room = scroller.bounds.width - 16 - others - row.spacing * CGFloat(max(0, row.arrangedSubviews.count - 1))
         // The largest cap at which the tabs fit (a tab narrower than the cap takes only what it needs).
         var cap = Self.widestTab
         if wants.reduce(0, +) > room {
@@ -515,13 +578,21 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
         for item in tabCaps where item.cap.constant != cap { item.cap.constant = cap }
     }
     /// [compact-strip] Owner 2026-11-21 ("Entire little strip for the sessions is still too tall … taking up way too much
-    /// screen space"): the iPhone's row is as slim as its words; `StripView` keeps each name a 44 pt tap.
-    private var pillHeight: CGFloat { tabs ? max(34, ceil(font.lineHeight) + 18) : max(30, ceil(font.lineHeight) + 12) }
-    private var stripHeight: CGFloat { pillHeight }
+    /// screen space"): the iPhone's row is slim; `StripView` keeps each name a 44 pt tap.
+    /// [bot-tabs-seamless] On the Mac, a compact ~27 pt item inside a ~33 pt sub-row; on iPhone/iPad, a ~32 pt
+    /// floating Liquid Glass capsule in Normal Theming or a snug ~34 pt seamless sub-row in Desktop Look.
+    private var pillHeight: CGFloat {
+        tabs ? max(26, ceil(macFont(weight: .medium).lineHeight) + 8)
+             : max(32, ceil(phoneFont(weight: .medium).lineHeight) + 14)
+    }
+    private var stripHeight: CGFloat {
+        if tabs { return pillHeight + 6 }
+        return Theme.isDesktop ? pillHeight + 2 : pillHeight + 8
+    }
 
     override func loadView() {
         let strip = StripView()
-        if !tabs { strip.reach = max(0, 44 - pillHeight) }
+        if !tabs { strip.reach = max(0, 44 - stripHeight) }
         view = strip
     }
 
@@ -529,11 +600,26 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
         super.viewDidLoad()
         view.accessibilityIdentifier = "chat.strip"
         view.addInteraction(UIDropInteraction(delegate: fileDropInteraction))   // [spring-drop]
-        // The chat's own soft top edge, carried on under the pills: the rows scroll up under it, as under the bar.
-        backing.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(backing)
+        // On the Mac, exact parity with the navigation bar's surface; on iPhone/iPad, a floating Liquid Glass capsule
+        // in Normal Theming and transparent over `ChatViewController.edgeStandIn` in Desktop Look.
+        if tabs {
+            macDesktopFrost.translatesAutoresizingMaskIntoConstraints = false
+            macDesktopFrost.fade = .none
+            view.addSubview(macDesktopFrost)
+            macIOSBand.isUserInteractionEnabled = false
+            macIOSBand.translatesAutoresizingMaskIntoConstraints = false
+            macIOSVeil.isUserInteractionEnabled = false
+            macIOSVeil.backgroundColor = ChatPalette.popupVeil
+            macIOSVeil.frame = macIOSBand.contentView.bounds
+            macIOSVeil.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            macIOSBand.contentView.addSubview(macIOSVeil)
+            view.addSubview(macIOSBand)
+        } else {
+            iosGlassBar.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(iosGlassBar)
+        }
         scroller.showsHorizontalScrollIndicator = false
-        scroller.alwaysBounceHorizontal = true
+        scroller.alwaysBounceHorizontal = tabs
         scroller.clipsToBounds = true
         scroller.translatesAutoresizingMaskIntoConstraints = false
         scroller.panGestureRecognizer.addTarget(self, action: #selector(scrolledByPerson))
@@ -544,23 +630,16 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
             scroller.layer.mask = fade
         }
         view.addSubview(scroller)
-        var newConfig = UIButton.Configuration.hqGlass()
-        newConfig.cornerStyle = .capsule
-        newConfig.image = UIImage(systemName: "plus")
-        newConfig.baseForegroundColor = ChatPalette.label
-        newConfig.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10)
-        if tabs {
-            newConfig = .plain()
-            newConfig.image = UIImage(systemName: "plus", withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .medium))
-            newConfig.baseForegroundColor = ChatPalette.label2   // quiet: the row's one colour is the line under Bot Chat
-            newConfig.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8)
-        }
-        newChat.configuration = newConfig
+        configureNewChat()
         newChat.isHidden = !tabs
         newChat.isPointerInteractionEnabled = true
         newChat.translatesAutoresizingMaskIntoConstraints = false
         newChat.accessibilityIdentifier = "chat.strip.new"
         newChat.accessibilityLabel = "New Chat"
+        if tabs {
+            newChat.toolTip = "New Chat"
+            PointerEffects.surface(newChat, pill: true)
+        }
         newChat.addAction(UIAction { [weak self] _ in
             guard let self, let screen = self.screen, let app = self.app, let navigation = screen.navigationController else { return }
             guard app.openNewChat(like: screen.session, draft: "", replacing: screen) else { return }
@@ -569,55 +648,99 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
             }
         }, for: .primaryActionTriggered)
         view.addSubview(newChat)
+        rightRule.backgroundColor = Self.ruleColor
+        rightRule.isUserInteractionEnabled = false
+        rightRule.isHidden = true
+        rightRule.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(rightRule)
         allChats.translatesAutoresizingMaskIntoConstraints = false
         allChats.accessibilityIdentifier = tabs ? "chat.strip.all" : "session-strip.all"
         allChats.isHidden = true
         allChats.isPointerInteractionEnabled = true
         allChats.setContentCompressionResistancePriority(.required, for: .horizontal)
         allChats.setContentHuggingPriority(.required, for: .horizontal)
-        if !tabs {
-            allChats.heightAnchor.constraint(equalToConstant: pillHeight).isActive = true
+        let allH = allChats.heightAnchor.constraint(equalToConstant: pillHeight)
+        allChatsHeight = allH
+        allH.isActive = true
+        if tabs {
+            PointerEffects.surface(allChats, pill: true)
+        } else {
             allChats.widthAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
         }
         allChats.addAction(UIAction { [weak self] _ in self?.showAll() }, for: .primaryActionTriggered)
         view.addSubview(allChats)
         row.axis = .horizontal
-        row.spacing = tabs ? 2 : 7
-        rule.backgroundColor = ChatPalette.separator
+        row.spacing = 2
+        rule.backgroundColor = Self.ruleColor
         rule.isUserInteractionEnabled = false
-        rule.isHidden = false
+        rule.isHidden = !tabs && !Theme.isDesktop
         rule.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(rule)
         row.alignment = .center
         row.translatesAutoresizingMaskIntoConstraints = false
         scroller.addSubview(row)
-        NSLayoutConstraint.activate([
-            backing.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            backing.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            // End the backing at the divider rather than covering the transcript.
-            backing.topAnchor.constraint(equalTo: view.topAnchor),
-            backing.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            scroller.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+        let pixel = HQShape.pixel(traitCollection.displayScale)
+        let newH = newChat.heightAnchor.constraint(equalToConstant: tabs ? pillHeight : 44)
+        newChatHeight = newH
+        let newW = newChat.widthAnchor.constraint(equalToConstant: tabs ? max(28, pillHeight) : 44)
+        newChatWidth = newW
+        let scrollerLeading = scroller.leadingAnchor.constraint(equalTo: view.leadingAnchor)
+        let scrollerTop = scroller.topAnchor.constraint(equalTo: view.topAnchor)
+        let scrollerBottom = scroller.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: tabs ? -4 : -4)
+        let allTrailing = tabs ? allChats.trailingAnchor.constraint(equalTo: rightRule.leadingAnchor, constant: -6)
+            : allChats.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -18)
+        if !tabs {
+            phoneScrollerLeading = scrollerLeading
+            phoneScrollerTop = scrollerTop
+            phoneScrollerBottom = scrollerBottom
+            phoneAllTrailing = allTrailing
+        }
+        var constraints: [NSLayoutConstraint] = [
+            scrollerLeading,
             tabs ? scrollerToNew : scrollerToAll,
-            tabs ? allChats.trailingAnchor.constraint(equalTo: newChat.leadingAnchor, constant: -7)
-                : allChats.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
-            allChats.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: tabs ? 0 : -1),
-            scroller.topAnchor.constraint(equalTo: view.topAnchor),
-            scroller.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            newChat.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
-            newChat.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: tabs ? 0 : -1),
-            newChat.widthAnchor.constraint(equalToConstant: tabs ? 34 : 44),
+            allTrailing,
+            allChats.centerYAnchor.constraint(equalTo: scroller.centerYAnchor),
+            rightRule.trailingAnchor.constraint(equalTo: newChat.leadingAnchor, constant: -6),
+            rightRule.centerYAnchor.constraint(equalTo: scroller.centerYAnchor),
+            rightRule.widthAnchor.constraint(equalToConstant: pixel),
+            rightRule.heightAnchor.constraint(equalToConstant: 12),
+            scrollerTop,
+            scrollerBottom,
+            newChat.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: tabs ? -10 : -14),
+            tabs ? newChat.centerYAnchor.constraint(equalTo: scroller.centerYAnchor)
+                : newChat.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: -1),
+            newW,
             rule.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             rule.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             rule.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            rule.heightAnchor.constraint(equalToConstant: HQShape.pixel(traitCollection.displayScale)),
-            newChat.heightAnchor.constraint(equalToConstant: tabs ? stripHeight : 44),
-            row.leadingAnchor.constraint(equalTo: scroller.contentLayoutGuide.leadingAnchor, constant: 14),
-            row.trailingAnchor.constraint(equalTo: scroller.contentLayoutGuide.trailingAnchor, constant: -14),
+            rule.heightAnchor.constraint(equalToConstant: pixel),
+            newH,
+            row.leadingAnchor.constraint(equalTo: scroller.contentLayoutGuide.leadingAnchor, constant: 8),
+            row.trailingAnchor.constraint(equalTo: scroller.contentLayoutGuide.trailingAnchor, constant: -8),
             row.topAnchor.constraint(equalTo: scroller.contentLayoutGuide.topAnchor),
             row.bottomAnchor.constraint(equalTo: scroller.contentLayoutGuide.bottomAnchor),
             row.centerYAnchor.constraint(equalTo: scroller.frameLayoutGuide.centerYAnchor),
-        ])
+        ]
+        if tabs {
+            constraints += [
+                macDesktopFrost.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                macDesktopFrost.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                macDesktopFrost.topAnchor.constraint(equalTo: view.topAnchor),
+                macDesktopFrost.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+                macIOSBand.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                macIOSBand.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                macIOSBand.topAnchor.constraint(equalTo: view.topAnchor),
+                macIOSBand.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            ]
+        } else {
+            constraints += [
+                iosGlassBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
+                iosGlassBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+                iosGlassBar.topAnchor.constraint(equalTo: view.topAnchor, constant: 4),
+                iosGlassBar.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -4),
+            ]
+        }
+        NSLayoutConstraint.activate(constraints)
         applyLook()
         let center = NotificationCenter.default
         for name in [SessionStrip.listChanged, SessionStripPref.didChange, TileMaker.changed, ArtifactPins.didChange] {
@@ -625,16 +748,31 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
                 MainActor.assumeIsolated { self?.reload() }
             })
         }
+        watches.append(center.addObserver(forName: HQAccessibility.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyLook() }
+        })
         watches.append(center.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.applyLook()
+                self.configureNewChat()
+                self.allChatsHeight?.constant = self.pillHeight
+                if self.tabs {
+                    self.newChatHeight?.constant = self.pillHeight
+                    self.newChatWidth?.constant = max(28, self.pillHeight)
+                }
                 self.shown = []      // the pills again, in the look's colours
                 self.allCount = -1
                 self.reload()
             }
         })
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (strip: SessionStripController, _) in
+            strip.configureNewChat()
+            strip.allChatsHeight?.constant = strip.pillHeight
+            if strip.tabs {
+                strip.newChatHeight?.constant = strip.pillHeight
+                strip.newChatWidth?.constant = max(28, strip.pillHeight)
+            }
             strip.shown = []
             strip.allCount = -1
             strip.reload()
@@ -642,15 +780,76 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
         reload()
     }
 
+    private func configureNewChat() {
+        var newConfig = UIButton.Configuration.hqGlass()
+        newConfig.cornerStyle = .capsule
+        newConfig.image = UIImage(systemName: "plus")
+        newConfig.baseForegroundColor = ChatPalette.label
+        newConfig.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10)
+        if tabs {
+            let size = (12 * max(1, ChatTitleView.macChrome)).rounded()
+            newConfig = .plain()
+            newConfig.image = UIImage(systemName: "plus", withConfiguration: UIImage.SymbolConfiguration(pointSize: size, weight: .medium))
+            newConfig.baseForegroundColor = ChatPalette.label2
+            newConfig.contentInsets = NSDirectionalEdgeInsets(top: 3, leading: 5, bottom: 3, trailing: 5)
+        }
+        newChat.configuration = newConfig
+    }
+
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         reload()
     }
 
-    /// The Desktop Look's chat edge is the hard frosted band; the iOS look's the soft fade (as the chat's own edge).
+    /// [bot-tabs-seamless] The Mac's iOS look bar switches between clear and frosted (`ChatViewController.updateTopBand`):
+    /// the strip's backing follows in lockstep so both read as one continuous surface.
+    func setTopBandShown(_ shown: Bool) {
+        guard tabs, topBandShown != shown else { return }
+        topBandShown = shown
+        if isViewLoaded { applyLook() }
+    }
+
+    /// Desktop Look: exact match to `ThemeChrome.solidBar(frosted: true)` on Mac, and transparent over
+    /// `ChatViewController.edgeStandIn` on iPhone/iPad (zero seam).
+    /// iOS Look: `ChatViewController.barBand` / `barClear` on Mac; floating Liquid Glass capsule on iPhone/iPad.
     private func applyLook() {
-        backing.hard = Theme.isDesktop
-        backing.keeps = !Theme.isDesktop
+        let desktop = Theme.isDesktop
+        let solid = HQAccessibility.reduceTransparency
+        if tabs {
+            macDesktopFrost.isHidden = !desktop
+            macDesktopFrost.effectView.isHidden = solid
+            macDesktopFrost.color = ChatPalette.page
+            macDesktopFrost.tintAlpha = solid ? 1 : DesktopFrost.barTintAlpha
+            macIOSBand.isHidden = desktop
+            macIOSBand.effect = solid ? nil : UIBlurEffect(style: .systemUltraThinMaterial)
+            macIOSVeil.backgroundColor = solid ? ChatPalette.page : ChatPalette.popupVeil
+            macIOSBand.alpha = topBandShown ? 1 : 0
+            rule.backgroundColor = Self.ruleColor
+            rightRule.backgroundColor = Self.ruleColor
+            return
+        }
+        iosGlassBar.isHidden = desktop
+        rule.isHidden = !desktop
+        rule.backgroundColor = Self.ruleColor
+        phoneScrollerLeading?.constant = desktop ? 2 : 18
+        phoneScrollerTop?.constant = desktop ? 0 : 4
+        phoneScrollerBottom?.constant = desktop ? -2 : -4
+        phoneAllTrailing?.constant = desktop ? -10 : -22
+        if !desktop, !Theme.solidChrome {
+            if solid {
+                iosGlassBar.effect = nil
+                iosGlassBar.backgroundColor = ChatPalette.botBubble
+                iosGlassBar.layer.borderWidth = HQShape.hairline
+                iosGlassBar.layer.borderColor = ChatPalette.strokeSecondary.resolvedColor(with: traitCollection).cgColor
+                iosGlassBar.cornerConfiguration = .capsule()
+            } else if !(iosGlassBar.effect is UIGlassEffect) {
+                iosGlassBar.effect = UIGlassEffect(style: .regular)
+                iosGlassBar.backgroundColor = nil
+                iosGlassBar.layer.borderWidth = 0
+                iosGlassBar.layer.borderColor = nil
+                iosGlassBar.cornerConfiguration = .capsule()
+            }
+        }
     }
 
     @objc private func scrolledByPerson() { personScrolled = true }
@@ -671,10 +870,12 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
 
     private func reload() {
         guard let app, let screen else { return }
-        let entries = SessionStripPref.isOn ? SessionStrip.entries(app: app, model: screen.session) : []
+        let raw = SessionStripPref.isOn ? SessionStrip.entries(app: app, model: screen.session) : []
+        // [bot-tabs-seamless] On the Mac, omit the redundant Bot Chat tab; the header right above names the bot.
+        let entries = tabs ? SessionStripRules.macEntries(raw) : raw
         // The Mac: only for a bot with a chat besides its own (its sidebar already says whose chat this is).
         let others = SessionStripPref.isOn ? SessionStrip.count(app: app, model: screen.session) : 0
-        let drawn = DeviceWord.isMac ? others > 0 || entries.count >= SessionStripRules.fewest : !entries.isEmpty
+        let drawn = DeviceWord.isMac ? others > 0 || !entries.isEmpty : !entries.isEmpty
         let height: CGFloat = SessionStripPref.isOn && drawn ? stripHeight : 0
         showAllCount(height > 0 ? others : 0)
         app.setChatList(self, shown: appeared && (DeviceWord.isMac ? height > 0 : SessionStripPref.isOn))
@@ -687,10 +888,10 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
         fittedFor = -1
         pillEntries = [:]
         for (index, entry) in entries.enumerated() {
+            if index > 0 { row.addArrangedSubview(middot()) }
             let pill = pill(entry, index: index)
             pillEntries[ObjectIdentifier(pill)] = entry
             row.addArrangedSubview(pill)
-            if tabs, index == 0, entry.isBotChat, entries.count > 1 { row.addArrangedSubview(divider()) }
         }
         if tabs { DispatchQueue.main.async { [weak self] in self?.view.setNeedsLayout(); self?.view.layoutIfNeeded(); self?.placeFade() } }
         if height > 0, !placedCurrent || !personScrolled {
@@ -705,6 +906,7 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
         allCount = count
         let shows = count > 0
         allChats.isHidden = !shows
+        rightRule.isHidden = !tabs || !shows
         if tabs {
             scrollerToNew.isActive = !shows
             scrollerToAll.isActive = shows
@@ -712,13 +914,15 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
         guard shows else { return }
         var config: UIButton.Configuration = .plain()
         config.cornerStyle = .capsule
-        config.contentInsets = tabs ? NSDirectionalEdgeInsets(top: 6, leading: 6, bottom: 6, trailing: 4)
-            : NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 10)
-        config.attributedTitle = AttributedString("All \(count)", attributes: AttributeContainer([.font: font]))
-        config.image = UIImage(systemName: "chevron.right", withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold))
+        config.contentInsets = tabs ? NSDirectionalEdgeInsets(top: 3, leading: 7, bottom: 3, trailing: 6)
+            : NSDirectionalEdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6)
+        config.attributedTitle = AttributedString("All \(count)", attributes: AttributeContainer([.font: tabs ? macFont(weight: .medium) : phoneFont(weight: .medium)]))
+        let chevronSize: CGFloat = tabs ? (9.5 * max(1, ChatTitleView.macChrome)).rounded() : 9.5
+        config.image = UIImage(systemName: "chevron.right",
+                               withConfiguration: UIImage.SymbolConfiguration(pointSize: chevronSize, weight: .semibold))
         config.imagePlacement = .trailing
-        config.imagePadding = 4
-        config.baseForegroundColor = tabs ? ChatPalette.label2 : HQPalette.tint
+        config.imagePadding = 3
+        config.baseForegroundColor = ChatPalette.label2
         allChats.configuration = config
         allChats.accessibilityLabel = "All chats, \(count)"
         allChats.toolTip = "All Chats"
@@ -760,70 +964,48 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
         scroller.setContentOffset(CGPoint(x: min(most, max(0, leading)), y: 0), animated: false)
     }
 
-    /// [bot-chat-sessions] The Mac's tab: its words (the bot's own chat reads "Bot Chat": the bar above names the bot),
-    /// a dot before them for a chat at work or with a reply not read, and the tint's line under the chat on screen.
-    /// [bot-tabs-ux] The whole tab is the target and lights under the pointer; its tip is the whole title and last line.
+    /// [bot-tabs-seamless] The Mac's seamless plain-text item: borderless at rest on the top bar's own ground, a 6 pt
+    /// dot before a chat at work or with a reply not read, and a soft hover fill under the pointer (`pill: true`:
+    /// crisp 4 pt box in Desktop Look, capsule in iOS Look).
     private func tab(_ entry: SessionStripEntry) -> UIButton {
-        let inset: CGFloat = 10
+        let inset: CGFloat = 8
+        let live = entry.working || entry.unread
         var config = UIButton.Configuration.plain()
-        config.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: inset, bottom: 6, trailing: inset)
+        config.contentInsets = NSDirectionalEdgeInsets(top: 3, leading: inset, bottom: 3, trailing: inset)
         config.imagePadding = 6
         config.titleLineBreakMode = .byTruncatingTail
-        let face = UIFontMetrics(forTextStyle: .subheadline).scaledFont(for: HQFont.system(ofSize: 14, weight: entry.current ? .semibold : .regular),
-                                                                    maximumPointSize: 18)
-        config.attributedTitle = AttributedString(entry.isBotChat ? "Bot Chat" : entry.title, attributes: AttributeContainer([.font: face]))
+        let face = macFont(weight: live ? .medium : .regular)
+        config.attributedTitle = AttributedString(entry.title, attributes: AttributeContainer([.font: face]))
         if entry.working {
-            config.image = SessionStrip.dot(SessionStrip.workingColor)
+            config.image = SessionStrip.dot(SessionStrip.workingColor, side: 6)
         } else if entry.unread {
-            config.image = SessionStrip.dot(SessionStrip.unreadColor)
+            config.image = SessionStrip.dot(SessionStrip.unreadColor, side: 6)
         }
-        // An unread chat's words are the label colour too: the dot alone is easy to miss.
-        config.baseForegroundColor = entry.current || entry.unread ? ChatPalette.label : ChatPalette.label2
+        config.baseForegroundColor = live ? ChatPalette.label : ChatPalette.label2
         let button = UIButton(configuration: config)
         button.isPointerInteractionEnabled = true
         button.heightAnchor.constraint(equalToConstant: pillHeight).isActive = true
         // Its width is shared out with the other tabs once the row is laid out (`fitTabs`).
         let cap = button.widthAnchor.constraint(lessThanOrEqualToConstant: Self.widestTab)
         cap.isActive = true
-        if !entry.isBotChat { tabCaps.append((button, cap)) }
-        if entry.current {
-            let line = UIView()
-            line.backgroundColor = ChatPalette.tint
-            line.isUserInteractionEnabled = false
-            line.translatesAutoresizingMaskIntoConstraints = false
-            button.addSubview(line)
-            NSLayoutConstraint.activate([
-                line.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: inset),
-                line.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -inset),
-                line.bottomAnchor.constraint(equalTo: button.bottomAnchor),
-                line.heightAnchor.constraint(equalToConstant: 2),
-            ])
-        } else {
-            PointerEffects.surface(button, radius: 6)
-            button.toolTip = entry.isBotChat || entry.detail.isEmpty ? entry.title : entry.title + "\n" + entry.detail
-            if !entry.isBotChat { button.menu = tabMenu(entry) }
-        }
+        tabCaps.append((button, cap))
+        PointerEffects.surface(button, pill: true)
+        button.toolTip = entry.detail.isEmpty ? entry.title : entry.title + "\n" + entry.detail
+        if !entry.isBotChat { button.menu = tabMenu(entry) }
         return button
     }
 
-    /// The short rule between Bot Chat and the bot's chats.
-    private func divider() -> UIView {
-        let line = UIView()
-        line.backgroundColor = ChatPalette.separator
-        line.isUserInteractionEnabled = false
-        line.translatesAutoresizingMaskIntoConstraints = false
-        let box = UIView()
-        box.isUserInteractionEnabled = false
-        box.addSubview(line)
-        NSLayoutConstraint.activate([
-            box.widthAnchor.constraint(equalToConstant: 9),
-            box.heightAnchor.constraint(equalToConstant: 16),
-            line.centerXAnchor.constraint(equalTo: box.centerXAnchor),
-            line.topAnchor.constraint(equalTo: box.topAnchor),
-            line.bottomAnchor.constraint(equalTo: box.bottomAnchor),
-            line.widthAnchor.constraint(equalToConstant: 1),
-        ])
-        return box
+    /// Subtle middot separating plain-text chat titles so multi-word names stay distinct without boxes.
+    private func middot() -> UILabel {
+        let dot = UILabel()
+        dot.text = "·"
+        dot.font = tabs ? macFont(weight: .semibold) : phoneFont(weight: .semibold)
+        dot.textColor = ChatPalette.label3
+        dot.isUserInteractionEnabled = false
+        dot.isAccessibilityElement = false
+        dot.setContentHuggingPriority(.required, for: .horizontal)
+        dot.setContentCompressionResistancePriority(.required, for: .horizontal)
+        return dot
     }
 
     /// A right-click on a chat's tab: what the Sessions list's row offers that fits a tab.
@@ -883,13 +1065,14 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
     }
 
     private func phoneTab(_ entry: SessionStripEntry) -> UIButton {
+        let live = entry.working || entry.unread
         var config = UIButton.Configuration.plain()
-        config.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10)
+        config.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6)
         config.titleLineBreakMode = .byTruncatingTail
-        config.attributedTitle = AttributedString(entry.title, attributes: AttributeContainer([.font: font]))
-        config.baseForegroundColor = entry.unread ? ChatPalette.label : ChatPalette.label2
-        if entry.working { config.image = SessionStrip.dot(SessionStrip.workingColor) }
-        else if entry.unread { config.image = SessionStrip.dot(SessionStrip.unreadColor) }
+        config.attributedTitle = AttributedString(entry.title, attributes: AttributeContainer([.font: phoneFont(weight: live ? .medium : .regular)]))
+        config.baseForegroundColor = live ? ChatPalette.label : ChatPalette.label2
+        if entry.working { config.image = SessionStrip.dot(SessionStrip.workingColor, side: 6) }
+        else if entry.unread { config.image = SessionStrip.dot(SessionStrip.unreadColor, side: 6) }
         config.imagePadding = 6
         let button = UIButton(configuration: config)
         button.heightAnchor.constraint(equalToConstant: pillHeight).isActive = true

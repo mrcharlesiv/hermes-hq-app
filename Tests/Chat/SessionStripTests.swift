@@ -159,6 +159,16 @@ struct SessionStripTests {
         #expect(SessionStripRules.settled([entry("bc", bot: true), entry("plain"), unread, busy], order: []).order == ["busy", "unread", "plain"])
     }
 
+    @Test("The Mac's seamless strip drops the redundant Bot Chat tab and keeps only the bot's other chats in order")
+    func macEntriesDropsBotChat() {
+        func entry(_ id: String, bot: Bool = false) -> SessionStripEntry {
+            SessionStripEntry(id: id, title: id, isBotChat: bot, working: false, unread: false, current: bot)
+        }
+        let settled = SessionStripRules.settled([entry("bc", bot: true), entry("a"), entry("b")], order: []).entries
+        #expect(SessionStripRules.macEntries(settled).map(\.id) == ["a", "b"])
+        #expect(SessionStripRules.macEntries([entry("bc", bot: true)]).isEmpty)
+    }
+
     @Test("A tab carries its last line for the tip, or the step while it works, and whether it is pinned")
     func detail() {
         var said = chat("said", ago: 60, unread: true)

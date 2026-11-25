@@ -76,6 +76,9 @@ final class RootSplitController: UIViewController {
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(wentAway), name: UIScene.didEnterBackgroundNotification, object: nil)
         center.addObserver(self, selector: #selector(cameBack), name: UIScene.willEnterForegroundNotification, object: nil)
+        #if targetEnvironment(macCatalyst)
+        center.addObserver(self, selector: #selector(topStripChanged), name: ChatViewController.topStripLayoutChanged, object: nil)
+        #endif
         #if DEBUG
         if UserDefaults.standard.bool(forKey: "HQDebugSnapshotResize") { replaySnapshotResizes() }
         // [ipad-polish] `-HQDebugNarrowAt <seconds>` / `-HQDebugWidenAt <seconds>`: the stand-in window goes to the phone
@@ -379,13 +382,7 @@ final class RootSplitController: UIViewController {
                                     y: window.minY, width: panel, height: window.height)
         if inspector.view.frame != inspectorFrame { inspector.view.frame = inspectorFrame }
         inspector.view.isHidden = room == 0 && !inspector.slidingOut
-        // [mac-ui-issues] Its Desktop Look band ends where the chat's bar does.
-        let bar = detail.navigationBar
-        inspector.bandBottom = bar.isHidden || bar.window == nil ? 0 : max(0, bar.convert(bar.bounds, to: view).maxY - inspectorFrame.minY)
-        // [mac-ten] Its tabs sit level with the bar's buttons. The bar is 54 pt tall on the Mac and its buttons stand
-        // in its top 44 pt (measured 2026-11-11: bar y 41, buttons y 41 to 85), so the middle is that row's, not the bar's.
-        let barFrame = bar.convert(bar.bounds, to: view)
-        inspector.barMiddle = bar.isHidden || bar.window == nil ? 0 : max(0, barFrame.minY + min(barFrame.height, 44) / 2 - inspectorFrame.minY)
+        syncInspectorHeader(inspectorFrame: inspectorFrame)
         NotificationCenter.default.post(name: MacSidebar.neighbourMayChange, object: nil)   // [sidebar-light] folded or not
         // A viewer over the panes (`PanePresentation`) follows them: a divider drag or a sidebar fold moves them
         // without resizing the window.
@@ -394,6 +391,27 @@ final class RootSplitController: UIViewController {
     }
 
     #if targetEnvironment(macCatalyst)
+    /// [mac-ui-issues] [bot-tabs-seamless] Aligns the inspector's header band and bottom rule to the chat's top bar
+    /// (extending through its `SessionStrip` when visible, so both panes end on one unbroken hairline), while keeping
+    /// the inspector's tabs level with the navigation bar's buttons.
+    private func syncInspectorHeader(inspectorFrame: CGRect? = nil) {
+        guard isViewLoaded else { return }
+        let frame = inspectorFrame ?? inspector.view.frame
+        let bar = detail.navigationBar
+        let barBottom = bar.isHidden || bar.window == nil ? 0 : max(0, bar.convert(bar.bounds, to: view).maxY - frame.minY)
+        let stripHeight = (detail.topViewController as? ChatViewController)?.visibleSessionStripHeight ?? 0
+        let pixel = HQShape.pixel(traitCollection.displayScale)
+        inspector.bandBottom = barBottom > 0 ? barBottom + (stripHeight > 0 ? max(0, stripHeight - pixel) : 0) : 0
+        // [mac-ten] Its tabs sit level with the bar's buttons. The bar is 54 pt tall on the Mac and its buttons stand
+        // in its top 44 pt (measured 2026-11-11: bar y 41, buttons y 41 to 85), so the middle is that row's, not the bar's.
+        let barFrame = bar.convert(bar.bounds, to: view)
+        inspector.barMiddle = bar.isHidden || bar.window == nil ? 0 : max(0, barFrame.minY + min(barFrame.height, 44) / 2 - frame.minY)
+    }
+
+    @objc private func topStripChanged() {
+        syncInspectorHeader()
+    }
+
     /// [mac] Where Watch Browser and Watch Screen go (`PaneViewer`): the right pane, or the list's place in one pane.
     var viewerRect: CGRect { layout.isDouble ? detail.view.frame : tabs.view.frame }
     #endif
@@ -509,6 +527,7 @@ final class RootSplitController: UIViewController {
             view.setNeedsLayout()   // a page opened beside a whole page, or closed; [mac-tools] a task beside the board
         }
         if isViewLoaded, listFolded != (layout == .double(sidebar: 0)) { listFoldMayHaveChanged() }   // [mac-ui-issues] Settings opened or closed
+        syncInspectorHeader()
         #else
         // [ipad-polish] Nothing left on the right: the list comes back, and stays for the next thing opened.
         if detailIsEmpty { listHidden = false }

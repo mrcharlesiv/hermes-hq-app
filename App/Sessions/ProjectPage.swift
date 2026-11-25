@@ -351,7 +351,7 @@ struct ProjectPageHeader: View {
         .animation(HQMotion.swiftUI(.snappy(duration: 0.2)), value: selectedPR)
     }
 
-    /// Calm, lineless 4-bucket shipping pipeline bar for coding projects (Ready / Needs You / In Flight / Shipped).
+    /// Calm, lineless 4-bucket shipping pipeline bar for coding projects (Ready / Needs You / Active / Shipped).
     private var codingPipelineBar: some View {
         HStack(spacing: 4) {
             pipelineSegment(.ready, dot: Color.hqGreen)

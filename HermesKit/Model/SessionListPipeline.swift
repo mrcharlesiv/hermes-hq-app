@@ -98,7 +98,7 @@ nonisolated struct SessionListInput: Sendable {
     var codingProjects: Set<String> = []
     /// A project-page-only PR state; the other filters still intersect it.
     var projectPRState: SessionPRStatus.State? = nil
-    /// A coding project page's pipeline bucket filter (Ready / Needs You / In Flight / Shipped).
+    /// A coding project page's pipeline bucket filter (Ready / Needs You / Active / Shipped).
     var projectPipelineBucket: CodingPipelineBucket? = nil
     /// [sessions-shape] A project's row opens its page (the app, not the tests of a project opening in place): under
     /// Group By Project a closed project keeps its live chats under its row.
@@ -565,7 +565,7 @@ nonisolated enum SessionListPipeline {
         let underPipeline = { (row: SessionSummary) in
             input.projectPipelineBucket.map { CodingPipeline.bucket(for: row, isDone: doneKeys.contains(Self.key(row))) == $0 } ?? true
         }
-        // Coding projects use the 4-bucket shipping pipeline (Ready to Ship / Needs You / In Flight / Shipped)
+        // Coding projects use the 4-bucket shipping pipeline (Ready to Ship / Needs You / Active / Shipped)
         // under both Needs Me First and By Status; Sort › Newest keeps chronological order while still honoring bucket filters.
         if input.codingProjects.contains(key), !byNewest {
             let underPR = { (row: SessionSummary) in

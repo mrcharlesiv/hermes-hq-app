@@ -246,7 +246,7 @@ struct SessionRowView: View {
                 } else if let status {
                     HStack(spacing: 6) {
                         if session.status != .needsInput {
-                            ProgressView().controlSize(.mini).tint(Color.hqLabel2)
+                            ProgressView().controlSize(.mini).tint(Color.hqTintText)
                         }
                         Text(status.words)
                             .font(Font.hq(desk ? DesktopRows.previewStyle : DeviceWord.isMac ? .footnote : .subheadline))
@@ -329,7 +329,7 @@ struct SessionRowView: View {
             HStack(spacing: 6) {
                 // While the turn runs, the same small spinner a Recent row's step line has (owner, 2026-11-20).
                 if codingWorking {
-                    ProgressView().controlSize(.mini).tint(Color.hqLabel2)
+                    ProgressView().controlSize(.mini).tint(Color.hqTintText)
                         .accessibilityHidden(true)
                 }
                 if let branchLead, !ready {
@@ -343,7 +343,7 @@ struct SessionRowView: View {
                 }
                 Text(displayLine)
                     .font(Font.hq(.footnote))
-                    .foregroundStyle(codingWorking ? (DeviceWord.isMac ? quietInk : Color.hqTintText) : quietInk)
+                    .foregroundStyle(codingWorking ? Color.hqTintText : quietInk)
                     .lineLimit(1)
                     .truncationMode(.tail)
                 if !large {
@@ -365,11 +365,9 @@ struct SessionRowView: View {
         }
     }
 
-    /// [projects-tidy] The ink of a working chat's step line ("Working…", "Reading package.json…"). Owner 2026-11-22
-    /// (the Mac's list: "very visually messy"): in the tint, three working chats read as three blue links and outshouted
-    /// their titles. On the Mac the line is the preview's grey (the spinner beside it, or the face's ring, says it
-    /// works); "Needs your input" keeps its orange. The iPhone and iPad keep the tint.
-    private var workingInk: Color { DeviceWord.isMac ? Color.hqLabel2 : Color.hqTintText }
+    /// The ink of a working chat's step line ("Working…", "Reading package.json…"): theme accent color on iOS and Mac
+    /// alike (owner 2026-11-24 preferred color on Mac too); "Needs your input" keeps its orange.
+    private var workingInk: Color { Color.hqTintText }
 
     /// [project-cards] The second line a chat in a card has only while it needs one: waiting on you, or its bot's step.
     private var cardStatus: (words: String, color: Color)? {

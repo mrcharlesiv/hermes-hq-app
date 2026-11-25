@@ -15,7 +15,7 @@ nonisolated enum CodingPipelineBucket: String, CaseIterable, Hashable, Sendable 
         switch self {
         case .ready: "Ready"
         case .needsYou: "Needs You"
-        case .inFlight: "In Flight"
+        case .inFlight: "Active"
         case .shipped: "Shipped"
         }
     }
@@ -24,7 +24,7 @@ nonisolated enum CodingPipelineBucket: String, CaseIterable, Hashable, Sendable 
         switch self {
         case .ready: "Ready to Ship"
         case .needsYou: "Needs You"
-        case .inFlight: "In Flight"
+        case .inFlight: "Active"
         case .shipped: "Shipped"
         }
     }
@@ -50,8 +50,8 @@ nonisolated enum CodingPipeline {
         if isDone || (session.archived && !working) { return .shipped }
         if let pr, (pr.state == .open || pr.state == .draft), pr.checks?.state == .failed { return .needsYou }
         if let pr, pr.state == .open, !working, pr.checks?.state != .running { return .ready }
-        if let pr, (pr.state == .merged || pr.state == .closed), !working { return .shipped }
         if session.unread && !working { return .needsYou }
+        if let pr, (pr.state == .merged || pr.state == .closed), !working { return .shipped }
         return .inFlight
     }
 

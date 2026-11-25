@@ -32,13 +32,15 @@ import Testing
         #expect(CodingPipeline.bucket(for: row("ready-noci", pr: readyNoCI)) == .ready)
         #expect(CodingPipeline.isReadyToMerge(row("ready", pr: readyPR)))
 
-        // Needs You: needsInput, failing CI, or unread non-ready active reply
+        // Needs You: needsInput, failing CI, or unread non-ready reply (even when an earlier PR merged)
         #expect(CodingPipeline.bucket(for: row("ask", status: .needsInput, pr: readyPR)) == .needsYou)
         #expect(CodingPipeline.bucket(for: row("fail", pr: failingPR)) == .needsYou)
         #expect(CodingPipeline.hasFailingChecks(row("fail", pr: failingPR)))
         #expect(CodingPipeline.bucket(for: row("unread-draft", unread: true, pr: draftPR)) == .needsYou)
+        #expect(CodingPipeline.bucket(for: row("unread-merged", unread: true, pr: mergedPR)) == .needsYou)
+        #expect(CodingPipeline.bucket(for: row("unread-closed", unread: true, pr: closedPR)) == .needsYou)
 
-        // In Flight: working bot (even on an open/merged PR), running checks, quiet draft, plain non-git chat
+        // Active: working bot (even on an open/merged PR), running checks, quiet draft, plain non-git chat
         #expect(CodingPipeline.bucket(for: row("working-open", running: true, pr: readyPR)) == .inFlight)
         #expect(CodingPipeline.bucket(for: row("working-merged", running: true, pr: mergedPR)) == .inFlight)
         #expect(CodingPipeline.bucket(for: row("running-ci", pr: runningPR)) == .inFlight)
@@ -46,10 +48,11 @@ import Testing
         #expect(CodingPipeline.bucket(for: row("chat", pr: unmatchedChat)) == .inFlight)
         #expect(CodingPipeline.bucket(for: row("plain", pr: nil)) == .inFlight)
 
-        // Shipped: quiet merged/closed or archived
+        // Shipped: quiet merged/closed or archived (even unread archived stays shipped)
         #expect(CodingPipeline.bucket(for: row("merged", pr: mergedPR)) == .shipped)
         #expect(CodingPipeline.bucket(for: row("closed", pr: closedPR)) == .shipped)
         #expect(CodingPipeline.bucket(for: row("archived", archived: true, pr: readyPR)) == .shipped)
+        #expect(CodingPipeline.bucket(for: row("archived-unread", unread: true, archived: true, pr: mergedPR)) == .shipped)
     }
 
     @Test func projectPageUsesShippingPipelineSectionsAndMatchesCountsOneToOne() {
@@ -73,7 +76,7 @@ import Testing
                                      projects: entries, codingProjects: ["/app"])
         let groups = SessionListPipeline.groups(input)
         let sectionTitles = groups.dropFirst().map(\.title)
-        #expect(sectionTitles == ["Ready to Ship", "Needs You", "In Flight", "Shipped"])
+        #expect(sectionTitles == ["Ready to Ship", "Needs You", "Active", "Shipped"])
 
         // Shipped starts collapsed by default, holding total 2.
         let shipped = groups.first { $0.title == "Shipped" }
@@ -95,7 +98,7 @@ import Testing
         // Projects with Sort › By Status or Sort › Newest also honor all 4 pipeline header toggles 1-to-1.
         var byStatusInput = input
         byStatusInput.projectsByStatus = ["/app"]
-        #expect(SessionListPipeline.groups(byStatusInput).dropFirst().map(\.title) == ["Ready to Ship", "Needs You", "In Flight", "Shipped"])
+        #expect(SessionListPipeline.groups(byStatusInput).dropFirst().map(\.title) == ["Ready to Ship", "Needs You", "Active", "Shipped"])
         for bucket in CodingPipelineBucket.allCases {
             var f = byStatusInput
             f.projectPipelineBucket = bucket

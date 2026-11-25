@@ -257,6 +257,9 @@ final class AppModel: AppServices {
                                    lastActive: session.lastActive)
         chat.botName = owner?.name ?? sessionStore?.ownerName(for: session) ?? session.title
         chat.modelName = botStore?.profile(named: session.profile)?.model
+        if let cwd = session.cwd?.trimmingCharacters(in: .whitespacesAndNewlines), !cwd.isEmpty {
+            chat.menus.cwd = cwd
+        }
         chat.activityLink.store = activityStore       // [activity]
         sessionStore?.markOpened(session)
         wire(chat)
@@ -318,6 +321,9 @@ final class AppModel: AppServices {
                                    }, startsNew: true)
         chat.botName = bot.name
         chat.modelName = extra["model"]?.string ?? botStore.profile(named: profile)?.model   // [project-new-chat-model] the project's own
+        if let folder = folder?.trimmingCharacters(in: .whitespacesAndNewlines), !folder.isEmpty {
+            chat.menus.cwd = folder   // [new-chat-project] known on frame 0 before session.create / session.resume answers
+        }
         chat.listsWhenStarted = extra["hidden"]?.bool != true   // [#440] a task's or a tile's chat stays off the lists
         chat.activityLink.store = activityStore       // [activity]
         wire(chat)
@@ -591,7 +597,10 @@ final class AppModel: AppServices {
         sessions.onChange = { [weak self] in
             self?.onSessionsChange?()
             for entry in self?.openChatScreens ?? [] {
-                if let screen = entry.screen.value { self?.updatePRTitle(screen) }
+                if let screen = entry.screen.value {
+                    self?.updatePRTitle(screen)
+                    self?.updateProjectBadge(screen)
+                }
             }
             NotificationCenter.default.post(name: SessionStrip.listChanged, object: nil)   // [session-strip]
             self?.threadStore.sessionsChanged()       // [threads] a thread started elsewhere, or one that moved
@@ -855,6 +864,33 @@ final class AppModel: AppServices {
         }
         let status = store.pullRequest(profile: live.profile, id: id)
         screen.sessionPR = status?.drawsMark == true ? status : nil
+    }
+
+    /// [new-chat-project] Resolves the open chat's project (name and look) for the empty-chat header subtitle.
+    private func updateProjectBadge(_ screen: ChatViewController) {
+        guard let live = screen.session as? LiveChatSession,
+              !live.menus.isBotChat, !live.menus.isThread,
+              let store = sessionStore else {
+            screen.sessionProject = nil
+            return
+        }
+        let cwd = live.menus.cwd ?? live.storedSessionId.flatMap { store.listedRow(id: $0, profile: live.profile)?.cwd }
+        let key = store.projectKeyFor(cwd: cwd, profile: live.profile)
+        guard key != SessionProjects.homeKey else {
+            screen.sessionProject = nil
+            return
+        }
+        let label = store.projectHolders(key: key).first?.project.label
+            ?? store.projectEntries().first(where: { $0.key == key })?.label
+            ?? (key as NSString).lastPathComponent
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            screen.sessionProject = nil
+            return
+        }
+        let look = store.projectLook(key)
+        screen.sessionProject = ChatProjectBadge(name: trimmed, emoji: look.emoji,
+                                                 color: look.color.map { SessionsOrganizer.uiColor($0) })
     }
 
     private static func displayNames(_ bots: [Bot]) -> [String: String] {
@@ -1386,6 +1422,12 @@ final class AppModel: AppServices {
         AppLog.note("screen", "open chat (\(model.messages.count) messages)")
         let screen = ChatViewController(session: model)
         updatePRTitle(screen)
+        updateProjectBadge(screen)
+        screen.onWorkingDirectoryChanged = { [weak self, weak screen] in
+            guard let self, let screen else { return }
+            self.updatePRTitle(screen)
+            self.updateProjectBadge(screen)
+        }
         screen.promptSheets = promptSheets   // [questions]
         let head = HeadView(side: 34)
         head.configure(raw: model.head, profile: model.profile, follows: true)   // [moods] the face acts out its turn

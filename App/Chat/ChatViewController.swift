@@ -13,6 +13,13 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     var sessionPR: SessionPRStatus? {
         didSet { if isViewLoaded, sessionPR != oldValue { updateSessionTitle() } }
     }
+    /// [new-chat-project] The project this chat belongs to (nil outside a project). Replaces the bot's name in the
+    /// header subtitle while the chat is still empty, then hands back to the bot's name once messages exist.
+    var sessionProject: ChatProjectBadge? {
+        didSet { if isViewLoaded, sessionProject != oldValue { updateSessionTitle() } }
+    }
+    /// Called when this chat's working directory becomes known or changes, so the host can refresh project & PR chrome.
+    var onWorkingDirectoryChanged: (() -> Void)?
     let session: any ChatSessionModel
 
     /// A view drawn left of the name in the title (the bot's head, added at integration). 34 pt.
@@ -2063,9 +2070,13 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
             center.addObserver(forName: FileBrowserPref.didChange, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.updateFilesButton() }
             },
-            // Any chat's folder: the check below is cheap and touches the bar only when this chat's answer changed.
+            // Any chat's folder: the checks below are cheap and touch the bar only when this chat's answer changed.
             center.addObserver(forName: LiveChatSession.workingDirectoryChanged, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.updateFilesButton() }
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.updateFilesButton()
+                    self.onWorkingDirectoryChanged?()
+                }
             },
         ]
         #if targetEnvironment(macCatalyst)
@@ -2586,8 +2597,9 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         requestApply()
         if reset { fillDoneLogged = false }
         startFill()
-        // After every delivery (rows, or the open's end): the placeholder that fits, and a held push.
+        // After every delivery (rows, or the open's end): the placeholder that fits, the empty-chat project subtitle, and a held push.
         updatePlaceholder(animated: true)
+        updateSessionTitle()
         pushIfWaiting()
     }
 
@@ -2705,10 +2717,36 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         if wasRunning && !session.isRunning { runningEndedAt = CACurrentMediaTime() }
     }
 
+    /// [new-chat-project] A project chat still waiting for its first message: swap the redundant bot subtitle for the
+    /// project mark and name. Never flashes while an existing uncached chat is still loading (`.opening` without
+    /// `startsNew`), and yields back to the bot's name as soon as any message exists.
+    private var showsProjectSubtitle: Bool {
+        guard sessionProject != nil,
+              titleOverride == nil,
+              !(session is ChatRoomSurface),
+              (session as? ChatSessionActions)?.isBotChat != true,
+              (session as? LiveChatSession)?.menus.isThread != true,
+              rows.isEmpty,
+              session.messages.isEmpty,
+              model.builtFrom == 0,
+              model.hiddenOlder == 0 else { return false }
+        switch openPhase {
+        case .open:
+            return true
+        case .opening:
+            return (session as? LiveChatSession)?.startsNew == true
+        case .failed:
+            return false
+        }
+    }
+
     private func updateSessionTitle() {
-        // A session that isn't the bot's own chat names its bot under the title (spec 06 §4.1).
+        // A session that isn't the bot's own chat names its bot under the title (spec 06 §4.1), except while an empty
+        // project chat shows its project there instead (the bot is already named in the intro and composer).
+        let projectSubtitle = showsProjectSubtitle ? sessionProject : nil
         let owner = botName.trimmingCharacters(in: .whitespaces)
-        var subtitle = owner.isEmpty || owner == shownTitle.trimmingCharacters(in: .whitespaces) ? nil : owner
+        var subtitle = projectSubtitle != nil ? nil
+            : (owner.isEmpty || owner == shownTitle.trimmingCharacters(in: .whitespaces) ? nil : owner)
         if let room = session as? ChatRoomSurface { subtitle = room.roomStatusLine }   // [groups] who is replying, else the members
         #if targetEnvironment(macCatalyst)
         // [mac-layout] The Mac's bar says what the bot is up to under its name: Working… while a turn runs, otherwise
@@ -2725,9 +2763,10 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         #endif
         if titleOverride != nil { subtitle = nil }   // [tasks-first] the page's own words stand alone (a task's list)
         titleView.pullRequest = titleOverride == nil ? sessionPR : nil
-        if titleView.title != shownTitle || titleView.subtitle != subtitle {
+        if titleView.title != shownTitle || titleView.subtitle != subtitle || titleView.subtitleProject != projectSubtitle {
             let renamed = titleView.title != shownTitle
             titleView.title = shownTitle
+            titleView.subtitleProject = projectSubtitle
             titleView.subtitle = subtitle
             sizeTitle()
             if renamed { updatePlaceholder(animated: false) }   // a named chat drops the intro's Name Chat

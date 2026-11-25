@@ -235,6 +235,13 @@ final class JumpButton: UIView {
     override func accessibilityActivate() -> Bool { onTap?(); return true }
 }
 
+/// A chat's project identity shown in the header subtitle while a new project chat is empty.
+struct ChatProjectBadge: Equatable {
+    var name: String
+    var emoji: String? = nil
+    var color: UIColor? = nil
+}
+
 /// The title in the bar (spec 06 §4.1): a glass rounded rectangle (r 14, 44 pt tall) holding the head (left of the
 /// name, added at integration through `accessory`) and the name in 17 semibold (capped at 22).
 final class ChatTitleView: UIView {
@@ -270,13 +277,66 @@ final class ChatTitleView: UIView {
     var subtitle: String? {
         didSet {
             guard subtitle != oldValue else { return }
-            subtitleLabel.text = subtitle
-            subtitleLabel.isHidden = subtitle == nil
-            if (subtitle == nil) != (oldValue == nil) { updateFont() }   // [ui-sizing] the pair's fit
+            let had = oldValue != nil || subtitleProject != nil
+            let has = hasSubtitle
+            updateSubtitle()
+            if had != has { updateFont() }   // [ui-sizing] the pair's fit
             updateLabel()
             invalidateIntrinsicContentSize()
             setNeedsLayout()
         }
+    }
+    /// [new-chat-project] A project mark and name shown in the subtitle while a new project chat is still empty,
+    /// replacing the redundant bot name (and preceding any trailing Mac status/model suffix).
+    var subtitleProject: ChatProjectBadge? {
+        didSet {
+            guard subtitleProject != oldValue else { return }
+            let had = subtitle != nil || oldValue != nil
+            let has = hasSubtitle
+            updateSubtitle()
+            if had != has { updateFont() }   // [ui-sizing] the pair's fit
+            updateLabel()
+            invalidateIntrinsicContentSize()
+            setNeedsLayout()
+            onSizeChange?()
+        }
+    }
+    private var hasSubtitle: Bool { subtitle != nil || subtitleProject != nil }
+    /// The rendered subtitle text (tests).
+    var shownSubtitleText: String? { subtitleLabel.isHidden ? nil : (subtitleLabel.attributedText?.string ?? subtitleLabel.text) }
+    /// Whether the rendered subtitle carries an inline glyph attachment (tests).
+    var subtitleHasAttachment: Bool {
+        guard !subtitleLabel.isHidden, let attributed = subtitleLabel.attributedText else { return false }
+        return attributed.containsAttachments(in: NSRange(location: 0, length: attributed.length))
+    }
+
+    private func updateSubtitle() {
+        subtitleLabel.isHidden = !hasSubtitle
+        guard hasSubtitle else {
+            subtitleLabel.attributedText = nil
+            subtitleLabel.text = nil
+            return
+        }
+        guard let project = subtitleProject, let font = subtitleLabel.font else {
+            subtitleLabel.attributedText = nil
+            subtitleLabel.text = subtitle
+            return
+        }
+        let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: ChatPalette.label2]
+        let out = NSMutableAttributedString()
+        if let emoji = project.emoji, !emoji.isEmpty {
+            out.append(NSAttributedString(string: emoji + "\u{2009}", attributes: attrs))
+        } else if let icon = UIImage(systemName: "folder.fill",
+                                     withConfiguration: UIImage.SymbolConfiguration(font: font, scale: .small)) {
+            let tint = (project.color ?? ChatPalette.label2).resolvedColor(with: traitCollection)
+            out.append(NSAttributedString(attachment: NSTextAttachment(image: icon.withTintColor(tint, renderingMode: .alwaysOriginal))))
+            out.append(NSAttributedString(string: "\u{2009}", attributes: attrs))
+        }
+        out.append(NSAttributedString(string: project.name, attributes: attrs))
+        if let subtitle, !subtitle.isEmpty {
+            out.append(NSAttributedString(string: " · " + subtitle, attributes: attrs))
+        }
+        subtitleLabel.attributedText = out
     }
     var accessory: UIView? {
         didSet {
@@ -336,7 +396,8 @@ final class ChatTitleView: UIView {
     }
 
     private func updateLabel() {
-        accessibilityLabel = [title, pullRequest.map { "Pull request: " + $0.summary }, muted ? "Muted" : nil, subtitle].compactMap { $0 }.joined(separator: ", ")
+        accessibilityLabel = [title, pullRequest.map { "Pull request: " + $0.summary }, muted ? "Muted" : nil,
+                              subtitleProject.map { "Project: \($0.name)" }, subtitle].compactMap { $0 }.joined(separator: ", ")
     }
 
     /// The name with the muted bell after it (Desktop Look draws its capitals in `applyLook`, on every layout).
@@ -395,6 +456,9 @@ final class ChatTitleView: UIView {
             view.setNeedsLayout()
             view.onSizeChange?()
         }
+        registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (view: ChatTitleView, _) in
+            if view.subtitleProject != nil { view.updateSubtitle() }
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
@@ -432,13 +496,14 @@ final class ChatTitleView: UIView {
         // 125 %: the bot's line hung under the pill. With a subtitle both shrink together until they fit; 17 + 13 at
         // 100 % already does.
         var sub = min(HQFont.preferred(.footnote, compatibleWith: traitCollection).pointSize, 18 * grow)
-        if subtitle != nil {
+        if hasSubtitle {
             let room: CGFloat = Self.rowHeight - 4, lines = (size + sub) * 1.2
             if lines > room { size *= room / lines; sub *= room / lines }
         }
         nameLabel.font = HQFont.face(ofSize: size, weight: .semibold)
         subtitleLabel.font = HQFont.face(ofSize: sub)
         if muted || pullRequest != nil { setName() }
+        if subtitleProject != nil { updateSubtitle() }
         invalidateIntrinsicContentSize()
     }
 
@@ -464,13 +529,13 @@ final class ChatTitleView: UIView {
         if Theme.isDesktop {   // [desktoplook2] 10 pt each side, a 22 pt face 7 pt before the name
             let accessoryW: CGFloat = showsAccessory ? desktopFaceSide + 7 : 0
             var nameW = ceil(nameLabel.intrinsicContentSize.width)
-            if subtitle != nil { nameW = max(nameW, ceil(subtitleLabel.intrinsicContentSize.width)) }
+            if hasSubtitle { nameW = max(nameW, ceil(subtitleLabel.intrinsicContentSize.width)) }
             return CGSize(width: min(maxWidth, 10 + accessoryW + nameW + 10), height: Self.rowHeight)
         }
         let accessoryW: CGFloat = showsAccessory ? faceSide + 10 : 0
         let pad: CGFloat = showsAccessory ? 5 : 14
         var nameW = ceil(nameLabel.intrinsicContentSize.width)
-        if subtitle != nil { nameW = max(nameW, ceil(subtitleLabel.intrinsicContentSize.width)) }
+        if hasSubtitle { nameW = max(nameW, ceil(subtitleLabel.intrinsicContentSize.width)) }
         return CGSize(width: min(maxWidth, pad + accessoryW + nameW + 14), height: Self.rowHeight)
     }
 
@@ -496,7 +561,7 @@ final class ChatTitleView: UIView {
             x += side + 10
         }
         let width = max(0, bounds.width - x - 14)
-        if subtitle != nil, let nameFont = nameLabel.font, let subFont = subtitleLabel.font {
+        if hasSubtitle, let nameFont = nameLabel.font, let subFont = subtitleLabel.font {
             // Name over the bot's name, centred as a pair in the 44 pt glass.
             let nameH = ceil(nameFont.lineHeight), subH = ceil(subFont.lineHeight)
             let top = max(0, (bounds.height - nameH - subH) / 2)
@@ -555,7 +620,7 @@ final class ChatTitleView: UIView {
             x += side + 7
         }
         let width = max(0, bounds.width - x - 10)
-        if subtitle != nil, let nameFont = nameLabel.font, let subFont = subtitleLabel.font {
+        if hasSubtitle, let nameFont = nameLabel.font, let subFont = subtitleLabel.font {
             let nameH = ceil(nameFont.lineHeight), subH = ceil(subFont.lineHeight)
             let top = max(0, (bounds.height - nameH - subH) / 2)
             nameLabel.frame = CGRect(x: x, y: top, width: width, height: nameH)

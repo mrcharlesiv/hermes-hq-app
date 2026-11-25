@@ -235,13 +235,18 @@ final class ChatDemoListViewController: UITableViewController {
         ChatPerf.pushStart = CACurrentMediaTime()
         ChatPerf.mark("demo.push.start")
         let initial = ChatDemo.argument("-HQDemoInitial").flatMap(Int.init)
-        let session = FakeChatSession(count: entry.1, initial: initial, title: entry.0, long: ChatDemo.flag("-HQDemoLong") && index == 0,
+        let sessionTitle = (index == 2 && ChatDemo.argument("-HQDemoProject") != nil) ? "New Chat" : entry.0
+        let session = FakeChatSession(count: entry.1, initial: initial, title: sessionTitle, long: ChatDemo.flag("-HQDemoLong") && index == 0,
                                       textPrefix: index == 3 ? "OTHER BOT: " : nil)
         session.fastStream = ChatDemo.flag("-HQDemoFastStream")
         ChatPerf.mark("demo.session.made")
         if ChatDemo.flag("-HQDemoBotTalk") { FakeChatSession.botTalkRoster() }
         if ChatDemo.flag("-HQDemoBotExchange") || ChatDemo.flag("-HQDemoRestated") { FakeChatSession.botExchangeRoster() }
         let chat = ChatViewController(session: session)
+        if let project = ChatDemo.argument("-HQDemoProject"), !project.isEmpty {
+            let color = ChatDemo.argument("-HQDemoProjectColor").flatMap(Int.init).map { SessionsOrganizer.uiColor($0) }
+            chat.sessionProject = ChatProjectBadge(name: project, emoji: ChatDemo.argument("-HQDemoProjectEmoji"), color: color)
+        }
         // MENUS (spec 1x §4.2): the demo chat isn't live, so ⋯ holds Share and Info only.
         ChatMenus.install(on: chat, account: nil) { [weak chat] in
             guard let chat else { return }

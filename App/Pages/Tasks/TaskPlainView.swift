@@ -28,7 +28,7 @@ struct TaskPlainView: View {
     @State private var notesWidth: CGFloat = 0
     /// The lines long notes fold to.
     static let notesFold = 3
-    enum Field: Hashable { case title, step, notes }
+    enum Field: Hashable { case title, step, editStep(String), notes }
     @Environment(\.dynamicTypeSize) private var typeSize
     /// The page has a bot's conversation (a bot is on the task, or it had one): its section, card and message box show.
     private var teammate: Bool { model.chatAtHand }
@@ -359,6 +359,15 @@ struct TaskPlainView: View {
         ForEach(TodoWords.repeatRules, id: \.self) { rule in
             Button { model.setRepeat(rule) } label: {
                 if task.repeatRule == rule { Label(TodoWords.repeatLabel(rule), systemImage: "checkmark") } else { Text(TodoWords.repeatLabel(rule)) }
+            }
+        }
+        if model.store.customRepeatSupported {
+            Section("Custom") {
+                ForEach(["every:2:weeks", "every:3:months", "after:1:weeks", "after:2:weeks", "after:1:months"], id: \.self) { rule in
+                    Button { model.setRepeat(rule) } label: {
+                        if task.repeatRule == rule { Label(TodoWords.repeatLabel(rule), systemImage: "checkmark") } else { Text(TodoWords.repeatLabel(rule)) }
+                    }
+                }
             }
         }
         if task.repeatRule != nil { Button("Don’t Repeat", role: .destructive) { model.setRepeat(nil) } }
@@ -722,7 +731,9 @@ struct TaskPlainView: View {
             let yours = task.whoKind == .me ? nil : open.first { $0.who != "bot" }?.id
             TaskBand()
             TaskSectionHead(title: "Steps", count: task.steps.isEmpty ? nil : "\(done.count)/\(task.steps.count)") { EmptyView() }
-            ForEach(open) { step in stepRow(step, yours: step.id == yours, last: false) }
+            ForEach(Array(open.enumerated()), id: \.element.id) { index, step in
+                stepRow(step, yours: step.id == yours, last: false, openIndex: index, openCount: open.count)
+            }
             if !model.gone, !task.isDone {
                 if model.addingStep {
                     TaskGridRow(last: done.isEmpty) {
@@ -757,16 +768,18 @@ struct TaskPlainView: View {
                 }
             }
             ForEach(Array(done.enumerated()), id: \.element.id) { index, step in
-                stepRow(step, yours: false, last: index == done.count - 1)
+                stepRow(step, yours: false, last: index == done.count - 1, openIndex: nil, openCount: 0)
             }
         }
     }
 
-    private func stepRow(_ step: TodoStep, yours: Bool, last: Bool) -> some View {
+    private func stepRow(_ step: TodoStep, yours: Bool, last: Bool, openIndex: Int?, openCount: Int) -> some View {
         let bot = step.who == "bot"
         let shared = task.whoKind != .me || bot
         let long = step.title.count > TodoSheetView.stepFold
-        return TaskGridRow(last: last) {
+        let editing = model.editingStepID == step.id
+        let canReorder = !step.done && openCount > 1 && !model.gone && !task.isDone
+        let row = TaskGridRow(last: last) {
             Button { model.toggleStep(step) } label: {
                 Image(systemName: step.done ? "checkmark.circle.fill" : "circle")
                     .font(Font.hq(.title3).weight(.light))
@@ -777,15 +790,37 @@ struct TaskPlainView: View {
             .hqIconLabel(step.done ? "Done" : "Not done")
         } text: {
             HStack(alignment: .center, spacing: 8) {
-                Text(step.title)
-                    .foregroundStyle(step.done ? Color.hqLabel3 : Color.hqLabel)
-                    .strikethrough(step.done, color: Color.hqLabel3)
-                    .lineLimit(long && !model.openSteps.contains(step.id) ? 2 : nil)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                    .onTapGesture { if long { HQMotion.withAnimation(.snappy) { model.toggleOpen(step) } } }
-                    .accessibilityIdentifier("task.step.title")
+                if editing {
+                    TextField("Step", text: $model.stepDraft, axis: .vertical)
+                        .lineLimit(1...4)
+                        .focused($focus, equals: .editStep(step.id))
+                        .submitLabel(.done)
+                        .onSubmit { model.saveStep() }
+                        .onAppear { focus = .editStep(step.id) }
+                        .onChange(of: focus) { old, new in
+                            if old == .editStep(step.id), new != .editStep(step.id) { model.saveStep() }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("task.step.field")
+                } else {
+                    Text(step.title)
+                        .foregroundStyle(step.done ? Color.hqLabel3 : Color.hqLabel)
+                        .strikethrough(step.done, color: Color.hqLabel3)
+                        .lineLimit(long && !model.openSteps.contains(step.id) ? 2 : nil)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            if long, !model.openSteps.contains(step.id) {
+                                HQMotion.withAnimation(.snappy) { model.toggleOpen(step) }
+                            } else if !step.done, !model.gone, !task.isDone {
+                                model.editStep(step)
+                            } else if long {
+                                HQMotion.withAnimation(.snappy) { model.toggleOpen(step) }
+                            }
+                        }
+                        .accessibilityIdentifier("task.step.title")
+                }
                 // Whose it is, on a task you share: the bot's face on its steps, "You" on yours.
                 if shared {
                     if bot, let helper = task.helper {
@@ -801,12 +836,25 @@ struct TaskPlainView: View {
                             .accessibilityLabel(yours ? "Yours, next" : "Yours")
                     }
                 }
+                if canReorder, !editing {
+                    Image(systemName: "line.3.horizontal")
+                        .font(Font.hq(.caption))
+                        .foregroundStyle(Color.hqLabel3)
+                        .accessibilityHidden(true)
+                }
             }
             .padding(.vertical, 6)
         }
         .accessibilityElement(children: .combine)
         .contextMenu {
             Button(step.done ? "Mark Not Done" : "Mark Done", systemImage: step.done ? "circle" : "checkmark.circle") { model.toggleStep(step) }
+            if !step.done, !model.gone, !task.isDone {
+                Button("Edit Step", systemImage: "pencil") { model.editStep(step) }
+            }
+            if let openIndex, canReorder {
+                if openIndex > 0 { Button("Move Up", systemImage: "arrow.up") { model.moveStep(step.id, by: -1) } }
+                if openIndex < openCount - 1 { Button("Move Down", systemImage: "arrow.down") { model.moveStep(step.id, by: 1) } }
+            }
             if task.whoKind != .me {
                 if bot {
                     Button("Take It Myself", systemImage: "person") { model.setStepWho(step, "me") }
@@ -814,7 +862,23 @@ struct TaskPlainView: View {
                     Button("Give to \(model.botName(task.helper))", systemImage: "sparkles") { model.setStepWho(step, "bot") }
                 }
             }
+            if !step.done, !model.gone, !model.store.readOnlyGateway {
+                Button("Turn into Task", systemImage: "arrow.up.right.square") { model.promoteStep(step) }
+            }
             Button("Delete Step", systemImage: "trash", role: .destructive) { model.deleteStep(step) }
+        }
+        return Group {
+            if canReorder, !editing {
+                row
+                    .draggable(step.id)
+                    .dropDestination(for: String.self) { items, _ in
+                        guard let source = items.first, source != step.id else { return false }
+                        model.reorderStep(from: source, to: step.id)
+                        return true
+                    }
+            } else {
+                row
+            }
         }
     }
 

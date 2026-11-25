@@ -1,4 +1,6 @@
-// Native task quick add. Parsing and saving stay in NewTodoModel; optional fields live under Details.
+// Compact quick-capture sheet for New Task: rides over the keyboard with live natural-language parsing,
+// notes directly underneath, a visible row of task chips (Date, List, Priority, Goal, Start Date, Repeat),
+// and a compact teammate picker so pure task management stays front and center.
 
 import SwiftUI
 import UIKit
@@ -19,11 +21,16 @@ final class NewTodoModel {
     var hasDue = false
     var due = Calendar.current.startOfDay(for: Date().addingTimeInterval(86_400)).addingTimeInterval(9 * 3600)
     var hasTime = false
+    /// Optional start day (when the task joins Today).
+    var starts: Date?
     var repeatRule: String?
     /// Picked on the priority button; nil: what the line says ("!high"), else none.
     var priority: Int?
     /// The list it starts in (the one on show).
     var section: String?
+    /// Optional goal (and milestone) it serves.
+    var goal: String?
+    var milestone: String?
     var saving = false
     var failure: String?
     /// "Added “Call mom”", for a moment after a task of your own went in.
@@ -50,6 +57,7 @@ final class NewTodoModel {
     func botName(_ id: String) -> String { PagesNames.botName(id, bots: bots) }
     func head(_ id: String) -> JSONValue? { PagesNames.head(id, bots: bots) }
     var fields: Bool { store.fieldsSupported }
+    var activeGoals: [Goal] { store.goalsSupported ? store.goals.filter { $0.state == .active } : [] }
 
     /// What the line says, read as it is typed.
     var read: TodoQuickRead {
@@ -59,8 +67,8 @@ final class NewTodoModel {
             return literal
         }
         return TodoQuickParse.read(title, now: Date(), dates: !manualDue,
-                            metadata: fields && !literalTitle,
-                            repeats: !literalTitle && who != .bot && (who == .me || fields), priorities: priority == nil)
+                                   metadata: fields && !literalTitle,
+                                   repeats: !literalTitle && who != .bot && (who == .me || fields), priorities: priority == nil)
     }
 
     /// When it's due: the hand-picked date, else the line's, else the day the sheet opened on.
@@ -70,10 +78,16 @@ final class NewTodoModel {
         if let date = read.due { return (date, read.hasTime) }
         return hasDue ? (due, hasTime) : nil
     }
-    var repeatNow: String? { who == .bot ? nil : (read.repeatRule ?? repeatRule) }
+    var repeatNow: String? { who == .bot ? nil : (repeatRule ?? read.repeatRule) }
     var priorityNow: Int { fields ? (priority ?? read.priority ?? 0) : 0 }
     var who: TodoWho { helper == nil ? .me : (alone ? .bot : .together) }
     var listName: String? { section.flatMap { id in store.sections.first { $0.id == id }?.name } }
+    var goalName: String? { goal.flatMap { id in store.goal(id)?.title }.flatMap { $0.isEmpty ? "Untitled Goal" : $0 } }
+
+    var whoLabel: String {
+        guard let helper else { return "Just Me" }
+        return alone ? botName(helper) : "You & \(botName(helper))"
+    }
 
     var canAdd: Bool { !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !saving }
 
@@ -94,10 +108,30 @@ final class NewTodoModel {
         controller.present(picker, animated: true)
     }
 
+    func setStarts(_ date: Date?) {
+        PagesHaptics.selection()
+        starts = date.map { Calendar.current.startOfDay(for: $0) }
+    }
+
+    func pickStarts() {
+        guard let controller else { return }
+        let picker = TodoDatePicker.make(date: starts, hasTime: false, rings: false, dayOnly: true) { [weak self] date, _ in
+            self?.setStarts(date)
+        }
+        controller.present(picker, animated: true)
+    }
+
+    func setGoal(_ id: String?, milestone: String? = nil) {
+        PagesHaptics.selection()
+        goal = id
+        self.milestone = id == nil ? nil : milestone
+    }
+
     func setWho(_ bot: String?, alone: Bool) {
         PagesHaptics.selection()
         helper = bot
         self.alone = bot != nil && alone
+        if self.alone { repeatRule = nil }
     }
 
     /// The line is empty again, for the next task: the list and who stay; the date goes back to the sheet's own day.
@@ -108,6 +142,9 @@ final class NewTodoModel {
         literalTitle = false
         priority = nil
         repeatRule = nil
+        starts = nil
+        goal = nil
+        milestone = nil
         hasTime = false
         hasDue = startDay != nil
         if let startDay { due = Calendar.current.startOfDay(for: startDay).addingTimeInterval(9 * 3600) }
@@ -121,14 +158,24 @@ final class NewTodoModel {
         let read = read
         let who = who
         let due = dueNow
+        let cleanTitle = read.title.trimmingCharacters(in: .whitespacesAndNewlines)
         // With a bot and you it's a shared task with nothing split yet: the bot's first turn asks which parts it takes.
-        var fields = TodoWire.newTask(title: read.title.trimmingCharacters(in: .whitespacesAndNewlines), who: who, bot: helper,
-                                      due: due.map { TodoDates.wire($0.date, hasTime: $0.hasTime) }, repeatRule: repeatNow, prep: false,
-                                      notes: notes.trimmingCharacters(in: .whitespacesAndNewlines))
+        var fields = TodoWire.newTask(
+            title: cleanTitle.isEmpty ? title.trimmingCharacters(in: .whitespacesAndNewlines) : cleanTitle,
+            who: who,
+            bot: helper,
+            due: due.map { TodoDates.wire($0.date, hasTime: $0.hasTime) },
+            repeatRule: repeatNow,
+            prep: false,
+            notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
+            goal: store.goalsSupported ? goal : nil,
+            milestone: store.goalsSupported ? milestone : nil
+        )
         if who == .together, store.fieldsSupported, let rule = repeatNow { fields["repeat"] = .string(rule) }
         if store.fieldsSupported {
             if priorityNow > 0 { fields["priority"] = .number(Double(priorityNow)) }
             if !read.tags.isEmpty { fields["tags"] = .array(read.tags.map(JSONValue.string)) }
+            if let starts { fields["starts"] = .string(TodoDates.wire(starts, hasTime: false)) }
         }
         if let section { fields["section"] = .string(section) }
         Task {
@@ -168,55 +215,40 @@ enum NewTodoSheet {
                      onCreated: @escaping (TodoTask?) -> Void) -> UIViewController {
         let model = NewTodoModel(store: store, bots: bots, preferredBot: preferredBot, section: section, dueDay: dueDay)
         model.onCreated = onCreated
-        let host = NewTodoHost(model: model)
-        let compact = UISheetPresentationController.Detent.custom(identifier: .init("tasks.new.compact")) { context in
-            min(460, context.maximumDetentValue)
-        }
-        let nav = ChatSheet.wrap(host, title: "New Task", detents: [compact, .large()])
-        nav.preferredContentSize = CGSize(width: 520, height: DeviceWord.isMac ? 540 : 460)
-        // The title takes the keys on open, and compact plus the keyboard never fits a phone: the sheet rose to large and
-        // the switch dropped the field's focus (keys up, then straight down). On a phone it opens at the height it types at.
-        if !DeviceWord.isMac, UIDevice.current.userInterfaceIdiom == .phone, let sheet = nav.sheetPresentationController {
-            sheet.selectedDetentIdentifier = .large
-        }
-        host.installClose()
-        SheetEditGuard.install(on: nav)
-        return nav
+        return NewTodoHost(model: model)
     }
 }
 
-/// A scrollable task sheet on mobile and a form dialog on Mac.
-final class NewTodoHost: UIHostingController<HQScaledRoot<NewTodoView>>, EditingPage {
+/// Compact quick-add sheet riding over the keyboard (same shape as NewGoalHost).
+final class NewTodoHost: UIHostingController<HQScaledRoot<NewTodoView>>, EditingPage, UIAdaptivePresentationControllerDelegate {
     let model: NewTodoModel
-    private var addItem: UIBarButtonItem!
+    private var fitted: CGFloat = 210
 
     init(model: NewTodoModel) {
         self.model = model
         super.init(rootView: HQScaledRoot(NewTodoView(model: model)))
         model.controller = self
-        rootView = HQScaledRoot(NewTodoView(model: model))
-        title = "New Task"
-        addItem = UIBarButtonItem(title: "Add", primaryAction: UIAction { [weak self] _ in self?.model.add() })
-        addItem.style = .prominent
-        addItem.accessibilityIdentifier = "tasks.new.add"
-        navigationItem.rightBarButtonItem = addItem
-        addItem.setProminentEnabled(model.canAdd)
+        rootView = HQScaledRoot(NewTodoView(model: model, onHeight: { [weak self] in self?.fit($0) }, close: { [weak self] in self?.closeAsking() }))
+        QuickAddSheet.configure(self, identifier: "tasks.new") { [weak self] in self?.fitted ?? 210 }
+        presentationController?.delegate = self
     }
 
     @MainActor required dynamic init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        view.accessibilityIdentifier = "tasks.new.sheet"
-        view.backgroundColor = HQPalette.sheetPage
-        observeForm()
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        presentationController?.delegate = self
     }
 
-    func installClose() {
-        let close = UIBarButtonItem.hqClose(DeviceWord.isMac ? .cancel : .close, action: UIAction { [weak self] _ in self?.closeAsking() })
-        close.accessibilityIdentifier = "sheet.close"
-        navigationItem.hqPlaceFormClose(close)
+    func presentationControllerShouldDismiss(_ presentationController: UIPresentationController) -> Bool {
+        !hasChanges && !model.saving
     }
+
+    func presentationControllerDidAttemptToDismiss(_ presentationController: UIPresentationController) {
+        closeAsking()
+    }
+
+    private func fit(_ height: CGFloat) { QuickAddSheet.fit(self, height, fitted: fitted) { fitted = $0 } }
 
     // Any typed draft requires confirmation before dismissing the sheet.
     var hasChanges: Bool {
@@ -224,33 +256,6 @@ final class NewTodoHost: UIHostingController<HQScaledRoot<NewTodoView>>, Editing
             || !model.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
     var isSaving: Bool { model.saving }
-
-    private func observeForm() {
-        withObservationTracking {
-            _ = model.title
-            _ = model.notes
-            _ = model.saving
-        } onChange: { [weak self] in
-            DispatchQueue.main.async { self?.refreshLock(); self?.observeForm() }
-        }
-        refreshLock()
-    }
-
-    private func refreshLock() {
-        if isSaving {
-            let spinner = UIActivityIndicatorView(style: .medium)
-            spinner.startAnimating()
-            navigationItem.rightBarButtonItem = UIBarButtonItem(customView: spinner)
-        } else {
-            navigationItem.rightBarButtonItem = addItem
-            addItem.setProminentEnabled(model.canAdd)
-        }
-        navigationItem.leftBarButtonItem?.isEnabled = !isSaving
-        if let navigation = navigationController {
-            EditingGuard.refreshLock(navigation)
-            if isSaving { EditingGuard.dropQuestion() }
-        }
-    }
 
     /// ✕, Escape: closes, asking first when there is something to lose.
     func closeAsking() {
@@ -358,82 +363,147 @@ struct QuickAddButton: View {
 
 struct NewTodoView: View {
     @Bindable var model: NewTodoModel
+    var onHeight: (CGFloat) -> Void = { _ in }
+    var close: () -> Void = {}
     @FocusState private var focus: Field?
-    @State private var detailsOpen = false
     enum Field: Hashable { case title, notes }
+
+    private var trimmedTitle: String { model.title.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     var body: some View {
         let read = model.read
-        Form {
-            Section {
-                TextField("What needs to be done?", text: $model.title)
+        let parsedDifferent = !trimmedTitle.isEmpty && (read.title != trimmedTitle || model.literalTitle)
+        VStack(alignment: .leading, spacing: 0) {
+            // Grabber on touch devices for visual continuity with compact sheets.
+            if !DeviceWord.isMac {
+                Capsule()
+                    .fill(Color.hqLabel3.opacity(0.45))
+                    .frame(width: 36, height: 4)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
+                    .accessibilityHidden(true)
+            }
+
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                TextField("What needs to be done?", text: $model.title, axis: .vertical)
+                    .lineLimit(1...3)
+                    .font(Font.hq(.body).weight(.medium))
                     .focused($focus, equals: .title)
-                    .submitLabel(.done).onSubmit { model.add() }
-                    .padding(.vertical, 8)
-                    .accessibilityIdentifier("tasks.new.title")
-            } header: { HQSectionLabel { Text("Task title") } }
-            Section {
-                whoStrip
-                if let helper = model.helper {
-                    // Through the looks' strip (ThemeLintTests): the Desktop Look draws its own segments. setWho plays the tick.
-                    HQSegmentedPicker("How to work", options: [("Work together", false), ("Give to \(model.botName(helper))", true)],
-                                      selection: Binding(get: { model.alone }, set: { model.setWho(helper, alone: $0) }), ticks: false)
-                    .accessibilityIdentifier("tasks.new.mode")
-                }
-            } header: { HQSectionLabel { Text("Who's involved") } }
-            if read.title != model.title.trimmingCharacters(in: .whitespacesAndNewlines) || model.literalTitle {
-                Section {
-                    if model.literalTitle {
-                        Text("Using your title exactly as typed.")
-                    } else {
-                        Text("Task name: \(read.title)")
-                            .accessibilityLabel("Will be named \(read.title)")
-                            .accessibilityIdentifier("tasks.new.read")
-                        if let due = read.due { Text("Date: " + TodoWords.newTaskDue(due, hasTime: read.hasTime, now: Date())) }
-                        if let rule = read.repeatRule { Text("Repeat: " + TodoWords.repeatLabel(rule)) }
-                        if let priority = read.priority { Text("Priority: " + TodoViews.priorityWord(priority)) }
-                        if !read.tags.isEmpty { Text("Tags: " + read.tags.map { "#" + $0 }.joined(separator: ", ")) }
+                    .submitLabel(.done)
+                    .onChange(of: model.title) { _, text in
+                        guard text.contains("\n") else { return }
+                        model.title = text.replacingOccurrences(of: "\n", with: " ")
+                        model.add()
                     }
-                    Button(model.literalTitle ? "Read details from title" : "Keep title as typed") { model.literalTitle.toggle() }
-                        .accessibilityIdentifier("tasks.new.literal")
-                }.font(Font.hq(.footnote))
+                    .accessibilityIdentifier("tasks.new.title")
+                Button(action: close) {
+                    Image(systemName: "xmark")
+                        .font(Font.hq(.footnote).weight(.semibold))
+                        .foregroundStyle(Color.hqLabel2)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(model.saving)
+                .hqIconLabel("Close")
+                .accessibilityIdentifier("sheet.close")
             }
-            Section {
-                Button { withAnimation(HQMotion.swiftUI(.snappy(duration: 0.2))) { detailsOpen.toggle() } } label: {
-                    HStack {
-                        Text("Details")
-                        Spacer()
-                        Image(systemName: detailsOpen ? "chevron.up" : "chevron.down").foregroundStyle(Color.hqLabel2)
-                    }.contentShape(Rectangle())
+            .padding(.top, DeviceWord.isMac ? 14 : 6)
+
+            if parsedDifferent {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(model.literalTitle ? "Using your title exactly as typed" : "→ “\(read.title)”\(read.tags.isEmpty ? "" : " " + read.tags.map { "#\($0)" }.joined(separator: " "))")
+                        .font(Font.hq(.footnote))
+                        .foregroundStyle(Color.hqLabel2)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityLabel(model.literalTitle ? "Using your title exactly as typed" : "Will be named \(read.title)")
+                        .accessibilityIdentifier("tasks.new.read")
+                    Button(model.literalTitle ? "Read details" : "Keep literal") {
+                        PagesHaptics.selection()
+                        model.literalTitle.toggle()
+                    }
+                    .font(Font.hq(.footnote).weight(.medium))
+                    .foregroundStyle(Color.hqTintText)
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("tasks.new.literal")
                 }
-                .buttonStyle(.plain).accessibilityIdentifier("tasks.new.details")
-                .accessibilityValue(detailsOpen ? "Expanded" : "Collapsed")
-                if detailsOpen {
-                    TextField("Notes", text: $model.notes, axis: .vertical)
-                        .lineLimit(2...5).focused($focus, equals: .notes)
-                        .accessibilityIdentifier("tasks.new.notes")
-                    HStack { Text("Date"); Spacer(); dateChip(read) }
-                    if model.fields { HStack { Text("Priority"); Spacer(); priorityChip } }
-                    if !model.store.sections.isEmpty { HStack { Text("List"); Spacer(); listChip } }
+                .padding(.top, 4)
+            }
+
+            TextField("Notes (optional)", text: $model.notes, axis: .vertical)
+                .lineLimit(1...3)
+                .font(Font.hq(.subheadline))
+                .foregroundStyle(Color.hqLabel)
+                .focused($focus, equals: .notes)
+                .padding(.top, 8)
+                .accessibilityIdentifier("tasks.new.notes")
+
+            // Visible one-tap task chips row (pure task management first: Date, List, Priority, Goal, Start, Repeat).
+            ScrollView(.horizontal) {
+                HStack(spacing: 8) {
+                    dateChip(read)
+                    if !model.store.sections.isEmpty { listChip }
+                    if model.fields { priorityChip }
+                    if !model.activeGoals.isEmpty { goalChip }
+                    if model.fields { startsChip }
+                    if model.who != .bot && (model.who == .me || model.fields) { repeatChip }
                 }
-            } footer: { HQSectionFooter { Text("Notes, date, priority and list") } }
+                .padding(.vertical, 2)
+            }
+            .scrollIndicators(.never)
+            .padding(.top, 12)
+
             if let failure = model.failure {
-                Section { Text(failure).foregroundStyle(Color.hqRed).accessibilityIdentifier("tasks.new.failure") }
+                Text(failure)
+                    .font(Font.hq(.footnote))
+                    .foregroundStyle(Color.hqRed)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 8)
+                    .accessibilityIdentifier("tasks.new.failure")
             } else if let helper = model.helper {
-                Section { Text(model.alone ? "\(model.botName(helper))’s chat opens and it starts on the task right away." : TodoWords.newTaskHelpNote(model.botName(helper)))
-                    .font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2).accessibilityIdentifier("tasks.new.help-note") }
+                Text(model.alone ? "\(model.botName(helper))’s chat opens and it starts on the task right away." : TodoWords.newTaskHelpNote(model.botName(helper)))
+                    .font(Font.hq(.footnote))
+                    .foregroundStyle(Color.hqLabel2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 8)
+                    .accessibilityIdentifier("tasks.new.help-note")
             } else if let added = model.added {
-                Section { Label(added, systemImage: "checkmark").font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
-                    .accessibilityIdentifier("tasks.new.added") }
+                Label(added, systemImage: "checkmark")
+                    .font(Font.hq(.footnote))
+                    .foregroundStyle(Color.hqLabel2)
+                    .padding(.top, 8)
+                    .accessibilityIdentifier("tasks.new.added")
             }
+
+            Divider().padding(.top, 10)
+
+            HStack(spacing: 10) {
+                if !model.bots.isEmpty {
+                    whoMenu
+                } else {
+                    Text("Just Me")
+                        .font(Font.hq(.footnote))
+                        .foregroundStyle(Color.hqLabel2)
+                }
+                Spacer(minLength: 8)
+                QuickAddButton(enabled: model.canAdd, saving: model.saving, identifier: "tasks.new.add") {
+                    model.add()
+                }
+            }
+            .padding(.top, 8)
+            .padding(.bottom, 12)
         }
-        .hqGroupedPage()
+        .padding(.horizontal, 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { onHeight($0) }
         .disabled(model.saving)
         .onAppear { focus = .title }
         .onChange(of: model.addedCount) { _, _ in focus = .title }
     }
 
-    // MARK: The buttons
+    // MARK: The chips
 
     private func chip(_ words: String?, symbol: String?, set: Bool, tint: Color? = nil) -> some View {
         QuickAddChip(words: words, symbol: symbol, set: set, tint: tint)
@@ -445,10 +515,10 @@ struct NewTodoView: View {
         var words = due.map { TodoWords.newTaskDue($0.date, hasTime: $0.hasTime, now: now) }
         if let rule = model.repeatNow { words = [words, TodoWords.repeatLabel(rule)].compactMap { $0 }.joined(separator: " · ") }
         return Menu {
-            Button("Today") { model.setDue(now, hasTime: false) }
-            Button("Tomorrow") { model.setDue(Calendar.current.date(byAdding: .day, value: 1, to: now), hasTime: false) }
-            Button("Next Week") { model.setDue(Calendar.current.date(byAdding: .day, value: 7, to: now), hasTime: false) }
-            Button("Choose Date…") { model.pickDate() }
+            Button("Today", systemImage: "sun.max") { model.setDue(now, hasTime: false) }
+            Button("Tomorrow", systemImage: "sunrise") { model.setDue(Calendar.current.date(byAdding: .day, value: 1, to: now), hasTime: false) }
+            Button("Next Week", systemImage: "calendar") { model.setDue(Calendar.current.date(byAdding: .day, value: 7, to: now), hasTime: false) }
+            Button("Choose Date…", systemImage: "calendar.badge.plus") { model.pickDate() }
             if due != nil { Button("No Date", role: .destructive) { model.setDue(nil, hasTime: false) } }
         } label: {
             chip(words ?? "Date", symbol: "calendar", set: due != nil)
@@ -456,24 +526,6 @@ struct NewTodoView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(words.map { "Due \($0). Change" } ?? "Date")
         .accessibilityIdentifier("tasks.new.due")
-    }
-
-    private var priorityChip: some View {
-        let level = model.priorityNow
-        return Menu {
-            ForEach([1, 2, 3], id: \.self) { value in
-                Button { PagesHaptics.selection(); model.priority = value } label: {
-                    if level == value { Label(TodoViews.priorityWord(value), systemImage: "checkmark") } else { Text(TodoViews.priorityWord(value)) }
-                }
-            }
-            if level > 0 { Button("No Priority", role: .destructive) { PagesHaptics.selection(); model.priority = 0 } }
-        } label: {
-            chip(level > 0 ? TodoViews.priorityWord(level) : nil, symbol: level > 0 ? "flag.fill" : "flag", set: level > 0,
-                 tint: TodoPriorityLook.color(level))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(level > 0 ? "\(TodoViews.priorityWord(level)) priority. Change" : "Priority")
-        .accessibilityIdentifier("tasks.new.priority")
     }
 
     private var listChip: some View {
@@ -487,60 +539,136 @@ struct NewTodoView: View {
                 }
             }
         } label: {
-            chip(model.listName ?? "List", symbol: "tray", set: model.section != nil)
+            let icon = model.section.flatMap { id in model.store.sections.first { $0.id == id }?.icon } ?? "tray"
+            chip(model.listName ?? "List", symbol: icon, set: model.section != nil)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(model.listName.map { "List: \($0). Change" } ?? "List")
         .accessibilityIdentifier("tasks.new.section")
     }
 
-    @ViewBuilder private func whoPeople(column: Bool) -> some View {
-        personButton(name: "You", id: nil, column: column)
-        ForEach(model.bots, id: \.id) { bot in personButton(name: bot.name, id: bot.id, column: column) }
-    }
-
-    @ViewBuilder private var whoStrip: some View {
-        if DeviceWord.isMac {
-            // [new-task-who-mac] Owner 2026-11-21 (Mac screenshot): the sideways strip showed a grey scroller over the
-            // names, and a click on a bot didn't pick it. On the Mac the faces wrap to more rows instead (FEEL-LIST #32):
-            // no scroller, nothing out of reach, and each face is a plain button. Owner, same day, on Mac 1199: "The
-            // bots don't line up properly" (each row started where its names' widths left it): the rows are a grid of
-            // equal columns, each face centred over its name, a long name on two lines.
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 96, maximum: 128), spacing: 8, alignment: .top)],
-                      alignment: .leading, spacing: 12) { whoPeople(column: true) }
-                .padding(.vertical, 4)
-        } else {
-            ScrollView(.horizontal) {
-                HStack(alignment: .top, spacing: 18) { whoPeople(column: false) }.padding(.vertical, 4)
-            }
-            // `.hidden` still shows the scroller with a mouse attached (an iPad with a trackpad); `.never` hides it.
-            .scrollIndicators(.never)
-        }
-    }
-
-    /// `column`: a cell of the Mac's grid, filling its column with the name under the face on up to two lines.
-    private func personButton(name: String, id: String?, column: Bool = false) -> some View {
-        let selected = model.helper == id
-        return Button { model.setWho(id, alone: false) } label: {
-            VStack(spacing: 5) {
-                Group {
-                    if let id {
-                        HeadImage(raw: model.head(id), profile: id, size: 40).frame(width: 40, height: 40)
-                    } else {
-                        Image(systemName: "person.crop.circle.fill").resizable().frame(width: 40, height: 40).foregroundStyle(Color.hqLabel3)
-                    }
+    private var priorityChip: some View {
+        let level = model.priorityNow
+        return Menu {
+            ForEach([1, 2, 3], id: \.self) { value in
+                Button { PagesHaptics.selection(); model.priority = value } label: {
+                    if level == value { Label(TodoViews.priorityWord(value), systemImage: "checkmark") } else { Text(TodoViews.priorityWord(value)) }
                 }
-                .padding(3)
-                .overlay(Circle().stroke(selected ? Color.hqTint : .clear, lineWidth: 2))
-                Text(name).font(Font.hq(.caption)).lineLimit(column ? 2 : 1)
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(selected ? Color.hqTintText : Color.hqLabel2)
-            }.frame(minWidth: 52, maxWidth: column ? .infinity : nil, minHeight: 60, alignment: .top)
-            .contentShape(Rectangle())   // the whole face and name take the click, not only their drawn pixels
+            }
+            if level > 0 { Button("No Priority", role: .destructive) { PagesHaptics.selection(); model.priority = 0 } }
+        } label: {
+            chip(level > 0 ? TodoViews.priorityWord(level) : "Priority", symbol: level > 0 ? "flag.fill" : "flag", set: level > 0,
+                 tint: TodoPriorityLook.color(level))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(name)
-        .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityIdentifier("tasks.new.person.\(id ?? "you")")
+        .accessibilityLabel(level > 0 ? "\(TodoViews.priorityWord(level)) priority. Change" : "Priority")
+        .accessibilityIdentifier("tasks.new.priority")
+    }
+
+    private var goalChip: some View {
+        Menu {
+            Button { model.setGoal(nil) } label: {
+                if model.goal == nil { Label("No Goal", systemImage: "checkmark") } else { Text("No Goal") }
+            }
+            ForEach(model.activeGoals) { goal in
+                let open = goal.milestones.filter { !$0.done }
+                if open.isEmpty {
+                    Button { model.setGoal(goal.id) } label: {
+                        if model.goal == goal.id { Label(goal.title, systemImage: "checkmark") } else { Text(goal.title) }
+                    }
+                } else {
+                    Menu(goal.title) {
+                        Button { model.setGoal(goal.id, milestone: nil) } label: {
+                            if model.goal == goal.id, model.milestone == nil { Label("No Milestone", systemImage: "checkmark") } else { Text("No Milestone") }
+                        }
+                        ForEach(open) { milestone in
+                            Button { model.setGoal(goal.id, milestone: milestone.id) } label: {
+                                if model.goal == goal.id, model.milestone == milestone.id { Label(milestone.title, systemImage: "checkmark") } else { Text(milestone.title) }
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            chip(model.goalName ?? "Goal", symbol: "smallcircle.filled.circle", set: model.goal != nil)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(model.goalName.map { "Goal: \($0). Change" } ?? "Goal")
+        .accessibilityIdentifier("tasks.new.goal")
+    }
+
+    private var startsChip: some View {
+        let now = Date()
+        let words = model.starts.map { "Starts " + TodoViews.soon($0, now: now) }
+        return Menu {
+            Button("Today", systemImage: "sun.max") { model.setStarts(now) }
+            Button("Tomorrow", systemImage: "sunrise") { model.setStarts(Calendar.current.date(byAdding: .day, value: 1, to: now)) }
+            Button("Next Week", systemImage: "calendar") { model.setStarts(Calendar.current.date(byAdding: .day, value: 7, to: now)) }
+            Button("Choose Date…", systemImage: "calendar.badge.clock") { model.pickStarts() }
+            if model.starts != nil { Button("No Start Date", role: .destructive) { model.setStarts(nil) } }
+        } label: {
+            chip(words ?? "Starts", symbol: "calendar.badge.clock", set: model.starts != nil)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(words.map { "\($0). Change" } ?? "Start Date")
+        .accessibilityIdentifier("tasks.new.starts")
+    }
+
+    private var repeatChip: some View {
+        let current = model.repeatNow
+        return Menu {
+            ForEach(TodoWords.repeatRules, id: \.self) { rule in
+                Button { PagesHaptics.selection(); model.repeatRule = rule } label: {
+                    if current == rule { Label(TodoWords.repeatLabel(rule), systemImage: "checkmark") } else { Text(TodoWords.repeatLabel(rule)) }
+                }
+            }
+            if current != nil { Button("Don’t Repeat", role: .destructive) { PagesHaptics.selection(); model.repeatRule = nil } }
+        } label: {
+            chip(current.map { TodoWords.repeatLabel($0) } ?? "Repeat", symbol: "repeat", set: current != nil)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(current.map { "Repeats \(TodoWords.repeatLabel($0)). Change" } ?? "Repeat")
+        .accessibilityIdentifier("tasks.new.repeat")
+    }
+
+    private var whoMenu: some View {
+        Menu {
+            Button { model.setWho(nil, alone: false) } label: {
+                if model.helper == nil { Label("Just Me", systemImage: "checkmark") } else { Text("Just Me") }
+            }
+            Section("Work Together") {
+                ForEach(model.bots, id: \.id) { bot in
+                    Button { model.setWho(bot.id, alone: false) } label: {
+                        if model.helper == bot.id, !model.alone { Label(bot.name, systemImage: "checkmark") } else { Text(bot.name) }
+                    }
+                }
+            }
+            Section("Give to Bot") {
+                ForEach(model.bots, id: \.id) { bot in
+                    Button { model.setWho(bot.id, alone: true) } label: {
+                        if model.helper == bot.id, model.alone { Label(bot.name, systemImage: "checkmark") } else { Text(bot.name) }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                if let helper = model.helper {
+                    HeadImage(raw: model.head(helper), profile: helper, size: 18).frame(width: 18, height: 18).accessibilityHidden(true)
+                } else {
+                    Image(systemName: "person").imageScale(.small).foregroundStyle(Color.hqLabel2).accessibilityHidden(true)
+                }
+                Text(model.whoLabel).lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down").font(Font.hq(.caption2)).foregroundStyle(Color.hqLabel2).accessibilityHidden(true)
+            }
+            .font(Font.hq(.footnote).weight(model.helper != nil ? .semibold : .regular))
+            .foregroundStyle(model.helper != nil ? Color.hqTintText : Color.hqLabel)
+            .padding(.horizontal, 11)
+            .frame(minHeight: 32)
+            .background(Capsule().fill(model.helper != nil ? Color.hqTint.opacity(0.12) : Color.hqFill3))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Who: \(model.whoLabel). Change")
+        .accessibilityIdentifier("tasks.new.who-menu")
     }
 }

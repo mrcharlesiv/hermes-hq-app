@@ -430,10 +430,12 @@ nonisolated struct TodoListAnswer: Decodable, Sendable {
     var goals: [Goal]?
     /// [goals step 3] The add-on puts bots on goals (hermes-hq-push 0.9.66): a lead, helpers, offers, the check-in.
     var goalBots = false
+    /// Custom interval / after-completion recurrence (`custom_repeat: true` when an add-on supports it).
+    var customRepeat = false
 
     enum CodingKeys: String, CodingKey {
         case rev, tasks, settings, sections, unchanged, pages, ideas, fields, files, lists, offers, goals
-        case goalBots = "goal_bots"
+        case goalBots = "goal_bots", customRepeat = "custom_repeat"
     }
 
     init(rev: Int, tasks: [TodoTask]?, settings: TodoSettings? = nil, sections: [TodoUserSection]? = nil, unchanged: Bool = false) {
@@ -472,6 +474,7 @@ nonisolated struct TodoListAnswer: Decodable, Sendable {
             goals = raw.compactMap { value in (try? value.encoded()).flatMap { try? JSONDecoder().decode(Goal.self, from: $0) } }
         }
         goalBots = ((try? c.decodeIfPresent(Bool.self, forKey: .goalBots)) ?? nil) ?? false
+        customRepeat = ((try? c.decodeIfPresent(Bool.self, forKey: .customRepeat)) ?? nil) ?? false
     }
 }
 
@@ -730,11 +733,17 @@ nonisolated enum TodoSections {
 
     /// The All Bots filter: one bot's tasks (its bot and together tasks); everything for All Bots.
     /// [goals] Step 2: a search also finds a task by its goal's name and its milestone's name (`goals`).
-    static func filtered(_ tasks: [TodoTask], scope: String, query: String, goals: [Goal] = []) -> [TodoTask] {
+    /// Optional `priority` (1…3) and `tag` narrow the list from the Filter menu without adding extra bar controls.
+    static func filtered(_ tasks: [TodoTask], scope: String, query: String, goals: [Goal] = [],
+                         priority: Int? = nil, tag: String? = nil) -> [TodoTask] {
         let words = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let wantedTag = tag?.trimmingCharacters(in: .whitespacesAndNewlines)
         return tasks.filter { task in
             // [bot-pills] "@me": your own tasks, with no bot helping.
             if scope == "@me" { if task.helper != nil { return false } } else if scope != "all", task.helper != scope { return false }
+            if let priority, task.priority != priority { return false }
+            if let wantedTag, !wantedTag.isEmpty,
+               !task.tags.contains(where: { $0.caseInsensitiveCompare(wantedTag) == .orderedSame }) { return false }
             guard !words.isEmpty else { return true }
             let fields = [task.title, task.notes, task.statusNote] + task.steps.map(\.title) + task.tags
                 + GoalViews.searchWords(task, goals: goals)
@@ -793,6 +802,21 @@ nonisolated enum TodoWords {
         case "weekly": return "Every Week"
         case "monthly": return "Every Month"
         case "yearly": return "Every Year"
+        case let custom? where custom.hasPrefix("every:") || custom.hasPrefix("after:"):
+            let parts = custom.split(separator: ":").map(String.init)
+            guard parts.count == 3, let count = Int(parts[1]), count > 0 else { return custom }
+            let unitBase: String
+            switch parts[2] {
+            case "day", "days": unitBase = count == 1 ? "Day" : "Days"
+            case "week", "weeks": unitBase = count == 1 ? "Week" : "Weeks"
+            case "month", "months": unitBase = count == 1 ? "Month" : "Months"
+            case "year", "years": unitBase = count == 1 ? "Year" : "Years"
+            default: unitBase = parts[2]
+            }
+            if parts[0] == "after" {
+                return "\(count) \(unitBase) After Completion"
+            }
+            return count == 1 ? "Every \(unitBase)" : "Every \(count) \(unitBase)"
         default: return "Never"
         }
     }

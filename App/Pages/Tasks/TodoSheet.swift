@@ -89,6 +89,9 @@ final class TodoSheetModel {
     var newStep = ""
     /// [tasks] The add-a-step field is open (Steps' +).
     var addingStep = false { didSet { syncEditing() } }
+    /// Inline step title editing.
+    var editingStepID: String? { didSet { syncEditing() } }
+    var stepDraft = ""
     var notes = ""
     var editingNotes = false { didSet { syncEditing() } }
     /// Observable mirror of `chat?.session.isRunning` + message updates (replaces 1 Hz `TimelineView` polling).
@@ -138,7 +141,7 @@ final class TodoSheetModel {
 
     /// [tasks] Writing in the brief (title, a step, the notes) on the task's chat: the composer steps aside meanwhile.
     private func syncEditing() {
-        let editing = embedded && (editingTitle || addingStep || editingNotes)
+        let editing = embedded && (editingTitle || addingStep || editingStepID != nil || editingNotes)
         if editingBrief != editing { editingBrief = editing }
     }
 
@@ -373,6 +376,94 @@ final class TodoSheetModel {
         patch(["steps": TodoWire.steps(task.steps + [TodoStep(title: title, who: "me")])])
     }
 
+    func editStep(_ step: TodoStep) {
+        guard !gone, !step.done else { return }
+        PagesHaptics.selection()
+        if editingStepID != nil, editingStepID != step.id { saveStep() }
+        stepDraft = step.title
+        editingStepID = step.id
+    }
+
+    func saveStep() {
+        guard let id = editingStepID else { return }
+        editingStepID = nil
+        let clean = stepDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let task, !clean.isEmpty,
+              let current = task.steps.first(where: { $0.id == id }),
+              current.title != clean else { return }
+        let updated = task.steps.map { s -> TodoStep in
+            var s = s
+            if s.id == id { s.title = clean }
+            return s
+        }
+        patch(["steps": TodoWire.steps(updated)])
+    }
+
+    /// Reorders open steps up or down by `offset` (-1 up, +1 down).
+    func moveStep(_ id: String, by offset: Int) {
+        guard let task else { return }
+        var open = task.steps.filter { !$0.done }
+        let done = task.steps.filter(\.done)
+        guard let idx = open.firstIndex(where: { $0.id == id }), open.indices.contains(idx + offset) else { return }
+        PagesHaptics.selection()
+        open.swapAt(idx, idx + offset)
+        patch(["steps": TodoWire.steps(open + done)])
+    }
+
+    /// Drag-and-drop reorder among open steps: moves `sourceID` to the slot of `targetID`.
+    func reorderStep(from sourceID: String, to targetID: String) {
+        guard sourceID != targetID, let task else { return }
+        var open = task.steps.filter { !$0.done }
+        let done = task.steps.filter(\.done)
+        guard let from = open.firstIndex(where: { $0.id == sourceID }),
+              let to = open.firstIndex(where: { $0.id == targetID }) else { return }
+        PagesHaptics.selection()
+        let moved = open.remove(at: from)
+        open.insert(moved, at: to)
+        patch(["steps": TodoWire.steps(open + done)])
+    }
+
+    /// Promotes a step into its own full task (inheriting list, goal, and bot if bot-owned) and removes the step.
+    func promoteStep(_ step: TodoStep) {
+        guard let task, !gone, !store.readOnlyGateway else { return }
+        PagesHaptics.selection()
+        let who: TodoWho = step.who == "bot" && task.helper != nil ? .bot : .me
+        var body = TodoWire.newTask(
+            title: step.title,
+            who: who,
+            bot: who == .bot ? task.helper : nil,
+            due: nil,
+            repeatRule: nil,
+            prep: false,
+            notes: "",
+            goal: store.goalsSupported ? task.goal : nil,
+            milestone: store.goalsSupported ? task.milestone : nil
+        )
+        if let section = task.section { body["section"] = .string(section) }
+        if store.fieldsSupported, !task.tags.isEmpty { body["tags"] = .array(task.tags.map(JSONValue.string)) }
+        Task {
+            guard await store.add(body) != nil else { PagesHaptics.error(); return }
+            let remaining = task.steps.filter { $0.id != step.id }
+            _ = await store.patch(taskID, ["steps": TodoWire.steps(remaining)])
+            PagesHaptics.success()
+            show("Turned step into a task")
+        }
+    }
+
+    /// Duplicates the current task as a fresh open copy.
+    func duplicate() {
+        guard !gone, !store.readOnlyGateway else { return }
+        PagesHaptics.selection()
+        Task {
+            if let copy = await store.duplicate(taskID) {
+                PagesHaptics.success()
+                show("Duplicated “\(copy.title)”")
+            } else {
+                PagesHaptics.error()
+            }
+        }
+    }
+
     func editTitle() {
         guard !gone else { return }
         PagesHaptics.selection()
@@ -395,10 +486,11 @@ final class TodoSheetModel {
         patch(["notes": .string(notes)])
     }
 
-    /// Commits any in-progress inline edit (title, notes, new step) so swipe-down dismissal never drops work.
+    /// Commits any in-progress inline edit (title, notes, step) so swipe-down dismissal never drops work.
     func flushUnsavedEdits() {
         if editingTitle { saveTitle() }
         if editingNotes { saveNotes() }
+        if editingStepID != nil { saveStep() }
         if addingStep {
             if !newStep.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { addStep() }
             addingStep = false
@@ -750,6 +842,9 @@ final class TodoSheetHost: UIHostingController<HQScaledRoot<TodoSheetView>> {
         }
         if !model.gone {
             details.append(UIAction(title: "Rename Task", image: UIImage(systemName: "pencil")) { _ in model.editTitle() })
+            if !model.store.readOnlyGateway {
+                details.append(UIAction(title: "Duplicate Task", image: UIImage(systemName: "plus.square.on.square")) { _ in model.duplicate() })
+            }
         }
         details.append(UIAction(title: "Copy Title", image: UIImage(systemName: "doc.on.doc")) { _ in
             UIPasteboard.general.string = task.title

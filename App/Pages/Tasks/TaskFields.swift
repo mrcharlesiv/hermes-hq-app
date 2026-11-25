@@ -60,28 +60,18 @@ extension TodoSheetModel {
         controller.present(picker, animated: true)
     }
 
-    /// The tags in one field, comma between them ("hiring, q4").
+    /// Tappable Tag Picker sheet with existing tags + type-to-create (comma-separated supported).
     func editTags() {
         guard let controller, let task else { return }
         PagesHaptics.selection()
-        let alert = UIAlertController(title: "Tags", message: "Short words to find it by, with a comma between them.", preferredStyle: .alert)
-        alert.addTextField { field in
-            field.text = task.tags.joined(separator: ", ")
-            field.placeholder = "hiring, q4"
-            field.autocapitalizationType = .none
-            field.returnKeyType = .done
-            field.accessibilityIdentifier = "task.tags.field"
-        }
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        let save = UIAlertAction(title: "Save", style: .default) { [weak self, weak alert] _ in
-            guard let self else { return }
-            let tags = TodoViews.tags(from: alert?.textFields?.first?.text ?? "")
-            guard tags != task.tags else { return }
+        let sheet = TaskTagPickerSheet.make(
+            selected: task.tags,
+            existing: TodoViews.allTags(in: store.tasks)
+        ) { [weak self] tags in
+            guard let self, tags != task.tags else { return }
             Task { if await !self.store.patch(self.taskID, ["tags": .array(tags.map(JSONValue.string))]) { PagesHaptics.error() } }
         }
-        alert.addAction(save)
-        alert.preferredAction = save
-        controller.present(alert, animated: true)
+        controller.present(sheet, animated: true)
     }
 
     // MARK: Files, photos and links

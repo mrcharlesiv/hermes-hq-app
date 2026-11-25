@@ -37,24 +37,25 @@ extension PagesTests {
         shot("tasks-bar" + name)
         plus.tap()
 
-        // Plain: the task, Due, and who helps (No One). No Me / A Bot / Together, no prep switch, no steps.
+        // Plain: compact quick-capture sheet with title, notes, task chips, and compact Who menu ("Just Me").
         let title = app.textViews["tasks.new.title"].firstMatch.exists ? app.textViews["tasks.new.title"].firstMatch : app.textFields["tasks.new.title"].firstMatch
         XCTAssertTrue(title.waitForExistence(timeout: 10), "New Task opens")
         XCTAssertFalse(app.descendants(matching: .any)["tasks.new.who"].exists, "no Who Does It switch")
         XCTAssertFalse(app.descendants(matching: .any)["tasks.new.prep"].exists, "no gets-it-ready switch")
-        XCTAssertFalse(app.textViews["tasks.new.notes"].exists, "Details starts closed")
-        let helper = app.buttons["tasks.new.person.default"].firstMatch
-        XCTAssertTrue(helper.isHittable, "Assign to is available without opening Details")
+        let whoMenu = app.descendants(matching: .any)["tasks.new.who-menu"].firstMatch
+        XCTAssertTrue(whoMenu.isHittable, "compact Who picker is available immediately")
         title.tap()
         title.typeText("Plan the team offsite")
         shot("tasks-new-plain" + name)
 
-        // Pick a bot: the footer says what Add will do.
+        // Pick a bot from the compact Who menu: the note says what Add will do.
         XCTAssertEqual(app.buttons.matching(identifier: "tasks.new.add").count, 1)
         XCTAssertFalse(app.descendants(matching: .any)["tasks.new.mode"].exists)
-        helper.tap()
-        XCTAssertTrue(app.buttons["Work together"].waitForExistence(timeout: 5))
+        whoMenu.tap()
+        let workTogetherBot = app.buttons["Hermes"].firstMatch
+        XCTAssertTrue(workTogetherBot.waitForExistence(timeout: 5))
         shot("tasks-assign-picker" + name)
+        workTogetherBot.tap()
         let note = app.staticTexts["tasks.new.help-note"].firstMatch
         XCTAssertTrue(note.waitForExistence(timeout: 5), "says what happens on Add")
         XCTAssertTrue(note.label.contains("chat opens"), note.label)
@@ -88,16 +89,17 @@ extension PagesTests {
         let plus = app.buttons["tasks.new"].firstMatch
         XCTAssertTrue(plus.waitForExistence(timeout: 20))
         plus.tap()
-        let title = app.textFields["tasks.new.title"].firstMatch
+        let title = app.textViews["tasks.new.title"].firstMatch.exists ? app.textViews["tasks.new.title"].firstMatch : app.textFields["tasks.new.title"].firstMatch
         XCTAssertTrue(title.waitForExistence(timeout: 10))
-        let bot = app.buttons["tasks.new.person.default"].firstMatch
-        XCTAssertTrue(bot.waitForExistence(timeout: 10))
-        bot.tap()
-        let solo = app.buttons["Give to Hermes"].firstMatch
-        XCTAssertTrue(solo.waitForExistence(timeout: 5))
-        solo.tap()
+        let whoMenu = app.descendants(matching: .any)["tasks.new.who-menu"].firstMatch
+        XCTAssertTrue(whoMenu.waitForExistence(timeout: 10))
+        whoMenu.tap()
+        let soloButtons = app.buttons.matching(identifier: "Hermes")
+        XCTAssertTrue(soloButtons.firstMatch.waitForExistence(timeout: 5))
+        soloButtons.element(boundBy: max(0, soloButtons.count - 1)).tap()
         shot("concept-a-solo")
-        app.buttons["tasks.new.person.you"].firstMatch.tap()
+        whoMenu.tap()
+        app.buttons["Just Me"].firstMatch.tap()
         XCTAssertFalse(app.descendants(matching: .any)["tasks.new.mode"].exists)
         title.tap()
         title.typeText("Self after changing owner")
@@ -109,8 +111,10 @@ extension PagesTests {
         XCTAssertTrue(posted("Self after changing owner")?.body?["bot"] == nil || posted("Self after changing owner")?.body?["bot"] is NSNull)
         title.tap()
         title.typeText("Solo bot task")
-        bot.tap()
-        app.buttons["Give to Hermes"].firstMatch.tap()
+        whoMenu.tap()
+        let soloAgain = app.buttons.matching(identifier: "Hermes")
+        XCTAssertTrue(soloAgain.firstMatch.waitForExistence(timeout: 5))
+        soloAgain.element(boundBy: max(0, soloAgain.count - 1)).tap()
         app.buttons["tasks.new.add"].firstMatch.tap()
         XCTAssertTrue(waitUntil(10) { posted("Solo bot task") != nil })
         XCTAssertEqual(posted("Solo bot task")?.body?["who"] as? String, "bot")

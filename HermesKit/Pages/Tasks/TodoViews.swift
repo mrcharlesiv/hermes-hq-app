@@ -162,6 +162,25 @@ nonisolated enum TodoViews {
         func byDue(_ items: [TodoTask]) -> [TodoTask] {
             items.sorted { a, b in due(a) != due(b) ? due(a) < due(b) : (created(a), a.id) < (created(b), b.id) }
         }
+        func priorityRank(_ task: TodoTask) -> Int { task.priority == 0 ? 4 : task.priority }
+        func byToday(_ items: [TodoTask]) -> [TodoTask] {
+            switch sort {
+            case "due":
+                return items.sorted { a, b in due(a) != due(b) ? due(a) < due(b) : (a.order, a.id) < (b.order, b.id) }
+            case "priority":
+                return items.sorted { a, b in priorityRank(a) != priorityRank(b) ? priorityRank(a) < priorityRank(b) : (a.order, a.id) < (b.order, b.id) }
+            case "added":
+                return items.sorted { (created($0), $0.id) > (created($1), $1.id) }
+            default:
+                // Default Today order: High/Medium priority rises to the top; ties break by due time, then manual order / created.
+                return items.sorted { a, b in
+                    let pa = priorityRank(a), pb = priorityRank(b)
+                    if pa != pb { return pa < pb }
+                    if due(a) != due(b) { return due(a) < due(b) }
+                    return (a.order, a.id) < (b.order, b.id)
+                }
+            }
+        }
         func newestDone(_ items: [TodoTask]) -> [TodoTask] { items.sorted { (finished($0), $0.id) > (finished($1), $1.id) } }
         var out: [TodoGroup] = []
         func add(_ kind: TodoGroupKind, _ items: [TodoTask]) { if !items.isEmpty { out.append(TodoGroup(kind: kind, tasks: items)) } }
@@ -179,7 +198,7 @@ nonisolated enum TodoViews {
             }
             let dated = Set((overdue + todays).map(\.id))
             add(.overdue, byDue(overdue))
-            add(.today, byDue(todays))
+            add(.today, byToday(todays))
             // The newest news first.
             let waiting = mine.filter { waitsOnYou($0) && !dated.contains($0.id) }.sorted { (updated($0), $0.id) > (updated($1), $1.id) }
             add(.waiting, waiting)
@@ -210,7 +229,11 @@ nonisolated enum TodoViews {
         case .inbox:
             // [task-lists] Dated or not: Inbox is what hasn't been filed.
             let loose = open.filter { !botsOwn($0) && list($0, known: known) == nil }
-            add(.open, loose.filter { !TodoSections.isStale($0, now: now) }.sorted { (created($0), $0.id) > (created($1), $1.id) })
+            let fresh = loose.filter { !TodoSections.isStale($0, now: now) }
+            let orderedFresh = sort == "smart"
+                ? fresh.sorted { (created($0), $0.id) > (created($1), $1.id) }
+                : TodoSections.ordered(fresh, sort: sort, calendar: calendar)
+            add(.open, orderedFresh)
             add(.stale, loose.filter { TodoSections.isStale($0, now: now) }.sorted { (updated($0), $0.id) < (updated($1), $1.id) })
             add(.done, newestDone(done.filter { !botsOwn($0) && list($0, known: known) == nil }))
         case .list(let id):
@@ -488,6 +511,113 @@ nonisolated enum TodoViews {
         case .goals: return GoalViews.emptyText
         }
     }
+
+    // MARK: Tags, Upcoming week header, Drag-to-day & Completed Logbook
+
+    /// Every tag in use across `tasks`, most frequent first, then alphabetical (case-insensitive deduplication).
+    static func allTags(in tasks: [TodoTask]) -> [String] {
+        var counts: [String: Int] = [:]
+        var canonical: [String: String] = [:]
+        for task in tasks {
+            for raw in task.tags {
+                let clean = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !clean.isEmpty else { continue }
+                let key = clean.lowercased()
+                counts[key, default: 0] += 1
+                if canonical[key] == nil { canonical[key] = clean }
+            }
+        }
+        return counts.keys.sorted { a, b in
+            let ca = counts[a] ?? 0, cb = counts[b] ?? 0
+            if ca != cb { return ca > cb }
+            return (canonical[a] ?? a).localizedCaseInsensitiveCompare(canonical[b] ?? b) == .orderedAscending
+        }.compactMap { canonical[$0] }
+    }
+
+    /// Heading over Upcoming's week strip: "November 2026", or "Nov – Dec 2026" when the 7 days span two months.
+    static func weekRangeTitle(_ dates: [Date], calendar: Calendar = .current) -> String {
+        guard let first = dates.first, let last = dates.last else { return "" }
+        let m1 = calendar.component(.month, from: first), y1 = calendar.component(.year, from: first)
+        let m2 = calendar.component(.month, from: last), y2 = calendar.component(.year, from: last)
+        if m1 == m2 && y1 == y2 { return TodoDates.format(first, template: "yMMMM", calendar: calendar) }
+        if y1 == y2 {
+            return "\(TodoDates.format(first, template: "MMM", calendar: calendar)) – \(TodoDates.format(last, template: "yMMM", calendar: calendar))"
+        }
+        return "\(TodoDates.format(first, template: "yMMM", calendar: calendar)) – \(TodoDates.format(last, template: "yMMM", calendar: calendar))"
+    }
+
+    /// Wire due string when rescheduling `task` onto `day`, keeping its clock time if it already had one.
+    static func rescheduledDue(for task: TodoTask, onto day: Date, preserveTime: Bool = true,
+                               calendar: Calendar = .current) -> String {
+        if preserveTime, let existing = TodoDates.due(task.due, calendar: calendar), existing.hasTime {
+            let clock = calendar.dateComponents([.hour, .minute], from: existing.date)
+            var parts = calendar.dateComponents([.year, .month, .day], from: day)
+            parts.hour = clock.hour
+            parts.minute = clock.minute
+            if let combined = calendar.date(from: parts) {
+                return TodoDates.wire(combined, hasTime: true, calendar: calendar)
+            }
+        }
+        return TodoDates.wire(day, hasTime: false, calendar: calendar)
+    }
+
+    /// Unified Completed Logbook groups: Today, Yesterday, This Week, Earlier This Month, then month headings.
+    static func logbook(_ tasks: [TodoTask], query: String = "", now: Date = Date(),
+                        calendar: Calendar = .current) -> [TodoLogbookGroup] {
+        let words = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let done = tasks.filter { task in
+            guard task.isDone else { return false }
+            guard !words.isEmpty else { return true }
+            let fields = [task.title, task.notes, task.statusNote] + task.steps.map(\.title) + task.tags
+            return fields.contains { $0.lowercased().contains(words) }
+        }
+        func finished(_ task: TodoTask) -> Date {
+            TodoDates.moment(task.doneAt) ?? TodoDates.moment(task.updatedAt) ?? TodoDates.moment(task.createdAt) ?? .distantPast
+        }
+        let sorted = done.sorted { (finished($0), $0.id) > (finished($1), $1.id) }
+        let today = calendar.startOfDay(for: now)
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: today) ?? today
+        let weekAgo = calendar.date(byAdding: .day, value: -6, to: today) ?? today
+        let thisMonth = calendar.dateComponents([.year, .month], from: today)
+
+        var order: [String] = []
+        var titles: [String: String] = [:]
+        var buckets: [String: [TodoTask]] = [:]
+        for task in sorted {
+            let at = finished(task)
+            let day = calendar.startOfDay(for: at)
+            let key: String
+            let title: String
+            if day >= today {
+                key = "today"; title = "Today"
+            } else if day >= yesterday {
+                key = "yesterday"; title = "Yesterday"
+            } else if day >= weekAgo {
+                key = "week"; title = "This Week"
+            } else if calendar.dateComponents([.year, .month], from: day) == thisMonth {
+                key = "month"; title = "Earlier This Month"
+            } else if at == .distantPast {
+                key = "earlier"; title = "Earlier"
+            } else {
+                let parts = calendar.dateComponents([.year, .month], from: day)
+                key = String(format: "%04d-%02d", parts.year ?? 0, parts.month ?? 1)
+                title = TodoDates.format(day, template: "yMMMM", calendar: calendar)
+            }
+            if buckets[key] == nil { order.append(key); titles[key] = title }
+            buckets[key, default: []].append(task)
+        }
+        return order.compactMap { key in
+            guard let items = buckets[key], !items.isEmpty else { return nil }
+            return TodoLogbookGroup(id: key, title: titles[key] ?? key, tasks: items)
+        }
+    }
+}
+
+/// One time bucket in the Completed Logbook.
+nonisolated struct TodoLogbookGroup: Identifiable, Hashable, Sendable {
+    var id: String
+    var title: String
+    var tasks: [TodoTask]
 }
 
 /// [tasks-first] The scheduled jobs the Hermes HQ add-on keeps to run Tasks: "Task prep" (a bot works through its

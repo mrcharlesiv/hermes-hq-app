@@ -181,6 +181,8 @@ nonisolated struct TodoSnapshot: Codable, Sendable {
     /// [goals step 3] Goals' offers seen here (a goal's chat card is told only the offer's id; this keeps what it was
     /// after the gateway lets it go).
     var seenOffers: [TodoOffer]?
+    /// Custom interval / after-completion recurrence supported by the add-on.
+    var customRepeat: Bool?
 }
 
 /// `POST /tasks/offers/{id}`'s answer.
@@ -252,6 +254,8 @@ final class TasksStore {
     private(set) var goalBotsSupported = false
     /// [goals step 5] The add-on draws Goal Pages (`goal_pages` in `/status`).
     private(set) var goalPagesSupported = false
+    /// Custom interval / after-completion recurrence (`custom_repeat: true` in `GET /tasks`).
+    private(set) var customRepeatSupported = false
     /// [goals step 3] Goal offers seen here, by id (newest kept, 80 at most): what a goal's chat card draws once the
     /// gateway has let the offer go ("Answered").
     @ObservationIgnored private var seenOffers: [String: TodoOffer] = [:]
@@ -528,6 +532,7 @@ final class TasksStore {
         goalsSupported = cached.value.goals != nil
         goalBotsSupported = goalsSupported && cached.value.goalBots == true
         goalPagesSupported = goalBotsSupported && cached.value.goalPages == true
+        customRepeatSupported = cached.value.customRepeat == true
         for offer in cached.value.seenOffers ?? [] { seenOffers[offer.id] = offer }
         if !seenOffers.isEmpty { _ = TodoOfferStates.note(Array(seenOffers.values), whole: false) }
         noteOffers(whole: false)
@@ -548,7 +553,8 @@ final class TasksStore {
                                     lists: listsSupported, offers: offers,
                                     goals: goalsSupported ? goals.filter { !TodoIDs.isLocal($0.id) } : nil,
                                     goalBots: goalBotsSupported, goalPages: goalPagesSupported,
-                                    seenOffers: seenOffers.isEmpty ? nil : Array(seenOffers.values))
+                                    seenOffers: seenOffers.isEmpty ? nil : Array(seenOffers.values),
+                                    customRepeat: customRepeatSupported)
         PagesCache.write(PagesCached(at: Date().timeIntervalSince1970, value: snapshot), to: url)
     }
 
@@ -594,6 +600,7 @@ final class TasksStore {
             ideasCount = answer.ideas
             adoptGoals(answer.goals)
             goalBotsSupported = goalsSupported && answer.goalBots
+            customRepeatSupported = answer.customRepeat
             if !goalBotsSupported { goalPagesSupported = false; goalPagesAsked = false }
             else if !goalPagesAsked {
                 goalPagesAsked = true
@@ -1458,6 +1465,66 @@ final class TasksStore {
         }
     }
 
+    /// Reschedules one or more tasks to `date` (nil clears due date). When `preserveTime` is true, each task with an
+    /// existing due time keeps its hour and minute on the new day.
+    @discardableResult
+    func reschedule(_ ids: [String], to date: Date?, hasTime: Bool = false, preserveTime: Bool = false,
+                    calendar: Calendar = .current) async -> Bool {
+        guard !refuse() else { return false }
+        return await withChildTasks(of: Bool.self) { group in
+            for id in ids {
+                guard let task = task(id) else { continue }
+                let dueValue: JSONValue = date.map { day in
+                    let wire = preserveTime
+                        ? TodoViews.rescheduledDue(for: task, onto: day, preserveTime: true, calendar: calendar)
+                        : TodoDates.wire(day, hasTime: hasTime, calendar: calendar)
+                    return .string(wire)
+                } ?? .null
+                group.addTask { await self.patch(id, ["due": dueValue]) }
+            }
+            var ok = true
+            while let one = await group.next() { ok = ok && one }
+            return ok
+        }
+    }
+
+    /// Updates priority across one or more tasks.
+    @discardableResult
+    func setPriority(_ ids: [String], priority: Int) async -> Bool {
+        guard !refuse(), fieldsSupported else { return false }
+        return await withChildTasks(of: Bool.self) { group in
+            for id in ids where task(id) != nil {
+                group.addTask { await self.patch(id, ["priority": .number(Double(priority))]) }
+            }
+            var ok = true
+            while let one = await group.next() { ok = ok && one }
+            return ok
+        }
+    }
+
+    /// Updates the goal (and optional milestone) across one or more tasks.
+    @discardableResult
+    func setGoal(_ ids: [String], goal: String?, milestone: String? = nil) async -> Bool {
+        guard !refuse(), goalsSupported else { return false }
+        let fields = GoalViews.assign(goal: goal, milestone: milestone, goals: goals)
+        return await withChildTasks(of: Bool.self) { group in
+            for id in ids where task(id) != nil {
+                group.addTask { await self.patch(id, fields) }
+            }
+            var ok = true
+            while let one = await group.next() { ok = ok && one }
+            return ok
+        }
+    }
+
+    /// Duplicates a task (fresh unticked steps, same metadata, new open task).
+    @discardableResult
+    func duplicate(_ id: String) async -> TodoTask? {
+        guard let source = task(id) else { return nil }
+        let body = TodoWire.duplicate(source, fieldsSupported: fieldsSupported, goalsSupported: goalsSupported)
+        return await add(body)
+    }
+
     /// Group By and Sort By (kept with the other Tasks settings on the gateway).
     /// False when the gateway refused it.
     @discardableResult
@@ -1528,6 +1595,32 @@ nonisolated enum TodoWire {
         if let goal {
             body["goal"] = .string(goal)
             if let milestone { body["milestone"] = .string(milestone) }
+        }
+        return body
+    }
+
+    /// Builds a clean `POST /tasks` body cloning `task` as a fresh open task with unticked steps.
+    static func duplicate(_ task: TodoTask, fieldsSupported: Bool, goalsSupported: Bool) -> [String: JSONValue] {
+        let freshSteps = task.steps.map { TodoStep(id: TodoIDs.make(), title: $0.title, who: $0.who, done: false) }
+        var body = newTask(
+            title: task.title,
+            who: task.whoKind,
+            bot: task.helper,
+            due: task.due,
+            repeatRule: task.whoKind == .bot || (task.whoKind == .together && !fieldsSupported) ? nil : task.repeatRule,
+            prep: task.prep,
+            notes: task.notes,
+            steps: freshSteps,
+            source: TodoSource(kind: "app"),
+            goal: goalsSupported ? task.goal : nil,
+            milestone: goalsSupported ? task.milestone : nil
+        )
+        if let section = task.section { body["section"] = .string(section) }
+        if fieldsSupported {
+            if task.priority > 0 { body["priority"] = .number(Double(task.priority)) }
+            if !task.tags.isEmpty { body["tags"] = .array(task.tags.map(JSONValue.string)) }
+            if let starts = task.starts { body["starts"] = .string(starts) }
+            if let alert = task.alert { body["alert"] = .number(Double(alert)) }
         }
         return body
     }

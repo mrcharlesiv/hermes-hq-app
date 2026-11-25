@@ -53,12 +53,13 @@ extension PagesTests {
         XCTAssertTrue(waitUntil(10) { self.patched("t_taxes") { ($0["priority"] as? Int) == 1 } }, "the gateway is told")
         XCTAssertTrue(waitUntil(5) { row.label.contains("High priority") }, row.label)
 
-        // Tags: one field, a comma between them.
+        // Tags: tappable tag picker sheet with existing chips + search/add field.
         app.descendants(matching: .any)["task.tags"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["task.tags.pick.money"].firstMatch.waitForExistence(timeout: 5), "existing tag is selectable")
         let field = app.textFields["task.tags.field"].firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 5), "the tags field")
-        XCTAssertEqual(field.value as? String, "money")
-        field.typeText(", #2026")
+        field.tap()
+        field.typeText("#2026")
         app.buttons["Save"].firstMatch.tap()
         XCTAssertTrue(waitUntil(10) { self.patched("t_taxes") { ($0["tags"] as? [String]) == ["money", "2026"] } }, "the tags are saved")
 

@@ -11,7 +11,7 @@ import UIKit
 final class TasksViewController: UIViewController, UICollectionViewDelegate, UISearchResultsUpdating,
                                   UICollectionViewDragDelegate, UICollectionViewDropDelegate {
     private nonisolated enum Section: Hashable {
-        case offers, keeper, week, group(TodoGroupKind), empty, ideas, skeleton
+        case filters, offers, keeper, week, group(TodoGroupKind), empty, ideas, skeleton
         /// [goals] The Goals view: a group of goal cards, then "+ New Goal" (or what a goal is, with none).
         case goals(GoalGroupKey), goalsFoot
         /// [goals] Step 2: Today's Goals shelf, over everything else in Today.
@@ -21,7 +21,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     /// `found`: a search's Goals group (any status), over its To Do and Done.
     nonisolated enum GoalGroupKey: String, Hashable { case active, someday, achieved, letGo, found }
     private nonisolated enum Item: Hashable {
-        case task(String), skeleton(Int), week, viewEmpty(String)
+        case filters, task(String), skeleton(Int), week, viewEmpty(String)
         /// [goals] A goal's card (its id), "+ New Goal", and the view with no goals.
         case goal(String), newGoal, goalsEmpty
         /// [goals] Step 2: the shelf (its heading and cards, one cell).
@@ -57,6 +57,13 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     private var goalOfferKept: String?
     /// Upcoming's week strip.
     private var week: [TodoWeekStrip.Day] = []
+    /// How many weeks forward/back Upcoming's strip is showing (0 = week starting today).
+    private var weekOffset = 0
+    /// Month/year title over Upcoming's strip ("November 2026").
+    private var weekTitle = ""
+    /// Active Priority / Tag filters from the Filter menu (nil = Any).
+    private var priorityFilter: Int?
+    private var tagFilter: String?
     /// The day picked on it ("2026-11-14"): the list holds that day alone. nil: every coming day.
     private var pickedDay: String?
     private var selecting = false
@@ -130,6 +137,8 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         return item
     }()
     private lazy var selectMoveItem: UIBarButtonItem = makeSelectMoveItem()
+    private lazy var selectScheduleItem: UIBarButtonItem = makeSelectScheduleItem()
+    private lazy var selectPriorityItem: UIBarButtonItem = makeSelectPriorityItem()
 
     private func makeSelectMoveItem() -> UIBarButtonItem {
         let menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] done in
@@ -138,6 +147,28 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         let item = UIBarButtonItem(title: "Move To", image: UIImage(systemName: "folder"), menu: menu)
         item.accessibilityIdentifier = "tasks.select.move"
         item.accessibilityLabel = "Move To"
+        DesktopBars.markThin(item)
+        return item
+    }
+
+    private func makeSelectScheduleItem() -> UIBarButtonItem {
+        let menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] done in
+            MainActor.assumeIsolated { done(self?.selectionScheduleChoices() ?? []) }
+        }])
+        let item = UIBarButtonItem(title: "Schedule", image: UIImage(systemName: "calendar"), menu: menu)
+        item.accessibilityIdentifier = "tasks.select.schedule"
+        item.accessibilityLabel = "Schedule"
+        DesktopBars.markThin(item)
+        return item
+    }
+
+    private func makeSelectPriorityItem() -> UIBarButtonItem {
+        let menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] done in
+            MainActor.assumeIsolated { done(self?.selectionPriorityChoices() ?? []) }
+        }])
+        let item = UIBarButtonItem(title: "Priority", image: UIImage(systemName: "flag"), menu: menu)
+        item.accessibilityIdentifier = "tasks.select.priority"
+        item.accessibilityLabel = "Priority"
         DesktopBars.markThin(item)
         return item
     }
@@ -468,10 +499,30 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
             }.margins(.all, 0)
             cell.backgroundConfiguration = .clear()
         }
+        let filtersCell = UICollectionView.CellRegistration<SoftCardListCell, Item> { [weak self] cell, _, _ in
+            guard let self else { return }
+            cell.contentConfiguration = UIHostingConfiguration {
+                TaskActiveFiltersBar(
+                    priority: self.priorityFilter,
+                    tag: self.tagFilter,
+                    clearPriority: { [weak self] in PagesHaptics.selection(); self?.priorityFilter = nil; self?.reload(animated: true) },
+                    clearTag: { [weak self] in PagesHaptics.selection(); self?.tagFilter = nil; self?.reload(animated: true) }
+                )
+            }.margins(.all, 0)
+            cell.backgroundConfiguration = .clear()
+        }
         let weekCell = UICollectionView.CellRegistration<SoftCardListCell, Item> { [weak self] cell, _, _ in
             guard let self else { return }
             cell.contentConfiguration = UIHostingConfiguration {
-                TodoWeekStrip(days: self.week) { [weak self] key in self?.goToDay(key) }
+                TodoWeekStrip(
+                    title: self.weekTitle,
+                    showTodayButton: self.weekOffset != 0 || self.pickedDay != nil,
+                    days: self.week,
+                    pick: { [weak self] key in self?.goToDay(key) },
+                    stepWeek: { [weak self] delta in self?.stepWeek(delta) },
+                    goToday: { [weak self] in self?.jumpToThisWeek() },
+                    onDropTask: { [weak self] taskID, dayKey in self?.rescheduleDroppedTask(taskID, onto: dayKey) ?? false }
+                )
             }.margins(.all, 0)
             cell.backgroundConfiguration = .clear()
         }
@@ -557,6 +608,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         }
         dataSource = UICollectionViewDiffableDataSource<Section, Item>(collectionView: collectionView) { [weak self] cv, path, item in
             switch item {
+            case .filters: return cv.dequeueConfiguredReusableCell(using: filtersCell, for: path, item: item)
             case .ideaHead: return cv.dequeueConfiguredReusableCell(using: ideaHeadCell, for: path, item: item)
             case .idea(let id): return cv.dequeueConfiguredReusableCell(using: ideaRowCell, for: path, item: id)
             case .ideaNote(let note): return cv.dequeueConfiguredReusableCell(using: ideaNoteCell, for: path, item: note)
@@ -640,6 +692,15 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         var view = TodoGroupHeaderView(title: words.title, detail: words.detail, count: count)
         view.onCard = BackdropCards.on(self)
         switch kind {
+        case .overdue:
+            if !store.readOnlyGateway, !selecting {
+                view.reschedule = (
+                    today: { [weak self] in self?.rescheduleOverdue(to: Date(), hasTime: false) },
+                    tomorrow: { [weak self] in self?.rescheduleOverdue(to: Calendar.current.date(byAdding: .day, value: 1, to: Date()), hasTime: false) },
+                    nextWeek: { [weak self] in self?.rescheduleOverdue(to: Calendar.current.date(byAdding: .day, value: 7, to: Date()), hasTime: false) },
+                    pick: { [weak self] in self?.pickRescheduleOverdue() }
+                )
+            }
         case .bot(let profile):
             view.face = (profile, bots.first { $0.id == profile }?.head)
         case .stale:
@@ -672,7 +733,9 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         let now = Date()
         let scoped = scope.effective(bots: bots)
         let all = store.tasks
-        let visible = TodoSections.filtered(all, scope: scoped, query: query, goals: store.goals)
+        let activePriority = store.fieldsSupported ? priorityFilter : nil
+        let activeTag = store.fieldsSupported ? tagFilter : nil
+        let visible = TodoSections.filtered(all, scope: scoped, query: query, goals: store.goals, priority: activePriority, tag: activeTag)
         let heads = Dictionary(bots.map { ($0.id, $0.head) }, uniquingKeysWith: { first, _ in first })
         let listShown = store.hasList && !store.needsAddOn
         settleView(tasks: all)
@@ -687,7 +750,12 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
                                     sort: store.settings.sort, paused: GoalViews.paused(store.goals))
         }
         // Upcoming's week: its dots from every coming day (and today's own tasks), then the picked day alone.
-        week = current == .upcoming && !searching ? weekDays(made, visible: visible, now: now) : []
+        if current == .upcoming && !searching {
+            week = weekDays(made, visible: visible, now: now)
+        } else {
+            week = []
+            weekTitle = ""
+        }
         if pickedDay != nil, !week.contains(where: { $0.key == pickedDay }) { pickedDay = nil }   // another view, or the day has passed
         if let pickedDay {
             made = TodoViews.dayGroups(visible, day: pickedDay, sections: store.sections, bots: bots.map(\.id), now: now,
@@ -744,6 +812,10 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         var ideasShown = false
         var goalsFound = false
         if listShown {
+            if (activePriority != nil || activeTag != nil), !searching {
+                snapshot.appendSections([.filters])
+                snapshot.appendItems([.filters], toSection: .filters)
+            }
             if !waiting.isEmpty || goalOffer != nil {
                 snapshot.appendSections([.offers])
                 snapshot.appendItems(waiting.map { .offer($0.id) } + (goalOffer.map { [.goalOffer($0.id)] } ?? []), toSection: .offers)
@@ -813,7 +885,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         // The week's dots, who looks (and when) and each idea's card follow every read.
         changed += snapshot.itemIdentifiers.filter { item in
             switch item {
-            case .week, .ideaHead, .more: return true
+            case .filters, .week, .ideaHead, .more: return true
             case .offer(let id): return previousOffers[id] != nil && previousOffers[id] != offerCards[id]
             case .goalOffer(let id): return previousGoalOffers[id] != nil && previousGoalOffers[id] != goalOfferCards[id]
             case .idea(let id): return previousIdeaCards[id] != nil && previousIdeaCards[id] != ideaCards[id]
@@ -876,12 +948,13 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     func show(_ view: TodoView) {
         guard view != current else {
             // The lit pill again: back to the top, as a tab's second tap (and Upcoming to every day again).
-            if pickedDay != nil { pickedDay = nil; if isViewLoaded { reload(animated: false) } }
+            if pickedDay != nil || weekOffset != 0 { pickedDay = nil; weekOffset = 0; if isViewLoaded { reload(animated: false) } }
             if isViewLoaded { collectionView.setContentOffset(CGPoint(x: 0, y: -collectionView.adjustedContentInset.top), animated: true) }
             return
         }
         current = view
         pickedDay = nil
+        weekOffset = 0
         openIdea = nil
         goalOfferKept = nil
         guard isViewLoaded else { return }
@@ -926,20 +999,57 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         return scoped == PagesScope.me ? "Nothing of your own here." : "Nothing with \(botName(scoped)) here."
     }
 
-    /// The next seven days, today first; a day with tasks carries a dot. A tap on a day shows that day alone.
+    /// Seven days starting at `today + weekOffset * 7`; a day with tasks carries a dot. A tap on a day shows that day alone.
     private func weekDays(_ made: [TodoGroup], visible: [TodoTask], now: Date) -> [TodoWeekStrip.Day] {
         let calendar = Calendar.current
         var busy = Set(made.compactMap { group -> String? in if case .day(let key) = group.kind { return key } else { return nil } })
         // Today's own tasks aren't "coming up", but its day on the strip still says it has some.
-        let todayKey = TodoViews.dayKey(calendar.startOfDay(for: now), calendar: calendar)
+        let todayStart = calendar.startOfDay(for: now)
+        let todayKey = TodoViews.dayKey(todayStart, calendar: calendar)
         if !TodoViews.dayGroups(visible, day: todayKey, sections: store.sections, bots: bots.map(\.id), now: now).isEmpty { busy.insert(todayKey) }
-        return (0..<7).compactMap { offset in
-            guard let date = calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: now)) else { return nil }
+        let start = calendar.date(byAdding: .day, value: weekOffset * 7, to: todayStart) ?? todayStart
+        let dates = (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
+        weekTitle = TodoViews.weekRangeTitle(dates, calendar: calendar)
+        return dates.map { date in
             let key = TodoViews.dayKey(date, calendar: calendar)
             return TodoWeekStrip.Day(key: key, weekday: TodoDates.format(date, template: "EEE", calendar: calendar),
                                      number: "\(calendar.component(.day, from: date))",
-                                     today: offset == 0, busy: busy.contains(key), picked: key == pickedDay)
+                                     today: key == todayKey, busy: busy.contains(key), picked: key == pickedDay)
         }
+    }
+
+    private func stepWeek(_ delta: Int) {
+        let next = max(0, min(52, weekOffset + delta))
+        guard next != weekOffset else { return }
+        PagesHaptics.selection()
+        weekOffset = next
+        pickedDay = nil
+        reload(animated: false)
+    }
+
+    private func jumpToThisWeek() {
+        PagesHaptics.selection()
+        weekOffset = 0
+        pickedDay = nil
+        reload(animated: false)
+        collectionView.setContentOffset(CGPoint(x: 0, y: -collectionView.adjustedContentInset.top), animated: true)
+    }
+
+    @discardableResult
+    private func rescheduleDroppedTask(_ taskID: String, onto dayKey: String) -> Bool {
+        guard !store.readOnlyGateway, let task = store.task(taskID), !task.isDone,
+              let day = TodoDates.day(dayKey) else { return false }
+        PagesHaptics.success()
+        let heading = TodoViews.dayHeading(dayKey, now: Date())
+        let label = heading.detail ?? heading.title
+        Task {
+            if await store.reschedule([taskID], to: day, preserveTime: true) {
+                notices.show("Scheduled for \(label)")
+            } else {
+                PagesHaptics.error()
+            }
+        }
+        return true
     }
 
     /// A day on the week: the list holds that day alone (every day answers, with tasks or without; the days with
@@ -1105,11 +1215,42 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     // MARK: Actions
 
     private func menuItems() -> [UIMenuElement] {
+        var filters: [UIMenuElement] = []
+        if store.fieldsSupported {
+            let priSubtitle = priorityFilter.map { TodoViews.priorityWord($0) }
+            let priChoices: [(Int?, String)] = [(nil, "Any Priority"), (1, "High"), (2, "Medium"), (3, "Low")]
+            filters.append(UIMenu(title: "Priority", subtitle: priSubtitle, image: UIImage(systemName: "flag"),
+                                  options: .singleSelection, children: priChoices.map { level, title in
+                UIAction(title: title, state: priorityFilter == level ? .on : .off) { [weak self] _ in
+                    PagesHaptics.selection()
+                    self?.priorityFilter = level
+                    self?.reload(animated: true)
+                }
+            }))
+            let tags = TodoViews.allTags(in: store.tasks)
+            if !tags.isEmpty || tagFilter != nil {
+                var tagActions = [UIAction(title: "All Tags", state: tagFilter == nil ? .on : .off) { [weak self] _ in
+                    PagesHaptics.selection()
+                    self?.tagFilter = nil
+                    self?.reload(animated: true)
+                }]
+                tagActions += tags.map { tag in
+                    UIAction(title: "#\(tag)", state: tagFilter?.caseInsensitiveCompare(tag) == .orderedSame ? .on : .off) { [weak self] _ in
+                        PagesHaptics.selection()
+                        self?.tagFilter = tag
+                        self?.reload(animated: true)
+                    }
+                }
+                filters.append(UIMenu(title: "Tag", subtitle: tagFilter.map { "#\($0)" }, image: UIImage(systemName: "tag"),
+                                      options: .singleSelection, children: tagActions))
+            }
+        }
         var organize: [UIMenuElement] = []
-        if currentList != nil {
-            // A list is in your order until you say otherwise.
+        if currentList != nil || current == .today || current == .inbox {
+            // A list is in your order until you say otherwise; Today & Inbox also accept Due/Priority/Added.
             let sort = store.settings.sort
-            var sorts: [(String, String, String)] = [("smart", "My Order", "hand.draw"), ("due", "Due Date", "calendar"), ("added", "Date Added", "clock")]
+            let defaultTitle = currentList != nil ? "My Order" : "Default"
+            var sorts: [(String, String, String)] = [("smart", defaultTitle, "hand.draw"), ("due", "Due Date", "calendar"), ("added", "Date Added", "clock")]
             // [tasks-first] By priority, on an add-on that keeps one (0.9.53).
             if store.fieldsSupported || sort == "priority" { sorts.insert(("priority", "Priority", "flag"), at: 2) }
             organize.append(UIMenu(title: "Sort By", subtitle: sorts.first { $0.0 == sort }?.1, image: UIImage(systemName: "arrow.up.arrow.down"),
@@ -1122,15 +1263,216 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         organize.append(UIAction(title: "Select Tasks", image: UIImage(systemName: "checkmark.circle")) { [weak self] _ in
             self?.setSelecting(true)
         })
-        return [
-            UIMenu(options: .displayInline, children: organize),
-            UIMenu(options: .displayInline, children: [
-                UIAction(title: "Import from Reminders…", image: UIImage(systemName: "square.and.arrow.down")) { [weak self] _ in
-                    self?.importReminders()
-                },
-            ]),
-            UIAction(title: "Tasks Settings…", image: UIImage(systemName: "gearshape")) { [weak self] _ in self?.openSettings() },
+        organize.append(UIAction(title: "Completed Logbook…", image: UIImage(systemName: "book.closed")) { [weak self] _ in
+            self?.openLogbook()
+        })
+        var out: [UIMenuElement] = []
+        if !filters.isEmpty { out.append(UIMenu(options: .displayInline, children: filters)) }
+        out.append(UIMenu(options: .displayInline, children: organize))
+        out.append(UIMenu(options: .displayInline, children: [
+            UIAction(title: "Import from Reminders…", image: UIImage(systemName: "square.and.arrow.down")) { [weak self] _ in
+                self?.importReminders()
+            },
+        ]))
+        out.append(UIAction(title: "Tasks Settings…", image: UIImage(systemName: "gearshape")) { [weak self] _ in self?.openSettings() })
+        return out
+    }
+
+    private func openLogbook() {
+        PagesHaptics.selection()
+        present(TaskLogbookSheet.make(store: store, bots: bots) { [weak self] id in
+            self?.openTask(id)
+        }, animated: true)
+    }
+
+    private func rescheduleOverdue(to date: Date?, hasTime: Bool) {
+        guard !store.readOnlyGateway, let date else { return }
+        let ids = groups.first { $0.0 == .overdue }?.1 ?? []
+        guard !ids.isEmpty else { return }
+        PagesHaptics.selection()
+        let label = TodoWords.day(date, now: Date())
+        Task {
+            if await store.reschedule(ids, to: date, hasTime: hasTime, preserveTime: !hasTime) {
+                PagesHaptics.success()
+                notices.show("Rescheduled \(ids.count) \(ids.count == 1 ? "task" : "tasks") to \(label)")
+            } else {
+                PagesHaptics.error()
+            }
+        }
+    }
+
+    private func pickRescheduleOverdue() {
+        let ids = groups.first { $0.0 == .overdue }?.1 ?? []
+        guard !ids.isEmpty else { return }
+        PagesHaptics.selection()
+        let picker = TodoDatePicker.make(date: Date(), hasTime: false, rings: true, title: "Reschedule Overdue") { [weak self] date, hasTime in
+            self?.rescheduleOverdue(to: date, hasTime: hasTime)
+        }
+        present(picker, animated: true)
+    }
+
+    private func scheduleTasks(_ ids: [String], to date: Date?, hasTime: Bool = false, preserveTime: Bool = false, after: (() -> Void)? = nil) {
+        guard !ids.isEmpty, !store.readOnlyGateway else { return }
+        PagesHaptics.selection()
+        Task {
+            let ok = await store.reschedule(ids, to: date, hasTime: hasTime, preserveTime: preserveTime)
+            if ok {
+                PagesHaptics.success()
+                if let date {
+                    let label = TodoWords.day(date, now: Date())
+                    notices.show(ids.count == 1 ? "Scheduled for \(label)" : "Scheduled \(ids.count) tasks for \(label)")
+                } else {
+                    notices.show(ids.count == 1 ? "Cleared due date" : "Cleared due dates")
+                }
+            } else {
+                PagesHaptics.error()
+            }
+            after?()
+        }
+    }
+
+    private func pickSchedule(for ids: [String], after: (() -> Void)? = nil) {
+        guard !ids.isEmpty else { return }
+        let existing = ids.count == 1 ? store.task(ids[0]).flatMap { TodoDates.due($0.due) } : nil
+        PagesHaptics.selection()
+        let picker = TodoDatePicker.make(date: existing?.date, hasTime: existing?.hasTime ?? false, rings: true) { [weak self] date, hasTime in
+            self?.scheduleTasks(ids, to: date, hasTime: hasTime, preserveTime: false, after: after)
+        }
+        present(picker, animated: true)
+    }
+
+    private func scheduleChoices(for ids: [String], after: (() -> Void)? = nil) -> [UIMenuElement] {
+        guard !ids.isEmpty else { return [] }
+        let now = Date()
+        var items: [UIMenuElement] = [
+            UIAction(title: "Today", image: UIImage(systemName: "sun.max")) { [weak self] _ in
+                self?.scheduleTasks(ids, to: now, preserveTime: true, after: after)
+            },
+            UIAction(title: "Tomorrow", image: UIImage(systemName: "sunrise")) { [weak self] _ in
+                self?.scheduleTasks(ids, to: Calendar.current.date(byAdding: .day, value: 1, to: now), preserveTime: true, after: after)
+            },
+            UIAction(title: "Next Week", image: UIImage(systemName: "calendar")) { [weak self] _ in
+                self?.scheduleTasks(ids, to: Calendar.current.date(byAdding: .day, value: 7, to: now), preserveTime: true, after: after)
+            },
+            UIAction(title: "Choose Date…", image: UIImage(systemName: "calendar.badge.plus")) { [weak self] _ in
+                self?.pickSchedule(for: ids, after: after)
+            },
         ]
+        if ids.contains(where: { store.task($0)?.due != nil }) {
+            items.append(UIAction(title: "No Date", image: UIImage(systemName: "calendar.badge.minus"), attributes: .destructive) { [weak self] _ in
+                self?.scheduleTasks(ids, to: nil, after: after)
+            })
+        }
+        return items
+    }
+
+    private func priorityChoices(for ids: [String], after: (() -> Void)? = nil) -> [UIMenuElement] {
+        guard !ids.isEmpty, store.fieldsSupported else { return [] }
+        let current = Set(ids.compactMap { store.task($0)?.priority })
+        var items: [UIMenuElement] = [1, 2, 3].map { level in
+            UIAction(title: TodoViews.priorityWord(level), image: UIImage(systemName: "flag.fill"), state: current == [level] ? .on : .off) { [weak self] _ in
+                guard let self else { return }
+                PagesHaptics.selection()
+                Task {
+                    if await !self.store.setPriority(ids, priority: level) { PagesHaptics.error() }
+                    after?()
+                }
+            }
+        }
+        if current != [0] {
+            items.append(UIAction(title: "No Priority", attributes: .destructive) { [weak self] _ in
+                guard let self else { return }
+                PagesHaptics.selection()
+                Task {
+                    if await !self.store.setPriority(ids, priority: 0) { PagesHaptics.error() }
+                    after?()
+                }
+            })
+        }
+        return items
+    }
+
+    private func assignChoices(for task: TodoTask) -> [UIMenuElement] {
+        let choices = PagesNames.scopeChoices(bots)
+        guard !choices.isEmpty else { return [] }
+        let justMe = UIAction(title: "Just Me", image: UIImage(systemName: "person"), state: task.whoKind == .me ? .on : .off) { [weak self] _ in
+            self?.assignTask(task.id, who: .me, bot: nil)
+        }
+        let together = UIMenu(title: "With Me", children: choices.map { bot in
+            UIAction(title: bot.name, state: task.whoKind == .together && task.helper == bot.id ? .on : .off) { [weak self] _ in
+                self?.assignTask(task.id, who: .together, bot: bot.id)
+            }
+        })
+        let solo = UIMenu(title: "By Itself", children: choices.map { bot in
+            UIAction(title: bot.name, state: task.whoKind == .bot && task.helper == bot.id ? .on : .off) { [weak self] _ in
+                self?.assignTask(task.id, who: .bot, bot: bot.id)
+            }
+        })
+        return [justMe, together, solo]
+    }
+
+    private func assignTask(_ id: String, who: TodoWho, bot: String?) {
+        guard !store.readOnlyGateway, let task = store.task(id) else { return }
+        let helper = who == .me ? nil : (bot ?? "default")
+        guard task.whoKind != who || task.helper != helper else { return }
+        PagesHaptics.selection()
+        var fields: [String: JSONValue] = ["who": .string(who.rawValue), "bot": helper.map(JSONValue.string) ?? .null]
+        if who == .bot || (who == .together && !store.fieldsSupported) { fields["repeat"] = .null }
+        if who == .me { fields["prep"] = .bool(false) }
+        if let steps = TodoEdits.stepsForJustMe(who, steps: task.steps) { fields["steps"] = TodoWire.steps(steps) }
+        let switchedBot = helper != nil && task.helper != helper
+        let existingLink = TaskChatLinks.link(task, account: context.account)
+        let replacingChat = switchedBot && existingLink != nil && existingLink?.profile != helper
+        if replacingChat { fields["chat"] = .object([:]) }
+        let asks = switchedBot && (existingLink == nil || replacingChat)
+        let words = who == .together ? TodoWords.helpQuestion : TaskNow.startRequest
+        Task {
+            guard await store.patch(id, fields) else { PagesHaptics.error(); return }
+            if replacingChat { TaskChatLinks.clear(task: id, account: context.account) }
+            if asks { openTask(id, asking: words) }
+        }
+    }
+
+    private func duplicateTask(_ id: String) {
+        guard !store.readOnlyGateway else { notices.show(JobsStore.readOnlyNotice); return }
+        PagesHaptics.selection()
+        Task {
+            if let copy = await store.duplicate(id) {
+                PagesHaptics.success()
+                notices.show("Duplicated “\(copy.title)”")
+            } else {
+                PagesHaptics.error()
+            }
+        }
+    }
+
+    private func showScheduleSheet(for id: String, source: UIView?) {
+        guard !store.readOnlyGateway, let task = store.task(id) else { return }
+        let sheet = UIAlertController(title: "Schedule “\(task.title)”", message: nil, preferredStyle: .actionSheet)
+        let now = Date()
+        sheet.addAction(UIAlertAction(title: "Today", style: .default) { [weak self] _ in
+            self?.scheduleTasks([id], to: now, preserveTime: true)
+        })
+        sheet.addAction(UIAlertAction(title: "Tomorrow", style: .default) { [weak self] _ in
+            self?.scheduleTasks([id], to: Calendar.current.date(byAdding: .day, value: 1, to: now), preserveTime: true)
+        })
+        sheet.addAction(UIAlertAction(title: "Next Week", style: .default) { [weak self] _ in
+            self?.scheduleTasks([id], to: Calendar.current.date(byAdding: .day, value: 7, to: now), preserveTime: true)
+        })
+        sheet.addAction(UIAlertAction(title: "Choose Date…", style: .default) { [weak self] _ in
+            self?.pickSchedule(for: [id])
+        })
+        if task.due != nil {
+            sheet.addAction(UIAlertAction(title: "No Date", style: .destructive) { [weak self] _ in
+                self?.scheduleTasks([id], to: nil)
+            })
+        }
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        if let popover = sheet.popoverPresentationController {
+            popover.sourceView = source ?? view
+            popover.sourceRect = source?.bounds ?? CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1)
+        }
+        present(sheet, animated: true)
     }
 
     private func toggleDone(_ id: String) {
@@ -1752,6 +2094,14 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         moveChoices(for: selectedIDs()) { [weak self] in self?.setSelecting(false) }
     }
 
+    private func selectionScheduleChoices() -> [UIMenuElement] {
+        scheduleChoices(for: selectedIDs()) { [weak self] in self?.setSelecting(false) }
+    }
+
+    private func selectionPriorityChoices() -> [UIMenuElement] {
+        priorityChoices(for: selectedIDs()) { [weak self] in self?.setSelecting(false) }
+    }
+
     private func selectedIDs() -> [String] { picked.filter { store.task($0) != nil } }
 
     private func togglePicked(_ id: String) {
@@ -1760,11 +2110,13 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         reload(animated: false)
     }
 
-    /// Select's bar: Move To, Mark Done, Delete, then Done (as the page's own three buttons, then Done).
+    /// Select's bar: Schedule, Move To, Mark Done, Delete, then Done (plus Priority when supported).
     private func updateSelectionBar() {
         let count = selectedIDs().count
-        for item in [selectMoveItem, selectDoneItem, selectDeleteItem] { item.isEnabled = count > 0 && !store.readOnlyGateway }
-        let items = [endSelectItem, selectDeleteItem, selectDoneItem, selectMoveItem]
+        let enabled = count > 0 && !store.readOnlyGateway
+        for item in [selectScheduleItem, selectMoveItem, selectPriorityItem, selectDoneItem, selectDeleteItem] { item.isEnabled = enabled }
+        var items = [endSelectItem, selectDeleteItem, selectDoneItem, selectMoveItem, selectScheduleItem]
+        if store.fieldsSupported { items.append(selectPriorityItem) }
         if navigationItem.rightBarButtonItems ?? [] != items { navigationItem.rightBarButtonItems = items }
     }
 
@@ -1808,18 +2160,25 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         present(sheet, animated: true)
     }
 
-    // MARK: Drag a task up or down its list
+    // MARK: Drag a task up or down its list, in Today, or onto a day in Upcoming
 
     /// A list's open tasks can be put in your own order by hand only when Sort By is My Order (`"smart"`).
     private var canArrange: Bool {
         currentList != nil && store.settings.sort == "smart" && !searching && !selecting && !store.readOnlyGateway
     }
 
+    /// Today's open tasks can be dragged to reorder; Upcoming's open tasks can be dragged onto any day pill or day section.
+    private var canDragTask: Bool {
+        guard !searching, !selecting, !store.readOnlyGateway else { return false }
+        return canArrange || current == .today || current == .upcoming
+    }
+
     func collectionView(_ collectionView: UICollectionView, itemsForBeginning session: UIDragSession,
                         at indexPath: IndexPath) -> [UIDragItem] {
         if let item = goalDragItem(at: indexPath) { return [item] }   // [goals] active goals, in your order
-        guard canArrange, let id = taskID(at: indexPath), let task = store.task(id), !task.isDone else { return [] }
-        let item = UIDragItem(itemProvider: NSItemProvider(object: task.title as NSString))
+        guard canDragTask, let id = taskID(at: indexPath), let task = store.task(id), !task.isDone else { return [] }
+        // Carry "hq-task:<id>" in NSItemProvider so SwiftUI `.dropDestination(for: String.self)` on Upcoming's week strip receives it.
+        let item = UIDragItem(itemProvider: NSItemProvider(object: ("hq-task:" + id) as NSString))
         item.localObject = id
         return [item]
     }
@@ -1832,10 +2191,19 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         return parameters
     }
 
-    /// Where a drop at `path` lands among the list's open tasks.
-    private func dropIndex(_ path: IndexPath?) -> Int? {
-        guard canArrange, let path, dataSource.sectionIdentifier(for: path.section) == .group(.open) else { return nil }
-        return path.item
+    /// Where a drop at `path` lands among open tasks (list or Today).
+    private func dropIndex(_ path: IndexPath?) -> (kind: TodoGroupKind, index: Int)? {
+        guard let path, case .group(let kind)? = dataSource.sectionIdentifier(for: path.section) else { return nil }
+        if canArrange, kind == .open { return (.open, path.item) }
+        if current == .today, !searching, !selecting, !store.readOnlyGateway, kind == .today { return (.today, path.item) }
+        return nil
+    }
+
+    /// Day key when dropping a task onto a day section in Upcoming.
+    private func upcomingDropDay(_ path: IndexPath?) -> String? {
+        guard current == .upcoming, !searching, !selecting, !store.readOnlyGateway,
+              let path, case .group(.day(let key))? = dataSource.sectionIdentifier(for: path.section) else { return nil }
+        return key
     }
 
     func collectionView(_ collectionView: UICollectionView, canHandle session: UIDropSession) -> Bool {
@@ -1846,15 +2214,24 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     func collectionView(_ collectionView: UICollectionView, dropSessionDidUpdate session: UIDropSession,
                         withDestinationIndexPath destinationIndexPath: IndexPath?) -> UICollectionViewDropProposal {
         if session.localDragSession?.items.first?.localObject is GoalDrag { return goalDropProposal(destinationIndexPath) }
-        guard session.localDragSession != nil, let index = dropIndex(destinationIndexPath) else {
-            return UICollectionViewDropProposal(operation: .forbidden)
+        guard session.localDragSession != nil else { return UICollectionViewDropProposal(operation: .forbidden) }
+        if let target = dropIndex(destinationIndexPath) {
+            let place = "\(target.kind):\(target.index)"
+            if place != dropPlace {
+                if dropPlace != nil { Haptics.play(.selection) }   // the first place is where the task was picked up
+                dropPlace = place
+            }
+            return UICollectionViewDropProposal(operation: .move, intent: .insertAtDestinationIndexPath)
         }
-        let place = "\(index)"
-        if place != dropPlace {
-            if dropPlace != nil { Haptics.play(.selection) }   // the first place is where the task was picked up
-            dropPlace = place
+        if let dayKey = upcomingDropDay(destinationIndexPath) {
+            let place = "day:\(dayKey)"
+            if place != dropPlace {
+                if dropPlace != nil { Haptics.play(.selection) }
+                dropPlace = place
+            }
+            return UICollectionViewDropProposal(operation: .move, intent: .insertIntoDestinationIndexPath)
         }
-        return UICollectionViewDropProposal(operation: .move, intent: .insertAtDestinationIndexPath)
+        return UICollectionViewDropProposal(operation: .forbidden)
     }
 
     func collectionView(_ collectionView: UICollectionView, dropSessionDidExit session: UIDropSession) { dropPlace = nil }
@@ -1862,10 +2239,14 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
 
     func collectionView(_ collectionView: UICollectionView, performDropWith coordinator: UICollectionViewDropCoordinator) {
         if coordinator.items.first?.dragItem.localObject is GoalDrag { dropGoal(coordinator); return }
-        guard let drop = coordinator.items.first, let id = drop.dragItem.localObject as? String, let list = currentList,
-              let target = dropIndex(coordinator.destinationIndexPath) else { return }
-        var ids = groups.first { $0.0 == .open }?.1 ?? []
-        var index = min(target, ids.count)
+        guard let drop = coordinator.items.first, let id = drop.dragItem.localObject as? String else { return }
+        if let dayKey = upcomingDropDay(coordinator.destinationIndexPath) {
+            rescheduleDroppedTask(id, onto: dayKey)
+            return
+        }
+        guard let target = dropIndex(coordinator.destinationIndexPath) else { return }
+        var ids = groups.first { $0.0 == target.kind }?.1 ?? []
+        var index = min(target.index, ids.count)
         if let from = ids.firstIndex(of: id) {
             ids.remove(at: from)
             if from < index { index -= 1 }
@@ -1876,10 +2257,19 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         let position = TodoSections.position(between: above, and: below)
         if let path = coordinator.destinationIndexPath { coordinator.drop(drop.dragItem, toItemAt: path) }
         Haptics.play(.soft)   // the drop lands; the places crossed on the way ticked
-        if store.settings.sort != "smart" {
-            notices.show("Sorted by \(store.settings.sort == "due" ? "Due Date" : (store.settings.sort == "priority" ? "Priority" : "Date Added")). Choose My Order in Sort By to arrange tasks by hand.", seconds: 4)
+        if let list = currentList {
+            if store.settings.sort != "smart" {
+                notices.show("Sorted by \(store.settings.sort == "due" ? "Due Date" : (store.settings.sort == "priority" ? "Priority" : "Date Added")). Choose My Order in Sort By to arrange tasks by hand.", seconds: 4)
+            }
+            Task { if await !store.move([id], to: list, position: position) { PagesHaptics.error() } }
+        } else if target.kind == .today {
+            var patch: [String: JSONValue] = ["position": .number(position)]
+            let wasOverdue = groups.first { $0.0 == .overdue }?.1.contains(id) == true
+            if wasOverdue, let task = store.task(id) {
+                patch["due"] = .string(TodoViews.rescheduledDue(for: task, onto: Date(), preserveTime: true))
+            }
+            Task { if await !store.patch(id, patch) { PagesHaptics.error() } }
         }
-        Task { if await !store.move([id], to: list, position: position) { PagesHaptics.error() } }
     }
 
     // MARK: [goals] The Goals view (docs/goals.md; App/Pages/Goals)
@@ -2190,14 +2580,33 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
             let keep = UIAction(title: "Keep", image: UIImage(systemName: "pin")) { [weak self] _ in self?.keep(id) }
             // [goals] Add to Goal, beside Move To (docs/goals.md "A task in a goal").
             let goalRow: [UIMenuElement] = GoalChoices.menu(for: id, store: self.store) { [weak self] goal in self?.openGoal(goal) }.map { [$0] } ?? []
+            var triage: [UIMenuElement] = [
+                UIMenu(title: "Schedule", subtitle: task.due.flatMap { _ in TodoWords.dueTile(task, now: Date()) },
+                       image: UIImage(systemName: "calendar"), children: self.scheduleChoices(for: [id])),
+            ]
+            if self.store.fieldsSupported {
+                triage.append(UIMenu(title: "Priority", subtitle: task.priority > 0 ? TodoViews.priorityWord(task.priority) : nil,
+                                     image: UIImage(systemName: "flag"), children: self.priorityChoices(for: [id])))
+            }
+            let assignItems = self.assignChoices(for: task)
+            if !assignItems.isEmpty {
+                triage.append(UIMenu(title: "Assign", subtitle: TodoViews.who(task, botName: self.botName),
+                                     image: UIImage(systemName: "person.2"), children: assignItems))
+            }
+            triage.append(UIMenu(title: "Move To", subtitle: self.listName(task.section),
+                                 image: UIImage(systemName: "folder"), children: self.moveChoices(for: [id])))
+            triage += goalRow
             return UIMenu(children: [
                 UIMenu(options: .displayInline, children: (stale ? [keep] : []) + [
                     UIAction(title: "Open Task", image: UIImage(systemName: "arrow.up.forward.square")) { [weak self] _ in self?.openTask(id) },
                     UIAction(title: task.isDone ? "Mark Not Done" : "Mark Done",
                              image: UIImage(systemName: task.isDone ? "circle" : "checkmark.circle")) { [weak self] _ in self?.toggleDone(id) },
-                    UIMenu(title: "Move To", subtitle: self.listName(task.section),
-                           image: UIImage(systemName: "folder"), children: self.moveChoices(for: [id])),
-                ] + goalRow + [
+                ]),
+                UIMenu(options: .displayInline, children: triage),
+                UIMenu(options: .displayInline, children: [
+                    UIAction(title: "Duplicate", image: UIImage(systemName: "plus.square.on.square")) { [weak self] _ in
+                        self?.duplicateTask(id)
+                    },
                     UIAction(title: "Select", image: UIImage(systemName: "checkmark.circle.badge.plus")) { [weak self] _ in
                         guard let self else { return }
                         self.setSelecting(true)
@@ -2260,6 +2669,16 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         }
         delete.image = UIImage(systemName: "trash.fill")
         var actions = [delete]
+        if let task = store.task(id), !task.isDone {
+            let schedule = UIContextualAction(style: .normal, title: "Schedule") { [weak self] _, view, finish in
+                guard let self else { finish(false); return }
+                self.showScheduleSheet(for: id, source: self.collectionView.cellForItem(at: path) ?? view)
+                finish(true)
+            }
+            schedule.image = UIImage(systemName: "calendar")
+            schedule.backgroundColor = HQPalette.tint
+            actions.append(schedule)
+        }
         if isStale(path) {
             // "Still Need These?": Keep beside Delete (a full swipe still deletes, as on every row).
             let keep = UIContextualAction(style: .normal, title: "Keep") { [weak self] _, _, finish in

@@ -358,6 +358,8 @@ struct TodoGroupHeaderView: View {
     var fold: (title: String, action: () -> Void)?
     /// [goals] The fold's identifier (Achieved and Let Go fold too).
     var foldID = "tasks.show-done"
+    /// Overdue: 1-tap bulk Reschedule menu (Today, Tomorrow, Next Week, Choose Date…).
+    var reschedule: (today: () -> Void, tomorrow: () -> Void, nextWeek: () -> Void, pick: () -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -367,6 +369,28 @@ struct TodoGroupHeaderView: View {
                 }
                 words
                 Spacer(minLength: 8)
+                if let reschedule {
+                    Menu {
+                        Button("Today", systemImage: "sun.max", action: reschedule.today)
+                        Button("Tomorrow", systemImage: "sunrise", action: reschedule.tomorrow)
+                        Button("Next Week", systemImage: "calendar", action: reschedule.nextWeek)
+                        Button("Choose Date…", systemImage: "calendar.badge.plus", action: reschedule.pick)
+                    } label: {
+                        HStack(spacing: 3) {
+                            Text("Reschedule")
+                            Image(systemName: "chevron.down").font(Font.hq(.caption2).weight(.semibold)).accessibilityHidden(true)
+                        }
+                        .padding(.top, 16).padding(.bottom, 6).padding(.leading, 12)
+                        .contentShape(Rectangle())
+                    }
+                    .font(Font.hq(.subheadline).weight(.medium))
+                    .foregroundStyle(Color.hqTintText)
+                    .buttonStyle(.plain)
+                    .menuIndicator(.hidden)
+                    .padding(.top, -16).padding(.bottom, -6)
+                    .accessibilityLabel("Reschedule Overdue Tasks")
+                    .accessibilityIdentifier("tasks.overdue.reschedule")
+                }
                 if let fold {
                     Button(action: fold.action) {
                         Text(fold.title).padding(.top, 16).padding(.bottom, 6).padding(.leading, 12).contentShape(Rectangle())
@@ -424,7 +448,8 @@ struct TodoGroupHeaderView: View {
     }
 }
 
-/// Upcoming's week: the next seven days, a dot under a day with tasks. A tap on such a day goes to it.
+/// Upcoming's week: seven days at a time, swipeable or stepped week-by-week, with a dot under days that have tasks.
+/// A tap on a day shows that day alone; dropping a task onto a day reschedules it there.
 struct TodoWeekStrip: View {
     struct Day: Hashable {
         var key: String
@@ -436,41 +461,168 @@ struct TodoWeekStrip: View {
         var picked = false
     }
 
+    var title: String = ""
+    var showTodayButton = false
     var days: [Day]
     var pick: (String) -> Void
+    var stepWeek: (Int) -> Void = { _ in }
+    var goToday: () -> Void = {}
+    var onDropTask: (String, String) -> Bool = { _, _ in false }
+    @State private var dropTarget: String?
 
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(days, id: \.key) { day in
-                Button { pick(day.key) } label: {
-                    VStack(spacing: 3) {
-                        Text(day.weekday.uppercased())
-                            .font(Font.hq(.caption2).weight(.semibold))
-                            .foregroundStyle(Color.hqLabel2)
-                        // The picked day is the filled circle; today, while it isn't picked, is the accent's number (as
-                        // Calendar's week). With no day picked the list holds every coming day.
-                        Text(day.number)
-                            .font(Font.hq(.callout).weight(day.today || (day.picked && !DeviceWord.isMac) ? .semibold : .regular)).monospacedDigit()   // [type] Mac: the circle shows the pick
-                            .foregroundStyle(day.picked ? Color.hqOnTint : (day.today ? Color.hqTintText : (day.busy ? Color.hqLabel : Color.hqLabel2)))
-                            .frame(width: HQFont.scaled(32), height: HQFont.scaled(32))
-                            .background { if day.picked { Circle().fill(Color.hqTint) } }
-                        Circle().fill(day.busy ? Color.hqLabel3 : Color.clear).frame(width: 5, height: 5)
+        VStack(spacing: 4) {
+            if !title.isEmpty {
+                HStack(spacing: 8) {
+                    Text(title)
+                        .font(Font.hq(.footnote).weight(.semibold))
+                        .foregroundStyle(Color.hqLabel)
+                        .lineLimit(1)
+                        .accessibilityIdentifier("tasks.week.month")
+                    Spacer(minLength: 8)
+                    if showTodayButton {
+                        Button(action: goToday) {
+                            Text("Today")
+                                .font(Font.hq(.caption).weight(.semibold))
+                                .foregroundStyle(Color.hqTintText)
+                                .padding(.horizontal, 9).padding(.vertical, 3)
+                                .background(Capsule().fill(Color.hqTint.opacity(0.14)))
+                                .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Jump to This Week")
+                        .accessibilityIdentifier("tasks.week.today")
                     }
-                    .frame(maxWidth: .infinity)
-                    .contentShape(Rectangle())
+                    HStack(spacing: 4) {
+                        Button { stepWeek(-1) } label: {
+                            Image(systemName: "chevron.left")
+                                .font(Font.hq(.caption).weight(.semibold))
+                                .foregroundStyle(Color.hqLabel2)
+                                .frame(width: 26, height: 26)
+                                .background(Circle().fill(Color.hqFill3))
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Previous Week")
+                        .accessibilityIdentifier("tasks.week.prev")
+                        Button { stepWeek(1) } label: {
+                            Image(systemName: "chevron.right")
+                                .font(Font.hq(.caption).weight(.semibold))
+                                .foregroundStyle(Color.hqLabel2)
+                                .frame(width: 26, height: 26)
+                                .background(Circle().fill(Color.hqFill3))
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Next Week")
+                        .accessibilityIdentifier("tasks.week.next")
+                    }
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("\(day.weekday) \(day.number)\(day.today ? ", today" : "")")
-                .accessibilityValue(day.busy ? "Has tasks" : "No tasks")
-                .accessibilityAddTraits(day.picked ? .isSelected : [])
-                .accessibilityHint(day.picked ? "Shows every coming day again" : "Shows this day alone")
-                .accessibilityIdentifier("tasks.week.\(day.key)")
+                .padding(.horizontal, 18)
+                .padding(.top, 4)
             }
+            HStack(spacing: 0) {
+                ForEach(days, id: \.key) { day in
+                    let targeted = dropTarget == day.key
+                    Button { pick(day.key) } label: {
+                        VStack(spacing: 3) {
+                            Text(day.weekday.uppercased())
+                                .font(Font.hq(.caption2).weight(.semibold))
+                                .foregroundStyle(targeted ? Color.hqTintText : Color.hqLabel2)
+                            // The picked day is the filled circle; today, while it isn't picked, is the accent's number (as
+                            // Calendar's week). With no day picked the list holds every coming day.
+                            Text(day.number)
+                                .font(Font.hq(.callout).weight(day.today || targeted || (day.picked && !DeviceWord.isMac) ? .semibold : .regular)).monospacedDigit()   // [type] Mac: the circle shows the pick
+                                .foregroundStyle(day.picked ? Color.hqOnTint : (day.today || targeted ? Color.hqTintText : (day.busy ? Color.hqLabel : Color.hqLabel2)))
+                                .frame(width: HQFont.scaled(32), height: HQFont.scaled(32))
+                                .background {
+                                    if day.picked {
+                                        Circle().fill(Color.hqTint)
+                                    } else if targeted {
+                                        Circle().fill(Color.hqTint.opacity(0.18))
+                                            .overlay { Circle().strokeBorder(Color.hqTint, style: StrokeStyle(lineWidth: 1.5, dash: [3, 2])) }
+                                    }
+                                }
+                            Circle().fill(day.busy ? Color.hqLabel3 : Color.clear).frame(width: 5, height: 5)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .dropDestination(for: String.self) { items, _ in
+                        guard let raw = items.first else { return false }
+                        let taskID = raw.hasPrefix("hq-task:") ? String(raw.dropFirst("hq-task:".count)) : raw
+                        return onDropTask(taskID, day.key)
+                    } isTargeted: { on in
+                        if on {
+                            if dropTarget != day.key { PagesHaptics.selection() }
+                            dropTarget = day.key
+                        } else if dropTarget == day.key {
+                            dropTarget = nil
+                        }
+                    }
+                    .accessibilityLabel("\(day.weekday) \(day.number)\(day.today ? ", today" : "")")
+                    .accessibilityValue(day.busy ? "Has tasks" : "No tasks")
+                    .accessibilityAddTraits(day.picked ? .isSelected : [])
+                    .accessibilityHint(day.picked ? "Shows every coming day again" : "Shows this day alone")
+                    .accessibilityIdentifier("tasks.week.\(day.key)")
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 2)
+            .padding(.bottom, 4)
+            .gesture(DragGesture(minimumDistance: 36, coordinateSpace: .local).onEnded { value in
+                guard abs(value.translation.width) > abs(value.translation.height) * 1.4 else { return }
+                stepWeek(value.translation.width < 0 ? 1 : -1)
+            })
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 6)
-        .padding(.bottom, 4)
         .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+    }
+}
+
+/// Dismissible chips shown only while a Priority or Tag filter is active, so nothing stays silently hidden.
+struct TaskActiveFiltersBar: View {
+    var priority: Int?
+    var tag: String?
+    var clearPriority: () -> Void
+    var clearTag: () -> Void
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 8) {
+                if let priority {
+                    chip("\(TodoViews.priorityWord(priority)) priority", symbol: "flag.fill",
+                         id: "tasks.filter.active.priority", action: clearPriority)
+                }
+                if let tag {
+                    chip("#\(tag)", symbol: "tag", id: "tasks.filter.active.tag", action: clearTag)
+                }
+            }
+            .padding(.horizontal, ListGutter.side)
+            .padding(.top, 6)
+            .padding(.bottom, 2)
+        }
+        .scrollIndicators(.never)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("tasks.filter.active")
+    }
+
+    private func chip(_ title: String, symbol: String, id: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: symbol).imageScale(.small).accessibilityHidden(true)
+                Text(title).lineLimit(1)
+                Image(systemName: "xmark").font(Font.hq(.caption2).weight(.semibold)).accessibilityHidden(true)
+            }
+            .font(Font.hq(.footnote).weight(.medium))
+            .foregroundStyle(Color.hqTintText)
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .background(Capsule().fill(Color.hqTint.opacity(0.14)))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Clear filter \(title)")
+        .accessibilityIdentifier(id)
     }
 }
 

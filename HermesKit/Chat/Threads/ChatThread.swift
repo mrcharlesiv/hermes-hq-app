@@ -103,6 +103,8 @@ nonisolated struct BusyThreadPayload: Sendable {
     var display: String? = nil
     /// Photos and files attached to the send.
     var attachments: [DraftAttachment] = []
+    /// Voice memo attached to the send (nil for typed/photo/file sends).
+    var memo: MemoFile? = nil
     /// Local bubble id to leave out of the thread's seed (nil when routed proactively before adding a main bubble).
     var localId: String? = nil
     /// Why the main chat couldn't take the send (nil for 4009 busy or proactive continuation).

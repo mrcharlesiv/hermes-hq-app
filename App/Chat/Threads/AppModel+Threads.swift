@@ -29,8 +29,12 @@ final class BotChatThreads: ChatThreadsHost {
     }
 
     func start(text: String, under anchor: ChatMessage?) -> String? {
+        start(text: text, memo: nil, under: anchor)
+    }
+
+    func start(text: String, memo: MemoFile?, under anchor: ChatMessage?) -> String? {
         guard let chat, let model, let bot = model.botStore?.bot(named: chat.profile) else { return nil }
-        return model.threadStore.start(text: text, in: chat, bot: bot, anchor: anchor)
+        return model.threadStore.start(text: text, memo: memo, in: chat, bot: bot, anchor: anchor)
     }
 
     func open(_ key: String, from screen: ChatViewController) {

@@ -6,8 +6,9 @@ import UIKit
 @MainActor protocol ChatThreadsHost: AnyObject {
     /// The chat's threads, oldest first.
     func threads() -> [ChatThread]
-    /// Starts one with `text` as its first message, hung under `anchor`; its key, nil when it could not start.
+    /// Starts one with `text` (and optional voice `memo`) as its first message, hung under `anchor`; its key, nil when it could not start.
     @discardableResult func start(text: String, under anchor: ChatMessage?) -> String?
+    @discardableResult func start(text: String, memo: MemoFile?, under anchor: ChatMessage?) -> String?
     /// Opens the thread's own chat (pushed on the iPhone, beside the chat on the Mac).
     func open(_ key: String, from screen: ChatViewController)
     /// A thread changed (a reply arrived, it got its title, one was started on another device).
@@ -23,6 +24,9 @@ import UIKit
 }
 
 extension ChatThreadsHost {
+    @discardableResult func start(text: String, memo: MemoFile?, under anchor: ChatMessage?) -> String? {
+        start(text: text, under: anchor)
+    }
     func busyRoutingBanner() -> ThreadBusyBanner? { nil }
     func optOutBusyRouting() {}
 }
@@ -108,10 +112,12 @@ extension ChatViewController {
     }
 
     /// [threads] §9: shows or clears the calm proactive-routing banner when sends go straight into a thread.
-    /// Never displaces an explicit edit, reply, queue-edit, or Reply in Thread banner.
+    /// Never displaces an explicit edit, reply, queue-edit, or Reply in Thread banner, and never stacks under an
+    /// active "Your message is waiting" hold card.
     func updateBusyThreadBanner() {
         guard isViewLoaded else { return }
-        let wanted = threadsHost?.busyRoutingBanner()
+        let waitingForOwner = (session as? ChatComposerNotices)?.ownerWaitKind != nil
+        let wanted = waitingForOwner ? nil : threadsHost?.busyRoutingBanner()
         let current = composer.editBanner as? ComposerEditBanner
         let isOurs = current?.accessibilityIdentifier == ComposerEditBanner.busyThreadIdentifier
         if let wanted {
@@ -187,6 +193,17 @@ extension ChatViewController {
         AppLog.trace("composer", "thread reply sent \(logTag): under \(AppLog.tag(anchorId))")
         // Replying in a thread is going into it: its own chat opens (the message it hangs under may be far up).
         if let key = host.start(text: text, under: anchor) { openThread(key: key) }
+        return true
+    }
+
+    /// A voice memo sent while Reply in Thread's banner is up: starts the thread under that message. False when none is up.
+    func sendAsThreadReply(memo: MemoFile, text: String) -> Bool {
+        guard let anchorId = threadAnchorId, let host = threadsHost else { return false }
+        threadAnchorId = nil
+        composer.editBanner = nil
+        let anchor = session.messages.last(where: { $0.id == anchorId })
+        AppLog.trace("composer", "thread memo reply sent \(logTag): under \(AppLog.tag(anchorId))")
+        if let key = host.start(text: text, memo: memo, under: anchor) { openThread(key: key) }
         return true
     }
 

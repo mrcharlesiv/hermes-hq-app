@@ -4365,6 +4365,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         if let roomChrome, roomChrome.refusesMemo(memo, typed: text) { return }   // [groups] no one to send to
         menus?.closeModelPanel()
         voice.memoSending()
+        if sendAsThreadReply(memo: memo, text: text) { return }   // [threads] Reply in Thread with a voice memo
         // A memo recorded under "Replying to …" goes out under the quote too (after the memo, which opens the message).
         let text = takeReplyQuote(into: text)
         endLanding()   // [notify]

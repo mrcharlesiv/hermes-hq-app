@@ -1401,22 +1401,30 @@ final class LiveChatSession: ChatSessionModel {
             if stopEpoch != epoch { withdrawStoppedSend(localId: localId, text: draft, attachments: attachments); return }
             refuseSend(localId: localId, text: draft, reason: reason, queued: queued, attachments: attachments)
         }
-        // [threads] §9: messages a bot's own chat cannot take now go on in a thread. Rich handler (`onBusyThreadSend`)
-        // accepts words, hidden-note prompts, skills/titled requests, and attachments; legacy `onBusyThread` stays plain
-        // words only. Rewinds, voice turns, memos and normal user-queued sends are unchanged; offline-queued sends may
-        // auto-thread if an external run holds the chat on reconnect.
+        // [threads] §9: messages a chat cannot take now go on in a thread. Rich handler (`onBusyThreadSend`) accepts
+        // words, hidden-note prompts, skills/titled requests, attachments, and voice memos; legacy `onBusyThread` stays
+        // plain words only. Rewinds, voice-live delegations, and normal user-queued sends are unchanged; offline-queued
+        // sends may auto-thread if an external run holds the chat on reconnect.
         func threadable() -> Bool {
-            let hasHandler = onBusyThreadSend != nil || (onBusyThread != nil && attachments.isEmpty && draft == text)
+            let isMemo = memoSends[localId] != nil
+            let hasHandler = onBusyThreadSend != nil || (!isMemo && onBusyThread != nil && attachments.isEmpty && draft == text)
             return hasHandler && (!queued || allowBusyThread) && !interrupted && !voiceHold
-                && memoSends[localId] == nil && voiceLiveSends[localId] == nil && rewindParams(for: localId) == nil
+                && voiceLiveSends[localId] == nil && rewindParams(for: localId) == nil
         }
         func threadTakes(reason: OwnerWait?) -> Bool {
             guard stopEpoch == epoch, threadable() else { return false }
-            let cleanText = carriedContextNote != nil ? (ThreadContextNote.stripped(text) ?? text) : text
-            let cleanDisplay: String? = (carriedContextNote != nil && draft == cleanText) ? nil : (draft == text ? nil : draft)
-            let payload = BusyThreadPayload(text: cleanText, display: cleanDisplay, attachments: attachments,
+            let payload: BusyThreadPayload
+            if let memoContext = memoSends[localId] {
+                payload = BusyThreadPayload(text: memoContext.typed, memo: memoContext.memo,
                                             localId: localId, reason: reason, proactive: false)
+            } else {
+                let cleanText = carriedContextNote != nil ? (ThreadContextNote.stripped(text) ?? text) : text
+                let cleanDisplay: String? = (carriedContextNote != nil && draft == cleanText) ? nil : (draft == text ? nil : draft)
+                payload = BusyThreadPayload(text: cleanText, display: cleanDisplay, attachments: attachments,
+                                            localId: localId, reason: reason, proactive: false)
+            }
             guard deliverToBusyThread(payload) else { return false }
+            memoSends.removeValue(forKey: localId)   // thread now owns the local recording
             if let carriedContextNote { restoreThreadContextNote?(carriedContextNote) }
             sendWentToThread(localId, reason: reason)
             return true

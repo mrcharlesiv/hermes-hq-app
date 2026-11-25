@@ -39,7 +39,7 @@ extension LiveChatSession {
     /// §9: routes a send to the app's thread handler (rich `onBusyThreadSend` first, legacy `onBusyThread` fallback).
     func deliverToBusyThread(_ payload: BusyThreadPayload) -> Bool {
         if let rich = onBusyThreadSend { return rich(payload) }
-        guard payload.attachments.isEmpty, payload.display == nil, let legacy = onBusyThread else { return false }
+        guard payload.attachments.isEmpty, payload.display == nil, payload.memo == nil, let legacy = onBusyThread else { return false }
         return legacy(payload.text, payload.localId ?? "")
     }
 
@@ -51,14 +51,14 @@ extension LiveChatSession {
         removeMessage(localId)
         if turn.userAnchorId == localId { turn.userAnchorId = nil; turn.anchorPromptKey = nil }
         if turn.preparingSendId == localId { turn.preparingSendId = nil }
-        // Drain burst messages queued behind this send during its brief wait straight into the same thread.
+        // Drain burst messages (including voice memos) queued behind this send during its brief wait into the same thread.
         if !isQueueParked, !queuedMessages.isEmpty {
             var remaining: [QueuedMessage] = []
             for item in queuedMessages {
-                let canDrain = !item.hidden && item.memo == nil && !VoiceChatRecord.isRecord(item.text)
+                let canDrain = !item.hidden && !VoiceChatRecord.isRecord(item.text)
                 if canDrain, deliverToBusyThread(BusyThreadPayload(text: item.text, display: item.display,
-                                                                   attachments: item.attachments, localId: nil,
-                                                                   reason: reason, proactive: true)) {
+                                                                   attachments: item.attachments, memo: item.memo,
+                                                                   localId: nil, reason: reason, proactive: true)) {
                     AppLog.note("send", "burst queued \(AppLog.tag(item.id)) drained into the same busy thread")
                 } else {
                     remaining.append(item)

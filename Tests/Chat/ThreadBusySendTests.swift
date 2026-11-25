@@ -367,4 +367,67 @@ struct ThreadBusySendTests {
         busy.withLock { $0 = false }
         #expect(await s.probeMainAvailability(checkServerRunning: true) == true)
     }
+
+    @Test func voiceMemoRoutesProactivelyIntoBusyThreadWithZeroWait() async throws {
+        let client = VoiceFakeClient()
+        VoiceTestStores.activate(client.account.id)
+        let memo = try VoiceTestStores.recording(client.account.id)
+        let s = LiveChatSession(client: client, account: client.account, profile: "ivy",
+                                storedSessionId: "20260929_120000_aabbcc02", title: "Ivy", head: nil,
+                                cache: makeTempCache(), resolveSessionId: nil, frameMode: .manual)
+        s.start()
+        #expect(await waitUntil(timeout: .seconds(5)) { s.openSettled })
+
+        var threaded: [BusyThreadPayload] = []
+        s.shouldRouteToBusyThread = { true }
+        s.onBusyThreadSend = { payload in
+            threaded.append(payload)
+            return true
+        }
+        let beforeMessages = s.messages.count
+        s.sendMemo(memo, text: "welcome channel note")
+        #expect(threaded.count == 1)
+        #expect(threaded[0].proactive == true)
+        #expect(threaded[0].memo?.path == memo.path)
+        #expect(threaded[0].text == "welcome channel note")
+        #expect(s.messages.count == beforeMessages, "no optimistic bubble added to busy main chat")
+        #expect(s.ownerWaitNotice == nil)
+        #expect(client.entries("rpc prompt.submit").isEmpty, "never touched main chat prompt.submit")
+    }
+
+    @Test func voiceMemoRefusedByBusyChatHandsOffToThreadInsteadOfWaiting() async throws {
+        let client = VoiceFakeClient()
+        VoiceTestStores.activate(client.account.id)
+        let memo = try VoiceTestStores.recording(client.account.id)
+        client.onCall { method, params, attempt in
+            if method == "prompt.submit" {
+                throw RPCError(code: 4090,
+                               message: "Another turn is running in this chat; send it again when the current turn ends.",
+                               data: ["reason": "SESSION_OWNER_BUSY"])
+            }
+            return try VoiceFakeClient.defaultCall(method, params, attempt)
+        }
+        let s = LiveChatSession(client: client, account: client.account, profile: "ivy",
+                                storedSessionId: "20260929_120000_aabbcc02", title: "Ivy", head: nil,
+                                cache: makeTempCache(), resolveSessionId: nil, frameMode: .manual)
+        s.threadAfter = .milliseconds(150)
+        s.silenceTimeout = .milliseconds(50)
+        var threaded: [BusyThreadPayload] = []
+        s.onBusyThreadSend = { payload in
+            threaded.append(payload)
+            return true
+        }
+        s.start()
+        #expect(await waitUntil(timeout: .seconds(5)) { s.openSettled })
+
+        s.sendMemo(memo, text: "")
+        #expect(await waitUntil(timeout: .seconds(5)) { threaded.count == 1 })
+        #expect(threaded[0].proactive == false)
+        #expect(threaded[0].reason == .runningReply)
+        #expect(threaded[0].memo?.path == memo.path)
+        #expect(s.ownerWaitNotice == nil)
+        #expect(s.memoSends.isEmpty, "thread now owns the recording")
+        #expect(s.memoDraft == nil, "not returned to main chat as a failed draft")
+        #expect(!s.isRunning)
+    }
 }

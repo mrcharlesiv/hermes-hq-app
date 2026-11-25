@@ -87,9 +87,19 @@ extension LiveChatSession: ChatVoiceMemos {
     func sendMemo(_ memo: MemoFile, text: String) {
         let toQueue = queuesNextSend
         queuesNextSend = false
+        sendFailure = nil
+        sessionProblem = nil
         flushDeltas()
         if !toQueue, memoSteers(typed: text) {
             steerMemo(memo, typed: text)
+            return
+        }
+        // [threads] §9 proactive routing: when the chat is already known to be unavailable (external run or latched
+        // busy thread), route the voice memo straight into the thread with zero wait, matching typed sends.
+        if !toQueue, !turn.busy, queuedMessages.isEmpty || isQueueParked,
+           shouldRouteToBusyThread?() == true,
+           deliverToBusyThread(BusyThreadPayload(text: text, memo: memo, localId: nil,
+                                                 reason: externalWorking ? .backgroundTask : nil, proactive: true)) {
             return
         }
         let waitInLine = turn.busy || (!queuedMessages.isEmpty && !isQueueParked)

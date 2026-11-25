@@ -200,7 +200,7 @@ final class ThreadStore {
     /// of the main chat it hangs under). The chat is made and the message sent with no screen; the reply runs beside
     /// whatever the main chat is doing.
     @discardableResult
-    func start(text: String, display: String? = nil, attachments: [DraftAttachment] = [],
+    func start(text: String, display: String? = nil, attachments: [DraftAttachment] = [], memo: MemoFile? = nil,
                in parent: LiveChatSession, bot: Bot, anchor: ChatMessage?,
                leavingOut localId: String? = nil, busyReason: String? = nil) -> String? {
         guard let model else { return nil }
@@ -240,8 +240,12 @@ final class ThreadStore {
         if let live = chat as? LiveChatSession {
             adopt(live, for: entry)
             live.listenOffScreen()
-            live.send(text, display: display, attachments: attachments)
-            AppLog.note("threads", "thread started in \(AppLog.tag(parentId)) (profile \(bot.id)): \(seed.count) seed rows, anchor row \(anchor?.rowId.map(String.init) ?? "-"), attachments \(attachments.count), main chat \(parent.isRunning || parent.externalWorking ? "working" : "idle")")
+            if let memo {
+                live.sendMemo(memo, text: text)
+            } else {
+                live.send(text, display: display, attachments: attachments)
+            }
+            AppLog.note("threads", "thread started in \(AppLog.tag(parentId)) (profile \(bot.id)): \(seed.count) seed rows, anchor row \(anchor?.rowId.map(String.init) ?? "-"), attachments \(attachments.count), memo \(memo != nil), main chat \(parent.isRunning || parent.externalWorking ? "working" : "idle")")
         } else {
             entry.problem = "Not connected to the gateway."
         }
@@ -426,11 +430,15 @@ final class ThreadStore {
                 live?.listenOffScreen()
             }
             if let live {
-                live.send(payload.text, display: payload.display, attachments: payload.attachments)
+                if let memo = payload.memo {
+                    live.sendMemo(memo, text: payload.text)
+                } else {
+                    live.send(payload.text, display: payload.display, attachments: payload.attachments)
+                }
                 busyThreads[scope]?.lastActivity = now
                 if let reason = payload.reason { busyThreads[scope]?.reason = reason }
                 trackReconciliation(key: active.entry.key, scope: scope)
-                AppLog.note("threads", "busy chat's send went on in its thread (\(scope), proactive=\(payload.proactive))")
+                AppLog.note("threads", "busy chat's send went on in its thread (\(scope), proactive=\(payload.proactive), memo=\(payload.memo != nil))")
                 changed(bot.id)
                 return true
             }
@@ -439,7 +447,7 @@ final class ThreadStore {
         releaseOldestIdleIfCrowded()
         let anchor = ThreadRules.busyAnchor(in: parent.messages, leavingOut: payload.localId)
         let busyReason = Self.seedBusyReason(payload.reason, externalWorking: parent.externalWorking)
-        guard let key = start(text: payload.text, display: payload.display, attachments: payload.attachments,
+        guard let key = start(text: payload.text, display: payload.display, attachments: payload.attachments, memo: payload.memo,
                               in: parent, bot: bot, anchor: anchor, leavingOut: payload.localId, busyReason: busyReason),
               let entry = entries.first(where: { $0.key == key }) else { return false }
         guard let live = entry.live else {
@@ -455,12 +463,17 @@ final class ThreadStore {
         startAvailabilityProbe(scope: scope, profile: bot.id, parent: parent, reason: latchReason)
         // Only hand back the initial unconfirmed auto-thread send if the thread fails off-screen; never clobber the
         // main chat's draft after the user opens the thread or after the thread has already accepted sends.
+        let initialMemo = payload.memo
         live.onDraftReturned = { [weak self, weak parent, weak live, weak entry] text, reason in
             guard let live, !live.observing, live.acceptedSends == 0 else { return }
             if let entry, entry.storedId == nil {
                 self?.entries.removeAll { $0.key == entry.key }
                 if self?.busyThreads[entry.parentScope]?.key == entry.key { self?.busyThreads[entry.parentScope] = nil }
                 self?.changed(entry.profile)
+            }
+            if let initialMemo {
+                live.setMemoDraft(nil)
+                parent?.setMemoDraft(initialMemo)
             }
             parent?.threadSendCameBack(text, reason: reason)
         }

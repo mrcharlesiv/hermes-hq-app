@@ -43,6 +43,7 @@ final class BrowserKeyField: UITextField, UITextFieldDelegate {
         case .code:
             accessibilityLabel = "Code for \(name)’s page"
             textContentType = .oneTimeCode
+            autocorrectionType = .default
             keyboardType = .asciiCapable
         }
         accessibilityIdentifier = "browser.keyboard.\(slot.rawValue)"

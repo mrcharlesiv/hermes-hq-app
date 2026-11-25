@@ -23,6 +23,7 @@ nonisolated struct PromptSheetCopy: Sendable, Equatable {
     var command: String?           // sudo: the command block (nil = none given)
     var commandMissing: String?    // sudo with no command
     var key: String? = nil         // secret: the variable it asks for, under the text in monospace
+    var hint: String? = nil        // vault.code: where the code was sent (e.g. "Text message to •••• 42")
     var fields: [Field]
     var primary: String
     var decline: String
@@ -87,7 +88,7 @@ nonisolated struct PromptSheetCopy: Sendable, Equatable {
             return PromptSheetCopy(
                 title: "Verification Code for \(site ?? "This Site")",
                 text: "\(site ?? "The site") is asking for a one-time code (text message, email or authenticator app). Enter it here and it’s typed into the page; \(bot) never sees it.",
-                command: nil, commandMissing: nil, fields: [.code], primary: "Enter Code", decline: "Skip",
+                command: nil, commandMissing: nil, hint: nonEmpty("hint"), fields: [.code], primary: "Enter Code", decline: "Skip",
                 chip: site.map { "Code for \($0) requested" } ?? "Code requested")
         case .approval, .clarify:
             return PromptSheetCopy(title: "", text: "", command: nil, commandMissing: nil, fields: [], primary: "", decline: "", chip: "")
@@ -207,6 +208,11 @@ final class PromptSheetController: UIViewController, UITextFieldDelegate, UIAdap
             let line = label(key, style: .footnote, color: HQPalette.label2)
             line.font = UIFontMetrics(forTextStyle: .footnote).scaledFont(for: HQFont.mono(ofSize: 13))
             line.accessibilityIdentifier = "prompt.key"
+            words.content.addArrangedSubview(line)
+        }
+        if let hint = copy.hint {
+            let line = label(hint, style: .footnote, color: HQPalette.label2)
+            line.accessibilityIdentifier = "prompt.hint"
             words.content.addArrangedSubview(line)
         }
         // [sudo-tidy] With the command to lead, the words follow the field as one quiet line.
@@ -490,8 +496,12 @@ final class PromptSheetController: UIViewController, UITextFieldDelegate, UIAdap
         case .code:
             f.placeholder = "123 456"
             f.textContentType = .oneTimeCode
-            f.keyboardType = .numberPad
-            f.addNumberPadDone()   // [diagnostics] the number pad has no Return key
+            // Leave autocorrectionType at .default and omit custom inputAccessoryView so iOS/macOS reliably shows
+            // "From Messages" / "From Mail" AutoFill above the keyboard; asciiCapable also accepts alphanumeric email
+            // codes and provides a native Return/Send key.
+            f.autocorrectionType = .default
+            f.keyboardType = .asciiCapable
+            f.returnKeyType = .send
             f.accessibilityLabel = "Code"
             f.accessibilityIdentifier = "prompt.code"
         }

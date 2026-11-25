@@ -397,6 +397,8 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     private var promptStackTop: NSLayoutConstraint?
     private weak var promptChip: UIView?
     private var promptGapPending = false
+    /// Message id for which the user already sent or dismissed the inline verification-code AutoFill bar.
+    private var dismissedCodeMessageId: String?
 
     // MARK: Init
 
@@ -2602,6 +2604,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         // After every delivery (rows, or the open's end): the placeholder that fits, the empty-chat project subtitle, and a held push.
         updatePlaceholder(animated: true)
         updateSessionTitle()
+        updateVerificationCodeBanner()
         pushIfWaiting()
     }
 
@@ -2648,6 +2651,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         // [groups] A room's round shows the same Stop square as a bot chat (it stops the room; owner 2026-11-06).
         composer.isRunning = session.isRunning || (session as? ChatRoomSurface)?.roomRunning == true
         updateBusyThreadBanner()                                                                 // [threads] §9
+        updateVerificationCodeBanner()
         // A bot answers a page's button by rewriting the page: its open sheet reloads, its card is pictured again.
         if wasRunning, !session.isRunning, let context = mediaContext { PageSnapshots.noteTurnEnded(context) }
         if wasRunning, !session.isRunning { TileMaker.turnEnded(session) }   // [dashboard] a New Tile asked in this chat
@@ -4826,7 +4830,40 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         guard isViewLoaded else { return }
         if closingGap { promptGapPending = true }
         if let last = session.messages.last?.id { pendingTouched.append(last) } else { pendingNewest = true }
+        updateVerificationCodeBanner()
         scheduleFlush()
+    }
+
+    /// Shows or clears the inline `.oneTimeCode` AutoFill bar above the composer when the agent's latest message asks
+    /// for a verification code from email, SMS, or an authenticator app. Never displaces explicit edit/reply/thread banners.
+    func updateVerificationCodeBanner() {
+        guard isViewLoaded else { return }
+        let activeId = VerificationCodePrompt.activeMessageId(in: session.messages)
+        let vaultCodeOpen = promptsUI?.prompts.values.contains(where: { $0.kind == .vaultCode }) == true
+        let wantedId: String? = (activeId != nil && activeId != dismissedCodeMessageId && composer.isEnabled && promptDock == nil && !vaultCodeOpen) ? activeId : nil
+        composer.setOneTimeCodeHint(wantedId != nil)
+        let current = composer.editBanner as? VerificationCodeBanner
+        if let wantedId {
+            guard composer.editBanner == nil || current != nil else { return }
+            if current?.messageId == wantedId { return }
+            let banner = VerificationCodeBanner(messageId: wantedId)
+            banner.onSend = { [weak self] code in
+                guard let self else { return }
+                self.dismissedCodeMessageId = wantedId
+                if self.composer.editBanner === banner { self.composer.editBanner = nil }
+                self.composer.setOneTimeCodeHint(false)
+                self.send(code)
+            }
+            banner.onDismiss = { [weak self] in
+                guard let self else { return }
+                self.dismissedCodeMessageId = wantedId
+                if self.composer.editBanner === banner { self.composer.editBanner = nil }
+                self.composer.setOneTimeCodeHint(false)
+            }
+            composer.editBanner = banner
+        } else if current != nil {
+            composer.editBanner = nil
+        }
     }
 
     /// The chip came or went: the transcript's bottom follows in the same animation.
@@ -4911,8 +4948,9 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
                                           composer.frame.minY, composer.isHidden ? 1 : 0))
         #endif
         promptDock = dock
+        updateVerificationCodeBanner()
         if let dock {
-            if composer.textView.isFirstResponder { composer.textView.resignFirstResponder() }
+            composer.endEditing(true)
             voice.composerCovered()   // VOICE: a take never records on behind the dock (it becomes the draft chip)
             if fade {
                 // Verify round 1: a cross-fade drew the half-clear card's text over the transcript's. The card is opaque

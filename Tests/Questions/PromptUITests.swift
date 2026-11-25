@@ -166,8 +166,14 @@ struct PromptUITests {
         #expect(sudoFields.map(\.textContentType) == [.password])
         #expect(sudo.value == nil)
         #expect(sudo.copy.chip == "Password requested" && sudo.copy.decline == "Don’t Send")
-        let (code, codeFields) = fields(.vaultCode, ["site": "Example Shop"])
-        #expect(codeFields.first?.textContentType == .oneTimeCode && codeFields.first?.keyboardType == .numberPad)
+        let (code, codeFields) = fields(.vaultCode, ["site": "Example Shop", "hint": "Text message to •••• 42"])
+        let codeField = try #require(codeFields.first)
+        #expect(codeField.textContentType == .oneTimeCode)
+        #expect(codeField.autocorrectionType == .default)
+        #expect(codeField.keyboardType == .asciiCapable)
+        #expect(codeField.returnKeyType == .send)
+        #expect(codeField.inputAccessoryView == nil)
+        #expect(code.copy.hint == "Text message to •••• 42")
         codeFields[0].text = "123 4-56"
         #expect(code.value == "123456")
         #expect(PromptSheetCopy.make(ValuePrompt(id: "", kind: .secret, params: ["env_var": "OPENWEATHER_API_KEY"])).chip

@@ -1162,11 +1162,28 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboa
         onDrawerInput?()   // [composer-drawers]
     }
 
+    /// Whether the chat's latest assistant message is asking for a one-time verification code: while the composer is
+    /// empty, tag `textView` with `.oneTimeCode` so tapping the regular message box also surfaces OTP AutoFill.
+    private var oneTimeCodeHint = false
+
+    func setOneTimeCodeHint(_ on: Bool) {
+        oneTimeCodeHint = on
+        applyOneTimeCodeHint()
+    }
+
+    private func applyOneTimeCodeHint() {
+        let wanted: UITextContentType? = (oneTimeCodeHint && textView.text.isEmpty) ? .oneTimeCode : nil
+        guard textView.textContentType != wanted else { return }
+        textView.textContentType = wanted
+        if textView.isFirstResponder { textView.reloadInputViews() }
+    }
+
     private func textChanged() {
         // [m9/composer] A field holding nothing but leftover line breaks is blank again: the placeholder shows and Send
         // is off (web `return-line-break`; any number of stray Returns, docs/spec/3x-composer.md §2.2). Never while an
         // input method is composing.
         if textView.markedTextRange == nil, ComposerKeyboard.isLeftoverLineBreaks(textView.text ?? "") { textView.text = "" }
+        applyOneTimeCodeHint()
         placeholderLabel.isHidden = !textView.text.isEmpty
         recomputeHeight(notify: true)
         updatePrimary(animated: true)

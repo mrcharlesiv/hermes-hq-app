@@ -753,7 +753,7 @@ private final class PagesScrollView: UIScrollView {
 
 // MARK: - One page
 
-final class QuestionPageView: UIView, UITextViewDelegate {
+final class QuestionPageView: UIView, UITextViewDelegate, UITextFieldDelegate {
     /// The question to its choices or field (owner 2026-10-30: at 8 pt the grey list crowded the question).
     /// [question-tidy] 10: the choices are rows on the card now, the first under its own hairline.
     static let answersGap: CGFloat = 10
@@ -765,11 +765,11 @@ final class QuestionPageView: UIView, UITextViewDelegate {
     var onStage: ((ClarifyStage) -> Void)?
     var onReturn: (() -> Void)?
     var onFocus: (() -> Void)?
-    var returnKey: UIReturnKeyType = .next { didSet { field?.textView.returnKeyType = returnKey } }
+    var returnKey: UIReturnKeyType = .next { didSet { field?.returnKeyType = returnKey } }
     var isLocked = false {
         didSet {
             rows.forEach { $0.isEnabled = !isLocked }
-            field?.textView.isEditable = !isLocked
+            field?.isEditable = !isLocked
             field?.updateMic()   // [question-dictate] no dictating into a card on its way
         }
     }
@@ -784,7 +784,8 @@ final class QuestionPageView: UIView, UITextViewDelegate {
     private let listStack = UIStackView()
 
     var isFieldOnly: Bool { (question.choices ?? []).isEmpty }
-    var isEditing: Bool { field?.textView.isFirstResponder == true }
+    var isEditing: Bool { field?.isEditing == true }
+    private var asksCode: Bool { VerificationCodePrompt.asksForCode(question.question) }
 
     init(question: ClarifyQuestion, stage: ClarifyStage, last: Bool) {
         self.question = question
@@ -829,7 +830,8 @@ final class QuestionPageView: UIView, UITextViewDelegate {
             stack.setCustomSpacing(Self.answersGap, after: title)
         }
         guard let choices = question.choices, !choices.isEmpty else {
-            let f = DockTextField(placeholder: "Type your answer…", accessibility: question.question)
+            let f = DockTextField(placeholder: asksCode ? "Verification code" : "Type your answer…",
+                                  accessibility: question.question, oneTimeCode: asksCode)
             f.text = stage.draft
             configure(f)
             stack.addArrangedSubview(f)
@@ -871,10 +873,16 @@ final class QuestionPageView: UIView, UITextViewDelegate {
     }
 
     private func configure(_ f: DockTextField) {
+        let identifier = isFieldOnly ? "question.field" : "question.otherField"
+        f.returnKeyType = returnKey
         f.textView.delegate = self
-        f.textView.returnKeyType = returnKey
         f.textView.autocapitalizationType = .sentences
-        f.textView.accessibilityIdentifier = isFieldOnly ? "question.field" : "question.otherField"
+        f.textView.accessibilityIdentifier = identifier
+        if let codeField = f.codeField {
+            codeField.delegate = self
+            codeField.accessibilityIdentifier = identifier
+            codeField.addTarget(self, action: #selector(codeFieldChanged(_:)), for: .editingChanged)
+        }
         dictation?.adopt(f)   // [question-dictate]
     }
 
@@ -901,22 +909,24 @@ final class QuestionPageView: UIView, UITextViewDelegate {
     /// "Something else…" becomes an inline field, focused in the same frame (the keyboard rises once).
     private func showOtherField(focus: Bool) {
         guard let other = otherRow, field == nil else { return }
-        let f = DockTextField(placeholder: "Something else", accessibility: "Something else", inline: true, multi: question.multiSelect)
+        let f = DockTextField(placeholder: asksCode ? "Verification code" : "Something else",
+                              accessibility: "Something else", inline: true, multi: question.multiSelect,
+                              oneTimeCode: asksCode)
         f.text = stage.draft
         configure(f)
         field = f
         other.embed(f)
-        if focus { f.textView.becomeFirstResponder() }
+        if focus { f.focus() }
     }
 
     private func hideOtherField() {
         guard let f = field else { return }
-        if f.textView.isFirstResponder { f.textView.resignFirstResponder() }
+        f.resign()
         otherRow?.embed(nil)
         field = nil
     }
 
-    func focusField() { field?.textView.becomeFirstResponder() }
+    func focusField() { field?.focus() }
 
     /// [question-dictate] The page's answer field, "Something else…" opened for it when the page has choices (Dictate
     /// with Hermes, or a failure card's Try Again, while the card covers the composer). nil while locked.
@@ -983,6 +993,22 @@ final class QuestionPageView: UIView, UITextViewDelegate {
 
     func textViewDidChange(_ textView: UITextView) {
         stage.draft = textView.text
+        field?.textChanged()
+        refreshMarks()
+        onStage?(stage)
+    }
+
+    // MARK: UITextFieldDelegate (verification-code questions)
+
+    func textFieldDidBeginEditing(_ textField: UITextField) { onFocus?() }
+
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        onReturn?()
+        return false
+    }
+
+    @objc private func codeFieldChanged(_ textField: UITextField) {
+        stage.draft = textField.text ?? ""
         field?.textChanged()
         refreshMarks()
         onStage?(stage)
@@ -1236,17 +1262,25 @@ final class Separator: UIView {
 /// [question-dictate] With voice in the chat, a mic at its trailing edge dictates into it (#438, `QuestionDictation`).
 final class DockTextField: UIView {
     let textView = UITextView()
+    /// When the question asks for a verification / one-time code, a real `UITextField` with `.oneTimeCode` stands in
+    /// for `textView` so iOS and macOS reliably offer "From Messages" / "From Mail" AutoFill above the keyboard.
+    let codeField: UITextField?
+    let oneTimeCode: Bool
     private let placeholder = UILabel()
     private var height: NSLayoutConstraint!
     private var placeholderTrailing: NSLayoutConstraint!
+    private var codeTrailing: NSLayoutConstraint?
     private let inline: Bool
     /// The text's own insets, before the mic's room.
     private let baseInset: UIEdgeInsets
     private let micButton = UIButton(type: .system)
 
-    init(placeholder text: String, accessibility: String, inline: Bool = false, multi: Bool = false) {
+    init(placeholder text: String, accessibility: String, inline: Bool = false, multi: Bool = false, oneTimeCode: Bool = false) {
         self.inline = inline
+        self.oneTimeCode = oneTimeCode
         baseInset = inline ? UIEdgeInsets(top: 8, left: 4, bottom: 8, right: 4) : UIEdgeInsets(top: 11, left: 14, bottom: 11, right: 14)
+        let otpField: UITextField? = oneTimeCode ? UITextField() : nil
+        self.codeField = otpField
         super.init(frame: .zero)
         backgroundColor = inline ? .clear : DockFill.answers   // [glass-phone] opaque on the glass card
         layer.cornerRadius = 12
@@ -1260,6 +1294,7 @@ final class DockTextField: UIView {
         textView.isScrollEnabled = false
         textView.accessibilityLabel = accessibility
         textView.translatesAutoresizingMaskIntoConstraints = false
+        textView.isHidden = oneTimeCode
         addSubview(textView)
         placeholder.text = text
         placeholder.font = HQFont.preferred(.body)
@@ -1267,7 +1302,26 @@ final class DockTextField: UIView {
         placeholder.textColor = ChatPalette.label3
         placeholder.isAccessibilityElement = false
         placeholder.translatesAutoresizingMaskIntoConstraints = false
+        placeholder.isHidden = oneTimeCode
         addSubview(placeholder)
+        if let otpField {
+            otpField.backgroundColor = .clear
+            otpField.font = HQFont.preferred(.body)
+            otpField.adjustsFontForContentSizeCategory = true
+            otpField.textColor = ChatPalette.label
+            otpField.tintColor = ChatPalette.caret
+            otpField.textContentType = .oneTimeCode
+            otpField.autocorrectionType = .default      // keep QuickType AutoFill bar enabled for Messages / Mail codes
+            otpField.autocapitalizationType = .none
+            otpField.smartQuotesType = .no
+            otpField.smartDashesType = .no
+            otpField.spellCheckingType = .no
+            otpField.keyboardType = .asciiCapable
+            otpField.attributedPlaceholder = NSAttributedString(string: text, attributes: [.foregroundColor: ChatPalette.label3])
+            otpField.accessibilityLabel = accessibility
+            otpField.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(otpField)
+        }
         height = heightAnchor.constraint(equalToConstant: 44)
         placeholderTrailing = placeholder.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -8)
         // [question-dictate] The composer's Dictate glyph, at the field's last line (as the composer's mic sits).
@@ -1283,7 +1337,7 @@ final class DockTextField: UIView {
         micButton.addAction(UIAction { [weak self] _ in self?.onDictate?() }, for: .primaryActionTriggered)
         PointerEffects.surface(micButton)
         addSubview(micButton)
-        NSLayoutConstraint.activate([
+        var constraints: [NSLayoutConstraint] = [
             textView.topAnchor.constraint(equalTo: topAnchor),
             textView.leadingAnchor.constraint(equalTo: leadingAnchor),
             textView.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -1296,7 +1350,18 @@ final class DockTextField: UIView {
             micButton.widthAnchor.constraint(equalToConstant: Self.micSize),
             micButton.heightAnchor.constraint(equalToConstant: Self.micSize),
             height,
-        ])
+        ]
+        if let otpField {
+            let trailing = otpField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -baseInset.right)
+            codeTrailing = trailing
+            constraints.append(contentsOf: [
+                otpField.topAnchor.constraint(equalTo: topAnchor),
+                otpField.bottomAnchor.constraint(equalTo: bottomAnchor),
+                otpField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: baseInset.left),
+                trailing,
+            ])
+        }
+        NSLayoutConstraint.activate(constraints)
     }
 
     // MARK: [question-dictate] Dictation (#438)
@@ -1328,16 +1393,54 @@ final class DockTextField: UIView {
             textView.alpha = showText ? 1 : 0
             placeholder.alpha = showText ? 1 : 0
             textView.accessibilityElementsHidden = !showText
+            codeField?.alpha = showText ? 1 : 0
+            codeField?.accessibilityElementsHidden = !showText
             updateMic()
             textChanged()
             setNeedsLayout()
         }
     }
 
+    var returnKeyType: UIReturnKeyType {
+        get { codeField?.returnKeyType ?? textView.returnKeyType }
+        set {
+            textView.returnKeyType = newValue
+            codeField?.returnKeyType = newValue
+        }
+    }
+
+    var isEditable: Bool {
+        get { codeField?.isEnabled ?? textView.isEditable }
+        set {
+            textView.isEditable = newValue
+            codeField?.isEnabled = newValue
+        }
+    }
+
+    var isEditing: Bool { codeField?.isFirstResponder == true || textView.isFirstResponder }
+
+    func focus() {
+        if let codeField { codeField.becomeFirstResponder() } else { textView.becomeFirstResponder() }
+    }
+
+    func resign() {
+        if let codeField, codeField.isFirstResponder { codeField.resignFirstResponder() }
+        if textView.isFirstResponder { textView.resignFirstResponder() }
+    }
+
     /// Dictated words go in at the caret as the composer's do (a space before them when the text there does not end in
     /// white space), the keyboard comes up, and the page takes them as typed words.
     func insertDictation(_ words: String) {
-        guard textView.isEditable else { return }
+        guard isEditable else { return }
+        if let codeField {
+            let current = codeField.text ?? ""
+            let result = ComposerView.dictationInsert(into: current, selection: NSRange(location: (current as NSString).length, length: 0), words: words)
+            codeField.text = result.text
+            codeField.becomeFirstResponder()
+            codeField.sendActions(for: .editingChanged)
+            textChanged()
+            return
+        }
         let result = ComposerView.dictationInsert(into: textView.text ?? "", selection: textView.selectedRange, words: words)
         textView.text = result.text
         textView.becomeFirstResponder()
@@ -1361,9 +1464,10 @@ final class DockTextField: UIView {
     func updateMic() {
         let shows = onDictate != nil && dictationContent == nil
         micButton.isHidden = !shows
-        micButton.isEnabled = dictateEnabled && textView.isEditable
+        micButton.isEnabled = dictateEnabled && isEditable
         var inset = baseInset
         if onDictate != nil { inset.right = max(inset.right, Self.micSize - 4) }
+        codeTrailing?.constant = -inset.right
         if textView.textContainerInset != inset {
             textView.textContainerInset = inset
             placeholderTrailing.constant = -(onDictate != nil ? Self.micSize : 8)
@@ -1379,13 +1483,23 @@ final class DockTextField: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
     var text: String {
-        get { textView.text }
-        set { textView.text = newValue; textChanged() }
+        get { codeField?.text ?? textView.text }
+        set {
+            textView.text = newValue
+            codeField?.text = newValue
+            textChanged()
+        }
     }
 
     func textChanged() {
-        placeholder.isHidden = !textView.text.isEmpty
         let width = bounds.width > 0 ? bounds.width : 300
+        if codeField != nil {
+            placeholder.isHidden = true
+            let target = dictationContent.map { max(44, ceil($0.height(for: width))) } ?? 44
+            if abs(height.constant - target) > 0.5 { height.constant = target }
+            return
+        }
+        placeholder.isHidden = !textView.text.isEmpty
         let fit = textView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
         // [question-dictate] While dictating: the row, and the words heard above it.
         let target = dictationContent.map { max(44, ceil($0.height(for: width))) } ?? min(132, max(44, ceil(fit)))

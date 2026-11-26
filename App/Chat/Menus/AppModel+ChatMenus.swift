@@ -159,14 +159,27 @@ extension AppModel: ChatMenuHosting {
         // The mobile live-tab doorway retains the canonical bot screen and its draft for Back.
         if !keepBot { stack.remove(at: index) }
         stack.append(next)
+        let draftCount = Self.placeNewChat(next, on: navigation, stack: stack, draft: draft)
+        AppLog.trace("chat", "/new: a new chat with \(AppLog.tag(bot.id)) opened in place\(draftCount == 0 ? "" : ", \(draftCount) chars in its field")")
+        return true
+    }
+
+    /// Marks a newly opened chat to focus its field (and carries any draft) before placing it on `navigation`, so
+    /// synchronous appearance (animations disabled, two-pane swaps, tests) still sees `focusesOnAppear`.
+    @discardableResult
+    static func placeNewChat(_ next: UIViewController, on navigation: UINavigationController,
+                             stack: [UIViewController], draft: String) -> Int {
+        let words = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let chatScreen = next as? ChatViewController {
+            // Fresh chats take the keys as they appear; set before setViewControllers can fire viewIsAppearing.
+            chatScreen.focusesOnAppear = true
+            if !words.isEmpty {
+                chatScreen.loadViewIfNeeded()
+                chatScreen.composer.text = words
+            }
+        }
         navigation.setViewControllers(stack, animated: true)
         Self.markPane(navigation)
-        let words = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !words.isEmpty, let chatScreen = next as? ChatViewController {
-            chatScreen.loadViewIfNeeded()
-            chatScreen.composer.text = words
-        }
-        AppLog.trace("chat", "/new: a new chat with \(AppLog.tag(bot.id)) opened in place\(words.isEmpty ? "" : ", \(words.count) chars in its field")")
-        return true
+        return words.count
     }
 }

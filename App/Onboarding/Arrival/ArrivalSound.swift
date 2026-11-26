@@ -48,6 +48,7 @@ nonisolated enum ArrivalSoundPlayers {
 
     static func play(_ cue: ArrivalSound.Cue) {
         dispatchPrecondition(condition: .onQueue(AudioWork.queue))
+        guard !AudioSessionCoordinator.isHeld else { return }
         let session = AVAudioSession.sharedInstance()
         // As CueAudio: always `.ambient` + mix (voice may have left another category behind).
         if session.category != .ambient || !session.categoryOptions.contains(.mixWithOthers) {

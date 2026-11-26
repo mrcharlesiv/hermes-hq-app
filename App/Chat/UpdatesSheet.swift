@@ -693,7 +693,10 @@ final class UpdateCardCell: UITableViewCell, UIContextMenuInteractionDelegate {
         // With part of the words selected, Copy Selection takes that part, ahead of the member's own menu.
         if let selected = textSelector?.selectedText {
             held.map(ChatTextSelector.nameWholeCopy)
-            let copy = UIAction(title: "Copy Selection", image: UIImage(systemName: "text.cursor")) { _ in UIPasteboard.general.string = selected }
+            let copy = UIAction(title: "Copy Selection", image: UIImage(systemName: "text.cursor")) { _ in
+                UIPasteboard.general.string = selected
+                Haptics.play(.success)
+            }
             copy.accessibilityIdentifier = "selection.copy"
             return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in
                 UIMenu(children: [copy] + (held.map { [UIMenu(options: .displayInline, children: $0.children)] } ?? []))

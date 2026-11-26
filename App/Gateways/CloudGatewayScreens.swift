@@ -836,7 +836,7 @@ private struct CloudFailedView: View {
         CloudCentered {
             ZStack {
                 Circle().fill(Color.hqOrange.opacity(0.14))
-                Image(systemName: "exclamationmark.triangle.fill").font(.system(size: badge * 0.4, weight: .semibold)).foregroundStyle(Color.hqOrange)
+                Image(systemName: "exclamationmark.triangle.fill").font(.system(size: badge * 0.4, weight: .semibold)).foregroundStyle(Color.hqOrange)   // a11y-font-ok: glyph sized to its scaled badge circle
             }
             .frame(width: badge, height: badge)
             .accessibilityHidden(true)
@@ -924,7 +924,7 @@ struct CloudTile: View {
 
     var body: some View {
         Image(systemName: symbol)
-            .font(.system(size: min(side, 48) * 0.47, weight: .semibold))
+            .font(.system(size: min(side, 48) * 0.47, weight: .semibold))   // a11y-font-ok: glyph sized to its scaled icon tile
             .foregroundStyle(Color.hqOnTint)
             .frame(width: min(side, 48), height: min(side, 48))
             .background(tint, in: RoundedRectangle(cornerRadius: min(side, 48) * 0.27, style: .continuous))
@@ -952,7 +952,7 @@ struct CloudHero: View {
             HeadImage(head: CloudCopy.mascot, size: size, working: working)
             if done {
                 Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: size * 0.34, weight: .semibold))
+                    .font(.system(size: size * 0.34, weight: .semibold))   // a11y-font-ok: checkmark badge sized to its head view
                     .symbolRenderingMode(.palette)
                     .foregroundStyle(Color.white, Color.green)
                     .background(Circle().fill(Color.hqGroupedPage).padding(-3))

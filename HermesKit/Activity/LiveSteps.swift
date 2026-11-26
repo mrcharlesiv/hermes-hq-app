@@ -59,7 +59,7 @@ nonisolated struct LiveSteps: Equatable {
     }
 }
 
-private nonisolated enum LiveChatText {
+nonisolated enum LiveChatText {
     /// A delta's text is empty or only spaces (a string, or the parts list some relays send).
     static func isBlank(_ value: JSONValue?) -> Bool {
         switch value {

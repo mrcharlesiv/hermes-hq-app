@@ -96,7 +96,7 @@ actor GatewayConnection {
     private var everReady = false
     private var heartbeat = false
     private var sessionAuthority = false   // [authority] this socket's `gateway.ready` named the session authority
-    private var generations: [String: Int] = [:]   // [authority] session → its latest turn (`execution_generation`)
+    private var generations = BoundedLRU<String, Int>(limit: 256)   // [authority] session → its latest turn (`execution_generation`)
     private var lastInbound = ContinuousClock.now
     private var lastHeartbeatSent: ContinuousClock.Instant?
     private var heartbeatSeq = 0
@@ -176,7 +176,7 @@ actor GatewayConnection {
     private var tally: [String: [String: Int]] = [:]
     /// The profile each session id was last named with on a call (and the runtime id a call answered with), so the
     /// replay's `session.events.since` names it too (spec 04 §1.4: `profile` on every session RPC). Bounded.
-    private var sessionProfiles: [String: String] = [:]
+    private var sessionProfiles = BoundedLRU<String, String>(limit: 256)
 
     init(base: URL, socketProfile: String, auth: GatewayAuth, transport: HTTPTransport, outlets: Outlets,
          timing: Timing = .standard) {
@@ -232,15 +232,13 @@ actor GatewayConnection {
 
     /// A snapshot states the session's turn as it is now (a restarted gateway counts afresh); a frame only moves it on.
     private func noteGeneration(_ generation: Int, for session: String, snapshot: Bool = false) {   // [authority]
-        guard !session.isEmpty, snapshot || generation >= (generations[session] ?? 0) else { return }
-        if generations.count > 256 { generations.removeAll() }
-        generations[session] = generation
+        guard !session.isEmpty, snapshot || generation >= (generations.peek(session) ?? 0) else { return }
+        generations.set(generation, for: session)
     }
 
     private func noteProfile(_ profile: String, for session: String) {
         guard !session.isEmpty else { return }
-        if sessionProfiles.count > 256 { sessionProfiles.removeAll() }
-        sessionProfiles[session] = profile
+        sessionProfiles.set(profile, for: session)
     }
 
     /// Sends on the current socket (published or, for the replay, merely ready).
@@ -250,7 +248,7 @@ actor GatewayConnection {
         nextId += 1
         // [authority] The frame as this socket's server takes it; the caller (and `pending`) keep the app's own verb.
         let wire = AuthorityWire.adapt(method, params, authority: sessionAuthority,
-                                       generation: params["session_id"]?.string.flatMap { generations[$0] })
+                                       generation: params["session_id"]?.string.flatMap { generations.value(for: $0) })
         let text = RPCFrame.request(id: id, method: wire.method, params: wire.params)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<JSONValue, Error>) in
@@ -893,7 +891,7 @@ actor GatewayConnection {
         let began = ContinuousClock.now
         do {
             var params: [String: JSONValue] = ["session_id": .string(session), "last_seen": .number(Double(last))]
-            if let profile = sessionProfiles[session] { params["profile"] = .string(profile) }
+            if let profile = sessionProfiles.value(for: session) { params["profile"] = .string(profile) }
             let result = try await send("session.events.since", .object(params), timeout: .seconds(10), epoch: epoch)
             guard epoch == socketEpoch else { return }
             if let answered = result["epoch"]?.string, let held = book.epoch, answered != held {

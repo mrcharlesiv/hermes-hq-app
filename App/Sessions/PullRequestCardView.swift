@@ -611,6 +611,7 @@ struct PullRequestGlyph: View {
             )
             alert.addAction(UIAlertAction(title: "Copy Message", style: .default) { _ in
                 UIPasteboard.general.string = words
+                Haptics.play(.success)
             })
             alert.addAction(UIAlertAction(title: "Open Chat", style: .default) { _ in open() })
             alert.addAction(UIAlertAction(title: "OK", style: .cancel))

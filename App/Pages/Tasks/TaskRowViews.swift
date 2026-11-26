@@ -301,7 +301,7 @@ struct TodoRowView: View {
         if row.selecting {
             let size = min(30, circleSize).rounded()
             Image(systemName: row.picked ? "checkmark.circle.fill" : "circle")
-                .font(.system(size: size, weight: row.picked ? .regular : .light))
+                .font(.system(size: size, weight: row.picked ? .regular : .light))   // a11y-font-ok: checkmark sized to its scaled circle frame
                 .foregroundStyle(row.picked ? Color.hqTint : Color.hqLabel3)
                 .frame(width: size, height: size)
                 .contentTransition(.symbolEffect(.replace))
@@ -312,7 +312,7 @@ struct TodoRowView: View {
                 let size = min(30, circleSize).rounded()
                 // [tasks-colour] Plain for every open task: its priority is the mark before its name (`named`).
                 Image(systemName: row.done || row.ticking ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: size, weight: .light))
+                    .font(.system(size: size, weight: .light))   // a11y-font-ok: checkmark sized to its scaled circle frame
                     .foregroundStyle(row.done || row.ticking ? Color.hqTint : Color.hqLabel3)
                     .frame(width: size, height: size)
                     .contentShape(Rectangle().inset(by: -10))

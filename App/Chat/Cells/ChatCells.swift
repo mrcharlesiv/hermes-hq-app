@@ -1285,7 +1285,10 @@ final class ChatBubbleCell: ChatBaseCell, UIContextMenuInteractionDelegate {
         #if targetEnvironment(macCatalyst)
         // [mac] With part of the message selected, Copy Selection takes that part, ahead of the message's own menu.
         if let selected = selectedText {
-            let copy = UIAction(title: "Copy Selection", image: UIImage(systemName: "text.cursor")) { _ in UIPasteboard.general.string = selected }
+            let copy = UIAction(title: "Copy Selection", image: UIImage(systemName: "text.cursor")) { _ in
+                UIPasteboard.general.string = selected
+                Haptics.play(.success)
+            }
             copy.accessibilityIdentifier = "selection.copy"
             let rest = delegate?.chatCellMenu(rowId: rowId, source: bubble)
             rest.map(ChatTextSelector.nameWholeCopy)   // its own Copy reads "Copy Message" beside it (Mac audit #11)

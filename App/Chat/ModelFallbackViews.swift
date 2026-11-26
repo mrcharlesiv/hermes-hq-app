@@ -572,7 +572,7 @@ private struct ModelFallbackSheetView: View {
                 headerRow
                 routeCard
                 Text(detail.explanation)
-                    .font(.subheadline)
+                    .font(Font.hq(.subheadline))
                     .foregroundStyle(Color.hqLabel)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("fallback.sheet.explanation")
@@ -598,7 +598,7 @@ private struct ModelFallbackSheetView: View {
                     .fill(accentColor.opacity(0.18))
                     .overlay(Circle().strokeBorder(accentColor.opacity(0.42), lineWidth: 1))
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 16, weight: .semibold))
+                    .hqSymbolFont(16, weight: .semibold, cap: 22)
                     .foregroundStyle(accentColor)
             }
             .frame(width: 40, height: 40)
@@ -606,10 +606,10 @@ private struct ModelFallbackSheetView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("Switched to \(detail.fallbackName)")
-                    .font(.headline)
+                    .font(Font.hq(.headline))
                     .foregroundStyle(Color.hqLabel)
                 Text(detail.kicker)
-                    .font(.footnote.weight(.semibold))
+                    .font(Font.hq(.footnote).weight(.semibold))
                     .foregroundStyle(accentColor)
             }
             Spacer(minLength: 0)
@@ -619,7 +619,7 @@ private struct ModelFallbackSheetView: View {
     private var routeCard: some View {
         HStack(spacing: 8) {
             Text(detail.primaryName)
-                .font(.footnote.weight(.semibold))
+                .font(Font.hq(.footnote).weight(.semibold))
                 .strikethrough(true, color: Color.hqLabel2)
                 .foregroundStyle(Color.hqLabel2)
                 .padding(.horizontal, 9)
@@ -628,12 +628,12 @@ private struct ModelFallbackSheetView: View {
                 .lineLimit(1)
 
             Image(systemName: "arrow.right")
-                .font(.caption.weight(.semibold))
+                .font(Font.hq(.caption).weight(.semibold))
                 .foregroundStyle(Color.hqLabel2)
                 .accessibilityHidden(true)
 
             Text(detail.fallbackName)
-                .font(.footnote.weight(.semibold))
+                .font(Font.hq(.footnote).weight(.semibold))
                 .foregroundStyle(Color.hqLabel)
                 .padding(.horizontal, 9)
                 .padding(.vertical, 5)
@@ -647,7 +647,7 @@ private struct ModelFallbackSheetView: View {
             Spacer(minLength: 4)
 
             Text(detail.routeStatus)
-                .font(.caption.weight(.medium))
+                .font(Font.hq(.caption).weight(.medium))
                 .foregroundStyle(Color.hqLabel2)
                 .lineLimit(1)
         }
@@ -665,13 +665,13 @@ private struct ModelFallbackSheetView: View {
     private func fixCard(command: String, hint: String?) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Fix on \(HostWord.phrase)")
-                .font(.caption.weight(.semibold))
+                .font(Font.hq(.caption).weight(.semibold))
                 .textCase(.uppercase)
                 .foregroundStyle(Color.hqLabel2)
 
             HStack(spacing: 10) {
                 Text(command)
-                    .font(.system(.footnote, design: .monospaced))
+                    .font(Font.hqSystem(.footnote, design: .monospaced))
                     .foregroundStyle(Color.hqLabel)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -683,7 +683,7 @@ private struct ModelFallbackSheetView: View {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copiedCommand = false }
                 } label: {
                     Text(copiedCommand ? "Copied" : "Copy")
-                        .font(.caption.weight(.semibold))
+                        .font(Font.hq(.caption).weight(.semibold))
                         .foregroundStyle(Color.hqLabel)
                         .padding(.horizontal, 11)
                         .padding(.vertical, 6)
@@ -698,7 +698,7 @@ private struct ModelFallbackSheetView: View {
 
             if let hint {
                 Text((try? AttributedString(markdown: hint)) ?? AttributedString(hint))
-                    .font(.caption)
+                    .font(Font.hq(.caption))
                     .foregroundStyle(Color.hqLabel2)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -715,7 +715,7 @@ private struct ModelFallbackSheetView: View {
         VStack(spacing: 10) {
             Button(action: onChooseModel) {
                 Text("Choose a Model")
-                    .font(.subheadline.weight(.semibold))
+                    .font(Font.hq(.subheadline).weight(.semibold))
                     .foregroundStyle(Color.hqOnTint)
                     .frame(maxWidth: .infinity)
                     .frame(minHeight: 44)
@@ -728,7 +728,7 @@ private struct ModelFallbackSheetView: View {
                 if let onOpenProviders {
                     Button(action: onOpenProviders) {
                         Text("Provider Settings")
-                            .font(.subheadline.weight(.semibold))
+                            .font(Font.hq(.subheadline).weight(.semibold))
                             .foregroundStyle(Color.hqLabel)
                             .frame(maxWidth: .infinity)
                             .frame(minHeight: 42)
@@ -746,7 +746,7 @@ private struct ModelFallbackSheetView: View {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copiedDetails = false }
                 } label: {
                     Text(copiedDetails ? "Copied" : "Copy Details")
-                        .font(.subheadline.weight(.semibold))
+                        .font(Font.hq(.subheadline).weight(.semibold))
                         .foregroundStyle(Color.hqLabel)
                         .frame(maxWidth: .infinity)
                         .frame(minHeight: 42)
@@ -762,7 +762,7 @@ private struct ModelFallbackSheetView: View {
     private var technicalSection: some View {
         DisclosureGroup(isExpanded: $showTechnical) {
             Text(technicalDump)
-                .font(.system(.caption, design: .monospaced))
+                .font(Font.hqSystem(.caption, design: .monospaced))
                 .foregroundStyle(Color.hqLabel2)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -771,7 +771,7 @@ private struct ModelFallbackSheetView: View {
                 .padding(.top, 8)
         } label: {
             Text("Technical details")
-                .font(.subheadline)
+                .font(Font.hq(.subheadline))
                 .foregroundStyle(Color.hqLabel2)
         }
         .tint(Color.hqLabel2)

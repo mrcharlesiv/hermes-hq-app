@@ -103,7 +103,7 @@ final class SpawnTreeModel {
         }
         let client = context.client
         events = Task { [weak self] in
-            for await event in client.events() where event.type.hasPrefix("subagent.") {
+            for await event in client.events(where: { $0.type.hasPrefix("subagent.") }) {
                 guard !Task.isCancelled else { return }
                 await self?.read()
             }

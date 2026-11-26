@@ -85,4 +85,14 @@ nonisolated enum NotificationOpener {
         record("expired")
         return original.userInfo["seal"] != nil ? unopened(original) : original
     }
+
+    /// Time expired after decryption succeeded (for example while waiting on Live Activity teardown): deliver the already-opened
+    /// notification rather than discarding it back to the "New notification" sealed placeholder.
+    static func expired(_ original: UNNotificationContent, opened: UNNotificationContent?, record: (String) -> Void) -> UNNotificationContent {
+        if let opened {
+            record("expired.opened")
+            return opened
+        }
+        return expired(original, record: record)
+    }
 }

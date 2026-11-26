@@ -44,7 +44,7 @@ final class TileWidgetWriter {
     private var again = false
     /// When each spec was last drawn this run (`<tile>|<family>|<w>x<h>`).
     private var drawn: [String: Date] = [:]
-    /// [tiles-v2] Last HTML SHA-256 content hash drawn for each spec key so unchanged HTML skips re-encoding.
+    /// [tiles-v2] Last `<sha256>|<themeSignature>` drawn for each spec key so unchanged HTML + theme skips re-encoding.
     private var drawnHashes: [String: String] = [:]
     /// [tiles-v2] Whether the current gateway answered 404/501 for `/api/tiles/widget-snapshot` (resets on account switch).
     private var remoteSnapshotUnsupported = false
@@ -52,6 +52,14 @@ final class TileWidgetWriter {
     private var writtenAccount: String?
     /// Last theme signature drawn for widgets (light + dark).
     private var lastThemeKey: String?
+    /// Serial background queue for all Keychain widget store I/O so `@MainActor` never blocks on IPC/encoding.
+    nonisolated private static let ioQueue = DispatchQueue(label: "ai.hermes.hq.tile-widget-io", qos: .utility)
+
+    private nonisolated static func onIO<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { continuation in
+            ioQueue.async { continuation.resume(returning: work()) }
+        }
+    }
 
     /// The widgets' own page context per bot: its generation moves with the widgets' redraws alone.
     private func context(_ pin: ArtifactPin) -> MediaContext {
@@ -117,12 +125,15 @@ final class TileWidgetWriter {
         remoteSnapshotUnsupported = false
         writtenAccount = nil
         lastThemeKey = nil
-        TileWidgetStore.signOut(scheme: AppIdentity.current.urlScheme)
-        Self.reload()
-        AppLog.note("widgets", "tile widgets: signed out")
-        #if DEBUG
-        Self.showProbe()
-        #endif
+        let scheme = AppIdentity.current.urlScheme
+        Self.ioQueue.async {
+            TileWidgetStore.signOut(scheme: scheme)
+            Self.reload()
+            AppLog.note("widgets", "tile widgets: signed out")
+            #if DEBUG
+            Task { @MainActor in Self.showProbe() }
+            #endif
+        }
     }
 
     private func detachObservers() {
@@ -163,6 +174,7 @@ final class TileWidgetWriter {
         }
         lastThemeKey = next
         drawn = [:]
+        drawnHashes = [:]
         stale = nil
         schedule(drawing: true)
     }
@@ -204,26 +216,37 @@ final class TileWidgetWriter {
         guard let account, let pins else { return false }
         let index = Self.index(pins: pins, bots: bots(), account: account, scheme: AppIdentity.current.urlScheme,
                                tint: Self.tints())
-        var changed = false
-        if writtenAccount != index.account, let kept = TileWidgetStore.loadIndex(), kept.account != index.account {
-            changed = TileWidgetStore.keepPictures([]) || changed   // another account's pictures go
-        }
+        let prevWrittenAccount = writtenAccount
         writtenAccount = index.account
-        if TileWidgetStore.loadIndex() != index {
-            changed = TileWidgetStore.saveIndex(index) || changed
-        }
         let placed = await Self.placed()
-        let wants = TileWidgetStore.wants(), sizes = Self.fallbackSizes(), now = Date()
-        let live = TileWidgetPlan.wanted(index: index, wants: wants, placed: placed, asked: asked, fallback: sizes, now: now)
-        // [tile-widgets] Every tile's three sizes are kept too, so one picked in Edit Widget shows at once.
-        let specs = TileWidgetPlan.wanted(index: index, wants: wants, placed: placed, asked: asked,
-                                          ahead: TileWidgetPlan.aheadTiles, fallback: sizes, now: now)
-        let aheadOnly = TileWidgetPlan.aheadOnly(all: specs, live: live)
-        changed = TileWidgetStore.keepPictures(specs) || changed
+        let sizes = Self.fallbackSizes(), now = Date(), askedSnapshot = asked
+        let prep: (changed: Bool, live: [TilePictureSpec], specs: [TilePictureSpec], aheadOnly: Set<TilePictureSpec>, existingPictures: Set<String>) = await Self.onIO {
+            var changed = false
+            if prevWrittenAccount != index.account, let kept = TileWidgetStore.loadIndex(), kept.account != index.account {
+                changed = TileWidgetStore.keepPictures([]) || changed   // another account's pictures go
+            }
+            if TileWidgetStore.loadIndex() != index {
+                changed = TileWidgetStore.saveIndex(index) || changed
+            }
+            let wants = TileWidgetStore.wants()
+            let live = TileWidgetPlan.wanted(index: index, wants: wants, placed: placed, asked: askedSnapshot, fallback: sizes, now: now)
+            // [tile-widgets] Every tile's three sizes are kept too, so one picked in Edit Widget shows at once.
+            let specs = TileWidgetPlan.wanted(index: index, wants: wants, placed: placed, asked: askedSnapshot,
+                                              ahead: TileWidgetPlan.aheadTiles, fallback: sizes, now: now)
+            let aheadOnly = TileWidgetPlan.aheadOnly(all: specs, live: live)
+            changed = TileWidgetStore.keepPictures(specs) || changed
+            let existingPictures = Set(WidgetVault.accounts(service: TileWidgetStore.pictureService))
+            return (changed, live, specs, aheadOnly, existingPictures)
+        }
+        guard !Task.isCancelled, self.account?.id == account.id else { return false }
+        var changed = prep.changed
+        var existingPictures = prep.existingPictures
+        let live = prep.live, specs = prep.specs, aheadOnly = prep.aheadOnly
+        let themeSig = Self.themeSignature()
         if drawing {
             let due = Self.due(specs, stale: stale, drawn: drawn, aheadOnly: aheadOnly, has: { spec in
-                TileWidgetStore.loadPicture(tile: spec.tile, family: spec.family, dark: false) != nil
-                    && TileWidgetStore.loadPicture(tile: spec.tile, family: spec.family, dark: true) != nil
+                existingPictures.contains(TileWidgetStore.pictureAccount(spec.tile, spec.family, dark: false))
+                    && existingPictures.contains(TileWidgetStore.pictureAccount(spec.tile, spec.family, dark: true))
             })
             stale = []
             var freshened = Set<MediaContext>()
@@ -235,15 +258,28 @@ final class TileWidgetWriter {
                 let context = context(pin)
                 if freshened.insert(context).inserted { PageSnapshots.shared.freshen(context) }
                 let key = Self.specKey(spec)
+                let hadBoth = existingPictures.contains(TileWidgetStore.pictureAccount(spec.tile, spec.family, dark: false))
+                    && existingPictures.contains(TileWidgetStore.pictureAccount(spec.tile, spec.family, dark: true))
+                var unchangedSkip = false
                 for dark in [false, true] {
                     await Self.waitForTheScreen()
                     guard let image = await Self.draw(pin, path: path, spec: spec, dark: dark, context: context) else { continue }
-                    let saved = TileWidgetStore.savePicture(image, tile: spec.tile, family: spec.family, dark: dark)
+                    if !dark, hadBoth,
+                       let htmlHash = PageSnapshots.shared.lastHash(path: path, context: context),
+                       drawnHashes[key] == "\(htmlHash)|\(themeSig)" {
+                        unchangedSkip = true
+                        break
+                    }
+                    let tileId = spec.tile, family = spec.family
+                    let saved = await Self.onIO { TileWidgetStore.savePicture(image, tile: tileId, family: family, dark: dark) }
+                    if saved != .refused { existingPictures.insert(TileWidgetStore.pictureAccount(tileId, family, dark: dark)) }
                     if saved == .written { changed = true }
                     AppLog.trace("widgets", "tile picture \(spec.family.rawValue) \(spec.width)x\(spec.height) pt \(dark ? "dark" : "light"): "
                                  + "\(Int(image.width * image.scale)) by \(Int(image.height * image.scale)) px drawn, \(image.jpeg.count / 1024) KB, \(saved)")
                 }
-                if let hash = PageSnapshots.shared.lastHash(path: path, context: context) { drawnHashes[key] = hash }
+                if let hash = PageSnapshots.shared.lastHash(path: path, context: context), !unchangedSkip {
+                    drawnHashes[key] = "\(hash)|\(themeSig)"
+                }
                 drawn[key] = Date()
             }
         } else if !remoteSnapshotUnsupported, let client = JobsStore.current?.client, client.account.id == account.id {
@@ -265,7 +301,8 @@ final class TileWidgetWriter {
                                               scale: Double(scale),
                                               fills: TileWidgetPlan.fills(points, in: CGSize(width: spec.width, height: spec.height)),
                                               edge: nil, jpeg: jpeg)
-                        if TileWidgetStore.savePicture(pic, tile: spec.tile, family: spec.family, dark: dark) == .written {
+                        let tileId = spec.tile, family = spec.family
+                        if await Self.onIO({ TileWidgetStore.savePicture(pic, tile: tileId, family: family, dark: dark) }) == .written {
                             changed = true
                         }
                     case .unsupported:
@@ -369,27 +406,43 @@ final class TileWidgetWriter {
         }
         guard let image, let cg = image.cgImage else { return nil }
         let scale = Double(image.scale)
-        let pixels = CGSize(width: Double(spec.width) * scale, height: Double(spec.height) * scale)
-        var fitted = TilePictureEncoding.fitted(cg, inside: pixels)
         #if DEBUG
-        // `-HQDebugWidgetOversize <n>`: the picture n times the widget's pixels (finding WidgetKit's pixel budget).
         let oversize = UserDefaults.standard.double(forKey: "HQDebugWidgetOversize")
-        if oversize > 1, let space = CGColorSpace(name: CGColorSpace.sRGB),
-           let big = CGContext(data: nil, width: Int(Double(fitted.width) * oversize), height: Int(Double(fitted.height) * oversize),
-                               bitsPerComponent: 8, bytesPerRow: 0, space: space,
-                               bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) {
-            big.draw(fitted, in: CGRect(x: 0, y: 0, width: big.width, height: big.height))
-            if let made = big.makeImage() { fitted = made }
-        }
+        #else
+        let oversize = 0.0
         #endif
-        guard let jpeg = TilePictureEncoding.jpeg(fitted) else {
-            AppLog.note("widgets", "tile widgets: a picture over the cap was left out")
-            return nil
-        }
-        let points = CGSize(width: Double(fitted.width) / scale, height: Double(fitted.height) / scale)
-        return TilePicture(drawnAt: Date(), width: Double(spec.width), height: Double(spec.height), scale: scale,
-                           fills: TileWidgetPlan.fills(points, in: CGSize(width: spec.width, height: spec.height)),
-                           edge: PinPictures.edgeColor(image).map(hex), jpeg: jpeg)
+        return await Task.detached(priority: .utility) {
+            let pixels = CGSize(width: Double(spec.width) * scale, height: Double(spec.height) * scale)
+            var fitted = TilePictureEncoding.fitted(cg, inside: pixels)
+            #if DEBUG
+            if oversize > 1, let space = CGColorSpace(name: CGColorSpace.sRGB),
+               let big = CGContext(data: nil, width: Int(Double(fitted.width) * oversize), height: Int(Double(fitted.height) * oversize),
+                                   bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                                   bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) {
+                big.draw(fitted, in: CGRect(x: 0, y: 0, width: big.width, height: big.height))
+                if let made = big.makeImage() { fitted = made }
+            }
+            #endif
+            guard let jpeg = TilePictureEncoding.jpeg(fitted) else {
+                AppLog.note("widgets", "tile widgets: a picture over the cap was left out")
+                return nil
+            }
+            let points = CGSize(width: Double(fitted.width) / scale, height: Double(fitted.height) / scale)
+            return TilePicture(drawnAt: Date(), width: Double(spec.width), height: Double(spec.height), scale: scale,
+                               fills: TileWidgetPlan.fills(points, in: CGSize(width: spec.width, height: spec.height)),
+                               edge: Self.edgeHex(cg), jpeg: jpeg)
+        }.value
+    }
+
+    /// Samples the bottom edge color of a drawn tile image (pure CGContext, safe off the main actor).
+    nonisolated private static func edgeHex(_ cg: CGImage) -> Int? {
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        var px = [UInt8](repeating: 0, count: 4)
+        guard let ctx = CGContext(data: &px, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4, space: space,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.draw(cg, in: CGRect(x: 0, y: 1 - CGFloat(cg.height), width: CGFloat(cg.width), height: CGFloat(cg.height)))
+        guard px[3] > 200 else { return nil }
+        return Int(px[0]) << 16 | Int(px[1]) << 8 | Int(px[2])
     }
 
     /// Waits while the screen's own pictures draw (at most 20 s), so a widget's never holds a visible tile back.
@@ -401,7 +454,7 @@ final class TileWidgetWriter {
 
     // MARK: The system's side
 
-    static func reload() {
+    nonisolated static func reload() {
         WidgetCenter.shared.reloadTimelines(ofKind: kind)
     }
 

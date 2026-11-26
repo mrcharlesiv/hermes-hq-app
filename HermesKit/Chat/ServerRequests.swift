@@ -4,6 +4,7 @@
 // dropped on answer, cancel and sign-out, and nothing here is logged or cached.
 
 import Foundation
+import Synchronization
 
 @MainActor final class ServerRequestCenter {
     struct Timing {
@@ -149,9 +150,35 @@ import Foundation
         statesTask?.cancel()
     }
 
+    nonisolated static func makeEventFilter() -> @Sendable (GatewayEvent) -> Bool {
+        let allowedTypes: Set<String> = [
+            LocalEvent.serverRequest, LocalEvent.openRequests, "gateway.ready",
+            "request.cancel", "clarify.request", "clarify.settled", "approval.cancelled",
+            "message.start", "tool.start", "tool.complete", "message.complete", "error", "session.info",
+        ]
+        let seenLiveDelta = Mutex<Set<String>>(Set())
+        return { event in
+            let type = event.type
+            if type == "message.delta" {
+                return seenLiveDelta.withLock { seen in
+                    if seen.count > 256 { seen.removeAll() }
+                    return seen.insert(event.sessionId).inserted
+                }
+            }
+            guard allowedTypes.contains(type) else { return false }
+            if type == "gateway.ready" {
+                seenLiveDelta.withLock { $0.removeAll() }
+            } else if type == "message.complete" || type == "error"
+                        || (type == "session.info" && event.payload["running"]?.bool == false) {
+                seenLiveDelta.withLock { _ = $0.remove(event.sessionId) }
+            }
+            return true
+        }
+    }
+
     func start() {
         guard eventsTask == nil, !shutDown else { return }
-        let events = client.events()
+        let events = client.events(where: Self.makeEventFilter())
         eventsTask = Task { [weak self] in
             for await event in events {
                 guard let self else { return }

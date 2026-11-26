@@ -175,7 +175,7 @@ nonisolated enum ForeignSessions {
         if place.count != out.count {
             var seen = Set<String>()
             out = out.filter { seen.insert($0.id).inserted }
-            place = Dictionary(uniqueKeysWithValues: out.enumerated().map { ($1.id, $0) })
+            place = Dictionary(out.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
         }
         for row in page {
             if let index = place[row.id] { out[index] = row } else { place[row.id] = out.count; out.append(row) }

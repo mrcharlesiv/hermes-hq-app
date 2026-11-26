@@ -212,7 +212,10 @@ struct ModelPricesView: View {
 
 struct PriceRowView: View {
     var row: PriceRow
-    var copy: (String) -> Void = { UIPasteboard.general.string = $0 }
+    var copy: (String) -> Void = {
+        UIPasteboard.general.string = $0
+        Haptics.play(.success)
+    }
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {

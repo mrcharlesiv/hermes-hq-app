@@ -34,6 +34,7 @@ import UIKit
         Task.detached(priority: .userInitiated) {
             let data = id == 1 ? CompletionCueSynth.wavData() : CompletionSoundVariant.wavData(id)
             await MainActor.run {
+                guard AudioSessionCoordinator.shared.owner == nil else { return }
                 if let data { AudioWork.later { CueAudio.play(data, fresh: true) } }
             }
         }
@@ -81,6 +82,7 @@ import UIKit
                 rendering = false
                 cueData = data
                 cueVariant = id
+                guard AudioSessionCoordinator.shared.owner == nil else { return }
                 if let data { AudioWork.later { CueAudio.play(data, fresh: true) } }
             }
         }
@@ -100,6 +102,7 @@ nonisolated enum CueAudio {
 
     static func play(_ data: Data, fresh: Bool = false) {
         dispatchPrecondition(condition: .onQueue(AudioWork.queue))
+        guard !AudioSessionCoordinator.isHeld else { return }
         let session = AVAudioSession.sharedInstance()
         // Only called while nothing holds the session (`CompletionCue.play` checks the voice coordinator on the main
         // actor; its own session calls run on this same queue, in order). Voice releases the session without putting

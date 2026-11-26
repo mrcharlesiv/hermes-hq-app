@@ -119,7 +119,7 @@ final class ActivityObservation {
     func start() {
         guard !started else { return }
         started = true
-        let events = client.events()
+        let events = client.events(matching: Self.watchedEvents)
         eventsTask = Task { [weak self] in
             for await event in events {
                 guard let self else { return }
@@ -372,6 +372,10 @@ final class ActivityObservation {
 
     private static let subagentEvents: Set<String> = ["subagent.spawn_requested", "subagent.start", "subagent.progress",
                                                       "subagent.thinking", "subagent.tool", "subagent.complete"]
+    private static let watchedEvents: Set<String> = subagentEvents.union([
+        "gateway.ready", "message.start", "todo.updated", "tool.start", "tool.complete",
+        "session.control.update", "message.complete", "error",
+    ])
 
     func handle(_ event: GatewayEvent) {
         if event.type == "gateway.ready" { connectionReady(); return }

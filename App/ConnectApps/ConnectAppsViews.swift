@@ -566,7 +566,7 @@ struct ConnectCategoryView: View {
         Task { await model.loadSignInRules() }
         do {
             let page = try await model.client.toolkits(session: session.id, slugs: category.slugs, limit: 30)
-            let order = Dictionary(uniqueKeysWithValues: category.slugs.enumerated().map { ($1, $0) })
+            let order = Dictionary(category.slugs.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
             items = page.items.sorted { (order[$0.slug] ?? 99) < (order[$1.slug] ?? 99) }
             AppLog.trace("connect", "composio category page loaded: \(items?.count ?? 0)")
         } catch {

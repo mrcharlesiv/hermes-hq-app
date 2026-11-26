@@ -236,7 +236,7 @@ struct CountBadgeView: View {
 
     var body: some View {
         Text("\(count)")
-            .font(.system(size: side * 16 / 22, design: .rounded))
+            .font(.system(size: side * 16 / 22, design: .rounded))   // a11y-font-ok: count sized to its scaled badge pill
             .monospacedDigit()
             .foregroundStyle(.white)
             .padding(.horizontal, side / 4)

@@ -415,6 +415,7 @@ import UIKit
 
     func copyDetails() {
         UIPasteboard.general.string = details
+        Haptics.play(.success)
     }
 
     /// Done on an end card (or the sheet closed).

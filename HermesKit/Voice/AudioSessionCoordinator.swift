@@ -9,6 +9,7 @@
 
 import AVFAudio
 import Foundation
+import Synchronization
 
 /// The serial queue every AVAudioSession and AVAudioRecorder call runs on.
 nonisolated enum AudioWork {
@@ -53,7 +54,13 @@ nonisolated enum AudioWork {
         var plays: Bool { self == .memoPlayback || self == .speech }
     }
 
-    private(set) var owner: Owner?
+    private nonisolated static let heldLock = Mutex<Bool>(false)
+    /// Lock-backed nonisolated check safe on `AudioWork.queue` so ambient cues never stomp a newly-acquired session.
+    nonisolated static var isHeld: Bool { heldLock.withLock { $0 } }
+
+    private(set) var owner: Owner? {
+        didSet { Self.heldLock.withLock { $0 = (owner != nil) } }
+    }
     /// Counts every time the session changes hands (`acquire` returns it), so a start that was abandoned can tell
     /// whether the session it took is still its own (`releaseAbandoned`).
     private(set) var grant = 0

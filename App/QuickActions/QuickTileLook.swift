@@ -59,7 +59,7 @@ struct QuickTileIcon: View {
             .frame(width: side, height: side)
             .overlay {
                 Image(systemName: QuickTileLook.symbol(symbol))
-                    .font(.system(size: side * 0.48, weight: .semibold))
+                    .font(.system(size: side * 0.48, weight: .semibold))   // a11y-font-ok: symbol sized to its square tile
                     .foregroundStyle(.white)
             }
             .accessibilityHidden(true)

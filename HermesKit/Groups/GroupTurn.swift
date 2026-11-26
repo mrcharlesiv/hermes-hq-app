@@ -114,7 +114,7 @@ nonisolated enum GroupTurnError: Error, Sendable, Equatable {
         guard task == nil else { return }
         // [perf] Filtered off the main actor: only the two event types it wants hop over, not every streamed delta.
         task = Task.detached { [weak self] in
-            for await event in client.events() where event.type == "message.complete" || event.type == "error" {
+            for await event in client.events(matching: ["message.complete", "error"]) {
                 await self?.fire(event.sessionId)
             }
         }

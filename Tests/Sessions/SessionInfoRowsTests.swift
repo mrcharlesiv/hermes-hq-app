@@ -202,11 +202,25 @@ import Testing
     }
 
     @Test func fallbackLinesParse() {
-        let model = ModelFallback.parse("Model fallback: claude-opus-5.5 via anthropic unavailable (overloaded); using gpt-5 via openai. Retrying")
-        #expect(model == ModelFallback(primary: "claude-opus-5.5", fallback: "gpt-5", reason: "overloaded"))
-        #expect(ModelFallback.parse("Model fallback: a via p unavailable; using b via q.") == ModelFallback(primary: "a", fallback: "b", reason: nil))
-        #expect(ModelFallback.parse("Provider fallback: anthropic unavailable; using openai for this response")
-                == ModelFallback(primary: "anthropic", fallback: "openai", reason: nil))
+        let line1 = "Model fallback: claude-opus-5.5 via anthropic unavailable (overloaded); using gpt-5 via openai. Retrying"
+        #expect(ModelFallback.parse(line1)
+                == ModelFallback(primary: "claude-opus-5.5", fallback: "gpt-5", reason: "overloaded",
+                                 primaryProvider: "anthropic", fallbackProvider: "openai",
+                                 rawText: line1, retryAfterSeconds: nil, isProviderShape: false))
+        let line2 = "Model fallback: a via p unavailable; using b via q."
+        #expect(ModelFallback.parse(line2)
+                == ModelFallback(primary: "a", fallback: "b", reason: nil,
+                                 primaryProvider: "p", fallbackProvider: "q",
+                                 rawText: line2, retryAfterSeconds: nil, isProviderShape: false))
+        let line3 = "Provider fallback: anthropic unavailable; using openai for this response"
+        #expect(ModelFallback.parse(line3)
+                == ModelFallback(primary: "anthropic", fallback: "openai", reason: nil,
+                                 primaryProvider: nil, fallbackProvider: nil,
+                                 rawText: line3, retryAfterSeconds: nil, isProviderShape: true))
+        let dotted = "Provider fallback: anthropic unavailable; using claude-sonnet-4.5 for this response"
+        #expect(ModelFallback.parse(dotted)?.fallback == "claude-sonnet-4.5")
+        let dottedPeriod = "Provider fallback: anthropic unavailable; using claude-sonnet-4.5."
+        #expect(ModelFallback.parse(dottedPeriod)?.fallback == "claude-sonnet-4.5")
         #expect(ModelFallback.parse("Compacting the conversation") == nil && ModelFallback.parse("") == nil)
         #expect(ModelFallback.restores("Primary model restored: claude-opus-5.5") && !ModelFallback.restores("Model fallback: x"))
     }

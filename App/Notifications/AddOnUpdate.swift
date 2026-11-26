@@ -847,7 +847,7 @@ struct AddOnUpdateView: View {
             Group {
                 if let symbol = update.symbol {
                     Image(systemName: symbol.name)
-                        .font(.system(size: symbolSize))
+                        .font(.system(size: symbolSize))   // a11y-font-ok: a symbol sized with Dynamic Type (@ScaledMetric)
                         .foregroundStyle(symbol.color)
                         .transition(.hqMotion(.scale.combined(with: .opacity)))
                 } else {

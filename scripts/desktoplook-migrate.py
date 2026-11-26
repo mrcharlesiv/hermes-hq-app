@@ -12,7 +12,7 @@ font it replaced (App/Theme/ThemeFonts.swift), so nothing changes for the standa
 import os, re, sys
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "App")
-SKIP = ("App/Theme/", "App/Kit/Accessibility/HQFont.swift")   # the font factory and its accessibility half
+SKIP = ("App/Theme/", "App/Debug/", "App/Kit/Accessibility/HQFont.swift")   # the font factory, debug hooks, and accessibility half
 STYLES = "largeTitle|title3|title2|title|headline|subheadline|body|callout|footnote|caption2|caption"
 RULES = [
     (re.compile(r"UIFont\.preferredFont\(forTextStyle:\s*"), "HQFont.preferred("),
@@ -46,6 +46,55 @@ def strip_code(line):
     return line.split("//")[0]
 
 
+def _balance_delta(code):
+    return (
+        code.count("(") - code.count(")")
+        + code.count("[") - code.count("]")
+        + code.count("{") - code.count("}")
+    )
+
+
+def _modifier_chain(lines, close_index):
+    """Collect the full SwiftUI postfix modifier chain after a closing `}`, handling multi-line args,
+    `#if ... #endif` blocks, and immediately enclosing container modifiers (e.g. `ScrollViewReader`)."""
+    tail = strip_code(lines[close_index]).rsplit("}", 1)[-1]
+    chain = tail
+    depth = _balance_delta(tail)
+    cond_depth = 0
+    k = close_index + 1
+    while k < len(lines):
+        stripped = lines[k].strip()
+        code = strip_code(lines[k])
+        if depth > 0 or cond_depth > 0:
+            if stripped.startswith("#if"):
+                cond_depth += 1
+            elif stripped.startswith("#endif") and cond_depth > 0:
+                cond_depth -= 1
+            depth += _balance_delta(code)
+            chain += "\n" + lines[k]
+            k += 1
+            continue
+        if stripped == "" or stripped.startswith("//") or stripped.startswith("."):
+            depth += _balance_delta(code)
+            chain += "\n" + lines[k]
+            k += 1
+            continue
+        if stripped.startswith("#if"):
+            cond_depth += 1
+            chain += "\n" + lines[k]
+            k += 1
+            continue
+        if stripped.startswith("}"):
+            # Enclosing wrapper (e.g. ScrollViewReader { List { ... } }.hqGroupedPage()): include its chain too.
+            after = strip_code(lines[k]).rsplit("}", 1)[-1]
+            depth = _balance_delta(after)
+            chain += "\n" + lines[k]
+            k += 1
+            continue
+        break
+    return chain
+
+
 def add_grouped_page(text):
     lines = text.split("\n")
     out, i = [], 0
@@ -63,10 +112,7 @@ def add_grouped_page(text):
             j += 1
         if j >= len(lines):                      # unbalanced: leave the file alone
             out.extend(lines[i:]); break
-        # the modifier chain after the closing brace
-        k, chain = j + 1, strip_code(lines[j]).rsplit("}", 1)[-1]
-        while k < len(lines) and (lines[k].strip().startswith(".") or lines[k].strip().startswith("//") or lines[k].strip().startswith("#")):
-            chain += lines[k]; k += 1
+        chain = _modifier_chain(lines, j)
         out.append(lines[i])
         inner = add_grouped_page("\n".join(lines[i + 1:j])) if j > i + 1 else None
         if inner is not None:
@@ -76,6 +122,20 @@ def add_grouped_page(text):
         if GROUPED not in chain and ".settingsList()" not in chain:
             out.append("%s%s   // [desktoplook] the page follows the skin" % (match.group(1), GROUPED))
         i = j + 1
+    return "\n".join(out)
+
+
+def rewrite_rules(text):
+    out = []
+    for line in text.split("\n"):
+        stripped = line.lstrip()
+        if stripped.startswith("//") or "a11y-font-ok" in line or "font-ok" in line:
+            out.append(line)
+            continue
+        updated = line
+        for pattern, replacement in RULES:
+            updated = pattern.sub(replacement, updated)
+        out.append(updated)
     return "\n".join(out)
 
 
@@ -129,9 +189,7 @@ def main():
             if rel.startswith(SKIP):
                 continue
             text = open(path).read()
-            new = text
-            for pattern, replacement in RULES:
-                new = pattern.sub(replacement, new)
+            new = rewrite_rules(text)
             new = add_grouped_page(new)
             if new != text:
                 if check:

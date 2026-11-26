@@ -745,7 +745,7 @@ final class PagesTabs {
     // MARK: Events and lifecycle
 
     private func watchEvents(_ client: any GatewayClient) {
-        let events = client.events()
+        let events = client.events(matching: ["cron.changed", "tasks.changed", "gateway.ready"])
         eventsTask = Task { [weak self] in
             for await event in events {
                 guard let self else { return }
@@ -829,7 +829,7 @@ final class PagesTabs {
         madeArtifacts?.reset()
         TasksHub.signedOut()   // [tasks]
         TileWidgetWriter.shared.signedOut()   // [tile-widgets] the widgets say "Open Hermes HQ"; every picture goes
-        TasksWidgetWriter.shared.signedOut()   // [tasks-widget] and no task stays where the widget reads
+        TasksWidgetWriter.shared.signedOutAsync()   // [tasks-widget] and no task stays where the widget reads
         if let account { Self.forgetDefaults(account) }
     }
 

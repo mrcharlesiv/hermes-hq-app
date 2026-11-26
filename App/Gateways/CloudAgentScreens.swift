@@ -730,7 +730,7 @@ struct CloudDeletePage: View {
         return CloudCentered {
             ZStack {
                 Circle().fill(Color.hqRed.opacity(0.12))
-                Image(systemName: "trash.fill").font(.system(size: min(badge, 110) * 0.4, weight: .semibold)).foregroundStyle(Color.hqRed)
+                Image(systemName: "trash.fill").font(.system(size: min(badge, 110) * 0.4, weight: .semibold)).foregroundStyle(Color.hqRed)   // a11y-font-ok: glyph sized to its scaled badge circle
             }
             .frame(width: min(badge, 110), height: min(badge, 110))
             .accessibilityHidden(true)

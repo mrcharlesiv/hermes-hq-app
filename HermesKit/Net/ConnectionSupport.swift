@@ -205,6 +205,41 @@ nonisolated final class Locked<Value: Sendable>: Sendable {
     @discardableResult func mutate<R: Sendable>(_ change: (inout Value) -> R) -> R { state.withLock { change(&$0) } }
 }
 
+/// Bounded least-recently-used map that evicts only the single stalest key at `limit` instead of wiping active entries.
+nonisolated struct BoundedLRU<Key: Hashable & Sendable, Value: Sendable>: Sendable {
+    private var entries: [Key: (value: Value, tick: UInt64)] = [:]
+    private var clock: UInt64 = 0
+    let limit: Int
+
+    init(limit: Int = 256) {
+        self.limit = max(1, limit)
+    }
+
+    var count: Int { entries.count }
+
+    func peek(_ key: Key) -> Value? { entries[key]?.value }
+
+    mutating func value(for key: Key) -> Value? {
+        guard let entry = entries[key] else { return nil }
+        clock &+= 1
+        entries[key] = (entry.value, clock)
+        return entry.value
+    }
+
+    mutating func set(_ value: Value, for key: Key) {
+        clock &+= 1
+        entries[key] = (value, clock)
+        while entries.count > limit, let oldest = entries.min(by: { $0.value.tick < $1.value.tick })?.key {
+            entries.removeValue(forKey: oldest)
+        }
+    }
+
+    mutating func removeAll() {
+        entries.removeAll()
+        clock = 0
+    }
+}
+
 /// What a network path change means for open sockets (spec 01 §13.7, HermesTransportPolicy.pathChange).
 nonisolated enum PathChange: Equatable, Sendable {
     case none, lost, restored, verify, replaced

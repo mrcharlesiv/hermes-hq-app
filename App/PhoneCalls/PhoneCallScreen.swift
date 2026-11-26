@@ -30,6 +30,7 @@ struct PhoneCallScreen: View {
                         Menu {
                             Button("Copy number", systemImage: "doc.on.doc") {
                                 UIPasteboard.general.string = call.to
+                                Haptics.play(.success)
                                 HQAnnounce.say("Number copied")
                             }
                             if !call.active {

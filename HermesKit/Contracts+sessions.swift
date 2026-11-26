@@ -313,7 +313,7 @@ nonisolated struct ModelFallback: Hashable, Sendable {
     private static let modelLead = JSRegex(#"Model fallback:\s*(\S+)\s+via\s+(\S+)\s+"#)
     private static let usingTail = JSRegex(#"^(\S+)(?:\s+via\s+(\S+?))?(?:\.(?:\s|$)|\s*$)"#)
     private static let retryIn = JSRegex(#"Primary retry eligible in\s*~?(\d+)\s*s\b"#)
-    private static let provider = JSRegex(#"Provider fallback:\s*(\S+)\s+(?:unavailable|could not respond|failed)(?:\s+\(([\s\S]*)\))?;\s*using\s+(\S+?)(?:\s+for this response|\.|\s|$)"#)
+    private static let provider = JSRegex(#"Provider fallback:\s*(\S+)\s+(?:unavailable|could not respond|failed)(?:\s+\(([\s\S]*)\))?;\s*using\s+(\S+?)(?:\s+for this response|\.(?:\s|$)|\s|$)"#)
 
     /// The gateway's status line, both shapes; nil for anything else.
     /// Splits on `; using ` first so reasons containing nested or truncated parentheses still parse cleanly.

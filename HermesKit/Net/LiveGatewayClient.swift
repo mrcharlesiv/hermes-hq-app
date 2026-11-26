@@ -179,6 +179,11 @@ nonisolated final class LiveGatewayClient: GatewayClient, GatewayTransfers, Gate
     /// [perf] Filtered before the event is queued: a main-actor consumer of a few types isn't woken by every delta.
     func events(matching types: Set<String>) -> AsyncStream<GatewayEvent> { eventHub.subscribe(where: { types.contains($0.type) }) }
 
+    /// [perf] Lock-side predicate filter before an event is queued onto a subscriber stream.
+    func events(where predicate: @escaping @Sendable (GatewayEvent) -> Bool) -> AsyncStream<GatewayEvent> {
+        eventHub.subscribe(where: predicate)
+    }
+
     func connectionStates() -> AsyncStream<ConnectionState> { stateHub.subscribe() }
 
     var latestReady: JSONValue? { ready.value }

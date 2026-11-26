@@ -104,7 +104,7 @@ final class GatewayPageModel {
         // [macpass-settings2] The rows keep the places they had while the page is open: the store puts the gateway in
         // use first, so a click on a gateway made it jump to the top and the other one took its place under the pointer.
         if !shownOrder.isEmpty {
-            let place = Dictionary(uniqueKeysWithValues: shownOrder.enumerated().map { ($1, $0) })
+            let place = Dictionary(shownOrder.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
             rows = rows.enumerated().sorted { (place[$0.element.id] ?? shownOrder.count + $0.offset, $0.offset)
                 < (place[$1.element.id] ?? shownOrder.count + $1.offset, $1.offset) }.map(\.element)
         }

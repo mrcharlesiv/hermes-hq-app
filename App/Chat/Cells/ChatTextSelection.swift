@@ -291,6 +291,7 @@ final class ChatTextSelector: NSObject, UIGestureRecognizerDelegate {
     func copySelection() {
         guard let text = selectedText else { return }
         UIPasteboard.general.string = text
+        Haptics.play(.success)
         AppLog.trace("chatui", "selection copied (\(text.count) chars)")
     }
 

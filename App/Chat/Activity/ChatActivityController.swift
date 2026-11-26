@@ -871,7 +871,7 @@ import UIKit
         // it stays while you have one open, until you fold it or the next message clears them. A finished child only
         // keeps its Steer row while words you typed to it are still in the field.
         if p.activityStore != nil {
-            unreadHelperFailures = Dictionary(uniqueKeysWithValues: a.unreadHelperFailures.map { ($0.id, $0) })
+            unreadHelperFailures = Dictionary(a.unreadHelperFailures.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
         } else {
             for child in a.subagents {
                 if child.status == .failed && !readHelperFailures.contains(child.id) {

@@ -619,7 +619,7 @@ final class SessionStore {
         AppLog.trace("sessions", "store start: \(recents.count) recents, \(cron.count) cron, \(messaging.count) messaging from cache")
         let client = self.client
         eventsTask = Task { [weak self] in
-            for await event in client.events() {
+            for await event in client.events(matching: ["sessions.changed", "session.info", "message.complete", "gateway.ready"]) {
                 guard let self else { return }
                 self.handle(event)
             }
@@ -1578,7 +1578,7 @@ final class SessionStore {
         func diff(_ old: [SidebarSessionRow], _ new: [SidebarSessionRow]) -> String {
             let oldKeys = Set(old.map { Self.writeKey(id: $0.id, profile: $0.profile) })
             let newKeys = Set(new.map { Self.writeKey(id: $0.id, profile: $0.profile) })
-            let oldByKey = Dictionary(uniqueKeysWithValues: old.map { (Self.writeKey(id: $0.id, profile: $0.profile), $0) })
+            let oldByKey = Dictionary(old.map { (Self.writeKey(id: $0.id, profile: $0.profile), $0) }, uniquingKeysWith: { first, _ in first })
             let added = newKeys.subtracting(oldKeys).count
             let removed = oldKeys.subtracting(newKeys).count
             let changed = new.filter { row in oldByKey[Self.writeKey(id: row.id, profile: row.profile)].map { $0 != row } ?? false }.count

@@ -306,7 +306,7 @@ final class ComposioModel {
             AppLog.note("connect", "composio connected apps load failed after \(AppLog.ms(since: start)) ms: \(error.kind)")
         }
         if let page = try? await client.toolkits(session: session.id, slugs: ComposioCatalog.popular, limit: 30) {
-            let order = Dictionary(uniqueKeysWithValues: ComposioCatalog.popular.enumerated().map { ($1, $0) })
+            let order = Dictionary(ComposioCatalog.popular.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
             popular = page.items.sorted { (order[$0.slug] ?? 99) < (order[$1.slug] ?? 99) }
         } else if popular == nil {
             popular = []

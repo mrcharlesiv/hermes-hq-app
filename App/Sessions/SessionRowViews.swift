@@ -533,7 +533,7 @@ struct SessionRowView: View {
             let mark = HStack(spacing: 4) {
                 if ready {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: HQFont.scaled(12), weight: .semibold))
+                        .hqSymbolFont(12, weight: .semibold, cap: 20)
                         .foregroundStyle(Color.hqGreen)
                     if let number = tags.shown.first?.number ?? pr.number {
                         Text(verbatim: "#\(number)")
@@ -543,7 +543,7 @@ struct SessionRowView: View {
                 } else if failing {
                     let failedCount = max(1, pr.checks?.failed ?? 1)
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: HQFont.scaled(12), weight: .semibold))
+                        .hqSymbolFont(12, weight: .semibold, cap: 20)
                         .foregroundStyle(Color.hqRed)
                     let label = (tags.shown.first?.number ?? pr.number).map { "#\($0) · \(failedCount) failed" } ?? "\(failedCount) failed"
                     Text(verbatim: label)

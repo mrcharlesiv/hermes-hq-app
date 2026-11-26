@@ -140,6 +140,8 @@ nonisolated protocol GatewayClient: AnyObject, Sendable {
     /// `events()` narrowed to these types, in order. A consumer that wants a few types uses it so it is not woken (on
     /// the main actor) for every message delta.
     func events(matching types: Set<String>) -> AsyncStream<GatewayEvent>
+    /// `events()` narrowed by a cheap lock-safe predicate before the event is queued.
+    func events(where predicate: @escaping @Sendable (GatewayEvent) -> Bool) -> AsyncStream<GatewayEvent>
     /// New subscriber stream of connection state changes; yields the current state first.
     func connectionStates() -> AsyncStream<ConnectionState>
     /// Payload of the latest gateway.ready (replay_epoch, performance plugin info…), nil before the first.
@@ -182,10 +184,15 @@ extension GatewayClient {
 
     /// Fakes: `events()` filtered after the fact (the live client filters before the event is queued).
     nonisolated func events(matching types: Set<String>) -> AsyncStream<GatewayEvent> {
+        events(where: { types.contains($0.type) })
+    }
+
+    /// Fakes: `events()` filtered after the fact (the live client filters before the event is queued).
+    nonisolated func events(where predicate: @escaping @Sendable (GatewayEvent) -> Bool) -> AsyncStream<GatewayEvent> {
         let all = events()
         return AsyncStream { continuation in
             let pump = Task {
-                for await event in all where types.contains(event.type) { continuation.yield(event) }
+                for await event in all where predicate(event) { continuation.yield(event) }
                 continuation.finish()
             }
             continuation.onTermination = { _ in pump.cancel() }

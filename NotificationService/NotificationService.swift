@@ -27,13 +27,32 @@ final class NotificationService: UNNotificationServiceExtension {
     private final class Once: @unchecked Sendable {
         private let lock = NSLock()
         private var handler: ((UNNotificationContent) -> Void)?
+        private var opened: UNNotificationContent?
+
         init(_ handler: @escaping (UNNotificationContent) -> Void) { self.handler = handler }
+
+        func setOpened(_ content: UNNotificationContent) {
+            lock.lock()
+            opened = content
+            lock.unlock()
+        }
+
         func send(_ content: UNNotificationContent) {
             lock.lock()
             let handler = self.handler
             self.handler = nil
             lock.unlock()
             handler?(content)
+        }
+
+        func expire(original: UNNotificationContent, record: (String) -> Void) {
+            lock.lock()
+            let handler = self.handler
+            let ready = self.opened
+            self.handler = nil
+            lock.unlock()
+            guard let handler else { return }
+            handler(NotificationOpener.expired(original, opened: ready, record: record))
         }
     }
 
@@ -46,6 +65,7 @@ final class NotificationService: UNNotificationServiceExtension {
         // calls this extension's two overrides one at a time, never from two threads at once, so a short-lived Task
         // using either value right after is no less safe than finishing synchronously would have been.
         nonisolated(unsafe) let opened = NotificationOpener.process(request.content, environment: .live)
+        once.setOpened(opened)
         #if canImport(ActivityKit) && !targetEnvironment(macCatalyst)
         if let dispatch = opened.userInfo["dispatch"] as? [String: Any], let subject = LiveActivityPush.turnFinished(dispatch) {
             // Held until this finishes (or `serviceExtensionTimeWillExpire` cuts it short, showing the opened alert
@@ -63,7 +83,8 @@ final class NotificationService: UNNotificationServiceExtension {
 
     override func serviceExtensionTimeWillExpire() {
         guard let original else { return }
-        finish(NotificationOpener.expired(original) { PushAlertDiagnostics.record($0) })
+        deliver?.expire(original: original) { PushAlertDiagnostics.record($0) }
+        deliver = nil
     }
 
     private func finish(_ content: UNNotificationContent) {

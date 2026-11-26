@@ -63,7 +63,7 @@ struct AppIconPage: View {
                     .overlay(alignment: .bottomTrailing) {
                         if chosen {
                             Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: iconSide * 0.3, weight: .semibold))
+                                .font(.system(size: iconSide * 0.3, weight: .semibold))   // a11y-font-ok: checkmark badge sized to its icon preview
                                 .symbolRenderingMode(.palette)
                                 .foregroundStyle(Color.hqOnTint, Color.hqTint)   // [paper-ink]
                                 .background(Circle().fill(Color.hqGroupedCard).padding(-2.5))

@@ -806,8 +806,15 @@ final class LiveChatSession: ChatSessionModel {
         queueDrainTask?.cancel(); queueDrainTask = nil
     }
 
+    private static let watchedEvents: Set<String> = [
+        "gateway.ready", "sessions.changed", "session.reclaimed", "btw.complete", "background.complete",
+        "message.start", "message.delta", "reasoning.delta", "thinking.delta", "reasoning.available",
+        "message.interim", "tool.generating", "tool.start", "tool.complete", "status.update",
+        "message.complete", "session.usage", "session.info", "error", "session.resume_progress", "session.title",
+    ]
+
     func subscribe() {
-        let events = client.events()
+        let events = client.events(matching: Self.watchedEvents)
         eventTask = Task { [weak self] in
             for await event in events {
                 guard let self else { return }

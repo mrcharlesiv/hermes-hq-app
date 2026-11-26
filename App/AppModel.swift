@@ -3,6 +3,7 @@
 // focus and unread bookkeeping around an open chat, "Working…" from the chat engine, connection changes for the
 // lists, and the app lifecycle for the socket and the stores.
 
+import Synchronization
 import UIKit
 
 final class AppModel: AppServices {
@@ -403,6 +404,18 @@ final class AppModel: AppServices {
         warmer?.prefetch(bot)
     }
 
+    enum SignOutDecision: Equatable, Sendable {
+        case fullSignOut(account: GatewayAccount?)
+        case purgeOnly(previousAccount: GatewayAccount)
+    }
+
+    nonisolated static func signOutDecision(asked: GatewayAccount?, current: GatewayAccount?) -> SignOutDecision {
+        guard let current else { return .fullSignOut(account: asked) }
+        guard let asked else { return .fullSignOut(account: current) }
+        if current.id == asked.id { return .fullSignOut(account: current) }
+        return .purgeOnly(previousAccount: asked)
+    }
+
     /// Sign Out (Account screen, spec 01 §17): stop the stores, end the client and its session (a password session is
     /// also ended on the gateway in the background), forget this account's local caches, then decide what to show.
     func signOut() {
@@ -416,24 +429,47 @@ final class AppModel: AppServices {
             await screenLeaving()                 // [screen] control is handed back while the client can still ask
             await notificationsLeaving(signingOut: true)
             signingOut = false
-            if account == nil { finishSignOut(leaving: asked.account, bots: asked.bots, sessions: asked.sessions) }
-            else { finishSignOut(leaving: account, bots: botStore, sessions: sessionStore) }
+            switch Self.signOutDecision(asked: asked.account, current: account) {
+            case .fullSignOut(let resolved):
+                let bots = account == nil ? asked.bots : botStore
+                let sessions = account == nil ? asked.sessions : sessionStore
+                finishSignOut(leaving: resolved, bots: bots, sessions: sessions)
+            case .purgeOnly(let previousAccount):
+                // Another account became active while awaiting network teardown; only purge the prior account's caches.
+                let staleBots = asked.bots === botStore ? nil : asked.bots
+                let staleSessions = asked.sessions === sessionStore ? nil : asked.sessions
+                purgeAccountCaches(leaving: previousAccount, bots: staleBots, sessions: staleSessions)
+            }
         }
     }
 
     private func finishSignOut(leaving: GatewayAccount?, bots: BotStore?, sessions: SessionStore?) {
-        if let leaving { ServerIssues.shared.signOut(account: leaving.id) }   // [capabilities] 3x §8.1
-        if let leaving { AddOnReminder.shared.signOut(account: leaving.id) }   // [addon-reminder]
-        if let leaving { PluginUpdateReminder.shared.signOut(account: leaving.id) }   // [plugin-updates]
         if leaving?.kind == .nous, leaving?.usesOwnLogin != true { NousSheetLogin.signedOut() }   // [nous-different-account] the next sheet asks who you are
         tearDown(shutdownClient: false)           // SignInService ends the client and still logs out with its cookies
         signIn.signOut()
         shareLeaving()                                // [share] the sheet offers nobody once signed out
         settingsHub.accountsChanged()                 // settings stream
+        BotsFilterMemory.reset()                      // [botslist] the next sign-in starts unfiltered
+        // [m2/pages] Jobs, Kanban and Artifacts caches go with the account (docs/spec/1x-pages.md §2.1, §2.5).
+        onSignOutPages?()
+        purgeAccountCaches(leaving: leaving, bots: bots, sessions: sessions)
+        intentsSignedOut()                            // [intents]
+        chatAwaitingTabs = nil                        // [notifications] a tapped alert's chat never opens under the next account
+        taskAwaitingTabs = nil
+        if signIn.store.accounts.isEmpty {
+            offlineHub.signedOutOfLast()              // [offline] §3.5: nothing left to name
+            PromptLibrary.shared.removeAll()          // ⋯ › Prompts: shared by every account, so kept until the last goes
+        }
+        onSignedOut?()
+    }
+
+    private func purgeAccountCaches(leaving: GatewayAccount?, bots: BotStore?, sessions: SessionStore?) {
+        if let leaving { ServerIssues.shared.signOut(account: leaving.id) }   // [capabilities] 3x §8.1
+        if let leaving { AddOnReminder.shared.signOut(account: leaving.id) }   // [addon-reminder]
+        if let leaving { PluginUpdateReminder.shared.signOut(account: leaving.id) }   // [plugin-updates]
         bots?.removeCachedData()
         sessions?.removeCachedData()
         if let leaving { SyncHub.forgetLists(accountId: leaving.id) }   // [sync] 13-1: with the lists' state it was about
-        BotsFilterMemory.reset()                      // [botslist] the next sign-in starts unfiltered
         if let leaving {
             GroupStore.removeFiles(directory: Self.listsCacheDirectory, account: leaving)   // [groups] rooms, marks, pins
             TranscriptCache.shared.purge(account: leaving.id)
@@ -456,21 +492,11 @@ final class AppModel: AppServices {
             BrowserLastPages.shared.purge(account: leaving.id)          // [last-page] the bots' last browser pages
             BotPhotoStore.purge(cacheDirectory: Self.listsCacheDirectory, account: leaving)
         }
-        // [m2/pages] Jobs, Kanban and Artifacts caches go with the account (docs/spec/1x-pages.md §2.1, §2.5).
-        onSignOutPages?()
         if let leaving {
             PagesCache.purge(account: leaving)
             SoulDraftStore.standard.removeAll(account: leaving.id)   // [13-12] unsaved SOUL.md text, beside the page caches
             KeychainToolRuleVault(account: leaving.id).removeAll()   // [13-13] half-saved connectors' copies (may hold headers)
         }
-        intentsSignedOut()                            // [intents]
-        chatAwaitingTabs = nil                        // [notifications] a tapped alert's chat never opens under the next account
-        taskAwaitingTabs = nil
-        if signIn.store.accounts.isEmpty {
-            offlineHub.signedOutOfLast()              // [offline] §3.5: nothing left to name
-            PromptLibrary.shared.removeAll()          // ⋯ › Prompts: shared by every account, so kept until the last goes
-        }
-        onSignedOut?()
     }
 
     // MARK: - Account lifecycle
@@ -682,7 +708,7 @@ final class AppModel: AppServices {
                 self.connectionChanged(state)
             }
         }
-        let events = client.events()
+        let events = client.events(where: Self.makeGatewayEventFilter())
         eventsTask = Task { [weak self] in
             for await event in events {
                 guard let self else { return }
@@ -973,6 +999,55 @@ final class AppModel: AppServices {
     }
 
     /// Turns that keep running after their chat left the screen: their "Working…" ends with the turn.
+    private nonisolated enum DeltaPhase: Equatable {
+        case thinking
+        case replying(sawNonBlank: Bool)
+    }
+
+    /// Filters intermediate streaming deltas off `@MainActor`: forwards the first thinking delta and first blank/non-blank
+    /// message delta per phase so BotMoods and LiveSteps see every phase edge without waking MainActor on every token.
+    nonisolated static func makeGatewayEventFilter() -> @Sendable (GatewayEvent) -> Bool {
+        let nonDeltaTypes: Set<String> = [
+            LocalEvent.messageTooLarge, "notification.show", "terminal.close",
+            "tool.start", "tool.generating", "tool.complete",
+            "message.start", "reasoning.available", "message.complete", "error", "session.interrupt",
+            "sessions.changed", "session.info",
+        ]
+        let phases = Mutex<[String: DeltaPhase]>([:])
+        return { event in
+            let type = event.type
+            if type == "gateway.ready" {
+                phases.withLock { $0.removeAll() }
+                return false
+            }
+            let sid = event.sessionId
+            if type == "thinking.delta" || type == "reasoning.delta" {
+                return phases.withLock { map in
+                    if map.count > 256 { map.removeAll() }
+                    if map[sid] == .thinking { return false }
+                    map[sid] = .thinking
+                    return true
+                }
+            }
+            if type == "message.delta" {
+                let nonBlank = !LiveChatText.isBlank(event.payload["text"])
+                return phases.withLock { map in
+                    if map.count > 256 { map.removeAll() }
+                    if case .replying(let sawNonBlank) = map[sid] {
+                        guard nonBlank && !sawNonBlank else { return false }
+                    }
+                    map[sid] = .replying(sawNonBlank: nonBlank)
+                    return true
+                }
+            }
+            guard nonDeltaTypes.contains(type) else { return false }
+            if !sid.isEmpty {
+                phases.withLock { _ = $0.removeValue(forKey: sid) }
+            }
+            return true
+        }
+    }
+
     private func gatewayEvent(_ event: GatewayEvent) {
         // [offline] §5.3: a message over 64 MB was skipped; said once per streak (the connection sends one event).
         if event.type == LocalEvent.messageTooLarge { offlineHub.messageTooLarge(); return }

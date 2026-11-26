@@ -31,7 +31,7 @@ struct PlatformMark: View {
         case .symbol(let name):
             Image(systemName: name).resizable().scaledToFit().fontWeight(.semibold).frame(width: size * 0.58, height: size * 0.58)
         case .letter(let letter):
-            Text(letter).font(.system(size: size * 0.6, weight: .bold, design: .rounded))
+            Text(letter).font(.system(size: size * 0.6, weight: .bold, design: .rounded))   // a11y-font-ok: letter mark sized to its square icon
         }
     }
 }

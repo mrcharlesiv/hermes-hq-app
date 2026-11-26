@@ -213,7 +213,7 @@ nonisolated struct CloudToolSchema: Sendable, Equatable {
             if choices.isEmpty, type == "string", let described = Self.describedChoices(detail) {
                 // "e.g. 'standard' (default, 2 GB) or 'pro' (4 GB)": a free string the description lists the values of.
                 choices = described.map(\.key)
-                titles = Dictionary(uniqueKeysWithValues: described.map { ($0.key, $0.title) })
+                titles = Dictionary(described.map { ($0.key, $0.title) }, uniquingKeysWith: { first, _ in first })
                 fallback = fallback ?? described.first { $0.isDefault }?.key
                 if name == "size" {
                     // Its sizes are examples ("e.g."): Portal also sells Max (8 GB), which the description leaves out.

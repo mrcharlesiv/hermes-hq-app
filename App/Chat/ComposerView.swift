@@ -418,7 +418,7 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboa
         guard macBoxChip, modelChip.title != nil, !recorderTakesRow, !leadingHeld else { return 0 }
         // [macpass-chat r4] The chip leaves the text room for a whole "Message" (a long model name in a 900 pt window
         // cut the placeholder to "Mes…"): it narrows to what is left, and steps aside when that is under 56 pt.
-        let font = textView.font ?? .preferredFont(forTextStyle: .body)
+        let font = textView.font ?? HQFont.preferred(.body)
         let word = ceil(("Message" as NSString).size(withAttributes: [.font: font]).width) + 4
         let left = fieldW - 2 * ChatMetrics.fieldPadH - micInset - 10 - word
         let w = modelChip.fittedWidth(in: min(240, fieldW * 0.4, max(0, left)), height: Self.macChipHeight)
@@ -710,7 +710,7 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboa
     var boxTrim: CGFloat {
         guard Self.macPlainBox, !expanded else { return 0 }
         let inset = textInsets
-        let font = textView.font ?? .preferredFont(forTextStyle: .body)
+        let font = textView.font ?? HQFont.preferred(.body)
         let key = "\(font.fontName)-\(font.pointSize)-\(inset.top)-\(inset.bottom)"
         if oneLineFit?.key != key {
             let probe = UITextView()
@@ -1339,6 +1339,7 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboa
         let text = ComposerKeyboard.sendText(textView.text ?? "")
         // [attachments] Never while a tile is still preparing (its import may yet fail and leave the send waiting).
         guard (!text.isEmpty || attachmentCount > 0) && !attachmentsPreparing else { return }
+        Haptics.play(.light)
         let boxes = [draftTextBox(), attachmentCount > 0 ? accessoryLiftBox?() : nil].compactMap { $0 }
         liftSource = boxes.isEmpty ? nil : boxes.dropFirst().reduce(boxes[0]) { $0.union($1) }
         defer { liftSource = nil }
@@ -1390,7 +1391,11 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboa
         switch primary {
         case .send:
             // VOICE: the recorder's Send, or a draft chip's (with the field's words).
-            if memoPrimary != .normal || memoChip != nil { onMemoSend?(); return }
+            if memoPrimary != .normal || memoChip != nil {
+                Haptics.play(.light)
+                onMemoSend?()
+                return
+            }
             submit()
         case .stop:
             Haptics.play(.rigid)

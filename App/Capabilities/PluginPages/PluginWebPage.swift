@@ -658,7 +658,7 @@ struct PluginWebPageStatus: View {
 
     private func message<Actions: View>(symbol: String, title: String, words: String, @ViewBuilder actions: () -> Actions) -> some View {
         VStack(spacing: 0) {
-            Image(systemName: symbol).font(.system(size: HQFont.scaled(GlassSheetKit.emptySymbolSize))).foregroundStyle(Color.hqLabel2)
+            Image(systemName: symbol).font(.system(size: HQFont.scaled(GlassSheetKit.emptySymbolSize))).foregroundStyle(Color.hqLabel2)   // a11y-font-ok: sized with HQFont.scaled
                 .padding(.bottom, GlassSheetKit.emptySymbolGap)
             Text(title).font(Font.hq(.title3).weight(.semibold)).foregroundStyle(Color.hqLabel).multilineTextAlignment(.center)
                 .padding(.bottom, GlassSheetKit.emptyLineGap)

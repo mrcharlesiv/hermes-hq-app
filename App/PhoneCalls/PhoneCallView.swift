@@ -294,11 +294,11 @@ private struct PhoneNewCallView: View {
                     .font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
                     .accessibilityIdentifier("phone.suggested")
             }
-            Picker("Who is being called", selection: whoBinding) {
-                Text("Someone else").tag(false)
-                Text("Myself").tag(true)
-            }
-            .pickerStyle(.segmented)
+            HQSegmentedPicker(
+                "Who is being called",
+                options: [("Someone else", false), ("Myself", true)],
+                selection: whoBinding
+            )
             .accessibilityIdentifier("phone.calling-who")
             TextField("To", text: $to)
                 .keyboardType(.phonePad).textContentType(.telephoneNumber).focused($editing, equals: .number)
@@ -454,7 +454,7 @@ struct PhoneMarkView: View {
 
     var body: some View {
         Image(systemName: mark.symbol)
-            .font(.system(size: size * 0.43, weight: .semibold))
+            .font(.system(size: size * 0.43, weight: .semibold))   // a11y-font-ok: symbol sized to its circle badge
             .foregroundStyle(Color(uiColor: PhoneCardColors.ink(on: mark.uiColor, minimum: 3)))
             .frame(width: size, height: size)
             .background(mark.color, in: .circle)

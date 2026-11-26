@@ -246,7 +246,7 @@ struct MarketplaceCommand: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Button {
                     UIPasteboard.general.string = command
-                    Haptics.play(.light)
+                    Haptics.play(.success)
                     copied = true
                     HQAnnounce.say("Copied")
                     Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }

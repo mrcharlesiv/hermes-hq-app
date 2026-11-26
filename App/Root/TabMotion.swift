@@ -33,17 +33,56 @@ import UIKit
 
 @MainActor
 enum TabMotion {
-    enum Kind {
+    nonisolated enum Kind: Sendable {
         case bot, kanban, typing, clock, sunrise, spread
         case gear, grid, plug, person, message, folder, branch, gauge, tree, sparkles, sign, stack, pin, tiles, terminal, checklist, bag
         case changes, star, bars, favorite
     }
 
+    private final class GenerationBox { var value: UInt = 0 }
+    private static let viewGenerations = NSMapTable<UIImageView, GenerationBox>(
+        keyOptions: [.weakMemory, .objectPointerPersonality],
+        valueOptions: .strongMemory
+    )
+
+    private static func nextGeneration(for view: UIImageView) -> UInt {
+        let box = viewGenerations.object(forKey: view) ?? {
+            let made = GenerationBox()
+            viewGenerations.setObject(made, forKey: view)
+            return made
+        }()
+        box.value &+= 1
+        return box.value
+    }
+
+    private static func currentGeneration(for view: UIImageView) -> UInt {
+        viewGenerations.object(forKey: view)?.value ?? 0
+    }
+
+    private struct ArtRequest: @unchecked Sendable {
+        let kind: Kind
+        let glyph: TabIcons.Glyph?
+        let symbol: UIImage
+        let origin: CGPoint
+        let size: CGSize
+        let scale: CGFloat
+        let room: CGFloat
+        let bold: Bool
+        let raster: UIImage?
+        let viewBoundsSize: CGSize
+    }
+
+    private struct PreparedPlayback: @unchecked Sendable {
+        let motion: Motion
+        let frames: [UIImage]
+    }
+
     /// Plays the tap motion of the icon `view` shows, drawn from `source` (the tab's own image: the bar item's, or the
-    /// app's bars' redrawn outline). Nothing for an icon with no motion, such as the turning Jobs ring.
+    /// app's bars' redrawn outline). Fast-paths synchronously when both frames and tinted frames are cached; otherwise
+    /// builds frames and runs InkMap off `@MainActor` and applies once ready.
     static func play(in view: UIImageView, source: UIImage?) {
         guard !HQMotion.reduced, view.window != nil, let source, let kind = kind(of: source),
-              let motion = motion(kind, source: source, in: view) else {
+              let req = artRequest(kind, source: source, in: view) else {
             #if DEBUG
             if UserDefaults.standard.bool(forKey: "HQDebugTabMotionDump") {
                 let name = source.map { TabIcons.symbolName(of: $0) ?? "\($0.size)" } ?? "nil"
@@ -57,6 +96,32 @@ enum TabMotion {
             #endif
             return
         }
+        let colour = view.tintColor.resolvedColor(with: view.traitCollection)
+        let cached = cachedMotion(source: source, size: req.size, scale: req.scale, bold: req.bold)
+        if let motion = cached, let frames = cachedTints(for: motion, colour: colour) {
+            _ = nextGeneration(for: view)
+            installAndStart(motion, frames: frames, kind: kind, in: view)
+            return
+        }
+        let token = nextGeneration(for: view)
+        nonisolated(unsafe) let colourCG = colour.cgColor
+        Task { [weak view] in
+            let prepared: PreparedPlayback? = await Task.detached(priority: .userInitiated) {
+                guard let motion = cached ?? Self.computeMotion(req) else { return nil }
+                let frames = Self.tintFrames(motion, colourCG: colourCG)
+                return PreparedPlayback(motion: motion, frames: frames)
+            }.value
+            guard let prepared else { return }
+            if cached == nil {
+                storeMotion(prepared.motion, source: source, size: req.size, scale: req.scale, bold: req.bold)
+            }
+            storeTints(prepared.frames, for: prepared.motion, colour: colour)
+            guard let view, !HQMotion.reduced, view.window != nil, currentGeneration(for: view) == token else { return }
+            installAndStart(prepared.motion, frames: prepared.frames, kind: kind, in: view)
+        }
+    }
+
+    private static func installAndStart(_ motion: Motion, frames: [UIImage], kind: Kind, in view: UIImageView) {
         // The frames play in a view of their own over the icon, which shows nothing meanwhile: the system bar sizes an
         // icon's view to the images it plays, so frames with room round them would leave it that much bigger (and
         // frames the size of the bar's raster left it an eighth smaller after every tap; owner 2026-10-31: "why did
@@ -65,7 +130,6 @@ enum TabMotion {
         // mask layer as a solid square once its lens let go, and image views don't tint the images they play.
         view.stopAnimating()
         view.subviews.filter { $0 is Overlay }.forEach { $0.removeFromSuperview() }
-        let frames = tinted(motion, view.tintColor.resolvedColor(with: view.traitCollection))
         // On whole pixels, so the frames are as sharp as the icon.
         let pixel = { (value: CGFloat) in (value * motion.scale).rounded() / motion.scale }
         let overlay = Overlay(frame: CGRect(x: pixel(view.bounds.midX + motion.shift - motion.size.width / 2),
@@ -109,26 +173,46 @@ enum TabMotion {
     /// The view the frames play in, over the icon.
     private final class Overlay: UIImageView {}
 
-    /// A motion's frames in a colour, kept for the few colours its tab shows in (the system bar plays a tap in both
-    /// its tinted and its plain copy of the icon). About 5 MB each, so a few at most.
+    /// A motion's frames in a colour, kept as a bounded LRU (about 5 MB each; 12 covers every visible tab + look).
     private static var tints: [(frame: CGImage, colour: UIColor, frames: [UIImage])] = []
+    private static let cacheLimit = 12
 
-    private static func tinted(_ motion: Motion, _ colour: UIColor) -> [UIImage] {
-        guard let key = motion.frames.first else { return [] }
-        if let kept = tints.first(where: { $0.frame === key && $0.colour == colour }) { return kept.frames }
-        let frames = motion.frames.map { frame -> UIImage in
+    private static func cachedTints(for motion: Motion, colour: UIColor) -> [UIImage]? {
+        guard let key = motion.frames.first,
+              let index = tints.firstIndex(where: { $0.frame === key && $0.colour == colour }) else { return nil }
+        let hit = tints.remove(at: index)
+        tints.append(hit)
+        return hit.frames
+    }
+
+    private static func storeTints(_ frames: [UIImage], for motion: Motion, colour: UIColor) {
+        guard let key = motion.frames.first else { return }
+        if let index = tints.firstIndex(where: { $0.frame === key && $0.colour == colour }) {
+            tints.remove(at: index)
+        } else if tints.count >= cacheLimit {
+            tints.removeFirst()
+        }
+        tints.append((key, colour, frames))
+    }
+
+    private nonisolated static func tintFrames(_ motion: Motion, colourCG: CGColor) -> [UIImage] {
+        motion.frames.map { frame -> UIImage in
             let rect = CGRect(x: 0, y: 0, width: frame.width, height: frame.height)
             guard let ctx = CGContext(data: nil, width: frame.width, height: frame.height, bitsPerComponent: 8, bytesPerRow: 0,
                                       space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
             else { return UIImage() }
             ctx.draw(frame, in: rect)
             ctx.setBlendMode(.sourceIn)
-            ctx.setFillColor(colour.cgColor)
+            ctx.setFillColor(colourCG)
             ctx.fill(rect)
             return ctx.makeImage().map { UIImage(cgImage: $0, scale: motion.scale, orientation: .up) } ?? UIImage()
         }
-        if tints.count >= 4 { tints.removeFirst() }
-        tints.append((key, colour, frames))
+    }
+
+    private static func tinted(_ motion: Motion, _ colour: UIColor) -> [UIImage] {
+        if let kept = cachedTints(for: motion, colour: colour) { return kept }
+        let frames = tintFrames(motion, colourCG: colour.cgColor)
+        storeTints(frames, for: motion, colour: colour)
         return frames
     }
 
@@ -219,7 +303,7 @@ enum TabMotion {
 
     // MARK: Frames
 
-    struct Motion {
+    nonisolated struct Motion: @unchecked Sendable {
         /// Coverage only, `size` at `scale`.
         let frames: [CGImage]
         /// The frames' size in points: the icon's image with room round it.
@@ -232,10 +316,9 @@ enum TabMotion {
         var shift: CGFloat = 0
     }
 
-    private static let fps: Double = 60
+    private nonisolated static let fps: Double = 60
 
-    /// Made once per icon and size: the bar's tabs (a few looks, two sizes at most) keep theirs. One serves every
-    /// colour (`tinted`). About 5 MB each, so a few at most, and none kept through a memory warning.
+    /// Made once per icon and size: bounded LRU cache of 12 entries so cycling tabs never re-rasterizes.
     private static var made: [(source: UIImage, size: CGSize, scale: CGFloat, bold: Bool, motion: Motion)] = [] {
         didSet { if oldValue.isEmpty, !made.isEmpty { forgetOnMemoryWarning() } }
     }
@@ -249,32 +332,49 @@ enum TabMotion {
         }
     }
 
-    static func motion(_ kind: Kind, source: UIImage, in view: UIImageView) -> Motion? {
+    private static func cachedMotion(source: UIImage, size: CGSize, scale: CGFloat, bold: Bool) -> Motion? {
+        guard let index = made.firstIndex(where: { $0.source === source && $0.size == size && $0.scale == scale && $0.bold == bold }) else { return nil }
+        let hit = made.remove(at: index)
+        made.append(hit)
+        return hit.motion
+    }
+
+    private static func storeMotion(_ motion: Motion, source: UIImage, size: CGSize, scale: CGFloat, bold: Bool) {
+        if let index = made.firstIndex(where: { $0.source === source && $0.size == size && $0.scale == scale && $0.bold == bold }) {
+            made.remove(at: index)
+        } else if made.count >= cacheLimit {
+            made.removeFirst()
+        }
+        made.append((source, size, scale, bold, motion))
+    }
+
+    private static func artRequest(_ kind: Kind, source: UIImage, in view: UIImageView) -> ArtRequest? {
         let scale = view.traitCollection.displayScale > 0 ? view.traitCollection.displayScale : 3
         let bold = view.traitCollection.legibilityWeight == .bold
-        let art: SymbolArt
-        var raster: UIImage?
         switch kind {
         case .bot, .kanban:
-            guard let rest = TabIcons.glyph(of: source)?.image(.rest) else { return nil }
-            art = SymbolArt(symbol: rest, origin: .zero, size: rest.size, scale: scale, room: 0)
+            guard let glyph = TabIcons.glyph(of: source) else { return nil }
+            let rest = glyph.image(.rest)
+            return ArtRequest(kind: kind, glyph: glyph, symbol: rest, origin: .zero, size: rest.size,
+                              scale: scale, room: 0, bold: bold, raster: nil, viewBoundsSize: view.bounds.size)
         case .clock where source === TabIcons.jobs:
             let jobs = TabIcons.jobsArt
-            art = SymbolArt(symbol: jobs.symbol, origin: jobs.origin, size: jobs.size, scale: scale)
+            return ArtRequest(kind: kind, glyph: nil, symbol: jobs.symbol, origin: jobs.origin, size: jobs.size,
+                              scale: scale, room: 0.25, bold: bold, raster: nil, viewBoundsSize: view.bounds.size)
         default:
-            raster = barRaster(in: view)
+            let raster = barRaster(in: view)
             guard let shown = raster ?? shownSymbol(in: view) else { return nil }
-            // The More dots swing round past the plain ellipsis's top and bottom, the Messaging bubble pops back
-            // about 30% bigger from its tail, and the pin lifts a quarter of its height, leaning.
             let room: CGFloat = switch kind { case .spread: 0.6; case .message, .pin, .terminal, .stack, .checklist, .bag: 0.4; default: 0.25 }
-            art = SymbolArt(symbol: shown, origin: .zero, size: shown.size, scale: scale, room: room)
+            return ArtRequest(kind: kind, glyph: nil, symbol: shown, origin: .zero, size: shown.size,
+                              scale: scale, room: room, bold: bold, raster: raster, viewBoundsSize: view.bounds.size)
         }
-        if let kept = made.first(where: { $0.source === source && $0.size == art.size && $0.scale == scale && $0.bold == bold }) {
-            return kept.motion
-        }
+    }
+
+    private nonisolated static func computeMotion(_ req: ArtRequest) -> Motion? {
+        let art = SymbolArt(symbol: req.symbol, origin: req.origin, size: req.size, scale: req.scale, room: req.room)
         let motion: Motion?
-        switch kind {
-        case .bot, .kanban: motion = TabIcons.glyph(of: source).flatMap { glyphMotion($0, kind: kind, art: art) }
+        switch req.kind {
+        case .bot, .kanban: motion = req.glyph.flatMap { glyphMotion($0, kind: req.kind, art: art) }
         case .typing: motion = typing(art)
         case .clock: motion = clock(art)
         case .sunrise: motion = sunrise(art)
@@ -302,22 +402,21 @@ enum TabMotion {
         case .tiles: motion = tiles(art)
         }
         guard var motion else { return nil }
-        // The icon's blank keeps the view's own size, as the bar sizes the view to the images it plays (the raster is
-        // smaller).
-        if let raster {
-            motion.blank = SymbolArt.blank(view.bounds.size, scale: scale)
+        if let raster = req.raster {
+            motion.blank = SymbolArt.blank(req.viewBoundsSize, scale: req.scale)
             motion.shift = inkShift(raster)
         }
-        if made.count >= 6 { made.removeFirst() }
-        made.append((source, art.size, scale, bold, motion))
         return motion
     }
 
-    /// The symbol as the system bar draws it. The bar shrinks a symbol's icon view (to about 0.87) and holds the symbol
-    /// as a raster of the size it shows at, which it draws at that size in the middle of the view; so this is that
-    /// raster, and the frames, played over the view in a view of their own, are its size (stretched over the view's
-    /// bounds they came out about 15% bigger than the icon). Nil where the view's layer holds the whole image at its
-    /// own size (the app's own bars), which draw `shownSymbol`.
+    static func motion(_ kind: Kind, source: UIImage, in view: UIImageView) -> Motion? {
+        guard let req = artRequest(kind, source: source, in: view) else { return nil }
+        if let kept = cachedMotion(source: source, size: req.size, scale: req.scale, bold: req.bold) { return kept }
+        guard let motion = computeMotion(req) else { return nil }
+        storeMotion(motion, source: source, size: req.size, scale: req.scale, bold: req.bold)
+        return motion
+    }
+
     private static func barRaster(in view: UIImageView) -> UIImage? {
         guard view.image?.isSymbolImage == true, let contents = view.layer.contents,
               CFGetTypeID(contents as CFTypeRef) == CGImage.typeID, view.bounds.width > 0, view.bounds.height > 0 else { return nil }
@@ -328,10 +427,16 @@ enum TabMotion {
         return UIImage(cgImage: raster, scale: scale, orientation: .up)
     }
 
-    /// How far right the frames go so that their drawing sits where the bar shows it, in points. Some rasters carry
-    /// clear columns at a side (on the right of Sessions' bubbles and Artifacts' photo, on the left of Import Sessions'
-    /// squares), and the bar puts the drawing itself in the middle of the view across, though not down (Sessions' clear
-    /// rows at the bottom count). Measured on screen: unshifted, those frames ended 1 to 3 pixels off the icon.
+    private static func shownSymbol(in view: UIImageView) -> UIImage? {
+        guard var image = view.image, image.isSymbolImage else { return nil }
+        if let preferred = view.preferredSymbolConfiguration { image = image.applyingSymbolConfiguration(preferred) ?? image }
+        if let config = image.symbolConfiguration { image = image.withConfiguration(config.withTraitCollection(view.traitCollection)) }
+        return image
+    }
+}
+
+nonisolated extension TabMotion {
+    /// How far right the frames go so that their drawing sits where the bar shows it, in points.
     private static func inkShift(_ raster: UIImage) -> CGFloat {
         guard let image = raster.cgImage, image.width > 0, image.height > 0,
               let ctx = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4,
@@ -342,14 +447,6 @@ enum TabMotion {
         let inked = (0..<image.width).filter { x in (0..<image.height).contains { y in bytes[(y * image.width + x) * 4 + 3] > 0 } }
         guard let left = inked.first, let right = inked.last else { return 0 }
         return CGFloat((image.width - 1 - right) - left) / 2 / raster.scale
-    }
-
-    /// The symbol the view draws: its image with the view's preferred configuration and traits (Bold Text).
-    private static func shownSymbol(in view: UIImageView) -> UIImage? {
-        guard var image = view.image, image.isSymbolImage else { return nil }
-        if let preferred = view.preferredSymbolConfiguration { image = image.applyingSymbolConfiguration(preferred) ?? image }
-        if let config = image.symbolConfiguration { image = image.withConfiguration(config.withTraitCollection(view.traitCollection)) }
-        return image
     }
 
     /// Frames for `duration` seconds at 60 a second, each the art (or with `base` false, nothing) with `change` drawn
@@ -1150,11 +1247,11 @@ enum TabMotion {
     }
 }
 
-private func circle(_ centre: CGPoint, _ radius: CGFloat) -> CGRect {
+private nonisolated func circle(_ centre: CGPoint, _ radius: CGFloat) -> CGRect {
     CGRect(x: centre.x - radius, y: centre.y - radius, width: radius * 2, height: radius * 2)
 }
 
-private extension CGAffineTransform {
+private nonisolated extension CGAffineTransform {
     /// About `point`: scaled (by `scaleY` up and down, when given), turned, then moved by `move`.
     static func about(_ point: CGPoint, scale: CGFloat = 1, scaleY: CGFloat? = nil, rotation: CGFloat = 0, move: CGPoint = .zero) -> CGAffineTransform {
         CGAffineTransform(translationX: point.x + move.x, y: point.y + move.y).rotated(by: rotation)
@@ -1162,7 +1259,7 @@ private extension CGAffineTransform {
     }
 }
 
-private extension CGContext {
+private nonisolated extension CGContext {
     /// `image` (one of the art's, in its points) drawn moved by `transform`.
     func draw(_ image: UIImage, _ transform: CGAffineTransform, blend: CGBlendMode = .normal) {
         saveGState()
@@ -1184,7 +1281,7 @@ private extension CGContext {
 
 /// A tab symbol as the icon view draws it: a fine map of where it has ink, and frames of the whole with parts
 /// redrawn, with room round it.
-private struct SymbolArt {
+private nonisolated struct SymbolArt: @unchecked Sendable {
     let symbol: UIImage
     /// Where the symbol sits in the icon's image, and that image's size (the Jobs tab's plain image has room around it).
     let origin: CGPoint
@@ -1286,7 +1383,7 @@ private struct SymbolArt {
 }
 
 /// An image's ink (alpha at least half) on a fine grid, read in points.
-private struct InkMap {
+private nonisolated struct InkMap {
     let width: Int
     let height: Int
     let scale: CGFloat
@@ -1511,7 +1608,7 @@ private struct InkMap {
 }
 
 /// The curves the motions move on, `t` in seconds.
-private enum Ease {
+private nonisolated enum Ease {
     static func clamp(_ x: CGFloat) -> CGFloat { min(max(x, 0), 1) }
 
     static func smooth(_ x: CGFloat) -> CGFloat {

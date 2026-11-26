@@ -59,10 +59,61 @@ final class HeadView: UIView {
     private var jellyKey = ""
     /// Monotonic token guarding `settleJelly` / `sheen` exit completions so a newer act or settle is never cut short.
     private var settleToken = 0
+    private nonisolated struct MotionPhysicsKey: Hashable, Sendable {
+        let mood: BotMood
+        let facing: Int
+        let seed: Int
+        let once: Bool
+        let rate: Double
+    }
+
+    private nonisolated struct MotionPhysics: Sendable {
+        let samples: [(at: Double, body: FaceBody, eyes: FaceEyes)]
+        let wobble: [FaceJelly]
+    }
+
     /// Cached 3D cushion geometry per (head, size) so mood switches start instantly.
     private static var solidCache: [String: FaceSolid] = [:]
     /// Cached smoothed 3D silhouette reaches per `(solidKey, mood, seed, once)` so repeated/switched acts start on frame 0.
     private static var reachesCache: [String: [[Double]]] = [:]
+    /// Bounded LRU cache of precomputed spring samples & jelly wobble (computed off `@MainActor`).
+    private static var physicsCache: [(key: MotionPhysicsKey, value: MotionPhysics)] = []
+    private static var memoryWatch: NSObjectProtocol?
+    private static let cacheLimit = 64
+
+    private static func ensureMemoryWatch() {
+        guard memoryWatch == nil else { return }
+        memoryWatch = NotificationCenter.default.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                solidCache.removeAll()
+                reachesCache.removeAll()
+                physicsCache.removeAll()
+            }
+        }
+    }
+
+    private static func cachedPhysics(_ key: MotionPhysicsKey) -> MotionPhysics? {
+        guard let idx = physicsCache.firstIndex(where: { $0.key == key }) else { return nil }
+        let hit = physicsCache.remove(at: idx)
+        physicsCache.append(hit)
+        return hit.value
+    }
+
+    private static func storePhysics(_ key: MotionPhysicsKey, _ value: MotionPhysics) {
+        ensureMemoryWatch()
+        if let idx = physicsCache.firstIndex(where: { $0.key == key }) {
+            physicsCache.remove(at: idx)
+        } else if physicsCache.count >= cacheLimit {
+            physicsCache.removeFirst()
+        }
+        physicsCache.append((key, value))
+    }
+
+    private nonisolated static func computePhysics(loop: FaceLoop, once: Bool, rate: Double, needWobble: Bool) -> MotionPhysics {
+        let samples = rate < 60 ? loop.samples(rate: rate) : loop.softSamples(once: once)
+        let wobble = needWobble ? FaceJelly.follow(samples, period: loop.period, once: once) : []
+        return MotionPhysics(samples: samples, wobble: wobble)
+    }
 
     /// Parametric pose of one independent GPU pill eye on a soft Shapes head.
     private struct VectorEyePose {
@@ -577,15 +628,27 @@ final class HeadView: UIView {
         let (begin, seed) = actClock()
         let loop = FaceLoop(mood, facing: act.design.facing, seed: seed)
         let cache = HeadImageCache.shared
-        if let pictures = cache.cachedActPictures(for: head, mood: mood, side: side, scale: scale, dark: dark, mark: mark) {
-            play(act, loop, pictures, begin: begin, scale: scale, wasActive: wasActive)
+        let physicsKey = MotionPhysicsKey(mood: mood, facing: act.design.facing, seed: seed, once: act.once, rate: 60)
+        let cachedPictures = cache.cachedActPictures(for: head, mood: mood, side: side, scale: scale, dark: dark, mark: mark)
+        let cachedPhys = Self.cachedPhysics(physicsKey)
+        if let pictures = cachedPictures, let phys = cachedPhys {
+            play(act, loop, pictures, physics: phys, begin: begin, scale: scale, wasActive: wasActive)
             return
         }
-        let head = self.head, mark = self.mark
+        let head = self.head, mark = self.mark, once = act.once
         Task { [weak self] in
-            let pictures = await cache.actPictures(for: head, mood: mood, side: side, scale: scale, dark: dark, mark: mark)
+            async let picturesTask: MatrixActPictures = cachedPictures != nil
+                ? cachedPictures!
+                : cache.actPictures(for: head, mood: mood, side: side, scale: scale, dark: dark, mark: mark)
+            async let physTask: MotionPhysics = cachedPhys != nil
+                ? cachedPhys!
+                : Task.detached(priority: .userInitiated) {
+                    Self.computePhysics(loop: loop, once: once, rate: 60, needWobble: true)
+                }.value
+            let (pictures, phys) = await (picturesTask, physTask)
+            if cachedPhys == nil { Self.storePhysics(physicsKey, phys) }
             guard let self, self.actKey == key else { return }
-            self.play(act, loop, pictures, begin: begin, scale: scale, wasActive: wasActive)
+            self.play(act, loop, pictures, physics: phys, begin: begin, scale: scale, wasActive: wasActive)
         }
     }
 
@@ -991,8 +1054,8 @@ final class HeadView: UIView {
 
     private static let actKeys = ["act", "act.bridge", "act.end", "act.lids", "act.seen", "act.jelly", "act.glint", "act.glint.fade"]
 
-    private func play(_ act: MatrixAct, _ loop: FaceLoop, _ pictures: MatrixActPictures, begin: CFTimeInterval, scale: CGFloat,
-                      wasActive: Bool) {
+    private func play(_ act: MatrixAct, _ loop: FaceLoop, _ pictures: MatrixActPictures, physics: MotionPhysics,
+                      begin: CFTimeInterval, scale: CGFloat, wasActive: Bool) {
         let frames = act.frames(loop)
         let images = frames.compactMap { pictures.faces[$0.pose] ?? matrixFrame($0.pose)?.cgImage }
         guard images.count == frames.count, let first = images.first else { return }
@@ -1037,20 +1100,20 @@ final class HeadView: UIView {
         }
         // 60 fps critically damped spring body + subtle 38% elastic follow-through on `mover` + dynamic 3D glint,
         // so dot-matrix heads move with fluid physical weight while keeping every LED dot razor-crisp.
-        let samples = loop.softSamples(once: act.once)
+        let samples = physics.samples
         let isFreshOnce = act.once && !wasActive && !prevBody.moving && abs(wallNow - begin) < 0.08
         moveBody(loop, samples: samples, begin: begin, wallNow: wallNow, once: act.once,
                  from: isFreshOnce ? nil : prevBody.body, solid: false)
-        playMatrixElastic(samples, period: period, begin: begin, wallNow: wallNow, once: act.once,
-                          from: isFreshOnce ? nil : (prevWobble.moving ? prevWobble.wobble : nil))
+        playMatrixElastic(samples, wobble: physics.wobble, period: period, begin: begin, wallNow: wallNow,
+                          once: act.once, from: isFreshOnce ? nil : (prevWobble.moving ? prevWobble.wobble : nil))
         playMatrixGlint(samples, period: period, begin: begin, wallNow: wallNow, once: act.once, fromOpacity: prevSheenOpacity)
     }
 
     /// Subtle elastic squash & lean follow-through on a dot-matrix head's `mover` layer: gives hops, landings, nods and
     /// quick turns physical weight without distorting the LEDs into rubber.
-    private func playMatrixElastic(_ samples: [(at: Double, body: FaceBody, eyes: FaceEyes)], period: Double,
-                                   begin: CFTimeInterval, wallNow: CFTimeInterval, once: Bool, from: FaceJelly?) {
-        let wobble = FaceJelly.follow(samples, period: period, once: once)
+    private func playMatrixElastic(_ samples: [(at: Double, body: FaceBody, eyes: FaceEyes)], wobble: [FaceJelly],
+                                   period: Double, begin: CFTimeInterval, wallNow: CFTimeInterval, once: Bool,
+                                   from: FaceJelly?) {
         let localBegin = localTime(begin, on: mover)
         let localNow = localTime(wallNow, on: mover)
         mover.removeAnimation(forKey: "act.end")
@@ -1603,23 +1666,87 @@ final class HeadView: UIView {
         guard key != actKey else { return }
         let wallNow = CACurrentMediaTime()
         let wasActive = !actKey.isEmpty
-        let grounded = usesGroundedMover
-        let bodyLayerTarget = grounded ? mover : stage
-        let prevBody = currentBody(at: localTime(wallNow, on: bodyLayerTarget))
-        let prevWobble = currentWobble(at: localTime(wallNow, on: jellyLayer))
-        let prevGaze = currentGaze(at: localTime(wallNow, on: gazeLayer))
-        let prevLids = currentLids(at: localTime(wallNow, on: eyesLayer))
-        let prevReachTrack = tracks.reach
-        let prevLeftTrack = tracks.leftEye
-        let prevRightTrack = tracks.rightEye
-        if wasActive { clearAct(settle: false) }
         actKey = key
         settleToken += 1
         let (begin, seed) = actClock()
         let loop = FaceLoop(mood, facing: MatrixHead.shownFacing, seed: seed)
-        playFace(mood: mood, seed: seed, loop: loop, begin: begin, wallNow: wallNow, once: mood.once,
-                 wasActive: wasActive, prevBody: prevBody, prevWobble: prevWobble, prevReachTrack: prevReachTrack,
-                 prevLeftTrack: prevLeftTrack, prevRightTrack: prevRightTrack, prevGaze: prevGaze, prevLids: prevLids)
+        let theme = head.themed?.theme
+        let rate: Double = theme == "pixel" ? 12 : 60
+        let darkPage = traitCollection.userInterfaceStyle == .dark
+        let physicsKey = MotionPhysicsKey(mood: mood, facing: MatrixHead.shownFacing, seed: seed, once: mood.once, rate: rate)
+        let cachedPhys = Self.cachedPhysics(physicsKey)
+
+        var softSpec: (key: String, points: [CGPoint], foot: CGPoint, layout: ShapeHeadLayout)?
+        var cachedSolid: FaceSolid?
+        if isSoft {
+            let layout = HeadGeometry.layout(head, compact: side < 64, darkPage: darkPage)
+            if layout.board == nil, layout.outline.count > 2 {
+                let place = layout.placement ?? HeadPlacement(k: 1, tx: 0, ty: 0), unit = side / 1024
+                let points = layout.outline.map { CGPoint(x: (place.k * $0.x + place.tx) * unit, y: (place.k * $0.y + place.ty) * unit) }
+                let foot = CGPoint(x: points.map(\.x).reduce(0, +) / Double(points.count), y: points.map(\.y).max() ?? side)
+                let solidKey = "\(head.cacheKey)|\(Int((side * 100).rounded()))"
+                softSpec = (solidKey, points, foot, layout)
+                cachedSolid = Self.solidCache[solidKey]
+            }
+        }
+        let needWobble = softSpec != nil
+        let needSolidBuild = softSpec != nil && cachedSolid == nil
+        if let phys = cachedPhys, !needSolidBuild {
+            let grounded = usesGroundedMover
+            let bodyLayerTarget = grounded ? mover : stage
+            let prevBody = currentBody(at: localTime(wallNow, on: bodyLayerTarget))
+            let prevWobble = currentWobble(at: localTime(wallNow, on: jellyLayer))
+            let prevGaze = currentGaze(at: localTime(wallNow, on: gazeLayer))
+            let prevLids = currentLids(at: localTime(wallNow, on: eyesLayer))
+            let prevReachTrack = tracks.reach
+            let prevLeftTrack = tracks.leftEye
+            let prevRightTrack = tracks.rightEye
+            if wasActive {
+                clearAct(settle: false)
+                actKey = key
+                settleToken += 1
+            }
+            playFace(mood: mood, seed: seed, loop: loop, physics: phys, soft: softSpec, prebuiltSolid: cachedSolid,
+                     begin: begin, wallNow: wallNow, once: mood.once, wasActive: wasActive, prevBody: prevBody,
+                     prevWobble: prevWobble, prevReachTrack: prevReachTrack, prevLeftTrack: prevLeftTrack,
+                     prevRightTrack: prevRightTrack, prevGaze: prevGaze, prevLids: prevLids)
+            return
+        }
+        let once = mood.once, pointsForSolid = softSpec?.points
+        Task { [weak self] in
+            let built: (phys: MotionPhysics, solid: FaceSolid?) = await Task.detached(priority: .userInitiated) {
+                let phys = cachedPhys ?? Self.computePhysics(loop: loop, once: once, rate: rate, needWobble: needWobble)
+                let solid: FaceSolid? = needSolidBuild ? pointsForSolid.map { FaceSolid(outline: $0, side: side) } : nil
+                return (phys, solid)
+            }.value
+            if cachedPhys == nil { Self.storePhysics(physicsKey, built.phys) }
+            if let sKey = softSpec?.key, let builtSolid = built.solid {
+                Self.ensureMemoryWatch()
+                if Self.solidCache.count >= Self.cacheLimit { Self.solidCache.removeAll() }
+                Self.solidCache[sKey] = builtSolid
+            }
+            guard let self, self.actKey == key, self.window != nil else { return }
+            let now = CACurrentMediaTime()
+            let bodyLayerTarget = self.usesGroundedMover ? self.mover : self.stage
+            let prevBody = self.currentBody(at: self.localTime(now, on: bodyLayerTarget))
+            let prevWobble = self.currentWobble(at: self.localTime(now, on: self.jellyLayer))
+            let prevGaze = self.currentGaze(at: self.localTime(now, on: self.gazeLayer))
+            let prevLids = self.currentLids(at: self.localTime(now, on: self.eyesLayer))
+            let prevReachTrack = self.tracks.reach
+            let prevLeftTrack = self.tracks.leftEye
+            let prevRightTrack = self.tracks.rightEye
+            let activeNow = !self.jellyLayer.isHidden || self.tracks.body != nil || prevBody.moving
+            if activeNow {
+                self.clearAct(settle: false)
+                self.actKey = key
+                self.settleToken += 1
+            }
+            self.playFace(mood: mood, seed: seed, loop: loop, physics: built.phys, soft: softSpec,
+                          prebuiltSolid: cachedSolid ?? built.solid, begin: begin, wallNow: now, once: once,
+                          wasActive: activeNow, prevBody: prevBody, prevWobble: prevWobble,
+                          prevReachTrack: prevReachTrack, prevLeftTrack: prevLeftTrack, prevRightTrack: prevRightTrack,
+                          prevGaze: prevGaze, prevLids: prevLids)
+        }
     }
 
     /// Framed/tiled themes whose `groundLayer` (tile frame, robot shoulders) stays anchored while `mover` acts inside it.
@@ -1628,7 +1755,9 @@ final class HeadView: UIView {
         return head.tile != .none
     }
 
-    private func playFace(mood: BotMood, seed: Int, loop: FaceLoop, begin: CFTimeInterval, wallNow: CFTimeInterval,
+    private func playFace(mood: BotMood, seed: Int, loop: FaceLoop, physics: MotionPhysics,
+                          soft: (key: String, points: [CGPoint], foot: CGPoint, layout: ShapeHeadLayout)?,
+                          prebuiltSolid: FaceSolid?, begin: CFTimeInterval, wallNow: CFTimeInterval,
                           once: Bool, wasActive: Bool, prevBody: (body: FaceBody, moving: Bool),
                           prevWobble: (wobble: FaceJelly, moving: Bool), prevReachTrack: ActiveTracks.Reach?,
                           prevLeftTrack: ActiveTracks.Eye?, prevRightTrack: ActiveTracks.Eye?,
@@ -1639,11 +1768,13 @@ final class HeadView: UIView {
         let theme = head.themed?.theme
         let lamps = theme == "dots"
         let isPixel = theme == "pixel"
-        let samples = isPixel ? loop.samples(rate: 12) : loop.softSamples(once: once)
+        let samples = physics.samples
         let side = bounds.width, period = loop.period
         let isFreshOnce = once && !wasActive && !prevBody.moving && abs(wallNow - begin) < 0.08
-        let jelly = playJelly(mood: mood, seed: seed, loop: loop, samples: samples, begin: begin, wallNow: wallNow,
-                              once: once, isFreshOnce: isFreshOnce, prevWobble: prevWobble, prevReachTrack: prevReachTrack)
+        let jelly = playJelly(mood: mood, seed: seed, loop: loop, samples: samples, wobble: physics.wobble,
+                              soft: soft, prebuiltSolid: prebuiltSolid, begin: begin, wallNow: wallNow,
+                              once: once, isFreshOnce: isFreshOnce, prevWobble: prevWobble,
+                              prevReachTrack: prevReachTrack)
         let grounded = usesGroundedMover
         let bodyScale: Double = switch theme {
         case "robot": 0.65
@@ -1973,8 +2104,9 @@ final class HeadView: UIView {
 
     /// Cached 3D cushion geometry for `(head, side)` so mood transitions never stall recomputing rest rings.
     private static func cachedSolid(key: String, outline: [CGPoint], side: Double) -> FaceSolid {
+        ensureMemoryWatch()
         if let hit = solidCache[key] { return hit }
-        if solidCache.count > 64 { solidCache.removeAll() }
+        if solidCache.count >= cacheLimit { solidCache.removeAll() }
         let made = FaceSolid(outline: outline, side: side)
         solidCache[key] = made
         return made
@@ -1983,21 +2115,21 @@ final class HeadView: UIView {
     /// Shows the body as its outline and starts its jelly: a solid body turning and tipping (FaceSolid), squashing and
     /// leaning on after each move (FaceJelly). C²-blends smoothly from where a jelly playing before is, or from rest.
     private func playJelly(mood: BotMood, seed: Int, loop: FaceLoop, samples: [(at: Double, body: FaceBody, eyes: FaceEyes)],
+                           wobble: [FaceJelly],
+                           soft: (key: String, points: [CGPoint], foot: CGPoint, layout: ShapeHeadLayout)?,
+                           prebuiltSolid: FaceSolid?,
                            begin: CFTimeInterval, wallNow: CFTimeInterval, once: Bool, isFreshOnce: Bool,
                            prevWobble: (wobble: FaceJelly, moving: Bool),
                            prevReachTrack: ActiveTracks.Reach?) -> (wobble: [FaceJelly], foot: CGPoint, outline: [CGPoint], solid: FaceSolid, layout: ShapeHeadLayout)? {
         let side = bounds.width
-        let layout = HeadGeometry.layout(head, compact: side < 64, darkPage: traitCollection.userInterfaceStyle == .dark)
-        guard isSoft, layout.board == nil, layout.outline.count > 2 else {
+        guard isSoft, let soft, let solid = prebuiltSolid ?? Self.solidCache[soft.key] else {
             dropJelly()
             tracks.reach = nil
             return nil
         }
+        let points = soft.points, foot = soft.foot, layout = soft.layout
+        let solidKey = soft.key
         let place = layout.placement ?? HeadPlacement(k: 1, tx: 0, ty: 0), unit = side / 1024
-        let points = layout.outline.map { CGPoint(x: (place.k * $0.x + place.tx) * unit, y: (place.k * $0.y + place.ty) * unit) }
-        let foot = CGPoint(x: points.map(\.x).reduce(0, +) / Double(points.count), y: points.map(\.y).max() ?? side)
-        let solidKey = "\(head.cacheKey)|\(Int((side * 100).rounded()))"
-        let solid = Self.cachedSolid(key: solidKey, outline: points, side: side)
         let still = HeadRenderer.outlinePath(solid.edge(solid.rest))
         let localBegin = localTime(begin, on: jellyLayer)
         let localNow = localTime(wallNow, on: jellyLayer)
@@ -2067,7 +2199,8 @@ final class HeadView: UIView {
                 let reaches = await Task.detached(priority: .userInitiated) {
                     solid.smoothed(solid.reaches(poses.map { ($0.turn, $0.tip) }), loop: !once)
                 }.value
-                if Self.reachesCache.count > 48 { Self.reachesCache.removeAll() }
+                Self.ensureMemoryWatch()
+                if Self.reachesCache.count >= Self.cacheLimit { Self.reachesCache.removeAll() }
                 Self.reachesCache[reachKey] = reaches
                 guard let self, self.actKey == act, !self.jellyLayer.isHidden else { return }
                 CATransaction.begin()
@@ -2078,8 +2211,7 @@ final class HeadView: UIView {
             }
         }
 
-        // The body: squashed and leant from its foot.
-        let wobble = FaceJelly.follow(samples, period: loop.period, once: once)
+        // The body: squashed and leant from its foot (using precomputed wobble).
         let pivot = CGPoint(x: foot.x - bounds.midX, y: foot.y - bounds.midY)
         func bend(_ jelly: FaceJelly) -> CATransform3D {
             var shape = CATransform3DMakeScale(1 + jelly.squash, 1 - jelly.squash, 1)

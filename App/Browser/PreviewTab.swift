@@ -45,7 +45,7 @@ import WebKit
         self.client = client
         self.accountId = accountId
         self.vaultService = PreviewVaultService(client: client)
-        let events = client.events()
+        let events = client.events(matching: ["preview.open", "preview.close"])
         eventsTask = Task { [weak self] in
             for await event in events {
                 guard let self else { return }
@@ -548,7 +548,7 @@ final class PreviewTabController: UIViewController, WKNavigationDelegate, WKUIDe
         let nav = UINavigationController(rootViewController: self)
         nav.view.accessibilityIdentifier = "preview-tab"
         if let sheet = nav.sheetPresentationController, !DeviceWord.isMac {
-            sheet.detents = [.medium(), .large()]
+            sheet.detents = [.medium(), .large()]   // solid-ok: live WKWebView browser sheet stays opaque so web pages remain readable at half height
             sheet.selectedDetentIdentifier = traitCollection.horizontalSizeClass == .compact ? .medium : .large
             sheet.largestUndimmedDetentIdentifier = .medium
             sheet.prefersGrabberVisible = true

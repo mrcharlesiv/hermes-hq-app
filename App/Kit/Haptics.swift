@@ -19,9 +19,38 @@ enum Haptics {
     /// The Share extension is another process: it reads the same answer from the App Group's defaults.
     nonisolated static let sharedKey = "hqn.haptics"
 
+    private static var cachedIsOn: Bool?
+    private static var updatingDefaults = false
+    private static var defaultsObserver: NSObjectProtocol?
+
+    private static func ensureDefaultsObserver() {
+        guard defaultsObserver == nil else { return }
+        defaultsObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: UserDefaults.standard,
+            queue: nil
+        ) { _ in
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { if !updatingDefaults { cachedIsOn = nil } }
+            } else {
+                Task { @MainActor in if !updatingDefaults { cachedIsOn = nil } }
+            }
+        }
+    }
+
     static var isOn: Bool {
-        get { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
+        get {
+            if let cachedIsOn { return cachedIsOn }
+            ensureDefaultsObserver()
+            let value = UserDefaults.standard.object(forKey: key) as? Bool ?? true
+            cachedIsOn = value
+            return value
+        }
         set {
+            ensureDefaultsObserver()
+            cachedIsOn = newValue
+            updatingDefaults = true
+            defer { updatingDefaults = false }
             UserDefaults.standard.set(newValue, forKey: key)
             if let group = ShareIdentity.appGroup { UserDefaults(suiteName: group)?.set(newValue, forKey: sharedKey) }
         }
@@ -33,19 +62,54 @@ enum Haptics {
     /// How many generators this process has asked the system for (the stress plan's L10: zero while off).
     private(set) static var generatorsMade = 0
 
+    private static var selectionGenerator: UISelectionFeedbackGenerator?
+    private static var impactGenerators: [UIImpactFeedbackGenerator.FeedbackStyle: UIImpactFeedbackGenerator] = [:]
+    private static var notificationGenerator: UINotificationFeedbackGenerator?
+
+    private static func selectionGen() -> UISelectionFeedbackGenerator {
+        if let selectionGenerator { return selectionGenerator }
+        generatorsMade += 1
+        let gen = UISelectionFeedbackGenerator()
+        selectionGenerator = gen
+        return gen
+    }
+
+    fileprivate static func impactGen(_ style: UIImpactFeedbackGenerator.FeedbackStyle) -> UIImpactFeedbackGenerator {
+        if let cached = impactGenerators[style] { return cached }
+        generatorsMade += 1
+        let gen = UIImpactFeedbackGenerator(style: style)
+        impactGenerators[style] = gen
+        return gen
+    }
+
+    private static func notificationGen() -> UINotificationFeedbackGenerator {
+        if let notificationGenerator { return notificationGenerator }
+        generatorsMade += 1
+        let gen = UINotificationFeedbackGenerator()
+        notificationGenerator = gen
+        return gen
+    }
+
+    private static func impactStyle(for kind: Kind) -> UIImpactFeedbackGenerator.FeedbackStyle? {
+        switch kind {
+        case .light: .light
+        case .medium: .medium
+        case .rigid: .rigid
+        case .soft: .soft
+        default: nil
+        }
+    }
+
     static func play(_ kind: Kind) {
         guard isOn else { return }
         if let sink { return sink(kind) }
-        generatorsMade += 1
         switch kind {
-        case .selection: UISelectionFeedbackGenerator().selectionChanged()
-        case .light: UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        case .medium: UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        case .rigid: UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
-        case .soft: UIImpactFeedbackGenerator(style: .soft).impactOccurred()
-        case .success: UINotificationFeedbackGenerator().notificationOccurred(.success)
-        case .warning: UINotificationFeedbackGenerator().notificationOccurred(.warning)
-        case .error: UINotificationFeedbackGenerator().notificationOccurred(.error)
+        case .selection: selectionGen().selectionChanged()
+        case .light, .medium, .rigid, .soft:
+            if let style = impactStyle(for: kind) { impactGen(style).impactOccurred() }
+        case .success: notificationGen().notificationOccurred(.success)
+        case .warning: notificationGen().notificationOccurred(.warning)
+        case .error: notificationGen().notificationOccurred(.error)
         }
     }
 
@@ -53,12 +117,10 @@ enum Haptics {
     static func prepare(_ kind: Kind) {
         guard isOn, sink == nil else { return }
         switch kind {
-        case .selection: UISelectionFeedbackGenerator().prepare()
-        case .light: UIImpactFeedbackGenerator(style: .light).prepare()
-        case .medium: UIImpactFeedbackGenerator(style: .medium).prepare()
-        case .rigid: UIImpactFeedbackGenerator(style: .rigid).prepare()
-        case .soft: UIImpactFeedbackGenerator(style: .soft).prepare()
-        case .success, .warning, .error: UINotificationFeedbackGenerator().prepare()
+        case .selection: selectionGen().prepare()
+        case .light, .medium, .rigid, .soft:
+            if let style = impactStyle(for: kind) { impactGen(style).prepare() }
+        case .success, .warning, .error: notificationGen().prepare()
         }
     }
 
@@ -293,8 +355,7 @@ extension Haptics {
                 let now = CACurrentMediaTime()
                 guard now - lastTap > 0.04 else { return }
                 lastTap = now
-                generatorsMade += 1
-                UIImpactFeedbackGenerator(style: sharpness > 0.6 ? .rigid : .heavy).impactOccurred(intensity: CGFloat(intensity))
+                Haptics.impactGen(sharpness > 0.6 ? .rigid : .heavy).impactOccurred(intensity: CGFloat(intensity))
                 return
             }
             let event = CHHapticEvent(eventType: .hapticTransient, parameters: [

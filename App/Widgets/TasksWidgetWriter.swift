@@ -78,7 +78,7 @@ final class TasksWidgetWriter {
         scheduleWrite()
     }
 
-    /// Sign-out (or a switch): the widget says "Open Hermes HQ"; no task stays where it reads.
+    /// Sign-out (or a switch): the widget says "Open Hermes HQ"; no task stays where it reads. Synchronous for tests.
     func signedOut() {
         guard enabled else { return }
         detach()
@@ -91,13 +91,32 @@ final class TasksWidgetWriter {
         AppLog.note("widgets", "tasks widget: signed out")
     }
 
+    /// Production sign-out: clears local state on `@MainActor` immediately and moves Keychain clearing off main.
+    func signedOutAsync() {
+        guard enabled else { return }
+        detach()
+        account = nil
+        ticking = [:]
+        let scheme = AppIdentity.current.urlScheme
+        Self.ioQueue.async {
+            let changed = TasksWidgetStore.quiet(.signedOut, scheme: scheme)
+            if changed { Self.reload() }
+            Task { @MainActor in
+                #if DEBUG
+                TileWidgetWriter.showProbe()
+                #endif
+                AppLog.note("widgets", "tasks widget: signed out")
+            }
+        }
+    }
+
     private func detach() {
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         observers = []
         watched = nil
     }
 
-    static func reload() { WidgetCenter.shared.reloadTimelines(ofKind: kind) }
+    nonisolated static func reload() { WidgetCenter.shared.reloadTimelines(ofKind: kind) }
 
     // MARK: Watching the list
 
@@ -135,30 +154,21 @@ final class TasksWidgetWriter {
         }
     }
 
-    /// Snapshots store state on `@MainActor`, then builds all widget views and writes Keychain off the main thread.
-    private func writeAsync(reason: String, now: Date = Date()) {
-        guard enabled, let account, let key = accountKey else { return }
+    private nonisolated enum PreparedWrite: Sendable {
+        case none
+        case quiet(state: TasksWidgetIndex.State, scheme: String, account: String)
+        case live(scheme: String, account: String, input: Input, botName: @Sendable (String?) -> String, now: Date)
+    }
+
+    private func prepareWrite(now: Date = Date()) -> PreparedWrite {
+        guard enabled, let account, let key = accountKey else { return .none }
         let scheme = AppIdentity.current.urlScheme
-        guard let store = currentStore(), store.account.id == account.id else { return }
+        guard let store = currentStore(), store.account.id == account.id else { return .none }
         watch(store)
         store.prepare()
         let state: TasksWidgetIndex.State = TasksHub.isOff(store.account) ? .off
             : store.needsAddOn ? .needsAddOn : store.hasList ? .live : .noList
-        guard state == .live else {
-            Self.ioQueue.async {
-                let changed = TasksWidgetStore.quiet(state, scheme: scheme, account: key)
-                if changed {
-                    Self.reload()
-                    Task { @MainActor in
-                        #if DEBUG
-                        TileWidgetWriter.showProbe()
-                        #endif
-                        AppLog.note("widgets", "tasks widget (\(reason)): \(state.rawValue)")
-                    }
-                }
-            }
-            return
-        }
+        guard state == .live else { return .quiet(state: state, scheme: scheme, account: key) }
         let roster = bots()
         let tasks = store.tasks.map { ticking[$0.id] ?? $0 }
         var profiles = Set(roster.map(\.id))
@@ -175,18 +185,58 @@ final class TasksWidgetWriter {
         }
         let input = Input(tasks: tasks, sections: store.sections, bots: roster.map(\.id), sort: store.settings.sort,
                           paused: GoalViews.paused(store.goals), goals: store.goals, ticking: Set(ticking.keys))
-        Self.ioQueue.async {
+        return .live(scheme: scheme, account: key, input: input, botName: botName, now: now)
+    }
+
+    private nonisolated static func performWrite(_ prep: PreparedWrite) -> (changed: Bool, logLine: String?) {
+        switch prep {
+        case .none:
+            return (false, nil)
+        case .quiet(let state, let scheme, let key):
+            let changed = TasksWidgetStore.quiet(state, scheme: scheme, account: key)
+            return (changed, changed ? state.rawValue : nil)
+        case .live(let scheme, let key, let input, let botName, let now):
             let result = Self.persistLive(scheme: scheme, account: key, input: input, botName: botName, now: now)
-            if result.changed {
-                Self.reload()
-                Task { @MainActor in
-                    #if DEBUG
-                    TileWidgetWriter.showProbe()
-                    #endif
-                    AppLog.note("widgets", "tasks widget (\(reason)): written, \(result.viewCount) views, \(result.openCount) open")
+            return (result.changed, result.changed ? "written, \(result.viewCount) views, \(result.openCount) open" : nil)
+        }
+    }
+
+    /// Snapshots store state on `@MainActor`, then builds all widget views and writes Keychain off the main thread.
+    private func writeAsync(reason: String, now: Date = Date()) {
+        let prep = prepareWrite(now: now)
+        guard case .none = prep else {
+            Self.ioQueue.async {
+                let result = Self.performWrite(prep)
+                if result.changed {
+                    Self.reload()
+                    Task { @MainActor in
+                        #if DEBUG
+                        TileWidgetWriter.showProbe()
+                        #endif
+                        if let logLine = result.logLine { AppLog.note("widgets", "tasks widget (\(reason)): \(logLine)") }
+                    }
                 }
             }
+            return
         }
+    }
+
+    /// Async write that awaits completion on `ioQueue` without blocking `@MainActor`.
+    @discardableResult
+    private func writeAsyncResult(reason: String, now: Date = Date()) async -> Bool {
+        let prep = prepareWrite(now: now)
+        if case .none = prep { return false }
+        let result: (changed: Bool, logLine: String?) = await withCheckedContinuation { continuation in
+            Self.ioQueue.async { continuation.resume(returning: Self.performWrite(prep)) }
+        }
+        #if DEBUG
+        TileWidgetWriter.showProbe()
+        #endif
+        if result.changed {
+            Self.reload()
+            if let logLine = result.logLine { AppLog.note("widgets", "tasks widget (\(reason)): \(logLine)") }
+        }
+        return result.changed
     }
 
     /// The background refresh and the pushed wake-up: the list read, then written. Whether the widget changed.
@@ -195,44 +245,23 @@ final class TasksWidgetWriter {
         watch(store)
         store.prepare()
         if !TasksHub.isOff(store.account) { await store.refresh() }
-        return write(reason: "refresh")
+        return await writeAsyncResult(reason: "refresh")
     }
 
     // MARK: Writing
 
-    /// Writes the index and every view. True when a byte changed (the widget reloaded).
+    /// Synchronous write kept for unit tests; production runtime paths use `writeAsync` / `writeAsyncResult`.
     @discardableResult
     func write(reason: String, now: Date = Date()) -> Bool {
-        guard enabled, let account, let key = accountKey else { return false }
-        let scheme = AppIdentity.current.urlScheme
-        guard let store = currentStore(), store.account.id == account.id else {
-            // No Tasks store yet in this launch (no tabs): what was written stays.
-            return false
-        }
-        watch(store)
-        store.prepare()
-        let state: TasksWidgetIndex.State = TasksHub.isOff(store.account) ? .off
-            : store.needsAddOn ? .needsAddOn : store.hasList ? .live : .noList
-        guard state == .live else {
-            let changed = TasksWidgetStore.quiet(state, scheme: scheme, account: key)
-            #if DEBUG
-            TileWidgetWriter.showProbe()
-            #endif
-            if changed { Self.reload(); AppLog.note("widgets", "tasks widget (\(reason)): \(state.rawValue)") }
-            return changed
-        }
-        let roster = bots()
-        let name: (String?) -> String = { PagesNames.botName($0 ?? "default", bots: roster) }
-        let tasks = store.tasks.map { ticking[$0.id] ?? $0 }
-        let input = Input(tasks: tasks, sections: store.sections, bots: roster.map(\.id), sort: store.settings.sort,
-                          paused: GoalViews.paused(store.goals), goals: store.goals, ticking: Set(ticking.keys))
-        let result = Self.persistLive(scheme: scheme, account: key, input: input, botName: name, now: now)
+        let prep = prepareWrite(now: now)
+        if case .none = prep { return false }
+        let result = Self.performWrite(prep)
         #if DEBUG
         TileWidgetWriter.showProbe()
         #endif
         if result.changed {
             Self.reload()
-            AppLog.note("widgets", "tasks widget (\(reason)): written, \(result.viewCount) views, \(result.openCount) open")
+            if let logLine = result.logLine { AppLog.note("widgets", "tasks widget (\(reason)): \(logLine)") }
         }
         return result.changed
     }
@@ -400,18 +429,18 @@ final class TasksWidgetWriter {
         }
         guard accountKey == self.accountKey else {
             AppLog.note("widgets", "tasks widget: check-off for another account, refused")
-            write(reason: "another account")
+            await writeAsyncResult(reason: "another account")
             return nil
         }
         store.prepare()
         if !store.hasList { await store.refresh() }
         guard let task = store.task(id), !task.isDone, ticking[id] == nil else {
             AppLog.note("widgets", "tasks widget: check-off for a task not open on the list")
-            write(reason: "task gone")
+            await writeAsyncResult(reason: "task gone")
             return nil
         }
         ticking[id] = task
-        write(reason: "ticked")
+        await writeAsyncResult(reason: "ticked")
         return store
     }
 
@@ -423,7 +452,7 @@ final class TasksWidgetWriter {
         let shown = Date().timeIntervalSince(started)
         if shown < holdTicked { try? await Task.sleep(for: .seconds(holdTicked - shown)) }
         ticking[id] = nil
-        write(reason: saved ? "ticked, saved" : "ticked, refused: put back")
+        await writeAsyncResult(reason: saved ? "ticked, saved" : "ticked, refused: put back")
         AppLog.note("widgets", "tasks widget: check-off \(saved ? "saved" : "refused, the row put back") in \(String(format: "%.1f", Date().timeIntervalSince(started))) s")
         return saved
     }

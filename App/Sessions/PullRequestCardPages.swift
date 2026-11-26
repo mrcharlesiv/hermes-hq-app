@@ -200,17 +200,17 @@ private struct InteractivePullRequestDiffView: View {
         VStack(alignment: .leading, spacing: 0) {
             let content = HStack(alignment: .top, spacing: 8) {
                 Text(verbatim: line.number.map(String.init) ?? "···")
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(Font.hqSystem(.caption2, design: .monospaced))
                     .foregroundStyle(Color.hqLabel3)
-                    .frame(width: 28, alignment: .trailing)
+                    .frame(minWidth: 28, alignment: .trailing)
                 Text(verbatim: line.text)
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(Font.hqSystem(.caption, design: .monospaced))
                     .foregroundStyle(textColor)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
                 if canComment {
                     Image(systemName: isSelected ? "bubble.left.fill" : "plus.bubble")
-                        .font(.system(size: 11))
+                        .hqSymbolFont(11, cap: 18)
                         .foregroundStyle(isSelected ? Color.hqTint : Color.hqLabel3.opacity(0.6))
                         .padding(.top, 2)
                         .accessibilityHidden(true)

@@ -215,7 +215,7 @@ final class ManagedAppsModel {
     // MARK: Following an operation
 
     private func listen() {
-        let events = api.client.events()
+        let events = api.client.events(matching: ["connection.update", "gateway.ready"])
         listening = Task { [weak self] in
             for await event in events {
                 guard let self else { return }

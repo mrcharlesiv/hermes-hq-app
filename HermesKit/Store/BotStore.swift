@@ -329,7 +329,7 @@ final class BotStore {
         AppLog.trace("bots", "store start: \(profiles.count) bots from cache")
         let client = self.client
         eventsTask = Task { [weak self] in
-            for await event in client.events() {
+            for await event in client.events(matching: ["sessions.changed", "gateway.ready"]) {
                 guard let self else { return }
                 self.handle(event)
             }

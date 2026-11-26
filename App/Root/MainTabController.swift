@@ -605,13 +605,13 @@ enum TabIcons {
     /// symbols beside it there (`barSymbol`); `redrawn` gives the app's own bars the outline.
     static let bot = Glyph(shape: .bot, pointSize: 23.5, line: 0.09, solid: true).made()
     static let kanban = Glyph(shape: .kanban, pointSize: 23.5, line: 0.09, solid: true).made()
-    private static let botHead = "M4 10a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"
+    nonisolated private static let botHead = "M4 10a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"
     /// 16 of the 24 units, where the outline's square is 18: solid at 18 it carried half again the ink of the icons
     /// beside it (measured after 496), the most on the bar.
-    private static let kanbanSquare = "M6 4h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"
+    nonisolated private static let kanbanSquare = "M6 4h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"
 
     /// [tabmotion] How a drawn glyph stands: at rest, or part way through its tap motion (`TabMotion`).
-    struct Pose {
+    nonisolated struct Pose: Sendable {
         /// Bots: the antenna's turn about its foot (radians, clockwise), how open the eyes are (1 open, 0 shut) and how
         /// far they look aside (glyph units, right +).
         var antenna: CGFloat = 0
@@ -625,15 +625,15 @@ enum TabIcons {
     /// [tabmotion] A drawn glyph's recipe, kept with each image made from it, so its tap motion can draw the same
     /// glyph again in another pose. `solid`: the system bar's filled glyph (eyes and columns cut through it); else the
     /// app's own bars' outline.
-    struct Glyph {
-        enum Shape { case bot, kanban }
+    nonisolated struct Glyph: Sendable {
+        enum Shape: Sendable { case bot, kanban }
         let shape: Shape
         let pointSize: CGFloat
         let line: CGFloat
         let solid: Bool
 
         /// The glyph at rest, remembered as this recipe's (`glyph(of:)`).
-        func made() -> UIImage {
+        @MainActor func made() -> UIImage {
             let image = image(.rest)
             glyphs.setObject(GlyphBox(self), forKey: image)
             return image
@@ -842,7 +842,7 @@ enum TabIcons {
         return nil
     }
 
-    private static func glyph(pointSize: CGFloat, line: CGFloat, rect: CGRect?, paths: [CGPath]) -> UIImage {
+    nonisolated private static func glyph(pointSize: CGFloat, line: CGFloat, rect: CGRect?, paths: [CGPath]) -> UIImage {
         let side = (pointSize * 1.35).rounded()
         let unit = side / 24
         let image = UIGraphicsImageRenderer(size: CGSize(width: side, height: side)).image { context in
@@ -861,7 +861,7 @@ enum TabIcons {
 
     /// The solid glyph: `body` filled and outlined (so it is as big as the outline glyph), `paths` stroked, `cutouts`
     /// cleared through it at the line's width.
-    private static func glyph(pointSize: CGFloat, line: CGFloat, body: String, paths: [CGPath], cutouts: [CGPath]) -> UIImage {
+    nonisolated private static func glyph(pointSize: CGFloat, line: CGFloat, body: String, paths: [CGPath], cutouts: [CGPath]) -> UIImage {
         let side = (pointSize * 1.35).rounded()
         let unit = side / 24
         let image = UIGraphicsImageRenderer(size: CGSize(width: side, height: side)).image { context in

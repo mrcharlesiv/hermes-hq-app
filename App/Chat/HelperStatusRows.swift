@@ -247,7 +247,7 @@ nonisolated enum HelperStatusRows {
                     }
                 }
             }
-            let order = Dictionary(uniqueKeysWithValues: messages.enumerated().map { ($0.element.id, $0.offset) })
+            let order = Dictionary(messages.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
             for g in groups.indices {
                 groups[g].members.sort { (order[$0.messageId] ?? 0) < (order[$1.messageId] ?? 0) }
             }

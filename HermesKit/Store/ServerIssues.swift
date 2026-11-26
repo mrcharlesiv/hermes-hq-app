@@ -92,7 +92,7 @@ nonisolated struct ServerIssue: Codable, Hashable, Sendable {
     func report(profile: String, servers: [McpServer]) {
         let time = now()
         var next = issues.filter { $0.profile != profile }
-        let old = Dictionary(uniqueKeysWithValues: stored.filter { $0.profile == profile }.map { ($0.name, $0) })
+        let old = Dictionary(stored.filter { $0.profile == profile }.map { ($0.name, $0) }, uniquingKeysWith: { _, latest in latest })
         var failing: Set<String> = []
         for server in servers {
             guard let kind = Self.kind(of: server) else { continue }

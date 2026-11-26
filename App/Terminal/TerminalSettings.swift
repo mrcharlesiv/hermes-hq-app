@@ -78,7 +78,7 @@ import UIKit
     static func font(size: CGFloat = fontSize, face: Face = TerminalSettings.face, bold: Bool = false) -> UIFont {
         if face == .hack { registerHack() }
         if let names = face.names, let font = UIFont(name: bold ? names.bold : names.regular, size: size) { return font }
-        return .monospacedSystemFont(ofSize: size, weight: bold ? .bold : .regular)
+        return .monospacedSystemFont(ofSize: size, weight: bold ? .bold : .regular)   // a11y-font-ok: terminal font follows user-configured point size
     }
 
     /// The chosen face at the chosen size on a screen. SwiftTerm finds the system's and Menlo's bold and italic by trait;

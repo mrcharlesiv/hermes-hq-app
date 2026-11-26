@@ -79,7 +79,7 @@ extension AppModel {
         ShareRosterWriter.shared.clear()
         AskRoster.clear()                       // [ask-bot]
         TileWidgetWriter.shared.signedOut()     // [tile-widgets] nothing of the account stays where the widgets read
-        TasksWidgetWriter.shared.signedOut()    // [tasks-widget]
+        TasksWidgetWriter.shared.signedOutAsync()   // [tasks-widget]
     }
 
     /// Signed in (launch restore, a fresh sign-in, a switch): a roster left by another account goes, this account's is

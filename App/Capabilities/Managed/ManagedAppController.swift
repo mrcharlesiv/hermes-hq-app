@@ -433,6 +433,7 @@ struct ManagedAppView: View {
                 .disabled(busy)
                 .listRowBackground(Color.clear)
                 .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                .hqDesktopBareRow()
                 .accessibilityIdentifier("managed-verb")
                 if let notice { Text(notice).font(Font.hq(.subheadline)).foregroundStyle(.orange) }
             }

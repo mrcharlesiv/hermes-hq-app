@@ -221,6 +221,7 @@ struct ConnectAppsSetupView: View {
                     .disabled(model.settingUp)
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets())
+                    .hqDesktopBareRow()
                     .accessibilityIdentifier("connect-apps.use-gateway-key")
                 } footer: { HQSectionFooter {
                     Text("Your gateway already has a Composio key. To use a different one, paste it below.")
@@ -265,6 +266,7 @@ struct ConnectAppsSetupView: View {
                 .disabled(key.trimmingCharacters(in: .whitespaces).isEmpty || model.settingUp)
                 .listRowBackground(Color.clear)
                 .listRowInsets(EdgeInsets())
+                .hqDesktopBareRow()
                 .accessibilityIdentifier("connect-apps.continue")
             } footer: { HQSectionFooter {
                 Label("Your key stays in this \(DeviceWord.name)’s Keychain. Nothing changes on your gateway until you turn on a bot.", systemImage: "lock.fill")
@@ -861,6 +863,7 @@ struct ConnectAppView: View {
                 .disabled(connect.phase != .idle)
                 .listRowBackground(Color.clear)
                 .listRowInsets(EdgeInsets())
+                .hqDesktopBareRow()
                 .accessibilityIdentifier("connect-app.connect")
             }
         } footer: { HQSectionFooter {
@@ -1274,6 +1277,7 @@ struct ConnectAccountView: View {
                 .disabled(connect.phase != .idle || busy)
                 .listRowBackground(Color.clear)
                 .listRowInsets(EdgeInsets())
+                .hqDesktopBareRow()
                 .accessibilityIdentifier("connect-account.sign-in")
             } footer: { HQSectionFooter {
                 if case .failed(let reason) = connect.outcome { Text(reason).foregroundStyle(.red) }

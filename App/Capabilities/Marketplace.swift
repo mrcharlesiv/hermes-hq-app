@@ -1164,6 +1164,7 @@ struct MarketplaceView: View {
                 }
                 .listRowInsets(EdgeInsets())
                 .listRowBackground(Color.clear)
+                .hqDesktopBareRow()
             } header: { HQSectionLabel { Text("Featured Plugins") } }
         }
     }

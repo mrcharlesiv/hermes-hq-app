@@ -311,6 +311,7 @@ struct GroupBotsPickerView: View {
                     .scrollIndicators(.never)
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
+                    .hqDesktopBareRow()
                     .accessibilityIdentifier("group-picker.chips")
                 }
                 .listSectionSpacing(.compact)

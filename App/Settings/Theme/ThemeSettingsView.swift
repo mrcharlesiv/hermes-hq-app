@@ -116,6 +116,7 @@ struct ThemeSettingsView: View {
                             .padding(.bottom, 4)
                             .listRowInsets(EdgeInsets())
                             .listRowBackground(Color.clear)
+                            .hqDesktopBareRow()
                     } footer: { HQSectionFooter {
                         gridFooter(state)
                     } }

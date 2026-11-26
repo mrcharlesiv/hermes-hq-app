@@ -1106,6 +1106,7 @@ struct NewChatSheetView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .listRowInsets(EdgeInsets())
                         .listRowBackground(Color.clear)
+                        .hqDesktopBareRow()
                 } else {
                     ScrollViewReader { proxy in
                         ScrollView(.horizontal) {
@@ -1117,6 +1118,7 @@ struct NewChatSheetView: View {
                     }
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
+                    .hqDesktopBareRow()
                 }
             } header: { HQSectionLabel { Text("Bot") } }
             let allRow = Button { showAll(bot) } label: {

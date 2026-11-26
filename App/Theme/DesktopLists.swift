@@ -138,6 +138,15 @@ import UIKit
     private func clearCards(in list: UICollectionView) {
         for cell in list.visibleCells {
             guard let cell = cell as? UICollectionViewListCell else { continue }
+            var background = cell.backgroundConfiguration ?? UIBackgroundConfiguration.listCell()
+            let pressed = cell.isHighlighted || cell.isSelected
+            let wanted: UIColor = pressed ? HQPalette.cellPressed : .clear
+            // A row SwiftUI drew clear on purpose (listRowBackground(Color.clear)) stays bare.
+            // Checked before fitting corners so the very first pass leaves bare rows unclipped.
+            if background.backgroundColor == .clear, background.customView == nil, !cell.hqDesktopCleared {
+                cell.hqBareRow = true
+            }
+            BareRowCorners.apply(cell)
             #if targetEnvironment(macCatalyst)
             // [mac] Stress test 2026-10-28 round 8: the rows clip to the outline's 4 pt corners, not the system card's
             // large ones (which cut the ends off a segmented strip standing in a one-row section: Import Sessions, and
@@ -150,13 +159,6 @@ import UIKit
             // [press-corners] the others clip to the outline's 4 pt.
             DesktopCardCorners.fitLater(cell, bare: cell.hqBareRow)
             #endif
-            var background = cell.backgroundConfiguration ?? UIBackgroundConfiguration.listCell()
-            let pressed = cell.isHighlighted || cell.isSelected
-            let wanted: UIColor = pressed ? HQPalette.cellPressed : .clear
-            // A row SwiftUI drew clear on purpose (listRowBackground(Color.clear)) stays bare.
-            if background.backgroundColor == .clear, background.customView == nil, !cell.hqDesktopCleared {
-                cell.hqBareRow = true
-            }
             if background.backgroundColor != wanted || background.cornerRadius != DesktopRows.radius {
                 background.backgroundColor = wanted
                 background.backgroundColorTransformer = nil
@@ -225,7 +227,7 @@ extension UIView {
 private let clearedKey = malloc(1)!
 private let bareKey = malloc(1)!
 extension UICollectionViewListCell {
-    fileprivate var hqDesktopCleared: Bool {
+    var hqDesktopCleared: Bool {
         get { (objc_getAssociatedObject(self, clearedKey) as? Bool) ?? false }
         set { objc_setAssociatedObject(self, clearedKey, newValue, .OBJC_ASSOCIATION_RETAIN) }
     }
@@ -305,6 +307,7 @@ struct DesktopBareRowMarker: UIViewRepresentable {
                 if let cell = current as? UICollectionViewListCell {
                     guard !cell.hqBareRow else { return }
                     cell.hqBareRow = true
+                    BareRowCorners.apply(cell)
                     // The list's outline may already be drawn round this row: draw it again without.
                     var up = cell.superview
                     while let next = up, !(next is UICollectionView) { up = next.superview }

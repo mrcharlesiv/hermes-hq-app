@@ -434,6 +434,7 @@ struct QuickActionSetupView: View {
                 preview
                     .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
                     .listRowBackground(Color.clear)
+                    .hqDesktopBareRow()
             }
             if let kind = draft.kind { details(kind) }
             look

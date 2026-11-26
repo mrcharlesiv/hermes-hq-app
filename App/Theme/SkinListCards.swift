@@ -25,6 +25,8 @@ import UIKit
         // A row's `configurationUpdateHandler` runs after `updateConfiguration(using:)` and may put iOS's card back
         // (the Mac's rows: `MacSelection.groupedRow`); the row's layout comes after both.
         exchange(UICollectionViewListCell.self, #selector(UIView.layoutSubviews), #selector(UICollectionViewListCell.hqSkinLayoutSubviews))
+        exchange(UICollectionViewListCell.self, #selector(UICollectionReusableView.prepareForReuse),
+                 #selector(UICollectionViewListCell.hqSkinPrepareForReuse))
         exchange(UITableViewCell.self, #selector(UIView.layoutSubviews), #selector(UITableViewCell.hqSkinTableLayoutSubviews))
         exchange(UISegmentedControl.self, #selector(UIView.didMoveToWindow), #selector(UISegmentedControl.hqSkinDidMoveToWindow))
     }
@@ -103,6 +105,112 @@ import UIKit
     private static func isSystem(_ color: UIColor) -> Bool {
         NSStringFromClass(type(of: color)).contains("DynamicSystemColor")
     }
+
+    /// Whether `cell` draws no grouped card behind its content (SwiftUI `.listRowBackground(Color.clear)` or
+    /// `.hqDesktopBareRow()`). Excludes normal grouped cards, Soft Cards rows (`ownKey`), painted custom backgrounds
+    /// (glass sheets' `hqSheetRows`, tinted rows), and UIKit app cells that pair clear rows with section decorations
+    /// (`SoftCardListCell`, `Bundle == .main`).
+    static func isBareRow(_ cell: UICollectionViewListCell) -> Bool {
+        if cell.hqBareRow { return true }
+        guard let background = cell.backgroundConfiguration else { return false }
+        guard background.visualEffect == nil else { return false }
+        guard objc_getAssociatedObject(cell, ownKey) == nil else { return false }
+        if let custom = background.customView {
+            // Wait until SwiftUI's custom background view has laid out so a painted card isn't misread before draw.
+            guard custom.bounds.width > 0.5, custom.bounds.height > 0.5 else { return false }
+            if let fill = background.backgroundColor, fill.resolvedColor(with: cell.traitCollection).cgColor.alpha > 0.01 { return false }
+            return !viewDraws(custom)
+        }
+        guard Bundle(for: type(of: cell)) != .main, !cell.hqDesktopCleared, !BackdropPlates.softRows(for: cell) else { return false }
+        guard let fill = background.backgroundColor else { return false }
+        return fill.resolvedColor(with: cell.traitCollection).cgColor.alpha <= 0.01
+    }
+
+    /// Whether a `UITableViewCell` draws no grouped card (`.backgroundConfiguration = .clear()`, e.g. empty/state rows).
+    static func isBareTableRow(_ cell: UITableViewCell) -> Bool {
+        guard let background = cell.backgroundConfiguration else { return false }
+        guard background.visualEffect == nil, objc_getAssociatedObject(cell, ownKey) == nil else { return false }
+        if let custom = background.customView {
+            guard custom.bounds.width > 0.5, custom.bounds.height > 0.5 else { return false }
+            if let fill = background.backgroundColor, fill.resolvedColor(with: cell.traitCollection).cgColor.alpha > 0.01 { return false }
+            return !viewDraws(custom)
+        }
+        guard !BackdropPlates.softRows(for: cell), let fill = background.backgroundColor else { return false }
+        return fill.resolvedColor(with: cell.traitCollection).cgColor.alpha <= 0.01
+    }
+
+    /// Whether a custom background view or its layer subtree paints anything (mirrors `GlassCardOutliner.draws`, plus
+    /// `UIVisualEffectView` so blur/glass row backgrounds are always treated as cards).
+    static func viewDraws(_ view: UIView, depth: Int = 0) -> Bool {
+        if view.isHidden || view.alpha < 0.01 { return false }
+        if view is UIVisualEffectView { return true }
+        if layerDraws(view.layer) { return true }
+        guard depth < 6 else { return true }
+        return view.subviews.contains { viewDraws($0, depth: depth + 1) }
+    }
+
+    private static func layerDraws(_ layer: CALayer, depth: Int = 0) -> Bool {
+        if layer.isHidden || layer.opacity < 0.01 { return false }
+        if let fill = layer.backgroundColor, fill.alpha > 0.01 { return true }
+        if layer.borderWidth > 0 || layer.contents != nil { return true }
+        if let shape = layer as? CAShapeLayer, shape.path != nil { return true }
+        guard depth < 6 else { return true }
+        return layer.sublayers?.contains { layerDraws($0, depth: depth + 1) } ?? false
+    }
+}
+
+/// Bare rows in `.insetGrouped` lists (`listRowBackground(Color.clear)`, e.g. Theme's `SkinGrid`, Job Detail's title
+/// and action tiles, Kanban task headers, Group sheets' intros, Marketplace's carousel and controls) receive UIKit's
+/// ~26 pt cell `cornerConfiguration` clip with `clipsToBounds = true`, slicing off glyphs and outer card corners near
+/// the row edges. UIKit's `UICollectionViewListCell.layoutSubviews()` re-applies `cornerConfiguration` on every layout
+/// pass, whereas `clipsToBounds = false` stops the corner mask without invalidating layout or fighting UIKit. Restored
+/// on reuse or whenever the row switches back to a painted card.
+@MainActor enum BareRowCorners {
+    private static let unclippedKey = malloc(1)!
+    private static let verifyPendingKey = malloc(1)!
+
+    static func apply(_ cell: UICollectionViewListCell) {
+        let bare = Theme.isDesktop ? cell.hqBareRow : SkinListCards.isBareRow(cell)
+        if bare {
+            if cell.clipsToBounds {
+                objc_setAssociatedObject(cell, unclippedKey, true, .OBJC_ASSOCIATION_RETAIN)
+                cell.clipsToBounds = false
+            }
+            // If bareness came from an unpainted SwiftUI `customView`, re-verify after the current run-loop turn in
+            // case SwiftUI commits its background layer (e.g. `.hqSheetRows()`) right after layoutSubviews.
+            if !Theme.isDesktop, !cell.hqBareRow, cell.backgroundConfiguration?.customView != nil {
+                verifyLater(cell)
+            }
+        } else if isUnclipped(cell) {
+            objc_setAssociatedObject(cell, unclippedKey, nil, .OBJC_ASSOCIATION_RETAIN)
+            if !cell.clipsToBounds { cell.clipsToBounds = true }
+        }
+    }
+
+    static func resetOnReuse(_ cell: UICollectionViewListCell) {
+        cell.hqBareRow = false
+        objc_setAssociatedObject(cell, verifyPendingKey, nil, .OBJC_ASSOCIATION_RETAIN)
+        if isUnclipped(cell) {
+            objc_setAssociatedObject(cell, unclippedKey, nil, .OBJC_ASSOCIATION_RETAIN)
+            if !cell.clipsToBounds { cell.clipsToBounds = true }
+        }
+    }
+
+    private static func verifyLater(_ cell: UICollectionViewListCell) {
+        guard (objc_getAssociatedObject(cell, verifyPendingKey) as? Bool) != true else { return }
+        objc_setAssociatedObject(cell, verifyPendingKey, true, .OBJC_ASSOCIATION_RETAIN)
+        DispatchQueue.main.async { [weak cell] in
+            MainActor.assumeIsolated {
+                guard let cell else { return }
+                objc_setAssociatedObject(cell, verifyPendingKey, nil, .OBJC_ASSOCIATION_RETAIN)
+                apply(cell)
+            }
+        }
+    }
+
+    private static func isUnclipped(_ cell: UIView) -> Bool {
+        (objc_getAssociatedObject(cell, unclippedKey) as? Bool) ?? false
+    }
 }
 
 /// [skin-segments] Owner 2026-11-02 (Theme's Themes / Chats / Backgrounds on a coloured skin): "The top tabs are not
@@ -157,11 +265,18 @@ extension UICollectionViewListCell {
     @objc dynamic func hqSkinUpdateConfiguration(using state: UICellConfigurationState) {
         hqSkinUpdateConfiguration(using: state)
         if let fixed = SkinListCards.adjusted(backgroundConfiguration, cell: self, pressed: state.hqPressed) { backgroundConfiguration = fixed }
+        BareRowCorners.apply(self)
     }
 
     @objc dynamic func hqSkinLayoutSubviews() {
         hqSkinLayoutSubviews()
         if let fixed = SkinListCards.adjusted(backgroundConfiguration, cell: self, pressed: configurationState.hqPressed) { backgroundConfiguration = fixed }
+        BareRowCorners.apply(self)
+    }
+
+    @objc dynamic func hqSkinPrepareForReuse() {
+        BareRowCorners.resetOnReuse(self)
+        hqSkinPrepareForReuse()
     }
 }
 

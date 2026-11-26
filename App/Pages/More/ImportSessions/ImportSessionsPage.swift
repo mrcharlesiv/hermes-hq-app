@@ -148,10 +148,9 @@ struct ImportSessionsView: View {
                 // [mac] Stress test 2026-10-28 #53: at the page's side inset, where the cards' text starts.
                 .listRowInsets(EdgeInsets(top: 0, leading: DeviceWord.isMac ? MacInset.side : 16, bottom: 10,
                                           trailing: DeviceWord.isMac ? MacInset.side : 16))
-                // [mac] Stress test 2026-10-28 round 6: the intro is text standing on the page in both looks; the
-                // Desktop Look outlined its section as a card (the iOS look draws none). On the Mac it is alone in its
-                // section (the segments have their own), so the section is marked bare.
-                .background { if DeviceWord.isMac && Theme.isDesktop { DesktopBareRowMarker() } }
+                // The intro is text standing on the page in both looks, on every device (on iPhone Desktop Look,
+                // leaving this row unmarked boxed both the intro and the bare segments row under it).
+                .hqDesktopBareRow()
                 if !DeviceWord.isMac { sourcePicker }
             }
             .listRowSeparator(.hidden)
@@ -178,6 +177,7 @@ struct ImportSessionsView: View {
                     .frame(height: 360)
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets())
+                    .hqDesktopBareRow()
             } header: { HQSectionLabel {
                 Text(ForeignSessions.scanning).textCase(nil)
             } }
@@ -187,6 +187,7 @@ struct ImportSessionsView: View {
                     .hqListedEmptyState(minHeight: 320, above: 250)   // [mac] Stress test 2026-10-28 #9: centred in the room left, no box
                     .listRowBackground(Color.clear)
                     .listRowInsets(EdgeInsets())
+                    .hqDesktopBareRow()
                     .accessibilityHint(reason)
             }
         case .loaded:
@@ -199,6 +200,7 @@ struct ImportSessionsView: View {
                         .hqListedEmptyState(minHeight: 280, above: 250)   // [mac] Stress test 2026-10-28 #9
                         .listRowBackground(Color.clear)
                         .listRowInsets(EdgeInsets())
+                        .hqDesktopBareRow()
                 }
             } else {
                 Section {

@@ -511,6 +511,7 @@ struct VoiceDiagnosticsView: View {
                 // The list's own row inset, so the block lines up with the section labels and rows below.
                 .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
                 .listRowBackground(Color.clear)
+                .hqDesktopBareRow()
             }
             Section {
                 ForEach(Array(model.facts.rows.enumerated()), id: \.offset) { index, row in

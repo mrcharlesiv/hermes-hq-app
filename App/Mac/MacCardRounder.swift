@@ -55,8 +55,10 @@ import UIKit
 
     private func fit() {
         guard !Theme.isDesktop, let list, list.window != nil else { return }
-        for cell in list.visibleCells where cell is UICollectionViewListCell {
-            MacSelection.fitCardCornersLater(cell, at: list.indexPath(for: cell), iosLook: true)
+        for case let cell as UICollectionViewListCell in list.visibleCells {
+            // Bare rows (listRowBackground(Color.clear), e.g. Theme's SkinGrid, bare intros, strips) draw no card and
+            // must not be clipped to the Mac's 13 pt card corners.
+            MacSelection.fitCardCornersLater(cell, bare: SkinListCards.isBareRow(cell), at: list.indexPath(for: cell), iosLook: true)
         }
     }
 }
@@ -106,7 +108,8 @@ import UIKit
         guard !Theme.isDesktop, let table, table.window != nil else { return }
         for cell in table.visibleCells {
             guard let path = table.indexPath(for: cell) else { continue }
-            let top = path.row == 0, foot = path.row == table.numberOfRows(inSection: path.section) - 1
+            let bare = SkinListCards.isBareTableRow(cell)
+            let top = !bare && path.row == 0, foot = !bare && path.row == table.numberOfRows(inSection: path.section) - 1
             let wanted: [(UIRectCorner, CGFloat)] = [(.topLeft, top ? MacCardRounder.radius : 0), (.topRight, top ? MacCardRounder.radius : 0),
                                                      (.bottomLeft, foot ? MacCardRounder.radius : 0), (.bottomRight, foot ? MacCardRounder.radius : 0)]
             guard wanted.contains(where: { abs(cell.effectiveRadius(corner: $0.0) - $0.1) > 0.01 }) else { continue }

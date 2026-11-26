@@ -183,7 +183,8 @@ import UIKit
                 }
                 budget.count += 1
                 cell.hqCornerFitBudget = budget
-                fitCardCorners(cell, bare: bare, at: path, cardRadius: iosLook ? MacCardRounder.radius : DesktopRows.radius)
+                let isBare = bare || (iosLook && (cell as? UICollectionViewListCell).map(SkinListCards.isBareRow) ?? false)
+                fitCardCorners(cell, bare: isBare, at: path, cardRadius: iosLook ? MacCardRounder.radius : DesktopRows.radius)
             }
         }
     }

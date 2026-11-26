@@ -92,6 +92,7 @@ struct PullRequestCardView: View {
                 // The words start where the section labels under them do, and clear of the cell's rounded corner
                 // (at 4 pt the corner cut the first letter of the last line).
                 .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 8, trailing: 20))
+                .hqDesktopBareRow()
             if let notice = card.unknownNotice {
                 Section {
                     VStack(alignment: .leading, spacing: 8) {

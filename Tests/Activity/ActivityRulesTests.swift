@@ -479,7 +479,19 @@ struct StepRulesTests {
         #expect(authRow.subtitle == "Opus 5.5 needs sign-in · Tap to fix")
         #expect(authRow.detail?.kicker == "Sign-in required · HTTP 401")
         #expect(authRow.detail?.primaryCommand == "claude auth login")
+        #expect(authRow.detail?.runnableCommand == "claude auth login")
+        #expect(authRow.detail?.primaryEnvVar == "CLAUDE_CODE_OAUTH_TOKEN")
         #expect(authRow.detail?.secondaryHint?.contains("CLAUDE_CODE_OAUTH_TOKEN") == true)
+
+        // Safe terminal command validation accepts plain CLI invocations and rejects shell chaining / multi-line injection
+        #expect(ModelFallbackRow.Detail.safeTerminalCommand("  claude auth login  ") == "claude auth login")
+        #expect(ModelFallbackRow.Detail.safeTerminalCommand("hermes auth login --provider anthropic") == "hermes auth login --provider anthropic")
+        #expect(ModelFallbackRow.Detail.safeTerminalCommand("claude auth login; rm -rf /") == nil)
+        #expect(ModelFallbackRow.Detail.safeTerminalCommand("claude auth login && whoami") == nil)
+        #expect(ModelFallbackRow.Detail.safeTerminalCommand("claude auth login | cat") == nil)
+        #expect(ModelFallbackRow.Detail.safeTerminalCommand("claude $(whoami)") == nil)
+        #expect(ModelFallbackRow.Detail.safeTerminalCommand("claude auth login\necho hi") == nil)
+        #expect(ModelFallbackRow.Detail.safeTerminalCommand("   ") == nil)
 
         // Billing exhaustion -> actionable card
         let billingRaw = "⚠️ Model fallback: claude-opus-5-5 via anthropic unavailable (billing or quota exhausted); using gpt-6.1-sol via openai-codex."

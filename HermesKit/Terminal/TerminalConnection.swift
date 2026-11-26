@@ -25,6 +25,8 @@ import Foundation
     }
     /// The shell's name ("zsh"), once the computer has said.
     private(set) var shell = ""
+    /// Whether the computer resumed an existing shell rather than starting a fresh one.
+    private(set) var resumed = false
     /// Bytes of this shell's output shown so far: where a new socket asks to start.
     private(set) var shown = 0
     /// Dials in a row that failed (0 once a socket is live).
@@ -198,10 +200,11 @@ import Foundation
                 onOutput?(data)
             case .text(let text):
                 switch TerminalWire.parse(text) {
-                case .ready(let offset, let shell, _):
+                case .ready(let offset, let shell, let resumed):
                     if offset != shown { onReset?() }
                     shown = offset
                     self.shell = shell
+                    self.resumed = resumed
                     failures = 0
                     phase = .live
                     if !waiting.isEmpty {

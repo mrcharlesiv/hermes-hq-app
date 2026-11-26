@@ -24,6 +24,12 @@ import UIKit
     var title = ""
     /// What the person named it (hold › Rename Tab…), "" when it goes by `name`.
     var customName = ""
+    /// A command queued to run once this tab connects to a fresh shell (nil once sent or cleared).
+    var pendingCommand: String?
+    /// Delayed dispatch waiting for the fresh shell's initial prompt before sending `pendingCommand`.
+    var commandTask: Task<Void, Never>?
+    /// Whether this tab's current connection has emitted any shell output yet.
+    var sawOutput = false
 
     init(session: String, customName: String = "") {
         self.session = session

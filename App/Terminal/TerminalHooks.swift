@@ -9,15 +9,22 @@ import UIKit
     /// For the page's Update Add-on (PushSetupOffer needs the app's model).
     static weak var model: AppModel?
 
-    /// A Terminal page for the signed-in gateway; nil while none is signed in, or its client can't open the socket.
-    static func page(presented: Bool) -> TerminalViewController? {
-        guard let context = MorePages.context, let sockets = context.client as? any GatewayTerminalSockets else { return nil }
-        return TerminalViewController(account: context.account, client: context.client, sockets: sockets, presented: presented)
+    /// Whether a Terminal page can be opened for the currently signed-in gateway.
+    static var canOpen: Bool {
+        guard let context = MorePages.context else { return false }
+        return context.client is any GatewayTerminalSockets
     }
 
-    /// Bot Info's row: over Bot Info (the Mac: over the right pane), closed with ✕.
-    static func open(from host: UIViewController) {
-        guard let page = page(presented: true) else { return }
+    /// A Terminal page for the signed-in gateway; nil while none is signed in, or its client can't open the socket.
+    static func page(presented: Bool, initialCommand: String? = nil) -> TerminalViewController? {
+        guard let context = MorePages.context, let sockets = context.client as? any GatewayTerminalSockets else { return nil }
+        return TerminalViewController(account: context.account, client: context.client, sockets: sockets,
+                                      presented: presented, initialCommand: initialCommand)
+    }
+
+    /// Bot Info's row or a fallback fix action: over the host (the Mac: over the right pane), closed with ✕.
+    static func open(from host: UIViewController, initialCommand: String? = nil) {
+        guard let page = page(presented: true, initialCommand: initialCommand) else { return }
         Haptics.play(.selection)
         PaneViewer.present(UINavigationController(rootViewController: page), from: host)
     }

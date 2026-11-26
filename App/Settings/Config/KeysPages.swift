@@ -487,8 +487,13 @@ struct EnvKeyEditor: View {
         }
     }
 
+    private static func looksSecret(_ key: String) -> Bool {
+        let upper = key.uppercased()
+        return ["_TOKEN", "_KEY", "_SECRET", "_PASSWORD"].contains { upper.hasSuffix($0) }
+    }
+
     var body: some View {
-        let info = model.info(key) ?? EnvVarInfo(key: key)
+        let info = model.info(key) ?? EnvVarInfo(key: key, isPassword: Self.looksSecret(key))
         List { Group {
             if let failure = model.failure {
                 SaveFailureSection(text: failure, detail: nil, retry: model.lastAction == nil ? nil : { model.retry() },
@@ -575,6 +580,7 @@ struct EnvKeyEditor: View {
         .saveFailureFeedback(model.failure)
         .onChange(of: draft) { _, _ in saved = false }
         .environment(\.openURL, LinkOpener.openURLAction)   // [links-browser]
+        .task { if !model.loaded { await model.load() } }
         .onDisappear { draft = "" }
     }
 }

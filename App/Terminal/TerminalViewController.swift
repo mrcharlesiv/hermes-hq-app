@@ -78,6 +78,10 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
     /// Face ID is asked for on the next return to the page (the app went away; not after a cancelled Face ID).
     private var askOnReturn = false
     private var unlocking = false
+    /// A single-line command requested when opening the Terminal (e.g. from Model Fallback's "Run in Terminal").
+    private var pendingCommand: String?
+    /// Whether the Terminal had already been turned on for this computer before this screen opened.
+    private let hadAllowedAtInit: Bool
 
     private(set) var state: State = .asking {
         didSet { if state != oldValue { render() } }
@@ -86,11 +90,21 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
     static let background = UIColor(red: 0.075, green: 0.078, blue: 0.09, alpha: 1)
     static let foreground = UIColor(white: 0.9, alpha: 1)
 
-    init(account: GatewayAccount, client: any GatewayClient, sockets: any GatewayTerminalSockets, presented: Bool = false) {
+    /// Strips surrounding whitespace and rejects empty or multi-line input so an initial command never injects extra lines.
+    static func sanitizeInitialCommand(_ command: String?) -> String? {
+        guard let raw = command?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        guard !raw.contains(where: { $0.isNewline || $0 == "\0" }) else { return nil }
+        return raw
+    }
+
+    init(account: GatewayAccount, client: any GatewayClient, sockets: any GatewayTerminalSockets,
+         presented: Bool = false, initialCommand: String? = nil) {
         self.account = account
         self.client = client
         self.sockets = sockets
         self.presented = presented
+        self.pendingCommand = Self.sanitizeInitialCommand(initialCommand)
+        self.hadAllowedAtInit = TerminalSettings.allowed(account.id)
         let names = TerminalSettings.tabNames(account.id)
         tabs = TerminalSettings.sessions(account.id).enumerated().map { index, session in
             TerminalTab(session: session, customName: names.indices.contains(index) ? names[index] : "")
@@ -354,6 +368,9 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
 
     private func hangUp() {
         for tab in tabs {
+            tab.commandTask?.cancel()
+            tab.commandTask = nil
+            tab.pendingCommand = nil
             tab.connection?.stop()
             tab.connection = nil
         }
@@ -460,6 +477,9 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
         showTabs()
         render()
         focus()
+        if frontTab.pendingCommand != nil, frontTab.phase == .live {
+            schedulePendingCommand(in: frontTab)
+        }
     }
 
     private func renderCover() {
@@ -524,16 +544,45 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
         case .needsUpdate: state = .needsAddOn
         case .unsupported: state = .connection(.stopped(.unsupported))
         case .off: state = .connection(.stopped(.off))
-        case .ready, .unknown: tabs.forEach(connect)   // can't tell: the socket says itself
+        case .ready, .unknown:
+            preparePendingCommand()
+            tabs.forEach(connect)   // can't tell: the socket says itself
         }
     }
 
+    /// Assigns `pendingCommand` to a brand-new shell tab (or the unused first tab on first-time setup) so an existing
+    /// shell is never clobbered. When all `maxTabs` tabs are already open, keeps `pendingCommand` to confirm once live.
+    private func preparePendingCommand() {
+        guard let command = pendingCommand else { return }
+        if !hadAllowedAtInit, tabs.count == 1 {
+            tabs[0].pendingCommand = command
+            pendingCommand = nil
+            return
+        }
+        guard tabs.count < TerminalSettings.maxTabs else { return }
+        let tab = TerminalTab(session: TerminalWire.newSession())
+        tab.pendingCommand = command
+        tabs.append(tab)
+        install(tab)
+        current = tabs.count - 1
+        saveTabs()
+        showTabs()
+        pendingCommand = nil
+        AppLog.note("terminal", "new tab for initial command (\(tabs.count) open)")
+    }
+
     private func connect(_ tab: TerminalTab) {
+        tab.commandTask?.cancel()
+        tab.commandTask = nil
+        tab.sawOutput = false
         tab.connection?.stop()
         tab.endedHere = false
         let sockets = self.sockets
         let connection = TerminalConnection(session: tab.session) { query in try await sockets.terminalSocket(query: query) }
-        connection.onOutput = { [weak tab] data in tab?.view.feed(byteArray: ArraySlice([UInt8](data))) }
+        connection.onOutput = { [weak self, weak tab] data in
+            tab?.view.feed(byteArray: ArraySlice([UInt8](data)))
+            if let self, let tab, !data.isEmpty { self.noteOutput(in: tab) }
+        }
         connection.onReset = { [weak tab] in tab?.clearScreen() }
         connection.onPhase = { [weak self, weak tab] phase in
             guard let self, let tab else { return }
@@ -549,6 +598,9 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
     private func phaseChanged(_ phase: TerminalConnection.Phase, in tab: TerminalTab) {
         AppLog.trace("terminal", "phase \(phase) (tab \((tabs.firstIndex { $0 === tab } ?? -1) + 1) of \(tabs.count))")
         if case .ended = phase {
+            tab.commandTask?.cancel()
+            tab.commandTask = nil
+            tab.pendingCommand = nil
             // The next open starts a fresh shell rather than dialling one that's gone.
             tab.session = TerminalWire.newSession()
             saveTabs()
@@ -559,14 +611,80 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
                 connect(tab)
                 return
             }
+        } else if case .stopped = phase {
+            tab.commandTask?.cancel()
+            tab.commandTask = nil
+            tab.pendingCommand = nil
         }
         tab.phase = phase
         strip.update(titles: tabTitles, current: current)
+        if phase == .live {
+            if let command = tab.pendingCommand {
+                if tab.connection?.resumed == true {
+                    tab.pendingCommand = nil
+                    if tab === frontTab { confirmOverflowCommand(command, in: tab) }
+                } else {
+                    schedulePendingCommand(in: tab)
+                }
+            } else if tab === frontTab, let overflow = pendingCommand {
+                pendingCommand = nil
+                confirmOverflowCommand(overflow, in: tab)
+            }
+        }
         guard tab === self.frontTab else { return }
         state = .connection(phase)
         if phase == .live, !relocked, view.window != nil, presentedViewController == nil, !terminal.isFirstResponder {
             _ = terminal.becomeFirstResponder()
         }
+    }
+
+    private func noteOutput(in tab: TerminalTab) {
+        guard tab.pendingCommand != nil, !tab.sawOutput else { return }
+        tab.sawOutput = true
+        if tab.phase == .live { schedulePendingCommand(in: tab) }
+    }
+
+    /// Waits briefly for the fresh shell's initial prompt before sending `tab.pendingCommand`.
+    private func schedulePendingCommand(in tab: TerminalTab) {
+        guard tab.pendingCommand != nil, tab.phase == .live, !relocked else { return }
+        tab.commandTask?.cancel()
+        let delay: Duration = tab.sawOutput ? .milliseconds(120) : .milliseconds(800)
+        tab.commandTask = Task { [weak self, weak tab] in
+            try? await Task.sleep(for: delay)
+            guard let self, let tab, !Task.isCancelled else { return }
+            self.runPendingCommand(in: tab)
+        }
+    }
+
+    private func runPendingCommand(in tab: TerminalTab) {
+        guard tab.phase == .live, !relocked, let command = tab.pendingCommand else { return }
+        tab.pendingCommand = nil
+        tab.commandTask = nil
+        tab.connection?.send(Data((command + "\r").utf8))
+        AppLog.note("terminal", "ran initial command")
+    }
+
+    private func confirmOverflowCommand(_ command: String, in tab: TerminalTab) {
+        guard presentedViewController == nil else { return }
+        let alert = UIAlertController(
+            title: "Run in Current Tab?",
+            message: "All \(TerminalSettings.maxTabs) terminal tabs are open. Run “\(command)” in this tab, or copy it to paste into an idle shell.",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in self?.focus() })
+        alert.addAction(UIAlertAction(title: "Copy Command", style: .default) { [weak self] _ in
+            UIPasteboard.general.string = command
+            Haptics.play(.success)
+            self?.focus()
+        })
+        let run = UIAlertAction(title: "Run Here", style: .default) { [weak self, weak tab] _ in
+            tab?.connection?.send(Data((command + "\r").utf8))
+            Haptics.play(.light)
+            self?.focus()
+        }
+        alert.addAction(run)
+        alert.preferredAction = run
+        present(alert, animated: true)
     }
 
     // MARK: Tabs
@@ -664,6 +782,9 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
 
     private func remove(_ tab: TerminalTab) {
         guard let index = tabs.firstIndex(where: { $0 === tab }) else { return }
+        tab.commandTask?.cancel()
+        tab.commandTask = nil
+        tab.pendingCommand = nil
         tab.connection?.stop()
         tab.connection = nil
         if tab.view.isFirstResponder {

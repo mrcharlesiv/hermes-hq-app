@@ -29,9 +29,24 @@ nonisolated struct ModelFallbackRow: Equatable, Hashable, Sendable {
         var routeStatus: String
         var explanation: String
         var primaryCommand: String?
+        var primaryEnvVar: String? = nil
         var secondaryHint: String?
         var rawText: String
         var isActionable: Bool
+
+        /// Validates that a parsed CLI fix command is a safe, single-command invocation suitable for running directly in
+        /// the in-app Terminal (no newlines, control characters, or shell chaining/redirection metacharacters).
+        static func safeTerminalCommand(_ raw: String?) -> String? {
+            guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !trimmed.isEmpty, trimmed.count <= 200 else { return nil }
+            let forbidden = CharacterSet(charactersIn: ";|&`$><(){}\\\n\r\0")
+            guard trimmed.rangeOfCharacter(from: forbidden) == nil else { return nil }
+            guard !trimmed.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7f }) else { return nil }
+            return trimmed
+        }
+
+        /// Non-nil when `primaryCommand` can be launched directly in a fresh Terminal tab.
+        var runnableCommand: String? { Self.safeTerminalCommand(primaryCommand) }
     }
 
     var presentation: Presentation
@@ -105,6 +120,7 @@ nonisolated struct ModelFallbackRow: Equatable, Hashable, Sendable {
             routeStatus: routeStatus,
             explanation: explanation,
             primaryCommand: primaryCommand,
+            primaryEnvVar: fallback.mentionedEnvVars.first,
             secondaryHint: secondaryHint,
             rawText: fallback.rawText.isEmpty ? "\(fallback.primary) → \(fallback.fallback)" : fallback.rawText,
             isActionable: fallback.isActionable
@@ -331,6 +347,11 @@ final class ModelFallbackCell: ChatBaseCell, UIContextMenuInteractionDelegate {
         guard let detail = currentRow?.detail else { return nil }
         return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
             var actions: [UIAction] = []
+            if let runnable = detail.runnableCommand, TerminalHooks.canOpen {
+                actions.append(UIAction(title: "Run in Terminal", image: UIImage(systemName: "apple.terminal")) { [weak self] _ in
+                    self?.delegate?.chatCellRunFallbackCommand(runnable)
+                })
+            }
             if let command = detail.primaryCommand {
                 actions.append(UIAction(title: "Copy Fix Command", image: UIImage(systemName: "terminal")) { _ in
                     UIPasteboard.general.string = command
@@ -529,32 +550,53 @@ private final class ModelFallbackPillControl: UIButton {
 
 enum ModelFallbackSheet {
     static func make(detail: ModelFallbackRow.Detail,
+                     onRunInTerminal: ((String?) -> Void)? = nil,
+                     onSetEnvVar: ((String) -> Void)? = nil,
                      onChooseModel: @escaping () -> Void,
                      onOpenProviders: (() -> Void)?) -> UIViewController {
-        var dismissHost: (() -> Void)?
+        var dismissAndThen: ((@escaping () -> Void) -> Void)?
         let view = ModelFallbackSheetView(
             detail: detail,
+            onRunInTerminal: onRunInTerminal.map { run in
+                { command in
+                    dismissAndThen? { run(command) }
+                }
+            },
+            onSetEnvVar: onSetEnvVar.map { openEnv in
+                { key in
+                    dismissAndThen? { openEnv(key) }
+                }
+            },
             onChooseModel: {
-                dismissHost?()
-                onChooseModel()
+                dismissAndThen? { onChooseModel() }
             },
             onOpenProviders: onOpenProviders.map { open in
                 {
-                    dismissHost?()
-                    open()
+                    dismissAndThen? { open() }
                 }
             }
         )
         let host = UIHostingController(rootView: view)
         host.view.backgroundColor = .clear
         let sheet = ChatSheet.wrap(host, title: "Model Fallback", detents: [.medium(), .large()])
-        dismissHost = { [weak sheet] in sheet?.dismiss(animated: true) }
+        if detail.isActionable {
+            sheet.sheetPresentationController?.selectedDetentIdentifier = .large
+        }
+        dismissAndThen = { [weak sheet] next in
+            if let sheet, sheet.presentingViewController != nil {
+                sheet.dismiss(animated: true, completion: next)
+            } else {
+                next()
+            }
+        }
         return sheet
     }
 }
 
 private struct ModelFallbackSheetView: View {
     let detail: ModelFallbackRow.Detail
+    let onRunInTerminal: ((String?) -> Void)?
+    let onSetEnvVar: ((String) -> Void)?
     let onChooseModel: () -> Void
     let onOpenProviders: (() -> Void)?
 
@@ -565,6 +607,14 @@ private struct ModelFallbackSheetView: View {
     private var accentColor: Color { Color(uiColor: PhoneCardColors.attention) }
     private var cardSurface: Color { Color(uiColor: HQPalette.sheetCard) }
     private var codeSurface: Color { Color(uiColor: ChatPalette.codeFill) }
+
+    private var showsFixCard: Bool {
+        detail.primaryCommand != nil || (detail.primaryEnvVar != nil && onSetEnvVar != nil)
+    }
+
+    private var hasPrimaryFixAction: Bool {
+        (detail.primaryCommand != nil && onRunInTerminal != nil) || (detail.primaryEnvVar != nil && onSetEnvVar != nil)
+    }
 
     var body: some View {
         ScrollView {
@@ -577,8 +627,8 @@ private struct ModelFallbackSheetView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("fallback.sheet.explanation")
 
-                if let command = detail.primaryCommand {
-                    fixCard(command: command, hint: detail.secondaryHint)
+                if showsFixCard {
+                    fixCard
                 }
 
                 actionButtons
@@ -662,45 +712,103 @@ private struct ModelFallbackSheetView: View {
         .accessibilityLabel("\(detail.primaryName) switched to \(detail.fallbackName). \(detail.routeStatus)")
     }
 
-    private func fixCard(command: String, hint: String?) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+    private var fixCard: some View {
+        let hintText: String? = detail.secondaryHint ?? (detail.primaryCommand == nil ? detail.primaryEnvVar.map { "Set `\($0)` in Hermes’s environment." } : nil)
+        let envIsPrimary = detail.primaryCommand == nil || onRunInTerminal == nil
+        return VStack(alignment: .leading, spacing: 10) {
             Text("Fix on \(HostWord.phrase)")
                 .font(Font.hq(.caption).weight(.semibold))
                 .textCase(.uppercase)
                 .foregroundStyle(Color.hqLabel2)
 
-            HStack(spacing: 10) {
-                Text(command)
-                    .font(Font.hqSystem(.footnote, design: .monospaced))
-                    .foregroundStyle(Color.hqLabel)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                Button {
-                    UIPasteboard.general.string = command
-                    Haptics.play(.success)
-                    copiedCommand = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copiedCommand = false }
-                } label: {
-                    Text(copiedCommand ? "Copied" : "Copy")
-                        .font(Font.hq(.caption).weight(.semibold))
+            if let command = detail.primaryCommand {
+                HStack(spacing: 10) {
+                    Text(command)
+                        .font(Font.hqSystem(.footnote, design: .monospaced))
                         .foregroundStyle(Color.hqLabel)
-                        .padding(.horizontal, 11)
-                        .padding(.vertical, 6)
-                        .background(Color.hqFill3, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("fallback.sheet.copy-command")
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .background(codeSurface, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-            if let hint {
-                Text((try? AttributedString(markdown: hint)) ?? AttributedString(hint))
+                    Button {
+                        UIPasteboard.general.string = command
+                        Haptics.play(.success)
+                        copiedCommand = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copiedCommand = false }
+                    } label: {
+                        Text(copiedCommand ? "Copied" : "Copy")
+                            .font(Font.hq(.caption).weight(.semibold))
+                            .foregroundStyle(Color.hqLabel)
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 6)
+                            .background(Color.hqFill3, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("fallback.sheet.copy-command")
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(codeSurface, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+
+                if let onRunInTerminal {
+                    let runnable = detail.runnableCommand
+                    Button {
+                        if let runnable {
+                            Haptics.play(.light)
+                            onRunInTerminal(runnable)
+                        } else {
+                            UIPasteboard.general.string = command
+                            Haptics.play(.success)
+                            onRunInTerminal(nil)
+                        }
+                    } label: {
+                        HStack(spacing: 7) {
+                            Image(systemName: "apple.terminal")
+                                .font(Font.hq(.subheadline).weight(.semibold))
+                            Text(runnable != nil ? "Run in Terminal" : "Copy & Open Terminal")
+                                .font(Font.hq(.subheadline).weight(.semibold))
+                        }
+                        .foregroundStyle(Color.hqOnTint)
+                        .frame(maxWidth: .infinity)
+                        .frame(minHeight: 44)
+                        .background(Color.hqTint, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("fallback.sheet.run-terminal")
+                }
+            }
+
+            if let hintText {
+                Text((try? AttributedString(markdown: hintText)) ?? AttributedString(hintText))
                     .font(Font.hq(.caption))
                     .foregroundStyle(Color.hqLabel2)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, detail.primaryCommand != nil && onRunInTerminal != nil ? 2 : 0)
+            }
+
+            if let envVar = detail.primaryEnvVar, let onSetEnvVar {
+                Button {
+                    Haptics.play(.light)
+                    onSetEnvVar(envVar)
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: "key.fill")
+                            .font(Font.hq(envIsPrimary ? .subheadline : .footnote).weight(.semibold))
+                        Text("Set \(envVar)")
+                            .font(Font.hq(envIsPrimary ? .subheadline : .footnote).weight(.semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.82)
+                    }
+                    .foregroundStyle(envIsPrimary ? Color.hqOnTint : Color.hqLabel)
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: envIsPrimary ? 44 : 38)
+                    .padding(.horizontal, 12)
+                    .background(envIsPrimary ? Color.hqTint : codeSurface, in: Capsule())
+                    .overlay(
+                        Capsule().strokeBorder(envIsPrimary ? Color.clear : Color.hqStroke.opacity(0.6), lineWidth: 0.75)
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("fallback.sheet.set-env")
             }
         }
         .padding(14)
@@ -716,10 +824,13 @@ private struct ModelFallbackSheetView: View {
             Button(action: onChooseModel) {
                 Text("Choose a Model")
                     .font(Font.hq(.subheadline).weight(.semibold))
-                    .foregroundStyle(Color.hqOnTint)
+                    .foregroundStyle(hasPrimaryFixAction ? Color.hqLabel : Color.hqOnTint)
                     .frame(maxWidth: .infinity)
-                    .frame(minHeight: 44)
-                    .background(Color.hqTint, in: Capsule())
+                    .frame(minHeight: hasPrimaryFixAction ? 42 : 44)
+                    .background(hasPrimaryFixAction ? cardSurface : Color.hqTint, in: Capsule())
+                    .overlay(
+                        Capsule().strokeBorder(hasPrimaryFixAction ? Color.hqStroke.opacity(0.6) : Color.clear, lineWidth: 0.75)
+                    )
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("fallback.sheet.choose-model")

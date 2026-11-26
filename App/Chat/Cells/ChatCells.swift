@@ -14,6 +14,7 @@ import UIKit
     func chatCellOpen(url: URL)
     func chatCellOpenPhoneResult(_ result: PhoneResultCard, sentAt: Date?)
     func chatCellOpenModelFallback(_ detail: ModelFallbackRow.Detail)
+    func chatCellRunFallbackCommand(_ command: String)
     /// [transcript] A link held in a bubble or a link chip: its own menu (Open, Open in Safari, Copy Link, Share…), titled
     /// with the whole address (docs/spec/3x-transcript.md L492, L568); nil keeps the message's menu.
     func chatCellLinkMenu(url: URL, source: UIView) -> UIMenu?
@@ -61,6 +62,7 @@ extension ChatCellDelegate {
     func chatCellOpenTable(_ table: MarkdownTable) {}
     func chatCellOpenPhoneResult(_ result: PhoneResultCard, sentAt: Date?) {}
     func chatCellOpenModelFallback(_ detail: ModelFallbackRow.Detail) {}
+    func chatCellRunFallbackCommand(_ command: String) {}
     func chatCellRemoveReaction(rowId: String) {}
     func chatCellCanReply(rowId: String) -> Bool { false }
     func chatCellReply(rowId: String) {}

@@ -121,8 +121,8 @@ nonisolated final class FakeTerminalSocket: TerminalSocketing, @unchecked Sendab
     }
 
     func deliver(_ frame: TerminalFrame) { push(.success(frame)) }
-    func ready(offset: Int, shell: String = "zsh") {
-        deliver(.text(#"{"type":"ready","session":"s","offset":\#(offset),"shell":"\#(shell)","resumed":false}"#))
+    func ready(offset: Int, shell: String = "zsh", resumed: Bool = false) {
+        deliver(.text(#"{"type":"ready","session":"s","offset":\#(offset),"shell":"\#(shell)","resumed":\#(resumed ? "true" : "false")}"#))
     }
 
     /// The link drops: with `code`, as if the computer sent a close frame first.
@@ -210,7 +210,27 @@ final class TerminalConnectionTests {
         connection.send(Data("x".utf8))
         #expect(sockets[0].sent.last == .binary(Data("x".utf8)))
         #expect(connection.shell == "zsh")
+        #expect(!connection.resumed)
         connection.stop()
+    }
+
+    @Test func readyRecordsResumedState() async {
+        let connection = make()
+        connection.start(cols: 80, rows: 24)
+        await until("dialled") { sockets.count == 1 }
+        sockets[0].ready(offset: 120, shell: "zsh", resumed: true)
+        await until("live") { connection.phase == .live }
+        #expect(connection.resumed)
+        connection.stop()
+    }
+
+    @Test func sanitizeInitialCommandAllowsSingleLineOnly() {
+        #expect(TerminalViewController.sanitizeInitialCommand("  claude auth login  ") == "claude auth login")
+        #expect(TerminalViewController.sanitizeInitialCommand("") == nil)
+        #expect(TerminalViewController.sanitizeInitialCommand("   \t ") == nil)
+        #expect(TerminalViewController.sanitizeInitialCommand("claude auth login\nwhoami") == nil)
+        #expect(TerminalViewController.sanitizeInitialCommand("claude auth login\rwhoami") == nil)
+        #expect(TerminalViewController.sanitizeInitialCommand(nil) == nil)
     }
 
     @Test func outputCountsAndResize() async {

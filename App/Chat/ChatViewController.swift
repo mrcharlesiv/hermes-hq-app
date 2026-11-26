@@ -4768,15 +4768,50 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     }
 
     func chatCellOpenModelFallback(_ detail: ModelFallbackRow.Detail) {
-        let canOpenProviders = MainTabController.current?.services != nil
+        let services = MainTabController.current?.services
+        let canOpenProviders = services != nil
         let openProviders: (() -> Void)? = canOpenProviders ? { [weak self] in
             self?.openProviderSettings()
         } : nil
+        let runInTerminal: ((String?) -> Void)? = TerminalHooks.canOpen ? { [weak self] command in
+            self?.openFallbackTerminal(command: command)
+        } : nil
+        let gatewaySettings = services as? GatewaySettingsServices
+        let canSetEnv = gatewaySettings?.settingsAPI != nil && gatewaySettings?.isReadOnlyGateway == false
+        let setEnvVar: ((String) -> Void)? = canSetEnv ? { [weak self] key in
+            self?.openEnvKeyEditor(key)
+        } : nil
         present(ModelFallbackSheet.make(
             detail: detail,
+            onRunInTerminal: runInTerminal,
+            onSetEnvVar: setEnvVar,
             onChooseModel: { [weak self] in self?.presentModelSheet() },
             onOpenProviders: openProviders
         ), animated: true)
+    }
+
+    func chatCellRunFallbackCommand(_ command: String) {
+        openFallbackTerminal(command: command)
+    }
+
+    private func openFallbackTerminal(command: String?) {
+        TerminalHooks.open(from: self, initialCommand: command)
+    }
+
+    private func openEnvKeyEditor(_ key: String) {
+        guard let services = MainTabController.current?.services,
+              let gateway = services as? GatewaySettingsServices,
+              let api = gateway.settingsAPI, !gateway.isReadOnlyGateway else { return }
+        let model = EnvKeysModel(api: api, readOnly: false)
+        let label = EnvKeys.title(EnvVarInfo(key: key))
+        let page = SettingsPageController(title: label, EnvKeyEditor(key: key, label: label, model: model))
+        let nav = UINavigationController(rootViewController: page)
+        let close = UIBarButtonItem.hqClose(action: UIAction { [weak nav] _ in nav?.dismiss(animated: true) })
+        close.accessibilityIdentifier = "sheet.close"
+        page.navigationItem.hqPlaceClose(close)
+        page.navigationItem.largeTitleDisplayMode = .never
+        SheetStyle.apply(nav, from: self, detents: [.large()])
+        present(nav, animated: true)
     }
 
     private func openProviderSettings() {

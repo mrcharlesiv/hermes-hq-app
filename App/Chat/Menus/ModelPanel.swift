@@ -1293,8 +1293,9 @@ final class PanelFace: UIControl {
 
     private func pose(_ mood: BotMood?, tempo: Float) {
         if face.posedMood != mood {
-            // A new act starts on the clock everyone shares: back to it first, then the tempo.
-            setTempo(1, reset: true)
+            // Keep the holder's local clock continuous (reset: false) so HeadView's presentation/parametric
+            // handoff reads the live current pose instead of teleporting back to wall-clock time.
+            setTempo(1, reset: false)
             face.posedMood = mood
         }
         setTempo(mood == nil || HQMotion.decorativeStill ? 1 : tempo, reset: false)
@@ -1326,9 +1327,9 @@ final class PanelFace: UIControl {
     func cheer() {
         cheering += 1
         let token = cheering
-        setTempo(1, reset: true)
+        setTempo(1, reset: false)
         face.posedMood = .done
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + BotMood.done.length) { [weak self] in
             guard let self, cheering == token else { return }
             cheering = 0
             refresh()

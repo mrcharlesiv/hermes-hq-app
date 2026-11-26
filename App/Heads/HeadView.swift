@@ -57,8 +57,114 @@ final class HeadView: UIView {
     private let rightEyeLayer = CALayer()
     /// The head and size the jelly was drawn for: another head drops it at once (a reused row), this one settles it.
     private var jellyKey = ""
+    /// Monotonic token guarding `settleJelly` / `sheen` exit completions so a newer act or settle is never cut short.
+    private var settleToken = 0
     /// Cached 3D cushion geometry per (head, size) so mood switches start instantly.
     private static var solidCache: [String: FaceSolid] = [:]
+    /// Cached smoothed 3D silhouette reaches per `(solidKey, mood, seed, once)` so repeated/switched acts start on frame 0.
+    private static var reachesCache: [String: [[Double]]] = [:]
+
+    /// Parametric pose of one independent GPU pill eye on a soft Shapes head.
+    private struct VectorEyePose {
+        var pos: CGPoint
+        var size: CGSize
+        var radius: CGFloat
+        var angle: Double
+        var opacity: Double
+
+        static func mix(_ a: VectorEyePose, _ b: VectorEyePose, _ k: Double) -> VectorEyePose {
+            let w = a.size.width + (b.size.width - a.size.width) * k
+            let h = a.size.height + (b.size.height - a.size.height) * k
+            var da = (b.angle - a.angle).truncatingRemainder(dividingBy: 2 * .pi)
+            if da > .pi { da -= 2 * .pi } else if da <= -.pi { da += 2 * .pi }
+            return VectorEyePose(pos: CGPoint(x: a.pos.x + (b.pos.x - a.pos.x) * k, y: a.pos.y + (b.pos.y - a.pos.y) * k),
+                                 size: CGSize(width: w, height: h), radius: min(w, h) / 2,
+                                 angle: a.angle + da * k, opacity: a.opacity + (b.opacity - a.opacity) * k)
+        }
+    }
+
+    /// Exact resting (idle, looking right, −20° tilted) and neutral (centred) eye metrics for a soft Shapes head.
+    private struct ShapeEyeMetrics {
+        var centerLeft: CGPoint, centerRight: CGPoint
+        var idleLeft: VectorEyePose, idleRight: VectorEyePose
+        var gap: Double, eyeW: Double, eyeH: Double
+        var eyeColor: CGColor
+    }
+
+    /// Snapshot of the currently running (or settling) parametric tracks so any switch, restart, or return to rest
+    /// C²-blends seamlessly from the exact live pose and velocity without a jump or zero-velocity slam.
+    private struct ActiveTracks {
+        struct Bridge<Value> {
+            var beginLocal: CFTimeInterval
+            var duration: Double
+            var from: Value
+        }
+        struct Body {
+            var samples: [(at: Double, body: FaceBody, eyes: FaceEyes)]
+            var period: Double
+            var once: Bool
+            var beginLocal: CFTimeInterval
+            var scale: Double
+            var bridge: Bridge<FaceBody>?
+            var settle: (beginLocal: CFTimeInterval, duration: Double, from: FaceBody)?
+        }
+        struct Wobble {
+            var samples: [(at: Double, body: FaceBody, eyes: FaceEyes)]
+            var wobble: [FaceJelly]
+            var period: Double
+            var once: Bool
+            var beginLocal: CFTimeInterval
+            var squashScale: Double
+            var leanScale: Double
+            var bridge: Bridge<FaceJelly>?
+            var settle: (beginLocal: CFTimeInterval, duration: Double, from: FaceJelly)?
+        }
+        struct Reach {
+            var reaches: [[Double]]
+            var period: Double
+            var once: Bool
+            var beginLocal: CFTimeInterval
+            var solid: FaceSolid
+            var bridge: Bridge<[Double]>?
+            var settle: (beginLocal: CFTimeInterval, duration: Double, from: [Double])?
+        }
+        struct Eye {
+            var times: [Double]
+            var poses: [VectorEyePose]
+            var period: Double
+            var once: Bool
+            var beginLocal: CFTimeInterval
+            var idle: VectorEyePose
+            var bridge: Bridge<VectorEyePose>?
+            var settle: (beginLocal: CFTimeInterval, duration: Double, from: VectorEyePose)?
+        }
+        struct Gaze {
+            var samples: [(at: Double, body: FaceBody, eyes: FaceEyes)]
+            var period: Double
+            var once: Bool
+            var beginLocal: CFTimeInterval
+            var rx: Double, ry: Double, restX: Double
+            var bridge: Bridge<CGPoint>?
+            var settle: (beginLocal: CFTimeInterval, duration: Double, from: CGPoint)?
+        }
+        struct Lids {
+            var samples: [(at: Double, body: FaceBody, eyes: FaceEyes)]
+            var period: Double
+            var once: Bool
+            var beginLocal: CFTimeInterval
+            var stepped: Bool
+            var bridge: Bridge<CGSize>?
+            var settle: (beginLocal: CFTimeInterval, duration: Double, from: CGSize)?
+        }
+        var body: Body?
+        var wobble: Wobble?
+        var reach: Reach?
+        var leftEye: Eye?
+        var rightEye: Eye?
+        var gaze: Gaze?
+        var lids: Lids?
+    }
+    private var tracks = ActiveTracks()
     // [photoheads] The bot this face belongs to when it came through `configure(raw:profile:working:)`: only then may
     // a photo the bot wears be drawn over the head (docs/spec/3x-photoheads.md §4.5).
     private(set) var faceProfile: String?
@@ -329,7 +435,9 @@ final class HeadView: UIView {
         }
         let themed = head.themed != nil
         let working = playsRoutines ? shownMood != nil : busy
-        let layered = !still && (themed ? working || moves.blinks : working || moves.blinks || moves.glance > 0)
+        // Keep layered split stable whenever motion is allowed so starting/ending an act on eyeless themes (Glyph,
+        // eyeless Orb/Dots) never rebuilds `drawnKey` mid-settle and cuts off `act.end`.
+        let layered = !still
         let state: HeadState = working && !playsRoutines ? .thinking : .idle
         let key = "\(head.cacheKey)|\(side)|\(scale)|\(themed ? false : dark)|\(state.rawValue)|\(layered)"
         if key != drawnKey {
@@ -389,7 +497,9 @@ final class HeadView: UIView {
         sheen.removeAllAnimations()
         sheen.isHidden = true
         sheenMask.contents = nil
-        clearAct()
+        let sameHead = jellyKey == "\(head.cacheKey)|\(side)"
+        if !sameHead { tracks = ActiveTracks() }
+        clearAct(settle: false)
         updateMotion()
     }
 
@@ -416,6 +526,7 @@ final class HeadView: UIView {
         eyesLayer.removeAllAnimations()
         moving = false
         dropJelly()
+        tracks = ActiveTracks()
         bodyLayer.removeAllAnimations()
         bodyLayer.contents = picture
         sheenMask.contents = picture
@@ -436,8 +547,15 @@ final class HeadView: UIView {
 
     // MARK: [moods] Acting out what the bot is doing
 
+    /// Wall-clock time converted into `layer`'s local time space so animations stay locked inside speed-shifted parents
+    /// (`PanelFace`, sheet transitions) as well as ordinary views.
+    private func localTime(_ wallTime: CFTimeInterval, on layer: CALayer) -> CFTimeInterval {
+        window != nil ? layer.convertTime(wallTime, from: nil) : wallTime
+    }
+
     /// Starts, swaps or stops the act a dot-matrix face plays: what its bot is doing, kept to one still face under
-    /// Reduce Motion. The act's pictures are drawn off the main thread the first time; the face stays as it is till then.
+    /// Reduce Motion. The act's pictures are drawn off the main thread the first time; the face stays smoothly in motion
+    /// till then so there is never a freeze frame between moods.
     private func syncAct(still: Bool) {
         let side = bounds.width
         guard let mood = shownMood, window != nil, side > 0, !showsPhoto, !drawnKey.isEmpty else {
@@ -446,11 +564,11 @@ final class HeadView: UIView {
         }
         let key = "\(mood.rawValue)|\(drawnKey)|\(still)"
         guard key != actKey else { return }
-        let shown = stage.presentation()?.transform
-        if !actKey.isEmpty { clearAct(settle: false) }
+        let wasActive = !actKey.isEmpty
         actKey = key
         let act = MatrixAct.make(mood, design: MatrixDesign(head))
         if still {
+            clearAct(settle: false)
             bodyLayer.contents = matrixFrame(act.still)?.cgImage
             return
         }
@@ -460,14 +578,14 @@ final class HeadView: UIView {
         let loop = FaceLoop(mood, facing: act.design.facing, seed: seed)
         let cache = HeadImageCache.shared
         if let pictures = cache.cachedActPictures(for: head, mood: mood, side: side, scale: scale, dark: dark, mark: mark) {
-            play(act, loop, pictures, begin: begin, scale: scale, from: shown)
+            play(act, loop, pictures, begin: begin, scale: scale, wasActive: wasActive)
             return
         }
         let head = self.head, mark = self.mark
         Task { [weak self] in
             let pictures = await cache.actPictures(for: head, mood: mood, side: side, scale: scale, dark: dark, mark: mark)
             guard let self, self.actKey == key else { return }
-            self.play(act, loop, pictures, begin: begin, scale: scale, from: shown)
+            self.play(act, loop, pictures, begin: begin, scale: scale, wasActive: wasActive)
         }
     }
 
@@ -489,24 +607,263 @@ final class HeadView: UIView {
         bodyLayer.contents = matrixFrame(.look)?.cgImage
     }
 
-    /// Whatever an act left: its swaps, its moves, its light. `settle`: the body eases back to standing (not when another
-    /// act takes over: that one eases in from where it is).
-    private func clearAct(settle: Bool = true) {
-        let moved: [(CALayer, CATransform3D)] = !settle ? [] : [stage, mover, gazeLayer, eyesLayer].compactMap { layer in
-            guard layer.animation(forKey: "act") != nil || layer.animation(forKey: "act.lids") != nil
-                    || layer.animation(forKey: "act.jelly") != nil,
-                  let shown = layer.presentation()?.transform else { return nil }
-            return (layer, shown)
+    // MARK: [moods] Live parametric evaluation & C² quintic transitions
+
+    private static let bridgeLength = 0.32
+    private static let onceBridgeLength = 0.22
+    private static let onceEyeEntryLength = 0.18
+
+    private func scaledBody(_ b: FaceBody, _ scale: Double) -> FaceBody {
+        guard scale != 1 else { return b }
+        return FaceBody(x: b.x * scale, y: b.y * scale, roll: b.roll * scale, turn: b.turn * scale,
+                        tip: b.tip * scale, squash: b.squash * scale)
+    }
+
+    private func scaledWobble(_ j: FaceJelly, squashScale: Double, leanScale: Double) -> FaceJelly {
+        guard squashScale != 1 || leanScale != 1 else { return j }
+        return FaceJelly(squash: j.squash * squashScale, lean: j.lean * leanScale)
+    }
+
+    /// Smooth soft clamp into (−1, 1) with zero flat-top kink when leading eyes overshoot 1.
+    private static func softUnit(_ v: Double) -> Double {
+        let a = abs(v)
+        guard a > 0.85 else { return v }
+        return (v < 0 ? -1 : 1) * (0.85 + 0.15 * tanh((a - 0.85) / 0.15))
+    }
+
+    private func restLookOffset() -> Double {
+        guard !isMatrix, bounds.width > 0 else { return 0 }
+        return head.themed.map { ThemeHeadSVG.restLook($0, compact: bounds.width < 64) * bounds.width / 1024 } ?? 0
+    }
+
+    private func currentBody(at localNow: CFTimeInterval) -> (body: FaceBody, moving: Bool) {
+        guard let track = tracks.body else { return (.rest, false) }
+        if let settle = track.settle {
+            let u = (localNow - settle.beginLocal) / max(settle.duration, 1e-6)
+            if u >= 1 { return (.rest, false) }
+            return (settle.from.mixedShortest(.rest, FaceBody.quintic(u)), true)
         }
+        let target = scaledBody(FaceLoop.interpolated(in: track.samples, at: localNow - track.beginLocal, period: track.period,
+                                                      once: track.once).body, track.scale)
+        if let bridge = track.bridge {
+            let u = (localNow - bridge.beginLocal) / max(bridge.duration, 1e-6)
+            if u < 1 { return (bridge.from.mixedShortest(target, FaceBody.quintic(u)), true) }
+        }
+        return (target, true)
+    }
+
+    private func currentWobble(at localNow: CFTimeInterval) -> (wobble: FaceJelly, moving: Bool) {
+        guard let track = tracks.wobble else { return (.rest, false) }
+        if let settle = track.settle {
+            let u = (localNow - settle.beginLocal) / max(settle.duration, 1e-6)
+            if u >= 1 { return (.rest, false) }
+            let k = FaceBody.quintic(u)
+            return (FaceJelly(squash: settle.from.squash * (1 - k), lean: settle.from.lean * (1 - k)), true)
+        }
+        let target = scaledWobble(FaceJelly.interpolated(in: track.wobble, samples: track.samples, at: localNow - track.beginLocal,
+                                                         period: track.period, once: track.once),
+                                  squashScale: track.squashScale, leanScale: track.leanScale)
+        if let bridge = track.bridge {
+            let u = (localNow - bridge.beginLocal) / max(bridge.duration, 1e-6)
+            if u < 1 {
+                let k = FaceBody.quintic(u)
+                return (FaceJelly(squash: bridge.from.squash + (target.squash - bridge.from.squash) * k,
+                                  lean: bridge.from.lean + (target.lean - bridge.from.lean) * k), true)
+            }
+        }
+        return (target, true)
+    }
+
+    private func currentReach(at localNow: CFTimeInterval, fallback: [Double]) -> (reach: [Double], moving: Bool) {
+        guard let track = tracks.reach, track.solid.rest.count == fallback.count else { return (fallback, false) }
+        if let settle = track.settle {
+            let u = (localNow - settle.beginLocal) / max(settle.duration, 1e-6)
+            if u >= 1 { return (track.solid.rest, false) }
+            let k = FaceBody.quintic(u)
+            return (zip(settle.from, track.solid.rest).map { $0 + ($1 - $0) * k }, true)
+        }
+        let target = track.reaches.isEmpty ? track.solid.rest
+            : FaceSolid.interpolatedReach(in: track.reaches, at: localNow - track.beginLocal, period: track.period, once: track.once)
+        if let bridge = track.bridge, bridge.from.count == target.count {
+            let u = (localNow - bridge.beginLocal) / max(bridge.duration, 1e-6)
+            if u < 1 {
+                let k = FaceBody.quintic(u)
+                return (zip(bridge.from, target).map { $0 + ($1 - $0) * k }, true)
+            }
+        }
+        return (target, true)
+    }
+
+    private static func interpolatedEye(in track: ActiveTracks.Eye, at t: Double) -> VectorEyePose {
+        let times = track.times, poses = track.poses
+        guard !poses.isEmpty else { return track.idle }
+        guard poses.count > 1, track.period > 0 else { return poses[0] }
+        var u = track.once ? min(max(t, 0), track.period) : t.truncatingRemainder(dividingBy: track.period)
+        if u < 0 { u += track.period }
+        if u <= times[0] { return poses[0] }
+        let last = times.count - 1
+        if u >= times[last] { return poses[last] }
+        var low = 0, high = last
+        while low + 1 < high {
+            let mid = (low + high) >> 1
+            if times[mid] <= u { low = mid } else { high = mid }
+        }
+        let span = times[high] - times[low]
+        let k = span > 1e-12 ? (u - times[low]) / span : 0
+        return VectorEyePose.mix(poses[low], poses[high], k)
+    }
+
+    private func currentEye(_ track: ActiveTracks.Eye?, at localNow: CFTimeInterval, fallback: VectorEyePose) -> (pose: VectorEyePose, moving: Bool) {
+        guard let track else { return (fallback, false) }
+        if let settle = track.settle {
+            let u = (localNow - settle.beginLocal) / max(settle.duration, 1e-6)
+            if u >= 1 { return (track.idle, false) }
+            return (VectorEyePose.mix(settle.from, track.idle, FaceBody.quintic(u)), true)
+        }
+        let target = Self.interpolatedEye(in: track, at: localNow - track.beginLocal)
+        if let bridge = track.bridge {
+            let u = (localNow - bridge.beginLocal) / max(bridge.duration, 1e-6)
+            if u < 1 { return (VectorEyePose.mix(bridge.from, target, FaceBody.quintic(u)), true) }
+        }
+        return (target, true)
+    }
+
+    private func currentGaze(at localNow: CFTimeInterval) -> (offset: CGPoint, moving: Bool) {
+        let rest = CGPoint(x: restLookOffset(), y: 0)
+        guard let track = tracks.gaze else { return (rest, false) }
+        if let settle = track.settle {
+            let u = (localNow - settle.beginLocal) / max(settle.duration, 1e-6)
+            if u >= 1 { return (CGPoint(x: track.restX, y: 0), false) }
+            let k = FaceBody.quintic(u)
+            return (CGPoint(x: settle.from.x + (track.restX - settle.from.x) * k, y: settle.from.y * (1 - k)), true)
+        }
+        let pose = FaceLoop.interpolated(in: track.samples, at: localNow - track.beginLocal, period: track.period, once: track.once)
+        let target = CGPoint(x: Self.softUnit(pose.eyes.x) * track.rx, y: Self.softUnit(pose.eyes.y) * track.ry)
+        if let bridge = track.bridge {
+            let u = (localNow - bridge.beginLocal) / max(bridge.duration, 1e-6)
+            if u < 1 {
+                let k = FaceBody.quintic(u)
+                return (CGPoint(x: bridge.from.x + (target.x - bridge.from.x) * k,
+                                y: bridge.from.y + (target.y - bridge.from.y) * k), true)
+            }
+        }
+        return (target, true)
+    }
+
+    private func currentLids(at localNow: CFTimeInterval) -> (scale: CGSize, moving: Bool) {
+        let rest = CGSize(width: 1, height: 1)
+        guard let track = tracks.lids else { return (rest, false) }
+        if let settle = track.settle {
+            let u = (localNow - settle.beginLocal) / max(settle.duration, 1e-6)
+            if u >= 1 { return (rest, false) }
+            let k = FaceBody.quintic(u)
+            return (CGSize(width: settle.from.width + (1 - settle.from.width) * k,
+                           height: settle.from.height + (1 - settle.from.height) * k), true)
+        }
+        let pose = FaceLoop.interpolated(in: track.samples, at: localNow - track.beginLocal, period: track.period, once: track.once)
+        let target = Self.lidScale(pose.eyes, stepped: track.stepped)
+        if let bridge = track.bridge {
+            let u = (localNow - bridge.beginLocal) / max(bridge.duration, 1e-6)
+            if u < 1 {
+                let k = FaceBody.quintic(u)
+                return (CGSize(width: bridge.from.width + (target.width - bridge.from.width) * k,
+                               height: bridge.from.height + (target.height - bridge.from.height) * k), true)
+            }
+        }
+        return (target, true)
+    }
+
+    private static func lidScale(_ eyes: FaceEyes, stepped: Bool) -> CGSize {
+        let shut = min(max(eyes.lids, 0), 1)
+        let wideBoost = stepped ? 0 : min(max(eyes.wide, 0), 1) * 0.14
+        let open = stepped ? (shut >= 0.72 ? 0.08 : 1) : max(0.08, (1 + wideBoost) * (1 - 0.9 * shut))
+        let blinkW = stepped ? 1 : 1 + 0.1 * shut
+        return CGSize(width: blinkW, height: open)
+    }
+
+    /// Exact resting (`HeadGeometry.pose(.idle)`: shifted right & up, tilted −20°) and centred eye geometry for a soft
+    /// Shapes head, so entering and leaving an act swaps bitmaps ↔ GPU pill layers with zero pixel jump.
+    private func shapeEyeMetrics(layout: ShapeHeadLayout, side: CGFloat) -> ShapeEyeMetrics {
+        let place = layout.placement ?? HeadPlacement(k: 1, tx: 0, ty: 0), unit = side / 1024
+        let shape = HeadGeometry.form(head.form, seed: head.seed)
+        let (fx, fy, faceSize) = shape.face
+        let s = HeadGeometry.unit * faceSize, bold = side < 64 ? 1.2 : 1.0
+        let gap1024 = 0.2 * s
+        let w1024 = HeadGeometry.n1(0.15 * s * bold)
+        let h1024 = HeadGeometry.n1(0.38 * s)
+        let eyeW = w1024 * place.k * unit
+        let eyeH = h1024 * place.k * unit
+        let gap = gap1024 * place.k * unit
+        let cx = (place.k * (512 + fx * HeadGeometry.unit) + place.tx) * unit
+        let cy = (place.k * (512 + fy * HeadGeometry.unit) + place.ty) * unit
+        let idlePose = HeadGeometry.pose(.idle)
+        let idleCx1024 = 512 + (fx + idlePose.at.x * faceSize) * HeadGeometry.unit
+        let idleCy1024 = 512 + (fy + idlePose.at.y * faceSize) * HeadGeometry.unit
+        func map(_ x1024: Double, _ y1024: Double) -> CGPoint {
+            CGPoint(x: (place.k * HeadGeometry.n1(x1024) + place.tx) * unit,
+                    y: (place.k * HeadGeometry.n1(y1024) + place.ty) * unit)
+        }
+        let idleSize = CGSize(width: eyeW, height: eyeH), radius = min(eyeW, eyeH) / 2
+        let idleLeft = VectorEyePose(pos: map(idleCx1024 - gap1024, idleCy1024), size: idleSize, radius: radius,
+                                     angle: idlePose.lean.0 * .pi / 180, opacity: 1)
+        let idleRight = VectorEyePose(pos: map(idleCx1024 + gap1024, idleCy1024), size: idleSize, radius: radius,
+                                      angle: idlePose.lean.1 * .pi / 180, opacity: 1)
+        return ShapeEyeMetrics(centerLeft: CGPoint(x: cx - gap, y: cy), centerRight: CGPoint(x: cx + gap, y: cy),
+                               idleLeft: idleLeft, idleRight: idleRight, gap: gap, eyeW: eyeW, eyeH: eyeH,
+                               eyeColor: HeadRenderer.color(layout.eyeColor))
+    }
+
+    /// 60 Hz C² quintic keyframe animation on `layer`: starts at exact `u = 0` (`beginLocal`) with zero start jerk and
+    /// hands off at `u = 1` matching position, velocity, and acceleration identically to the live track underneath.
+    private func addSmoothTransition(_ layer: CALayer, keyPath: String, key: String, beginLocal: CFTimeInterval,
+                                     duration: Double, values: (Double) -> Any) {
+        let steps = max(8, Int((duration * 60).rounded(.up)))
+        let anim = CAKeyframeAnimation(keyPath: keyPath)   // motion-ok: still under Reduce Motion (syncAct, syncFace)
+        anim.values = (0...steps).map { values(Double($0) / Double(steps)) }
+        anim.keyTimes = (0...steps).map { NSNumber(value: Double($0) / Double(steps)) }
+        anim.duration = duration
+        anim.beginTime = beginLocal
+        anim.fillMode = .backwards
+        anim.isRemovedOnCompletion = true
+        layer.add(anim, forKey: key)
+    }
+
+    /// Whatever an act left: its swaps, its moves, its light. `settle`: eases every moved layer C²-smoothly back to its
+    /// exact resting pose (including the right-looking −20° idle eyes on Shapes) before swapping back to bitmaps.
+    private func clearAct(settle: Bool = true) {
+        let wallNow = CACurrentMediaTime()
+        let bodyLayerTarget = usesGroundedMover ? mover : stage
+        let hadBody = bodyLayerTarget.animation(forKey: "act") != nil || tracks.body != nil
+        let hadElastic = isMatrix && (mover.animation(forKey: "act.jelly") != nil || tracks.wobble != nil)
+        let hadGaze = !isMatrix && jellyLayer.isHidden && (gazeLayer.animation(forKey: "act") != nil || tracks.gaze != nil)
+        let hadLids = !isMatrix && jellyLayer.isHidden && (eyesLayer.animation(forKey: "act.lids") != nil || tracks.lids != nil)
+
+        let bodyLocalNow = localTime(wallNow, on: bodyLayerTarget)
+        let bodySnap: (body: FaceBody, moving: Bool) = hadBody ? currentBody(at: bodyLocalNow) : (body: .rest, moving: false)
+        let elasticLocalNow = localTime(wallNow, on: mover)
+        let elasticSnap: (wobble: FaceJelly, moving: Bool) = hadElastic ? currentWobble(at: elasticLocalNow) : (wobble: .rest, moving: false)
+        let gazeLocalNow = localTime(wallNow, on: gazeLayer)
+        let gazeSnap: (offset: CGPoint, moving: Bool) = hadGaze ? currentGaze(at: gazeLocalNow) : (offset: CGPoint(x: restLookOffset(), y: 0), moving: false)
+        let lidsLocalNow = localTime(wallNow, on: eyesLayer)
+        let lidsSnap: (scale: CGSize, moving: Bool) = hadLids ? currentLids(at: lidsLocalNow) : (scale: CGSize(width: 1, height: 1), moving: false)
+        let sheenShownOpacity = sheen.isHidden ? Float(0) : (sheen.presentation()?.opacity ?? sheen.opacity)
+
         actKey = ""
+        settleToken += 1
+        let token = settleToken
+
         bodyLayer.removeAnimation(forKey: "act")
         for layer in [stage, mover, gazeLayer, eyesLayer] {
             for key in Self.actKeys { layer.removeAnimation(forKey: key) }
         }
-        if settle && !isMatrix && bounds.width > 0 {
-            let look = head.themed.map { ThemeHeadSVG.restLook($0, compact: bounds.width < 64) * bounds.width / 1024 } ?? 0
-            gazeLayer.transform = CATransform3DMakeTranslation(look, 0, 0)
+        stage.transform = CATransform3DIdentity
+        mover.transform = CATransform3DIdentity
+        let restX = restLookOffset()
+        if !isMatrix && bounds.width > 0 {
+            gazeLayer.transform = CATransform3DMakeTranslation(restX, 0, 0)
         }
+        eyesLayer.transform = CATransform3DIdentity
+
         if !settle || jellyLayer.isHidden {
             for eye in [leftEyeLayer, rightEyeLayer] {
                 eye.removeAllAnimations()
@@ -517,31 +874,142 @@ final class HeadView: UIView {
         flareMask.sublayers?.forEach { $0.removeFromSuperlayer() }
         flare.isHidden = true
         flare.contents = nil
-        if sheen.animation(forKey: "act.glint") != nil {
-            sheen.removeAnimation(forKey: "act.glint")
+
+        if !settle {
+            sheen.removeAllAnimations()
+            sheen.isHidden = true
+            return
+        }
+        if window == nil {
+            sheen.removeAllAnimations()
+            sheen.isHidden = true
+            dropJelly()
+            tracks = ActiveTracks()
+            return
+        }
+
+        // Smoothly fade Matrix 3D glint out instead of snapping off.
+        if !sheen.isHidden && sheenShownOpacity > 0.01 {
+            let fadeLocalNow = localTime(wallNow, on: sheen)
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            CATransaction.setCompletionBlock { [weak self] in
+                guard let self, self.settleToken == token, self.actKey.isEmpty else { return }
+                self.sheen.removeAllAnimations()
+                self.sheen.isHidden = true
+            }
+            sheen.removeAnimation(forKey: "act.glint.fade")
+            sheen.opacity = 0
+            addSmoothTransition(sheen, keyPath: "opacity", key: "act.end", beginLocal: fadeLocalNow, duration: 0.25) { u in
+                Double(sheenShownOpacity) * (1 - FaceBody.quintic(u))
+            }
+            CATransaction.commit()
+        } else {
+            sheen.removeAllAnimations()
             sheen.isHidden = true
         }
-        for (layer, shown) in moved where !CATransform3DEqualToTransform(shown, layer.transform) {
-            bridge(layer, "transform", from: NSValue(caTransform3D: shown), to: NSValue(caTransform3D: layer.transform), key: "act.end")
+
+        let solidBody = !jellyLayer.isHidden
+        if bodySnap.moving {
+            let from = bodySnap.body
+            let delta = max(abs(from.x), abs(from.y), abs(from.squash),
+                            abs(FaceBody.shortestAngleDelta(from: from.roll, to: 0)) / 90,
+                            abs(FaceBody.shortestAngleDelta(from: from.turn, to: 0)) / 90,
+                            abs(FaceBody.shortestAngleDelta(from: from.tip, to: 0)) / 90)
+            if delta > 1e-4 {
+                let dur = Self.bridgeLength
+                addSmoothTransition(bodyLayerTarget, keyPath: "transform", key: "act.end", beginLocal: bodyLocalNow, duration: dur) { u in
+                    NSValue(caTransform3D: self.bodyTransform(from.mixedShortest(.rest, FaceBody.quintic(u)), solid: solidBody))
+                }
+                tracks.body = ActiveTracks.Body(samples: [], period: 1, once: true, beginLocal: bodyLocalNow, scale: 1,
+                                                bridge: nil, settle: (bodyLocalNow, dur, from))
+            } else {
+                tracks.body = nil
+            }
+        } else {
+            tracks.body = nil
         }
-        // Another act taking over moves the jelly on from where it is (`playJelly`); else it settles, then the picture shows.
-        if settle { settleJelly() }
+
+        if elasticSnap.moving {
+            let from = elasticSnap.wobble
+            if abs(from.squash) > 1e-4 || abs(from.lean) > 1e-4 {
+                let dur = Self.bridgeLength
+                addSmoothTransition(mover, keyPath: "transform", key: "act.end", beginLocal: elasticLocalNow, duration: dur) { u in
+                    let k = 1 - FaceBody.quintic(u)
+                    var t = CATransform3DMakeScale(1 + from.squash * k, 1 - from.squash * k, 1)
+                    t.m21 = -from.lean * k
+                    return NSValue(caTransform3D: t)
+                }
+                tracks.wobble = ActiveTracks.Wobble(samples: [], wobble: [], period: 1, once: true, beginLocal: elasticLocalNow,
+                                                    squashScale: 1, leanScale: 1, bridge: nil, settle: (elasticLocalNow, dur, from))
+            } else {
+                tracks.wobble = nil
+            }
+        }
+
+        if gazeSnap.moving {
+            let from = gazeSnap.offset
+            if hypot(from.x - restX, from.y) > 0.1 {
+                let dur = Self.bridgeLength
+                addSmoothTransition(gazeLayer, keyPath: "transform", key: "act.end", beginLocal: gazeLocalNow, duration: dur) { u in
+                    let k = FaceBody.quintic(u)
+                    return NSValue(caTransform3D: CATransform3DMakeTranslation(from.x + (restX - from.x) * k, from.y * (1 - k), 0))
+                }
+                tracks.gaze = ActiveTracks.Gaze(samples: [], period: 1, once: true, beginLocal: gazeLocalNow, rx: 0, ry: 0,
+                                                restX: restX, bridge: nil, settle: (gazeLocalNow, dur, from))
+            } else {
+                tracks.gaze = nil
+            }
+        } else {
+            tracks.gaze = nil
+        }
+
+        if lidsSnap.moving {
+            let from = lidsSnap.scale
+            if abs(from.width - 1) > 1e-3 || abs(from.height - 1) > 1e-3 {
+                let dur = Self.bridgeLength
+                let dx = (eyeCentre.x - 0.5) * bounds.width, dy = (eyeCentre.y - 0.5) * bounds.height
+                addSmoothTransition(eyesLayer, keyPath: "transform", key: "act.end", beginLocal: lidsLocalNow, duration: dur) { u in
+                    let k = FaceBody.quintic(u)
+                    let sx = from.width + (1 - from.width) * k, sy = from.height + (1 - from.height) * k
+                    var t = CATransform3DMakeTranslation(dx, dy, 0)
+                    t = CATransform3DScale(t, sx, sy, 1)
+                    return NSValue(caTransform3D: CATransform3DTranslate(t, -dx, -dy, 0))
+                }
+                tracks.lids = ActiveTracks.Lids(samples: [], period: 1, once: true, beginLocal: lidsLocalNow, stepped: false,
+                                                bridge: nil, settle: (lidsLocalNow, dur, from))
+            } else {
+                tracks.lids = nil
+            }
+        } else {
+            tracks.lids = nil
+        }
+
+        // Settle soft Shapes jelly & vector eyes back to their exact resting right-looking pose, then swap invisibly.
+        settleJelly(token: token, wallNow: wallNow)
     }
 
-    private static let actKeys = ["act", "act.bridge", "act.end", "act.lids", "act.seen", "act.jelly", "act.glint"]
+    private static let actKeys = ["act", "act.bridge", "act.end", "act.lids", "act.seen", "act.jelly", "act.glint", "act.glint.fade"]
 
     private func play(_ act: MatrixAct, _ loop: FaceLoop, _ pictures: MatrixActPictures, begin: CFTimeInterval, scale: CGFloat,
-                      from shown: CATransform3D?) {
+                      wasActive: Bool) {
         let frames = act.frames(loop)
         let images = frames.compactMap { pictures.faces[$0.pose] ?? matrixFrame($0.pose)?.cgImage }
         guard images.count == frames.count, let first = images.first else { return }
+        let wallNow = CACurrentMediaTime()
+        let prevBody = currentBody(at: localTime(wallNow, on: stage))
+        let prevWobble = currentWobble(at: localTime(wallNow, on: mover))
+        let prevSheenOpacity = sheen.isHidden ? Float(0) : (sheen.presentation()?.opacity ?? sheen.opacity)
+        let savedKey = actKey
+        clearAct(settle: false)
+        actKey = savedKey
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
         let period = loop.period
         func time(_ animation: CAAnimation, _ duration: Double, after offset: Double = 0) {
             animation.duration = duration
-            animation.beginTime = begin + offset
+            animation.beginTime = localTime(begin + offset, on: flareMask)
             animation.isRemovedOnCompletion = false
             if act.once { animation.fillMode = .forwards } else { animation.repeatCount = .infinity }
         }
@@ -552,7 +1020,10 @@ final class HeadView: UIView {
             faces.values = images
             faces.keyTimes = frames.map { NSNumber(value: $0.at / period) } + [1]
             faces.calculationMode = .discrete
-            time(faces, period)
+            faces.duration = period
+            faces.beginTime = localTime(begin, on: bodyLayer)
+            faces.isRemovedOnCompletion = false
+            if act.once { faces.fillMode = .forwards } else { faces.repeatCount = .infinity }
             bodyLayer.add(faces, forKey: "act")
         }
         if let effect = act.effect, let lit = pictures.lit {
@@ -567,17 +1038,21 @@ final class HeadView: UIView {
         // 60 fps critically damped spring body + subtle 38% elastic follow-through on `mover` + dynamic 3D glint,
         // so dot-matrix heads move with fluid physical weight while keeping every LED dot razor-crisp.
         let samples = loop.softSamples(once: act.once)
-        moveBody(loop, samples: samples, begin: begin, once: act.once, from: shown)
-        playMatrixElastic(samples, period: period, begin: begin, once: act.once)
-        playMatrixGlint(samples, period: period, begin: begin, once: act.once)
+        let isFreshOnce = act.once && !wasActive && !prevBody.moving && abs(wallNow - begin) < 0.08
+        moveBody(loop, samples: samples, begin: begin, wallNow: wallNow, once: act.once,
+                 from: isFreshOnce ? nil : prevBody.body, solid: false)
+        playMatrixElastic(samples, period: period, begin: begin, wallNow: wallNow, once: act.once,
+                          from: isFreshOnce ? nil : (prevWobble.moving ? prevWobble.wobble : nil))
+        playMatrixGlint(samples, period: period, begin: begin, wallNow: wallNow, once: act.once, fromOpacity: prevSheenOpacity)
     }
 
     /// Subtle elastic squash & lean follow-through on a dot-matrix head's `mover` layer: gives hops, landings, nods and
     /// quick turns physical weight without distorting the LEDs into rubber.
     private func playMatrixElastic(_ samples: [(at: Double, body: FaceBody, eyes: FaceEyes)], period: Double,
-                                   begin: CFTimeInterval, once: Bool) {
+                                   begin: CFTimeInterval, wallNow: CFTimeInterval, once: Bool, from: FaceJelly?) {
         let wobble = FaceJelly.follow(samples, period: period, once: once)
-        let shownMover = mover.presentation()?.transform
+        let localBegin = localTime(begin, on: mover)
+        let localNow = localTime(wallNow, on: mover)
         mover.removeAnimation(forKey: "act.end")
         func elastic(_ j: FaceJelly) -> CATransform3D {
             let sq = j.squash * 0.38, ln = j.lean * 0.36
@@ -588,19 +1063,32 @@ final class HeadView: UIView {
         let anim = CAKeyframeAnimation(keyPath: "transform")   // motion-ok: still under Reduce Motion (syncAct)
         anim.values = wobble.map { NSValue(caTransform3D: elastic($0)) }
         anim.keyTimes = samples.map { NSNumber(value: $0.at / period) }
-        settle(anim, period: period, begin: begin, once: once)
+        settle(anim, period: period, beginLocal: localBegin, once: once)
         mover.add(anim, forKey: "act.jelly")
-        if let shownMover, !CATransform3DEqualToTransform(shownMover, CATransform3DIdentity) {
-            let then = Self.sample(in: samples, at: CACurrentMediaTime() + Self.bridgeLength - begin, period: period, once: once)
-            bridge(mover, "transform", from: NSValue(caTransform3D: shownMover),
-                   to: NSValue(caTransform3D: elastic(wobble[min(then, wobble.count - 1)])))
+        var activeBridge: ActiveTracks.Bridge<FaceJelly>?
+        if let from {
+            let dur = once ? Self.onceBridgeLength : Self.bridgeLength
+            addSmoothTransition(mover, keyPath: "transform", key: "act.bridge", beginLocal: localNow, duration: dur) { u in
+                let target = FaceJelly.interpolated(in: wobble, samples: samples, at: (localNow - localBegin) + u * dur,
+                                                    period: period, once: once)
+                let k = FaceBody.quintic(u)
+                let blended = FaceJelly(squash: from.squash + (target.squash * 0.38 - from.squash) * k,
+                                        lean: from.lean + (target.lean * 0.36 - from.lean) * k)
+                var t = CATransform3DMakeScale(1 + blended.squash, 1 - blended.squash, 1)
+                t.m21 = -blended.lean
+                return NSValue(caTransform3D: t)
+            }
+            activeBridge = ActiveTracks.Bridge(beginLocal: localNow, duration: dur, from: from)
         }
+        tracks.wobble = ActiveTracks.Wobble(samples: samples, wobble: wobble, period: period, once: once,
+                                            beginLocal: localBegin, squashScale: 0.38, leanScale: 0.36,
+                                            bridge: activeBridge, settle: nil)
     }
 
     /// Dynamic 3D specular light rolling across a dot-matrix head's LEDs as it turns and tips (masked by `sheenMask`,
     /// zero extra bitmaps): turning right rolls the highlight left across the dome, giving real 3D physicality.
     private func playMatrixGlint(_ samples: [(at: Double, body: FaceBody, eyes: FaceEyes)], period: Double,
-                                 begin: CFTimeInterval, once: Bool) {
+                                 begin: CFTimeInterval, wallNow: CFTimeInterval, once: Bool, fromOpacity prevOpacity: Float) {
         guard sheenMask.contents != nil else { return }
         let dark = traitCollection.userInterfaceStyle == .dark
         let peak = UIColor.white.withAlphaComponent(dark ? 0.36 : 0.24).cgColor
@@ -609,6 +1097,7 @@ final class HeadView: UIView {
         sheen.type = .radial
         sheen.colors = [peak, clear]
         sheen.locations = [0, 1]
+        sheen.opacity = 1
         sheen.isHidden = false
         let facing = Double(MatrixHead.shownFacing)
         func spot(_ b: FaceBody) -> (start: CGPoint, end: CGPoint) {
@@ -616,7 +1105,8 @@ final class HeadView: UIView {
             let cy = min(max(0.32 - b.tip / 110, 0.1), 0.78)
             return (CGPoint(x: cx, y: cy), CGPoint(x: cx + 0.56, y: cy + 0.56))
         }
-        let points = samples.map { spot($0.body) }
+        var points = samples.map { spot($0.body) }
+        if !once, let first = points.first { points[points.count - 1] = first }
         let startAnim = CAKeyframeAnimation(keyPath: "startPoint")   // motion-ok: still under Reduce Motion (syncAct)
         startAnim.values = points.map { NSValue(cgPoint: $0.start) }
         startAnim.duration = period
@@ -630,10 +1120,17 @@ final class HeadView: UIView {
             sheen.startPoint = first.start
             sheen.endPoint = first.end
         }
+        let localBegin = localTime(begin, on: sheen)
+        let localNow = localTime(wallNow, on: sheen)
         let group = CAAnimationGroup()
         group.animations = [startAnim, endAnim]
-        settle(group, period: period, begin: begin, once: once)
+        settle(group, period: period, beginLocal: localBegin, once: once)
         sheen.add(group, forKey: "act.glint")
+        if prevOpacity < 0.99 {
+            addSmoothTransition(sheen, keyPath: "opacity", key: "act.glint.fade", beginLocal: localNow, duration: 0.25) { u in
+                Double(prevOpacity) + (1 - Double(prevOpacity)) * FaceBody.quintic(u)
+            }
+        }
     }
 
     // MARK: [moods] The body, for every face that plays the routines
@@ -652,59 +1149,42 @@ final class HeadView: UIView {
     }
 
     /// Plays `loop`'s body on `target` (`stage` for bare/Dots heads, `mover` for framed/robot heads whose tile or
-    /// shoulders stay grounded) from `begin`, easing in from `shown`.
+    /// shoulders stay grounded) from `begin`, C²-blending smoothly from `from` into the live trajectory.
     private func moveBody(_ loop: FaceLoop, samples given: [(at: Double, body: FaceBody, eyes: FaceEyes)]? = nil,
                           on target: CALayer? = nil, scale: Double = 1, discrete: Bool = false,
-                          begin: CFTimeInterval, once: Bool, from shown: CATransform3D?, solid: Bool = false) {
+                          begin: CFTimeInterval, wallNow: CFTimeInterval, once: Bool, from: FaceBody?, solid: Bool = false) {
         let layer = target ?? stage
         let samples = given ?? loop.samples()
-        func scaled(_ b: FaceBody) -> FaceBody {
-            guard scale != 1 else { return b }
-            return FaceBody(x: b.x * scale, y: b.y * scale, roll: b.roll * scale, turn: b.turn * scale,
-                            tip: b.tip * scale, squash: b.squash * scale)
-        }
+        let localBegin = localTime(begin, on: layer)
+        let localNow = localTime(wallNow, on: layer)
         layer.removeAnimation(forKey: "act.end")
         layer.transform = CATransform3DIdentity
         let move = CAKeyframeAnimation(keyPath: "transform")   // motion-ok: still under Reduce Motion (syncAct, syncFace)
-        move.values = samples.map { NSValue(caTransform3D: bodyTransform(scaled($0.body), solid: solid)) }
+        move.values = samples.map { NSValue(caTransform3D: bodyTransform(scaledBody($0.body, scale), solid: solid)) }
         move.keyTimes = samples.map { NSNumber(value: $0.at / loop.period) }
         if discrete { move.calculationMode = .discrete }
-        settle(move, period: loop.period, begin: begin, once: once)
+        settle(move, period: loop.period, beginLocal: localBegin, once: once)
         layer.add(move, forKey: "act")
-        if let shown {
-            let then = samples[Self.sample(in: samples, at: CACurrentMediaTime() + Self.bridgeLength - begin, period: loop.period, once: once)]
-            bridge(layer, "transform", from: NSValue(caTransform3D: shown),
-                   to: NSValue(caTransform3D: bodyTransform(scaled(then.body), solid: solid)))
+        var activeBridge: ActiveTracks.Bridge<FaceBody>?
+        if let from, !discrete {
+            let dur = once ? Self.onceBridgeLength : Self.bridgeLength
+            addSmoothTransition(layer, keyPath: "transform", key: "act.bridge", beginLocal: localNow, duration: dur) { u in
+                let targetPose = self.scaledBody(FaceLoop.interpolated(in: samples, at: (localNow - localBegin) + u * dur,
+                                                                       period: loop.period, once: once).body, scale)
+                return NSValue(caTransform3D: self.bodyTransform(from.mixedShortest(targetPose, FaceBody.quintic(u)), solid: solid))
+            }
+            activeBridge = ActiveTracks.Bridge(beginLocal: localNow, duration: dur, from: from)
         }
+        tracks.body = ActiveTracks.Body(samples: samples, period: loop.period, once: once, beginLocal: localBegin,
+                                        scale: scale, bridge: activeBridge, settle: nil)
     }
 
-    /// Which of `samples` (of a loop `period` long) plays `t` seconds in: over and over, or once and held.
-    private static func sample(in samples: [(at: Double, body: FaceBody, eyes: FaceEyes)], at t: Double, period: Double, once: Bool) -> Int {
-        var t = once ? min(max(t, 0), period) : t.truncatingRemainder(dividingBy: period)
-        if t < 0 { t += period }
-        return samples.lastIndex { $0.at <= t } ?? 0
-    }
-
-    /// An act's animation over its whole loop from `begin`: over and over, or once and held.
-    private func settle(_ animation: CAAnimation, period: Double, begin: CFTimeInterval, once: Bool) {
+    /// An act's animation over its whole loop from `beginLocal`: over and over, or once and held.
+    private func settle(_ animation: CAAnimation, period: Double, beginLocal: CFTimeInterval, once: Bool) {
         animation.duration = period
-        animation.beginTime = begin
+        animation.beginTime = beginLocal
         animation.isRemovedOnCompletion = false
         if once { animation.fillMode = .forwards } else { animation.repeatCount = .infinity }
-    }
-
-    private static let bridgeLength = 0.3
-
-    /// Eases `layer` from where it shows (`from`) into what plays from now on (`to`, `bridgeLength` from now), so a new
-    /// act doesn't jump. Added after the act's own animation, it shows over it until it's done.
-    private func bridge(_ layer: CALayer, _ keyPath: String, from: Any, to: Any, key: String = "act.bridge") {
-        let ease = CABasicAnimation(keyPath: keyPath)   // motion-ok: still under Reduce Motion (syncAct, syncFace)
-        ease.fromValue = from
-        ease.toValue = to
-        ease.duration = Self.bridgeLength
-        ease.beginTime = CACurrentMediaTime()
-        ease.timingFunction = CAMediaTimingFunction(controlPoints: 0.3, 0, 0.2, 1)
-        layer.add(ease, forKey: key)
     }
 
     /// The masks an effect moves over the lit LEDs: white where they flare.
@@ -720,11 +1200,16 @@ final class HeadView: UIView {
             layer.opacity = 0
             return layer
         }
-        func opacity(_ values: [Double], at seconds: [Double], over duration: Double, discrete: Bool = false) -> CAKeyframeAnimation {
+        func opacity(_ values: [Double], at seconds: [Double], over duration: Double, discrete: Bool = false,
+                     smooth: Bool = false) -> CAKeyframeAnimation {
             let fade = CAKeyframeAnimation(keyPath: "opacity")   // motion-ok: still under Reduce Motion (syncAct)
             fade.values = values
             fade.keyTimes = seconds.map { NSNumber(value: $0 / duration) }
-            if discrete { fade.calculationMode = .discrete }
+            if discrete {
+                fade.calculationMode = .discrete
+            } else if smooth && values.count > 1 {
+                fade.timingFunctions = Array(repeating: CAMediaTimingFunction(name: .easeInEaseOut), count: values.count - 1)
+            }
             return fade
         }
         func ring(at centre: CGPoint, from small: CGFloat, to big: CGFloat, width: CGFloat, over duration: Double) -> (CAShapeLayer, CAAnimation) {
@@ -741,8 +1226,11 @@ final class HeadView: UIView {
             grow.toValue = circle(big)
             grow.timingFunction = CAMediaTimingFunction(name: .easeOut)
             let fade = CAKeyframeAnimation(keyPath: "opacity")   // motion-ok: still under Reduce Motion (syncAct)
-            fade.values = [1, 0.85, 0]
-            fade.keyTimes = [0, 0.55, 1]
+            // Soft fade-in from 0 avoids an abrupt opacity pop when each ring spawns.
+            fade.values = [0, 1, 0.82, 0]
+            fade.keyTimes = [0, 0.1, 0.55, 1]
+            fade.timingFunctions = [CAMediaTimingFunction(name: .easeOut), CAMediaTimingFunction(name: .linear),
+                                    CAMediaTimingFunction(name: .easeInEaseOut)]
             grow.duration = duration
             fade.duration = duration
             let both = CAAnimationGroup()
@@ -798,25 +1286,31 @@ final class HeadView: UIView {
                 dot.bounds = CGRect(x: 0, y: 0, width: side * 0.28, height: side * 0.28)
                 dot.position = CGPoint(x: pos.x * side, y: pos.y * side)
                 dot.opacity = 0
-                let ping = opacity([0, 1, 0.35, 0, 0], at: [0, 0.06, 0.28, 0.62, sweepDuration], over: sweepDuration)
+                let ping = opacity([0, 1, 0.35, 0, 0], at: [0, 0.06, 0.28, 0.62, sweepDuration], over: sweepDuration, smooth: true)
                 time(ping, sweepDuration, phase * sweepDuration)
                 dot.add(ping, forKey: "act")
                 return dot
             }
             return [sweep] + blips
         case .scan:
-            // A soft horizontal reading beam stepping down line by line while a bright focus spot sweeps left-to-right.
+            // A soft horizontal reading beam sweeping cleanly off both edges (zero wrap teleport) while a focus spot
+            // glides along three lines and smoothly dims across carriage returns and the bottom-to-top wrap.
+            let scanPeriod = 3.6
             let band = CAGradientLayer()
             let height = side * 0.28
             band.frame = CGRect(x: 0, y: -height, width: side, height: height)
-            band.colors = [clear, UIColor.white.withAlphaComponent(0.65).cgColor, clear]
+            band.colors = [clear, UIColor.white.withAlphaComponent(0.68).cgColor, clear]
             band.locations = [0, 0.5, 1]
+            band.opacity = 0
             let down = CABasicAnimation(keyPath: "position.y")   // motion-ok: still under Reduce Motion (syncAct)
-            down.fromValue = side * 0.2
-            down.toValue = side * 0.85
+            down.fromValue = -height / 2
+            down.toValue = side + height / 2
             down.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            time(down, 3.45, 0)
+            time(down, scanPeriod, 0)
+            let bandFade = opacity([0, 1, 1, 0], at: [0, 0.14 * scanPeriod, 0.86 * scanPeriod, scanPeriod], over: scanPeriod, smooth: true)
+            time(bandFade, scanPeriod, 0)
             band.add(down, forKey: "act")
+            band.add(bandFade, forKey: "act.fade")
             let spot = CAGradientLayer()
             spot.type = .radial
             spot.colors = [white, clear]
@@ -824,22 +1318,29 @@ final class HeadView: UIView {
             spot.startPoint = CGPoint(x: 0.5, y: 0.5)
             spot.endPoint = CGPoint(x: 1, y: 1)
             spot.bounds = CGRect(x: 0, y: 0, width: side * 0.38, height: side * 0.26)
-            spot.position = CGPoint(x: side * 0.2, y: side * 0.36)
-            let scanPeriod = 3.45
+            spot.position = CGPoint(x: side * 0.18, y: side * 0.36)
             let trace = CAKeyframeAnimation(keyPath: "position")   // motion-ok: still under Reduce Motion (syncAct)
             let rows: [CGFloat] = [0.36, 0.56, 0.74]
             var pts: [CGPoint] = [], times: [Double] = []
             for (i, ry) in rows.enumerated() {
-                let t0 = Double(i) * 1.15
+                let t0 = 0.04 + Double(i) * 1.12
                 pts += [CGPoint(x: side * 0.18, y: side * ry), CGPoint(x: side * 0.82, y: side * ry)]
-                times += [t0, t0 + 0.92]
+                times += [t0, t0 + 0.90]
             }
+            pts.insert(pts[0], at: 0)
+            times.insert(0, at: 0)
             pts.append(pts[0])
             times.append(scanPeriod)
             trace.values = pts.map { NSValue(cgPoint: $0) }
             trace.keyTimes = times.map { NSNumber(value: $0 / scanPeriod) }
+            trace.timingFunctions = Array(repeating: CAMediaTimingFunction(name: .easeInEaseOut), count: pts.count - 1)
             time(trace, scanPeriod, 0)
+            let spotFade = opacity([0, 1, 1, 0.15, 1, 1, 0.15, 1, 1, 0, 0],
+                                   at: [0, 0.12, 0.92, 1.04, 1.16, 2.04, 2.16, 2.28, 3.14, 3.30, scanPeriod],
+                                   over: scanPeriod, smooth: true)
+            time(spotFade, scanPeriod, 0)
             spot.add(trace, forKey: "act")
+            spot.add(spotFade, forKey: "act.fade")
             return [band, spot]
         case .rain:
             // Streaks falling a LED at a time, two speeds; each picture is two heads tall and loops a head's height.
@@ -859,8 +1360,11 @@ final class HeadView: UIView {
                 return drop
             }
         case .typing:
-            // LED by LED along each line in turn, with a crisp blinking cursor leading the active tip, then both clear.
+            // LED by LED along each line in turn, with a crisp blinking cursor leading the active tip; fades cleanly
+            // during the pause before wrapping back to an empty page (zero hard snap).
             let period = 2 * MatrixAct.lineLength + MatrixAct.typingPause
+            let clearStart = 2 * MatrixAct.lineLength + 0.06
+            let clearEnd = period - 0.04
             let lines = MatrixActMasks.typingLines(design)
             var out: [CALayer] = lines.enumerated().map { index, line in
                 let count = line.last - line.first + 1
@@ -874,7 +1378,10 @@ final class HeadView: UIView {
                 typed.keyTimes = [0] + (1...count).map { NSNumber(value: (start + Double($0) * MatrixAct.lineLength / Double(count + 1)) / period) } + [1]
                 typed.calculationMode = .discrete
                 time(typed, period, 0)
+                let fade = opacity([0, 1, 1, 0, 0], at: [0, 0.04, clearStart, clearEnd, period], over: period, smooth: true)
+                time(fade, period, 0)
                 bar.add(typed, forKey: "act")
+                bar.add(fade, forKey: "act.fade")
                 return bar
             }
             if let first = lines.first {
@@ -897,8 +1404,20 @@ final class HeadView: UIView {
                 move.keyTimes = ks.map { NSNumber(value: $0) } + [1]
                 move.calculationMode = .discrete
                 time(move, period, 0)
-                let blink = opacity([1, 0.25, 1], at: [0, 0.22, 0.44], over: 0.44)
-                time(blink, 0.44, 0)
+                // Envelope wraps smoothly to 0 during the clear pause and fades back in at line 1 start.
+                var blinkValues: [Double] = [0], blinkTimes: [Double] = [0]
+                var t = 0.08
+                var high = true
+                while t < clearStart {
+                    blinkValues.append(high ? 1.0 : 0.28)
+                    blinkTimes.append(t)
+                    high.toggle()
+                    t += 0.22
+                }
+                blinkValues += [0, 0]
+                blinkTimes += [clearEnd, period]
+                let blink = opacity(blinkValues, at: blinkTimes, over: period, smooth: true)
+                time(blink, period, 0)
                 cursor.add(move, forKey: "act")
                 cursor.add(blink, forKey: "act.blink")
                 out.append(cursor)
@@ -948,7 +1467,7 @@ final class HeadView: UIView {
                 grow.values = [0.22, 1.12, 1.12]
                 grow.keyTimes = [0, 0.55, 1]
                 grow.timingFunctions = [CAMediaTimingFunction(name: .easeOut), CAMediaTimingFunction(name: .linear)]
-                let fade = opacity([peak, 0, 0], at: [0, 0.55 * length, length], over: length)
+                let fade = opacity([0, peak, 0, 0], at: [0, 0.05 * length, 0.55 * length, length], over: length, smooth: true)
                 grow.duration = length
                 fade.duration = length
                 let pop = CAAnimationGroup()
@@ -977,7 +1496,7 @@ final class HeadView: UIView {
             core.startPoint = CGPoint(x: 0.5, y: 0.5)
             core.endPoint = CGPoint(x: 1, y: 1)
             core.frame = CGRect(x: 0, y: 0, width: side, height: side)
-            let breathe = opacity([0.2, 0.9, 0.2], at: [0, 0.9, 1.8], over: 1.8)
+            let breathe = opacity([0.2, 0.9, 0.2], at: [0, 0.9, 1.8], over: 1.8, smooth: true)
             time(breathe, 1.8, 0)
             core.add(breathe, forKey: "act")
             let twinkles: [CALayer] = pictures.masks.enumerated().map { index, mask in
@@ -986,7 +1505,7 @@ final class HeadView: UIView {
                 twinkle.contentsGravity = .resize
                 twinkle.frame = CGRect(x: 0, y: 0, width: side, height: side)
                 twinkle.opacity = 0
-                let blink = opacity([0, 1, 0, 0], at: [0, 0.18, 0.58, 1.14], over: 1.14)
+                let blink = opacity([0, 1, 0, 0], at: [0, 0.18, 0.58, 1.14], over: 1.14, smooth: true)
                 time(blink, 1.14, Double(index) * 0.38)
                 twinkle.add(blink, forKey: "act")
                 return twinkle
@@ -994,7 +1513,7 @@ final class HeadView: UIView {
             return [core] + twinkles
         case .pulse, .flash:
             // Replying: a warm soft glow + gentle voice-ripple ring on each nod beat; Asking: an inquiring beacon ring
-            // + crisp flash on each hop landing.
+            // + crisp flash on each hop landing. Every beat finishes cleanly inside `loop.period` (zero wrap cut-off).
             let light = whole()
             let (peak, rise, fall) = effect == .pulse ? (0.34, 0.1, 0.22) : (0.58, 0.03, 0.22)
             var values = [0.0], seconds = [0.0]
@@ -1004,18 +1523,30 @@ final class HeadView: UIView {
             }
             values.append(0)
             seconds.append(loop.period)
-            let glow = opacity(values, at: seconds, over: loop.period)
+            let glow = opacity(values, at: seconds, over: loop.period, smooth: true)
             time(glow, loop.period, 0)
             light.add(glow, forKey: "act")
             let middle = CGPoint(x: side * 0.5, y: side * 0.5)
-            let ringDuration = effect == .pulse ? 0.55 : 0.62
-            let beatRings: [CALayer] = loop.marks.prefix(6).map { mark in
-                let (wave, out) = ring(at: middle, from: pitch * 1.4, to: side * 0.72,
-                                       width: pitch * (effect == .pulse ? 1.5 : 1.7), over: ringDuration)
+            let ringDuration = effect == .pulse ? 0.52 : 0.58
+            let validMarks = loop.marks.filter { $0 >= 0 && $0 + ringDuration <= loop.period - 0.02 }
+            let ringWidth = pitch * (effect == .pulse ? 1.5 : 1.7)
+            var lanes: [[Double]] = []
+            for mark in validMarks {
+                if let idx = lanes.firstIndex(where: { ($0.last ?? -1) + ringDuration + 0.02 <= mark }) {
+                    lanes[idx].append(mark)
+                } else {
+                    lanes.append([mark])
+                }
+            }
+            let beatRings: [CALayer] = lanes.map { laneMarks in
+                let (wave, _) = ring(at: middle, from: pitch * 1.4, to: side * 0.72, width: ringWidth, over: ringDuration)
+                let pulses: [CAAnimation] = laneMarks.map { mark in
+                    let (_, out) = ring(at: middle, from: pitch * 1.4, to: side * 0.72, width: ringWidth, over: ringDuration)
+                    out.beginTime = mark
+                    return out
+                }
                 let pad = CAAnimationGroup()
-                pad.animations = [out]
-                pad.duration = loop.period
-                out.beginTime = mark
+                pad.animations = pulses
                 time(pad, loop.period, 0)
                 wave.add(pad, forKey: "act")
                 return wave
@@ -1024,7 +1555,7 @@ final class HeadView: UIView {
         case .burst:
             // A bright flash as it jumps, three concentric celebration rings, then staggered sparkles.
             let light = whole()
-            let flash = opacity([0.9, 0], at: [0, 0.45], over: 0.45)
+            let flash = opacity([0, 0.9, 0], at: [0, 0.05, 0.45], over: 0.45, smooth: true)
             time(flash, 0.45, 0)
             light.add(flash, forKey: "act")
             let middle = CGPoint(x: side * 0.5, y: side * 0.5)
@@ -1040,7 +1571,7 @@ final class HeadView: UIView {
                 twinkle.contentsGravity = .resize
                 twinkle.frame = CGRect(x: 0, y: 0, width: side, height: side)
                 twinkle.opacity = 0
-                let blink = opacity([0, 1, 0], at: [0, 0.2, 0.72], over: 0.72)
+                let blink = opacity([0, 1, 0], at: [0, 0.2, 0.72], over: 0.72, smooth: true)
                 time(blink, 0.72, 0.48 + Double(index) * 0.26)
                 twinkle.add(blink, forKey: "act")
                 return twinkle
@@ -1070,14 +1601,25 @@ final class HeadView: UIView {
         }
         let key = "\(mood.rawValue)|\(drawnKey)"
         guard key != actKey else { return }
+        let wallNow = CACurrentMediaTime()
+        let wasActive = !actKey.isEmpty
         let grounded = usesGroundedMover
-        let shown = (grounded ? mover : stage).presentation()?.transform
-        let looking = gazeLayer.presentation()?.transform
-        if !actKey.isEmpty { clearAct(settle: false) }
+        let bodyLayerTarget = grounded ? mover : stage
+        let prevBody = currentBody(at: localTime(wallNow, on: bodyLayerTarget))
+        let prevWobble = currentWobble(at: localTime(wallNow, on: jellyLayer))
+        let prevGaze = currentGaze(at: localTime(wallNow, on: gazeLayer))
+        let prevLids = currentLids(at: localTime(wallNow, on: eyesLayer))
+        let prevReachTrack = tracks.reach
+        let prevLeftTrack = tracks.leftEye
+        let prevRightTrack = tracks.rightEye
+        if wasActive { clearAct(settle: false) }
         actKey = key
+        settleToken += 1
         let (begin, seed) = actClock()
         let loop = FaceLoop(mood, facing: MatrixHead.shownFacing, seed: seed)
-        playFace(loop, begin: begin, once: mood.once, from: shown, looking: looking)
+        playFace(mood: mood, seed: seed, loop: loop, begin: begin, wallNow: wallNow, once: mood.once,
+                 wasActive: wasActive, prevBody: prevBody, prevWobble: prevWobble, prevReachTrack: prevReachTrack,
+                 prevLeftTrack: prevLeftTrack, prevRightTrack: prevRightTrack, prevGaze: prevGaze, prevLids: prevLids)
     }
 
     /// Framed/tiled themes whose `groundLayer` (tile frame, robot shoulders) stays anchored while `mover` acts inside it.
@@ -1086,7 +1628,11 @@ final class HeadView: UIView {
         return head.tile != .none
     }
 
-    private func playFace(_ loop: FaceLoop, begin: CFTimeInterval, once: Bool, from shown: CATransform3D?, looking: CATransform3D?) {
+    private func playFace(mood: BotMood, seed: Int, loop: FaceLoop, begin: CFTimeInterval, wallNow: CFTimeInterval,
+                          once: Bool, wasActive: Bool, prevBody: (body: FaceBody, moving: Bool),
+                          prevWobble: (wobble: FaceJelly, moving: Bool), prevReachTrack: ActiveTracks.Reach?,
+                          prevLeftTrack: ActiveTracks.Eye?, prevRightTrack: ActiveTracks.Eye?,
+                          prevGaze: (offset: CGPoint, moving: Bool), prevLids: (scale: CGSize, moving: Bool)) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
@@ -1095,7 +1641,9 @@ final class HeadView: UIView {
         let isPixel = theme == "pixel"
         let samples = isPixel ? loop.samples(rate: 12) : loop.softSamples(once: once)
         let side = bounds.width, period = loop.period
-        let jelly = playJelly(loop, samples: samples, begin: begin, once: once)
+        let isFreshOnce = once && !wasActive && !prevBody.moving && abs(wallNow - begin) < 0.08
+        let jelly = playJelly(mood: mood, seed: seed, loop: loop, samples: samples, begin: begin, wallNow: wallNow,
+                              once: once, isFreshOnce: isFreshOnce, prevWobble: prevWobble, prevReachTrack: prevReachTrack)
         let grounded = usesGroundedMover
         let bodyScale: Double = switch theme {
         case "robot": 0.65
@@ -1106,24 +1654,32 @@ final class HeadView: UIView {
         default: 1.0
         }
         moveBody(loop, samples: samples, on: grounded ? mover : stage, scale: bodyScale, discrete: isPixel,
-                 begin: begin, once: once, from: shown, solid: jelly != nil)
+                 begin: begin, wallNow: wallNow, once: once, from: isFreshOnce ? nil : prevBody.body, solid: jelly != nil)
         guard !eyesLayer.isHidden || jelly != nil else { return }
         for layer in [gazeLayer, eyesLayer] { layer.removeAnimation(forKey: "act.end") }
         gazeLayer.transform = CATransform3DIdentity
+        eyesLayer.transform = CATransform3DIdentity
         func moments(_ times: [Double]) -> [NSNumber] { times.map { NSNumber(value: $0 / period) } }
 
         // Soft Shapes heads: independent 3D-seated GPU pill normal slit eyes! Each eye wraps individually round the 3D
         // cushion (far eye narrows and slips behind first during turns & pirouettes) with crisp rounded capsules.
         if let jelly {
-            playVectorEyes(jelly: jelly, samples: samples, period: period, begin: begin, once: once)
+            playVectorEyes(jelly: jelly, samples: samples, period: period, begin: begin, wallNow: wallNow, once: once,
+                           wasActive: wasActive, prevLeftTrack: prevLeftTrack, prevRightTrack: prevRightTrack)
+            tracks.gaze = nil
+            tracks.lids = nil
             return
         }
         for eye in [leftEyeLayer, rightEyeLayer] {
             eye.removeAllAnimations()
             eye.isHidden = true
         }
+        tracks.leftEye = nil
+        tracks.rightEye = nil
         if eyesLayer.contents != nil { eyesLayer.isHidden = false }
 
+        let gazeLocalBegin = localTime(begin, on: gazeLayer)
+        let gazeLocalNow = localTime(wallNow, on: gazeLayer)
         // Bitmap eyes (Dots lamps, Robot visor, Pixel, Orb, boarded Shapes).
         let look = CAKeyframeAnimation(keyPath: "transform")   // motion-ok: still under Reduce Motion (syncFace)
         if lamps {
@@ -1142,6 +1698,9 @@ final class HeadView: UIView {
             look.values = steps.map { NSValue(caTransform3D: CATransform3DMakeTranslation($0.x * pitch, $0.y * pitch, 0)) }
             look.keyTimes = moments(times) + [1]
             look.calculationMode = .discrete
+            settle(look, period: period, beginLocal: gazeLocalBegin, once: once)
+            gazeLayer.add(look, forKey: "act")
+            tracks.gaze = nil
         } else {
             let reachFactor: Double = switch theme {
             case "robot": 0.048
@@ -1151,35 +1710,62 @@ final class HeadView: UIView {
             }
             let rx = reachFactor * side, ry = reachFactor * 0.85 * side
             look.values = samples.map { sample in
-                let ex = min(max(sample.eyes.x, -1), 1), ey = min(max(sample.eyes.y, -1), 1)
+                let ex = Self.softUnit(sample.eyes.x), ey = Self.softUnit(sample.eyes.y)
                 return NSValue(caTransform3D: CATransform3DMakeTranslation(ex * rx, ey * ry, 0))
             }
             look.keyTimes = moments(samples.map(\.at))
             if isPixel { look.calculationMode = .discrete }
-        }
-        settle(look, period: period, begin: begin, once: once)
-        gazeLayer.add(look, forKey: "act")
-        if let looking, let values = look.values, !values.isEmpty, !lamps, !isPixel {
-            let then = Self.sample(in: samples, at: CACurrentMediaTime() + Self.bridgeLength - begin, period: period, once: once)
-            bridge(gazeLayer, "transform", from: NSValue(caTransform3D: looking), to: values[min(then, values.count - 1)])
+            settle(look, period: period, beginLocal: gazeLocalBegin, once: once)
+            gazeLayer.add(look, forKey: "act")
+            var activeGazeBridge: ActiveTracks.Bridge<CGPoint>?
+            if !isPixel {
+                let from = prevGaze.offset
+                let dur = once ? (isFreshOnce ? Self.onceEyeEntryLength : Self.onceBridgeLength) : Self.bridgeLength
+                addSmoothTransition(gazeLayer, keyPath: "transform", key: "act.bridge", beginLocal: gazeLocalNow, duration: dur) { u in
+                    let target = FaceLoop.interpolated(in: samples, at: (gazeLocalNow - gazeLocalBegin) + u * dur,
+                                                       period: period, once: once).eyes
+                    let tx = Self.softUnit(target.x) * rx, ty = Self.softUnit(target.y) * ry
+                    let k = FaceBody.quintic(u)
+                    return NSValue(caTransform3D: CATransform3DMakeTranslation(from.x + (tx - from.x) * k,
+                                                                               from.y + (ty - from.y) * k, 0))
+                }
+                activeGazeBridge = ActiveTracks.Bridge(beginLocal: gazeLocalNow, duration: dur, from: from)
+            }
+            tracks.gaze = ActiveTracks.Gaze(samples: samples, period: period, once: once, beginLocal: gazeLocalBegin,
+                                            rx: rx, ry: ry, restX: restLookOffset(), bridge: activeGazeBridge, settle: nil)
         }
         // Narrowing, widening and blinking, about the eyes' own middle.
         let stepped = (lamps && head.themed?.pattern == "face") || isPixel
         let dx = (eyeCentre.x - 0.5) * bounds.width, dy = (eyeCentre.y - 0.5) * bounds.height
-        let lids = CAKeyframeAnimation(keyPath: "transform")   // motion-ok: still under Reduce Motion (syncFace)
-        lids.values = samples.map { sample in
-            let shut = min(max(sample.eyes.lids, 0), 1)
-            let wideBoost = stepped ? 0 : min(max(sample.eyes.wide, 0), 1) * 0.14
-            let open = stepped ? (shut >= 0.72 ? 0.08 : 1) : max(0.08, (1 + wideBoost) * (1 - 0.9 * shut))
-            let blinkW = stepped ? 1 : 1 + 0.1 * shut
+        let lidsLocalBegin = localTime(begin, on: eyesLayer)
+        let lidsLocalNow = localTime(wallNow, on: eyesLayer)
+        func lidTransform(_ s: CGSize) -> CATransform3D {
             var t = CATransform3DMakeTranslation(dx, dy, 0)
-            t = CATransform3DScale(t, blinkW, open, 1)
-            return NSValue(caTransform3D: CATransform3DTranslate(t, -dx, -dy, 0))
+            t = CATransform3DScale(t, s.width, s.height, 1)
+            return CATransform3DTranslate(t, -dx, -dy, 0)
         }
+        let lids = CAKeyframeAnimation(keyPath: "transform")   // motion-ok: still under Reduce Motion (syncFace)
+        lids.values = samples.map { NSValue(caTransform3D: lidTransform(Self.lidScale($0.eyes, stepped: stepped))) }
         lids.keyTimes = moments(samples.map(\.at))
         if stepped { lids.calculationMode = .discrete }
-        settle(lids, period: period, begin: begin, once: once)
+        settle(lids, period: period, beginLocal: lidsLocalBegin, once: once)
         eyesLayer.add(lids, forKey: "act.lids")
+        var activeLidsBridge: ActiveTracks.Bridge<CGSize>?
+        if !stepped && !isFreshOnce {
+            let from = prevLids.scale
+            let dur = once ? Self.onceBridgeLength : Self.bridgeLength
+            addSmoothTransition(eyesLayer, keyPath: "transform", key: "act.bridge", beginLocal: lidsLocalNow, duration: dur) { u in
+                let target = Self.lidScale(FaceLoop.interpolated(in: samples, at: (lidsLocalNow - lidsLocalBegin) + u * dur,
+                                                                 period: period, once: once).eyes, stepped: false)
+                let k = FaceBody.quintic(u)
+                let blended = CGSize(width: from.width + (target.width - from.width) * k,
+                                     height: from.height + (target.height - from.height) * k)
+                return NSValue(caTransform3D: lidTransform(blended))
+            }
+            activeLidsBridge = ActiveTracks.Bridge(beginLocal: lidsLocalNow, duration: dur, from: from)
+        }
+        tracks.lids = ActiveTracks.Lids(samples: samples, period: period, once: once, beginLocal: lidsLocalBegin,
+                                        stepped: stepped, bridge: activeLidsBridge, settle: nil)
     }
 
     /// Independent 3D-seated GPU pill eyes for a soft Shapes head while acting:
@@ -1189,78 +1775,79 @@ final class HeadView: UIView {
     /// - Subtle stereo convergence when focusing closely vs widening when gazing up/out
     /// - Organic saccade velocity lean + 3D dome curvature micro-tilt
     /// - Loop-locked living micro-drift, subtle eye-breath, and 1-frame (~17 ms) natural left/right blink stagger
+    /// - C² quintic handoff from/to the exact right-looking −20° idle pose (zero teleport at start or end)
     private func playVectorEyes(jelly: (wobble: [FaceJelly], foot: CGPoint, outline: [CGPoint], solid: FaceSolid, layout: ShapeHeadLayout),
                                 samples: [(at: Double, body: FaceBody, eyes: FaceEyes)], period: Double,
-                                begin: CFTimeInterval, once: Bool) {
+                                begin: CFTimeInterval, wallNow: CFTimeInterval, once: Bool, wasActive: Bool,
+                                prevLeftTrack: ActiveTracks.Eye?, prevRightTrack: ActiveTracks.Eye?) {
         let side = bounds.width
-        let layout = jelly.layout
-        let place = layout.placement ?? HeadPlacement(k: 1, tx: 0, ty: 0), unit = side / 1024
-        let shape = HeadGeometry.form(head.form, seed: head.seed)
-        let (fx, fy, faceSize) = shape.face
-        let s = HeadGeometry.unit * faceSize, bold = side < 64 ? 1.2 : 1.0
-        let gap = 0.2 * s * place.k * unit
-        let eyeW = 0.15 * s * bold * place.k * unit
-        let eyeH = 0.38 * s * place.k * unit
-        let cx = (place.k * (512 + fx * HeadGeometry.unit) + place.tx) * unit
-        let cy = (place.k * (512 + fy * HeadGeometry.unit) + place.ty) * unit
-        let eyeColor = HeadRenderer.color(layout.eyeColor)
+        let metrics = shapeEyeMetrics(layout: jelly.layout, side: side)
         let scale = traitCollection.displayScale > 0 ? traitCollection.displayScale : 3
-        let times = samples.map { NSNumber(value: $0.at / period) }
+        let rawTimes = samples.map(\.at)
+        let times = rawTimes.map { NSNumber(value: $0 / period) }
         func beyond(_ v: Double) -> Double { abs(v) <= 1 ? v : (v < 0 ? -1 : 1) * (1 + 0.35 * tanh((abs(v) - 1) / 0.35)) }
         let glance = moves.glance
         let count = samples.count
+        let unique = once ? count : max(1, count - 1)
 
-        // Smooth horizontal gaze velocity for natural saccade lean (follow-through into eye darts).
-        let gazeVelX: [Double] = (0..<count).map { i in
-            let prev = once ? max(0, i - 1) : (i - 1 + count) % count
-            let next = once ? min(count - 1, i + 1) : (i + 1) % count
-            let dt = max(abs(samples[next].at - samples[prev].at), 1.0 / 60.0)
-            let dx = (samples[next].eyes.x - samples[prev].eyes.x) + (samples[next].body.turn - samples[prev].body.turn) / FaceEyes.across
+        // Smooth horizontal gaze velocity for natural saccade lean, properly wrapped modulo `unique` across the loop seam.
+        var gazeVelX: [Double] = (0..<count).map { i in
+            if !once && i == count - 1 { return 0 }
+            let prev = once ? max(0, i - 1) : (i - 1 + unique) % unique
+            let next = once ? min(count - 1, i + 1) : (i + 1) % unique
+            var dt = samples[next].at - samples[prev].at
+            if !once && dt <= 0 { dt += period }
+            dt = max(dt, 1.0 / 60.0)
+            let dTurn = FaceBody.shortestAngleDelta(from: samples[prev].body.turn, to: samples[next].body.turn)
+            let dx = (samples[next].eyes.x - samples[prev].eyes.x) + dTurn / FaceEyes.across
             return dx / dt
         }
+        if !once && count > 1 { gazeVelX[count - 1] = gazeVelX[0] }
+
         // Loop-locked integer harmonics for subtle living micro-drift and eye-breath (zero seam on loop wrap).
         let driftK1 = once ? 0.0 : max(1, (period / 2.9).rounded())
         let driftK2 = once ? 0.0 : max(1, (period / 4.7).rounded())
         let breathK = once ? 0.0 : max(1, (period / 3.4).rounded())
 
         eyesLayer.isHidden = true
-        let configs: [(CALayer, CGPoint, Double, Int)] = [
-            (leftEyeLayer, CGPoint(x: cx - gap, y: cy), -1, 0),
-            (rightEyeLayer, CGPoint(x: cx + gap, y: cy), 1, 1),   // 1-frame (~17 ms) natural blink stagger
+        let configs: [(CALayer, CGPoint, VectorEyePose, Double, Int, ActiveTracks.Eye?, Bool)] = [
+            (leftEyeLayer, metrics.centerLeft, metrics.idleLeft, -1, 0, prevLeftTrack, true),
+            (rightEyeLayer, metrics.centerRight, metrics.idleRight, 1, 1, prevRightTrack, false),
         ]
-        for (eyeLayer, restPoint, sideSign, blinkLag) in configs {
-            let prevPos = eyeLayer.isHidden ? nil : eyeLayer.presentation()?.position
-            let prevBounds = eyeLayer.isHidden ? nil : eyeLayer.presentation()?.bounds
-            let prevRadius = eyeLayer.isHidden ? nil : eyeLayer.presentation()?.cornerRadius
-            let prevTrans = eyeLayer.isHidden ? nil : eyeLayer.presentation()?.transform
+        for (eyeLayer, restPoint, idlePose, sideSign, blinkLag, prevTrack, isLeft) in configs {
+            let localBegin = localTime(begin, on: eyeLayer)
+            let localNow = localTime(wallNow, on: eyeLayer)
+            let prev = currentEye(prevTrack, at: localNow, fallback: idlePose)
             eyeLayer.removeAllAnimations()
-            eyeLayer.bounds = CGRect(x: 0, y: 0, width: eyeW, height: eyeH)
-            eyeLayer.cornerRadius = min(eyeW, eyeH) / 2
-            eyeLayer.backgroundColor = eyeColor
+            eyeLayer.bounds = CGRect(origin: .zero, size: idlePose.size)
+            eyeLayer.cornerRadius = idlePose.radius
+            eyeLayer.backgroundColor = metrics.eyeColor
             eyeLayer.contentsScale = scale
-            eyeLayer.position = restPoint
-            eyeLayer.transform = CATransform3DIdentity
+            eyeLayer.position = idlePose.pos
+            eyeLayer.transform = CATransform3DMakeRotation(idlePose.angle, 0, 0, 1)
             eyeLayer.opacity = 1
             eyeLayer.isHidden = false
 
-            // 5-tap Gaussian smoothing on `lids` with 1-frame natural inter-eye stagger.
-            let smoothLids: [Double] = (0..<count).map { i in
+            // 5-tap Gaussian smoothing on `lids`, wrapped modulo `unique` so index 0 and index `count - 1` match identically.
+            var smoothLids: [Double] = (0..<count).map { i in
                 func lid(_ idx: Int) -> Double {
                     let sIdx = idx - blinkLag
-                    let j = once ? min(max(sIdx, 0), count - 1) : ((sIdx % count) + count) % count
+                    let j = once ? min(max(sIdx, 0), count - 1) : ((sIdx % unique) + unique) % unique
                     return min(max(samples[j].eyes.lids, 0), 1)
                 }
                 return 0.12 * lid(i - 2) + 0.22 * lid(i - 1) + 0.32 * lid(i) + 0.22 * lid(i + 1) + 0.12 * lid(i + 2)
             }
+            if !once && count > 1 { smoothLids[count - 1] = smoothLids[0] }
 
-            var positions: [NSValue] = []
-            var boundsList: [NSValue] = []
-            var radii: [Double] = []
-            var transforms: [NSValue] = []
-            var opacities: [Double] = []
+            var poses: [VectorEyePose] = []
+            poses.reserveCapacity(count)
             var needsFade = false
 
             for (i, sample) in samples.enumerated() {
+                if !once && i == count - 1, let first = poses.first {
+                    poses.append(first)
+                    continue
+                }
                 let totalTurn = sample.body.turn + beyond(sample.eyes.x) * FaceEyes.across * glance
                 let totalTip = sample.body.tip + beyond(sample.eyes.y) * FaceEyes.down * glance
                 let seat = jelly.solid.seat(restPoint, turn: totalTurn, tip: totalTip)
@@ -1273,9 +1860,9 @@ final class HeadView: UIView {
                 }
                 // Subtle stereo gaze convergence: draw ~5% closer when leaning in closely, widen slightly gazing up.
                 let focus = min(max(sample.body.tip / 20, -0.5), 1.0)
-                let convergeX = -sideSign * gap * 0.055 * focus
-                // Living loop-locked micro-drift & eye-breath (subtle organic life during held poses).
-                let phase = sample.at / max(period, 1e-6)
+                let convergeX = -sideSign * metrics.gap * 0.055 * focus
+                // Living loop-locked micro-drift & eye-breath (exact 0/cos(0) at phase 0 and 1).
+                let phase = i == 0 ? 0.0 : sample.at / max(period, 1e-6)
                 let driftX = once ? 0 : side * 0.005 * sin(2 * Double.pi * driftK1 * phase + 0.35 * sideSign)
                 let driftY = once ? 0 : side * 0.004 * cos(2 * Double.pi * driftK2 * phase)
                 let eyeBreath = once ? 0 : 0.025 * sin(2 * Double.pi * breathK * phase)
@@ -1286,74 +1873,96 @@ final class HeadView: UIView {
 
                 // True capsule dimensions (near/far perspective depth + foreshortening + volume-preserving blink).
                 let depthScale = seat.scale
-                let baseW = eyeW * min(max(seat.wide * depthScale, 0.12), 1.25)
-                let baseH = eyeH * min(max(seat.high * depthScale, 0.2), 1.25)
-                let w = max(eyeW * 0.22, baseW * (1 + 0.16 * shut - 0.04 * wideBoost))
+                let baseW = metrics.eyeW * min(max(seat.wide * depthScale, 0.12), 1.25)
+                let baseH = metrics.eyeH * min(max(seat.high * depthScale, 0.2), 1.25)
+                let w = max(metrics.eyeW * 0.22, baseW * (1 + 0.16 * shut - 0.04 * wideBoost))
                 let openFactor = max(0.0, (1 + wideBoost + asym + eyeBreath) * (1 - 0.90 * shut))
-                let h = max(eyeW * 0.42, baseH * openFactor)
+                let h = max(metrics.eyeW * 0.42, baseH * openFactor)
 
                 // Top-down weighted eyelid closure: upper lid drops ~72%, lower lid lifts ~28%; perk lifts slightly up.
                 let lidDropY = (baseH - h) * 0.22 * shut - wideBoost * baseH * 0.06
 
-                positions.append(NSValue(cgPoint: CGPoint(x: restPoint.x + seat.dx + wx + convergeX + driftX,
-                                                          y: restPoint.y + seat.dy + wy + lidDropY + driftY)))
-                boundsList.append(NSValue(cgRect: CGRect(x: 0, y: 0, width: w, height: h)))
-                radii.append(min(w, h) / 2)
-
-                // Organic micro-tilt: saccade velocity lean + 3D dome contour alignment + curious asymmetry (clamped ±7°).
+                let pos = CGPoint(x: restPoint.x + seat.dx + wx + convergeX + driftX,
+                                  y: restPoint.y + seat.dy + wy + lidDropY + driftY)
+                // Organic micro-tilt: smoothly soft-clamped ±7.5° with zero hard clipping kink.
                 let saccadeTilt = tanh(gazeVelX[i] * 0.11) * 0.08
-                let domeTilt = 0.045 * min(max(sample.eyes.x, -1), 1) * min(max(sample.eyes.y, -1), 1)
+                let domeTilt = 0.045 * Self.softUnit(sample.eyes.x) * Self.softUnit(sample.eyes.y)
                 let curiousTilt = 0.04 * min(max(sample.eyes.tilt, -1), 1)
-                let angle = min(max(saccadeTilt + domeTilt + curiousTilt, -0.13), 0.13)
-                transforms.append(NSValue(caTransform3D: CATransform3DMakeRotation(angle, 0, 0, 1)))
+                let angle = 0.13 * tanh((saccadeTilt + domeTilt + curiousTilt) / 0.13)
 
                 let k = min(max((seat.facing - 0.05) / 0.25, 0), 1)
                 let op = k * k * (3 - 2 * k)
                 if op < 0.99 { needsFade = true }
-                opacities.append(op)
+                poses.append(VectorEyePose(pos: pos, size: CGSize(width: w, height: h), radius: min(w, h) / 2,
+                                           angle: angle, opacity: op))
             }
 
+            // Linear interpolation between 60 Hz C³-smooth samples avoids non-periodic `.cubic` endpoint tangent kinks.
             let posAnim = CAKeyframeAnimation(keyPath: "position")   // motion-ok: still under Reduce Motion (syncFace)
-            posAnim.values = positions
+            posAnim.values = poses.map { NSValue(cgPoint: $0.pos) }
             posAnim.keyTimes = times
-            posAnim.calculationMode = .cubic
-            settle(posAnim, period: period, begin: begin, once: once)
+            settle(posAnim, period: period, beginLocal: localBegin, once: once)
             eyeLayer.add(posAnim, forKey: "act")
 
             let boundsAnim = CAKeyframeAnimation(keyPath: "bounds")  // motion-ok: still under Reduce Motion (syncFace)
-            boundsAnim.values = boundsList
+            boundsAnim.values = poses.map { NSValue(cgRect: CGRect(origin: .zero, size: $0.size)) }
             boundsAnim.keyTimes = times
-            settle(boundsAnim, period: period, begin: begin, once: once)
+            settle(boundsAnim, period: period, beginLocal: localBegin, once: once)
             eyeLayer.add(boundsAnim, forKey: "act.lids")
 
             let radiusAnim = CAKeyframeAnimation(keyPath: "cornerRadius") // motion-ok: still under Reduce Motion (syncFace)
-            radiusAnim.values = radii
+            radiusAnim.values = poses.map(\.radius)
             radiusAnim.keyTimes = times
-            settle(radiusAnim, period: period, begin: begin, once: once)
+            settle(radiusAnim, period: period, beginLocal: localBegin, once: once)
             eyeLayer.add(radiusAnim, forKey: "act.radius")
 
             let rotAnim = CAKeyframeAnimation(keyPath: "transform")  // motion-ok: still under Reduce Motion (syncFace)
-            rotAnim.values = transforms
+            rotAnim.values = poses.map { NSValue(caTransform3D: CATransform3DMakeRotation($0.angle, 0, 0, 1)) }
             rotAnim.keyTimes = times
-            settle(rotAnim, period: period, begin: begin, once: once)
+            settle(rotAnim, period: period, beginLocal: localBegin, once: once)
             eyeLayer.add(rotAnim, forKey: "act.tilt")
 
             if needsFade {
                 let fadeAnim = CAKeyframeAnimation(keyPath: "opacity")   // motion-ok: still under Reduce Motion (syncFace)
-                fadeAnim.values = opacities
+                fadeAnim.values = poses.map(\.opacity)
                 fadeAnim.keyTimes = times
-                settle(fadeAnim, period: period, begin: begin, once: once)
+                settle(fadeAnim, period: period, beginLocal: localBegin, once: once)
                 eyeLayer.add(fadeAnim, forKey: "act.seen")
             }
 
-            if let prevPos, let prevBounds, let prevRadius, let prevTrans {
-                let then = Self.sample(in: samples, at: CACurrentMediaTime() + Self.bridgeLength - begin, period: period, once: once)
-                let idx = min(then, positions.count - 1)
-                bridge(eyeLayer, "position", from: NSValue(cgPoint: prevPos), to: positions[idx], key: "act.bridge")
-                bridge(eyeLayer, "bounds", from: NSValue(cgRect: prevBounds), to: boundsList[idx], key: "act.bridge.bounds")
-                bridge(eyeLayer, "cornerRadius", from: prevRadius, to: radii[idx], key: "act.bridge.radius")
-                bridge(eyeLayer, "transform", from: NSValue(caTransform3D: prevTrans), to: transforms[idx], key: "act.bridge.shape")
+            // Always C² quintic-blend from the live pose (or exact idle right-looking −20° pose) into the new eye track.
+            let eyeTrack = ActiveTracks.Eye(times: rawTimes, poses: poses, period: period, once: once,
+                                            beginLocal: localBegin, idle: idlePose, bridge: nil, settle: nil)
+            let fromPose = prev.pose
+            let dur = once ? (wasActive || prev.moving ? Self.onceBridgeLength : Self.onceEyeEntryLength) : Self.bridgeLength
+            let steps = max(8, Int((dur * 60).rounded(.up)))
+            let blended: [VectorEyePose] = (0...steps).map { step in
+                let u = Double(step) / Double(steps)
+                let target = Self.interpolatedEye(in: eyeTrack, at: (localNow - localBegin) + u * dur)
+                return VectorEyePose.mix(fromPose, target, FaceBody.quintic(u))
             }
+            let bTimes = (0...steps).map { NSNumber(value: Double($0) / Double(steps)) }
+            func addEyeBridge(_ keyPath: String, _ key: String, _ values: [Any]) {
+                let anim = CAKeyframeAnimation(keyPath: keyPath)   // motion-ok: still under Reduce Motion (syncFace)
+                anim.values = values
+                anim.keyTimes = bTimes
+                anim.duration = dur
+                anim.beginTime = localNow
+                anim.fillMode = .backwards
+                anim.isRemovedOnCompletion = true
+                eyeLayer.add(anim, forKey: key)
+            }
+            addEyeBridge("position", "act.bridge", blended.map { NSValue(cgPoint: $0.pos) })
+            addEyeBridge("bounds", "act.bridge.bounds", blended.map { NSValue(cgRect: CGRect(origin: .zero, size: $0.size)) })
+            addEyeBridge("cornerRadius", "act.bridge.radius", blended.map(\.radius))
+            addEyeBridge("transform", "act.bridge.shape", blended.map { NSValue(caTransform3D: CATransform3DMakeRotation($0.angle, 0, 0, 1)) })
+            if needsFade || fromPose.opacity < 0.99 {
+                addEyeBridge("opacity", "act.bridge.seen", blended.map(\.opacity))
+            }
+            let tracked = ActiveTracks.Eye(times: rawTimes, poses: poses, period: period, once: once, beginLocal: localBegin,
+                                           idle: idlePose, bridge: ActiveTracks.Bridge(beginLocal: localNow, duration: dur, from: fromPose),
+                                           settle: nil)
+            if isLeft { tracks.leftEye = tracked } else { tracks.rightEye = tracked }
         }
     }
 
@@ -1372,14 +1981,16 @@ final class HeadView: UIView {
     }
 
     /// Shows the body as its outline and starts its jelly: a solid body turning and tipping (FaceSolid), squashing and
-    /// leaning on after each move (FaceJelly). Easing in from where a jelly playing before shows, or from the body's
-    /// picture.
-    private func playJelly(_ loop: FaceLoop, samples: [(at: Double, body: FaceBody, eyes: FaceEyes)], begin: CFTimeInterval,
-                           once: Bool) -> (wobble: [FaceJelly], foot: CGPoint, outline: [CGPoint], solid: FaceSolid, layout: ShapeHeadLayout)? {
+    /// leaning on after each move (FaceJelly). C²-blends smoothly from where a jelly playing before is, or from rest.
+    private func playJelly(mood: BotMood, seed: Int, loop: FaceLoop, samples: [(at: Double, body: FaceBody, eyes: FaceEyes)],
+                           begin: CFTimeInterval, wallNow: CFTimeInterval, once: Bool, isFreshOnce: Bool,
+                           prevWobble: (wobble: FaceJelly, moving: Bool),
+                           prevReachTrack: ActiveTracks.Reach?) -> (wobble: [FaceJelly], foot: CGPoint, outline: [CGPoint], solid: FaceSolid, layout: ShapeHeadLayout)? {
         let side = bounds.width
         let layout = HeadGeometry.layout(head, compact: side < 64, darkPage: traitCollection.userInterfaceStyle == .dark)
         guard isSoft, layout.board == nil, layout.outline.count > 2 else {
             dropJelly()
+            tracks.reach = nil
             return nil
         }
         let place = layout.placement ?? HeadPlacement(k: 1, tx: 0, ty: 0), unit = side / 1024
@@ -1388,10 +1999,20 @@ final class HeadView: UIView {
         let solidKey = "\(head.cacheKey)|\(Int((side * 100).rounded()))"
         let solid = Self.cachedSolid(key: solidKey, outline: points, side: side)
         let still = HeadRenderer.outlinePath(solid.edge(solid.rest))
-        // From the picture, the outline at rest (the same points as every edge it moves through, so one morphs into the next).
-        let shownPath = jellyLayer.isHidden ? still : jellyLayer.presentation()?.path
-        let shownBend = jellyLayer.isHidden ? CATransform3DIdentity : jellyLayer.presentation()?.transform
-        for key in ["act.end", "act.end.bend"] { jellyLayer.removeAnimation(forKey: key) }
+        let localBegin = localTime(begin, on: jellyLayer)
+        let localNow = localTime(wallNow, on: jellyLayer)
+
+        let prevReach: (reach: [Double], moving: Bool)
+        if let prevReachTrack, prevReachTrack.solid.rest.count == solid.rest.count {
+            tracks.reach = prevReachTrack
+            prevReach = currentReach(at: localNow, fallback: solid.rest)
+        } else {
+            prevReach = (solid.rest, false)
+        }
+
+        for key in ["act.end", "act.end.bend", "act.bridge", "act.bridge.path", "act", "act.path"] {
+            jellyLayer.removeAnimation(forKey: key)
+        }
         jellyKey = "\(head.cacheKey)|\(side)"
         jellyLayer.path = still
         jellyLayer.transform = CATransform3DIdentity
@@ -1402,34 +2023,61 @@ final class HeadView: UIView {
         jellyLayer.isHidden = false
         bodyLayer.isHidden = true
 
-        // The edge: the solid seen turned and tipped at 30 keyframes/s (Core Animation interpolates cleanly to 60/120 Hz),
-        // smoothed so it never boils or flickers, worked out off the main thread.
-        let pathSamples: [(at: Double, turn: Double, tip: Double)] = samples.enumerated().compactMap { i, s in
-            (i % 2 == 0 || i == samples.count - 1) ? (at: s.at, turn: s.body.turn, tip: s.body.tip) : nil
-        }
-        let poses = pathSamples
+        // Uniform 30 Hz poses over `period` ensure symmetric temporal smoothing and bit-exact wrap across the loop seam.
+        let poses = FaceLoop.uniformPoses(from: samples, period: loop.period, rate: 30, once: once)
         let act = actKey, period = loop.period
-        Task { [weak self] in
-            let edges = await Task.detached(priority: .userInitiated) {
-                solid.smoothed(solid.reaches(poses.map { ($0.turn, $0.tip) }), loop: !once).map(solid.edge)
-            }.value
-            guard let self, self.actKey == act, !self.jellyLayer.isHidden else { return }
-            let paths = edges.map(HeadRenderer.outlinePath)
+        let reachKey = "\(solidKey)|\(mood.rawValue)|\(seed)|\(once ? 1 : 0)"
+
+        func installReaches(_ reaches: [[Double]], at wallTime: CFTimeInterval, fromReach: [Double], bridgePath: Bool) {
+            let paths = reaches.map { HeadRenderer.outlinePath(solid.edge($0)) }
             let turning = CAKeyframeAnimation(keyPath: "path")   // motion-ok: still under Reduce Motion (syncFace)
             turning.values = paths
             turning.keyTimes = poses.map { NSNumber(value: $0.at / period) }
-            self.settle(turning, period: period, begin: begin, once: once)
-            let shown = self.jellyLayer.presentation()?.path
-            self.jellyLayer.removeAnimation(forKey: "act.bridge.path")
-            self.jellyLayer.add(turning, forKey: "act.path")
-            if let shown {
-                let soon = CACurrentMediaTime() + Self.bridgeLength - begin
-                var t = once ? min(max(soon, 0), period) : soon.truncatingRemainder(dividingBy: period)
-                if t < 0 { t += period }
-                let then = poses.lastIndex { $0.at <= t } ?? 0
-                self.bridge(self.jellyLayer, "path", from: shown, to: paths[then], key: "act.bridge.path")
+            settle(turning, period: period, beginLocal: localBegin, once: once)
+            jellyLayer.removeAnimation(forKey: "act.bridge.path")
+            jellyLayer.add(turning, forKey: "act.path")
+            let nowLocal = localTime(wallTime, on: jellyLayer)
+            var activeReachBridge: ActiveTracks.Bridge<[Double]>?
+            if bridgePath {
+                let dur = once ? Self.onceBridgeLength : Self.bridgeLength
+                addSmoothTransition(jellyLayer, keyPath: "path", key: "act.bridge.path", beginLocal: nowLocal, duration: dur) { u in
+                    let target = FaceSolid.interpolatedReach(in: reaches, at: (nowLocal - localBegin) + u * dur,
+                                                             period: period, once: once)
+                    let k = FaceBody.quintic(u)
+                    let blended = zip(fromReach, target).map { $0 + ($1 - $0) * k }
+                    return HeadRenderer.outlinePath(solid.edge(blended))
+                }
+                activeReachBridge = ActiveTracks.Bridge(beginLocal: nowLocal, duration: dur, from: fromReach)
+            }
+            tracks.reach = ActiveTracks.Reach(reaches: reaches, period: period, once: once, beginLocal: localBegin,
+                                              solid: solid, bridge: activeReachBridge, settle: nil)
+        }
+
+        if let cached = Self.reachesCache[reachKey] {
+            installReaches(cached, at: wallNow, fromReach: prevReach.reach, bridgePath: !isFreshOnce)
+        } else {
+            // While computing off-main for the first time, hold the outgoing silhouette smoothly instead of snapping to `still`.
+            let fromSnapshot = prevReach.reach
+            if prevReach.moving {
+                jellyLayer.path = HeadRenderer.outlinePath(solid.edge(fromSnapshot))
+            }
+            tracks.reach = ActiveTracks.Reach(reaches: [fromSnapshot], period: period, once: once, beginLocal: localBegin,
+                                              solid: solid, bridge: nil, settle: nil)
+            Task { [weak self] in
+                let reaches = await Task.detached(priority: .userInitiated) {
+                    solid.smoothed(solid.reaches(poses.map { ($0.turn, $0.tip) }), loop: !once)
+                }.value
+                if Self.reachesCache.count > 48 { Self.reachesCache.removeAll() }
+                Self.reachesCache[reachKey] = reaches
+                guard let self, self.actKey == act, !self.jellyLayer.isHidden else { return }
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                self.jellyLayer.path = still
+                installReaches(reaches, at: CACurrentMediaTime(), fromReach: fromSnapshot, bridgePath: true)
+                CATransaction.commit()
             }
         }
+
         // The body: squashed and leant from its foot.
         let wobble = FaceJelly.follow(samples, period: loop.period, once: once)
         let pivot = CGPoint(x: foot.x - bounds.midX, y: foot.y - bounds.midY)
@@ -1442,50 +2090,132 @@ final class HeadView: UIView {
         let shape = CAKeyframeAnimation(keyPath: "transform")   // motion-ok: still under Reduce Motion (syncFace)
         shape.values = wobble.map { NSValue(caTransform3D: bend($0)) }
         shape.keyTimes = samples.map { NSNumber(value: $0.at / loop.period) }
-        settle(shape, period: loop.period, begin: begin, once: once)
+        settle(shape, period: loop.period, beginLocal: localBegin, once: once)
         jellyLayer.add(shape, forKey: "act")
-        if let shownPath, let shownBend {
-            let then = Self.sample(in: samples, at: CACurrentMediaTime() + Self.bridgeLength - begin, period: loop.period, once: once)
-            bridge(jellyLayer, "path", from: shownPath, to: still, key: "act.bridge.path")
-            bridge(jellyLayer, "transform", from: NSValue(caTransform3D: shownBend), to: NSValue(caTransform3D: bend(wobble[then])))
+        var activeWobbleBridge: ActiveTracks.Bridge<FaceJelly>?
+        if !isFreshOnce {
+            let fromW = prevWobble.wobble
+            let dur = once ? Self.onceBridgeLength : Self.bridgeLength
+            addSmoothTransition(jellyLayer, keyPath: "transform", key: "act.bridge", beginLocal: localNow, duration: dur) { u in
+                let target = FaceJelly.interpolated(in: wobble, samples: samples, at: (localNow - localBegin) + u * dur,
+                                                    period: loop.period, once: once)
+                let k = FaceBody.quintic(u)
+                let blended = FaceJelly(squash: fromW.squash + (target.squash - fromW.squash) * k,
+                                        lean: fromW.lean + (target.lean - fromW.lean) * k)
+                return NSValue(caTransform3D: bend(blended))
+            }
+            activeWobbleBridge = ActiveTracks.Bridge(beginLocal: localNow, duration: dur, from: fromW)
         }
+        tracks.wobble = ActiveTracks.Wobble(samples: samples, wobble: wobble, period: loop.period, once: once,
+                                            beginLocal: localBegin, squashScale: 1, leanScale: 1,
+                                            bridge: activeWobbleBridge, settle: nil)
         return (wobble, foot, points, solid, layout)
     }
 
-    /// The act is over: the jelly and GPU pill eyes ease smoothly back to rest, then the body's picture shows again.
-    private func settleJelly() {
+    /// The act is over: the jelly and GPU pill eyes ease C²-smoothly back to the EXACT resting right-looking −20° pose,
+    /// then swap invisibly back to the cached bitmap on transaction completion (guarded by `token`).
+    private func settleJelly(token: Int, wallNow: CFTimeInterval) {
         guard !jellyLayer.isHidden else { return }
-        let shownPath = jellyLayer.presentation()?.path, shownBend = jellyLayer.presentation()?.transform
-        for key in ["act", "act.path", "act.bridge", "act.bridge.path"] { jellyLayer.removeAnimation(forKey: key) }
-        if let shownPath, let rest = jellyLayer.path {
-            bridge(jellyLayer, "path", from: shownPath, to: rest, key: "act.end")
-        }
-        if let shownBend {
-            bridge(jellyLayer, "transform", from: NSValue(caTransform3D: shownBend), to: NSValue(caTransform3D: CATransform3DIdentity),
-                   key: "act.end.bend")
-        }
-        for eye in [leftEyeLayer, rightEyeLayer] where !eye.isHidden {
-            let shownPos = eye.presentation()?.position, shownBounds = eye.presentation()?.bounds
-            let shownRadius = eye.presentation()?.cornerRadius, shownTrans = eye.presentation()?.transform
-            eye.removeAllAnimations()
-            if let shownPos {
-                bridge(eye, "position", from: NSValue(cgPoint: shownPos), to: NSValue(cgPoint: eye.position), key: "act.end")
-            }
-            if let shownBounds {
-                bridge(eye, "bounds", from: NSValue(cgRect: shownBounds), to: NSValue(cgRect: eye.bounds), key: "act.end.bounds")
-            }
-            if let shownRadius {
-                bridge(eye, "cornerRadius", from: shownRadius, to: eye.cornerRadius, key: "act.end.radius")
-            }
-            if let shownTrans {
-                bridge(eye, "transform", from: NSValue(caTransform3D: shownTrans), to: NSValue(caTransform3D: CATransform3DIdentity),
-                       key: "act.end.shape")
-            }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.bridgeLength) { [weak self] in
-            guard let self, self.actKey.isEmpty else { return }
+        let side = bounds.width
+        let layout = HeadGeometry.layout(head, compact: side < 64, darkPage: traitCollection.userInterfaceStyle == .dark)
+        let place = layout.placement ?? HeadPlacement(k: 1, tx: 0, ty: 0), unit = side / 1024
+        let points = layout.outline.map { CGPoint(x: (place.k * $0.x + place.tx) * unit, y: (place.k * $0.y + place.ty) * unit) }
+        let foot = CGPoint(x: points.map(\.x).reduce(0, +) / Double(max(points.count, 1)), y: points.map(\.y).max() ?? side)
+        let pivot = CGPoint(x: foot.x - bounds.midX, y: foot.y - bounds.midY)
+        let metrics = shapeEyeMetrics(layout: layout, side: side)
+        let jellyLocalNow = localTime(wallNow, on: jellyLayer)
+        let solid = tracks.reach?.solid
+            ?? Self.cachedSolid(key: "\(head.cacheKey)|\(Int((side * 100).rounded()))", outline: points, side: side)
+        let stillPath = HeadRenderer.outlinePath(solid.edge(solid.rest))
+        let reachSnap = currentReach(at: jellyLocalNow, fallback: solid.rest)
+        let wobbleSnap = currentWobble(at: jellyLocalNow)
+        let leftLocalNow = localTime(wallNow, on: leftEyeLayer)
+        let rightLocalNow = localTime(wallNow, on: rightEyeLayer)
+        let leftSnap = currentEye(tracks.leftEye, at: leftLocalNow, fallback: metrics.idleLeft)
+        let rightSnap = currentEye(tracks.rightEye, at: rightLocalNow, fallback: metrics.idleRight)
+
+        let dur = Self.bridgeLength
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        CATransaction.setCompletionBlock { [weak self] in
+            guard let self, self.settleToken == token, self.actKey.isEmpty else { return }
             self.dropJelly()
         }
+
+        for key in ["act", "act.path", "act.bridge", "act.bridge.path", "act.end", "act.end.bend"] {
+            jellyLayer.removeAnimation(forKey: key)
+        }
+        jellyLayer.path = stillPath
+        jellyLayer.transform = CATransform3DIdentity
+
+        let reachDelta = zip(reachSnap.reach, solid.rest).map { abs($0 - $1) }.max() ?? 0
+        if reachSnap.moving && reachDelta > 0.05 {
+            let fromReach = reachSnap.reach
+            addSmoothTransition(jellyLayer, keyPath: "path", key: "act.end", beginLocal: jellyLocalNow, duration: dur) { u in
+                let k = FaceBody.quintic(u)
+                let blended = zip(fromReach, solid.rest).map { $0 + ($1 - $0) * k }
+                return HeadRenderer.outlinePath(solid.edge(blended))
+            }
+            tracks.reach = ActiveTracks.Reach(reaches: [], period: 1, once: true, beginLocal: jellyLocalNow,
+                                              solid: solid, bridge: nil, settle: (jellyLocalNow, dur, fromReach))
+        } else {
+            tracks.reach = nil
+        }
+
+        if wobbleSnap.moving && (abs(wobbleSnap.wobble.squash) > 1e-4 || abs(wobbleSnap.wobble.lean) > 1e-4) {
+            let fromW = wobbleSnap.wobble
+            addSmoothTransition(jellyLayer, keyPath: "transform", key: "act.end.bend", beginLocal: jellyLocalNow, duration: dur) { u in
+                let k = 1 - FaceBody.quintic(u)
+                var shape = CATransform3DMakeScale(1 + fromW.squash * k, 1 - fromW.squash * k, 1)
+                shape.m21 = -fromW.lean * k
+                let there = CATransform3DConcat(CATransform3DMakeTranslation(-pivot.x, -pivot.y, 0), shape)
+                return NSValue(caTransform3D: CATransform3DConcat(there, CATransform3DMakeTranslation(pivot.x, pivot.y, 0)))
+            }
+            tracks.wobble = ActiveTracks.Wobble(samples: [], wobble: [], period: 1, once: true, beginLocal: jellyLocalNow,
+                                                squashScale: 1, leanScale: 1, bridge: nil, settle: (jellyLocalNow, dur, fromW))
+        } else {
+            tracks.wobble = nil
+        }
+
+        let steps = max(8, Int((dur * 60).rounded(.up)))
+        let sTimes = (0...steps).map { NSNumber(value: Double($0) / Double(steps)) }
+        let eyeConfigs: [(CALayer, VectorEyePose, VectorEyePose, CFTimeInterval, Bool)] = [
+            (leftEyeLayer, leftSnap.pose, metrics.idleLeft, leftLocalNow, true),
+            (rightEyeLayer, rightSnap.pose, metrics.idleRight, rightLocalNow, false),
+        ]
+        var anyAnimated = reachDelta > 0.05 || abs(wobbleSnap.wobble.squash) > 1e-4 || abs(wobbleSnap.wobble.lean) > 1e-4
+        for (eye, fromPose, idlePose, nowLocal, isLeft) in eyeConfigs where !eye.isHidden {
+            eye.removeAllAnimations()
+            eye.position = idlePose.pos
+            eye.bounds = CGRect(origin: .zero, size: idlePose.size)
+            eye.cornerRadius = idlePose.radius
+            eye.transform = CATransform3DMakeRotation(idlePose.angle, 0, 0, 1)
+            eye.opacity = 1
+            let blended: [VectorEyePose] = (0...steps).map { step in
+                VectorEyePose.mix(fromPose, idlePose, FaceBody.quintic(Double(step) / Double(steps)))
+            }
+            func addSettle(_ keyPath: String, _ key: String, _ values: [Any]) {
+                let anim = CAKeyframeAnimation(keyPath: keyPath)   // motion-ok: still under Reduce Motion (syncFace)
+                anim.values = values
+                anim.keyTimes = sTimes
+                anim.duration = dur
+                anim.beginTime = nowLocal
+                anim.fillMode = .backwards
+                anim.isRemovedOnCompletion = true
+                eye.add(anim, forKey: key)
+            }
+            addSettle("position", "act.end", blended.map { NSValue(cgPoint: $0.pos) })
+            addSettle("bounds", "act.end.bounds", blended.map { NSValue(cgRect: CGRect(origin: .zero, size: $0.size)) })
+            addSettle("cornerRadius", "act.end.radius", blended.map(\.radius))
+            addSettle("transform", "act.end.shape", blended.map { NSValue(caTransform3D: CATransform3DMakeRotation($0.angle, 0, 0, 1)) })
+            if fromPose.opacity < 0.99 { addSettle("opacity", "act.end.seen", blended.map(\.opacity)) }
+            anyAnimated = true
+            let settleTrack = ActiveTracks.Eye(times: [], poses: [], period: 1, once: true, beginLocal: nowLocal,
+                                               idle: idlePose, bridge: nil, settle: (nowLocal, dur, fromPose))
+            if isLeft { tracks.leftEye = settleTrack } else { tracks.rightEye = settleTrack }
+        }
+        CATransaction.commit()
+        if !anyAnimated { dropJelly() }
     }
 
     /// No jelly: the body's picture shows.
@@ -1496,6 +2226,9 @@ final class HeadView: UIView {
             eye.removeAllAnimations()
             eye.isHidden = true
         }
+        tracks.reach = nil
+        tracks.leftEye = nil
+        tracks.rightEye = nil
         bodyLayer.isHidden = false
         if eyesLayer.contents != nil { eyesLayer.isHidden = false }
     }

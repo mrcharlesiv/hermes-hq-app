@@ -26,6 +26,29 @@ nonisolated struct FaceBody: Hashable, Sendable {
         return FaceBody(x: mix(x, other.x), y: mix(y, other.y), roll: mix(roll, other.roll), turn: mix(turn, other.turn),
                         tip: mix(tip, other.tip), squash: mix(squash, other.squash))
     }
+
+    /// Shortest signed angular difference from `a` to `b`, in (−180°, 180°], so settling from 360° back to 0° moves 0°.
+    static func shortestAngleDelta(from a: Double, to b: Double) -> Double {
+        var d = (b - a).truncatingRemainder(dividingBy: 360)
+        if d > 180 { d -= 360 } else if d <= -180 { d += 360 }
+        return d
+    }
+
+    /// Smooth blend between poses using shortest angular arcs (never unwinds a full 360° spin backwards).
+    func mixedShortest(_ other: FaceBody, _ k: Double) -> FaceBody {
+        func mix(_ a: Double, _ b: Double) -> Double { a + (b - a) * k }
+        return FaceBody(x: mix(x, other.x), y: mix(y, other.y),
+                        roll: roll + Self.shortestAngleDelta(from: roll, to: other.roll) * k,
+                        turn: turn + Self.shortestAngleDelta(from: turn, to: other.turn) * k,
+                        tip: tip + Self.shortestAngleDelta(from: tip, to: other.tip) * k,
+                        squash: mix(squash, other.squash))
+    }
+
+    /// C² quintic S-curve (0→1 with zero velocity and zero acceleration at both ends) for silk-smooth transitions.
+    static func quintic(_ u: Double) -> Double {
+        let u = min(max(u, 0), 1)
+        return u * u * u * (10 + u * (-15 + 6 * u))
+    }
 }
 
 /// Where the eyes look (−1…1 each way, + right and down), how far shut they are (0 open … 1 shut), how wide/perked
@@ -394,17 +417,17 @@ nonisolated enum FaceRoutines {
         let body = FaceBody(tip: 6), eyes = FaceEyes(y: 0.42, lids: 0.28)
         var busy = FaceScript(body, eyes)       // working away to an energetic alternating groove
         for beat in 0..<4 {
-            let t = Double(beat) * 0.6
+            let t = 0.04 + Double(beat) * 0.56
             let side = beat % 2 == 0 ? f : -f
-            busy.move(t, 0.26, .drop) { $0.y = 0.038; $0.squash = 0.07; $0.roll = 4.5 * side; $0.tip = 10 }
-            busy.move(t + 0.26, 0.34, .spring, to: body)
-            busy.mark(t + 0.26)
+            busy.move(t, 0.24, .drop) { $0.y = 0.038; $0.squash = 0.07; $0.roll = 4.5 * side; $0.tip = 10 }
+            busy.move(t + 0.24, 0.30, .spring, to: body)
+            busy.mark(t + 0.24)
             if beat == 0 || beat == 2 {
-                busy.look(t + 0.05, 0.14, .snappy) { $0.x = 0.45 * side }
+                busy.look(t + 0.04, 0.14, .snappy) { $0.x = 0.45 * side }
             }
         }
-        busy.look(1.85, 0.16, to: eyes)
-        busy.blink(2.05)
+        busy.look(1.75, 0.16, to: eyes)
+        busy.blink(1.96)
 
         var check = FaceScript(body, eyes)      // snaps up to check output, satisfied mini-nod, back to work
         check.look(0.32, 0.1, .snappy) { $0.x = 0.95 * f; $0.y = -0.2; $0.lids = 0; $0.wide = 0.5 }
@@ -412,11 +435,11 @@ nonisolated enum FaceRoutines {
         check.blink(1.0)
         nod(&check, 1.25, depth: 7)
         check.look(1.78, 0.12, .snappy, to: eyes)
-        check.move(1.8, 0.34, to: body)
-        for (i, t) in [2.2, 2.7].enumerated() {
+        check.move(1.8, 0.32, to: body)
+        for (i, t) in [2.14, 2.62].enumerated() {
             let side = i == 0 ? f : -f
             check.move(t, 0.22, .drop) { $0.y = 0.036; $0.squash = 0.068; $0.roll = 4 * side; $0.tip = 10 }
-            check.move(t + 0.22, 0.28, .spring, to: body)
+            check.move(t + 0.22, 0.26, .spring, to: body)
             check.mark(t + 0.22)
         }
 
@@ -465,10 +488,10 @@ nonisolated enum FaceRoutines {
 
         var pleased = typed(tilt: 6 * f)        // head on one side, widens & nods pleased at the end
         pleased.look(end - 0.08, 0.1, .snappy) { $0.lids = 0; $0.wide = 0.45 }
-        pleased.move(end - 0.06, 0.12, .snappy) { $0.tip = 15; $0.y = 0.018; $0.squash = 0.035 }
+        pleased.move(end - 0.06, 0.1, .snappy) { $0.tip = 15; $0.y = 0.018; $0.squash = 0.035 }
         pleased.mark(end + 0.04)
-        pleased.look(end + 0.08, 0.18, to: eyes)
-        pleased.move(end + 0.06, 0.3, .spring, to: body)
+        pleased.look(end + 0.06, 0.18, to: eyes)
+        pleased.move(end + 0.04, 0.28, .spring, to: body)
 
         var revise = FaceScript(body, eyes)     // starts line 1, brief squint-tilt rethink, brisk finish + line 2
         revise.look(0.05, 0.42, .linear) { $0.x = 0.05; $0.y = 0.32 }
@@ -636,9 +659,9 @@ nonisolated enum FaceRoutines {
         explain.move(1.05, 0.6, .spring) { $0.turn = 14 * f; $0.roll = 5 * f; $0.tip = 3 }
         explain.look(1.08, 0.18) { $0.x = 0.35 * f; $0.wide = 0.25 }
         explain.mark(1.45)
-        explain.move(1.92, 0.52, .spring, to: .rest)
-        explain.look(1.95, 0.22, to: .rest)
-        nod(&explain, 2.48, depth: 8)
+        explain.move(1.86, 0.5, .spring, to: .rest)
+        explain.look(1.9, 0.22, to: .rest)
+        nod(&explain, 2.38, depth: 8)
         return [along.clip(2.4), sway.clip(3.0), bright.clip(2.3), explain.clip(3.0)]
     }
 
@@ -688,41 +711,41 @@ nonisolated enum FaceRoutines {
             }
             script.mark(0.66)
             script.move(0.66, 0.3, .spring) { $0.squash = 0; $0.tip = 0 }
-            script.move(1.0, 0.36) { $0.tip = -9; $0.roll = spinRoll + 7 * f }
-            // Back to rest (a whole turn is rest).
-            script.move(1.88, 0.42) { $0.tip = 0; $0.roll = spinRoll; $0.turn = spinTurn }
+            script.move(1.0, 0.34) { $0.tip = -9; $0.roll = spinRoll + 7 * f }
+            // Settles cleanly back to rest well before `length` so the C³ spring reaches zero velocity.
+            script.move(1.58, 0.42, .glide) { $0.tip = 0; $0.roll = spinRoll; $0.turn = spinTurn }
             script.look(0.78, 0.2, .glide) { $0.y = 0; $0.wide = 0.3 }
-            script.doubleBlink(1.26)
-            script.look(1.9, 0.22, to: .rest)
+            script.doubleBlink(1.10)
+            script.look(1.70, 0.22, .glide, to: .rest)
             return script.clip(BotMood.done.length)
         }
         return [jump(.plain), jump(.cartwheel), jump(.pirouette)]
     }
 
     private static func failed(_ f: Double) -> [FaceClip] {
-        // Routine 0: sharp flinch and "no!" head-shake with eyes screwed shut, then a defeated droop.
+        // Routine 0: sharp flinch and "no!" head-shake with eyes screwed shut, then a defeated droop that settles cleanly.
         var shake = FaceScript()
         shake.look(0, 0.1, .drop) { $0.lids = 0.95 }
         shake.move(0.02, 0.15, .snappy) { $0.x = -0.036 * f; $0.turn = -22 * f; $0.roll = -6 * f }
         shake.move(0.17, 0.19, .snappy) { $0.x = 0.036 * f; $0.turn = 20 * f; $0.roll = 6 * f }
         shake.move(0.36, 0.17, .snappy) { $0.x = -0.018 * f; $0.turn = -10 * f; $0.roll = -3 * f }
         shake.move(0.53, 0.16) { $0.x = 0; $0.turn = 0; $0.roll = 0 }
-        shake.move(0.7, 0.42) { $0.tip = 17; $0.y = 0.045; $0.squash = 0.065 }
-        shake.look(0.72, 0.28) { $0.y = 0.65; $0.lids = 0.52 }
-        shake.move(1.45, 0.4, to: .rest)
-        shake.look(1.52, 0.28, to: .rest)
+        shake.move(0.7, 0.36) { $0.tip = 17; $0.y = 0.045; $0.squash = 0.065 }
+        shake.look(0.72, 0.26) { $0.y = 0.65; $0.lids = 0.52 }
+        shake.move(1.18, 0.36, .glide, to: .rest)
+        shake.look(1.22, 0.26, .glide, to: .rest)
 
-        // Routine 1: startled recoil hop-back, quick shudder, then weary tilted slump.
+        // Routine 1: startled recoil hop-back, quick shudder, then weary tilted slump that settles cleanly.
         var recoil = FaceScript()
         recoil.look(0, 0.09, .drop) { $0.lids = 0.95 }
         recoil.move(0.02, 0.14, .rise) { $0.y = -0.04; $0.tip = -10; $0.squash = -0.05; $0.x = -0.024 * f; $0.turn = -14 * f }
         recoil.move(0.16, 0.16, .snappy) { $0.y = 0; $0.tip = 0; $0.squash = 0.03; $0.x = 0.028 * f; $0.turn = 16 * f; $0.roll = 4 * f }
         recoil.move(0.32, 0.16, .snappy) { $0.x = -0.016 * f; $0.turn = -9 * f; $0.roll = -2 * f; $0.squash = 0 }
         recoil.move(0.48, 0.16) { $0.x = 0; $0.turn = 0; $0.roll = 0 }
-        recoil.move(0.68, 0.44) { $0.tip = 16; $0.roll = 9 * f; $0.y = 0.042; $0.squash = 0.06 }
-        recoil.look(0.7, 0.28) { $0.y = 0.6; $0.lids = 0.5; $0.tilt = -0.3 * f }
-        recoil.move(1.45, 0.4, to: .rest)
-        recoil.look(1.52, 0.28, to: .rest)
+        recoil.move(0.68, 0.36) { $0.tip = 16; $0.roll = 9 * f; $0.y = 0.042; $0.squash = 0.06 }
+        recoil.look(0.7, 0.26) { $0.y = 0.6; $0.lids = 0.5; $0.tilt = -0.3 * f }
+        recoil.move(1.18, 0.36, .glide, to: .rest)
+        recoil.look(1.22, 0.26, .glide, to: .rest)
         return [shake.clip(BotMood.failed.length), recoil.clip(BotMood.failed.length)]
     }
 }
@@ -785,6 +808,52 @@ nonisolated struct FaceLoop: Sendable {
                 out.append((start + t, clip.body(at: t), clip.eyes(at: t)))
             }
         }
+        if !out.isEmpty {
+            out[0].at = 0
+            out[out.count - 1].at = period
+        }
+        return out
+    }
+
+    /// Linearly interpolated pose at `t` in `samples` (`period` long), wrapping when `!once` and clamping when `once`.
+    static func interpolated(in samples: [(at: Double, body: FaceBody, eyes: FaceEyes)], at t: Double, period: Double,
+                             once: Bool) -> (body: FaceBody, eyes: FaceEyes) {
+        guard !samples.isEmpty else { return (.rest, .rest) }
+        guard samples.count > 1, period > 0 else { return (samples[0].body, samples[0].eyes) }
+        var u = once ? min(max(t, 0), period) : t.truncatingRemainder(dividingBy: period)
+        if u < 0 { u += period }
+        if u <= samples[0].at { return (samples[0].body, samples[0].eyes) }
+        let last = samples.count - 1
+        if u >= samples[last].at { return (samples[last].body, samples[last].eyes) }
+        var low = 0, high = last
+        while low + 1 < high {
+            let mid = (low + high) >> 1
+            if samples[mid].at <= u { low = mid } else { high = mid }
+        }
+        let a = samples[low], b = samples[high], span = b.at - a.at
+        let k = span > 1e-12 ? (u - a.at) / span : 0
+        return (a.body.mixed(b.body, k), a.eyes.mixed(b.eyes, k))
+    }
+
+    /// Uniformly spaced `(at, turn, tip)` poses at `rate` Hz over `period`, so temporal smoothing across the loop seam
+    /// never sees a half-width final interval.
+    static func uniformPoses(from samples: [(at: Double, body: FaceBody, eyes: FaceEyes)], period: Double, rate: Double = 30,
+                             once: Bool) -> [(at: Double, turn: Double, tip: Double)] {
+        guard samples.count > 1, period > 0 else {
+            return samples.map { ($0.at, $0.body.turn, $0.body.tip) }
+        }
+        let steps = max(1, Int((period * rate).rounded()))
+        var out: [(at: Double, turn: Double, tip: Double)] = []
+        out.reserveCapacity(steps + 1)
+        for k in 0...steps {
+            let at = k == steps ? period : period * Double(k) / Double(steps)
+            if !once && k == steps {
+                out.append((period, out[0].turn, out[0].tip))
+            } else {
+                let pose = interpolated(in: samples, at: at, period: period, once: once)
+                out.append((at, pose.body.turn, pose.body.tip))
+            }
+        }
         return out
     }
 
@@ -814,7 +883,7 @@ nonisolated struct FaceLoop: Sendable {
             targets[i][6] += targets[i][3] / FaceEyes.across
             targets[i][7] += targets[i][4] / FaceEyes.down
         }
-        let wrap = (0..<10).map { targets[targets.count - 1][$0] - targets[0][$0] }
+        let targetWrap = (0..<10).map { targets[targets.count - 1][$0] - targets[0][$0] }
         // Two-stage cascaded critically damped spring (C³ smooth: position, velocity, AND acceleration are all continuous,
         // so motion flows like liquid butter with zero hard starts, hard stops, or overshoot ringing).
         let omega = [4.4, 4.4, 2.8, 2.8, 2.8, 4.4, 6.2, 6.2, 5.2, 4.6].map { 2 * Double.pi * $0 }
@@ -824,43 +893,85 @@ nonisolated struct FaceLoop: Sendable {
             var at = input[0], speed = [Double](repeating: 0, count: 10)
             var res: [[Double]] = []
             res.reserveCapacity(raw.count)
-            let passes = once ? 1 : 3
-            for pass in 0..<passes {
-                if pass > 0 { for c in [2, 3, 4, 6, 7] { at[c] -= wrap[c] } }
-                let record = pass == passes - 1
-                for i in 0..<(raw.count - 1) {
-                    if record { res.append(at) }
-                    let dt = raw[i + 1].at - raw[i].at
-                    guard dt > 0 else { continue }
-                    let t0 = input[i], t1 = input[i + 1]
-                    for c in 0..<10 {
-                        let w = freq[c], e = exp(-w * dt)
-                        let m = 0.5 * (t0[c] + t1[c])
-                        let dx = at[c] - m
-                        let c2 = speed[c] + w * dx
-                        at[c] = m + (dx + c2 * dt) * e
-                        speed[c] = (speed[c] - w * c2 * dt) * e
-                    }
+            func step(_ i: Int) {
+                let dt = raw[i + 1].at - raw[i].at
+                guard dt > 0 else { return }
+                let t0 = input[i], t1 = input[i + 1]
+                for c in 0..<10 {
+                    let w = freq[c], e = exp(-w * dt)
+                    let m = 0.5 * (t0[c] + t1[c])
+                    let dx = at[c] - m
+                    let c2 = speed[c] + w * dx
+                    at[c] = m + (dx + c2 * dt) * e
+                    speed[c] = (speed[c] - w * c2 * dt) * e
                 }
             }
-            res.append(at)
+            if !once {
+                // Critically damped spring at ≥2.8 Hz decays below 1e-21 over 3.2 s: warming up the final 3.2 s of the
+                // loop (or a full pass for shorter loops) converges the periodic state to full Double precision while
+                // staying 3.5× faster on the main thread than running multiple full passes.
+                let warmup = min(period, 3.2)
+                let warmStart = raw.firstIndex { $0.at >= period - warmup } ?? 0
+                at = input[warmStart]
+                for i in warmStart..<(raw.count - 1) { step(i) }
+                for c in [2, 3, 4, 6, 7] { at[c] -= wrap[c] }
+                if period < 3.2 {
+                    for i in 0..<(raw.count - 1) { step(i) }
+                    for c in [2, 3, 4, 6, 7] { at[c] -= wrap[c] }
+                }
+            }
+            for i in 0..<(raw.count - 1) {
+                res.append(at)
+                step(i)
+            }
+            if !once, let first = res.first {
+                // Guarantee bit-exact loop closure (modulo full 360° wraps on angle channels).
+                var closed = first
+                for c in [2, 3, 4, 6, 7] { closed[c] += wrap[c] }
+                res.append(closed)
+            } else {
+                res.append(at)
+            }
             return res
         }
         let stage1 = filter(targets, freq: omega)
-        let out = filter(stage1, freq: omega2)
+        var out = filter(stage1, freq: omega2)
+        // A once-only routine settles cleanly to its exact resting end pose with zero velocity and zero acceleration, so
+        // it never slams to a halt at `period` or jerks on handoff back to rest.
+        if once, let finalTarget = targets.last {
+            let settleWindow = min(0.32, period * 0.25)
+            let settleStart = period - settleWindow
+            for i in raw.indices where raw[i].at > settleStart {
+                let w = FaceBody.quintic((raw[i].at - settleStart) / max(settleWindow, 1e-6))
+                for c in 0..<10 { out[i][c] += (finalTarget[c] - out[i][c]) * w }
+            }
+            out[out.count - 1] = finalTarget
+        }
         // A gentle organic breath about every 3.4 s (a whole number a loop, so it joins up): subtle lift, stretch, and
         // harmonic float so held moments stay alive.
         let breaths = once ? 0 : max(1, (period / 3.4).rounded())
-        return zip(raw, out).map { sample, c in
+        let lastIndex = raw.count - 1
+        let baseSway = once ? 0 : sin(0.65)
+        var result: [(at: Double, body: FaceBody, eyes: FaceEyes)] = []
+        result.reserveCapacity(raw.count)
+        for (i, (sample, c)) in zip(raw, out).enumerated() {
+            let seam = !once && (i == 0 || i == lastIndex)
             let phase = 2 * Double.pi * breaths * sample.at / period
-            let breath = sin(phase)
-            let sway = once ? 0 : sin(phase + 0.65)
-            return (sample.at,
-                    FaceBody(x: c[0], y: c[1] - 0.004 * breath, roll: c[2] + 0.8 * sway, turn: c[3], tip: c[4] - 0.5 * breath,
-                             squash: c[5] - 0.015 * breath),
-                    FaceEyes(x: c[6] - c[3] / FaceEyes.across, y: c[7] - c[4] / FaceEyes.down, lids: sample.eyes.lids,
-                             wide: c[8], tilt: c[9]))
+            let breath = seam ? 0 : sin(phase)
+            let sway = once ? 0 : (seam ? baseSway : sin(phase + 0.65))
+            result.append((sample.at,
+                           FaceBody(x: c[0], y: c[1] - 0.004 * breath, roll: c[2] + 0.8 * sway, turn: c[3], tip: c[4] - 0.5 * breath,
+                                    squash: c[5] - 0.015 * breath),
+                           FaceEyes(x: c[6] - c[3] / FaceEyes.across, y: c[7] - c[4] / FaceEyes.down, lids: sample.eyes.lids,
+                                    wide: c[8], tilt: c[9])))
         }
+        if !once, let first = result.first {
+            // Bit-exact periodic closure across all channels (preserving any full-turn angle wrap).
+            var endBody = first.body
+            endBody.roll += targetWrap[2]; endBody.turn += targetWrap[3]; endBody.tip += targetWrap[4]
+            result[lastIndex] = (period, endBody, first.eyes)
+        }
+        return result
     }
 }
 
@@ -904,31 +1015,66 @@ nonisolated struct FaceJelly: Hashable, Sendable {
         }
         var squash = (at: 0.0, speed: 0.0), lean = (at: 0.0, speed: 0.0)
         var before = once ? (stretch: 0.0, down: 0.0, across: 0.0, swing: 0.0) : speeds[speeds.count - 1]
-        var out: [FaceJelly] = []
-        for pass in 0..<(once ? 1 : 3) {
-            let last = pass == (once ? 0 : 2)
-            for (i, speed) in speeds.enumerated() {
-                if last { out.append(FaceJelly(squash: squash.at, lean: lean.at)) }
-                // A change in speed pushes the soft body the other way (it carries on as the body stops, lags as it goes).
-                squash.speed -= speed.down - before.down
-                lean.speed -= speed.across - before.across + speed.swing - before.swing
-                before = speed
-                let span = samples[i + 1].at - samples[i].at, steps = max(1, Int((span * 120).rounded(.up))), dt = span / Double(steps)
-                for _ in 0..<steps {
-                    squash.speed += (-omega * omega * (squash.at - speed.stretch) - 2 * damping * omega * squash.speed) * dt
-                    squash.at += squash.speed * dt
-                    lean.speed += (-omega * omega * lean.at - 2 * damping * omega * lean.speed) * dt
-                    lean.at += lean.speed * dt
-                }
+        func advance(_ i: Int) {
+            let speed = speeds[i]
+            // A change in speed pushes the soft body the other way (it carries on as the body stops, lags as it goes).
+            squash.speed -= speed.down - before.down
+            lean.speed -= speed.across - before.across + speed.swing - before.swing
+            before = speed
+            let span = samples[i + 1].at - samples[i].at, steps = max(1, Int((span * 120).rounded(.up))), dt = span / Double(steps)
+            for _ in 0..<steps {
+                squash.speed += (-omega * omega * (squash.at - speed.stretch) - 2 * damping * omega * squash.speed) * dt
+                squash.at += squash.speed * dt
+                lean.speed += (-omega * omega * lean.at - 2 * damping * omega * lean.speed) * dt
+                lean.at += lean.speed * dt
             }
         }
-        out.append(FaceJelly(squash: squash.at, lean: lean.at))
-        // Eased to a limit, not cut off at it (a cut-off reads as a jolt); a once-only wobble eased out by its end.
+        if !once {
+            // Decay rate 0.82 * 2π * 2.0 ≈ 10.3 s⁻¹ drops below 1e-18 over 4.2 s, giving exact periodic steady-state.
+            let warmup = min(period, 4.2)
+            let warmStart = samples.firstIndex { $0.at >= period - warmup } ?? 0
+            before = speeds[(warmStart - 1 + speeds.count) % speeds.count]
+            for i in warmStart..<speeds.count { advance(i) }
+            if period < 4.2 {
+                for i in 0..<speeds.count { advance(i) }
+            }
+        }
+        var out: [FaceJelly] = []
+        out.reserveCapacity(samples.count)
+        for i in 0..<speeds.count {
+            out.append(FaceJelly(squash: squash.at, lean: lean.at))
+            advance(i)
+        }
+        out.append(!once ? out[0] : FaceJelly(squash: squash.at, lean: lean.at))
+        // Eased to a limit, not cut off at it (a cut-off reads as a jolt); a once-only wobble eased out C²-smoothly by its end.
         func limit(_ v: Double, _ most: Double) -> Double { most * tanh(v / most) }
-        return zip(samples, out).map { sample, jelly in
-            let left = once ? min(max((period - sample.at) / 0.4, 0), 1) : 1, fade = left * left * (3 - 2 * left)
+        var result = zip(samples, out).map { sample, jelly in
+            let fade = once ? FaceBody.quintic((period - sample.at) / 0.4) : 1
             return FaceJelly(squash: limit(jelly.squash, jelly.squash < 0 ? 0.16 : 0.2) * fade, lean: limit(jelly.lean, 0.14) * fade)
         }
+        if !once, let first = result.first { result[result.count - 1] = first }
+        return result
+    }
+
+    /// Linearly interpolated wobble at `t` in `wobble` (`samples` timestamps, `period` long).
+    static func interpolated(in wobble: [FaceJelly], samples: [(at: Double, body: FaceBody, eyes: FaceEyes)], at t: Double,
+                             period: Double, once: Bool) -> FaceJelly {
+        guard wobble.count == samples.count, !wobble.isEmpty else { return .rest }
+        guard wobble.count > 1, period > 0 else { return wobble[0] }
+        var u = once ? min(max(t, 0), period) : t.truncatingRemainder(dividingBy: period)
+        if u < 0 { u += period }
+        if u <= samples[0].at { return wobble[0] }
+        let last = samples.count - 1
+        if u >= samples[last].at { return wobble[last] }
+        var low = 0, high = last
+        while low + 1 < high {
+            let mid = (low + high) >> 1
+            if samples[mid].at <= u { low = mid } else { high = mid }
+        }
+        let span = samples[high].at - samples[low].at
+        let k = span > 1e-12 ? (u - samples[low].at) / span : 0
+        let a = wobble[low], b = wobble[high]
+        return FaceJelly(squash: a.squash + (b.squash - a.squash) * k, lean: a.lean + (b.lean - a.lean) * k)
     }
 
     /// How far `box` (the eyes) can go each way and stay `margin` inside the outline (the closed spline through
@@ -974,7 +1120,7 @@ nonisolated struct FaceSolid: Sendable {
     /// Its view's size: a point nearer you shows bigger, as the stage's perspective had it.
     private let side: Double
 
-    static let bins = 48
+    static let bins = 72
     /// Which way each bin looks from the middle.
     private static let rays = (0..<bins).map { b -> (x: Double, y: Double) in
         let a = 2 * Double.pi * Double(b) / Double(bins)
@@ -999,7 +1145,35 @@ nonisolated struct FaceSolid: Sendable {
             return edge.map { (x: $0.x * scale, y: $0.y * scale, z: z) }
         }
         rest = []
-        rest = reach(turn: 0, tip: 0)
+        // Facing straight ahead (turn = 0, tip = 0), every ring `k` projects to a scalar multiple `m_k` of `edge`, so
+        // the exact silhouette equals the single ring with maximal `m_k` (49× faster on init, bit-identical).
+        let maxM = (0...24).map { k -> Double in
+            let a = -Double.pi / 2 + Double.pi * Double(k) / 24
+            let sc = pow(max(cos(a), 0), Self.fullness), z = depth * sin(a)
+            return sc / max(0.2, 1 - z / (self.side * 2.5))
+        }.max() ?? 1
+        let bins = Self.bins, step = 2 * Double.pi / Double(bins)
+        let flat = edge.map { (x: $0.x * maxM, y: $0.y * maxM, a: atan2($0.y, $0.x)) }
+        var restReach = [Double](repeating: 0, count: bins)
+        for i in flat.indices {
+            let a = flat[i], b = flat[(i + 1) % flat.count]
+            var span = b.a - a.a
+            if span > Double.pi { span -= 2 * Double.pi } else if span < -Double.pi { span += 2 * Double.pi }
+            let from = span >= 0 ? a : b, to = span >= 0 ? b : a
+            let first = Int((from.a / step).rounded(.up)), last = Int(((from.a + abs(span)) / step).rounded(.down))
+            guard first <= last else { continue }
+            let across = from.x * to.y - from.y * to.x, dx = to.x - from.x, dy = to.y - from.y
+            for n in first...last {
+                let bin = ((n % bins) + bins) % bins, ray = Self.rays[bin], facing = ray.x * dy - ray.y * dx
+                guard abs(facing) > 1e-9 else { continue }
+                let r = across / facing
+                if r > restReach[bin] { restReach[bin] = r }
+            }
+        }
+        for b in 0..<bins where restReach[b] <= 0 {
+            restReach[b] = max(restReach[(b + bins - 1) % bins], restReach[(b + 1) % bins])
+        }
+        rest = restReach
     }
 
     /// `p` (about the middle) turned and tipped, before perspective.
@@ -1089,7 +1263,8 @@ nonisolated struct FaceSolid: Sendable {
             let total = w.reduce(0, +)
             return w.map { $0 / total }
         }
-        let round = kernel(1.6), along = kernel(2.6), unique = loop ? n - 1 : n
+        let round = kernel(2.0), along = kernel(2.6), unique = loop ? n - 1 : n
+        let alongHalf = along.count / 2
         let rounded = reaches.map { reach in
             (0..<bins).map { b in
                 round.enumerated().reduce(0.0) { sum, tap in
@@ -1098,14 +1273,32 @@ nonisolated struct FaceSolid: Sendable {
                 }
             }
         }
-        return (0..<n).map { i in
-            (0..<bins).map { b in
-                rest[b] + along.enumerated().reduce(0.0) { sum, tap in
-                    let j = i + tap.offset - along.count / 2
-                    return sum + tap.element * rounded[loop ? ((j % unique) + unique) % unique : min(max(j, 0), n - 1)][b]
+        var out = (0..<n).map { i -> [Double] in
+            if loop {
+                return (0..<bins).map { b in
+                    rest[b] + along.enumerated().reduce(0.0) { sum, tap in
+                        let j = i + tap.offset - alongHalf
+                        return sum + tap.element * rounded[((j % unique) + unique) % unique][b]
+                    }
                 }
             }
+            // Symmetric truncated radius at once-only endpoints guarantees bit-exact `rest` at t = 0 and t = period.
+            let radius = min(alongHalf, i, n - 1 - i)
+            if radius == 0 {
+                return (0..<bins).map { b in rest[b] + rounded[i][b] }
+            }
+            let slice = along[(alongHalf - radius)...(alongHalf + radius)]
+            let norm = slice.reduce(0, +)
+            return (0..<bins).map { b in
+                var sum = 0.0
+                for offset in -radius...radius {
+                    sum += along[alongHalf + offset] * rounded[i + offset][b]
+                }
+                return rest[b] + sum / norm
+            }
         }
+        if loop, let first = out.first { out[n - 1] = first }
+        return out
     }
 
     /// The edge as points round it (this view's), `reach` out at each bin.
@@ -1115,6 +1308,20 @@ nonisolated struct FaceSolid: Sendable {
             let a = Double(b) * step
             return CGPoint(x: middle.x + r * cos(a), y: middle.y + r * sin(a))
         }
+    }
+
+    /// Linearly interpolated polar reach at `t` from a uniformly spaced `reaches` array over `0...period`.
+    static func interpolatedReach(in reaches: [[Double]], at t: Double, period: Double, once: Bool) -> [Double] {
+        guard !reaches.isEmpty else { return [] }
+        guard reaches.count > 1, period > 0 else { return reaches[0] }
+        var u = once ? min(max(t, 0), period) : t.truncatingRemainder(dividingBy: period)
+        if u < 0 { u += period }
+        let steps = reaches.count - 1
+        let f = u / period * Double(steps)
+        let low = min(max(Int(floor(f)), 0), steps - 1)
+        let k = f - Double(low)
+        let a = reaches[low], b = reaches[low + 1]
+        return zip(a, b).map { $0 + ($1 - $0) * k }
     }
 
     /// Where a face drawn at `point` (facing ahead) goes as the body turns and tips: how far it moves; how wide and

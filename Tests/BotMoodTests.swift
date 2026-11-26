@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import Testing
+import UIKit
 @testable import HermesHQNative
 
 /// [moods] What a bot's face acts out: the tool rules, the hub's timing (a step held long enough to see, "done" and
@@ -169,6 +170,7 @@ struct BotMoodTests {
 
     private func alike(_ a: FaceEyes, _ b: FaceEyes) -> Bool {
         abs(a.x - b.x) < 0.001 && abs(a.y - b.y) < 0.001 && abs(a.lids - b.lids) < 0.001
+            && abs(a.wide - b.wide) < 0.001 && abs(a.tilt - b.tilt) < 0.001
     }
 
     /// Each of a mood's routines starts and ends on the mood's own pose, so any one can follow any other; a once-only
@@ -510,5 +512,171 @@ struct BotMoodTests {
         #expect(MatrixAct.make(.asking, design: design).poses.contains { $0.wide }, "asking perks eyes wide")
         #expect(MatrixAct.make(.done, design: design).poses.contains { $0.wide }, "done perks eyes wide")
         #expect(FaceRoutines.clips(.done, facing: 1).contains { $0.body.contains { abs($0.value.turn) >= 359 } }, "done has 3D pirouette")
+    }
+
+    /// Every looping mood closes bit-exact across its loop wrap (`t = period` → `0`) on all body, eye, jelly and 3D
+    /// solid channels, with seam jerk no worse than smooth interior motion (zero end-to-start kink).
+    @Test(arguments: BotMood.allCases.filter { !$0.once })
+    func loopingMoodsWrapSilkySmoothly(mood: BotMood) {
+        let outline = (0..<40).map { i -> CGPoint in
+            let a = Double(i) / 40 * 2 * .pi
+            return CGPoint(x: 50 + cos(a) * 32, y: 50 + sin(a) * 30)
+        }
+        let solid = FaceSolid(outline: outline, side: 100)
+        let channels: [(String, Bool, (FaceBody, FaceEyes) -> Double)] = [
+            ("x", false, { b, _ in b.x * 100 }), ("y", false, { b, _ in b.y * 100 }),
+            ("roll", true, { b, _ in b.roll }), ("turn", true, { b, _ in b.turn }), ("tip", true, { b, _ in b.tip }),
+            ("squash", false, { b, _ in b.squash * 100 }),
+            ("ex", false, { _, e in e.x * 10 }), ("ey", false, { _, e in e.y * 10 }),
+            ("lids", false, { _, e in e.lids * 10 }), ("wide", false, { _, e in e.wide * 10 }), ("tilt", false, { _, e in e.tilt * 10 }),
+        ]
+        for seed in [1, 3, 7, 42] {
+            let loop = FaceLoop(mood, facing: 1, seed: seed)
+            let soft = loop.softSamples(once: false)
+            let wobble = FaceJelly.follow(soft, period: loop.period, once: false)
+            let n = soft.count
+            #expect(soft[0].at == 0 && soft[n - 1].at == loop.period)
+            for (name, isAngle, get) in channels {
+                let vals = soft.map { get($0.body, $0.eyes) }
+                func diff(_ a: Double, _ b: Double) -> Double {
+                    isAngle ? FaceBody.shortestAngleDelta(from: b, to: a) : (a - b)
+                }
+                // Bit-exact position closure across the wrap.
+                #expect(abs(diff(vals[n - 1], vals[0])) < 1e-9, "\(mood) seed \(seed) \(name) position seam")
+                // Smoothness (3rd difference / discrete jerk) across the wrap vs interior peak.
+                // Exclude raw stepped blink `lids` from C² jerk (blinks are smoothed per-eye in HeadView).
+                guard name != "lids", n >= 6 else { continue }
+                let interiorJerk = (1..<(n - 3)).map { i -> Double in
+                    let d0 = diff(vals[i], vals[i - 1]), d1 = diff(vals[i + 1], vals[i]), d2 = diff(vals[i + 2], vals[i + 1])
+                    return abs((d2 - d1) - (d1 - d0))
+                }.max() ?? 0
+                let dm1 = diff(vals[n - 1], vals[n - 2]), d0 = diff(vals[1], vals[0]), d1 = diff(vals[2], vals[1])
+                let dm2 = diff(vals[n - 2], vals[n - 3])
+                let seamJerkA = abs((d0 - dm1) - (dm1 - dm2))
+                let seamJerkB = abs((d1 - d0) - (d0 - dm1))
+                let budget = max(interiorJerk * 1.35, 0.02)
+                #expect(max(seamJerkA, seamJerkB) <= budget,
+                        "\(mood) seed \(seed) \(name): seam jerk \(max(seamJerkA, seamJerkB)) > \(budget)")
+            }
+            // Bit-exact jelly closure + smooth wrap across both squash and lean.
+            #expect(wobble[0] == wobble[n - 1], "\(mood) seed \(seed) jelly wrap mismatch")
+            for (jName, jVals) in [("squash", wobble.map(\.squash)), ("lean", wobble.map(\.lean))] {
+                var jInt = 0.0
+                for i in 1..<(n - 3) {
+                    let a0 = jVals[i + 1] - 2 * jVals[i] + jVals[i - 1]
+                    let a1 = jVals[i + 2] - 2 * jVals[i + 1] + jVals[i]
+                    jInt = max(jInt, abs(a1 - a0))
+                }
+                let aPrev = jVals[0] - 2 * jVals[n - 2] + jVals[n - 3]
+                let aNext = jVals[1] - 2 * jVals[0] + jVals[n - 2]
+                let jSeam = abs(aNext - aPrev)
+                #expect(jSeam <= max(jInt * 1.5, 0.002), "\(mood) seed \(seed) jelly \(jName) seam jerk \(jSeam)")
+            }
+
+            // Uniform 30 Hz 3D cushion poses and smoothed reaches close bit-exact.
+            if seed == 3 {
+                let poses = FaceLoop.uniformPoses(from: soft, period: loop.period, rate: 30, once: false)
+                #expect(poses.first?.at == 0 && poses.last?.at == loop.period)
+                #expect(abs(FaceBody.shortestAngleDelta(from: poses[0].turn, to: poses[poses.count - 1].turn)) < 1e-9)
+                #expect(abs(FaceBody.shortestAngleDelta(from: poses[0].tip, to: poses[poses.count - 1].tip)) < 1e-9)
+                let reaches = solid.smoothed(solid.reaches(poses.map { ($0.turn, $0.tip) }), loop: true)
+                #expect(reaches.first == reaches.last, "\(mood) 3D solid reach seam")
+            }
+        }
+    }
+
+    /// Once-only moods (`done`, `failed`) begin and finish at exact rest (mod 360° for full spins) with near-zero
+    /// terminal velocity on body, eyes, jelly, and 3D solid silhouette — never slamming to a stop.
+    @Test(arguments: [BotMood.done, .failed])
+    func onceMoodsSettleSilkyCleanlyToRest(mood: BotMood) {
+        let outline = (0..<40).map { i -> CGPoint in
+            let a = Double(i) / 40 * 2 * .pi
+            return CGPoint(x: 50 + cos(a) * 32, y: 50 + sin(a) * 30)
+        }
+        let solid = FaceSolid(outline: outline, side: 100)
+        // Cover all routines (done has 3 routines: hop, cartwheel 360° roll, pirouette 360° turn).
+        for seed in 0..<8 {
+            let loop = FaceLoop(mood, facing: 1, seed: seed)
+            let soft = loop.softSamples(once: true)
+            let wobble = FaceJelly.follow(soft, period: loop.period, once: true)
+            let n = soft.count
+            let dtEnd = soft[n - 1].at - soft[n - 2].at
+            let start = soft[0], end = soft[n - 1], prev = soft[n - 2]
+            #expect(start.at == 0 && end.at == loop.period)
+            #expect(alike(start.body, .rest) && alike(start.eyes, .rest))
+            #expect(alike(end.body, .rest) && alike(end.eyes, .rest), "\(mood) seed \(seed) ended off rest: \(end.body)")
+            // Terminal angular & linear velocities must be near zero (< 0.5°/s, < 0.01/s).
+            let endRollVel = abs(FaceBody.shortestAngleDelta(from: prev.body.roll, to: end.body.roll)) / dtEnd
+            let endTurnVel = abs(FaceBody.shortestAngleDelta(from: prev.body.turn, to: end.body.turn)) / dtEnd
+            let endTipVel = abs(FaceBody.shortestAngleDelta(from: prev.body.tip, to: end.body.tip)) / dtEnd
+            let endXYVel = max(abs(end.body.x - prev.body.x), abs(end.body.y - prev.body.y), abs(end.body.squash - prev.body.squash)) / dtEnd
+            #expect(max(endRollVel, endTurnVel, endTipVel) < 0.5, "\(mood) seed \(seed) terminal angular vel")
+            #expect(endXYVel < 0.01, "\(mood) seed \(seed) terminal linear vel \(endXYVel)")
+            #expect(wobble[0] == .rest && wobble[n - 1] == .rest)
+            let jEndVel = max(abs(wobble[n - 1].squash - wobble[n - 2].squash), abs(wobble[n - 1].lean - wobble[n - 2].lean)) / dtEnd
+            #expect(jEndVel < 0.02, "\(mood) seed \(seed) jelly terminal vel \(jEndVel)")
+            let poses = FaceLoop.uniformPoses(from: soft, period: loop.period, rate: 30, once: true)
+            let reaches = solid.smoothed(solid.reaches(poses.map { ($0.turn, $0.tip) }), loop: false)
+            let startErr = zip(reaches[0], solid.rest).map { abs($0 - $1) }.max() ?? 0
+            let endErr = zip(reaches[reaches.count - 1], solid.rest).map { abs($0 - $1) }.max() ?? 0
+            #expect(startErr < 1e-6 && endErr < 1e-6, "\(mood) seed \(seed) solid endpoints \(startErr)/\(endErr)")
+        }
+    }
+
+    /// Shortest-arc angular blending never unwinds a completed 360° cartwheel or pirouette backwards.
+    @Test func shortestAngleBlendNeverUnwindsFullSpins() {
+        #expect(abs(FaceBody.shortestAngleDelta(from: 360, to: 0)) < 1e-9)
+        #expect(abs(FaceBody.shortestAngleDelta(from: -360, to: 0)) < 1e-9)
+        #expect(abs(FaceBody.shortestAngleDelta(from: 300, to: 0) - 60) < 1e-9)
+        #expect(abs(FaceBody.shortestAngleDelta(from: -300, to: 0) + 60) < 1e-9)
+        let spun = FaceBody(roll: 360, turn: 360, tip: 0)
+        let mid = spun.mixedShortest(.rest, 0.5)
+        #expect(abs(mid.roll - 360) < 1e-9 && abs(mid.turn - 360) < 1e-9)
+        let partial = FaceBody(roll: 300, turn: 0, tip: 0).mixedShortest(.rest, 0.5)
+        #expect(abs(partial.roll - 330) < 1e-9)
+        // Quintic S-curve has zero derivative at both ends.
+        #expect(FaceBody.quintic(0) == 0 && FaceBody.quintic(1) == 1)
+        #expect(FaceBody.quintic(0.01) < 1e-4 && 1 - FaceBody.quintic(0.99) < 1e-4)
+    }
+
+    /// Live `HeadView` lifecycle across all head themes: entering acts, rapid mood switching, once-only completion,
+    /// and settling back to rest run cleanly without crashes or non-periodic `.cubic` eye-position kinks.
+    @MainActor @Test func headViewTransitionsAcrossAllThemes() {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        let themes: [Head] = [
+            Head.defaultShapeHead(profile: "ivy"),
+            Head.defaultMatrixHead(profile: "default"),
+            Head(record: HeadRecord.ideas(profile: "otto", about: "", round: 0, theme: "dots")[0])!,
+            Head(record: HeadRecord.ideas(profile: "otto", about: "", round: 0, theme: "robot")[0])!,
+            Head(record: HeadRecord.ideas(profile: "otto", about: "", round: 0, theme: "orb")[0])!,
+            Head(record: HeadRecord.ideas(profile: "otto", about: "", round: 0, theme: "pixel")[0])!,
+            Head(record: HeadRecord.ideas(profile: "otto", about: "", round: 0, theme: "glyph")[0])!,
+        ]
+        #expect(FaceSolid.bins == 72)
+        for head in themes {
+            let view = HeadView(side: 80)
+            window.addSubview(view)
+            view.configure(head: head)
+            view.layoutIfNeeded()
+            for mood in [BotMood.thinking, .reading, .writing, .replying, .done, .failed] {
+                view.posedMood = mood
+                view.layoutIfNeeded()
+            }
+            // Verify no layer carries a non-periodic `.cubic` keyframe animation on `position`.
+            func checkNoCubic(_ layer: CALayer) {
+                for key in layer.animationKeys() ?? [] {
+                    if let anim = layer.animation(forKey: key) as? CAKeyframeAnimation, anim.keyPath == "position" {
+                        #expect(anim.calculationMode != .cubic, "\(head.theme) \(key) uses non-periodic cubic")
+                    }
+                }
+                for sub in layer.sublayers ?? [] { checkNoCubic(sub) }
+            }
+            checkNoCubic(view.layer)
+            // Return to rest (triggers smooth C² settle), then interrupt mid-settle back into acting.
+            view.posedMood = nil
+            view.posedMood = .searching
+            view.posedMood = nil
+            view.removeFromSuperview()
+        }
     }
 }

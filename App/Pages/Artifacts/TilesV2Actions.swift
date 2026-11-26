@@ -66,10 +66,10 @@ extension ArtifactsViewController {
             return
         }
         guard let path = pin.gatewayPath else { return }
-        let dark = traitCollection.userInterfaceStyle == .dark
+        let traits = traitCollection
         let shape = pinPictureShape(pin)
         PagesHUD.show("Rendering Image…", symbol: "photo", from: host)
-        PageSnapshots.shared.picture(path: path, name: pin.label, context: pinPictures.context(pin), dark: dark, shape: shape) { [weak self, weak host, weak anchor] image in
+        PageSnapshots.shared.picture(path: path, name: pin.label, context: pinPictures.context(pin), traits: traits, shape: shape) { [weak self, weak host, weak anchor] image in
             guard let self, let host else { return }
             guard let image else {
                 PagesHaptics.error()

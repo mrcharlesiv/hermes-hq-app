@@ -99,9 +99,10 @@ final class BotArtifactsModel {
         }
     }
 
-    func picture(_ record: ArtifactRecord, dark: Bool) -> UIImage? {
+    func picture(_ record: ArtifactRecord, dark: Bool, highContrast: Bool = false) -> UIImage? {
         _ = tick
-        return pictures.picture(ArtifactPin(record), dark: dark, pixels: 120 * 3, shape: .box(aspect: 1))
+        Theme.touch()
+        return pictures.picture(ArtifactPin(record), dark: dark, highContrast: highContrast, pixels: 120 * 3, shape: .box(aspect: 1))
     }
 }
 
@@ -112,6 +113,7 @@ struct BotArtifactsSection: View {
     var open: (ArtifactRecord) -> Void
     var seeAll: () -> Void
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.dynamicTypeSize) private var typeSize
 
     /// Three across a phone's sheet (two at the accessibility sizes), more where the sheet is wider.
@@ -197,7 +199,7 @@ struct BotArtifactsSection: View {
     }
 
     private func tile(_ record: ArtifactRecord, name: String) -> some View {
-        let picture = model.picture(record, dark: scheme == .dark)
+        let picture = model.picture(record, dark: scheme == .dark, highContrast: contrast == .increased)
         let page = BotArtifactsModel.isPage(record)
         let fill = picture.flatMap { page ? PinPictures.edgeColor($0) : nil }.map { Color(uiColor: $0) } ?? Color.hqFill3
         let shape = RoundedRectangle(cornerRadius: HQShape.radius(10, .card), style: .continuous)

@@ -114,15 +114,17 @@ struct FavoriteTileFace: View {
         source.previews.onUpdate = { [weak self] _ in self?.tick += 1 }
     }
 
-    func picture(_ pin: ArtifactPin, dark: Bool, size: CGSize) -> UIImage? {
+    func picture(_ pin: ArtifactPin, dark: Bool, highContrast: Bool = false, size: CGSize) -> UIImage? {
         _ = tick
-        return source.pictures.picture(pin, dark: dark, pixels: max(size.width, size.height) * 3, shape: FavoriteTiles.shape(size))
+        Theme.touch()
+        return source.pictures.picture(pin, dark: dark, highContrast: highContrast, pixels: max(size.width, size.height) * 3, shape: FavoriteTiles.shape(size))
     }
 
     /// A small square of it, for a row (as Bot Info's grid asks).
-    func thumb(_ pin: ArtifactPin, dark: Bool, side: CGFloat) -> UIImage? {
+    func thumb(_ pin: ArtifactPin, dark: Bool, highContrast: Bool = false, side: CGFloat) -> UIImage? {
         _ = tick
-        return source.pictures.picture(pin, dark: dark, pixels: side * 3, shape: .box(aspect: 1))
+        Theme.touch()
+        return source.pictures.picture(pin, dark: dark, highContrast: highContrast, pixels: side * 3, shape: .box(aspect: 1))
     }
 }
 
@@ -132,9 +134,10 @@ struct DashboardTileThumb: View {
     var pictures: FavoriteTilePictures?
     var side: CGFloat
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
-        let picture = pictures?.thumb(pin, dark: scheme == .dark, side: side)
+        let picture = pictures?.thumb(pin, dark: scheme == .dark, highContrast: contrast == .increased, side: side)
         let shape = RoundedRectangle(cornerRadius: side * 0.26, style: .continuous)
         Rectangle()
             .fill(picture.flatMap { pin.isPage ? PinPictures.edgeColor($0) : nil }.map { Color(uiColor: $0) } ?? Color.hqFill3)
@@ -161,8 +164,10 @@ struct DashboardTilePreview: View {
     var stacked: Bool
     @State private var width: CGFloat = 0
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
+        let _ = Theme.touch()
         let size = FavoriteTileSize.picture(width: width > 0 ? width : 360, side: 0, gap: HQFont.scaled(12), wide: tile.wide, stacked: stacked)
         let height = FavoriteTileSize.height(picture: size, names: ArtifactPins.showsNames, nameHeight: PinTileView.nameHeight)
         let kept = pictures?.source.pin(tile.pin)
@@ -172,9 +177,10 @@ struct DashboardTilePreview: View {
             return pin
         }()
         let dark = scheme == .dark
-        let picture = kept.flatMap { pictures?.picture($0, dark: dark, size: size) }
+        let high = contrast == .increased
+        let picture = kept.flatMap { pictures?.picture($0, dark: dark, highContrast: high, size: size) }
         let failed = kept.map { pictures?.source.pictures.failed($0) ?? false } ?? true
-        let busy = picture == nil && kept.map { pictures?.source.pictures.waiting($0, dark: dark, shape: FavoriteTiles.shape(size)) ?? false } == true
+        let busy = picture == nil && kept.map { pictures?.source.pictures.waiting($0, dark: dark, highContrast: high, shape: FavoriteTiles.shape(size)) ?? false } == true
         HStack {
             Spacer(minLength: 0)
             FavoriteTileFace(pin: pin, picture: picture, busy: busy, health: .none, live: nil,

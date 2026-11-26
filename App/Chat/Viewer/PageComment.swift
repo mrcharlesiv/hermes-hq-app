@@ -61,7 +61,7 @@ import UIKit
     /// The page's side. `accent` is a CSS colour for the ring.
     static func script(accent: String) -> String {
         #"""
-        (function(){if(window.__hqComment)return;var A='\#(accent)',on=false,ring=null,held=null,touch=null,last=0;
+        (function(){if(window.__hqComment)return;var A='var(--accent,\#(accent))',on=false,ring=null,held=null,touch=null,last=0;
         function post(m){try{window.webkit.messageHandlers.hermes.postMessage({id:0,comment:m})}catch(e){}}
         function box(){if(!ring){ring=document.createElement('div');ring.setAttribute('data-hq-comment-ring','');
         ring.style.cssText='position:fixed;z-index:2147483647;pointer-events:none;box-sizing:border-box;border:1.5px solid '+A+

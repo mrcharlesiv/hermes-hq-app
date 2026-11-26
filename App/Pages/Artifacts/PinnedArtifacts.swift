@@ -408,9 +408,10 @@ final class PinPictures {
     private let previews: ArtifactPreviews
     private let thumbs = ArtifactThumbs.shared
     private var asked: Set<String> = []
+    private var prewarming: Set<String> = []
     private var diskAsked: Set<String> = []
-    /// The shapes each pin's page was asked in this run (its tile changed size, or Grid became Cards).
-    private var shapesAsked: [String: Set<PageSnapshots.Shape>] = [:]
+    /// The theme + shape keys each pin's page was asked in this run.
+    private var keysAsked: [String: Set<String>] = [:]
     /// Each pin's newest page picture in any shape: it stands in (fitted) while a new size's picture draws.
     private var latest: [String: UIImage] = [:]
     /// A pin's picture landed (its id).
@@ -427,7 +428,11 @@ final class PinPictures {
 
     /// The picture now (nil while the first one draws, or when there is none), asking for a fresh one when due.
     /// `shape`: the window a page is drawn in, the shape of the tile or card it shows in.
-    func picture(_ pin: ArtifactPin, dark: Bool, pixels: CGFloat, shape: PageSnapshots.Shape) -> UIImage? {
+    func picture(_ pin: ArtifactPin, dark: Bool, highContrast: Bool = false, pixels: CGFloat, shape: PageSnapshots.Shape) -> UIImage? {
+        picture(pin, traits: HTMLPageSheet.pageTraits(dark: dark, highContrast: highContrast), pixels: pixels, shape: shape)
+    }
+
+    func picture(_ pin: ArtifactPin, traits: UITraitCollection, pixels: CGFloat, shape: PageSnapshots.Shape) -> UIImage? {
         if pin.kind == .image {
             switch previews.state(pin.record) {
             case .image(let image): previews.request(pin.record, pixels: pixels); return image   // a bigger one, if due
@@ -436,11 +441,12 @@ final class PinPictures {
             }
         }
         guard pin.isPage, let path = pin.gatewayPath else { return nil }
-        shapesAsked[pin.id, default: []].insert(shape)
-        let key = pageKey(pin, dark: dark, shape: shape)
+        let themeKey = HTMLPageSheet.themeKey(traits)
+        let key = pageKey(pin, themeKey: themeKey, shape: shape)
+        keysAsked[pin.id, default: []].insert(key)
         let context = context(pin)
         let generation = PageSnapshots.shared.generation(context)
-        if let hit = PageSnapshots.shared.cached(path: path, context: context, dark: dark, shape: shape) {
+        if let hit = PageSnapshots.shared.cached(path: path, context: context, traits: traits, shape: shape) {
             // Drawn when, unknown (a chat's card asked for it): as old as can be, so a chat read again redraws it.
             if !thumbs.pageIsCurrent(account, key, generation: generation) {
                 thumbs.keepPage(hit, account, key, generation: generation, askedAt: .distantPast)
@@ -457,18 +463,67 @@ final class PinPictures {
         }
         if !thumbs.pageIsCurrent(account, key, generation: generation), asked.insert(key).inserted {
             let askedAt = Date()
-            PageSnapshots.shared.picture(path: path, name: pin.label, context: context, dark: dark, shape: shape) { [weak self] image in
+            PageSnapshots.shared.pictureResult(path: path, name: pin.label, context: context, traits: traits, shape: shape,
+                                               priority: .foreground) { [weak self] result in
                 guard let self else { return }
                 self.asked.remove(key)
-                // Drawn (or not drawable) at this generation either way: a page that fails isn't asked again at once.
-                self.thumbs.keepPage(image, self.account, key, generation: generation, askedAt: askedAt)
-                if let image { self.latest[pin.id] = image }
-                self.onUpdate?(pin.id)
+                switch result {
+                case .image(let image):
+                    self.thumbs.keepPage(image, self.account, key, generation: generation, askedAt: askedAt)
+                    self.latest[pin.id] = image
+                    self.onUpdate?(pin.id)
+                case .failed:
+                    // Not drawable at this generation: a page that fails isn't asked again at once.
+                    self.thumbs.keepPage(nil, self.account, key, generation: generation, askedAt: askedAt)
+                    self.onUpdate?(pin.id)
+                case .cancelled:
+                    break
+                }
             }
         }
         // The last picture stays up while a newer one draws.
         if let kept { latest[pin.id] = kept }
-        return kept ?? thumbs.page(account, pageKey(pin, dark: !dark, shape: shape)) ?? latest[pin.id]
+        let oppTraits = Self.oppositeTraits(traits)
+        let oppKey = pageKey(pin, themeKey: HTMLPageSheet.themeKey(oppTraits), shape: shape)
+        return kept ?? thumbs.page(account, oppKey) ?? latest[pin.id]
+    }
+
+    private static func oppositeTraits(_ traits: UITraitCollection) -> UITraitCollection {
+        let oppositeDark = traits.userInterfaceStyle != .dark
+        let highContrast = traits.accessibilityContrast == .high
+        let generation = traits[ThemeGenerationTrait.self]
+        return UITraitCollection { copy in
+            copy.userInterfaceStyle = oppositeDark ? .dark : .light
+            copy.accessibilityContrast = highContrast ? .high : .normal
+            copy[ThemeGenerationTrait.self] = generation
+        }
+    }
+
+    /// Pre-warms up to 12 locally cached page tiles in the opposite light/dark mode at background priority so
+    /// switching appearance hits an already-warm snapshot.
+    func prewarmOppositeMode(_ pins: [ArtifactPin], traits: UITraitCollection, shape: (ArtifactPin) -> PageSnapshots.Shape) {
+        guard ThemeTable.current.forcedDark == nil else { return }
+        let opposite = Self.oppositeTraits(traits)
+        let oppThemeKey = HTMLPageSheet.themeKey(opposite)
+        for pin in pins.lazy.filter({ $0.isPage && $0.gatewayPath != nil }).prefix(12) {
+            guard let path = pin.gatewayPath else { continue }
+            let s = shape(pin)
+            let key = pageKey(pin, themeKey: oppThemeKey, shape: s)
+            let context = context(pin)
+            let generation = PageSnapshots.shared.generation(context)
+            if PageSnapshots.shared.cached(path: path, context: context, traits: opposite, shape: s) != nil { continue }
+            if thumbs.pageIsCurrent(account, key, generation: generation) { continue }
+            guard !asked.contains(key), prewarming.insert(key).inserted else { continue }
+            let askedAt = Date()
+            PageSnapshots.shared.pictureResult(path: path, name: pin.label, context: context, traits: opposite, shape: s,
+                                               priority: .background, localOnly: true, cancelOnModeChange: true) { [weak self] result in
+                guard let self else { return }
+                self.prewarming.remove(key)
+                if case .image(let image) = result {
+                    self.thumbs.keepPage(image, self.account, key, generation: generation, askedAt: askedAt)
+                }
+            }
+        }
     }
 
     /// [tiles] The picture the tile shows now (the last one drawn), if any.
@@ -507,9 +562,13 @@ final class PinPictures {
     }
 
     /// Whether the picture is still coming (a spinner instead of the type glyph).
-    func waiting(_ pin: ArtifactPin, dark: Bool, shape: PageSnapshots.Shape) -> Bool {
+    func waiting(_ pin: ArtifactPin, dark: Bool, highContrast: Bool = false, shape: PageSnapshots.Shape) -> Bool {
+        waiting(pin, traits: HTMLPageSheet.pageTraits(dark: dark, highContrast: highContrast), shape: shape)
+    }
+
+    func waiting(_ pin: ArtifactPin, traits: UITraitCollection, shape: PageSnapshots.Shape) -> Bool {
         if pin.kind == .image, case .loading = previews.state(pin.record) { return true }
-        return pin.isPage && asked.contains(pageKey(pin, dark: dark, shape: shape))
+        return pin.isPage && asked.contains(pageKey(pin, themeKey: HTMLPageSheet.themeKey(traits), shape: shape))
     }
 
     /// Draw the pins' pages again (pull to refresh, or their chat was read again): a bot rewrites its page in place.
@@ -517,17 +576,15 @@ final class PinPictures {
     func redraw(_ pins: [ArtifactPin], drawnBefore: Date = .distantFuture) {
         for pin in pins {
             if pin.kind == .image { previews.clearFailure(pin.record.id) }
-            guard pin.isPage, ![true, false].contains(where: { dark in
-                (shapesAsked[pin.id] ?? []).contains { thumbs.pageDrawnSince(account, pageKey(pin, dark: dark, shape: $0), drawnBefore) }
-            })
+            guard pin.isPage, !(keysAsked[pin.id] ?? []).contains(where: { thumbs.pageDrawnSince(account, $0, drawnBefore) })
             else { continue }
             // A new generation for the pin's chat: the next ask draws it again (an open card in that chat redraws too).
             PageSnapshots.noteTurnEnded(context(pin))
         }
     }
 
-    private func pageKey(_ pin: ArtifactPin, dark: Bool, shape: PageSnapshots.Shape) -> String {
-        pin.id + (dark ? "|d" : "|l") + "|" + shape.key
+    private func pageKey(_ pin: ArtifactPin, themeKey: String, shape: PageSnapshots.Shape) -> String {
+        pin.id + "|" + themeKey + "|" + shape.key
     }
 
     /// The picture's top-left pixel: the page's own background, around a chart fitted whole.

@@ -28,8 +28,8 @@ final class LiveTiles: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     private struct Live {
         let web: WKWebView
         var file: URL
-        /// The theme the page was drawn with (a change of look draws it again).
-        var dark: Bool
+        /// The theme the page was drawn with (a change of look or mode updates it).
+        var themeKey: String
         var readAt = Date()
         var lastIntent = Date.distantPast
         var shownAt = Date()
@@ -94,17 +94,49 @@ final class LiveTiles: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     }
 
     /// The live web view for a tile (made and loaded the first time), or nil while its page is read.
-    func view(for pin: ArtifactPin, dark: Bool) -> WKWebView? {
+    func view(for pin: ArtifactPin, traits: UITraitCollection) -> WKWebView? {
         guard isLive(pin) else { return nil }
         if var live = tiles[pin.id] {
             live.shownAt = Date()
-            if live.dark != dark { live.dark = dark; handTheme(live.web, dark: dark); live.web.loadPageFile(live.file) }
+            let themeKey = HTMLPageSheet.themeKey(traits)
+            let changed = live.themeKey != themeKey
+            if changed { live.themeKey = themeKey }
             tiles[pin.id] = live
+            if changed { applyTheme(id: pin.id, live: live, traits: traits) }
             return live.web
         }
         guard hasRoom() else { return nil }
         read(pin, fresh: false)
         return nil
+    }
+
+    /// Updates every running live tile to match `traits` in place, falling back to reload only when scripts/canvases need it.
+    func updateTheme(_ traits: UITraitCollection) {
+        let themeKey = HTMLPageSheet.themeKey(traits)
+        for id in Array(tiles.keys) {
+            guard var live = tiles[id], live.themeKey != themeKey else { continue }
+            live.themeKey = themeKey
+            tiles[id] = live
+            applyTheme(id: id, live: live, traits: traits)
+        }
+    }
+
+    private func applyTheme(id: String, live: Live, traits: UITraitCollection) {
+        let web = live.web
+        let expectedKey = live.themeKey
+        let file = live.file
+        web.overrideUserInterfaceStyle = traits.userInterfaceStyle == .dark ? .dark : .light
+        handTheme(web, traits: traits)
+        guard !web.isLoading, web.alpha >= 0.01 else {
+            web.loadPageFile(file)
+            return
+        }
+        web.evaluateJavaScript(HTMLPageSheet.applyThemeScript(traits)) { [weak self, weak web] value, error in
+            guard let self, let web, self.tiles[id]?.web === web, self.tiles[id]?.themeKey == expectedKey else { return }
+            if error != nil || (value as? String) == "reload" || (value as? Bool) == true {
+                web.loadPageFile(self.tiles[id]?.file ?? file)
+            }
+        }
     }
 
     /// Room for one more live view: under the limit, or one off screen to give way.
@@ -145,7 +177,8 @@ final class LiveTiles: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             guard let oldest = leastRecent() else { return }
             drop(oldest)
         }
-        let dark = host?.traitCollection.userInterfaceStyle == .dark
+        let traits = host?.traitCollection ?? HTMLPageSheet.pageTraits(dark: false)
+        let themeKey = HTMLPageSheet.themeKey(traits)
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
         config.userContentController.add(LiveTileHandler(self), name: "hermes")
@@ -158,18 +191,18 @@ final class LiveTiles: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         web.scrollView.isScrollEnabled = false            // the Tiles page scrolls, not the tile
         web.scrollView.contentInsetAdjustmentBehavior = .never
         web.allowsLinkPreview = false
+        web.overrideUserInterfaceStyle = traits.userInterfaceStyle == .dark ? .dark : .light
         web.alpha = 0                                     // the picture shows until the page has drawn
         web.navigationDelegate = self
         web.accessibilityIdentifier = "live-tile"
-        handTheme(web, dark: dark)
-        tiles[id] = Live(web: web, file: file, dark: dark)
+        handTheme(web, traits: traits)
+        tiles[id] = Live(web: web, file: file, themeKey: themeKey)
         web.loadPageFile(file)
         AppLog.trace("pages", "live tile started (\(tiles.count) live)")
         onChange?(id)
     }
 
-    private func handTheme(_ web: WKWebView, dark: Bool) {
-        let traits = UITraitCollection(userInterfaceStyle: dark ? .dark : .light)
+    private func handTheme(_ web: WKWebView, traits: UITraitCollection) {
         let content = web.configuration.userContentController
         content.removeAllUserScripts()
         content.addUserScript(WKUserScript(source: HTMLPageSheet.prelude(traits, talks: true), injectionTime: .atDocumentStart, forMainFrameOnly: true))

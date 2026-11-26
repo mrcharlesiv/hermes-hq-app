@@ -36,7 +36,7 @@ final class PageCardView: UIControl {
     /// [pins] A pin on the picture's corner while the page is pinned to Artifacts.
     private let pinBadge = UIImageView(image: UIImage(systemName: "pin.fill"))
     private var context: MediaContext?
-    private var dark = false
+    private var themeKey = ""
     /// [page-fold] Only the caption shows: a later message hands the page over again.
     private var folded = false
     /// [page-cards] The reply that hands the page over is still arriving: the page's shape, no picture yet (the bot
@@ -89,6 +89,12 @@ final class PageCardView: UIControl {
         NotificationCenter.default.addObserver(self, selector: #selector(turnEnded(_:)), name: PageSnapshots.turnEnded, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(pinsChanged), name: ArtifactPins.didChange, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(headLearnt), name: PageSnapshots.headLearnt, object: nil)
+        registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self, UITraitAccessibilityContrast.self]) { (card: PageCardView, _) in
+            let nextKey = HTMLPageSheet.themeKey(card.traitCollection)
+            guard nextKey != card.themeKey else { return }
+            card.themeKey = nextKey
+            if card.ref != nil && !card.folded { card.loadPicture() }
+        }
     }
 
     @objc private func headLearnt() {
@@ -118,11 +124,11 @@ final class PageCardView: UIControl {
         layer.cornerCurve = .continuous
         nameLabel.font = style.bodyBold
         hintLabel.font = style.time
-        let isDark = traitCollection.userInterfaceStyle == .dark
+        let nextThemeKey = HTMLPageSheet.themeKey(traitCollection)
         #if DEBUG
         let building = building || UserDefaults.standard.bool(forKey: "HQDebugPageBuilding")   // the wait, held for a picture
         #endif
-        let same = self.ref == ref && self.context == context && dark == isDark && self.folded == folded && self.building == building
+        let same = self.ref == ref && self.context == context && themeKey == nextThemeKey && self.folded == folded && self.building == building
         self.folded = folded
         self.building = building
         showName(ref, context: context)
@@ -133,7 +139,7 @@ final class PageCardView: UIControl {
         guard !same else { showPinned(); return }
         self.ref = ref
         self.context = context
-        dark = isDark
+        themeKey = nextThemeKey
         showPinned()
         if folded { return }
         if building, picture.image == nil { show(nil) } else { loadPicture() }
@@ -159,27 +165,20 @@ final class PageCardView: UIControl {
         pinBadge.isHidden = true
     }
 
-    override func traitCollectionDidChange(_ previous: UITraitCollection?) {
-        super.traitCollectionDidChange(previous)
-        if traitCollection.userInterfaceStyle != previous?.userInterfaceStyle, ref != nil {
-            dark = traitCollection.userInterfaceStyle == .dark
-            loadPicture()
-        }
-    }
-
     private func loadPicture() {
         guard let ref, let context, let path = ref.attachment.gatewayPath else { show(nil); return }
         #if DEBUG
         if UserDefaults.standard.bool(forKey: "HQDebugPageSkeleton") { show(nil); return }   // the wait, held for a picture
         #endif
         let snapshots = PageSnapshots.shared
-        if let hit = snapshots.cached(path: path, context: context, dark: dark) { show(hit); return }
+        let traits = traitCollection
+        if let hit = snapshots.cached(path: path, context: context, traits: traits) { show(hit); return }
         // The last picture stays up while the new one draws (no flash after every turn).
         if picture.image == nil { show(nil) }
-        let wanted = snapshots.key(path: path, context: context, dark: dark)
-        snapshots.picture(path: path, name: ref.attachment.name, context: context, dark: dark) { [weak self] image in
+        let wanted = snapshots.key(path: path, context: context, traits: traits)
+        snapshots.picture(path: path, name: ref.attachment.name, context: context, traits: traits) { [weak self] image in
             guard let self, let current = self.ref, let ctx = self.context, let p = current.attachment.gatewayPath,
-                  snapshots.key(path: p, context: ctx, dark: self.dark) == wanted else { return }
+                  snapshots.key(path: p, context: ctx, traits: self.traitCollection) == wanted else { return }
             self.showName(current, context: ctx)   // the read that drew the picture found the page's title
             if let image { self.show(image, fresh: true) } else if self.picture.image == nil { self.show(nil, failed: true) }
         }

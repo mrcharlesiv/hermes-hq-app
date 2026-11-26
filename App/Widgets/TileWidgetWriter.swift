@@ -50,6 +50,8 @@ final class TileWidgetWriter {
     private var remoteSnapshotUnsupported = false
     /// The account key of the last index written (a different account's pictures all go).
     private var writtenAccount: String?
+    /// Last theme signature drawn for widgets (light + dark).
+    private var lastThemeKey: String?
 
     /// The widgets' own page context per bot: its generation moves with the widgets' redraws alone.
     private func context(_ pin: ArtifactPin) -> MediaContext {
@@ -70,6 +72,7 @@ final class TileWidgetWriter {
         drawn = [:]
         drawnHashes = [:]
         remoteSnapshotUnsupported = false
+        lastThemeKey = Self.themeSignature()
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: ArtifactPins.didChange, object: pins, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.schedule() }
@@ -78,7 +81,7 @@ final class TileWidgetWriter {
             MainActor.assumeIsolated { self?.schedule(drawing: false) }   // a bot renamed: the index's bot names
         })
         observers.append(center.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.schedule(drawing: false) }   // the tint the quiet states use
+            MainActor.assumeIsolated { self?.themeChanged() }
         })
         observers.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.pageMayHaveChanged(nil) }
@@ -113,6 +116,7 @@ final class TileWidgetWriter {
         drawnHashes = [:]
         remoteSnapshotUnsupported = false
         writtenAccount = nil
+        lastThemeKey = nil
         TileWidgetStore.signOut(scheme: AppIdentity.current.urlScheme)
         Self.reload()
         AppLog.note("widgets", "tile widgets: signed out")
@@ -145,6 +149,22 @@ final class TileWidgetWriter {
             stale = nil
         }
         schedule()
+    }
+
+    private static func themeSignature() -> String {
+        PageSnapshots.themeKey(dark: false) + "|" + PageSnapshots.themeKey(dark: true)
+    }
+
+    private func themeChanged() {
+        let next = Self.themeSignature()
+        guard next != lastThemeKey else {
+            schedule(drawing: false)   // only the tint/non-page tokens changed
+            return
+        }
+        lastThemeKey = next
+        drawn = [:]
+        stale = nil
+        schedule(drawing: true)
     }
 
     /// One pass soon (several asks in a moment make one).
@@ -342,7 +362,8 @@ final class TileWidgetWriter {
                              context: MediaContext) async -> TilePicture? {
         let shape = PageSnapshots.Shape.frame(width: spec.width, height: spec.height, zoom: 100)
         let image: UIImage? = await withCheckedContinuation { continuation in
-            PageSnapshots.shared.picture(path: path, name: pin.label, context: context, dark: dark, shape: shape) {
+            PageSnapshots.shared.picture(path: path, name: pin.label, context: context, dark: dark, shape: shape,
+                                         priority: .background) {
                 continuation.resume(returning: $0)
             }
         }

@@ -30,6 +30,13 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
     private var liveTiles: LiveTiles?
     /// A tile is being dragged (a redraw then waits: applying a snapshot mid-move is refused).
     private var moving = false
+    private var drawnThemeKey = ""
+    private var drawnScale: CGFloat = HQFont.scale
+    private var prewarmTask: Task<Void, Never>?
+
+    isolated deinit {
+        prewarmTask?.cancel()
+    }
 
     init(inSheet: Bool) {
         self.inSheet = inSheet
@@ -101,9 +108,20 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
             }
             HQAnnounce.say("Moved")
         }
-        for name in [QuickTileStore.didChange, Theme.didChange, ServerIssues.didChange] {
+        for name in [QuickTileStore.didChange, ServerIssues.didChange] {
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.reload() }
+            }
+        }
+        NotificationCenter.default.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if self.viewIfLoaded?.window != nil {
+                    self.liveTiles?.updateTheme(self.traitCollection)
+                }
+                if HTMLPageSheet.themeKey(self.traitCollection) != self.drawnThemeKey || HQFont.scale != self.drawnScale {
+                    self.reload()
+                }
             }
         }
         // [favorites-live-tiles] A pin renamed, redrawn, unpinned, removed in Artifacts, or Show Names turned; its
@@ -122,8 +140,19 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
                 self.redraw(pin: id)
             }
         }
-        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (self: Self, _: UITraitCollection) in
-            self.reload()
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self, UITraitUserInterfaceStyle.self,
+                                ThemeGenerationTrait.self, UITraitAccessibilityContrast.self]) { (self: Self, previous) in
+            let appearanceChanged = previous.userInterfaceStyle != self.traitCollection.userInterfaceStyle
+                || previous[ThemeGenerationTrait.self] != self.traitCollection[ThemeGenerationTrait.self]
+                || previous.accessibilityContrast != self.traitCollection.accessibilityContrast
+            if appearanceChanged {
+                self.liveTiles?.updateTheme(self.traitCollection)
+                PageSnapshots.shared.cancelPrewarm()
+                guard self.viewIfLoaded?.window != nil else { return }
+                self.reload()
+            } else {
+                self.reload()
+            }
         }
         loadList()
     }
@@ -136,6 +165,8 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
+        prewarmTask?.cancel()
+        prewarmTask = nil
         liveTiles?.watch(false)   // [favorites-live-tiles] as the Dashboard: hidden, every live view goes
         if isEditing, navigationController?.presentedViewController == nil, presentedViewController == nil {
             setEditing(false, animated: false)
@@ -213,10 +244,13 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
         snapshot.appendItems(list.tiles.map(\.id), toSection: 0)
         if isEditing { snapshot.appendItems([Self.addID], toSection: 0) }
         snapshot.reconfigureItems(snapshot.itemIdentifiers)
+        drawnThemeKey = HTMLPageSheet.themeKey(traitCollection)
+        drawnScale = HQFont.scale
         dataSource.apply(snapshot, animatingDifferences: false)
         collectionView.collectionViewLayout.invalidateLayout()
         navigationItem.rightBarButtonItems = list.tiles.isEmpty ? [] : [editItem]
         setNeedsUpdateContentUnavailableConfiguration()
+        scheduleOppositeModePrewarm()
     }
 
     override func updateContentUnavailableConfiguration(using state: UIContentUnavailableConfigurationState) {
@@ -449,19 +483,19 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
         let name = tile.shownName(currentPinName: kept.map { source?.pins.name($0) ?? $0.name })
         let size = pictureSize(tile) ?? CGSize(width: 160, height: 160)
         let height = tileHeight(tile) ?? size.height
-        let dark = traitCollection.userInterfaceStyle == .dark
+        let traits = traitCollection
         var pin = kept ?? ArtifactPin.standIn(id: tile.pin, name: name)
         pin.title = name   // the Favorites tile's own name (it follows the pin's until typed over)
         var picture: UIImage?, busy = false, failed = missing, health = TileJobs.Health.none
         var working: String?, live: WKWebView?
         if let kept, let source {
             let shape = FavoriteTiles.shape(size)
-            picture = source.pictures.picture(kept, dark: dark, pixels: max(size.width, size.height) * traitCollection.displayScale, shape: shape)
-            busy = picture == nil && source.pictures.waiting(kept, dark: dark, shape: shape)
+            picture = source.pictures.picture(kept, traits: traits, pixels: max(size.width, size.height) * traitCollection.displayScale, shape: shape)
+            busy = picture == nil && source.pictures.waiting(kept, traits: traits, shape: shape)
             failed = source.pictures.failed(kept)
             health = failed && kept.isPage ? .failed(TileHealthMark.goneWords) : TileUpdates.shared.health(kept.id)
             working = TileMaker.working(on: kept.id, accountId: source.accountId)?.tileWords
-            live = isEditing ? nil : liveTiles?.view(for: kept, dark: dark)   // Edit shows pictures, as Edit Tiles
+            live = isEditing ? nil : liveTiles?.view(for: kept, traits: traits)   // Edit shows pictures, as Edit Tiles
         }
         let shown = pin
         cell.contentConfiguration = UIHostingConfiguration {
@@ -495,6 +529,30 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
             guard !shown.isEmpty else { return }
             snapshot.reconfigureItems(shown)
             self.dataSource.apply(snapshot, animatingDifferences: false)
+            self.scheduleOppositeModePrewarm()
+        }
+    }
+
+    /// Pre-warms locally cached Dashboard tiles on Favorites in the opposite light/dark mode once settled.
+    private func scheduleOppositeModePrewarm() {
+        prewarmTask?.cancel()
+        guard viewIfLoaded?.window != nil, list.tiles.contains(where: isPicture) else { return }
+        prewarmTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard let self, !Task.isCancelled, self.viewIfLoaded?.window != nil, !PageSnapshots.shared.isBusy,
+                  let source = self.dashboardTiles() else { return }
+            var shapes: [String: PageSnapshots.Shape] = [:]
+            var pins: [ArtifactPin] = []
+            for tile in self.list.tiles where self.isPicture(tile) {
+                guard let pin = source.pin(tile.pin), shapes[pin.id] == nil else { continue }
+                let size = self.pictureSize(tile) ?? CGSize(width: 160, height: 160)
+                shapes[pin.id] = FavoriteTiles.shape(size)
+                pins.append(pin)
+            }
+            guard !pins.isEmpty else { return }
+            source.pictures.prewarmOppositeMode(pins, traits: self.traitCollection) {
+                shapes[$0.id] ?? .box(aspect: 1)
+            }
         }
     }
 

@@ -77,6 +77,9 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
     private var resizing: (id: String, start: CGRect, size: PinTileSize)?
     /// [mac] The app's scale the Grid was last laid out at (`gridMetrics`).
     private var drawnScale: CGFloat = 1
+    private var themeObserver: NSObjectProtocol?
+    private var drawnThemeKey = ""
+    private var prewarmTask: Task<Void, Never>?
     /// [pins] The count the Pinned page's header says ("3 Pinned").
     private var pinnedHeaderCount = -1
     /// Owner 2026-11-17 (Mac calls Q13): on the Mac the Tiles page has no row under the bar ("5 Items … + ⊞"): its New
@@ -301,8 +304,15 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
             }
         }
         scopeObserver = scope.observe { [weak self] _ in self?.scopeChanged() }
-        registerForTraitChanges([UITraitPreferredContentSizeCategory.self, UITraitUserInterfaceStyle.self]) { (vc: ArtifactsViewController, previous) in
-            if previous.userInterfaceStyle != vc.traitCollection.userInterfaceStyle {
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self, UITraitUserInterfaceStyle.self,
+                                ThemeGenerationTrait.self, UITraitAccessibilityContrast.self]) { (vc: ArtifactsViewController, previous) in
+            let appearanceChanged = previous.userInterfaceStyle != vc.traitCollection.userInterfaceStyle
+                || previous[ThemeGenerationTrait.self] != vc.traitCollection[ThemeGenerationTrait.self]
+                || previous.accessibilityContrast != vc.traitCollection.accessibilityContrast
+            if appearanceChanged {
+                vc.liveTiles?.updateTheme(vc.traitCollection)
+                PageSnapshots.shared.cancelPrewarm()
+                guard vc.viewIfLoaded?.window != nil else { return }
                 vc.reload(animated: false)
             } else {
                 vc.reload(animated: false)
@@ -310,14 +320,19 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         }
         // [mac] UI Scale (⌘+ / ⌘−) or the look changed: the Grid's cells and the pages in them follow the app's scale.
         drawnScale = HQFont.scale
-        NotificationCenter.default.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
+        themeObserver = NotificationCenter.default.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.barFilterWidth?.constant = (320 * max(1, HQFont.scale)).rounded()
-                guard HQFont.scale != self.drawnScale else { return }
-                self.drawnScale = HQFont.scale
-                self.collectionView.collectionViewLayout.invalidateLayout()
-                self.reload(animated: false)
+                if HQFont.scale != self.drawnScale {
+                    self.drawnScale = HQFont.scale
+                    self.collectionView.collectionViewLayout.invalidateLayout()
+                    self.reload(animated: false)
+                } else if self.viewIfLoaded?.window != nil,
+                          HTMLPageSheet.themeKey(self.traitCollection) != self.drawnThemeKey {
+                    self.liveTiles?.updateTheme(self.traitCollection)
+                    self.reload(animated: false)
+                }
             }
         }
         store.setScope(currentScope)
@@ -331,6 +346,8 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         if let pinsViewObserver { NotificationCenter.default.removeObserver(pinsViewObserver) }
         if let tileObserver { NotificationCenter.default.removeObserver(tileObserver) }
         if let tileChangedObserver { NotificationCenter.default.removeObserver(tileChangedObserver) }
+        if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
+        prewarmTask?.cancel()
         tileWatch?.cancel()
         if let hiddenObserver { NotificationCenter.default.removeObserver(hiddenObserver) }
     }
@@ -392,6 +409,8 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        prewarmTask?.cancel()
+        prewarmTask = nil
         if pinnedOnly { navigationController?.interactiveContentPopGestureRecognizer?.isEnabled = true }
         if editingTiles { setEditingTiles(false) }
         updateMakingTimer(0)
@@ -1255,12 +1274,12 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
 
     private func configurePin(_ cell: UICollectionViewCell, _ kept: ArtifactPin) {
         let pin = pins.shown(kept)   // Mac polish #45: its name as every list shows it
-        let dark = traitCollection.userInterfaceStyle == .dark
+        let traits = traitCollection
         let grid = ArtifactPins.view == .grid
         let pixels = (pinnedOnly || grid && pin.tileSize != .small ? 640 : 520) * traitCollection.displayScale
         let shape = pinPictureShape(pin)
-        let picture = pinPictures.picture(pin, dark: dark, pixels: pixels, shape: shape)
-        let busy = picture == nil && (pinPictures.waiting(pin, dark: dark, shape: shape) || openingRow == pin.record.id)
+        let picture = pinPictures.picture(pin, traits: traits, pixels: pixels, shape: shape)
+        let busy = picture == nil && (pinPictures.waiting(pin, traits: traits, shape: shape) || openingRow == pin.record.id)
         let bot = PagesNames.botName(pin.profile, bots: services?.bots ?? [])
         let subtitle = store.scope != "all" && !pin.sessionTitle.isEmpty ? pin.sessionTitle   // one bot: its name says nothing
             : pin.sessionTitle.isEmpty ? bot : "\(bot) · \(pin.sessionTitle)"
@@ -1286,7 +1305,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         #endif
         if grid {
             let names = ArtifactPins.showsNames, editing = editingTiles
-            let live = editing ? nil : liveTiles?.view(for: pin, dark: dark)   // [live-tiles]
+            let live = editing ? nil : liveTiles?.view(for: pin, traits: traits)   // [live-tiles]
             let capped = !editing && (liveTiles?.isCapped(pin) == true)        // [tiles-v2]
             cell.contentConfiguration = UIHostingConfiguration {
                 PinTileView(pin: pin, picture: tilePicture, fills: fills, busy: busy, showsName: names, health: tileHealth,
@@ -1374,7 +1393,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         // Mac polish #46: a row draws no picture, so a gone one was never asked for and never known to be gone; a small
         // read (shared with the grid and cards) finds out, and the row then wears the missing mark.
         if pin.kind == .image {
-            _ = pinPictures.picture(pin, dark: traitCollection.userInterfaceStyle == .dark, pixels: 120 * traitCollection.displayScale,
+            _ = pinPictures.picture(pin, traits: traitCollection, pixels: 120 * traitCollection.displayScale,
                                     shape: pinPictureShape(pin))
         }
         let failed = pinPictures.failed(pin)   // Mac polish #46: a picture that's gone is drawn as missing
@@ -1815,10 +1834,9 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
     /// [tiles] The tile's picture as it shows now (the one already drawn for its tile, card or row), for Change Tile.
     func currentPicture(_ kept: ArtifactPin) -> UIImage? {
         let pin = pins.shown(kept)
-        let dark = traitCollection.userInterfaceStyle == .dark
         let grid = ArtifactPins.view == .grid
         let pixels = (pinnedOnly || grid && pin.tileSize != .small ? 640 : 520) * traitCollection.displayScale
-        return pinPictures.picture(pin, dark: dark, pixels: pixels, shape: pinPictureShape(pin))
+        return pinPictures.picture(pin, traits: traitCollection, pixels: pixels, shape: pinPictureShape(pin))
     }
 
     /// [tile-chats] The tile's own chat (the one its bot last worked on it in), or a fresh hidden one when it has none.
@@ -2026,6 +2044,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         guard snapshot.indexOfItem(item) != nil else { return }
         snapshot.reconfigureItems([item])
         dataSource.apply(snapshot, animatingDifferences: false)
+        scheduleOppositeModePrewarm()
     }
 
     private func previewUpdated(_ id: String) {
@@ -2041,6 +2060,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         guard snapshot.indexOfItem(item) != nil else { return }
         snapshot.reconfigureItems([item])
         dataSource.apply(snapshot, animatingDifferences: false)
+        scheduleOppositeModePrewarm()
     }
 
     private func matches(_ record: ArtifactRecord) -> Bool {
@@ -2091,8 +2111,10 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
             }
             pinnedHeaderCount = shown.count
         }
+        drawnThemeKey = HTMLPageSheet.themeKey(traitCollection)
         dataSource.apply(snapshot, animatingDifferences: animated && !HQMotion.reduced)
         relayGridIfChanged()
+        scheduleOppositeModePrewarm()
         listShowsState = shown.isEmpty
         if shown.isEmpty != paneListIsEmpty {
             paneListIsEmpty = shown.isEmpty
@@ -2220,10 +2242,12 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         lastPinKeys = pinKeys
         lastOpeningRow = openingRow
         tilesRounded = filter == nil || isGrid
+        drawnThemeKey = HTMLPageSheet.themeKey(traitCollection)
         dataSource.apply(snapshot, animatingDifferences: animated && !HQMotion.reduced)
         refreshCountedHeads()
         restoreMark()
         relayGridIfChanged()
+        scheduleOppositeModePrewarm()
         // UX study #89: the empty or can't-load state is a cell here; the iPad placeholder beside hears when it comes or goes.
         // Mac polish #115: loading counts too (its placeholder rows are nothing to choose), so the pane stays blank.
         let empty = view != .list
@@ -2234,6 +2258,18 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         }
         updateBarItems()
         if collectionView.refreshControl?.isRefreshing == true, !store.refreshing { collectionView.refreshControl?.endRefreshing() }
+    }
+
+    /// Pre-warms locally cached page tiles in the opposite light/dark mode once the current view settles.
+    private func scheduleOppositeModePrewarm() {
+        prewarmTask?.cancel()
+        guard viewIfLoaded?.window != nil, ArtifactPins.view != .list else { return }
+        prewarmTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard let self, !Task.isCancelled, self.viewIfLoaded?.window != nil, !PageSnapshots.shared.isBusy else { return }
+            let pins = self.pinnedOnly ? self.visiblePins() : Array(self.visiblePins().prefix(Self.pinTilesOnArtifacts))
+            self.pinPictures.prewarmOppositeMode(pins, traits: self.traitCollection) { self.pinPictureShape($0) }
+        }
     }
 
     private var lastOpeningRow: String?

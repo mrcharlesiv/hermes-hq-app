@@ -86,6 +86,7 @@ final class TileVersionsModel {
     var rolling: Int?
     var pictures: [Int: UIImage] = [:]
     @ObservationIgnored private var asked: Set<Int> = []
+    @ObservationIgnored private var pictureThemeKey = ""
     @ObservationIgnored weak var controller: UIViewController?
     /// A version was put back on the tile (the Tiles page draws it again).
     @ObservationIgnored var onRolledBack: ((TileVersion) -> Void)?
@@ -127,12 +128,16 @@ final class TileVersionsModel {
         pin.gatewayPath.map { TileVersionFiles.path(of: version, tile: $0) }
     }
 
-    /// The version's picture, drawn the first time its row shows.
-    func askPicture(_ version: TileVersion) {
-        guard pictures[version.number] == nil, let path = path(version), asked.insert(version.number).inserted else { return }
-        let dark = controller?.traitCollection.userInterfaceStyle == .dark
-        PageSnapshots.shared.picture(path: path, name: version.file, context: context, dark: dark, shape: .box(aspect: 4.0 / 3)) { [weak self] image in
-            guard let self, let image else { return }
+    /// The version's picture, drawn the first time its row shows or when the active theme/mode changes.
+    func askPicture(_ version: TileVersion, traits: UITraitCollection) {
+        let nextThemeKey = HTMLPageSheet.themeKey(traits)
+        if nextThemeKey != pictureThemeKey {
+            pictureThemeKey = nextThemeKey
+            asked.removeAll()
+        }
+        guard let path = path(version), asked.insert(version.number).inserted else { return }
+        PageSnapshots.shared.picture(path: path, name: version.file, context: context, traits: traits, shape: .box(aspect: 4.0 / 3)) { [weak self] image in
+            guard let self, let image, self.pictureThemeKey == nextThemeKey else { return }
             self.pictures[version.number] = image
         }
     }
@@ -282,8 +287,13 @@ private struct TileVersionRow: View {
     var current: Bool
     /// [Mac UI check 2026-11-13] The Roll Back button's place, for its question to point at.
     @State private var anchor = TileVersionAnchor()
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
+        let _ = Theme.touch()
+        let traits = HTMLPageSheet.pageTraits(dark: scheme == .dark, highContrast: contrast == .increased)
+        let themeKey = HTMLPageSheet.themeKey(traits)
         let width = HQFont.scaled(88), height = HQFont.scaled(66)
         let shape = RoundedRectangle(cornerRadius: HQShape.radius(9, .card), style: .continuous)
         let picture = model.pictures[version.number]
@@ -353,13 +363,16 @@ private struct TileVersionRow: View {
             }
         }
         .onAppear {
-            model.askPicture(version)
+            model.askPicture(version, traits: traits)
             #if DEBUG
             if TileVersionsModel.debugAsk, model.asksFirst(version), version.number == 1 {
                 TileVersionsModel.debugAsk = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [anchor] in model.askRollBack(version, from: anchor.view) }
             }
             #endif
+        }
+        .onChange(of: themeKey) {
+            model.askPicture(version, traits: traits)
         }
     }
 }

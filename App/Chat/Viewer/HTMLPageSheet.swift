@@ -88,8 +88,8 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
     private let statusBar = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
     private var lastIntent = Date.distantPast
     private var waitingForReply = false
-    /// The theme the page was handed (`prelude`), so a change of look hands it the new one.
-    private var handedPrelude: String?
+    /// The theme key the page was handed (`themeKey`), so a change of look or mode hands it the new one.
+    private var handedThemeKey: String?
     /// [tiles] Where the page was scrolled when it was drawn again (the bot rewrote it, a look change): put back once
     /// it has drawn, so an update in place doesn't throw the reader to the top.
     private var keptScroll: [Double]?
@@ -308,6 +308,7 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
                                            forMainFrameOnly: true))
         if let handler { content.add(WeakHandler(handler), name: "hermes") }
         let web = WKWebView(frame: .zero, configuration: config)
+        if traits.userInterfaceStyle != .unspecified { web.overrideUserInterfaceStyle = traits.userInterfaceStyle }
         web.isFindInteractionEnabled = true   // [page-refine] Find in Page (the system's bar)
         web.isOpaque = false
         web.backgroundColor = .clear
@@ -336,6 +337,7 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
     private static func takeSpare(traits: UITraitCollection, handler: WKScriptMessageHandler?) -> WKWebView? {
         guard let web = spare else { return nil }
         spare = nil
+        if traits.userInterfaceStyle != .unspecified { web.overrideUserInterfaceStyle = traits.userInterfaceStyle }
         let content = web.configuration.userContentController
         content.removeAllUserScripts()
         content.addUserScript(WKUserScript(source: prelude(traits, talks: handler != nil), injectionTime: .atDocumentStart,
@@ -390,7 +392,7 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
         statusBar.translatesAutoresizingMaskIntoConstraints = false
         statusBar.cornerConfiguration = .capsule()
         shadeStatusBar()
-        registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (page: HTMLPageSheet, _) in
+        registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self, UITraitAccessibilityContrast.self]) { (page: HTMLPageSheet, _) in
             page.shadeStatusBar()
             page.handTheme()
         }
@@ -537,18 +539,34 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
     /// The theme for the look the sheet shows now, and the page drawn with it (again, when the look changed).
     private func handTheme() {
         guard let webView, viewIfLoaded?.window != nil else { return }
-        let script = Self.prelude(traitCollection, talks: talks)
-        guard script != handedPrelude else { return }
-        handedPrelude = script
+        let key = Self.themeKey(traitCollection)
+        guard key != handedThemeKey else { return }
+        handedThemeKey = key
+        if traitCollection.userInterfaceStyle != .unspecified {
+            webView.overrideUserInterfaceStyle = traitCollection.userInterfaceStyle
+        }
         let content = webView.configuration.userContentController
         content.removeAllUserScripts()
-        content.addUserScript(WKUserScript(source: script, injectionTime: .atDocumentStart, forMainFrameOnly: true))
-        load()
+        content.addUserScript(WKUserScript(source: Self.prelude(traitCollection, talks: talks), injectionTime: .atDocumentStart,
+                                           forMainFrameOnly: true))
+        guard painted else { load(); return }
+        webView.evaluateJavaScript(Self.applyThemeScript(traitCollection)) { [weak self, weak webView] value, error in
+            guard let self, let webView, webView === self.webView, Self.themeKey(self.traitCollection) == key else { return }
+            if error != nil || (value as? String) == "reload" || (value as? Bool) == true {
+                self.load()
+                return
+            }
+            self.refreshBackdropColor(for: webView)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self, weak webView] in
+                guard let self, let webView, webView === self.webView, Self.themeKey(self.traitCollection) == key else { return }
+                self.refreshBackdropColor(for: webView)
+            }
+        }
     }
 
     private func load() {
         // The first load waits for the theme (`handTheme`); a tile still being read loads when it lands (`readTile`).
-        guard handedPrelude != nil, let file, let webView else { return }
+        guard handedThemeKey != nil, let file, let webView else { return }
         #if DEBUG
         if UserDefaults.standard.bool(forKey: "HQDebugPageSkeleton") { return }   // the wait, held for a picture
         #endif
@@ -970,22 +988,28 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
 
     /// The bands above and below the page's window take the page's own background (a grey tile page in a white sheet).
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        refreshBackdropColor(for: webView, finishLoad: true)
+    }
+
+    private func refreshBackdropColor(for webView: WKWebView, finishLoad: Bool = false) {
         webView.evaluateJavaScript("""
             (() => { const b = getComputedStyle(document.body).backgroundColor;
               return /rgba\\(.*, 0\\)$|transparent/.test(b) ? getComputedStyle(document.documentElement).backgroundColor : b })()
             """) { [weak self] value, _ in
             guard let self else { return }
-            if self.commenting { webView.evaluateJavaScript("window.__hqComment&&window.__hqComment.set(true)") }
-            if let at = self.keptScroll {
-                self.keptScroll = nil
-                // Twice: once now, once after the next frame (a page that draws its charts by script grows then).
-                let js = "scrollTo(\(at[0]),\(at[1]));requestAnimationFrame(function(){scrollTo(\(at[0]),\(at[1]))})"
-                webView.evaluateJavaScript(js)
+            if finishLoad {
+                if self.commenting { webView.evaluateJavaScript("window.__hqComment&&window.__hqComment.set(true)") }
+                if let at = self.keptScroll {
+                    self.keptScroll = nil
+                    // Twice: once now, once after the next frame (a page that draws its charts by script grows then).
+                    let js = "scrollTo(\(at[0]),\(at[1]));requestAnimationFrame(function(){scrollTo(\(at[0]),\(at[1]))})"
+                    webView.evaluateJavaScript(js)
+                }
             }
             let colour = (value as? String).flatMap(Self.cssColour)
             // [tiles] The first draw fades in over its own colour, the spinner gone; later ones (a look change, the bot
             // rewrote it) swap in place.
-            if !self.painted {
+            if finishLoad && !self.painted {
                 self.painted = true
                 self.skeleton.vanish()
                 UIView.animate(withDuration: HQMotion.quick) {   // motion-ok: a fade and a colour, nothing moves
@@ -994,7 +1018,7 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
                 }
             }
             #if DEBUG
-            self.debugTour()
+            if finishLoad { self.debugTour() }
             #endif
             guard let colour else { return }
             self.view.backgroundColor = colour
@@ -1067,19 +1091,29 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
     /// kept on the line of its words, links and checkboxes in the theme's tint, long words and code wrapped rather than
     /// widening the page. All in :where(), so a page that styles any of it keeps its own. The add-on's page check
     /// (hermes-hq-push skills/html-page/check_page.py, DEFAULTS) draws pages with the same rules: keep the two alike.
-    static func prelude(_ traits: UITraitCollection, talks: Bool) -> String {
-        func css(_ dynamic: UIColor) -> String {
-            let color = dynamic.resolvedColor(with: traits)
-            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-            color.getRed(&r, green: &g, blue: &b, alpha: &a)
-            return "rgba(\(Int(r * 255)),\(Int(g * 255)),\(Int(b * 255)),\(String(format: "%.3f", a)))"
+    /// Trait collection carrying the active theme generation, light/dark mode, and contrast for off-screen pages.
+    static func pageTraits(dark: Bool, highContrast: Bool = false) -> UITraitCollection {
+        UITraitCollection { traits in
+            traits.userInterfaceStyle = dark ? .dark : .light
+            traits.accessibilityContrast = highContrast ? .high : .normal
+            traits[ThemeGenerationTrait.self] = ThemeTable.generation
         }
-        // In :where() (no weight): a page's own rules win, even `*{padding:0}` (owner 2026-11-02: a dashboard sized
-        // 100vw x 100vh got the 16 pt sides on top and ran wider than its window).
-        let style = """
-        :root{--foreground:\(css(ChatPalette.label));--muted-foreground:\(css(ChatPalette.label2));\
-        --accent:\(css(ChatPalette.tint));--border:\(css(ChatPalette.separator));--card:\(css(ChatPalette.elevated));\
-        --hq-radius:\(ThemeTable.desktopLook ? Int(DesktopRows.radius) : 16)px;\
+    }
+
+    private static func cssColor(_ dynamic: UIColor, traits: UITraitCollection) -> String {
+        let color = dynamic.resolvedColor(with: traits)
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        color.getRed(&r, green: &g, blue: &b, alpha: &a)
+        return "rgba(\(Int(r * 255)),\(Int(g * 255)),\(Int(b * 255)),\(String(format: "%.3f", a)))"
+    }
+
+    /// The CSS variables and baseline element defaults injected into the page's `<style id="__hq-theme">`.
+    static func preludeCSS(_ traits: UITraitCollection) -> String {
+        let desktop = ThemeTable.withSet(generation: traits[ThemeGenerationTrait.self]) { $0.state.desktopLook }
+        return """
+        :root{--foreground:\(cssColor(ChatPalette.label, traits: traits));--muted-foreground:\(cssColor(ChatPalette.label2, traits: traits));\
+        --accent:\(cssColor(ChatPalette.tint, traits: traits));--border:\(cssColor(ChatPalette.separator, traits: traits));--card:\(cssColor(ChatPalette.elevated, traits: traits));\
+        --hq-radius:\(desktop ? Int(DesktopRows.radius) : 16)px;\
         color-scheme:\(traits.userInterfaceStyle == .dark ? "dark" : "light");color:var(--foreground);accent-color:var(--accent);\
         font-family:-apple-system,system-ui,sans-serif;-webkit-text-size-adjust:100%}\
         :where(html,body){margin:0;padding:0;background:transparent}:where(body){padding:12px 16px;box-sizing:border-box;\
@@ -1089,31 +1123,77 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
         :where(a){color:var(--accent)}:where(pre){white-space:pre-wrap}\
         :where(hr){border:0;border-top:1px solid var(--border)}:where(iframe){max-width:100%;border:0}
         """
-        let escaped = style.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "`", with: "\\`")
+    }
+
+    /// Deterministic hash identifying the resolved visual theme + mode + contrast for `traits`.
+    static func themeKey(_ traits: UITraitCollection) -> String {
+        let dark = traits.userInterfaceStyle == .dark
+        let input = (dark ? "d|" : "l|") + preludeCSS(traits) + "|" + PageLegibility.groundJS(traits)
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in input.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x100000001b3
+        }
+        return (dark ? "d-" : "l-") + String(format: "%016llx", hash)
+    }
+
+    /// Updates an already-loaded page's theme variables and legibility in place; evaluates to `true` when the page's
+    /// scripts or canvases require a reload, `false` when the in-place update is complete, or `'reload'` before prelude runs.
+    static func applyThemeScript(_ traits: UITraitCollection) -> String {
+        let escaped = preludeCSS(traits)
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "`", with: "\\`")
+            .replacingOccurrences(of: "$", with: "\\$")
+        let dark = traits.userInterfaceStyle == .dark ? "true" : "false"
+        let ground = PageLegibility.groundJS(traits)
+        return "typeof window.__hqApplyTheme==='function'?window.__hqApplyTheme(`\(escaped)`,\(dark),\(ground)):'reload'"
+    }
+
+    static func prelude(_ traits: UITraitCollection, talks: Bool) -> String {
+        // In :where() (no weight): a page's own rules win, even `*{padding:0}` (owner 2026-11-02: a dashboard sized
+        // 100vw x 100vh got the 16 pt sides on top and ran wider than its window).
+        let style = preludeCSS(traits)
+        let escaped = style
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "`", with: "\\`")
+            .replacingOccurrences(of: "$", with: "\\$")
         let send = talks ? """
         var n=0,w={};window.__hermesAck=function(id,r){var f=w[id];delete w[id];if(f)f(r)};\
         window.hermes={send:function(p){return new Promise(function(res){var id=++n;w[id]=res;\
         try{window.webkit.messageHandlers.hermes.postMessage({id:id,prompt:String(p)})}catch(e){delete w[id];res({ok:false,error:'undelivered'})}})}};\
         document.addEventListener('click',function(e){var t=e.target&&e.target.closest&&e.target.closest('[data-hermes-send]');\
         if(t){e.preventDefault();window.hermes.send(t.getAttribute('data-hermes-send'))}},true);
-        """ + PageComment.script(accent: css(ChatPalette.tint))
+        """ + PageComment.script(accent: cssColor(ChatPalette.tint, traits: traits))
         : "window.hermes={send:function(){return Promise.resolve({ok:false,error:'undelivered'})}};"
         return """
         (function(){var m=document.querySelector('meta[name=viewport]');if(!m){m=document.createElement('meta');m.name='viewport';\
         m.content='width=device-width,initial-scale=1';(document.head||document.documentElement).appendChild(m)}\
-        var s=document.createElement('style');s.textContent=`\(escaped)`;\
+        var s=document.createElement('style');s.id='__hq-theme';s.textContent=`\(escaped)`;\
         (document.head||document.documentElement).prepend(s);\(send)\
         function fit(){var vw=document.documentElement.clientWidth;\
         document.querySelectorAll('svg[width][height]:not([viewBox])').forEach(function(g){\
         var w=parseFloat(g.getAttribute('width')),h=parseFloat(g.getAttribute('height'));\
         if(w>0&&h>0&&w>vw-8){g.setAttribute('viewBox','0 0 '+w+' '+h);g.setAttribute('preserveAspectRatio','xMinYMin meet');\
         g.style.width='100%';g.style.height='auto'}})}\
-        function scheme(){var c=getComputedStyle(document.body).backgroundColor,m=c&&c.match(/[\\d.]+/g);\
+        var dark=\(traits.userInterfaceStyle == .dark ? "true" : "false"),schemeOwned=false;\
+        function scheme(){var r=document.documentElement.style;\
+        if(schemeOwned){r.colorScheme='';r.removeProperty('--foreground');r.removeProperty('--muted-foreground');schemeOwned=false}\
+        var c=getComputedStyle(document.body).backgroundColor,m=c&&c.match(/[\\d.]+/g);\
         if(!m||m.length<3||(m.length>3&&+m[3]<0.5)){c=getComputedStyle(document.documentElement).backgroundColor;m=c&&c.match(/[\\d.]+/g)}\
         if(m&&m.length>=3&&!(m.length>3&&+m[3]<0.5)){var k=/^color\\(/.test(c)?255:1,l=(0.299*m[0]+0.587*m[1]+0.114*m[2])*k/255;\
-        var light=l>0.5,r=document.documentElement.style;r.colorScheme=light?'light':'dark';\
-        if(light===\(traits.userInterfaceStyle == .dark)){r.setProperty('--foreground',light?'#1c1c1e':'#f2f2f7');\
-        r.setProperty('--muted-foreground',light?'rgba(60,60,67,0.75)':'rgba(235,235,245,0.7)')}}}\
+        var light=l>0.5;r.colorScheme=light?'light':'dark';\
+        if(light===dark){r.setProperty('--foreground',light?'#1c1c1e':'#f2f2f7');\
+        r.setProperty('--muted-foreground',light?'rgba(60,60,67,0.75)':'rgba(235,235,245,0.7)')}\
+        schemeOwned=true}}\
+        window.__hqApplyTheme=function(css,isDark,ground){dark=!!isDark;\
+        var st=s||document.getElementById('__hq-theme');if(st)st.textContent=css;\
+        if(document.body)scheme();\
+        if(window.__hqLegible&&window.__hqLegible.setGround)window.__hqLegible.setGround(ground);\
+        requestAnimationFrame(function(){if(document.body)scheme();if(window.__hqLegible)window.__hqLegible.run()});\
+        if(document.querySelector('canvas'))return true;\
+        var re=/prefers-color-scheme|getComputedStyle|--foreground|--card|--accent|--muted-foreground|--border/;\
+        for(var i=0;i<document.scripts.length;i++){if(re.test(document.scripts[i].textContent||''))return true}\
+        return false};\
         document.addEventListener('DOMContentLoaded',function(){fit();scheme();new MutationObserver(fit).observe(document.body,\
         {subtree:true,childList:true,attributes:true,attributeFilter:['width','height']})});})();
         """ + PageLegibility.script(traits)   // after `scheme`, so it reads the inks that left

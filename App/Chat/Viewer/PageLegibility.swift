@@ -30,11 +30,16 @@ import UIKit
 /// those parts' transitions off (a `transition: color` would otherwise show it its own ink, fading, as the page's). An ink the page has set over ours since is the page's and stays. A change is answered at once, before it
 /// is painted; the wait before the next run grows with what a run cost.
 enum PageLegibility {
-    /// The script, for the page colour the web view sits on in `traits`.
-    static func script(_ traits: UITraitCollection, ground: UIColor = ChatPalette.page) -> String {
+    /// The ground colour array passed to `PageLegibility` for `traits`.
+    static func groundJS(_ traits: UITraitCollection, ground: UIColor = ChatPalette.page) -> String {
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         ground.resolvedColor(with: traits).getRed(&r, green: &g, blue: &b, alpha: &a)
-        return source.replacingOccurrences(of: "__GROUND__", with: "[\(Int(r * 255)),\(Int(g * 255)),\(Int(b * 255)),1]")
+        return "[\(Int(r * 255)),\(Int(g * 255)),\(Int(b * 255)),1]"
+    }
+
+    /// The script, for the page colour the web view sits on in `traits`.
+    static func script(_ traits: UITraitCollection, ground: UIColor = ChatPalette.page) -> String {
+        source.replacingOccurrences(of: "__GROUND__", with: groundJS(traits, ground: ground))
     }
 
     /// `FLOOR` and `GOAL` are WCAG's 3:1 (large text, and the least anything is left at) and 4.5:1 (body text);
@@ -210,7 +215,7 @@ enum PageLegibility {
       ['pointerover','pointerout','focusin','focusout'].forEach(function(e){document.addEventListener(e,soon,true)})}
     if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start);else start();
     window.addEventListener('load',run);
-    window.__hqLegible={run:run,count:function(){return mine.length},wait:function(){return gap}};
+    window.__hqLegible={run:run,setGround:function(g){GROUND=g;memo={};run()},count:function(){return mine.length},wait:function(){return gap}};
     })();
     """#
 }

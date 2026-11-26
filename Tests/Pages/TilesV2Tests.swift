@@ -6,7 +6,9 @@ import Foundation
 import ImageIO
 import Synchronization
 import Testing
+import UIKit
 import UniformTypeIdentifiers
+import WebKit
 @testable import HermesHQNative
 
 private nonisolated final class FakeWidgetGateway: GatewayClient, Sendable {
@@ -225,5 +227,174 @@ struct TilesV2Tests {
         let bad = await TileWidgetRemote.fetch(client: badBytesGateway, path: "/Users/me/d.html", profile: "default",
                                                width: 160, height: 80, dark: false, scale: 2, maxBytes: TileWidgetStore.maxPictureBytes)
         #expect(bad == .unavailable)
+    }
+
+    // MARK: Theme & light/dark updates on tiles
+
+    @Test func themeKeyTracksVisualThemeAndModeOnly() {
+        let light = HTMLPageSheet.pageTraits(dark: false)
+        let dark = HTMLPageSheet.pageTraits(dark: true)
+        let highLight = HTMLPageSheet.pageTraits(dark: false, highContrast: true)
+
+        let lightKey = HTMLPageSheet.themeKey(light)
+        let darkKey = HTMLPageSheet.themeKey(dark)
+        let highKey = HTMLPageSheet.themeKey(highLight)
+        #expect(lightKey != darkKey)
+        #expect(lightKey != highKey)
+
+        let skinKey = ThemeTable.$testSet.withValue(ThemeResolver.resolve(ThemeState(skinID: "catppuccin"))) {
+            HTMLPageSheet.themeKey(light)
+        }
+        #expect(skinKey != lightKey)
+
+        let desktopKey = ThemeTable.$testSet.withValue(ThemeResolver.resolve(ThemeState(desktopLook: true))) {
+            HTMLPageSheet.themeKey(light)
+        }
+        #expect(desktopKey != lightKey)
+
+        let unrelatedKey = ThemeTable.$testSet.withValue(ThemeResolver.resolve(ThemeState(bubbleCorners: 20, density: .compact))) {
+            HTMLPageSheet.themeKey(light)
+        }
+        #expect(unrelatedKey == lightKey)
+
+        let ctx = MediaContext(accountId: MediaContext.demoAccount, profile: "otto", storedSessionId: "s-theme")
+        #expect(PageSnapshots.shared.key(path: "/Users/me/tile.html", context: ctx, traits: light)
+                != PageSnapshots.shared.key(path: "/Users/me/tile.html", context: ctx, traits: dark))
+    }
+
+    @Test func applyThemeUpdatesWebViewInPlaceWithoutReload() async throws {
+        let html = """
+        <!doctype html><html><body>
+        <h2 id="h" style="color:#1d3a5c">Heading</h2>
+        <p id="p" style="color:var(--foreground);border:1px solid var(--accent)">Body</p>
+        </body></html>
+        """
+        let lightTraits = HTMLPageSheet.pageTraits(dark: false)
+        let config = WKWebViewConfiguration()
+        config.userContentController.addUserScript(WKUserScript(
+            source: HTMLPageSheet.prelude(lightTraits, talks: false),
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true))
+        let web = WKWebView(frame: CGRect(x: 0, y: 0, width: 320, height: 320), configuration: config)
+        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = web.frame
+        window.overrideUserInterfaceStyle = .light
+        window.addSubview(web)
+        window.isHidden = false
+        defer { window.isHidden = true }
+
+        web.loadHTMLString(html, baseURL: nil)
+        for _ in 0..<80 {
+            try await Task.sleep(for: .milliseconds(50))
+            let ready = (try? await web.evaluateJavaScript(
+                "document.readyState === 'complete' && !!window.__hqLegible && typeof window.__hqApplyTheme === 'function'"
+            )) as? Bool
+            if ready == true { break }
+        }
+
+        let darkTraits = HTMLPageSheet.pageTraits(dark: true)
+        web.overrideUserInterfaceStyle = .dark
+        let needsReload = try await web.evaluateJavaScript(HTMLPageSheet.applyThemeScript(darkTraits)) as? Bool
+        #expect(needsReload == false)
+        try await Task.sleep(for: .milliseconds(100))
+
+        let scheme = try #require(try await web.evaluateJavaScript("getComputedStyle(document.documentElement).colorScheme") as? String)
+        #expect(scheme.contains("dark"))
+
+        let headingRGB = try #require(try await web.evaluateJavaScript(
+            "getComputedStyle(document.getElementById('h')).color"
+        ) as? String)
+        #expect(headingRGB != "rgb(29, 58, 92)", "dark heading ink should be lifted in place for dark ground, got \(headingRGB)")
+
+        let beforeBorder = try #require(try await web.evaluateJavaScript(
+            "getComputedStyle(document.getElementById('p')).borderTopColor"
+        ) as? String)
+        let solarizedAccent = try await ThemeTable.$testSet.withValue(ThemeResolver.resolve(ThemeState(skinID: "solarized"))) {
+            let traits = HTMLPageSheet.pageTraits(dark: true)
+            let reload = try await web.evaluateJavaScript(HTMLPageSheet.applyThemeScript(traits)) as? Bool
+            #expect(reload == false)
+            return try #require(try await web.evaluateJavaScript(
+                "getComputedStyle(document.getElementById('p')).borderTopColor"
+            ) as? String)
+        }
+        #expect(solarizedAccent != beforeBorder)
+
+        _ = try await web.evaluateJavaScript("document.body.appendChild(document.createElement('canvas'));0")
+        let canvasNeedsReload = try await web.evaluateJavaScript(HTMLPageSheet.applyThemeScript(lightTraits)) as? Bool
+        #expect(canvasNeedsReload == true)
+    }
+
+    @Test func snapshotReRendersWithNewThemeAndCancelsStalePrewarm() async throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: "tile-theme-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let tileURL = dir.appending(path: "tile.html")
+        let html = """
+        <!doctype html><html><head><style>
+        html,body{margin:0;width:100vw;height:100vh;overflow:hidden}
+        body{background:var(--card,#ffffff);color:var(--foreground,#111111)}
+        @media(prefers-color-scheme:dark){body{background:#101218;color:#f5f5f7}}
+        </style></head><body><div>Tile</div></body></html>
+        """
+        try Data(html.utf8).write(to: tileURL)
+
+        let ctx = MediaContext(accountId: MediaContext.demoAccount, profile: "otto", storedSessionId: "s-snap-theme")
+        let shape = PageSnapshots.Shape.frame(width: 180, height: 180)
+        let lightTraits = HTMLPageSheet.pageTraits(dark: false)
+        let darkTraits = HTMLPageSheet.pageTraits(dark: true)
+
+        let lightResult = await snapshot(path: tileURL.path, name: "tile.html", context: ctx, traits: lightTraits, shape: shape)
+        guard case .image(let lightImg) = lightResult else {
+            Issue.record("expected light snapshot image")
+            return
+        }
+
+        let darkResult = await snapshot(path: tileURL.path, name: "tile.html", context: ctx, traits: darkTraits, shape: shape)
+        guard case .image(let darkImg) = darkResult else {
+            Issue.record("expected dark snapshot image")
+            return
+        }
+
+        let lightEdge = try #require(PinPictures.edgeColor(lightImg))
+        let darkEdge = try #require(PinPictures.edgeColor(darkImg))
+        #expect(lightEdge != darkEdge)
+
+        let skinResult = await ThemeTable.$testSet.withValue(ThemeResolver.resolve(ThemeState(skinID: "catppuccin"))) {
+            let traits = HTMLPageSheet.pageTraits(dark: false)
+            return await snapshot(path: tileURL.path, name: "tile.html", context: ctx, traits: traits, shape: shape)
+        }
+        guard case .image(let skinImg) = skinResult else {
+            Issue.record("expected catppuccin light snapshot image")
+            return
+        }
+        let skinEdge = try #require(PinPictures.edgeColor(skinImg))
+        #expect(skinEdge != lightEdge)
+
+        // Verify cancelling background prewarm settles pending callbacks cleanly without hanging.
+        var prewarmResults: [PageSnapshots.SnapshotResult] = []
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            let extraURL = dir.appending(path: "prewarm.html")
+            try? Data(html.utf8).write(to: extraURL)
+            let prewarmShape = PageSnapshots.Shape.frame(width: 200, height: 200)
+            PageSnapshots.shared.pictureResult(path: extraURL.path, name: "prewarm.html", context: ctx,
+                                               traits: darkTraits, shape: prewarmShape,
+                                               priority: .background, localOnly: true, cancelOnModeChange: true) { result in
+                prewarmResults.append(result)
+                done.resume()
+            }
+            PageSnapshots.shared.cancelPrewarm()
+        }
+        #expect(prewarmResults.count == 1)
+    }
+
+    private func snapshot(path: String, name: String, context: MediaContext, traits: UITraitCollection,
+                          shape: PageSnapshots.Shape) async -> PageSnapshots.SnapshotResult {
+        await withCheckedContinuation { continuation in
+            PageSnapshots.shared.pictureResult(path: path, name: name, context: context, traits: traits, shape: shape) {
+                continuation.resume(returning: $0)
+            }
+        }
     }
 }

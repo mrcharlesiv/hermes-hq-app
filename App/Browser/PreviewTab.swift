@@ -184,9 +184,14 @@ import WebKit
         #if targetEnvironment(macCatalyst)
         if let inspector = MacInspector.beside(screen) {
             browser.presentationMode = .docked
-            inspector.showBrowser(browser, title: browser.headerTitle)
+            inspector.showBrowser(browser, title: browser.headerTitle, popOut: { [weak self, weak browser, weak inspector, weak screen] in
+                guard let self, let browser, let screen else { return }
+                inspector?.closeBrowser()
+                self.popOut(browser, for: screen)
+            }, onClosed: { [weak screen] in
+                screen?.refreshInAppBrowserButton()
+            })
             if inspector.isVisible {
-                inspector.onBrowserClosed = { [weak screen] in screen?.refreshInAppBrowserButton() }
                 browser.onHeaderTitleChange = { [weak inspector] title in inspector?.renameBrowser(title) }
                 browser.onPopOutRequested = { [weak self, weak browser, weak inspector, weak screen] in
                     guard let self, let browser, let screen else { return }
@@ -240,8 +245,8 @@ import WebKit
             guard let screen else { return }
             let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
             let prefix = cleanTitle.isEmpty
-                ? "Look at \(url.absoluteString) in the in-app browser: "
-                : "Look at \"\(cleanTitle)\" (\(url.absoluteString)) in the in-app browser: "
+                ? "Look at \(url.absoluteString) in the preview pane: "
+                : "Look at \"\(cleanTitle)\" (\(url.absoluteString)) in the preview pane: "
             let current = screen.composer.text
             screen.composer.text = current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? prefix

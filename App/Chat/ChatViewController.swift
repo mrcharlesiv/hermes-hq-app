@@ -1893,12 +1893,12 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         return item
     }
 
-    /// [preview-tab] Globe button beside the inspector: toggles the collaborative In-App Browser (⌥⌘B).
+    /// [browser-dock] Globe button beside the inspector: toggles the unified Browser pane beside chat (⌥⌘B).
     private func makeInAppBrowserButton() -> UIBarButtonItem {
         let item = UIBarButtonItem(image: Self.barImage("globe"), primaryAction: UIAction { [weak self] _ in
             self?.onToggleInAppBrowser?()
         })
-        item.accessibilityLabel = "In-App Browser"
+        item.accessibilityLabel = "Browser"
         item.accessibilityIdentifier = "chat.in-app-browser"
         if isInAppBrowserOpen?() == true { item.tintColor = ChatPalette.tint }
         return item

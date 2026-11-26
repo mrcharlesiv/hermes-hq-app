@@ -32,6 +32,13 @@ final class BrowserViewerController: UIViewController, BrowserStageHost, UITextF
     private var closing = false
     /// [#351] The Mac window it had to itself has closed (its red button): nothing is left to dismiss.
     private var windowGone = false
+    /// [browser-dock] True while hosted inside MacInspector beside the chat (Pop Out moves it to ViewerWindow).
+    var isDocked = false
+    /// [browser-dock] Dismisses the MacInspector browser pane when closed from inside the viewer.
+    var onDockedClose: (() -> Void)?
+    private var poppingOut = false
+    private let addressRow = UIStackView()
+    private let dockedTabsButton = UIButton(type: .system)
     /// [presence] "Ask Hermes to Install It" was tapped: the button reads "Asking…" and takes no second tap.
     private var asking = false
     private var emptyProblemText: String?
@@ -110,6 +117,16 @@ final class BrowserViewerController: UIViewController, BrowserStageHost, UITextF
         // bot's browser asked for again comes to the front, another bot's takes its place once the first has gone
         // (a held browser handed back). iPhone and iPad: one at a time.
         let shown = current
+        #if targetEnvironment(macCatalyst)
+        if let shown, shown.isDocked, !shown.closing {
+            if shown.scope.profile == scope.profile { return }
+            shown.close {
+                present(scope: scope, service: service, from: presenter, canAsk: canAsk, askToInstall: askToInstall,
+                        openPlugins: openPlugins, helper: helper, cloudGateway: cloudGateway, updateAddOn: updateAddOn)
+            }
+            return
+        }
+        #endif
         switch ViewerReopen.decide(shown: shown?.scope.profile, leaving: shown?.closing ?? false, asked: scope.profile,
                                    ownWindow: shown.map { ViewerWindow.owns($0) } ?? false) {
         case .ignore: return
@@ -133,6 +150,52 @@ final class BrowserViewerController: UIViewController, BrowserStageHost, UITextF
         viewer.updateAddOn = updateAddOn
         current = viewer
         Haptics.play(.selection)
+        #if targetEnvironment(macCatalyst)
+        // [browser-dock] Dock Watch Browser directly beside the chat in MacInspector (auto-collapsing the Sessions/Bots
+        // list for breathing room), with Pop Out to a standalone ViewerWindow whenever wanted.
+        if let inspector = MacInspector.beside(presenter) {
+            viewer.isDocked = true
+            let chat = presenter as? ChatViewController
+            viewer.onDockedClose = { [weak inspector, weak chat] in
+                inspector?.closeBrowser()
+                chat?.refreshInAppBrowserButton()
+            }
+            inspector.showBrowser(viewer, title: "\(viewer.name)’s Browser", popOut: { [weak viewer, weak inspector, weak presenter, weak chat] in
+                guard let viewer, !viewer.closing else { return }
+                viewer.poppingOut = true
+                inspector?.closeBrowser()
+                viewer.isDocked = false
+                viewer.onDockedClose = nil
+                viewer.poppingOut = false
+                viewer.view.backgroundColor = HQPalette.groupedPage
+                chat?.refreshInAppBrowserButton()
+                let opened = ViewerWindow.open(viewer, title: "\(viewer.name)’s Browser") { [weak viewer, weak presenter] in
+                    guard let viewer, !viewer.closing else { return }
+                    guard let presenter, presenter.viewIfLoaded?.window != nil else { viewer.close(); return }
+                    PaneViewer.present(UINavigationController(rootViewController: viewer), from: presenter)
+                }
+                if !opened, let presenter, presenter.viewIfLoaded?.window != nil {
+                    PaneViewer.present(UINavigationController(rootViewController: viewer), from: presenter)
+                }
+            }, onClosed: { [weak viewer, weak chat] in
+                chat?.refreshInAppBrowserButton()
+                guard let viewer, !viewer.poppingOut, !viewer.closing else { return }
+                viewer.isDocked = false
+                viewer.onDockedClose = nil
+                viewer.windowGone = true
+                viewer.close()
+            })
+            if inspector.isVisible {
+                chat?.refreshInAppBrowserButton()
+                return
+            }
+            viewer.poppingOut = true
+            inspector.closeBrowser()
+            viewer.isDocked = false
+            viewer.onDockedClose = nil
+            viewer.poppingOut = false
+        }
+        #endif
         // [#351] Mac: a window of its own, resizable, zoomable and full screen; over the right pane only if the Mac
         // gives no window.
         let opened = ViewerWindow.open(viewer, title: "\(viewer.name)’s Browser") { [weak viewer, weak presenter] in
@@ -169,7 +232,7 @@ final class BrowserViewerController: UIViewController, BrowserStageHost, UITextF
         // Stress test 2026-10-28 #56, #78: in the Desktop Look, the look's page and bar (it was iOS's neutral grey, its
         // title floating over no bar).
         view.backgroundColor = HQPalette.plainPage
-        if DeviceWord.isMac { view.backgroundColor = HQPalette.groupedPage }   // [mac] Stress test 2026-10-28 round 7: the grouped page, as the other Mac pages
+        if DeviceWord.isMac { view.backgroundColor = isDocked ? HQPalette.page : HQPalette.groupedPage }   // [mac] docked beside chat matches page background
         title = "\(name)’s Browser"   // [#351] also its Mac window's name (present)
         if let account = service.accountId, let saved = BrowserLastPages.shared.page(account: account, profile: scope.profile),
            saved.fits(scope) {
@@ -218,7 +281,24 @@ final class BrowserViewerController: UIViewController, BrowserStageHost, UITextF
         address.placeholder = "Search or enter address"
         address.accessibilityLabel = "Address"
         address.accessibilityIdentifier = "browser.address"
-        view.addSubview(address)
+
+        var tabsCfg = UIButton.Configuration.plain()
+        tabsCfg.contentInsets = NSDirectionalEdgeInsets(top: 4, leading: 6, bottom: 4, trailing: 6)
+        dockedTabsButton.configuration = tabsCfg
+        dockedTabsButton.tintColor = HQPalette.label2
+        dockedTabsButton.showsMenuAsPrimaryAction = true
+        dockedTabsButton.isHidden = true
+        dockedTabsButton.accessibilityIdentifier = "browser.dockedTabs"
+        dockedTabsButton.setContentHuggingPriority(.required, for: .horizontal)
+        dockedTabsButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        addressRow.axis = .horizontal
+        addressRow.alignment = .center
+        addressRow.spacing = 8
+        addressRow.translatesAutoresizingMaskIntoConstraints = false
+        addressRow.addArrangedSubview(address)
+        addressRow.addArrangedSubview(dockedTabsButton)
+        view.addSubview(addressRow)
 
         askCard.translatesAutoresizingMaskIntoConstraints = false
         askCard.backgroundColor = DeviceWord.isMac ? HQPalette.groupedCard : HQPalette.card   // [mac] round 7: a card on the grouped page
@@ -349,14 +429,16 @@ final class BrowserViewerController: UIViewController, BrowserStageHost, UITextF
         #else
         let emptyMiddle = empty.centerYAnchor.constraint(equalTo: stage.centerYAnchor)
         #endif
+        let topPad: CGFloat = isDocked ? 10 : 4
+        let sidePad: CGFloat = isDocked ? 12 : 16
         NSLayoutConstraint.activate([
-            address.topAnchor.constraint(equalTo: safe.topAnchor, constant: 4),
-            address.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: 16),
-            address.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -16),
-            address.heightAnchor.constraint(greaterThanOrEqualToConstant: 38),
-            askCard.topAnchor.constraint(equalTo: address.bottomAnchor, constant: 8),
-            askCard.leadingAnchor.constraint(equalTo: address.leadingAnchor),
-            askCard.trailingAnchor.constraint(equalTo: address.trailingAnchor),
+            addressRow.topAnchor.constraint(equalTo: safe.topAnchor, constant: topPad),
+            addressRow.leadingAnchor.constraint(equalTo: safe.leadingAnchor, constant: sidePad),
+            addressRow.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -sidePad),
+            address.heightAnchor.constraint(greaterThanOrEqualToConstant: isDocked ? 34 : 38),
+            askCard.topAnchor.constraint(equalTo: addressRow.bottomAnchor, constant: 8),
+            askCard.leadingAnchor.constraint(equalTo: addressRow.leadingAnchor),
+            askCard.trailingAnchor.constraint(equalTo: addressRow.trailingAnchor),
             stripe.leadingAnchor.constraint(equalTo: askCard.leadingAnchor),
             stripe.topAnchor.constraint(equalTo: askCard.topAnchor),
             stripe.bottomAnchor.constraint(equalTo: askCard.bottomAnchor),
@@ -740,6 +822,7 @@ final class BrowserViewerController: UIViewController, BrowserStageHost, UITextF
         }
         stage.isHidden = emptyState != nil && !live
         let hasPage = session != nil && setup == .ready
+        addressRow.isHidden = !hasPage && !last
         address.isHidden = !hasPage && !last
         // The address: the site's host, or the whole address while the person edits it.
         let tab = state?.currentTab
@@ -774,13 +857,24 @@ final class BrowserViewerController: UIViewController, BrowserStageHost, UITextF
         if let tabs = state?.tabs, tabs.count > 1 {
             // A tab glyph with the count in it ("3.square"; SF Symbols number them up to 50), stacked squares past that.
             let symbol = tabs.count <= 50 ? "\(tabs.count).square" : "square.on.square"
-            let item = UIBarButtonItem(image: UIImage(systemName: symbol) ?? UIImage(systemName: "square.on.square"), menu: tabsMenu(state!))
-            item.accessibilityLabel = "\(tabs.count) tabs"
-            item.accessibilityIdentifier = "browser.tabs"
-            // [mac] #55: the page's own item, not the Mac's trailing Done.
-            if navigationItem.hqOwnRightItem?.accessibilityLabel != item.accessibilityLabel { navigationItem.rightBarButtonItem = item }
-            else { navigationItem.hqOwnRightItem?.menu = item.menu }
+            let menu = tabsMenu(state!)
+            if isDocked {
+                dockedTabsButton.isHidden = false
+                dockedTabsButton.configuration?.image = UIImage(systemName: symbol) ?? UIImage(systemName: "square.on.square")
+                dockedTabsButton.menu = menu
+                dockedTabsButton.accessibilityLabel = "\(tabs.count) tabs"
+                navigationItem.rightBarButtonItem = nil
+            } else {
+                dockedTabsButton.isHidden = true
+                let item = UIBarButtonItem(image: UIImage(systemName: symbol) ?? UIImage(systemName: "square.on.square"), menu: menu)
+                item.accessibilityLabel = "\(tabs.count) tabs"
+                item.accessibilityIdentifier = "browser.tabs"
+                // [mac] #55: the page's own item, not the Mac's trailing Done.
+                if navigationItem.hqOwnRightItem?.accessibilityLabel != item.accessibilityLabel { navigationItem.rightBarButtonItem = item }
+                else { navigationItem.hqOwnRightItem?.menu = item.menu }
+            }
         } else {
+            dockedTabsButton.isHidden = true
             navigationItem.rightBarButtonItem = nil
         }
         followFieldFocus()
@@ -982,6 +1076,15 @@ final class BrowserViewerController: UIViewController, BrowserStageHost, UITextF
     /// before whoever waits in `afterClose`. Should the dismissal not take, the viewer is put back to work instead.
     private func leave(_ gone: (() -> Void)? = nil) {
         let host: UIViewController = navigationController ?? self
+        // [browser-dock] Docked inside MacInspector: hand dismissal back to the inspector pane.
+        if isDocked {
+            isDocked = false
+            let dismissDock = onDockedClose
+            onDockedClose = nil
+            dismissDock?()
+            leaveEnded(host, gone, windowClosed: true)
+            return
+        }
         // [#351] The Mac: the viewer's own window closes (already gone when its red button closed it).
         if windowGone || ViewerWindow.close(self) { leaveEnded(host, gone, windowClosed: true); return }
         guard let presenter = host.presentingViewController else { leaveEnded(host, gone); return }
@@ -1125,7 +1228,7 @@ final class BrowserViewerController: UIViewController, BrowserStageHost, UITextF
     override var canBecomeFirstResponder: Bool { true }
 
     private func takeKeys() {
-        guard !closing, !typing, view.window != nil, presentedViewController == nil else { return }
+        guard !isDocked, !closing, !typing, view.window != nil, presentedViewController == nil else { return }
         becomeFirstResponder()
     }
 

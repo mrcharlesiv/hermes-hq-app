@@ -188,7 +188,10 @@ extension MoreViewController: KeySearchable {}
         // [Mac AAA 2026-11-17] Owner's call Q8: Show/Hide Inspector (⌘I) under it, where Mac apps keep the inspector
         // (Pages, Keynote, Xcode); it left the Chat menu. Same key, same action and naming (`validateChat`).
         menus.insert(UIMenu(title: "", options: .displayInline, children: [
-            command("Hide Sidebar", toggleSidebar, "s", [.control, .command]), ChatMenuBar.inspectorItem()]), at: 0)
+            command("Hide Sidebar", toggleSidebar, "s", [.control, .command]),
+            command("Hide List", toggleList, "l", [.shift, .command]),
+            ChatMenuBar.inspectorItem(),
+        ]), at: 0)
         // [mac] Mail's and Safari's text size items: the Desktop Look's UI Scale (MacWindow.changeTextSize).
         menus.append(UIMenu(title: "", options: .displayInline, children: [
             command("Make Text Bigger", textBigger, "+", .command),
@@ -211,6 +214,7 @@ extension MoreViewController: KeySearchable {}
     static let textNormal = #selector(AppDelegate.hqTextNormal(_:))
     static let textSmaller = #selector(AppDelegate.hqTextSmaller(_:))
     static let toggleSidebar = #selector(AppDelegate.hqToggleSidebar(_:))
+    static let toggleList = #selector(AppDelegate.hqToggleList(_:))
     static let keyboardShortcuts = #selector(AppDelegate.hqKeyboardShortcuts(_:))
     /// Help's items. [keys] 2026-11-14 (round 3): Keyboard Shortcuts has a key of its own, ⌘/, as in Slack, Linear and
     /// Notion (⇧⌘/ stays the system's Help search).
@@ -852,11 +856,9 @@ extension AppDelegate {
         // edits, not an alert) and then act, as a Mac window's own commands do; they no longer dim under every sheet.
         let givesWay = KeyCommands.sheetGivesWay(root)
         switch command.action {
-        #if !targetEnvironment(macCatalyst)
-        case KeyCommands.toggleList:   // [ipad-polish]
-            command.title = root.split?.listHidden == true ? "Show List" : "Hide List"
+        case KeyCommands.toggleList:
+            command.title = root.split?.isListCollapsedForUser == true ? "Show List" : "Hide List"
             enabled = enabled && root.split?.canToggleList == true
-        #endif
         case KeyCommands.newChatHere:
             // [cmd-n] Off with no chat of one bot on show (a group chat, a page, nothing open).
             enabled = (enabled || givesWay) && root.sessionsViewController.organizer != nil && root.chatOnShow?.session is LiveChatSession
@@ -1609,12 +1611,10 @@ extension AppDelegate {
         }
     }
 
-    #if !targetEnvironment(macCatalyst)
     @objc func hqToggleList(_ sender: Any?) {
         AppLog.note("keys", "hide or show the list")
         KeyCommands.root?.split?.toggleList()
     }
-    #endif
 
     @objc func hqRefresh(_ sender: Any?) {
         #if targetEnvironment(macCatalyst)

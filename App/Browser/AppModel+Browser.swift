@@ -40,19 +40,32 @@ extension AppModel {
         } : nil)
     }
 
-    /// The chat screen's browser pieces: the collaborative In-App Browser, the card on the shelf, and ⋯ › Watch Browser.
+    /// The chat screen's browser pieces: one unified Browser (Watch Browser docked beside chat on Mac, full-screen on
+    /// iPhone/iPad), the live activity card on the shelf, and silent `desktop_preview` handling if a bot pushes one.
     func installBrowser(on screen: ChatViewController, menus: ChatMenus) {
-        previewTabs?.register(screen)   // [preview-tab] a bot's Browser tab opens beside/over its chat
-        screen.isInAppBrowserOpen = { [weak self, weak screen] in
-            guard let self, let screen else { return false }
-            return self.previewTabs?.isOpen(for: screen) == true
+        previewTabs?.register(screen)   // [preview-tab] silent support when a bot explicitly invokes `desktop_preview`
+        guard let browser else { return }
+        screen.isInAppBrowserOpen = { [weak screen] in
+            guard let screen else { return false }
+            #if targetEnvironment(macCatalyst)
+            if let inspector = MacInspector.beside(screen), inspector.isVisible, inspector.shownBrowser != nil {
+                return true
+            }
+            #endif
+            return BrowserViewerController.isWatching(profile: screen.session.profile)
         }
         screen.onToggleInAppBrowser = { [weak self, weak screen] in
             guard let self, let screen else { return }
-            self.previewTabs?.toggleBrowser(for: screen)
+            #if targetEnvironment(macCatalyst)
+            if let inspector = MacInspector.beside(screen), inspector.isVisible, inspector.shownBrowser != nil {
+                inspector.closeBrowser()
+                screen.refreshInAppBrowserButton()
+                return
+            }
+            #endif
+            self.openBrowser(self.browserScope(for: screen.session), from: screen)
             screen.refreshInAppBrowserButton()
         }
-        guard let browser else { return }
         let model = screen.session
         let fallback = browserScope(for: model)
         // [presence] An ask notice about this bot is old news once its chat (and the card saying the same) is up.
@@ -65,23 +78,30 @@ extension AppModel {
         }
         menus.slotItems[.browser] = { [weak self, weak screen, weak menus] in
             guard let self, let screen else { return [] }
-            let inAppOpen = self.previewTabs?.isOpen(for: screen) == true
-            let inApp = UIAction(title: inAppOpen ? "Hide In-App Browser" : "In-App Browser",
-                                 image: UIImage(systemName: "globe")) { [weak self, weak screen] _ in
-                guard let self, let screen else { return }
-                self.previewTabs?.toggleBrowser(for: screen)
-            }
-            inApp.accessibilityIdentifier = "chat.more.in-app-browser"
             // [presence] Greyed with "Offline" under it while the link is not ready (spec 3x-presence §9); the menu is
             // built again on every open, so the state is fresh.
             let rule = BrowserMenuRule.chatItem(offline: menus?.offline ?? false)
-            let watch = UIAction(title: BrowserMenuRule.title, subtitle: rule.subtitle, image: UIImage(systemName: "safari"),
+            #if targetEnvironment(macCatalyst)
+            let docked = MacInspector.beside(screen).map { $0.isVisible && $0.shownBrowser != nil } ?? false
+            let title = docked ? "Hide Browser" : "Browser"
+            #else
+            let title = BrowserMenuRule.title
+            #endif
+            let watch = UIAction(title: title, subtitle: rule.subtitle, image: UIImage(systemName: "globe"),
                                  attributes: rule.disabled ? .disabled : []) { [weak self, weak screen] _ in
                 guard let self, let screen else { return }
+                #if targetEnvironment(macCatalyst)
+                if let inspector = MacInspector.beside(screen), inspector.isVisible, inspector.shownBrowser != nil {
+                    inspector.closeBrowser()
+                    screen.refreshInAppBrowserButton()
+                    return
+                }
+                #endif
                 self.openBrowser(self.browserScope(for: screen.session), from: screen)
+                screen.refreshInAppBrowserButton()
             }
             watch.accessibilityIdentifier = "chat.more.browser"
-            return [inApp, watch]
+            return [watch]
         }
     }
 

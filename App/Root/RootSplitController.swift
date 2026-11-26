@@ -146,7 +146,22 @@ final class RootSplitController: UIViewController {
         }
         inspector.onShownChange = { [weak self] in
             guard let self else { return }
+            let showingBrowser = MacInspector.isShown && self.inspector.hasChat && self.inspector.isShowingBrowser
+            if showingBrowser {
+                if !self.browserWasOpen {
+                    self.browserWasOpen = true
+                    // [preview-tab] Auto-collapse the Bots/Sessions list column when the In-App Browser opens so Chat +
+                    // Browser get full breathing room; closing the browser restores the list automatically.
+                    if !self.listFolded, self.canToggleList {
+                        self.browserTakesList = true
+                    }
+                }
+            } else {
+                self.browserWasOpen = false
+                self.browserTakesList = false
+            }
             if !MacInspector.isShown || !self.inspector.hasChat { self.inspectorTakesList = false }   // ⌘I again or chat closed: the list comes back
+            self.syncListToggle()
             self.view.setNeedsLayout()
             // Mac polish #1: a chat a layout moved never forces another from inside it; the next pass places the panel.
             guard !self.applyingLayout else { return }
@@ -199,7 +214,15 @@ final class RootSplitController: UIViewController {
         guard MacInspector.isShown, PaneLayout.inspectorFits(panes: panes, inspector: MacInspector.narrowest, listFolded: listFolded)
         else { return 0 }
         // [mac-ui-issues] As wide as it was dragged, or what this window has room for beside the panes.
-        var width = inspector.activeChosenWidth
+        // [preview-tab] When the list is folded beside a docked In-App Browser and the user hasn't dragged a custom
+        // width, give the browser a comfortable ~54% share (clamped to browserDefaultWidth...browserWidest) so Chat
+        // and Browser share the window evenly.
+        var width: CGFloat
+        if inspector.isShowingBrowser, listFolded, !MacInspector.hasCustomBrowserWidth {
+            width = min(MacInspector.browserWidest, max(MacInspector.browserDefaultWidth, (panes.width * 0.54).rounded()))
+        } else {
+            width = inspector.activeChosenWidth
+        }
         while width > MacInspector.narrowest, !PaneLayout.inspectorFits(panes: panes, inspector: width, listFolded: listFolded) {
             width = max(MacInspector.narrowest, width - 10)
         }
@@ -219,6 +242,14 @@ final class RootSplitController: UIViewController {
     /// instead of doing nothing; ⌘I again brings the list back. Only asked for, never from a resize, and only while the
     /// chat and the panel still fit: in a narrower window the list stays and the panel waits, as before.
     private var inspectorTakesList = false
+    /// [preview-tab] Auto-folds the Sessions/Bots list while the docked In-App Browser is open so Chat + Browser have
+    /// room to breathe; restored when the browser closes or unfolded on demand via the list toggle / rail click.
+    private var browserTakesList = false
+    private var browserWasOpen = false
+    private var listFoldedForBrowser: Bool {
+        guard browserTakesList, MacInspector.isShown, inspector.isShowingBrowser, isViewLoaded, inspector.hasChat else { return false }
+        return PaneLayout.inspectorFits(panes: Self.panesSize(windowRect.size), inspector: MacInspector.narrowest, listFolded: true)
+    }
     private var listFoldedForInspector: Bool {
         guard inspectorTakesList, MacInspector.isShown, isViewLoaded, inspector.hasChat else { return false }
         let panes = Self.panesSize(windowRect.size)
@@ -525,6 +556,8 @@ final class RootSplitController: UIViewController {
 
     private func detailChanged() {
         #if targetEnvironment(macCatalyst)
+        if detailIsEmpty { macListHidden = false }
+        syncListToggle()
         if isViewLoaded, listWide != placedWide || (boardPanel(in: contentRect.width) != nil) != placedBoardPanel {
             view.setNeedsLayout()   // a page opened beside a whole page, or closed; [mac-tools] a task beside the board
         }
@@ -592,13 +625,125 @@ final class RootSplitController: UIViewController {
         #if targetEnvironment(macCatalyst)
         // [mac-layout] Owner 2026-11-03 "I like the bots in the sidebar": open or folded, the bots are in the sidebar, so
         // the Bots list never sits beside it; a bot's chat takes the room. Another list folds away while ⌘I's inspector
-        // needs its room (`inspectorTakesList`).
+        // needs its room (`inspectorTakesList`), while the docked In-App Browser is open (`listFoldedForBrowser`), or
+        // when the user manually tucked the list away (`macListHidden`, ⇧⌘L / sidebar button).
         // [bots-place] With Bots in Sidebar off, the Bots list is beside the sidebar as any place's.
-        (tabs.shownTab == .bots && MacSidebar.botsInSidebar) || listFoldedForInspector || settingsTakesList
+        (tabs.shownTab == .bots && MacSidebar.botsInSidebar)
+            || listFoldedForInspector
+            || listFoldedForBrowser
+            || (macListHidden && !detailIsEmpty)
+            || settingsTakesList
         #else
         listHidden && !detailIsEmpty   // [ipad-polish] put away by its button (`setListHidden`)
         #endif
     }
+
+    #if targetEnvironment(macCatalyst)
+    // MARK: Hiding the list (Mac)
+
+    /// [preview-tab] Manual list collapse on Mac (chat bar `sidebar.leading` button, ⇧⌘L, or clicking the active
+    /// Sessions/Bots rail icon): lets the user hide the middle list column for extra room anytime, and also overrides
+    /// `browserTakesList` to peek at the list while the In-App Browser is open.
+    private(set) var macListHidden = false
+    private weak var macToggleHost: UIViewController?
+    private lazy var macListToggleButton: UIButton = {
+        var config = UIButton.Configuration.plain()
+        config.image = UIImage(systemName: "sidebar.leading")
+        config.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 15, weight: .medium)
+        config.imagePadding = 5
+        config.contentInsets = NSDirectionalEdgeInsets(top: 5, leading: 7, bottom: 5, trailing: 7)
+        config.cornerStyle = .capsule
+        let button = UIButton(configuration: config, primaryAction: UIAction { [weak self] _ in
+            self?.toggleList()
+        })
+        button.accessibilityIdentifier = "pane.listToggle"
+        MacHover.button(button)
+        return button
+    }()
+    private lazy var macListToggle: UIBarButtonItem = {
+        let item = UIBarButtonItem(customView: macListToggleButton)
+        item.accessibilityIdentifier = "pane.listToggle"
+        return item
+    }()
+
+    /// True when the active tab has a middle list column that can be collapsed or expanded beside the open detail pane.
+    var canToggleList: Bool {
+        guard isDouble, !detailIsEmpty, !settingsTakesList else { return false }
+        if tabs.shownTab == .bots && MacSidebar.botsInSidebar { return false }
+        return true
+    }
+
+    /// True when the middle list column is currently tucked away (either manually or automatically for In-App Browser).
+    var isListCollapsedForUser: Bool {
+        macListHidden || listFoldedForBrowser || listFoldedForInspector
+    }
+
+    func toggleList() {
+        setListHidden(!isListCollapsedForUser)
+    }
+
+    func setListHidden(_ hidden: Bool, animated: Bool = true) {
+        if hidden {
+            guard canToggleList else { return }
+            macListHidden = true
+        } else {
+            macListHidden = false
+            browserTakesList = false
+            // If the inspector only fits with the list folded, leave inspectorTakesList alone unless inspector is closed.
+            if !MacInspector.isShown || !inspector.hasChat { inspectorTakesList = false }
+        }
+        AppLog.note("mac", hidden ? "list column collapsed beside chat" : "list column expanded beside chat")
+        syncListToggle()
+        guard isViewLoaded else { return }
+        applyListFold(animated: animated)
+    }
+
+    /// Puts the `sidebar.leading` toggle button at the leading end of the chat's navigation bar on Mac whenever the
+    /// active tab has a collapsible list column (Sessions, Bots with Bots-in-Sidebar off, Jobs, etc.).
+    private func syncListToggle() {
+        let first = isDouble ? detail.viewControllers.first : nil
+        let host = (first is DetailPlaceholderViewController || !canToggleList) ? nil : first
+        if let old = macToggleHost, old !== host,
+           old.navigationItem.leftBarButtonItems?.contains(where: { $0 === macListToggle }) == true {
+            let rest = old.navigationItem.leftBarButtonItems?.filter { $0 !== macListToggle } ?? []
+            old.navigationItem.leftBarButtonItems = rest.isEmpty ? nil : rest
+        }
+        macToggleHost = host
+        if let host {
+            let items = host.navigationItem.leftBarButtonItems ?? []
+            if items.isEmpty {
+                host.navigationItem.leftBarButtonItem = macListToggle
+            } else if !items.contains(where: { $0 === macListToggle }),
+                      items.allSatisfy({ $0.accessibilityIdentifier == ChatViewController.backToBotChatID }) {
+                host.navigationItem.leftBarButtonItems = [macListToggle] + items
+            }
+        }
+        let collapsed = isListCollapsedForUser
+        let rawPlace = tabs.selectedViewController?.tabBarItem.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let place = rawPlace.isEmpty ? "List" : rawPlace
+        var config = macListToggleButton.configuration ?? .plain()
+        config.image = UIImage(systemName: "sidebar.leading")
+        if collapsed {
+            var attrs = AttributeContainer()
+            attrs.font = HQFont.preferred(.footnote).pagesWeight(.medium)
+            config.attributedTitle = AttributedString(place, attributes: attrs)
+            config.contentInsets = NSDirectionalEdgeInsets(top: 5, leading: 8, bottom: 5, trailing: 10)
+            config.baseForegroundColor = HQPalette.label
+            config.background.backgroundColor = HQPalette.label.withAlphaComponent(0.08)
+            config.background.cornerRadius = 7
+        } else {
+            config.attributedTitle = nil
+            config.contentInsets = NSDirectionalEdgeInsets(top: 5, leading: 7, bottom: 5, trailing: 7)
+            config.baseForegroundColor = HQPalette.label2
+            config.background.backgroundColor = .clear
+        }
+        macListToggleButton.configuration = config
+        macListToggleButton.sizeToFit()
+        macListToggleButton.accessibilityLabel = collapsed ? "Show \(place)" : "Hide \(place)"
+        macListToggleButton.toolTip = collapsed ? "Show \(place) (⇧⌘L)" : "Hide \(place) (⇧⌘L)"
+        macListToggle.accessibilityLabel = macListToggleButton.accessibilityLabel
+    }
+    #endif
 
     #if !targetEnvironment(macCatalyst)
     // MARK: Hiding the list (iPad)
@@ -633,6 +778,7 @@ final class RootSplitController: UIViewController {
 
     /// The list can be put away or brought back now (the menu's item is on).
     var canToggleList: Bool { isDouble && !detailIsEmpty }
+    var isListCollapsedForUser: Bool { listHidden }
 
     func toggleList() { setListHidden(!listHidden) }
 
@@ -676,7 +822,6 @@ final class RootSplitController: UIViewController {
         listToggle.isSelected = false
     }
     #else
-    private func syncListToggle() {}
     #endif
 
     #if targetEnvironment(macCatalyst)
@@ -793,6 +938,9 @@ final class RootSplitController: UIViewController {
     }
 
     private func applyListFold(animated: Bool) {
+        #if targetEnvironment(macCatalyst)
+        syncListToggle()
+        #endif
         let fold = listFolded != (layout == .double(sidebar: 0))
         guard isViewLoaded, fold || listWide != placedWide || (boardPanel(in: contentRect.width) != nil) != placedBoardPanel else { return }
         if fold { AppLog.note("mac", listFolded ? "bots list folded into the rail" : "list pane back beside the rail") }
@@ -813,6 +961,7 @@ final class RootSplitController: UIViewController {
     /// and stream kept), and comes back to the right pane when that tab is picked again; a tab with nothing of its own
     /// shows the placeholder. Only a person's tab switch: code that selects a tab and then opens something keeps D7.
     func followSelectedTab() {
+        macListHidden = false
         let parked = pendingParked   // what the switch held back from the list's column (`tabWillShow`)
         pendingParked = nil
         guard isDouble else { parked.map(putBack); return }

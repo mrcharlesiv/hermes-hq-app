@@ -66,7 +66,7 @@ import UIKit
             UICommand(title: "Model Prices", action: tool, propertyList: ChatMenus.ToolRow.prices.rawValue),
         ]
         #if targetEnvironment(macCatalyst)
-        tools.insert(item("In-App Browser", inAppBrowser, "b", [.command, .alternate]), at: 0)   // [preview-tab]
+        tools.insert(item("Browser", inAppBrowser, "b", [.command, .alternate]), at: 0)   // [browser-dock]
         tools.insert(item("Choose Model…", chooseModel, "m", [.command, .control]), at: 0)   // [Mac model selector]
         #endif
         let more: [UIMenuElement] = [
@@ -198,7 +198,7 @@ extension AppDelegate {
             enabled = chat?.onToggleInAppBrowser != nil
             #if targetEnvironment(macCatalyst)
             let open = chat.flatMap { MacInspector.beside($0)?.isShowingBrowser } == true
-            command.title = open ? "Hide In-App Browser" : "Show In-App Browser"
+            command.title = open ? "Hide Browser" : "Show Browser"
             #endif
         case ChatMenuBar.tool:
             if let row = (command.propertyList as? String).flatMap(ChatMenus.ToolRow.init(rawValue:)) {

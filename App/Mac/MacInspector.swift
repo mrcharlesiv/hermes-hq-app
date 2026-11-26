@@ -54,6 +54,10 @@ final class MacInspector: UIViewController {
         }
         set { UserDefaults.standard.set(Double(min(max(newValue, narrowest), browserWidest)), forKey: browserWidthKey) }
     }
+    /// Whether the user has explicitly dragged the docked In-App Browser to a custom width.
+    static var hasCustomBrowserWidth: Bool {
+        UserDefaults.standard.double(forKey: browserWidthKey) > 0
+    }
     /// Whether the panel is currently showing the docked collaborative In-App Browser.
     var isShowingBrowser: Bool { browserView != nil && !Self.taskMode }
     /// The preferred width for whatever mode the panel is in now.
@@ -147,16 +151,20 @@ final class MacInspector: UIViewController {
         }
     }
 
-    /// [preview-tab] Collaborative In-App Browser docked beside the chat in place of the tabs; Pop Out moves it into
-    /// its own window, ✕ closes it back to chat (restoring whether the inspector was open before).
-    private var browserView: PreviewTabController?
+    /// [browser-dock] Unified Browser pane docked beside the chat in place of the Inspector tabs (hosts Watch Browser
+    /// by default, or a bot-opened `desktop_preview`); Pop Out moves it into its own window, ✕ closes it back to chat
+    /// (restoring whether the inspector was open before and bringing back any auto-collapsed list column).
+    private var browserView: UIViewController?
     private var inspectorWasShownBeforeBrowser = false
     private let browserRow = UIStackView()
     private let browserTitle = UILabel()
-    var shownBrowser: PreviewTabController? { browserView }
+    var shownBrowser: UIViewController? { browserView }
     var onBrowserClosed: (() -> Void)?
+    var onPopOutBrowser: (() -> Void)?
 
-    func showBrowser(_ next: PreviewTabController, title: String) {
+    func showBrowser(_ next: UIViewController, title: String, popOut: (() -> Void)? = nil, onClosed: (() -> Void)? = nil) {
+        let replacing = browserView != nil && browserView !== next
+        let previousClosed = replacing ? onBrowserClosed : nil
         let alreadyBrowser = browserView != nil
         if !alreadyBrowser {
             inspectorWasShownBeforeBrowser = Self.isShown
@@ -167,6 +175,8 @@ final class MacInspector: UIViewController {
             onThreadClosed?()
         }
         browserView = next
+        onPopOutBrowser = popOut
+        onBrowserClosed = onClosed
         browserTitle.text = title
         if !Self.isShown {
             Self.isShown = true
@@ -180,6 +190,7 @@ final class MacInspector: UIViewController {
             followLook()
             fill()
         }
+        previousClosed?()
     }
 
     func renameBrowser(_ title: String) {
@@ -187,13 +198,16 @@ final class MacInspector: UIViewController {
     }
 
     @objc func popOutBrowser() {
-        browserView?.onPopOutRequested?()
+        onPopOutBrowser?()
     }
 
     @objc func closeBrowser() {
         guard browserView != nil else { return }
+        let closed = onBrowserClosed
         clear()
         browserView = nil
+        onPopOutBrowser = nil
+        onBrowserClosed = nil
         let restore = inspectorWasShownBeforeBrowser
         inspectorWasShownBeforeBrowser = false
         Self.isShown = restore
@@ -202,7 +216,7 @@ final class MacInspector: UIViewController {
             followLook()
             if restore { fill() }
         }
-        onBrowserClosed?()
+        closed?()
     }
 
     private var content: UIViewController?
@@ -501,14 +515,17 @@ final class MacInspector: UIViewController {
         }
         // [preview-tab] The docked In-App Browser belonged to the previous chat; restore inspector's prior open state.
         if browserView != nil {
+            let closed = onBrowserClosed
             clear()
             browserView = nil
+            onPopOutBrowser = nil
+            onBrowserClosed = nil
             let restore = inspectorWasShownBeforeBrowser
             inspectorWasShownBeforeBrowser = false
             Self.isShown = restore
             if isViewLoaded { followLook() }
             onShownChange?()
-            onBrowserClosed?()
+            closed?()
         }
         // [bot-chat-sessions] The Chats tab stays as it is while one of its rows opens (its place in the list, no
         // flash): it takes the chat now beside it and marks that row.
@@ -538,11 +555,14 @@ final class MacInspector: UIViewController {
     func show(_ tab: Tab) {
         let leavingBrowser = browserView != nil
         if leavingBrowser {
+            let closed = onBrowserClosed
             clear()
             browserView = nil
+            onPopOutBrowser = nil
+            onBrowserClosed = nil
             inspectorWasShownBeforeBrowser = false
             if isViewLoaded { followLook() }
-            onBrowserClosed?()
+            closed?()
         }
         let changed = tab != self.shownTab || content == nil || leavingBrowser
         self.shownTab = tab
@@ -567,11 +587,14 @@ final class MacInspector: UIViewController {
     func toggle() {
         if isVisible {
             if browserView != nil {
+                let closed = onBrowserClosed
                 clear()
                 browserView = nil
+                onPopOutBrowser = nil
+                onBrowserClosed = nil
                 inspectorWasShownBeforeBrowser = false
                 if isViewLoaded { followLook() }
-                onBrowserClosed?()
+                closed?()
             }
             Self.isShown = false
             onShownChange?()

@@ -24,7 +24,7 @@ settings:
     DEVELOPMENT_TEAM: 2Y6UGK7GET
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: YES
-    MARKETING_VERSION: "1.0.5"
+    MARKETING_VERSION: "1.0.6"
     CURRENT_PROJECT_VERSION: "5"
     # Identity tables: HQ_X = $(HQ_X_$(HQ_IDENTITY)). project-original.yml sets HQ_IDENTITY_CHOICE.
     HQ_IDENTITY: $(HQ_IDENTITY_CHOICE:default=native)

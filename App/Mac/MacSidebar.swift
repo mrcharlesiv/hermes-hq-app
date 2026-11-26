@@ -730,6 +730,17 @@ final class MacSidebar: UIView {
             row.isTool = isTool(controller)   // [sidebar-tidy] quieter than the bots and places
             row.addAction(UIAction { [weak self, weak row, weak controller] _ in
                 guard let self, let tabs = self.tabs, let controller else { return }
+                // [preview-tab] Clicking the already-active Sessions/Bots rail icon while at its root toggles the
+                // middle list column (so you can unfold the list on demand while In-App Browser is open, or tuck it away).
+                if tabs.selectedViewController === controller,
+                   let split = tabs.split, split.canToggleList,
+                   ((controller as? UINavigationController)?.viewControllers.count ?? 1) <= 1 {
+                    split.toggleList()
+                    MacSelection.focus(on: .sidebar)
+                    self.selectionChanged()
+                    row?.playMotion()
+                    return
+                }
                 // [mac] stress test #62: the right pane follows the tab; a chat left over its list goes straight there
                 // (`switchPlace`, tester 2026-11-14: one laid out in the hidden list column froze the app)
                 if let split = tabs.split { split.switchPlace(to: controller) { tabs.pick(controller) } } else { tabs.pick(controller) }

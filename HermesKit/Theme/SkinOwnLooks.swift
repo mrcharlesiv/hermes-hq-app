@@ -189,6 +189,20 @@ nonisolated extension SkinCatalog {
                                    iconTile: RGBA(hex: 0x042808))
             return SkinOwnLook.Pair(light: look, dark: look)
         }(),
+        "vercel": SkinOwnLook.Pair(
+            // Pure white in light and true OLED black in dark, keeping crisp neutral elevation and electric blue bubbles.
+            light: SkinOwnLook(page: RGBA(hex: 0xFFFFFF), card: RGBA(hex: 0xF4F4F5), pressed: RGBA(hex: 0xE6E6E8),
+                               meBubble: RGBA(hex: 0x006AFF), codeFill: RGBA(hex: 0xEFEFF1), grey: RGBA(hex: 0x737373),
+                               fillAlphas: [0.20, 0.16, 0.12, 0.08], separator: RGBA(hex: 0x737373).alpha(0.32),
+                               replyEdge: RGBA(hex: 0x737373).alpha(0.24), tableHead: RGBA(hex: 0xEAEAEC),
+                               replyGlassTint: 0.85, subtle: RGBA(hex: 0x555555), muted: RGBA(hex: 0x737373),
+                               reply: RGBA(hex: 0xF4F4F5), grouped: RGBA(hex: 0xF5F5F6), meText: .white),
+            dark: SkinOwnLook(page: RGBA(hex: 0x000000), card: RGBA(hex: 0x141414), pressed: RGBA(hex: 0x222222),
+                              meBubble: RGBA(hex: 0x005CE0), codeFill: RGBA(hex: 0x0C0C0C), grey: RGBA(hex: 0x888888),
+                              fillAlphas: [0.34, 0.28, 0.22, 0.14], separator: RGBA(hex: 0x888888).alpha(0.32),
+                              replyEdge: RGBA(hex: 0x888888).alpha(0.24), tableHead: RGBA(hex: 0x1A1A1A),
+                              replyGlassTint: 0.85, subtle: RGBA(hex: 0xA1A1A1), muted: RGBA(hex: 0x737373),
+                              reply: RGBA(hex: 0x141414), grouped: RGBA(hex: 0x0A0A0A), meText: .white)),
     ]
 
     /// Skin-matched code syntax palettes; each colour is checked against the skin's code surface for 4.5:1 readability
@@ -267,5 +281,38 @@ nonisolated extension SkinCatalog {
             dark: SyntaxColours(comment: RGBA(hex: 0xB5C7F3), keyword: RGBA(hex: 0xFFE6CB), string: RGBA(hex: 0x9FE3D8),
                                 constant: RGBA(hex: 0xF7C59F), entity: RGBA(hex: 0xFFD6A5), function: RGBA(hex: 0xC8DCFF),
                                 tag: RGBA(hex: 0x96D6FF), invalid: RGBA(hex: 0xFF8A80))),
+        "codex": SyntaxColours.Pair(
+            light: SyntaxColours(comment: RGBA(hex: 0x636369), keyword: RGBA(hex: 0x751ED9), string: RGBA(hex: 0x008A36),
+                                 constant: RGBA(hex: 0x0169CC), entity: RGBA(hex: 0x9A5000), function: RGBA(hex: 0x0169CC),
+                                 tag: RGBA(hex: 0x0F766E), invalid: RGBA(hex: 0xE02E2A)),
+            dark: SyntaxColours(comment: RGBA(hex: 0x8E8E93), keyword: RGBA(hex: 0xB06DFF), string: RGBA(hex: 0x4ADE80),
+                                constant: RGBA(hex: 0x52A8FF), entity: RGBA(hex: 0xF5B44A), function: RGBA(hex: 0x52A8FF),
+                                tag: RGBA(hex: 0x5EEAD4), invalid: RGBA(hex: 0xFF6B6B))),
+        "notion": SyntaxColours.Pair(
+            light: SyntaxColours(comment: RGBA(hex: 0x787774), keyword: RGBA(hex: 0x6940A5), string: RGBA(hex: 0x0F7B6C),
+                                 constant: RGBA(hex: 0xB85C00), entity: RGBA(hex: 0x9A4B26), function: RGBA(hex: 0x266EB8),
+                                 tag: RGBA(hex: 0x0F7B6C), invalid: RGBA(hex: 0xA31515)),
+            dark: SyntaxColours(comment: RGBA(hex: 0x9B9A97), keyword: RGBA(hex: 0xB088E6), string: RGBA(hex: 0x4EC9B0),
+                                constant: RGBA(hex: 0xE5A760), entity: RGBA(hex: 0xE6A17C), function: RGBA(hex: 0x63A8EE),
+                                tag: RGBA(hex: 0x4EC9B0), invalid: RGBA(hex: 0xFA6B68))),
+        "vercel": SyntaxColours.Pair(
+            light: SyntaxColours(comment: RGBA(hex: 0x666666), keyword: RGBA(hex: 0xA100F8), string: RGBA(hex: 0x1D8236),
+                                 constant: RGBA(hex: 0x006AFF), entity: RGBA(hex: 0xB45309), function: RGBA(hex: 0x006AFF),
+                                 tag: RGBA(hex: 0x0E7490), invalid: RGBA(hex: 0xEB001D)),
+            dark: SyntaxColours(comment: RGBA(hex: 0x888888), keyword: RGBA(hex: 0xC084FC), string: RGBA(hex: 0x46D369),
+                                constant: RGBA(hex: 0x52A8FF), entity: RGBA(hex: 0xF5A623), function: RGBA(hex: 0x52A8FF),
+                                tag: RGBA(hex: 0x5EEAD4), invalid: RGBA(hex: 0xFF6166))),
+        "night-owl": {
+            let s = SyntaxColours(comment: RGBA(hex: 0x7E97AC), keyword: RGBA(hex: 0xC792EA), string: RGBA(hex: 0xECC48D),
+                                  constant: RGBA(hex: 0xF78C6C), entity: RGBA(hex: 0xFFCB8B), function: RGBA(hex: 0x82AAFF),
+                                  tag: RGBA(hex: 0x7FDBCA), invalid: RGBA(hex: 0xEF5350))
+            return SyntaxColours.Pair(light: s, dark: s)
+        }(),
+        "lobster": {
+            let s = SyntaxColours(comment: RGBA(hex: 0x94A3B8), keyword: RGBA(hex: 0xFF7373), string: RGBA(hex: 0x4ADE80),
+                                  constant: RGBA(hex: 0xFBBF24), entity: RGBA(hex: 0xFB923C), function: RGBA(hex: 0x60A5FA),
+                                  tag: RGBA(hex: 0x38BDF8), invalid: RGBA(hex: 0xFF5C5C))
+            return SyntaxColours.Pair(light: s, dark: s)
+        }(),
     ]
 }

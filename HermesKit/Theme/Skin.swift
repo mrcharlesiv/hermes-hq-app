@@ -82,11 +82,17 @@ nonisolated enum SkinCatalog {
         // Not a desktop skin (owner 2026-11-01): its palettes are desktop-tokens.py's APP_ONLY table.
         ("rose-pine", "Rosé Pine", "Muted pine, rosé and iris — Dawn and Main", nil),
         ("nous-alt", "Nous Alt", "Glass neutrals, cream on mission-blue", nil),
+        // App-only skins from Synara's palette catalog (owner 2026-11-26): desktop-tokens.py's APP_ONLY table.
+        ("codex", "Codex", "Clean white and deep graphite with crisp Codex blue", nil),
+        ("notion", "Notion", "Warm editorial ink in light and calm charcoal in dark", nil),
+        ("vercel", "Vercel", "Pure white and true OLED black with electric blue", nil),
         ("midnight", "Midnight", "Deep blue-violet with cool accents", nil),
         ("ember", "Ember", "Warm crimson and bronze — forge vibes", nil),
         ("mono", "Mono", "Clean grayscale — minimal and focused", nil),
         ("slate", "Slate", "Cool slate blue — focused developer theme", nil),
         ("cyberpunk", "Cyberpunk", "Neon green on black — matrix terminal", Skin.monospacedFamily),
+        ("night-owl", "Night Owl", "Deep midnight navy with cool ice text and mint syntax", nil),
+        ("lobster", "Lobster", "Deep slate navy with crisp zinc text and coral red", nil),
         // [mac] Stress test 2026-10-28 #27: on a Mac the same colours are the Mac's own system colours too.
         ("ios", DeviceWord.isMac ? "Apple System" : "iOS System",
          DeviceWord.isMac ? "Apple’s system colors, true black in dark, system blue" : "iOS colors, true black in dark, system blue", nil),

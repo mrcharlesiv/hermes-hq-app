@@ -72,13 +72,14 @@ private let allStates: [ThemeState] = SkinCatalog.all.flatMap { skin in
         // Rosé Pine (owner 2026-11-01) is the app's own, beside the desktop's other two-palette community themes; Paper
         // (owner 2026-11-16) is the app's own too, beside Nous whose blue it keeps.
         #expect(SkinCatalog.all.map(\.id) == ["nous", "paper", "github", "catppuccin", "everforest", "solarized", "rose-pine",
-                                               "nous-alt", "midnight", "ember", "mono", "slate", "cyberpunk", "ios"])
+                                               "nous-alt", "codex", "notion", "vercel",
+                                               "midnight", "ember", "mono", "slate", "cyberpunk", "night-owl", "lobster", "ios"])
         #expect(SkinCatalog.skin("midnight")?.description == "Deep blue-violet with cool accents")
         #expect(SkinCatalog.skin("ios")?.label == "iOS System")
         #expect(SkinCatalog.skin("ios")?.description == "iOS colors, true black in dark, system blue")
         #expect(SkinCatalog.skin("cyberpunk")?.sansFamily == Skin.monospacedFamily)
         #expect(SkinCatalog.skin("cyberpunk")?.usesMonospacedUI == true)
-        #expect(SkinCatalog.all.filter(\.hasOneLook).map(\.id) == ["midnight", "ember", "mono", "slate", "cyberpunk"])
+        #expect(SkinCatalog.all.filter(\.hasOneLook).map(\.id) == ["midnight", "ember", "mono", "slate", "cyberpunk", "night-owl", "lobster"])
         // Stress test 2026-10-28 #88: one-palette skins say which mode they are; the others have no tag.
         #expect(SkinCatalog.skin("midnight")?.onlyModeTag == "Dark Only")
         #expect(SkinCatalog.skin("nous")?.onlyModeTag == nil)
@@ -167,13 +168,36 @@ private let allStates: [ThemeState] = SkinCatalog.all.flatMap { skin in
         }
     }
 
+    /// Synara-sourced themes: Codex, Notion, Vercel (Adaptive), Night Owl and Lobster (Dark Only).
+    @Test func synaraThemesResolveCleanlyInLightAndDark() throws {
+        for (id, label) in [("codex", "Codex"), ("notion", "Notion"), ("vercel", "Vercel")] {
+            let skin = try #require(SkinCatalog.skin(id))
+            #expect(skin.label == label && skin.onlyModeTag == nil)
+            let dark = try #require(skin.dark)
+            #expect(!skin.light.rendersDark && dark.rendersDark)
+            #expect(SettingsSearch.themeKeywords.contains(label.lowercased()))
+        }
+        let vercel = ThemeResolver.resolve(ThemeState(skinID: "vercel"))
+        #expect(vercel.light.page == .white && vercel.dark.page == .black, "Vercel keeps pure white and true OLED black")
+        #expect(vercel.light.meText == .white && vercel.dark.meText == .white)
+        for (id, label, bg) in [("night-owl", "Night Owl", RGBA(hex: 0x011627)), ("lobster", "Lobster", RGBA(hex: 0x111827))] {
+            let skin = try #require(SkinCatalog.skin(id))
+            #expect(skin.label == label && skin.onlyModeTag == "Dark Only" && skin.hasOneLook)
+            #expect(skin.light.background == bg && skin.light.rendersDark)
+            let set = ThemeResolver.resolve(ThemeState(skinID: id))
+            #expect(set.forcedDark == true && set.light == set.dark)
+            #expect(SettingsSearch.themeKeywords.contains(label.lowercased()))
+        }
+    }
+
     /// Every seed against the web app's own table, when the read-only reference is on this Mac.
     @Test func generatedSeedsEqualTheWebTable() throws {
         let script = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("HermesKit/Theme/SkinSeeds.generated.swift")
         let text = try String(contentsOf: script, encoding: .utf8)
         #expect(text.contains("\"cyberpunk\": ("))
-        #expect(text.components(separatedBy: "SkinSeeds(").count - 1 == 23, "9 skins with two palettes, 5 with one")
+        #expect(text.contains("\"lobster\": ("))
+        #expect(text.components(separatedBy: "SkinSeeds(").count - 1 == 31, "12 skins with two palettes, 7 with one")
     }
 }
 

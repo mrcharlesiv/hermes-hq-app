@@ -11,8 +11,9 @@ import argparse, os, re, sys
 KEYS = ["background", "foreground", "card", "muted", "mutedForeground", "popover", "primary", "secondary", "accent",
         "border", "input", "ring", "midground", "composerRing", "destructive", "sidebarBackground", "sidebarBorder",
         "userBubble", "userBubbleBorder"]
-ORDER = ["nous", "paper", "github", "catppuccin", "everforest", "solarized", "rose-pine", "nous-alt", "midnight", "ember",
-         "mono", "slate", "cyberpunk", "ios"]
+ORDER = ["nous", "paper", "github", "catppuccin", "everforest", "solarized", "rose-pine", "nous-alt",
+         "codex", "notion", "vercel",
+         "midnight", "ember", "mono", "slate", "cyberpunk", "night-owl", "lobster", "ios"]
 CONSTS = {"NOUS_ALT_BLUE": "#0053FD", "NOUS_ALT_NAVY": "#1540B1", "NOUS_ALT_CREAM": "#FFE6CB"}
 
 # Skins the desktop doesn't ship, in its slots. Rosé Pine (owner 2026-11-01): Dawn light, Main dark, from
@@ -49,6 +50,59 @@ APP_ONLY = {
          "accent": "#1a1a19", "border": "#2e2e2b", "input": "#0e0e0d", "ring": "#edece6", "midground": "#edece6",
          "composerRing": "#edece6", "destructive": "#f85149", "sidebarBackground": "#0e0e0d",
          "sidebarBorder": "#2e2e2b", "userBubble": "#242422", "userBubbleBorder": "#33332f"},
+    ),
+    # Synara-sourced app-only themes (owner 2026-11-26): Codex, Notion, Vercel (Adaptive) + Night Owl, Lobster (Dark Only).
+    "codex": (
+        {"background": "#ffffff", "foreground": "#0d0d0d", "card": "#f7f7f8", "muted": "#f3f3f5",
+         "mutedForeground": "#636369", "popover": "#ffffff", "primary": "#0169cc", "secondary": "#e3effb",
+         "accent": "#e9f2fc", "border": "#e2e2e6", "input": "#ffffff", "ring": "#0169cc", "midground": "#0169cc",
+         "composerRing": "#0169cc", "destructive": "#e02e2a", "sidebarBackground": "#f5f5f7",
+         "sidebarBorder": "#e2e2e6", "userBubble": "#dcebfa", "userBubbleBorder": "#c4ddf7"},
+        {"background": "#111111", "foreground": "#fcfcfc", "card": "#191919", "muted": "#1e1e20",
+         "mutedForeground": "#8e8e93", "popover": "#1c1c1e", "primary": "#0169cc", "secondary": "#152940",
+         "accent": "#132438", "border": "#2e2e32", "input": "#141416", "ring": "#0169cc", "midground": "#0169cc",
+         "composerRing": "#0169cc", "destructive": "#e02e2a", "sidebarBackground": "#0b0b0c",
+         "sidebarBorder": "#2a2a2e", "userBubble": "#10243b", "userBubbleBorder": "#234266"},
+    ),
+    "notion": (
+        {"background": "#ffffff", "foreground": "#37352f", "card": "#f7f6f3", "muted": "#f1f0ec",
+         "mutedForeground": "#787774", "popover": "#ffffff", "primary": "#3183d8", "secondary": "#e7f1fb",
+         "accent": "#edf4fc", "border": "#e3e2df", "input": "#ffffff", "ring": "#3183d8", "midground": "#3183d8",
+         "composerRing": "#3183d8", "destructive": "#a31515", "sidebarBackground": "#f7f6f3",
+         "sidebarBorder": "#e3e2df", "userBubble": "#e5f0fa", "userBubbleBorder": "#c9dfee"},
+        {"background": "#191919", "foreground": "#d9d9d8", "card": "#202020", "muted": "#262626",
+         "mutedForeground": "#9b9a97", "popover": "#252525", "primary": "#3183d8", "secondary": "#1e3247",
+         "accent": "#1b2c3d", "border": "#333333", "input": "#1e1e1e", "ring": "#3183d8", "midground": "#3183d8",
+         "composerRing": "#3183d8", "destructive": "#fa423e", "sidebarBackground": "#202020",
+         "sidebarBorder": "#2f2f2f", "userBubble": "#1d3044", "userBubbleBorder": "#2e4b69"},
+    ),
+    "vercel": (
+        {"background": "#ffffff", "foreground": "#171717", "card": "#f4f4f5", "muted": "#f5f5f5",
+         "mutedForeground": "#666666", "popover": "#ffffff", "primary": "#006aff", "secondary": "#e6f0ff",
+         "accent": "#edf4ff", "border": "#eaeaea", "input": "#ffffff", "ring": "#006aff", "midground": "#006aff",
+         "composerRing": "#006aff", "destructive": "#eb001d", "sidebarBackground": "#f5f5f6",
+         "sidebarBorder": "#eaeaea", "userBubble": "#e5f0ff", "userBubbleBorder": "#bfd8ff"},
+        {"background": "#000000", "foreground": "#ededed", "card": "#141414", "muted": "#161616",
+         "mutedForeground": "#888888", "popover": "#111111", "primary": "#006efe", "secondary": "#0f2340",
+         "accent": "#0d1e38", "border": "#262626", "input": "#0a0a0a", "ring": "#006efe", "midground": "#006efe",
+         "composerRing": "#006efe", "destructive": "#f13342", "sidebarBackground": "#0a0a0a",
+         "sidebarBorder": "#222222", "userBubble": "#0b1f3a", "userBubbleBorder": "#1d3e6e"},
+    ),
+    "night-owl": (
+        {"background": "#011627", "foreground": "#d6deeb", "card": "#0b253a", "muted": "#0d2940",
+         "mutedForeground": "#7e97ac", "popover": "#0b253a", "primary": "#d6deeb", "secondary": "#15344e",
+         "accent": "#122d45", "border": "#1d3b53", "input": "#0b253a", "ring": "#44596b", "midground": "#44596b",
+         "destructive": "#ef5350", "sidebarBackground": "#01111d", "sidebarBorder": "#163047",
+         "userBubble": "#13314a", "userBubbleBorder": "#234968"},
+        None,
+    ),
+    "lobster": (
+        {"background": "#111827", "foreground": "#e4e4e7", "card": "#1a2336", "muted": "#1f293d",
+         "mutedForeground": "#94a3b8", "popover": "#1d273b", "primary": "#e4e4e7", "secondary": "#28354e",
+         "accent": "#222f47", "border": "#2d3b55", "input": "#1a2336", "ring": "#ff5c5c", "midground": "#ff5c5c",
+         "destructive": "#ff5c5c", "sidebarBackground": "#0b101b", "sidebarBorder": "#233048",
+         "userBubble": "#2a1e2b", "userBubbleBorder": "#5c2b36"},
+        None,
     ),
 }
 
@@ -107,7 +161,7 @@ def read(ref):
     for name in ORDER[:-1]:
         if name in APP_ONLY:
             light, dark = APP_ONLY[name]
-            skins[name] = ({k: hexrgba(v) for k, v in light.items()}, {k: hexrgba(v) for k, v in dark.items()})
+            skins[name] = ({k: hexrgba(v) for k, v in light.items()}, {k: hexrgba(v) for k, v in dark.items()} if dark else None)
             continue
         m = re.search(r"\n  '?%s'?: \{" % re.escape(name), table)
         body, _ = block(table, m.start())

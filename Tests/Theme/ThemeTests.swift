@@ -492,6 +492,12 @@ private let allStates: [ThemeState] = SkinCatalog.all.flatMap { skin in
         #expect(ember.page != base.page && ember.tint != base.tint, "the page and the accent are the skin's")
         #expect(ember.separator != base.separator && ember.fill1 != base.fill1 && ember.botBubble != base.botBubble,
                 "custom skins receive hue-matched neutrals instead of cold iOS greys")
+        #expect(ember.strokePrimary == ember.separator && ember.strokeSecondary == ember.separator && ember.strokeTertiary == ember.separator,
+                "Native look strokes stay synced to each skin's hue-matched separator")
+        let catppuccin = ThemeResolver.resolve(ThemeState(skinID: "catppuccin")).dark
+        #expect(catppuccin.strokeSecondary == catppuccin.separator && catppuccin.strokeSecondary != base.strokeSecondary)
+        let rosePine = ThemeResolver.resolve(ThemeState(skinID: "rose-pine")).dark
+        #expect(rosePine.strokeSecondary == rosePine.separator && rosePine.strokeSecondary != base.strokeSecondary)
         // Cards are the page raised in its own hue, not iOS's neutral grey (owner 2026-11-01).
         #expect(ember.groupedCard != base.groupedCard)
         #expect(ember.groupedCard.contrast(with: ember.page) > 1.05, "the card stands off the page")

@@ -218,6 +218,9 @@ nonisolated enum ThemeResolver {
             t.fill3 = neutral.alpha(dark ? 0.20 : 0.11)
             t.fill4 = neutral.alpha(dark ? 0.14 : 0.08)
             t.separator = neutral.alpha(dark ? 0.36 : 0.28)
+            t.strokePrimary = t.separator
+            t.strokeSecondary = t.separator
+            t.strokeTertiary = t.separator
             t.searchFill = neutral.alpha(dark ? 0.18 : 0.12)
             t.muted = neutral
             // Cards lift gently off the grouped canvas in light mode (toward white) and rise a step in ink in dark mode.
@@ -377,6 +380,9 @@ nonisolated enum ThemeResolver {
         t.fill1 = fills[0]; t.fill2 = fills[1]; t.fill3 = fills[2]; t.fill4 = fills[3]
         t.searchFill = own.grey.alpha(0.12)
         t.separator = own.separator
+        t.strokePrimary = own.separator
+        t.strokeSecondary = own.separator
+        t.strokeTertiary = own.separator
         t.muted = own.muted
     }
 

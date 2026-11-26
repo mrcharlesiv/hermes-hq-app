@@ -196,8 +196,8 @@ struct TasksSmartGridView: View {
         .padding(.vertical, 11)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
-            shape.fill(Color.hqGroupedCard)
-                .overlay { shape.strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline) }
+            shape.fill(Color(uiColor: ProjectPageHeader.fill))
+                .overlay { if Theme.isDesktop { shape.strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline) } }
         }
         .contentShape(shape)
     }
@@ -333,16 +333,16 @@ struct TasksOverviewListsCard: View {
 
                     if idx < lists.count - 1 {
                         Rectangle()
-                            .fill(Color.hqStroke)
-                            .frame(height: HQShape.hairline)
+                            .fill(Color(uiColor: HQPalette.separator))
+                            .frame(height: HQShape.line(Theme.isDesktop ? 1 : 0.5))
                             .padding(.leading, 54)
                     }
                 }
             }
         }
         .background {
-            shape.fill(Color.hqGroupedCard)
-                .overlay { shape.strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline) }
+            shape.fill(Color(uiColor: ProjectPageHeader.fill))
+                .overlay { if Theme.isDesktop { shape.strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline) } }
         }
         .clipShape(shape)
         .padding(.horizontal, ListGutter.side)
@@ -469,15 +469,15 @@ struct TasksOverviewSuggestedCard: View {
 
                 if idx < model.cards.count - 1 {
                     Rectangle()
-                        .fill(Color.hqStroke)
-                        .frame(height: HQShape.hairline)
+                        .fill(Color(uiColor: HQPalette.separator))
+                        .frame(height: HQShape.line(Theme.isDesktop ? 1 : 0.5))
                         .padding(.leading, 14)
                 }
             }
         }
         .background {
-            shape.fill(Color.hqGroupedCard)
-                .overlay { shape.strokeBorder(Color.hqOrange.opacity(0.28), lineWidth: HQShape.hairline) }
+            shape.fill(Color(uiColor: ProjectPageHeader.fill))
+                .overlay { if Theme.isDesktop { shape.strokeBorder(Color.hqOrange.opacity(0.28), lineWidth: HQShape.hairline) } }
         }
         .clipShape(shape)
         .padding(.horizontal, ListGutter.side)
@@ -693,8 +693,8 @@ struct TasksOverviewAgentsCard: View {
 
             if agents.suggested != nil && agents.botsCount != nil {
                 Rectangle()
-                    .fill(Color.hqStroke)
-                    .frame(height: HQShape.hairline)
+                    .fill(Color(uiColor: HQPalette.separator))
+                    .frame(height: HQShape.line(Theme.isDesktop ? 1 : 0.5))
                     .padding(.leading, 54)
             }
 
@@ -735,8 +735,8 @@ struct TasksOverviewAgentsCard: View {
             }
         }
         .background {
-            shape.fill(Color.hqGroupedCard)
-                .overlay { shape.strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline) }
+            shape.fill(Color(uiColor: ProjectPageHeader.fill))
+                .overlay { if Theme.isDesktop { shape.strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline) } }
         }
         .clipShape(shape)
         .padding(.horizontal, ListGutter.side)

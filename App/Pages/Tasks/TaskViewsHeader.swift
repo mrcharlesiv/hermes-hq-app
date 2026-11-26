@@ -266,7 +266,7 @@ private struct TaskViewsBand: View {
             // [rail-scroller] Owner 2026-11-18 (Mac screenshot): `.hidden` still shows the scroller with a mouse
             // attached, a grey bar over the pills. `.never` hides it there too; a trackpad swipe still scrolls.
             .scrollIndicators(.never)
-            .hqScrollEdgeFade(width: 20)
+            .hqScrollEdgeFade(width: 20, preservesGlass: true)
             // Only as far as it takes to show the picked pill whole (no anchor): centring it slid the whole row
             // sideways on every tap, even with every pill already in view (owner 2026-11-12: "it's glitching").
             .onAppear { proxy.scrollTo(model.picked.key) }

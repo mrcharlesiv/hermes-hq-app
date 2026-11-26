@@ -96,12 +96,14 @@ struct PinCardView: View {
             .padding(.vertical, typeSize.isAccessibilitySize ? 10 : 7)
             .fixedSize(horizontal: false, vertical: true)
         }
-        .background(Color.hqGroupedCard)
+        .background(Color(uiColor: ProjectPageHeader.fill))
         .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
         .overlay { PinHoverFill(hover: hover, shape: RoundedRectangle(cornerRadius: radius, style: .continuous)) }
         .overlay {
-            RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .strokeBorder(Color.hqStroke, lineWidth: desktop ? 1 : 0.5)
+            if desktop {
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline)
+            }
         }
         .overlay { if ringed { TileChangedRing().clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous)) } }
         .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
@@ -204,7 +206,7 @@ struct PinTileView: View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         VStack(spacing: 5) {
             Rectangle()
-                .fill(picture.flatMap { fills ? nil : PinPictures.edgeColor($0) }.map { Color(uiColor: $0) } ?? Color.hqGroupedCard)
+                .fill(picture.flatMap { fills ? nil : PinPictures.edgeColor($0) }.map { Color(uiColor: $0) } ?? Color(uiColor: ProjectPageHeader.fill))
                 .overlay {
                     if let picture {
                         if fills {
@@ -237,7 +239,7 @@ struct PinTileView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipShape(shape)
                 .overlay { PinHoverFill(hover: hover, shape: shape) }
-                .overlay { shape.strokeBorder(Color.hqStroke, lineWidth: HQShape.line(Theme.isDesktop ? 1 : 0.5)) }
+                .overlay { if Theme.isDesktop { shape.strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline) } }
                 .overlay(alignment: .topLeading) {
                     if editing, let unpin {
                         Button(action: unpin) {

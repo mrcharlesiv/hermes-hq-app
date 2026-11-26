@@ -183,7 +183,8 @@ struct GoalShelfCardView: View {
             .frame(width: width, alignment: .leading)
             .frame(maxWidth: width == nil ? .infinity : nil, alignment: .leading)
             .background {
-                shape.fill(Color.hqGroupedCard).overlay { shape.strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline) }
+                shape.fill(Color(uiColor: ProjectPageHeader.fill))
+                    .overlay { if Theme.isDesktop { shape.strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline) } }
             }
             .hqPointerFill(shape)
             .contentShape(shape)

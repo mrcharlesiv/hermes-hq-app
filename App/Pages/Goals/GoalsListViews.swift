@@ -151,9 +151,11 @@ struct GoalCard: View {
         .padding(.horizontal, 14)
         .background {
             if model.quiet {
-                shape.fill(Color.hqLabel.opacity(0.04)).overlay { shape.strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline) }
+                shape.fill(Color.hqLabel.opacity(0.04))
+                    .overlay { if Theme.isDesktop { shape.strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline) } }
             } else {
-                shape.fill(Color.hqGroupedCard).overlay { shape.strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline) }
+                shape.fill(Color(uiColor: ProjectPageHeader.fill))
+                    .overlay { if Theme.isDesktop { shape.strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline) } }
             }
         }
         .hqPointerFill(shape)

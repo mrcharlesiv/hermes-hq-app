@@ -491,8 +491,10 @@ extension View {
     /// so a pick changes its tint rather than its view. With the look on, nothing: the caller draws the desktop's piece.
     /// `still`: glass that does not answer a touch itself ([pill-reorder]: a pill that is held and dragged draws its own
     /// lift; the glass's own answer to a long press made the pill fold up and come back when it was let go).
-    func hqPickGlass<S: InsettableShape>(_ selected: Bool, in shape: S, prominent: Bool = false, still: Bool = false) -> some View {
-        modifier(PickGlass(selected: selected, shape: shape, prominent: prominent, still: still))
+    /// `glassTint`: optional subtle glass tint when unselected (used by segmented Liquid Glass tracks).
+    func hqPickGlass<S: InsettableShape>(_ selected: Bool, in shape: S, prominent: Bool = false, still: Bool = false,
+                                         glassTint: Color? = nil) -> some View {
+        modifier(PickGlass(selected: selected, shape: shape, prominent: prominent, still: still, glassTint: glassTint))
     }
 
     /// A row of `hqPickGlass` picks in one glass container: glass can't sample glass, so without it a pick lenses its
@@ -584,6 +586,7 @@ private struct PickGlass<S: InsettableShape>: ViewModifier {
     var shape: S
     var prominent: Bool
     var still = false
+    var glassTint: Color? = nil
     @Environment(\.colorScheme) private var scheme
     @Environment(\.hqFlatPicks) private var flat
 
@@ -614,7 +617,7 @@ private struct PickGlass<S: InsettableShape>: ViewModifier {
             // In the dark the glass lifts the tint, and white words on a chosen chip read 3.3:1; a third darker, 7.5:1.
             // [paper-glass] Not in an ink skin: Paper's dark accent is ivory under dark words, and darkened it went a muddy grey.
             let ink = prominent && scheme == .dark && Theme.inkIcons == nil ? Color.hqTint.mix(with: .black, by: 0.3) : Color.hqTint
-            let tint: Color? = selected ? (prominent ? ink : Color.hqTint.opacity(0.16)) : nil
+            let tint: Color? = selected ? (prominent ? ink : Color.hqTint.opacity(0.16)) : glassTint
             // The ring rides on the content, under the glass's own layer: an overlay after it vanished in a container.
             content.overlay(shape.strokeBorder(Color.hqTint, lineWidth: selected && !prominent ? 2 : 0))
                 .glassEffect(Glass.regular.tint(tint).interactive(!still), in: shape)

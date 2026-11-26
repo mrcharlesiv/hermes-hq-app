@@ -75,4 +75,22 @@ struct TasksNavigationTests {
         #expect(!botsOnly.isEmpty)
         #expect(botsOnly.botsSpoken == "Bots’ Tasks, 2 tasks")
     }
+
+    @Test func scrollEdgeFadeSkipsMaskOnLiveLiquidGlassRails() {
+        // Native Liquid Glass pill rails must not wrap GlassEffectContainer in .mask(...), which flattens untinted glass.
+        #expect(!ScrollEdgeFadeRule.appliesMask(width: 20, preservesGlass: true, desktop: false, flatPicks: false, flatPills: false))
+        // Desktop look, flat picks, and non-glass horizontal strips keep the fade mask.
+        #expect(ScrollEdgeFadeRule.appliesMask(width: 20, preservesGlass: true, desktop: true, flatPicks: false, flatPills: false))
+        #expect(ScrollEdgeFadeRule.appliesMask(width: 20, preservesGlass: true, desktop: false, flatPicks: true, flatPills: false))
+        #expect(ScrollEdgeFadeRule.appliesMask(width: 20, preservesGlass: true, desktop: false, flatPicks: false, flatPills: true))
+        #expect(ScrollEdgeFadeRule.appliesMask(width: 20, preservesGlass: false, desktop: false, flatPicks: false, flatPills: false))
+        #expect(!ScrollEdgeFadeRule.appliesMask(width: 0, preservesGlass: false, desktop: true, flatPicks: false, flatPills: false))
+    }
+
+    @Test func sessionsPillsSwitchUsesRecessedGlassTrackInNativeLiquidGlass() {
+        #expect(SessionsPillsSwitch.usesRecessedGlassTrack(desktop: false, flatPicks: false, flatPills: false))
+        #expect(!SessionsPillsSwitch.usesRecessedGlassTrack(desktop: true, flatPicks: false, flatPills: false))
+        #expect(!SessionsPillsSwitch.usesRecessedGlassTrack(desktop: false, flatPicks: true, flatPills: false))
+        #expect(!SessionsPillsSwitch.usesRecessedGlassTrack(desktop: false, flatPicks: false, flatPills: true))
+    }
 }

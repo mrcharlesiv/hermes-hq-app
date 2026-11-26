@@ -852,33 +852,54 @@ private struct ScrollEdgeFadeState: Equatable {
     var trailing = false
 }
 
+/// Pure rule for whether `hqScrollEdgeFade` applies a `.mask(...)`: skips masking when `preservesGlass` is set and
+/// live Liquid Glass is active (masking a `GlassEffectContainer` flattens untinted `Glass.regular` to invisible).
+nonisolated enum ScrollEdgeFadeRule {
+    static func appliesMask(width: CGFloat, preservesGlass: Bool, desktop: Bool, flatPicks: Bool, flatPills: Bool) -> Bool {
+        guard width > 0 else { return false }
+        if preservesGlass && !desktop && !flatPicks && !flatPills { return false }
+        return true
+    }
+}
+
 private struct ScrollEdgeFade: ViewModifier {
     var width: CGFloat = 20
+    var preservesGlass = false
+    @Environment(\.hqFlatPicks) private var flatPicks
     @State private var state = ScrollEdgeFadeState()
 
-    func body(content: Content) -> some View {
-        content
-            .onScrollGeometryChange(for: ScrollEdgeFadeState.self) { geometry in
-                ScrollEdgeFadeState(
-                    leading: geometry.contentOffset.x > geometry.contentInsets.leading + 0.5,
-                    trailing: geometry.contentOffset.x < geometry.contentSize.width - geometry.containerSize.width - geometry.contentInsets.trailing - 0.5)
-            } action: { _, next in state = next }
-            .mask(alignment: .leading) {
-                HStack(spacing: 0) {
-                    LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing)
-                        .frame(width: state.leading ? width : 0)
-                    Rectangle()
-                    LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
-                        .frame(width: state.trailing ? width : 0)
+    @ViewBuilder func body(content: Content) -> some View {
+        let _ = Theme.touch()
+        if ScrollEdgeFadeRule.appliesMask(width: width, preservesGlass: preservesGlass,
+                                          desktop: Theme.isDesktop, flatPicks: flatPicks, flatPills: Theme.flatPills) {
+            content
+                .onScrollGeometryChange(for: ScrollEdgeFadeState.self) { geometry in
+                    ScrollEdgeFadeState(
+                        leading: geometry.contentOffset.x > geometry.contentInsets.leading + 0.5,
+                        trailing: geometry.contentOffset.x < geometry.contentSize.width - geometry.containerSize.width - geometry.contentInsets.trailing - 0.5)
+                } action: { _, next in state = next }
+                .mask(alignment: .leading) {
+                    HStack(spacing: 0) {
+                        LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing)
+                            .frame(width: state.leading ? width : 0)
+                        Rectangle()
+                        LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                            .frame(width: state.trailing ? width : 0)
+                    }
                 }
-            }
+        } else {
+            content
+        }
     }
 }
 
 extension View {
     /// A chip row cut off flat at the screen edge read as clipping, not more to scroll to (item 20): a short fade on
     /// the trailing edge while more chips lie off screen, and on the leading edge once scrolled.
-    func hqScrollEdgeFade(width: CGFloat = 20) -> some View { modifier(ScrollEdgeFade(width: width)) }
+    /// Pass `preservesGlass: true` on rails carrying live Liquid Glass pills so the mask never flattens the glass.
+    func hqScrollEdgeFade(width: CGFloat = 20, preservesGlass: Bool = false) -> some View {
+        modifier(ScrollEdgeFade(width: width, preservesGlass: preservesGlass))
+    }
 }
 
 /// [mac] Stress test 2026-10-28 round 7: a clamped chip rail comes to rest on a chip, so its leading chip sits at the
@@ -1027,10 +1048,17 @@ struct SessionsPillsSwitch: View {
     var model: SessionsHeaderModel
     /// [mac-top] The Mac's switch names its sides, with their glyphs; in a narrow pane, the names alone.
     var macIcons = true
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.hqFlatPicks) private var flatPicks
     /// The side drawn is the tint while nothing is picked, a soft grey while a pill is.
     private var allPicked: Bool {
         model.pills == .projects ? model.pickedProjects.isEmpty && model.status == nil && !model.botPicked
             : model.picked == nil && model.status == nil
+    }
+
+    /// Pure rule for whether the phone segmented switch draws a recessed Liquid Glass track and crisper raised thumb.
+    nonisolated static func usesRecessedGlassTrack(desktop: Bool, flatPicks: Bool, flatPills: Bool) -> Bool {
+        !desktop && !flatPicks && !flatPills
     }
 
     var body: some View {
@@ -1074,6 +1102,12 @@ struct SessionsPillsSwitch: View {
 
     private var phoneBody: some View {
         Group {
+            let _ = Theme.touch()
+            let glass = Self.usesRecessedGlassTrack(desktop: Theme.isDesktop, flatPicks: flatPicks, flatPills: Theme.flatPills)
+            let dark = colorScheme == .dark
+            let trackTint: Color? = glass ? (dark ? Color.black.opacity(0.22) : Color.hqLabel.opacity(0.06)) : nil
+            let thumbFill: Color = allPicked ? Color.hqTint : glass ? Color.hqLabel.opacity(dark ? 0.20 : 0.14) : Color.hqLabel.opacity(0.12)
+            let thumbEdge: Color = Color.hqLabel.opacity(dark ? 0.16 : 0.08)
             let side: CGFloat = Theme.isDesktop ? HQFont.scaled(24) : HQFont.scaled(30)
             let half = side + 8
             // Each side's touch reaches this far past the capsule (into the rail's margin, and the gap before the
@@ -1087,14 +1121,14 @@ struct SessionsPillsSwitch: View {
                     let here = model.pills == view
                     switchSide(view, here: here, half: half, side: side)
                         // [switch-neutral] Owner 2026-11-18: "idk why the background to Projects is black?" With a
-                        // pill lit, the view's side is a soft grey thumb (a segmented control's), not solid black.
+                        // pill lit, the view's side is a raised pill thumb (a segmented control's), not solid black.
                         .foregroundStyle(!here ? Color.hqLabel2 : allPicked ? Color.hqOnTint : Color.hqLabel)
                         // [switch-thumb] Owner 2026-11-19 (Desktop Look on the iPhone: "the pill showing which is
                         // selected doesn't look right"): the Desktop Look's track is a 4 pt-corner box, so the side shown
                         // is a box of its corner inset by the track's 2 pt, not a capsule rounding past the track's own corners.
                         .background {
                             if here {
-                                thumbShape.fill(allPicked ? Color.hqTint : Color.hqLabel.opacity(0.12))
+                                thumbBackground(fill: thumbFill, edge: thumbEdge, showEdge: !allPicked && glass)
                             }
                         }
                 }
@@ -1103,7 +1137,7 @@ struct SessionsPillsSwitch: View {
             .background {
                 if Theme.isDesktop { RoundedRectangle(cornerRadius: DesktopRows.radius, style: .continuous).fill(Color.hqFill3) }
             }
-            .hqPickGlass(false, in: Capsule(), prominent: true)
+            .hqPickGlass(false, in: Capsule(), prominent: true, glassTint: trackTint)
             .accessibilityHidden(true)
             .frame(height: touch)
             // [switch-sides] The touch: a clear button over each side (its own drawing, unseen, sizes it), the outer one
@@ -1136,9 +1170,17 @@ struct SessionsPillsSwitch: View {
     static func symbol(_ view: SessionPills) -> String { view == .bots ? "bubble.left.and.bubble.right" : "folder" }
 
     /// [switch-thumb] The side shown: concentric with the track (the Desktop Look's box, else the glass capsule).
-    private var thumbShape: AnyShape {
-        Theme.isDesktop ? AnyShape(RoundedRectangle(cornerRadius: max(2, DesktopRows.radius - 2), style: .continuous))
-            : AnyShape(Capsule())
+    @ViewBuilder private func thumbBackground(fill: Color, edge: Color, showEdge: Bool) -> some View {
+        if Theme.isDesktop {
+            RoundedRectangle(cornerRadius: max(2, DesktopRows.radius - 2), style: .continuous).fill(fill)
+        } else {
+            Capsule().fill(fill)
+                .overlay {
+                    if showEdge {
+                        Capsule().strokeBorder(edge, lineWidth: HQShape.line(0.5))
+                    }
+                }
+        }
     }
 
     /// One side of the switch: its glyph and its name. [switch-words] Owner 2026-11-17: "I want the bots/projects

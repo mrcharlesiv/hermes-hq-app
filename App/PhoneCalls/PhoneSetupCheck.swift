@@ -65,17 +65,22 @@ nonisolated struct PhoneSetupCheck: Equatable, Sendable {
         case .success(let app)?:
             if app.active == false {
                 rows.append(Row(id: "connection", state: .fail, sentence: "The voice connection is turned off.",
-                                fix: "Turn it on in the samplehost portal (Voice › Programmable Voice)."))
+                                fix: "\(DeviceWord.Tap) Fix voice connection below, or turn it on in the samplehost portal (Voice › Programmable Voice)."))
+            } else if app.webhook_event_url != nil && !samplehostHasValidWebhookURL(app.webhook_event_url) {
+                rows.append(Row(id: "connection", state: .fail,
+                                sentence: "The voice connection has no valid https:// webhook URL, so samplehost won't place calls on it.",
+                                fix: "\(DeviceWord.Tap) Fix voice connection below, or set an https:// webhook URL in the samplehost portal (Voice › Programmable Voice › Voice API)."))
             } else {
                 rows.append(Row(id: "connection", state: .pass, sentence: "\(app.application_name ?? "The voice connection") is an active Call Control application."))
             }
             if (app.outbound?.outbound_voice_profile_id ?? "").isEmpty {
                 rows.append(Row(id: "profile", state: .fail, sentence: "The connection has no outbound voice profile, so it can't call out.",
-                                fix: "In the samplehost portal, give the connection an outbound voice profile."))
+                                fix: "\(DeviceWord.Tap) Fix voice connection below, or attach an outbound voice profile in the samplehost portal."))
             }
         case .failure(.unexpected(404))?:
-            rows.append(Row(id: "connection", state: .fail, sentence: "The voice connection isn't a Call Control application.",
-                            fix: "Choose the Call Control application your number uses, or make one in the samplehost portal."))
+            rows.append(Row(id: "connection", state: .fail,
+                            sentence: "The voice connection isn't a Voice API (Call Control) application — TeXML and SIP connections can't place calls here.",
+                            fix: "\(DeviceWord.Tap) Fix voice connection below, or choose a Voice API application in Phone Calls settings."))
         default:
             rows.append(Row(id: "connection", state: .unknown, sentence: "Your voice connection: " + couldNotCheck))
         }
@@ -180,11 +185,17 @@ nonisolated struct PhoneSetupCheck: Equatable, Sendable {
 struct PhoneSetupCheckView: View {
     let accountID: String
     @State private var rows: [PhoneSetupCheck.Row] = []
+    @State private var loadedNumbers: [samplehostNumber] = []
     @State private var running = false
     @State private var optimizing = false
+    @State private var fixingConnection = false
     @State private var optimizeError: String?
 
     private var canOptimize: Bool { rows.contains { $0.id == "voice" && $0.state == .warn } }
+    private var canFixConnection: Bool {
+        rows.contains { ($0.id == "connection" || $0.id == "profile") && $0.state == .fail }
+            || rows.contains { $0.id == "number" && $0.state == .fail && $0.sentence.contains("voice connection") }
+    }
 
     var body: some View {
         Form {
@@ -206,20 +217,51 @@ struct PhoneSetupCheckView: View {
                 Text("Hermes HQ reads these from samplehost with your key. Checking changes nothing.")
             }
             if let optimizeError {
-                Section { Text(optimizeError).foregroundStyle(.red) }
+                Section { Text(optimizeError).foregroundStyle(Color.hqRed) }
             }
             Section {
+                if canFixConnection {
+                    Button(fixingConnection ? "Fixing voice connection…" : "Fix voice connection") {
+                        Task { await fixConnection() }
+                    }
+                    .disabled(running || optimizing || fixingConnection)
+                    .accessibilityIdentifier("phone.check.fix-connection")
+                }
                 if canOptimize {
                     Button(optimizing ? "Optimizing…" : "Optimize assistant for calls") { Task { await optimize() } }
-                        .disabled(running || optimizing)
+                        .disabled(running || optimizing || fixingConnection)
                         .accessibilityIdentifier("phone.check.optimize")
                 }
-                Button(running ? "Checking…" : "Check Again") { Task { await run() } }.disabled(running || optimizing)
+                Button(running ? "Checking…" : "Check Again") { Task { await run() } }
+                    .disabled(running || optimizing || fixingConnection)
                     .accessibilityIdentifier("phone.check.again")
+                NavigationLink("Setup & how to use guide") {
+                    PhoneGuideView().navigationTitle("Setup & how to use")
+                }
+                .accessibilityIdentifier("phone.check.guide")
             }
         }
         .hqGroupedPage()   // [desktoplook] the page follows the skin
         .task { await run() }
+    }
+
+    private func fixConnection() async {
+        guard !fixingConnection, var setup = PhoneKeyStore.app.load(for: accountID) else { return }
+        fixingConnection = true; optimizeError = nil
+        defer { fixingConnection = false }
+        let targetNumber = loadedNumbers.first { $0.phone_number == setup.fromNumber }
+        let api = samplehostAPI(key: setup.apiKey)
+        let repaired = await Result.of {
+            try await api.repairVoiceConnection(connectionID: setup.connectionID, for: targetNumber)
+        }
+        switch repaired {
+        case .success(let updated):
+            setup.connectionID = updated.connectionID
+            try? PhoneKeyStore.app.save(setup, for: accountID)
+            await run()
+        case .failure(let error):
+            optimizeError = phoneMessage(error)
+        }
     }
 
     private func optimize() async {
@@ -238,6 +280,7 @@ struct PhoneSetupCheckView: View {
         running = true
         defer { running = false }
         let reads = await PhoneSetupCheck.read(samplehostAPI(key: setup.apiKey), setup: setup)
+        if case .success(let nums)? = reads.numbers { loadedNumbers = nums }
         rows = PhoneSetupCheck.rows(setup: setup, reads: reads)
         AppLog.note("phone", "setup checked: \(rows.filter { $0.state == .fail }.count) to fix")
     }

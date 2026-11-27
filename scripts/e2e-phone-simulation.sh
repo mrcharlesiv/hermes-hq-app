@@ -57,7 +57,8 @@ tests=(-only-testing:HermesHQNativeUITests/SessionsTests/testPhoneCallsSimulated
   -only-testing:HermesHQNativeUITests/SessionsTests/testPhoneCallsHangUpTakesTwoTaps
   -only-testing:HermesHQNativeUITests/SessionsTests/testPhoneCallsDesignLight
   -only-testing:HermesHQNativeUITests/SessionsTests/testPhoneCallsDesignDark
-  -only-testing:HermesHQNativeUITests/SessionsTests/testPhoneCallsLargeText)
+  -only-testing:HermesHQNativeUITests/SessionsTests/testPhoneCallsLargeText
+  -only-testing:HermesHQNativeUITests/SessionsTests/testPhoneCallsTeXMLTrapAndSetupGuide)
 if [[ ${HQ_PHONE_TEST:-} == switch ]]; then tests=(-only-testing:HermesHQNativeUITests/SessionsTests/testPhoneCallsAccountSwitch); fi
 if [[ -n ${HQ_PHONE_ONLY:-} ]]; then tests=(); for t in ${=HQ_PHONE_ONLY}; do tests+=(-only-testing:HermesHQNativeUITests/SessionsTests/$t); done; fi
 RESULT="$OUT/PhoneAcceptance-$(date +%Y%m%d-%H%M%S).xcresult"

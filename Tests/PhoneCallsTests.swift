@@ -233,13 +233,76 @@ nonisolated final class PhoneCallsTests: XCTestCase {
     @MainActor func testCallControlAppsListsOnlyActiveApps() async throws {
         samplehostStub.reset { _ in
             (200, ["data": [
-                ["id": "cc-1", "application_name": "Main Voice", "active": true],
+                ["id": "cc-1", "application_name": "Main Voice", "active": true, "webhook_event_url": "https://voice-events.invalid/hermes-hq"],
                 ["id": "cc-2", "application_name": "Old Voice", "active": false],
             ]])
         }
         let apps = try await api().callControlApps()
         XCTAssertEqual(apps.map(\.id), ["cc-1"])
+        XCTAssertEqual(apps.first?.webhook_event_url, "https://voice-events.invalid/hermes-hq")
         XCTAssertEqual(samplehostStub.seen.first?.path, "/v2/call_control_applications")
+    }
+
+    @MainActor func testProvisionVoiceConnectionCreatesProfileCallControlAppAndAssignsNumber() async throws {
+        samplehostStub.reset { seen in
+            switch (seen.method, seen.path) {
+            case ("GET", "/v2/outbound_voice_profiles"):
+                return (200, ["data": []])
+            case ("POST", "/v2/outbound_voice_profiles"):
+                return (200, ["data": ["id": "ovp-created", "name": seen.json["name"] as? String ?? "",
+                                       "enabled": true, "whitelisted_destinations": ["US"]]])
+            case ("POST", "/v2/call_control_applications"):
+                return (200, ["data": ["id": "cc-created", "application_name": seen.json["application_name"] as? String ?? "",
+                                       "active": true, "webhook_event_url": seen.json["webhook_event_url"] as? String ?? "",
+                                       "outbound": ["outbound_voice_profile_id": "ovp-created"]]])
+            case ("PATCH", "/v2/phone_numbers/num-1"):
+                return (200, ["data": ["id": "num-1", "phone_number": "+12125550100", "status": "active",
+                                       "connection_id": seen.json["connection_id"] as? String ?? "",
+                                       "connection_name": "Hermes HQ Voice"]])
+            default:
+                return (404, ["errors": [["code": "404", "title": "Not found"]]])
+            }
+        }
+        let texmlNumber = samplehostNumber(id: "num-1", phone_number: "+12125550100", status: "active",
+                                       connection_id: "texml-auto-1", connection_name: "Hermes HQ Caller")
+        let result = try await api().provisionVoiceConnection(for: texmlNumber)
+        XCTAssertEqual(result.app.id, "cc-created")
+        XCTAssertEqual(result.app.application_name, "Hermes HQ Voice")
+        XCTAssertEqual(result.updatedNumber?.connection_id, "cc-created")
+        let profilePost = try XCTUnwrap(samplehostStub.seen.first { $0.method == "POST" && $0.path == "/v2/outbound_voice_profiles" })
+        XCTAssertEqual(profilePost.json["whitelisted_destinations"] as? [String], ["US"])
+        let appPost = try XCTUnwrap(samplehostStub.seen.first { $0.method == "POST" && $0.path == "/v2/call_control_applications" })
+        XCTAssertEqual(appPost.json["webhook_event_url"] as? String, PhoneLimits.voiceWebhookURL)
+        XCTAssertEqual((appPost.json["outbound"] as? [String: Any])?["outbound_voice_profile_id"] as? String, "ovp-created")
+        let numberPatch = try XCTUnwrap(samplehostStub.seen.first { $0.method == "PATCH" && $0.path == "/v2/phone_numbers/num-1" })
+        XCTAssertEqual(numberPatch.json["connection_id"] as? String, "cc-created")
+    }
+
+    @MainActor func testRepairVoiceConnectionReplacesTeXMLConnectionWithExistingVoiceApp() async throws {
+        samplehostStub.reset { seen in
+            switch (seen.method, seen.path) {
+            case ("GET", "/v2/call_control_applications/texml-99"):
+                return (404, [:])
+            case ("GET", "/v2/call_control_applications"):
+                return (200, ["data": [[
+                    "id": "cc-voice-1",
+                    "application_name": "My Voice API",
+                    "active": true,
+                    "webhook_event_url": "https://voice-events.invalid/hermes-hq",
+                    "outbound": ["outbound_voice_profile_id": "ovp-1"],
+                ]]])
+            case ("PATCH", "/v2/phone_numbers/num-1"):
+                return (200, ["data": ["id": "num-1", "phone_number": "+12125550100", "status": "active",
+                                       "connection_id": seen.json["connection_id"] as? String ?? ""]])
+            default:
+                return (404, [:])
+            }
+        }
+        let number = samplehostNumber(id: "num-1", phone_number: "+12125550100", status: "active", connection_id: "texml-99")
+        let repaired = try await api().repairVoiceConnection(connectionID: "texml-99", for: number)
+        XCTAssertEqual(repaired.connectionID, "cc-voice-1")
+        XCTAssertEqual(repaired.connectionName, "My Voice API")
+        XCTAssertEqual(repaired.updatedNumber?.connection_id, "cc-voice-1")
     }
 
     @MainActor func testWrongKeyReadsAsBadKey() async {
@@ -499,6 +562,9 @@ nonisolated final class PhoneCallsTests: XCTestCase {
         do { _ = try await api.dial(PhoneDialRequest(to: "", from: "+15550100001", connectionID: "c", assistantID: "a", purpose: "p", commandID: "x")); XCTFail() } catch {
             XCTAssertEqual(phoneMessage(error), "samplehost: The 'to' parameter is required and cannot be blank.")
         }
+        let texmlError = samplehostError.provider("The requested connection_id (Call Control App ID) is either invalid or does not exist. Only Call Control Apps with valid webhook URL are accepted.")
+        XCTAssertTrue(phoneMessage(texmlError).contains("Voice API (Call Control)"))
+        XCTAssertTrue(phoneMessage(texmlError).contains("TeXML"))
     }
 
     // MARK: The key

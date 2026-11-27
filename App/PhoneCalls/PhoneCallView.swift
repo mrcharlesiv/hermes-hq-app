@@ -172,7 +172,16 @@ private struct PhoneNewCallView: View {
                             .buttonStyle(PhoneActionStyle(fill: Color.hqTint, ink: Color(uiColor: PhoneCardColors.onAccent)))
                             .disabled(!phoneIsE164(destination) || purpose.isEmpty || busy || controller.hasActiveCall)
                     } else {
-                        Text("Connect samplehost in Settings › Phone Calls (Beta) to place calls.")
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Connect samplehost in Settings › Voice & Calls › Phone Calls (Beta) to place calls.")
+                                .font(Font.hq(.headline))
+                            Text("Paste your samplehost API key there, then use Create Voice Connection and Create Assistant so Hermes HQ sets up a Voice API (Call Control) application and voice assistant for your samplehost number.")
+                                .font(Font.hq(.footnote))
+                                .foregroundStyle(Color.hqLabel2)
+                        }
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .phoneCard(radius: 18)
                     }
                     if !recent.isEmpty, !confirming {
                         Text("Recent").font(Font.hq(.headline)).padding(.top, 10).accessibilityAddTraits(.isHeader)

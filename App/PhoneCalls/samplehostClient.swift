@@ -59,7 +59,7 @@ nonisolated enum samplehostError: Error, Equatable, Sendable, CustomStringConver
 nonisolated func phoneMessage(_ error: Error) -> String {
     switch error as? samplehostError {
     case .badKey: return "samplehost didn't accept this API key. Check it in the samplehost portal and try again."
-    case .provider(let detail): return "samplehost: \(detail)"
+    case .provider(let detail): return friendlysamplehostProviderMessage(detail)
     case .callEnded: return "This call has already ended."
     case .network: return "Couldn't reach samplehost. Check your connection and try again."
     case .unexpected(let status): return "samplehost answered with an unexpected error (\(status)). Try again."
@@ -67,6 +67,27 @@ nonisolated func phoneMessage(_ error: Error) -> String {
     case .refused(let words): return words
     case nil: return "The phone request couldn't be completed. Try again."
     }
+}
+
+/// Adds plain-language guidance to samplehost's most common setup rejections while keeping samplehost's own error text.
+nonisolated func friendlysamplehostProviderMessage(_ detail: String) -> String {
+    let lower = detail.lowercased()
+    if lower.contains("connection_id") && (lower.contains("call control") || lower.contains("webhook") || lower.contains("invalid") || lower.contains("does not exist")) {
+        return "samplehost: \(detail) Open Settings › Voice & Calls › Phone Calls (Beta) to choose or create a Voice API (Call Control) connection — TeXML applications created for AI Assistants can't place calls here."
+    }
+    if lower.contains("verified") && (lower.contains("level") || lower.contains("destination") || lower.contains("unverified")) {
+        return "samplehost: \(detail) New samplehost accounts at Level 1 can only call Verified Numbers until Level 2 verification is completed in the samplehost portal."
+    }
+    return "samplehost: \(detail)"
+}
+
+/// True when `raw` is an `https://` URL with a dotted host, as samplehost requires on Call Control `webhook_event_url`.
+nonisolated func samplehostHasValidWebhookURL(_ raw: String?) -> Bool {
+    guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty,
+          let parts = URLComponents(string: trimmed),
+          parts.scheme?.lowercased() == "https",
+          let host = parts.host, !host.isEmpty, host.contains(".") else { return false }
+    return true
 }
 
 // MARK: - Responses (only the fields the app reads)
@@ -255,11 +276,13 @@ nonisolated struct samplehostAssistantDetail: Sendable, Equatable {
     }
 }
 
-/// list-call-control-applications: `data[]` (`id`, `application_name`, `active`).
+/// list-call-control-applications: `data[]` (`id`, `application_name`, `active`, `webhook_event_url`, `outbound`).
 nonisolated struct samplehostCallControlAppSummary: Decodable, Sendable, Hashable, Identifiable {
     let id: String
     var application_name: String? = nil
     var active: Bool? = nil
+    var webhook_event_url: String? = nil
+    var outbound: samplehostCallControlApp.Outbound? = nil
 }
 
 /// get-balance: `data.balance` (string dollars), `data.currency`.
@@ -269,18 +292,91 @@ nonisolated struct samplehostBalance: Decodable, Sendable, Equatable {
     var amount: Double? { Double(balance) }
 }
 
-/// retrieve-a-call-control-application: `active`, `application_name`, `outbound.outbound_voice_profile_id`.
-nonisolated struct samplehostCallControlApp: Decodable, Sendable, Equatable {
-    nonisolated struct Outbound: Decodable, Sendable, Equatable { var outbound_voice_profile_id: String? = nil }
+/// retrieve-a-call-control-application: `active`, `application_name`, `webhook_event_url`, `outbound.outbound_voice_profile_id`.
+nonisolated struct samplehostCallControlApp: Decodable, Sendable, Hashable {
+    nonisolated struct Outbound: Decodable, Sendable, Hashable { var outbound_voice_profile_id: String? = nil }
+    var id: String? = nil
     var active: Bool? = nil
     var application_name: String? = nil
+    var webhook_event_url: String? = nil
     var outbound: Outbound? = nil
 }
 
-/// retrieve-an-outbound-voice-profile: `enabled`, `whitelisted_destinations` (country codes such as "US").
+/// retrieve-an-outbound-voice-profile / list-outbound-voice-profiles: `id`, `name`, `enabled`, `whitelisted_destinations`.
 nonisolated struct samplehostVoiceProfile: Decodable, Sendable, Equatable {
+    var id: String? = nil
+    var name: String? = nil
     var enabled: Bool? = nil
     var whitelisted_destinations: [String]? = nil
+}
+
+/// Resolves valid Voice API (Call Control) connections and detects when a samplehost number or saved setup points at a
+/// TeXML or SIP connection instead (`POST /v2/calls` only accepts Call Control applications with a valid webhook URL).
+nonisolated enum PhoneConnectionResolver {
+    struct Option: Equatable, Sendable, Identifiable {
+        let id: String
+        let name: String
+    }
+
+    /// Valid choices for the Voice connection picker. When `apps` was fetched (`!= nil`), only real Call Control
+    /// applications are offered so TeXML applications (such as the one samplehost auto-creates for an AI Assistant) cannot
+    /// be mistaken for a Voice API connection. When `apps` could not be read (`nil`), falls back to numbers' connections.
+    static func options(numbers: [samplehostNumber], apps: [samplehostCallControlAppSummary]?) -> [Option] {
+        var seen = Set<String>()
+        if let apps {
+            return apps.compactMap { app in
+                guard !app.id.isEmpty, seen.insert(app.id).inserted else { return nil }
+                let label = app.application_name.flatMap { $0.isEmpty ? nil : $0 } ?? app.id
+                return Option(id: app.id, name: label)
+            }
+        }
+        return numbers.compactMap { n in
+            guard let id = n.connection_id, !id.isEmpty, seen.insert(id).inserted else { return nil }
+            let label = n.connection_name.flatMap { $0.isEmpty ? nil : $0 } ?? id
+            return Option(id: id, name: label)
+        }
+    }
+
+    /// Picks the best Voice API connection when a From number is chosen or loaded. Never auto-selects a TeXML or SIP
+    /// connection when `apps` is known.
+    static func preferredConnection(for pickedNumber: String, numbers: [samplehostNumber],
+                                    apps: [samplehostCallControlAppSummary]?, current: String = "") -> String {
+        let matchedNumber = numbers.first { $0.phone_number == pickedNumber }
+        guard let apps else {
+            if let id = matchedNumber?.connection_id, !id.isEmpty { return id }
+            return current
+        }
+        let validIDs = Set(apps.map(\.id).filter { !$0.isEmpty })
+        if let id = matchedNumber?.connection_id, validIDs.contains(id) { return id }
+        if !current.isEmpty, validIDs.contains(current) { return current }
+        if apps.count == 1, !apps[0].id.isEmpty { return apps[0].id }
+        let readyApps = apps.filter { $0.webhook_event_url == nil || samplehostHasValidWebhookURL($0.webhook_event_url) }
+        if readyApps.count == 1, !readyApps[0].id.isEmpty { return readyApps[0].id }
+        return ""
+    }
+
+    /// True when `connectionID` is known to NOT be an active Call Control application (for example, a TeXML app).
+    static func isInvalidSavedConnection(_ connectionID: String?, apps: [samplehostCallControlAppSummary]?) -> Bool {
+        guard let apps, let id = connectionID, !id.isEmpty else { return false }
+        return !apps.contains { $0.id == id }
+    }
+
+    /// Explains why a saved connection or a number's current samplehost connection (such as an AI Assistant's TeXML app)
+    /// cannot place outbound Voice API calls.
+    static func nonCallControlWarning(selectedNumber: samplehostNumber?, connectionID: String,
+                                      apps: [samplehostCallControlAppSummary]?) -> String? {
+        guard let apps else { return nil }
+        let validIDs = Set(apps.map(\.id))
+        if !connectionID.isEmpty, !validIDs.contains(connectionID) {
+            return "The selected voice connection isn't a samplehost Voice API (Call Control) application — it looks like a TeXML or SIP connection. samplehost automatically makes a TeXML app when an AI Assistant enables telephony, but outbound calls require a Voice API application."
+        }
+        if let selectedNumber, let numConn = selectedNumber.connection_id, !numConn.isEmpty, !validIDs.contains(numConn),
+           connectionID.isEmpty {
+            let label = selectedNumber.connection_name.flatMap { $0.isEmpty ? nil : "“\($0)”" } ?? "another connection"
+            return "\(phoneShown(selectedNumber.phone_number)) is currently assigned to \(label) in samplehost, which is a TeXML or SIP connection rather than a Voice API (Call Control) application. Choose or create a Voice API connection below."
+        }
+        return nil
+    }
 }
 
 // MARK: - The dial request
@@ -329,6 +425,11 @@ nonisolated enum PhoneLimits {
     static let stayCopy = "The assistant stays on until the job is done. Safety stop at 30 minutes."
     /// Never resolves (RFC 2606 `.invalid`), so the ask_owner webhook sends nothing anywhere. See PhoneAskOwner.
     static let askOwnerURL = "https://ask-owner.invalid/hermes-hq"
+    /// Default webhook URL for a Voice API (Call Control) application created by Hermes HQ. Never resolves (RFC 2606
+    /// `.invalid`), so call events stay in samplehost and are read directly with `GET /v2/call_events`.
+    static let voiceWebhookURL = "https://voice-events.invalid/hermes-hq"
+    static let voiceAppName = "Hermes HQ Voice"
+    static let voiceProfileName = "Hermes HQ Outbound"
 }
 
 /// The ask_owner tool and the per-call instructions.
@@ -953,6 +1054,149 @@ nonisolated struct samplehostAPI: Sendable, CustomStringConvertible, CustomDebug
     func callControlApps() async throws -> [samplehostCallControlAppSummary] {
         let data = try await send("GET", ["call_control_applications"], query: [("page[size]", "250")])
         return try decode(DataList<samplehostCallControlAppSummary>.self, data).data.filter { $0.active != false }
+    }
+
+    /// list-outbound-voice-profiles: `GET /v2/outbound_voice_profiles?page[size]=250`.
+    func voiceProfiles() async throws -> [samplehostVoiceProfile] {
+        let data = try await send("GET", ["outbound_voice_profiles"], query: [("page[size]", "250")])
+        return try decode(DataList<samplehostVoiceProfile>.self, data).data
+    }
+
+    /// create-an-outbound-voice-profile: `POST /v2/outbound_voice_profiles`. New samplehost accounts start with none.
+    func createVoiceProfile(name: String = PhoneLimits.voiceProfileName, country: String = "US") async throws -> samplehostVoiceProfile {
+        let normalizedCountry = country.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let bodyWithDestinations: [String: Any] = [
+            "name": name,
+            "traffic_type": "conversational",
+            "enabled": true,
+            "whitelisted_destinations": normalizedCountry.isEmpty ? ["US"] : [normalizedCountry],
+        ]
+        if let data = try? await send("POST", ["outbound_voice_profiles"],
+                                      body: try JSONSerialization.data(withJSONObject: bodyWithDestinations)) {
+            if let wrapped = try? JSONDecoder().decode(DataOne<samplehostVoiceProfile>.self, from: data) { return wrapped.data }
+            return try decode(samplehostVoiceProfile.self, data)
+        }
+        // Fallback if a restricted account tier rejects explicit destination whitelisting on creation.
+        let fallbackBody: [String: Any] = ["name": name, "traffic_type": "conversational", "enabled": true]
+        let data = try await send("POST", ["outbound_voice_profiles"],
+                                  body: try JSONSerialization.data(withJSONObject: fallbackBody))
+        if let wrapped = try? JSONDecoder().decode(DataOne<samplehostVoiceProfile>.self, from: data) { return wrapped.data }
+        return try decode(samplehostVoiceProfile.self, data)
+    }
+
+    /// Ensures an enabled outbound voice profile exists for `country`, creating or enabling one if needed.
+    func ensureVoiceProfile(country: String) async throws -> String {
+        let target = country.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let existing = (try? await voiceProfiles()) ?? []
+        if let match = existing.first(where: { profile in
+            guard let id = profile.id, !id.isEmpty, profile.enabled != false else { return false }
+            let allowed = (profile.whitelisted_destinations ?? []).map { $0.uppercased() }
+            return allowed.isEmpty || target.isEmpty || allowed.contains(target)
+        }), let id = match.id {
+            return id
+        }
+        do {
+            let created = try await createVoiceProfile(country: target.isEmpty ? "US" : target)
+            if let id = created.id, !id.isEmpty { return id }
+        } catch {
+            if let anyEnabled = existing.first(where: { ($0.id?.isEmpty == false) && $0.enabled != false })?.id {
+                return anyEnabled
+            }
+            throw error
+        }
+        throw samplehostError.provider("Couldn't create an outbound voice profile in samplehost.")
+    }
+
+    /// create-a-call-control-application: `POST /v2/call_control_applications` (Voice API application).
+    func createCallControlApp(name: String = PhoneLimits.voiceAppName,
+                              webhookURL: String = PhoneLimits.voiceWebhookURL,
+                              outboundProfileID: String) async throws -> samplehostCallControlAppSummary {
+        let body: [String: Any] = [
+            "application_name": name,
+            "active": true,
+            "webhook_api_version": "2",
+            "webhook_event_url": webhookURL,
+            "outbound": ["outbound_voice_profile_id": outboundProfileID],
+        ]
+        let data = try await send("POST", ["call_control_applications"],
+                                  body: try JSONSerialization.data(withJSONObject: body))
+        if let wrapped = try? JSONDecoder().decode(DataOne<samplehostCallControlAppSummary>.self, from: data) { return wrapped.data }
+        return try decode(samplehostCallControlAppSummary.self, data)
+    }
+
+    /// update-a-call-control-application: `PATCH /v2/call_control_applications/{id}`.
+    func updateCallControlApp(id: String, name: String, webhookURL: String, outboundProfileID: String) async throws -> samplehostCallControlApp {
+        let body: [String: Any] = [
+            "application_name": name,
+            "active": true,
+            "webhook_api_version": "2",
+            "webhook_event_url": webhookURL,
+            "outbound": ["outbound_voice_profile_id": outboundProfileID],
+        ]
+        let data = try await send("PATCH", ["call_control_applications", id],
+                                  body: try JSONSerialization.data(withJSONObject: body))
+        if let wrapped = try? JSONDecoder().decode(DataOne<samplehostCallControlApp>.self, from: data) { return wrapped.data }
+        return try decode(samplehostCallControlApp.self, data)
+    }
+
+    /// update-a-phone-number: `PATCH /v2/phone_numbers/{id}` with `connection_id` so the chosen number is on the Voice API app.
+    func assignNumberConnection(numberID: String, connectionID: String) async throws -> samplehostNumber {
+        let body: [String: Any] = ["connection_id": connectionID]
+        let data = try await send("PATCH", ["phone_numbers", numberID],
+                                  body: try JSONSerialization.data(withJSONObject: body))
+        if let wrapped = try? JSONDecoder().decode(DataOne<samplehostNumber>.self, from: data) { return wrapped.data }
+        return try decode(samplehostNumber.self, data)
+    }
+
+    /// One-tap Voice API setup: ensures an enabled Outbound Voice Profile exists, creates a Call Control ("Voice API")
+    /// application with a valid HTTPS webhook URL, and links `number` to it when given.
+    func provisionVoiceConnection(for number: samplehostNumber?,
+                                  webhookURL: String = PhoneLimits.voiceWebhookURL) async throws -> (app: samplehostCallControlAppSummary, updatedNumber: samplehostNumber?) {
+        let country = number.flatMap { PhoneSetupCheck.country(of: $0.phone_number) } ?? "US"
+        let profileID = try await ensureVoiceProfile(country: country)
+        let app = try await createCallControlApp(name: PhoneLimits.voiceAppName, webhookURL: webhookURL, outboundProfileID: profileID)
+        var updatedNumber: samplehostNumber? = nil
+        if let number, !number.id.isEmpty, number.connection_id != app.id {
+            updatedNumber = try? await assignNumberConnection(numberID: number.id, connectionID: app.id)
+        }
+        return (app, updatedNumber)
+    }
+
+    /// Repairs an existing setup's voice connection (activates/fixes webhook URL & outbound voice profile, or replaces a
+    /// TeXML/missing connection ID with a real Call Control application) and links `number` to it.
+    func repairVoiceConnection(connectionID: String?, for number: samplehostNumber?,
+                               webhookURL: String = PhoneLimits.voiceWebhookURL) async throws -> (connectionID: String, connectionName: String, updatedNumber: samplehostNumber?) {
+        let country = number.flatMap { PhoneSetupCheck.country(of: $0.phone_number) } ?? "US"
+        if let id = connectionID, !id.isEmpty, let existing = try? await callControlApp(id: id) {
+            let existingProfileID = existing.outbound?.outbound_voice_profile_id ?? ""
+            let profileID: String
+            if !existingProfileID.isEmpty,
+               let prof = try? await voiceProfile(id: existingProfileID), prof.enabled != false,
+               ((prof.whitelisted_destinations ?? []).isEmpty || (prof.whitelisted_destinations ?? []).map({ $0.uppercased() }).contains(country)) {
+                profileID = existingProfileID
+            } else {
+                profileID = try await ensureVoiceProfile(country: country)
+            }
+            let effectiveWebhook = samplehostHasValidWebhookURL(existing.webhook_event_url) ? (existing.webhook_event_url ?? webhookURL) : webhookURL
+            let name = existing.application_name.flatMap { $0.isEmpty ? nil : $0 } ?? PhoneLimits.voiceAppName
+            _ = try await updateCallControlApp(id: id, name: name, webhookURL: effectiveWebhook, outboundProfileID: profileID)
+            var updatedNumber: samplehostNumber? = nil
+            if let number, !number.id.isEmpty, number.connection_id != id {
+                updatedNumber = try? await assignNumberConnection(numberID: number.id, connectionID: id)
+            }
+            return (id, name, updatedNumber)
+        }
+        // Not a Call Control application (e.g. a TeXML app): reuse an active Call Control app if the account already has one, else create one.
+        let existingApps = (try? await callControlApps()) ?? []
+        if let ready = existingApps.first(where: { samplehostHasValidWebhookURL($0.webhook_event_url) && !($0.outbound?.outbound_voice_profile_id ?? "").isEmpty }) {
+            var updatedNumber: samplehostNumber? = nil
+            if let number, !number.id.isEmpty, number.connection_id != ready.id {
+                updatedNumber = try? await assignNumberConnection(numberID: number.id, connectionID: ready.id)
+            }
+            return (ready.id, ready.application_name ?? ready.id, updatedNumber)
+        }
+        let provisioned = try await provisionVoiceConnection(for: number, webhookURL: webhookURL)
+        return (provisioned.app.id, provisioned.app.application_name ?? provisioned.app.id, provisioned.updatedNumber)
     }
 
     /// get-balance: `GET /v2/balance`.

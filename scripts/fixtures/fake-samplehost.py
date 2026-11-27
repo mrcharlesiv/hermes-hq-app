@@ -49,6 +49,14 @@ lock = threading.RLock()
 def empty():
     return {'requests': [], 'problems': [], 'calls': [], 'answers': [], 'told': [], 'hangups': 0, 'assistants': [],
             'created_keys': [], 'dials': [], 'telephony_updates': [],
+            'number': {'id': '1293384261075731499', 'record_type': 'phone_number', 'phone_number': FROM, 'status': 'active',
+                       'connection_id': CONNECTION, 'connection_name': 'Simulated connection'},
+            'apps': [{'id': CONNECTION, 'record_type': 'call_control_application', 'active': True,
+                      'application_name': 'Simulated connection',
+                      'webhook_event_url': 'https://voice-events.invalid/hermes-hq',
+                      'outbound': {'outbound_voice_profile_id': PROFILE}}],
+            'profiles': [{'id': PROFILE, 'record_type': 'outbound_voice_profile', 'name': 'Simulated profile',
+                          'enabled': True, 'whitelisted_destinations': ['US', 'CA']}],
             'scenario': {'name': 'answers', 'lag': 0.0, 'events_lag': 2.0, 'summary_delay': 3.0},
             'assistant_config': {'greeting': '', 'transcription': {'model': 'deepgram/flux', 'language': 'auto'},
                                  'interruption_settings': {'enable': True}},
@@ -180,7 +188,8 @@ def check_dial(body):
     tools = assistant.get('tools') or []
     webhook = next((t.get('webhook') or {} for t in tools if t.get('type') == 'webhook'), {})
     instructions = assistant.get('instructions') or ''
-    for name, ok in [('connection_id', body.get('connection_id') == CONNECTION), ('from', body.get('from') == FROM),
+    valid_app_ids = {a['id'] for a in state['apps'] if a.get('active', True) and str(a.get('webhook_event_url') or '').startswith('https://')}
+    for name, ok in [('connection_id', body.get('connection_id') in valid_app_ids), ('from', body.get('from') == FROM),
                      ('to', str(body.get('to') or '').startswith('+') and str(body.get('to'))[1:].isdigit()),
                      ('time_limit_secs', body.get('time_limit_secs') == 1800), ('timeout_secs', body.get('timeout_secs') == 45),
                      ('answering_machine_detection', body.get('answering_machine_detection') == 'premium'),
@@ -199,9 +208,14 @@ def route(method, path, query, body, headers=None):
     call = next((entry for entry in calls if path.startswith('/v2/calls/' + entry['id'] + '/') or path == '/v2/calls/' + entry['id']), None)
 
     if method == 'GET' and path == '/v2/phone_numbers':
-        return 200, {'data': [{'id': '1293384261075731499', 'record_type': 'phone_number', 'phone_number': FROM, 'status': 'active',
-                               'connection_id': CONNECTION, 'connection_name': 'Simulated connection'}],
+        return 200, {'data': [dict(state['number'])],
                      'meta': {'total_pages': 1, 'total_results': 1, 'page_number': 1, 'page_size': 250}}
+    if method == 'PATCH' and path == '/v2/phone_numbers/' + state['number']['id']:
+        cid = (body or {}).get('connection_id') or ''
+        state['number']['connection_id'] = cid
+        matched_app = next((a for a in state['apps'] if a['id'] == cid), None)
+        state['number']['connection_name'] = matched_app.get('application_name') if matched_app else cid
+        return 200, {'data': dict(state['number'])}
     if method == 'GET' and path == '/v2/ai/assistants':
         return 200, {'data': state['assistants']}
     if method == 'POST' and path == '/v2/ai/assistants':
@@ -237,12 +251,56 @@ def route(method, path, query, body, headers=None):
                      'telephony_settings': state['telephony']}
     if method == 'GET' and path == '/v2/balance':
         return 200, {'data': {'record_type': 'balance', 'balance': '25.00', 'currency': 'USD', 'credit_limit': '0.00'}}
-    if method == 'GET' and path == '/v2/call_control_applications/' + CONNECTION:
-        return 200, {'data': {'id': CONNECTION, 'record_type': 'call_control_application', 'active': True,
-                              'application_name': 'Simulated connection', 'outbound': {'outbound_voice_profile_id': PROFILE}}}
-    if method == 'GET' and path == '/v2/outbound_voice_profiles/' + PROFILE:
-        return 200, {'data': {'id': PROFILE, 'record_type': 'outbound_voice_profile', 'enabled': True, 'whitelisted_destinations': ['US', 'CA']}}
+    if method == 'GET' and path == '/v2/call_control_applications':
+        return 200, {'data': [dict(a) for a in state['apps']], 'meta': {'total_pages': 1, 'total_results': len(state['apps'])}}
+    if method == 'POST' and path == '/v2/call_control_applications':
+        url = str((body or {}).get('webhook_event_url') or '')
+        if not url.startswith('https://'):
+            return error(422, '10003', 'Invalid webhook_event_url', 'webhook_event_url must be a valid https:// URL.')
+        created = {'id': CONNECTION, 'record_type': 'call_control_application',
+                   'active': bool((body or {}).get('active', True)),
+                   'application_name': (body or {}).get('application_name') or 'Hermes HQ Voice',
+                   'webhook_event_url': url,
+                   'outbound': dict((body or {}).get('outbound') or {})}
+        state['apps'] = [a for a in state['apps'] if a['id'] != CONNECTION] + [created]
+        return 200, {'data': created}
+    if path.startswith('/v2/call_control_applications/'):
+        app_id = path.split('/v2/call_control_applications/', 1)[1]
+        matched = next((a for a in state['apps'] if a['id'] == app_id), None)
+        if matched and method == 'GET':
+            return 200, {'data': dict(matched)}
+        if matched and method == 'PATCH':
+            url = str((body or {}).get('webhook_event_url') or '')
+            if not url.startswith('https://'):
+                return error(422, '10003', 'Invalid webhook_event_url', 'webhook_event_url must be a valid https:// URL.')
+            matched['active'] = bool((body or {}).get('active', True))
+            if (body or {}).get('application_name'): matched['application_name'] = body['application_name']
+            matched['webhook_event_url'] = url
+            if isinstance((body or {}).get('outbound'), dict): matched['outbound'] = dict(body['outbound'])
+            return 200, {'data': dict(matched)}
+        return error(404, '10005', 'Resource not found', 'The requested resource or URL could not be found.')
+    if method == 'GET' and path == '/v2/outbound_voice_profiles':
+        return 200, {'data': [dict(p) for p in state['profiles']], 'meta': {'total_pages': 1, 'total_results': len(state['profiles'])}}
+    if method == 'POST' and path == '/v2/outbound_voice_profiles':
+        created_profile = {'id': PROFILE, 'record_type': 'outbound_voice_profile',
+                           'name': (body or {}).get('name') or 'Hermes HQ Outbound',
+                           'enabled': bool((body or {}).get('enabled', True)),
+                           'whitelisted_destinations': list((body or {}).get('whitelisted_destinations') or ['US'])}
+        state['profiles'] = [p for p in state['profiles'] if p['id'] != PROFILE] + [created_profile]
+        return 200, {'data': created_profile}
+    if method == 'GET' and path.startswith('/v2/outbound_voice_profiles/'):
+        prof_id = path.split('/v2/outbound_voice_profiles/', 1)[1]
+        matched_prof = next((p for p in state['profiles'] if p['id'] == prof_id), None)
+        if matched_prof:
+            return 200, {'data': dict(matched_prof)}
+        return error(404, '10005', 'Resource not found', 'The requested resource or URL could not be found.')
     if method == 'POST' and path == '/v2/calls':
+        req_conn = (body or {}).get('connection_id')
+        valid_conn = next((a for a in state['apps'] if a['id'] == req_conn and a.get('active', True)
+                           and str(a.get('webhook_event_url') or '').startswith('https://')), None)
+        if not valid_conn:
+            return error(422, '10015', 'Invalid connection_id',
+                         'The requested connection_id (Call Control App ID) is either invalid or does not exist. Only Call Control Apps with valid webhook URL are accepted.')
         check_dial(body or {})
         call = next((entry for entry in calls if entry['command_id'] == (body or {}).get('command_id')), None)
         if call is None:
@@ -359,6 +417,13 @@ class Handler(BaseHTTPRequestHandler):
                 state['scenario'] = {'name': name, 'lag': float((body or {}).get('lag', 0)), 'events_lag': float((body or {}).get('events_lag', 2)),
                                      'summary_delay': (body or {}).get('summary_delay', 3)}
             return self.reply(200, {'ok': True})
+        if path == '/__fixture/texml_trap' and method == 'POST':
+            with lock:
+                state['number']['connection_id'] = 'texml-sim'
+                state['number']['connection_name'] = 'Hermes HQ Caller'
+                state['apps'] = []
+                state['profiles'] = []
+            return self.reply(200, {'ok': True})
         auth_ok = self.headers.get('Authorization') == 'Bearer ' + KEY
         with lock:
             state['requests'].append({'method': method, 'path': path, 'auth_ok': auth_ok, 'key_in_url': KEY in self.path,
@@ -369,6 +434,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.reply(status, obj)
     def do_GET(self): self.handle_any('GET')
     def do_POST(self): self.handle_any('POST')
+    def do_PATCH(self): self.handle_any('PATCH')
 
 def main():
     p = argparse.ArgumentParser(); p.add_argument('--port', type=int, required=True); p.add_argument('--cert', required=True); p.add_argument('--key', required=True); a = p.parse_args()

@@ -558,6 +558,43 @@ struct PhoneSetupCheckTests {
         let rows = PhoneSetupCheck.rows(setup: Self.setup, reads: reads)
         #expect(Self.state(rows, "voice") == .warn)
     }
+
+    @Test func missingWebhookURLAndTeXMLConnectionsFailClearly() {
+        var missingWebhook = Self.good()
+        missingWebhook.app = .success(samplehostCallControlApp(
+            active: true, application_name: "Voice App", webhook_event_url: "",
+            outbound: .init(outbound_voice_profile_id: "ovp-1")
+        ))
+        let rows = PhoneSetupCheck.rows(setup: Self.setup, reads: missingWebhook)
+        #expect(Self.state(rows, "connection") == .fail)
+        #expect(rows.first { $0.id == "connection" }?.sentence.contains("webhook URL") == true)
+
+        let texml404 = PhoneSetupCheck.rows(setup: Self.setup, reads: .init(numbers: .success([Self.number]), app: .failure(.unexpected(404))))
+        #expect(Self.state(texml404, "connection") == .fail)
+        #expect(texml404.first { $0.id == "connection" }?.sentence.contains("TeXML") == true)
+
+        #expect(samplehostHasValidWebhookURL("https://voice-events.invalid/hermes-hq"))
+        #expect(!samplehostHasValidWebhookURL(""))
+        #expect(!samplehostHasValidWebhookURL("http://voice-events.invalid/hermes-hq"))
+        #expect(!samplehostHasValidWebhookURL("localhost"))
+    }
+
+    @Test func resolverExcludesTeXMLAndPicksRealVoiceAPIConnection() {
+        let texmlNum = samplehostNumber(id: "n1", phone_number: "+12125550100", status: "active",
+                                    connection_id: "texml-1", connection_name: "Hermes HQ Caller")
+        // Account with zero Call Control apps: TeXML connection is NOT offered or auto-selected.
+        #expect(PhoneConnectionResolver.options(numbers: [texmlNum], apps: []).isEmpty)
+        #expect(PhoneConnectionResolver.preferredConnection(for: "+12125550100", numbers: [texmlNum], apps: []) == "")
+        #expect(PhoneConnectionResolver.isInvalidSavedConnection("texml-1", apps: []))
+        #expect(PhoneConnectionResolver.nonCallControlWarning(selectedNumber: texmlNum, connectionID: "", apps: [])?.contains("TeXML") == true)
+
+        // Account where user manually created a Voice API app while number is still on TeXML: offers and picks the Voice API app.
+        let voiceApp = samplehostCallControlAppSummary(id: "cc-1", application_name: "Voice API App", active: true,
+                                                   webhook_event_url: "https://voice-events.invalid/hermes-hq")
+        #expect(PhoneConnectionResolver.options(numbers: [texmlNum], apps: [voiceApp]) == [.init(id: "cc-1", name: "Voice API App")])
+        #expect(PhoneConnectionResolver.preferredConnection(for: "+12125550100", numbers: [texmlNum], apps: [voiceApp]) == "cc-1")
+        #expect(!PhoneConnectionResolver.isInvalidSavedConnection("cc-1", apps: [voiceApp]))
+    }
 }
 
 @Suite struct PhoneChatChipTests {

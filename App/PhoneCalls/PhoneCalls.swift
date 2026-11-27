@@ -11,7 +11,8 @@ struct PhoneSettingsView: View {
     let accountID: String
     @State private var setup: PhoneSetup?
     @State private var numbers: [samplehostNumber] = []
-    @State private var apps: [samplehostCallControlAppSummary] = []
+    /// `nil` before `callControlApps()` has answered (or if that read failed); `[...]` once known.
+    @State private var apps: [samplehostCallControlAppSummary]? = nil
     @State private var assistants: [samplehostAssistant] = []
     @State private var key = ""
     @State private var number = ""
@@ -20,6 +21,8 @@ struct PhoneSettingsView: View {
     @State private var ownerName = ""
     @State private var recordCalls = false
     @State private var sendResults = true
+    @State private var customWebhookURL = ""
+    @State private var needsCustomWebhookURL = false
     @State private var error: String?
     @State private var notice: String?
     @State private var busy = false
@@ -30,16 +33,32 @@ struct PhoneSettingsView: View {
 
     private var store: PhoneKeyStore { .app }
     private var controller: PhoneCallController { .shared(for: accountID) }
-    private var connections: [(id: String, name: String)] {
-        var seen = Set<String>()
-        var out: [(id: String, name: String)] = numbers.compactMap { n in
-            guard let id = n.connection_id, !id.isEmpty, seen.insert(id).inserted else { return nil }
-            return (id, n.connection_name.flatMap { $0.isEmpty ? nil : $0 } ?? id)
-        }
-        for app in apps where !app.id.isEmpty && seen.insert(app.id).inserted {
-            out.append((app.id, app.application_name.flatMap { $0.isEmpty ? nil : $0 } ?? app.id))
-        }
-        return out
+    private var connections: [PhoneConnectionResolver.Option] {
+        PhoneConnectionResolver.options(numbers: numbers, apps: apps)
+    }
+    private var selectedNumber: samplehostNumber? {
+        numbers.first { $0.phone_number == number }
+    }
+    private var selectedApp: samplehostCallControlAppSummary? {
+        apps?.first { $0.id == connection }
+    }
+    private var savedConnectionInvalid: Bool {
+        PhoneConnectionResolver.isInvalidSavedConnection(setup?.connectionID, apps: apps)
+    }
+    private var selectedAppNeedsFix: Bool {
+        guard let selectedApp else { return false }
+        let missingWebhook = selectedApp.webhook_event_url != nil && !samplehostHasValidWebhookURL(selectedApp.webhook_event_url)
+        let missingProfile = selectedApp.outbound != nil && (selectedApp.outbound?.outbound_voice_profile_id ?? "").isEmpty
+        return missingWebhook || missingProfile
+    }
+    private var nonCallControlWarning: String? {
+        guard loaded else { return nil }
+        return PhoneConnectionResolver.nonCallControlWarning(selectedNumber: selectedNumber, connectionID: connection, apps: apps)
+    }
+    private var statusWords: String {
+        guard let setup else { return "Not connected" }
+        if savedConnectionInvalid { return "Connected, choose or create a Voice API connection" }
+        return setup.ready ? "Ready" : "Connected, choose a number and assistant"
     }
     private var changed: Bool {
         guard let setup else { return false }
@@ -51,7 +70,7 @@ struct PhoneSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Text(setup == nil ? "Not connected" : setup?.ready == true ? "Ready" : "Connected, choose a number and assistant")
+                Text(statusWords)
                     .accessibilityIdentifier("phone.settings.status")
                 if setup == nil {
                     SecureField("samplehost API key", text: $key)
@@ -63,8 +82,24 @@ struct PhoneSettingsView: View {
             } header: { Text("samplehost") } footer: {
                 Text("Hermes HQ calls samplehost directly with your key. It stays in this device's Keychain for this account and is never sent to your gateway. Calls are billed to your samplehost account.")
             }
-            if let error { Section { Text(error).foregroundStyle(.red).accessibilityIdentifier("phone.settings.error") } }
+            if let error { Section { Text(error).foregroundStyle(Color.hqRed).accessibilityIdentifier("phone.settings.error") } }
             if let notice { Section { Text(notice).foregroundStyle(Color.hqLabel2).accessibilityIdentifier("phone.settings.notice") } }
+            if setup == nil {
+                Section {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("1. In portal.samplehost.com, add credit and buy an active phone number.")
+                        Text("2. Create an API key under Keys & Credentials and paste it above.")
+                        Text("3. Hermes HQ sets up your Voice API connection and AI Assistant right here — then start calls from any chat via ⋯ › Phone Call or by asking your bot to call.")
+                    }
+                    .font(Font.hq(.footnote))
+                    .foregroundStyle(Color.hqLabel2)
+                    .padding(.vertical, 2)
+                    NavigationLink("Setup & how to use guide") {
+                        PhoneGuideView().navigationTitle("Setup & how to use")
+                    }
+                    .accessibilityIdentifier("phone.settings.guide")
+                } header: { Text("How it works") }
+            }
             if setup != nil {
                 Section {
                     Picker("From number", selection: $number) {
@@ -72,11 +107,13 @@ struct PhoneSettingsView: View {
                         ForEach(numbers) { Text($0.phone_number).tag($0.phone_number) }
                     }
                     .onChange(of: number) { _, picked in
-                        if let id = numbers.first(where: { $0.phone_number == picked })?.connection_id, !id.isEmpty { connection = id }
+                        connection = PhoneConnectionResolver.preferredConnection(
+                            for: picked, numbers: numbers, apps: apps, current: connection
+                        )
                     }
                     Picker("Voice connection", selection: $connection) {
                         Text("Select").tag("")
-                        ForEach(connections, id: \.id) { Text($0.name).tag($0.id) }
+                        ForEach(connections) { Text($0.name).tag($0.id) }
                     }
                     Picker("AI Assistant", selection: $assistant) {
                         Text("Select").tag("")
@@ -86,10 +123,46 @@ struct PhoneSettingsView: View {
                         .textContentType(.name).autocorrectionDisabled()
                         .accessibilityIdentifier("phone.settings.name")
                 } header: { Text("Calls") } footer: {
-                    Text("The voice connection must be the Call Control application your number uses. Each call gives your assistant this call's context, who it is calling, and an ask_owner tool. With a name, the assistant introduces itself for you (or speaks directly to you when calling you). \(PhoneLimits.stayCopy)")
+                    Text("Voice connection must be a samplehost Voice API (Call Control) application — not a TeXML application. Each call gives your assistant this call's context, who it is calling, and an ask_owner tool. With a name, the assistant introduces itself for you (or speaks directly to you when calling you). \(PhoneLimits.stayCopy)")
+                }
+                if let warning = nonCallControlWarning {
+                    Section {
+                        Text(warning)
+                            .font(Font.hq(.footnote))
+                            .foregroundStyle(Color.hqOrange)
+                            .accessibilityIdentifier("phone.settings.texml-warning")
+                    }
                 }
                 if numbers.isEmpty && loaded {
-                    Section { Text("No active phone numbers on this samplehost account.").font(Font.hq(.footnote)) }
+                    Section { Text("No active phone numbers on this samplehost account. Buy a voice number in portal.samplehost.com under Numbers › Buy Numbers, then reopen this page.").font(Font.hq(.footnote)) }
+                }
+                if loaded, let knownApps = apps, knownApps.isEmpty || selectedAppNeedsFix || savedConnectionInvalid {
+                    Section {
+                        if knownApps.isEmpty {
+                            Text("This samplehost account has no Voice API (Call Control) application yet. TeXML applications created for AI Assistants can't place outbound calls here. Hermes HQ can create a Voice API connection, set up its Outbound Voice Profile, and link your number in one tap.")
+                                .font(Font.hq(.footnote))
+                        } else if selectedAppNeedsFix {
+                            Text("The chosen Voice API application is missing an https:// webhook URL or Outbound Voice Profile, which samplehost requires before placing calls.")
+                                .font(Font.hq(.footnote))
+                        }
+                        if needsCustomWebhookURL {
+                            TextField("Webhook URL (https://…)", text: $customWebhookURL)
+                                .keyboardType(.URL).autocorrectionDisabled().textInputAutocapitalization(.never)
+                                .accessibilityIdentifier("phone.settings.webhook-url")
+                            Text("samplehost asked for a reachable https:// address on this Voice API application. Enter any https:// URL you own; Hermes HQ reads call events directly with your API key, so no webhook server is needed.")
+                                .font(Font.hq(.caption))
+                                .foregroundStyle(Color.hqLabel2)
+                        }
+                        if knownApps.isEmpty {
+                            Button(busy ? "Setting up…" : "Create Voice Connection") { createVoiceConnection() }
+                                .disabled(busy)
+                                .accessibilityIdentifier("phone.settings.create-connection")
+                        } else if selectedAppNeedsFix || savedConnectionInvalid {
+                            Button(busy ? "Fixing…" : "Fix Voice Connection") { fixVoiceConnection() }
+                                .disabled(busy)
+                                .accessibilityIdentifier("phone.settings.fix-connection")
+                        }
+                    }
                 }
                 if assistants.isEmpty && loaded {
                     Section {
@@ -110,11 +183,17 @@ struct PhoneSettingsView: View {
                     Text("When a call ends, Hermes HQ sends what happened (the outcome, questions and answers, and the transcript) into the chat the call was made from, so your agent knows.")
                 }
                 Section {
-                    Button("Save") { save() }.disabled(busy || !changed || number.isEmpty || connection.isEmpty || assistant.isEmpty)
+                    Button("Save") { save() }
+                        .disabled(busy || (!changed && !savedConnectionInvalid) || number.isEmpty || connection.isEmpty || assistant.isEmpty
+                                  || PhoneConnectionResolver.isInvalidSavedConnection(connection, apps: apps))
                         .accessibilityIdentifier("phone.settings.save")
                 }
-                if setup?.ready == true {
-                    Section {
+                Section {
+                    NavigationLink("Setup & how to use guide") {
+                        PhoneGuideView().navigationTitle("Setup & how to use")
+                    }
+                    .accessibilityIdentifier("phone.settings.guide")
+                    if setup?.ready == true && !savedConnectionInvalid {
                         NavigationLink("Check my setup") { PhoneSetupCheckView(accountID: accountID).navigationTitle("Check my setup") }
                             .accessibilityIdentifier("phone.settings.check")
                         Button("Optimize assistant for calls") { optimizeAssistant() }.disabled(busy)
@@ -124,8 +203,12 @@ struct PhoneSettingsView: View {
                         Button("Clear call history", role: .destructive) { confirmClear = true }
                             .disabled(!controller.calls.contains { !$0.active })
                             .accessibilityIdentifier("phone.settings.clear-history")
-                    } footer: {
-                        Text("Hermes HQ automatically tunes your assistant for fast turn-taking, natural interruptions, noise suppression, and prompt pickup before your next call. Use this button to apply those settings right away.")
+                    }
+                } footer: {
+                    if setup?.ready == true && !savedConnectionInvalid {
+                        Text("Place calls from any chat via ⋯ › Phone Call, or ask your bot in chat to call someone. Hermes HQ automatically tunes your assistant for fast turn-taking, natural interruptions, and noise suppression before your next call.")
+                    } else {
+                        Text("Open the guide for step-by-step samplehost setup, Voice API vs. TeXML details, and how to place and steer calls from a chat.")
                     }
                 }
             }
@@ -149,11 +232,90 @@ struct PhoneSettingsView: View {
 
     private func fetch(_ api: samplehostAPI) async throws {
         numbers = try await api.phoneNumbers()
-        if !numbers.contains(where: { !($0.connection_id ?? "").isEmpty }) {
-            apps = (try? await api.callControlApps()) ?? []
+        apps = try? await api.callControlApps()
+        if !number.isEmpty {
+            let resolved = PhoneConnectionResolver.preferredConnection(
+                for: number, numbers: numbers, apps: apps, current: connection
+            )
+            if !PhoneConnectionResolver.isInvalidSavedConnection(setup?.connectionID, apps: apps) || !resolved.isEmpty {
+                connection = resolved
+            }
+        } else if numbers.count == 1 {
+            number = numbers[0].phone_number
+            connection = PhoneConnectionResolver.preferredConnection(
+                for: number, numbers: numbers, apps: apps, current: connection
+            )
         }
         assistants = try await api.assistants()
         pickOnlyAssistant()
+    }
+
+    private var effectiveWebhookURL: String {
+        let trimmed = customWebhookURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? PhoneLimits.voiceWebhookURL : trimmed
+    }
+
+    private func handleWebhookRejectionIfNeeded(_ caught: Error) {
+        let words = phoneMessage(caught).lowercased()
+        if customWebhookURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           words.contains("webhook") || words.contains("url") || words.contains("10003") {
+            needsCustomWebhookURL = true
+        }
+    }
+
+    private func createVoiceConnection() {
+        guard !busy, let stored = setup else { return }
+        busy = true; error = nil; notice = nil
+        let targetNumber = selectedNumber ?? (numbers.count == 1 ? numbers[0] : nil)
+        let webhook = effectiveWebhookURL
+        Task {
+            defer { busy = false }
+            do {
+                let api = samplehostAPI(key: stored.apiKey)
+                let result = try await api.provisionVoiceConnection(for: targetNumber, webhookURL: webhook)
+                var currentApps = apps ?? []
+                if !currentApps.contains(where: { $0.id == result.app.id }) { currentApps.append(result.app) }
+                apps = currentApps
+                if let updated = result.updatedNumber, let idx = numbers.firstIndex(where: { $0.id == updated.id }) {
+                    numbers[idx] = updated
+                }
+                if number.isEmpty, let targetNumber { number = targetNumber.phone_number }
+                connection = result.app.id
+                needsCustomWebhookURL = false
+                notice = "Created Voice API connection “\(result.app.application_name ?? PhoneLimits.voiceAppName)”."
+                if !number.isEmpty, !connection.isEmpty, !assistant.isEmpty { busy = false; save() }
+            } catch {
+                handleWebhookRejectionIfNeeded(error)
+                self.error = phoneMessage(error)
+            }
+        }
+    }
+
+    private func fixVoiceConnection() {
+        guard !busy, let stored = setup else { return }
+        busy = true; error = nil; notice = nil
+        let targetNumber = selectedNumber ?? (numbers.count == 1 ? numbers[0] : nil)
+        let currentConn = connection.isEmpty ? stored.connectionID : connection
+        let webhook = effectiveWebhookURL
+        Task {
+            defer { busy = false }
+            do {
+                let api = samplehostAPI(key: stored.apiKey)
+                let repaired = try await api.repairVoiceConnection(connectionID: currentConn, for: targetNumber, webhookURL: webhook)
+                apps = (try? await api.callControlApps()) ?? [samplehostCallControlAppSummary(id: repaired.connectionID, application_name: repaired.connectionName, active: true, webhook_event_url: webhook)]
+                if let updated = repaired.updatedNumber, let idx = numbers.firstIndex(where: { $0.id == updated.id }) {
+                    numbers[idx] = updated
+                }
+                if number.isEmpty, let targetNumber { number = targetNumber.phone_number }
+                connection = repaired.connectionID
+                needsCustomWebhookURL = false
+                notice = "Updated Voice API connection “\(repaired.connectionName)”."
+                if !number.isEmpty, !connection.isEmpty, !assistant.isEmpty { busy = false; save() }
+            } catch {
+                handleWebhookRejectionIfNeeded(error)
+                self.error = phoneMessage(error)
+            }
+        }
     }
 
     private func optimizeAssistant() {
@@ -185,7 +347,9 @@ struct PhoneSettingsView: View {
                 let made = try await samplehostAPI(key: stored.apiKey).createAssistant(idempotencyKey: createKey)
                 if !assistants.contains(made) { assistants.append(made) }
                 assistant = made.id
-                if !number.isEmpty, !connection.isEmpty { busy = false; save() }
+                if !number.isEmpty, !connection.isEmpty, !PhoneConnectionResolver.isInvalidSavedConnection(connection, apps: apps) {
+                    busy = false; save()
+                }
             } catch { self.error = phoneMessage(error) }
         }
     }
@@ -201,21 +365,27 @@ struct PhoneSettingsView: View {
     private func connect() {
         guard !busy, !key.isEmpty, setup == nil else { return }
         let submitted = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        key = ""; busy = true; error = nil
+        key = ""; busy = true; error = nil; notice = nil
         Task {
             defer { busy = false }
             let api = samplehostAPI(key: submitted)
             do {
                 numbers = try await api.phoneNumbers()   // the read-only check that the key works
+                let fetchedApps = try? await api.callControlApps()
+                apps = fetchedApps
                 var fresh = PhoneSetup(apiKey: submitted)
-                if numbers.count == 1 { fresh.fromNumber = numbers[0].phone_number; fresh.connectionID = numbers[0].connection_id }
+                if numbers.count == 1 {
+                    fresh.fromNumber = numbers[0].phone_number
+                    let preferred = PhoneConnectionResolver.preferredConnection(
+                        for: numbers[0].phone_number, numbers: numbers, apps: fetchedApps, current: ""
+                    )
+                    fresh.connectionID = preferred.isEmpty ? nil : preferred
+                } else if let fetchedApps, fetchedApps.count == 1 {
+                    fresh.connectionID = fetchedApps[0].id
+                }
                 try store.save(fresh, for: accountID)
                 apply(fresh)
-                if numbers.count != 1 { number = ""; connection = "" }
-                if !numbers.contains(where: { !($0.connection_id ?? "").isEmpty }) {
-                    apps = (try? await api.callControlApps()) ?? []
-                    if apps.count == 1 && connection.isEmpty { connection = apps[0].id }
-                }
+                if numbers.count != 1 { number = "" }
                 assistants = try await api.assistants()
                 pickOnlyAssistant()
                 if fresh.ready == false, !number.isEmpty, !connection.isEmpty, !assistant.isEmpty { busy = false; save() }
@@ -225,8 +395,9 @@ struct PhoneSettingsView: View {
         }
     }
 
-    /// Saves the choices, then makes the assistant's recording match the switch (wire fact 9). A failed match is
-    /// shown; the choices stay saved and the next dial tries again (and won't dial if it fails).
+    /// Saves the choices, links the samplehost number to the chosen Voice API connection when needed, and makes the
+    /// assistant's recording match the switch (wire fact 9). A failed recording match is shown; the choices stay saved
+    /// and the next dial tries again (and won't dial if it fails).
     private func save() {
         guard !busy, var next = setup else { return }
         next.fromNumber = number; next.connectionID = connection; next.assistantID = assistant
@@ -242,8 +413,14 @@ struct PhoneSettingsView: View {
         guard next.ready, let assistantID = next.assistantID else { return }
         busy = true
         let api = samplehostAPI(key: next.apiKey), on = next.records
+        let numberToLink = selectedNumber.flatMap { $0.connection_id != connection && !$0.id.isEmpty ? $0 : nil }
+        let targetConnection = connection
         Task {
             defer { busy = false }
+            if let numberToLink, let updated = try? await api.assignNumberConnection(numberID: numberToLink.id, connectionID: targetConnection),
+               let idx = numbers.firstIndex(where: { $0.id == updated.id }) {
+                numbers[idx] = updated
+            }
             let matched = await Result.of { try await api.prepareAssistantForCall(assistantID: assistantID, recording: on) }
             if case .failure(let failure) = matched {
                 error = "Saved, but the assistant's recording couldn't be set to \(on ? "on" : "off"). Calls won't go out until it can. " + phoneMessage(failure)
@@ -259,7 +436,8 @@ struct PhoneSettingsView: View {
             await controller.endAll()
             controller.forgetHistory()
             store.delete(for: accountID)
-            apply(nil); numbers = []; apps = []; assistants = []; error = nil; notice = nil
+            apply(nil); numbers = []; apps = nil; assistants = []; error = nil; notice = nil
+            needsCustomWebhookURL = false; customWebhookURL = ""
         }
     }
 }

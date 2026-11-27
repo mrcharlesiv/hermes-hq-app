@@ -33,8 +33,8 @@ extension SessionsTests {
         }
     }
 
-    /// More › Settings › Phone Calls (Beta), from wherever the More tab was left (a second tap on More pops it to its
-    /// first page, so a page another account left open is never reused).
+    /// More › Settings › Voice & Calls › Phone Calls (Beta), from wherever the More tab was left (a second tap on More
+    /// pops it to its first page, so a page another account left open is never reused).
     @MainActor func openPhoneSettings(_ app: XCUIApplication) {
         let more = app.tabButton(id: "tab-more", label: "More")
         more.tap()
@@ -42,6 +42,9 @@ extension SessionsTests {
         for _ in 0..<3 where !settings.waitForExistence(timeout: 3) { more.tap() }
         if !settings.exists { shot(app, "phone-more-not-found") }
         XCTAssertTrue(settings.waitForExistence(timeout: 10)); settings.tap()
+        let voiceSettings = app.buttons["settings.config.voice"]
+        for _ in 0..<6 where !voiceSettings.isHittable { app.swipeUp() }
+        XCTAssertTrue(voiceSettings.waitForExistence(timeout: 10)); voiceSettings.tap()
         let phoneSettings = app.buttons["settings.phone-calls"]
         for _ in 0..<6 where !phoneSettings.isHittable { app.swipeUp() }
         XCTAssertTrue(phoneSettings.waitForExistence(timeout: 10)); phoneSettings.tap()
@@ -138,9 +141,10 @@ extension SessionsTests {
             (try? samplehostRequests(samplehost).contains { ($0["method"] as? String) == "GET" && ($0["path"] as? String) == "/v2/ai/assistants/assistant-sim" }) == true
         }
         let setupRequests = try samplehostRequests(samplehost).map { "\($0["method"] ?? "") \($0["path"] ?? "")" }
-        XCTAssertEqual(Set(setupRequests), ["GET /v2/phone_numbers", "GET /v2/ai/assistants", "POST /v2/ai/assistants",
+        XCTAssertEqual(Set(setupRequests), ["GET /v2/phone_numbers", "GET /v2/call_control_applications",
+                                            "GET /v2/ai/assistants", "POST /v2/ai/assistants",
                                             "GET /v2/ai/assistants/assistant-sim"],
-                       "setup reads, creates the assistant with recording off by default, and confirms it")
+                       "setup reads numbers & Voice API connections, creates the assistant with recording off by default, and confirms it")
         XCTAssertEqual(setupRequests.filter { $0 == "POST /v2/ai/assistants" }.count, 1, "one assistant made")
         let telephony = try XCTUnwrap(try samplehost.control("/__fixture/state")["telephony"] as? [String: Any])
         XCTAssertEqual((telephony["recording_settings"] as? [String: Any])?["enabled"] as? Bool, false, "Record calls is off by default")
@@ -705,6 +709,75 @@ extension SessionsTests {
         shot(large, "phone-accessibility-text")
         hangUp(large)
         XCTAssertTrue(statusText(large, prefix: "Finished").waitForExistence(timeout: 30))
+        try assertKeyOnlyInHeader(samplehost)
+    }
+
+    /// Reproduces the TeXML connection trap (number assigned to TeXML, no Voice API app or Outbound Voice Profile yet),
+    /// walks through the Setup & how to use guide, provisions a Voice API connection + AI Assistant in two taps, and
+    /// verifies every Check my setup row passes.
+    @MainActor func testPhoneCallsTeXMLTrapAndSetupGuide() throws {
+        let samplehost = try samplehostFixture()
+        try samplehost.control("/__fixture/reset", [:])
+        try samplehost.control("/__fixture/texml_trap", [:])
+        try account.control("/__fixture/mode", ["prompts": "reply"])
+
+        let app = launch(fresh: true, extra: ["-HQDebugAppearance", "dark"],
+                         environment: ["HQ_SAMPLEHOST_BASE_URL": samplehost.url + "/v2"])
+        XCTAssertTrue(row(app, "s-garden").waitForExistence(timeout: 20))
+        openPhoneSettings(app)
+
+        XCTAssertTrue(app.staticTexts["Not connected"].waitForExistence(timeout: 10))
+        let guideLink = app.buttons["phone.settings.guide"]
+        XCTAssertTrue(guideLink.waitForExistence(timeout: 10), "guide is reachable before connecting")
+        shot(app, "phone-setup-1-disconnected")
+
+        guideLink.tap()
+        XCTAssertTrue(app.staticTexts["Quick setup"].waitForExistence(timeout: 10))
+        shot(app, "phone-setup-2-guide-top")
+        app.swipeUp()
+        let copyWebhook = app.buttons["phone.guide.copy-webhook"]
+        for _ in 0..<3 where !copyWebhook.exists { app.swipeUp() }
+        XCTAssertTrue(copyWebhook.waitForExistence(timeout: 10))
+        shot(app, "phone-setup-3-guide-troubleshooting")
+        app.navigationBars.buttons.firstMatch.tap()
+
+        let key = app.secureTextFields["samplehost API key"]
+        XCTAssertTrue(key.waitForExistence(timeout: 10))
+        key.tap(); key.typeText("KEYTEST")
+        app.buttons["Connect"].tap()
+
+        let warning = app.staticTexts["phone.settings.texml-warning"]
+        XCTAssertTrue(warning.waitForExistence(timeout: 15), "warns when the number is on a TeXML connection")
+        let createConn = app.buttons["phone.settings.create-connection"]
+        if !createConn.exists { app.swipeUp() }
+        XCTAssertTrue(createConn.waitForExistence(timeout: 10))
+        shot(app, "phone-setup-4-texml-warning")
+
+        createConn.tap()
+        XCTAssertTrue(app.staticTexts["phone.settings.notice"].waitForExistence(timeout: 15))
+
+        let createAssistant = app.buttons["phone.settings.create-assistant"]
+        for _ in 0..<3 where !createAssistant.exists { app.swipeUp() }
+        XCTAssertTrue(createAssistant.waitForExistence(timeout: 10))
+        createAssistant.tap()
+
+        for _ in 0..<3 where !app.staticTexts["Ready"].exists { app.swipeDown() }
+        XCTAssertTrue(app.staticTexts["Ready"].waitForExistence(timeout: 15))
+        shot(app, "phone-setup-5-ready")
+
+        let check = app.buttons["phone.settings.check"]
+        for _ in 0..<4 where !check.isHittable { app.swipeUp() }
+        XCTAssertTrue(check.waitForExistence(timeout: 10))
+        check.tap()
+
+        XCTAssertTrue(app.descendants(matching: .any)["phone.check.balance"].waitForExistence(timeout: 15))
+        for id in ["key", "number", "connection", "profile", "country", "assistant", "model", "recording", "balance"] {
+            let checkRow = app.descendants(matching: .any)["phone.check." + id]
+            XCTAssertTrue(checkRow.exists, id)
+            XCTAssertTrue(checkRow.label.hasPrefix("OK"), "\(id): \(checkRow.label)")
+        }
+        shot(app, "phone-setup-6-check-all-pass")
+        XCTAssertEqual(try samplehost.control("/__fixture/state")["problems"] as? [String], [])
         try assertKeyOnlyInHeader(samplehost)
     }
 

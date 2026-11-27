@@ -1445,16 +1445,14 @@ struct GatewayCardView: View {
                     icon
                     details
                 }
-                .layoutPriority(1)   // [mac] Stress test 2026-10-28 round 6: see below
+                .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 icon
                 details
-                    // [mac] Stress test 2026-10-28 round 6: the cause of More's three status lines. An HStack shares
-                    // what is left between its flexible children, so the text column got about half (the Spacer took
-                    // the rest) and DotSeparatedText's two-line layouts didn't fit it. The text goes first now.
-                    .layoutPriority(1)
+                    // Takes the whole text column on the first layout pass (with a Spacer beside it, HStack split the
+                    // room and ViewThatFits couldn't see the column's width until a second pass).
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Spacer(minLength: 8)
             if !DeviceWord.isMac {   // [mac] Stress test 2026-10-28 #51: More and Settings are source lists on the Mac
                 Image(systemName: "chevron.right")
                     .font(Font.hq(.footnote).weight(.semibold))
@@ -1462,7 +1460,6 @@ struct GatewayCardView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }, action: { rowWidth = $0 })   // [gateway-card]
         .padding(.vertical, Theme.isDesktop ? 12 : padV)
         .frame(minHeight: Theme.isDesktop ? 76 : 64)
         .contentShape(Rectangle())
@@ -1475,14 +1472,6 @@ struct GatewayCardView: View {
 
     private var icon: some View {
         WornAppIcon(side: 48)
-    }
-
-    /// [gateway-card] The row's width, for choosing the status line's form.
-    @State private var rowWidth: CGFloat = 0
-
-    private static func width(_ text: String, _ font: UIFont, medium: Bool = false) -> CGFloat {
-        let face = medium ? HQFont.system(ofSize: font.pointSize, weight: .medium) : font
-        return ceil((text as NSString).size(withAttributes: [.font: face]).width) + 2
     }
 
     /// How far the dot's middle sits above the status line's baseline.
@@ -1519,9 +1508,10 @@ struct GatewayCardView: View {
             }
             // The dot's middle sits at the middle of the capitals (3 pt above the baseline at the default size).
             let dot = min(dotSize, 14)
+            let lift = dotLift
             let state = HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Circle().fill(model.dotColor).frame(width: dot, height: dot)
-                    .alignmentGuide(.firstTextBaseline) { $0.height / 2 + dotLift }
+                    .alignmentGuide(.firstTextBaseline) { $0.height / 2 + lift }
                 // Owner 2026-11-04: "Connected · 1 Bot · Hermes 0.22.6" broke wherever the width ran out, its tail
                 // indented under "Connected", and read as an accident. The state has its own line; the facts sit
                 // under it, smaller and quieter, from the column's left edge.
@@ -1534,46 +1524,43 @@ struct GatewayCardView: View {
             // form stands: the state on its own line and the facts under it, never a broken line.
             if model.factPieces.isEmpty {
                 state
+            } else if typeSize.isAccessibilitySize {
+                twoLineStatus(state)
             } else {
-                // Chosen by measuring (a `ViewThatFits` here always took the two-line form: the row's first layout pass
-                // offers the column no width): the line at its own sizes, else a size down, else two lines.
+                // Chosen synchronously with ViewThatFits over `details`'s full column width (a `@State` width from
+                // `onGeometryChange` measured two lines on cell reuse and shrank to one on the next turn, snapping More
+                // and Settings back ~16 pt whenever a slow upward scroll reached the gateway card).
                 let facts = " · " + model.factPieces.joined(separator: " · ")
-                let room = rowWidth - 48 - 14 - (DeviceWord.isMac ? 8 : 34)
-                let full = dot + 6 + Self.width(model.stateWords, HQFont.preferred(.subheadline), medium: true) + Self.width(facts, HQFont.preferred(.footnote))
-                let small = 7 + 5 + Self.width(model.stateWords + facts, HQFont.preferred(.caption1), medium: true)
-                if rowWidth > 0, !typeSize.isAccessibilitySize, full <= room {
+                ViewThatFits(in: .horizontal) {
                     HStack(alignment: .firstTextBaseline, spacing: 0) {
-                        // [Mac AAA rest 2026-11-17] The state is never broken inside its word: in the iPhone's Desktop
-                        // Look the measure above came out a few points short and "Connected" broke as "Connecte / d".
-                        // If the line is that little too long the facts give up a little size instead (where it fits,
-                        // as chosen, both draw exactly as before).
                         state.fixedSize()
                         Text(facts)
                             .font(Font.hq(.footnote))
                             .foregroundStyle(Color(uiColor: HQPalette.cardNote))
                             .lineLimit(1)
-                            .minimumScaleFactor(0.85)
+                            .fixedSize()
                     }
-                } else if rowWidth > 0, !typeSize.isAccessibilitySize, small <= room {
-                    // A narrower phone (the mini): the whole line a size down before it is given up for two lines.
                     HStack(alignment: .firstTextBaseline, spacing: 5) {
                         Circle().fill(model.dotColor).frame(width: 7, height: 7)
-                            .alignmentGuide(.firstTextBaseline) { $0.height / 2 + dotLift - 0.5 }
+                            .alignmentGuide(.firstTextBaseline) { $0.height / 2 + lift - 0.5 }
                         Text("\(Text(model.stateWords).fontWeight(.medium).foregroundStyle(Color.hqLabel2))\(Text(facts).foregroundStyle(Color(uiColor: HQPalette.cardNote)))")
                             .font(Font.hq(.caption))
                             .lineLimit(1)
                             .fixedSize()
                     }
-                } else {
-                    VStack(alignment: .leading, spacing: 3) {
-                        state
-                        // Mac polish #68: label 2 in the iOS look (label 3 read about 2.1:1 on the card); the Desktop Look's 3.
-                        DotSeparatedText(pieces: model.factPieces)
-                            .font(Font.hq(.footnote))
-                            .foregroundStyle(Color(uiColor: HQPalette.cardNote))
-                    }
+                    twoLineStatus(state)
                 }
             }
+        }
+    }
+
+    private func twoLineStatus<StateView: View>(_ state: StateView) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            state
+            // Mac polish #68: label 2 in the iOS look (label 3 read about 2.1:1 on the card); the Desktop Look's 3.
+            DotSeparatedText(pieces: model.factPieces)
+                .font(Font.hq(.footnote))
+                .foregroundStyle(Color(uiColor: HQPalette.cardNote))
         }
     }
 }

@@ -513,7 +513,7 @@ extension MacOpenQuickly {
         case PagesTabs.settingsRowID:
             return (nil, { _ in })
         case "passwords":
-            return (.gateway, { SettingsNavigator.openRoot("vault", router: $0) })
+            return (.accounts, { SettingsNavigator.openRoot("vault", router: $0) })
         case "capabilities", "connectors", ComposioRow.id:
             return (.tools, { SettingsNavigator.openRoot(id, router: $0) })
         case "profiles", "messaging", "webhooks", "import-sessions":

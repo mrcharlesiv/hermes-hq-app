@@ -22,11 +22,10 @@ enum AppearanceRows {
     static let topEdge = "row:top-edge"
     static let thinkingBar = "row:thinking-drive"
 
-    /// Whether Appearance draws `row` on this device (Thinking Bar is under Sounds & Haptics off the Mac).
+    /// Whether Appearance draws `row` on this device (Thinking Bar lives in Appearance › Chats on both iOS and Mac).
     static func contains(_ row: String) -> Bool {
         switch row {
-        case lightOrDark, desktopLook, highContrast, uiScale, density, workingRing, topEdge: true
-        case thinkingBar: DeviceWord.isMac
+        case lightOrDark, desktopLook, highContrast, uiScale, density, workingRing, topEdge, thinkingBar: true
         default: false
         }
     }
@@ -242,7 +241,7 @@ struct AppearanceSections: View {
         Section {
             chatBubblesRow(state)
             if !state.desktopLook { backgroundsRow(state) }
-            macThinkingBarRow
+            thinkingBarRow
         } header: { header(.chats) }
     }
 
@@ -263,22 +262,40 @@ struct AppearanceSections: View {
         .accessibilityIdentifier("settings.backgrounds-row")
     }
 
-    /// [thinking-drive] Thinking Bar on the Mac. [macpass-settings2] The iPhone has it under Sounds & Haptics for its
-    /// feel (a haptic rev); the Mac has no haptics and the drive makes no sound, so it is a look.
-    /// [mac] Not in the Desktop Look, where the bar draws calmly whatever the drive (Mac polish #37).
-    @ViewBuilder private var macThinkingBarRow: some View {
-        if DeviceWord.isMac, model.thinkingBarShown {
-            HStack(spacing: 12) {
-                SettingsRowLabel(title: "Thinking Bar", systemImage: "gauge.with.dots.needle.67percent")
-                Spacer(minLength: 16)
-                MacPopUp(label: "Thinking Bar", selection: Binding(get: { model.thinkingDrive }, set: { (value: ThinkingDrive) in
-                    model.thinkingDrive = value
-                    ThinkingDrive.chosen = value
-                }), options: ThinkingDrive.allCases) { $0.title }
-                    .accessibilityIdentifier("settings.thinking-drive")
-                    .hqMacSettingsControl()
+    /// [thinking-drive] Thinking Bar in Appearance › Chats on both iPhone and Mac (hidden in the Mac Desktop Look,
+    /// where the bar draws calmly whatever the drive).
+    @ViewBuilder private var thinkingBarRow: some View {
+        let drive = Binding(get: { model.thinkingDrive }, set: { (value: ThinkingDrive) in
+            Haptics.play(.selection)
+            model.thinkingDrive = value
+            ThinkingDrive.chosen = value
+        })
+        if DeviceWord.isMac {
+            if model.thinkingBarShown {
+                HStack(spacing: 12) {
+                    SettingsRowLabel(title: "Thinking Bar", systemImage: "gauge.with.dots.needle.67percent")
+                    Spacer(minLength: 16)
+                    MacPopUp(label: "Thinking Bar", selection: drive, options: ThinkingDrive.allCases) { $0.title }
+                        .accessibilityIdentifier("settings.thinking-drive")
+                        .hqMacSettingsControl()
+                }
+                .revealRow(AppearanceRows.thinkingBar, revealed)
             }
-            .revealRow(AppearanceRows.thinkingBar, revealed)
+        } else {
+            SettingsMenuRowFace(label: SettingsRowLabel(title: "Thinking Bar", systemImage: "gauge.with.dots.needle.67percent"), value: model.thinkingDrive.title)
+                .overlay {
+                    Menu {
+                        Picker("Thinking Bar", selection: drive) {
+                            ForEach(ThinkingDrive.allCases) { Text($0.title).tag($0) }
+                        }
+                    } label: {
+                        Color.clear.contentShape(Rectangle())
+                    }
+                    .accessibilityLabel("Thinking Bar")
+                    .accessibilityValue(model.thinkingDrive.title)
+                    .accessibilityIdentifier("settings.thinking-drive")
+                }
+                .revealRow(AppearanceRows.thinkingBar, revealed)
         }
     }
 

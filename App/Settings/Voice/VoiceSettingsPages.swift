@@ -12,9 +12,10 @@ import UIKit
         router.push(makeSection(router: router))
     }
 
-    /// The Voice page list (also where "Voice Settings…" lands).
+    /// The Voice & Calls page list (also where "Voice Settings…" lands).
     static func makeSection(router: SettingsRouter) -> UIViewController {
-        SettingsPageController(title: "Voice", VoiceSectionView(router: router))
+        let title = (router.services as? AppModel)?.client != nil ? "Voice & Calls" : "Voice"
+        return SettingsPageController(title: title, VoiceSectionView(router: router))
     }
 
     static func makePage(_ page: ConfigPage, router: SettingsRouter) -> UIViewController? {
@@ -82,6 +83,14 @@ struct VoiceSectionView: View {
                     ValueRow(title: page.title, value: nil, systemImage: page.symbol) { ConfigScreens.open(page: page, router: router) }
                         .accessibilityIdentifier("config-page.\(page.key)")
                 }
+            }
+            if let client = (router.services as? AppModel)?.client {
+                Section {
+                    NavRow(title: "Phone Calls (Beta)", systemImage: "phone") {
+                        router.push("Phone Calls (Beta)", PhoneSettingsView(accountID: client.account.id))
+                    }
+                    .accessibilityIdentifier("settings.phone-calls")
+                } header: { HQSectionLabel { Text("Calls") } }
             }
         }.hqMacSettingsRowInsets() }
         .settingsList().hqMacSettingsRows()

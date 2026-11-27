@@ -45,11 +45,12 @@ enum MorePages {
         var keywords: [String] = []
     }
 
-    /// `S/ui-nav/more-model.ts:13-17,32`; tiles `S/phone-tab-bar.tsx:924-927`.
+    /// More's rows grouped by role: Workspace (daily destinations), Apps & Extensions (channels & hooks),
+    /// Insights (analytics & graphs), and System (profiles, status/maintenance, session import).
     static let pages: [Page] = [
-        Page(id: "profiles", title: "Bot Profiles", symbol: "person.crop.circle", tile: 0x5E5CE6, section: "bots", header: "Bots", order: 10,
+        Page(id: "profiles", title: "Bot Profiles", symbol: "person.crop.circle", tile: 0x5E5CE6, section: "system", header: "System", order: 10,
              keywords: ["profiles", "soul", "bots"]),
-        Page(id: "messaging", title: "Messaging", symbol: "message.fill", tile: 0x30B94D, section: "bots", header: "Bots", order: 110,
+        Page(id: "messaging", title: "Messaging", symbol: "message.fill", tile: 0x30B94D, section: "apps", header: "Apps & Extensions", order: 110,
              keywords: ["telegram", "discord", "slack", "platforms", "pairing"]),
         Page(id: "files", title: "Files", symbol: "folder", tile: 0x0A84FF, section: "workspace", header: "Workspace", order: 10,
              keywords: ["files", "browse", "folder", "documents"]),
@@ -63,7 +64,7 @@ enum MorePages {
         Page(id: "terminal", title: "Terminal", symbol: "apple.terminal.fill", tile: 0x48484A, section: "workspace", header: "Workspace",
              order: 30, keywords: ["terminal", "shell", "command line", "console", "ssh", "bash", "zsh"]),   // [terminal]
         Page(id: "command-center", title: CommandCenterNames.page, symbol: "gauge.with.dots.needle.67percent", tile: 0x636366,
-             section: "insights", header: "Insights", order: 10, keywords: ["command center", "system", "status", "maintenance", "logs", "doctor"]),
+             section: "system", header: "System", order: 110, keywords: ["command center", "system", "status", "maintenance", "logs", "doctor"]),
         // [status-page] Its Usage tab, a row of its own under it (owner 2026-11-03: one home per page).
         Page(id: "usage", title: CommandCenterNames.usage, symbol: "chart.bar.fill", tile: 0x0A84FF, section: "insights", header: "Insights",
              order: 15, keywords: ["usage", "tokens", "cost", "spend", "analytics"]),
@@ -74,9 +75,9 @@ enum MorePages {
         Page(id: "star-map", title: "Star Map", symbol: DeviceWord.isMac ? "star" : "sparkles", tile: 0x8E5CD9, section: "insights",
              header: "Insights", order: 30, keywords: ["memory", "graph", "skills", "learning"]),
         Page(id: "webhooks", title: "Webhooks", symbol: "arrow.triangle.turn.up.right.diamond.fill", tile: 0xE5446D,
-             section: "integrations", header: "Integrations", order: 110, keywords: ["webhooks", "hooks", "triggers"]),
+             section: "apps", header: "Apps & Extensions", order: 120, keywords: ["webhooks", "hooks", "triggers"]),
         Page(id: "import-sessions", title: "Import Sessions", symbol: "square.and.arrow.down.on.square", tile: 0xA2845E,
-             section: "integrations", header: "Integrations", order: 120, keywords: ["import", "claude", "codex", "conversation", "sessions"]),
+             section: "system", header: "System", order: 120, keywords: ["import", "claude", "codex", "conversation", "sessions"]),
     ]
 
     /// A More page's search words (More search), by its row id.

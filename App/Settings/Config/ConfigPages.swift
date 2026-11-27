@@ -8,14 +8,25 @@ import SwiftUI
 import UIKit
 
 enum ConfigScreens {
+    /// Display title for a config section on the Settings root and its own page bar.
+    @MainActor static func displayTitle(for section: ConfigSection, services: (any AppServices)? = nil) -> String {
+        switch section.id {
+        case "model": "Models"
+        case "workspace": MorePages.context != nil ? "Workspace & Tasks" : section.title
+        case "voice": (services as? AppModel)?.client != nil ? "Voice & Calls" : section.title
+        default: section.title
+        }
+    }
+
     /// A section's page list (or its only page).
-    @MainActor static func open(section: ConfigSection, router: SettingsRouter) {
+    @MainActor static func open(section: ConfigSection, router: SettingsRouter, reveal: String? = nil) {
         router.jump?(.gateway)   // [Mac UI check 2026-11-13] Hermes' in the Mac's category column (`SettingsRouter.jump`)
         // [talk] Voice has rows of this iPhone's own, so it opens with or without the gateway's settings.
         if section.id == "voice" { VoiceSettingsScreens.openSection(router: router); return }
         guard let store = router.gatewaySettings?.configStore else { return }
         // [mac] Stress test 2026-10-28 #51: a flattened section holds its pages' fields, so it saves as a page does.
-        router.push(section.title, ConfigSectionView(section: section, store: store, router: router),
+        router.push(displayTitle(for: section, services: router.services),
+                    ConfigSectionView(section: section, store: store, router: router, reveal: reveal),
                     onDisappear: flattensOnMac(section) ? { store.flush() } : nil)
     }
 
@@ -72,12 +83,61 @@ struct ConfigSectionView: View {
     let section: ConfigSection
     let store: GatewayConfigStore
     let router: SettingsRouter
+    var reveal: String? = nil
+    @State private var revealed: String?
+    @State private var tileModelSummary: String?
 
     var body: some View {
-        if ConfigScreens.flattensOnMac(section) {
-            flattened
-        } else {
-            pageList
+        ScrollViewReader { proxy in
+            Group {
+                if ConfigScreens.flattensOnMac(section) {
+                    flattened
+                } else {
+                    pageList
+                }
+            }
+            .onAppear { refreshExtraValues() }
+            .task {
+                guard let reveal else { return }
+                try? await Task.sleep(for: .milliseconds(350))
+                HQMotion.withAnimation { proxy.scrollTo(reveal, anchor: .center) }
+                revealed = reveal
+                try? await Task.sleep(for: .seconds(1.4))
+                revealed = nil
+            }
+        }
+    }
+
+    private func refreshExtraValues() {
+        if section.id == "model", let account = router.services.account {
+            tileModelSummary = TileModels.defaultValue(TileModelSettings(accountId: account.id).defaultModel)
+        }
+    }
+
+    /// Extra consolidated sections appended to Browser and Workspace (both flattened on Mac and pageList on iPhone).
+    @ViewBuilder private var extraSections: some View {
+        if section.id == "browser" {
+            Section {
+                NavRow(title: "Browser Use Cloud", systemImage: "cloud") {
+                    router.push("Browser Use Cloud", BrowserCloudSettingsView(model: BrowserCloudSettingsModel(
+                        service: (router.services as? AppModel)?.browser, router: router,
+                        setUp: BrowserCloudSettingsModel.setUp(router.services, router: router))))
+                }
+                .accessibilityIdentifier("settings.browser-use-cloud")
+            } header: { HQSectionLabel { Text("Cloud Browser") } }
+        }
+        if section.id == "workspace" {
+            Section {
+                NavRow(title: SettingsSearch.sessionsPageTitle, systemImage: "folder.badge.gearshape") {
+                    router.push(SettingsSearch.sessionsPageTitle, SessionsSettingsView(store: store, router: router))
+                }
+                .accessibilityIdentifier("settings.sessions")
+            } header: { HQSectionLabel { Text("Sessions & Archiving") } }
+            if let tasks = TasksSwitchRow() {
+                Section {
+                    tasks.revealed(revealed)
+                } header: { HQSectionLabel { Text("Tasks") } } footer: { HQSectionFooter { Text(TasksSwitchRow.footer) } }
+            }
         }
     }
 
@@ -111,6 +171,7 @@ struct ConfigSectionView: View {
                     } }
                 }
             }
+            extraSections
         }.hqMacSettingsRowInsets() }
         .settingsList().hqMacSettingsRows()
         .saveFailureFeedback(store.failure?.text)
@@ -128,11 +189,19 @@ struct ConfigSectionView: View {
                              systemImage: page.symbol) { ConfigScreens.open(page: page, router: router) }
                         .accessibilityIdentifier("config-page.\(page.key)")
                 }
+                if section.id == "model", let account = router.services.account {
+                    ValueRow(title: "Tile Model", value: tileModelSummary ?? TileModels.defaultValue(TileModelSettings(accountId: account.id).defaultModel),
+                             systemImage: "rectangle.3.group") {
+                        router.push("Tile Model", TileModelView(router: router, accountId: account.id))
+                    }
+                    .accessibilityIdentifier("settings.tile-model")
+                }
             } footer: { HQSectionFooter {
                 Text(Self.footer(section.id, defaultBot: router.services.bots.first { $0.id == "default" }?.name,
                                  otherBots: ((router.services as? SettingsServices)?.rosterCount ?? 0) > 1))
                     .accessibilityIdentifier("config-section.\(section.id).footer")
             } }
+            extraSections
         }.hqMacSettingsRowInsets() }
         .settingsList().hqMacSettingsRows()
         .task { await store.load() }
@@ -145,7 +214,7 @@ struct ConfigSectionView: View {
     /// the card that ends it on its own page.
     static func savedNote(_ id: String) -> String {
         switch id {
-        case "chat" where DeviceWord.isMac: "Saved on \(HostWord.phrase), except Largest Attachment, which is set on this Mac."
+        case "chat": "Saved on \(HostWord.phrase), except Largest Attachment, which is set on this \(DeviceWord.name)."
         default: "Saved on \(HostWord.phrase)."
         }
     }
@@ -154,10 +223,7 @@ struct ConfigSectionView: View {
         let saved = "Saved on \(HostWord.phrase)."
         return switch id {
         case "model": SettingsWords.modelSectionFooter(defaultBot: defaultBot, otherBots: otherBots)
-        // [mac] Mac polish #132: the Mac's Attachments card also holds Largest Attachment, which is this Mac's own; the
-        // footer under it said the whole card was saved on the computer running Hermes.
-        case "chat": "How Hermes talks and what it does with attachments. "
-            + (DeviceWord.isMac ? "Saved on \(HostWord.phrase), except Largest Attachment, which is set on this Mac." : saved)
+        case "chat": "How Hermes talks and what it does with attachments. Saved on \(HostWord.phrase), except Largest Attachment, which is set on this \(DeviceWord.name)."
         case "workspace": "Where Hermes works on \(HostWord.phrase). Saved there too."
         case "safety": "What Hermes asks before it acts, and what it keeps private. \(saved)"
         case "browser": "How Hermes’s own browser signs in and reaches local addresses. \(saved)"
@@ -241,7 +307,7 @@ struct ConfigFieldsContent: View {
             let fields = store.fields(page).filter { !excluding.contains($0.key) && !hidden.contains($0.key) }
             // [mac] Stress test 2026-10-28 round 7: the leaf page keeps what its card on the section's page has: Largest
             // Attachment under Image Attachments, and the section's footer (Shell, Local & Private URLs lost it).
-            let limitRow = DeviceWord.isMac && page.key == MacAttachmentLimitRow.page
+            let limitRow = page.key == MacAttachmentLimitRow.page
             if DeviceWord.isMac {
                 // [mac] Stress test 2026-10-28 #94: one card of fields drawn in place, each with its help under its
                 // control, instead of a card per setting with its help between.
@@ -283,6 +349,9 @@ struct ConfigFieldsContent: View {
                 } footer: { HQSectionFooter {
                     if let description = field.description { Text(description) }
                 } }
+            }
+            if !DeviceWord.isMac, limitRow {
+                IOSAttachmentLimitSection(router: router)
             }
         }
     }
@@ -627,6 +696,27 @@ struct MacAttachmentLimitRow: View {
             }), range: AttachmentLimit.range, unit: "MB", label: "Largest Attachment")
         }
         .accessibilityIdentifier("settings.attachment-limit")
+        .onReceive(NotificationCenter.default.publisher(for: AttachmentLimit.didChange)) { _ in
+            megabytes = AttachmentLimit.megabytes
+        }
+    }
+}
+
+/// iOS counterpart to `MacAttachmentLimitRow`: puts Largest Attachment inside Chat Behavior › Attachments so iPhone
+/// and Mac match (still saved on this device only).
+struct IOSAttachmentLimitSection: View {
+    let router: SettingsRouter
+    @State private var megabytes = AttachmentLimit.megabytes
+
+    var body: some View {
+        Section {
+            NavRow(title: "Largest Attachment", systemImage: "paperclip", value: "\(megabytes) MB") {
+                router.push("Largest Attachment", AttachmentLimitPage { megabytes = $0 })
+            }
+            .accessibilityIdentifier("settings.attachment-limit")
+        } footer: { HQSectionFooter {
+            Text(AttachmentLimit.footer())
+        } }
         .onReceive(NotificationCenter.default.publisher(for: AttachmentLimit.didChange)) { _ in
             megabytes = AttachmentLimit.megabytes
         }

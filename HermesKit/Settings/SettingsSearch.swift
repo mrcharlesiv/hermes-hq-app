@@ -71,9 +71,9 @@ nonisolated enum SettingsSearch {
     static let liveActivitiesLabel = "Show Progress on Lock Screen"   // [live]
     static let autoPluginUpdateChecksLabel = "Automatic Plugin Update Checks"
     static let checkPluginUpdatesLabel = "Check for Plugin Updates"
-    // [mac] No Haptics switch on the Mac (it has nothing that taps back): the section is "Sounds" there.
+    // [mac] No Haptics switch on the Mac: Completion Sound lives in General there, and Sounds & Haptics is its own page on iOS.
     #if targetEnvironment(macCatalyst)
-    static let hasHaptics = false, soundsSection = "Sounds"
+    static let hasHaptics = false, soundsSection = "General"
     #else
     static let hasHaptics = true, soundsSection = "Sounds & Haptics"
     #endif
@@ -126,7 +126,7 @@ nonisolated enum SettingsSearch {
         .init(id: "app:keychain", label: "Saved Sign-In (\(DeviceWord.system) Keychain)", context: "Gateway", keywords: ["keychain", "password", "credentials", "remember me", "login", "connection"], target: .root("gateway")),
         .init(id: "app:test-notification", label: "Send Test Notification", context: "Notifications", keywords: ["test notification", "alert", "push", "notify"], target: .root("notifications")),
         // UX study 2026-10-21 #113: the switches on the root and on Notifications are found too.
-        .init(id: "app:tasks", label: "Tasks", context: "Turn Tasks On or Off", keywords: ["tasks", "to do", "todo", "turn off tasks", "disable tasks", "task list"], target: .root("row:tasks")),
+        .init(id: "app:tasks", label: "Tasks", context: "Workspace & Tasks", keywords: ["tasks", "to do", "todo", "turn off tasks", "disable tasks", "task list"], target: .root("row:tasks")),
         .init(id: "app:show-file-changes", label: "File Changes", context: "Chat", keywords: ["show file changes", "folded", "collapse", "files changed", "file changed", "changes", "edits", "review", "card", "diff", ChatRowNotes.showFileChanges], target: .root("row:show-file-changes")),
         .init(id: "app:new-chat-asks-project", label: "New Chat Asks for a Project", context: "Chat", keywords: ["new chat", "project", "no project", "ask", "choose project", "folder", ChatRowNotes.newChatAsksProject], target: .root("row:new-chat-asks-project")),
         .init(id: "app:wait-for-models", label: "Favorites Wait for Models", context: "Chat", keywords: ["favorites", "favourites", "hide favorites", "starred models", "ghost", "removed provider", "model list"], target: .root("row:wait-for-models")),
@@ -143,8 +143,8 @@ nonisolated enum SettingsSearch {
         .init(id: "app:new-chat-mode", label: "⌘N Opens", context: "Chat", keywords: ["command n", "cmd n", "shortcut", "keyboard", "bot chat", "new session", "persistent", "existing chat", "focus", ChatRowNotes.newChatMode(botChat: true), ChatRowNotes.newChatMode(botChat: false)], target: .root("row:new-chat-mode")),
         .init(id: "app:new-chat-key", label: "⌘N Bot", context: "Chat", keywords: ["command n", "cmd n", "shortcut", "keyboard", "new chat", "new session", "default bot", "default profile", "new chat here"], target: .root("row:new-chat-key")),
         .init(id: "app:new-chat-project", label: "⌘N Project", context: "Chat", keywords: ["command n", "cmd n", "shortcut", "default project", "folder", "workspace"], target: .root("row:new-chat-project")),   // [cmd-n] Mac only (filtered in `index`)
-        .init(id: "app:resume", label: "Reopen Last Chat on Launch", context: "Chat", keywords: ["resume", "restore", "last session", "startup", "launch", ChatRowNotes.resumeLastChat], target: .root("row:resume-last-chat")),
-        .init(id: "app:tips", label: "In-App Tips", context: "Chat", keywords: ["tips", "hints", "help"], target: .root("row:tips")),
+        .init(id: "app:resume", label: "Reopen Last Chat on Launch", context: DeviceWord.isMac ? "General" : "Chat", keywords: ["resume", "restore", "last session", "startup", "launch", ChatRowNotes.resumeLastChat], target: .root("row:resume-last-chat")),
+        .init(id: "app:tips", label: "In-App Tips", context: DeviceWord.isMac ? "General" : "Chat", keywords: ["tips", "hints", "help"], target: .root("row:tips")),
         .init(id: "app:appearance", label: "Light or Dark", context: "Appearance", keywords: ["appearance", "dark", "light", "theme", "mode"], target: .root("row:appearance")),
         // [mac] Mac polish #131: the page is Sidebar on the Mac, and its Kanban Tab control Kanban.
         .init(id: "app:tab-order", label: SettingsWords.tabsPageTitle(), context: "Appearance", keywords: ["tabs", "tab bar", "tab order", "reorder", "rearrange", "organize", "move tabs", "sessions first", "sidebar", "hide tabs", "hide bots", "custom tabs", "add a tab", "files tab"], target: .root("tab-order")),   // [taborder]
@@ -156,7 +156,7 @@ nonisolated enum SettingsSearch {
         // [app-icons] App Icon: the Home Screen's on the iPhone and iPad, the Dock's on the Mac (`MacDockIcon`).
         .init(id: "app:app-icon", label: "App Icon", context: "Appearance", keywords: ["icon", "home screen", "dock", "alternate icon", "feather", "original", "pearl", "black and white", "hermes", "winged", "god", "shapes", "matrix", "robot", "change icon"], target: .root("app-icon")),
         .init(id: "app:haptics", label: "Haptics", context: soundsSection, keywords: ["vibration", "taptic", "taps", "buzz", "feedback"], target: .root("row:haptics")),
-        .init(id: "app:attachment-limit", label: "Largest Attachment", context: "Chat", keywords: ["megabytes", "size", "file size", "limit", "mb", "upload"], target: .root("attachment-limit")),
+        .init(id: "app:attachment-limit", label: "Largest Attachment", context: "Chat Behavior", keywords: ["megabytes", "size", "file size", "limit", "mb", "upload"], target: .root("attachment-limit")),
         .init(id: "app:file-browser", label: fileBrowserLabel, context: "Chat", keywords: ["file browser", "files", "folder", "project folder", "workspace"], target: .root("row:file-browser")),
         // [session-strip]
         .init(id: "app:session-strip", label: "Other Chats at the Top", context: "Chat", keywords: ["session strip", "sessions", "chats", "switch chats", "pills", "top bar", "move between chats", "other sessions"], target: .root("row:session-strip")),
@@ -164,7 +164,7 @@ nonisolated enum SettingsSearch {
         .init(id: "app:intro-splash", label: introSplashLabel, context: "Chat", keywords: ["intro splash", "intro", "greeting", "empty chat", "face", "welcome"], target: .root("row:intro-splash")),
         .init(id: "app:completion-sound", label: "Completion Sound", context: soundsSection, keywords: ["sound", "chime", "cue", "reply finished"], target: .root("row:completion-sound")),
         .init(id: "app:sound", label: "Sound", context: soundsSection, keywords: ["chime", "preset", "preview", "tone"], target: .root("sound-picker")),
-        .init(id: "app:thinking-drive", label: "Thinking Bar", context: hasHaptics ? soundsSection : "Appearance", keywords: ["lightspeed", "afterburner", "calm", "hyperspace", "warp", "thinking", "effort", "reasoning", "slider", "model panel", "animation"], target: .root("row:thinking-drive")),   // [thinking-drive]
+        .init(id: "app:thinking-drive", label: "Thinking Bar", context: "Appearance", keywords: ["lightspeed", "afterburner", "calm", "hyperspace", "warp", "thinking", "effort", "reasoning", "slider", "model panel", "animation"], target: .root("row:thinking-drive")),   // [thinking-drive]
         .init(id: "app:licenses", label: "Open-Source Licenses", context: "About", keywords: ["licence", "license", "open source"], target: .root("licenses")),
         .init(id: "app:default-folder", label: "Default Project Folder", context: sessionsPageTitle, keywords: ["folder", "directory", "project", "workspace", "cwd", "new chat"], target: .root("sessions")),
         .init(id: "app:auto-archive", label: "Auto-Archive Stale Chats", context: sessionsPageTitle, keywords: ["archive", "old chats", "retention", "inactive"], target: .root("sessions")),
@@ -191,12 +191,14 @@ nonisolated enum SettingsSearch {
         ("vault", "Passwords", ["vault", "passwords", "logins", "cards", "addresses", "keychain", "1password", "bitwarden"]),
         ("billing", "Billing", ["balance", "credits", "plan", "nous portal", "usage"]),
         ("browser-use-cloud", "Browser Use Cloud", ["browser use", "cloud browser", "api key", "all bots", "watch", "take over"]),
+        ("phone-calls", "Phone Calls (Beta)", ["phone", "calls", "samplehost", "voicemail", "voice calls"]),
         ("sessions", sessionsPageTitle, ["sessions", "archive", "chats", "project folder", "chat folder", "retention"]),
         ("capabilities", "Capabilities", ["abilities", "what bots can do"]),   // [cap-pages]
         // [tile-models] The model the tiles' jobs run, and their fallback.
         ("tile-model", "Tile Model", ["tiles", "tile model", "dashboard", "fallback", "jobs model", "cron model"]),
         ("composio", "Composio", ["connect apps", "api key", "gmail", "slack", "apps"]),   // [composio-row]
         ("about", "About", ["version", "support", "privacy", "build", "app version"]),
+        ("backup-reset", "Backup & Reset", ["backup", "factory"]),
         // [macpass-settings2] Device Access was not found at all ("contacts", "location", "health" found nothing).
         ("device-access", "Device Access", ["device", "contacts", "calendar", "calendars", "reminders", "location", "health",
                                             "photos", "permissions", "what bots can use"]),
@@ -212,14 +214,13 @@ nonisolated enum SettingsSearch {
         ("plugins", "Plugins", ["plugins", "add-ons", "addons", "extensions", "find plugins", "install plugin", "catalog"]),   // [find-plugins]
     ].map { SettingsSearchEntry(id: "page:\($0.0)", label: $0.1, context: "Capabilities", keywords: $0.2, target: .root($0.0), isPage: true) }
 
-    /// [macpass-settings2] The file buttons are under About in the Mac's Settings window (a result said "Settings", and
-    /// Clear's label wasn't the button's).
-    private static var actionsContext: String { DeviceWord.isMac ? "About" : "Settings" }
+    /// Backup & Reset lives under Hermes on Mac and its own page on iPhone; Clear Model Favorites lives under Chat.
+    private static var actionsContext: String { DeviceWord.isMac ? "Hermes" : "Backup & Reset" }
 
     static let actions: [SettingsSearchEntry] = [
         .init(id: "action:export", label: "Export Settings…", context: actionsContext, keywords: ["export", "backup", "save settings", "download"], target: .action("export")),
         .init(id: "action:import", label: "Import Settings…", context: actionsContext, keywords: ["import", "restore", "load settings", "upload"], target: .action("import")),
-        .init(id: "action:clear-models", label: DeviceWord.isMac ? "Clear Model Favorites…" : "Clear Favorite & Recent Models…", context: actionsContext, keywords: ["favorites", "favourites", "starred models", "recent models", "unstar", "clear"], target: .action("clear-models")),
+        .init(id: "action:clear-models", label: DeviceWord.isMac ? "Clear Model Favorites…" : "Clear Favorite & Recent Models…", context: "Chat", keywords: ["favorites", "favourites", "starred models", "recent models", "unstar", "clear"], target: .action("clear-models")),
         .init(id: "action:reset", label: "Reset to Defaults…", context: actionsContext, keywords: ["reset", "defaults", "factory", "restore defaults"], target: .action("reset")),
     ]
 

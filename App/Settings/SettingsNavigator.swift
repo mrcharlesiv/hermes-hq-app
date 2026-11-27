@@ -12,9 +12,8 @@ enum SettingsNavigator {
     static func open(_ target: SettingsSearchEntry.Target, router: SettingsRouter, actions: SettingsFileActions) {
         switch target {
         case .field: router.jump?(.gateway)   // [Mac UI check 2026-11-13] config pages are Hermes' (ConfigScreens.open does so too)
-        // [macpass-settings2] Export, Import, Clear and Reset are About's buttons in two columns: About shows, so the
-        // share menu points at its button and the prompt is over the page that has it.
-        case .action: router.jump?(.about)
+        // Backup & Reset buttons live in Hermes on Mac; Clear Model Favorites lives in Chat.
+        case .action(let id): router.jump?(id == "clear-models" ? .chat : .gateway)
         default: break
         }
         switch target {
@@ -49,12 +48,12 @@ enum SettingsNavigator {
         if id.hasPrefix("config:") || id.hasPrefix("background:") { return id.hasPrefix("config:") ? .gateway : .appearance }
         switch id {
         case "theme", "chat-bubbles", "backgrounds", "tab-order", SettingsSearch.kanbanTabTarget, "app-icon": return .appearance
-        case "notifications", "device-access", "proactivity-beta": return .general
+        case "notifications", "device-access", "sound-picker", "proactivity-beta": return .general
         case "tool-calls": return .chat
-        case "attachment-limit": return DeviceWord.isMac ? .gateway : .chat   // a row of Chat Behavior on the Mac (below)
-        case "sound-picker": return .sounds
-        case "vault", "sessions", "providers", "keys", "billing", "auxiliary-models", "browser-use-cloud", "phone-calls": return .gateway
-        case "capabilities", "skills", "connectors", "tools", "plugins", ComposioRow.id, "tile-model": return .tools
+        case "attachment-limit": return .gateway
+        case "vault", "providers", "keys", "billing": return .accounts
+        case "sessions", "auxiliary-models", "browser-use-cloud", "phone-calls", "tile-model", "backup-reset": return .gateway
+        case "capabilities", "skills", "connectors", "tools", "plugins", ComposioRow.id: return .tools
         case "about", "diagnostics", "licenses", "about:perf-log", "about:detailed-log", "about:mark": return .about
         default: return nil
         }
@@ -86,7 +85,16 @@ enum SettingsNavigator {
         case "device-access": router.push(DeviceAccessSettingsController())   // [macpass-settings2]
         case "proactivity-beta": router.push(ProactivityBetaPage.make(router: router))   // [proactivity-beta]
         case "phone-calls":
-            if let client = (services as? AppModel)?.client { router.push("Phone Calls (Beta)", PhoneSettingsView(accountID: client.account.id)) }
+            if let client = (services as? AppModel)?.client {
+                let phone = SettingsPageController(title: "Phone Calls (Beta)", PhoneSettingsView(accountID: client.account.id))
+                let voice = VoiceSettingsScreens.makeSection(router: router)
+                if let navigation = router.navigation {
+                    for page in [voice, phone] { page.navigationItem.largeTitleDisplayMode = .never }
+                    navigation.setViewControllers(navigation.viewControllers + [voice, phone], animated: true)
+                } else {
+                    router.push(phone)
+                }
+            }
         case "providers": router.push("Providers", ProvidersPageView(router: router))
         case "keys": router.push("Keys", KeysPageView(router: router))
         case "vault": router.push(PasswordsPageController(router: router))   // [passwords-page] the page More › Passwords opens
@@ -97,17 +105,41 @@ enum SettingsNavigator {
                 router.push(ConnectAppsScreens.makeRoot(services: services))
             }
         case "billing": router.push("Billing", BillingPageView(router: router))
-        case "browser-use-cloud":   // the key and "Use for All Bots" (App/Browser/BrowserCloudSettings.swift)
-            router.push("Browser Use Cloud", BrowserCloudSettingsView(model: BrowserCloudSettingsModel(
+        case "browser-use-cloud":   // consolidated under Browser
+            let cloud = SettingsPageController(title: "Browser Use Cloud", BrowserCloudSettingsView(model: BrowserCloudSettingsModel(
                 service: (services as? AppModel)?.browser, router: router, setUp: BrowserCloudSettingsModel.setUp(services, router: router))))
+            if let section = ConfigCatalog.section("browser"), let store = router.gatewaySettings?.configStore, let navigation = router.navigation {
+                let browser = SettingsPageController(title: ConfigScreens.displayTitle(for: section, services: services),
+                                                     ConfigSectionView(section: section, store: store, router: router))
+                for page in [browser, cloud] { page.navigationItem.largeTitleDisplayMode = .never }
+                navigation.setViewControllers(navigation.viewControllers + [browser, cloud], animated: true)
+            } else {
+                router.push(cloud)
+            }
         case "sessions":
             guard let store = router.gatewaySettings?.configStore else { return }
-            router.push(SettingsSearch.sessionsPageTitle, SessionsSettingsView(store: store, router: router))
+            let sessions = SettingsPageController(title: SettingsSearch.sessionsPageTitle, SessionsSettingsView(store: store, router: router))
+            if let section = ConfigCatalog.section("workspace"), let navigation = router.navigation {
+                let workspace = SettingsPageController(title: ConfigScreens.displayTitle(for: section, services: services),
+                                                       ConfigSectionView(section: section, store: store, router: router))
+                for page in [workspace, sessions] { page.navigationItem.largeTitleDisplayMode = .never }
+                navigation.setViewControllers(navigation.viewControllers + [workspace, sessions], animated: true)
+            } else {
+                router.push(sessions)
+            }
         // [cap-pages] Capabilities, and each of its lists over it (Back goes to the four rows).
         case "capabilities": router.push(CapabilitiesHubController(services: services, settingsPage: true))
-        case "tile-model":   // [tile-models] the tiles' jobs' model and fallback
+        case "tile-model":   // [tile-models] consolidated under Models
             guard let account = services.account else { return }
-            router.push("Tile Model", TileModelView(router: router, accountId: account.id))
+            let tile = SettingsPageController(title: "Tile Model", TileModelView(router: router, accountId: account.id))
+            if let section = ConfigCatalog.section("model"), let store = router.gatewaySettings?.configStore, let navigation = router.navigation {
+                let models = SettingsPageController(title: ConfigScreens.displayTitle(for: section, services: services),
+                                                    ConfigSectionView(section: section, store: store, router: router))
+                for page in [models, tile] { page.navigationItem.largeTitleDisplayMode = .never }
+                navigation.setViewControllers(navigation.viewControllers + [models, tile], animated: true)
+            } else {
+                router.push(tile)
+            }
         case "skills", "connectors", "tools", "plugins":
             if let tab = CapabilitiesTab(rawValue: id) { router.push(CapabilitiesPages.pages(tab, services: services, settingsPage: true)) }
         case "auxiliary-models":   // [capabilities] 3x §17.5 g

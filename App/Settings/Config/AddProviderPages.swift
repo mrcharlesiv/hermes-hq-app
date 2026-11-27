@@ -191,7 +191,7 @@ private extension ProviderAddRoute {
             router.push("Providers", ProvidersPageView(router: router, startAdding: true))
         }
         #if targetEnvironment(macCatalyst)
-        if MacSettingsWindow.open(category: .gateway, then: push) { return }
+        if MacSettingsWindow.open(category: .accounts, then: push) { return }
         #endif
         guard let services = MainTabController.current?.services else { return }
         var top = presenter

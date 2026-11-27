@@ -13,7 +13,7 @@
 import UIKit
 
 @MainActor enum SettingsWindowTour {
-    static let allStops = ["cat:general", "cat:appearance", "cat:chat", "cat:sounds", "cat:gateway", "cat:tools", "cat:about",
+    static let allStops = ["cat:general", "cat:appearance", "cat:chat", "cat:gateway", "cat:accounts", "cat:tools", "cat:about",
                            "gateway", "notifications", "device-access", "theme", "chat-bubbles", "backgrounds", "background:app",
                            "background:chats", "app-icon", "tab-order", "tool-calls", "providers", "keys", "vault", "billing",
                            "sessions", "auxiliary-models", "capabilities", "diagnostics", "licenses", "search:sound", "search:zzzz"]

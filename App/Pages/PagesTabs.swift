@@ -44,10 +44,9 @@ struct MoreSection {
 final class PagesTabs {
     // MARK: More registry (other streams add rows without editing this file)
 
-    /// `S/ui-nav/more-model.ts:12-17`: Settings alone, then Bots, Workspace, Insights, Integrations.
-    /// [plugin-pages-more] Plugin Pages after Insights: places you go to, before Integrations' setup pages.
-    /// Owner 2026-11-23: the Discord card (`HQCommunity`) above everything until it's closed.
-    static let sectionOrder = ["community", "account", "settings", "bots", "workspace", "insights", "plugins", "integrations"]
+    /// More's sections in order: Gateway + Settings at the top, then daily Workspace, Apps & Extensions, Insights,
+    /// Plugin Pages, and System (admin, secrets, profiles). Discord card heads More until closed.
+    static let sectionOrder = ["community", "account", "settings", "workspace", "apps", "insights", "plugins", "system"]
     private static var registered: [String: MoreSection] = [:]
     private static var registryObservers: [UUID: () -> Void] = [:]
 
@@ -445,9 +444,9 @@ final class PagesTabs {
     static let settingsRowID = "settings"
     /// [mac-layout] More's sections whose pages are the Mac sidebar's Tools.
     static let toolSections: Set<String> = ["workspace", "insights"]
-    /// Mac polish #33 (owner's call 2026-11-07): Marketplace is a Tool too, after those, and under it each page your
-    /// bots' plugins add (More › Plugin Pages on the iPhone), only while some bot has one. ⌘K finds them as before.
-    static let toolPages = ["marketplace"]
+    /// Mac polish #33: Status & Maintenance (moved to System on iOS) and Marketplace are sidebar Tools too, followed by
+    /// each page your bots' plugins add (More › Plugin Pages on the iPhone), only while some bot has one.
+    static let toolPages = ["command-center", "marketplace"]
     /// The page tabs that are Tools (not places from Settings › Tabs), in More's order.
     private(set) var toolIDs: [String] = []
     func isTool(_ controller: UIViewController) -> Bool {
@@ -495,11 +494,11 @@ final class PagesTabs {
         // Then Marketplace and the plugin pages (Mac polish #33).
         // [more-bots] Bots, while it is no place: the list of bots, first of the Tools (the sidebar has no bots then).
         var tools: [String] = rows[Self.botsRowID] == nil ? [] : [Self.botsRowID]
-        // [mac-favorites] Favorites next, first of the pages as it is first in the iPhone's More.
+        // [mac-favorites] Quick Actions next, first of the pages as it is first in the iPhone's Workspace.
         if rows[QuickTileStore.rowID] != nil, !chosen.contains(QuickTileStore.rowID) { tools.append(QuickTileStore.rowID) }
         tools += sections.filter { Self.toolSections.contains($0.id) }.flatMap { $0.rows() }
-            .filter { $0.card == nil && TabChoice.pageIDs.contains($0.id) && !chosen.contains($0.id) }.map(\.id)
-        tools += Self.toolPages.filter { rows[$0] != nil && !chosen.contains($0) }
+            .filter { $0.card == nil && TabChoice.pageIDs.contains($0.id) && !chosen.contains($0.id) && !tools.contains($0.id) }.map(\.id)
+        tools += Self.toolPages.filter { rows[$0] != nil && !chosen.contains($0) && !tools.contains($0) }
         tools += sections.filter { $0.id == PluginPagesMore.section }.flatMap { $0.rows() }.map(\.id)
         toolIDs = tools
         chosen += tools
@@ -622,28 +621,21 @@ final class PagesTabs {
             sections["workspace"] = MoreSection(id: "workspace", header: "Workspace") { (extra?.rows() ?? []) + workspace }
         }
         var all = Self.merged(sections)   // [morepages] appended rows
-        // [quick-actions] The page the Quick Actions shortcut opens, first in More (over Settings, under the gateway
-        // card), where Favorites was (§25 Q11; owner 2026-11-22: Quick Actions replaces Favorites). [mac-favorites]
-        // On the Mac too (owner 2026-11-22: "I don't see the Favorites page as an option"): its tiles are actions, not
-        // a list of places the sidebar already is, so there it is the first of the sidebar's Tools (`pageTabs`).
+        // [quick-actions] Quick Actions leads Workspace (everyday destinations), right above Tasks, Files, Changes,
+        // Terminal and Tiles. On the Mac it stays the first of the sidebar's Tools (`pageTabs`).
         if services != nil {
-            // [favorites-name] Owner 2026-11-22: "Icon should be a star and it needs to animate like all of others" (the
-            // star's tab motion: `TabMotion.favorite`). Yellow, as the retired Favorites row was.
             let quick = MoreRow(id: QuickTileStore.rowID, title: IntentsText.quickActions, symbol: "star.circle.fill", image: nil,
                                 tile: UIColor(red: 1, green: 0xB3 / 255, blue: 0, alpha: 1)) { [weak self] in self?.makeQuickActions() }
-            // One group with Settings, above it (a lone row reads as a stray card).
-            let settings = all["settings"]
-            all["settings"] = MoreSection(id: "settings", header: settings?.header) { [quick] + (settings?.rows() ?? []) }
+            let ws = all["workspace"]
+            all["workspace"] = MoreSection(id: "workspace", header: ws?.header ?? "Workspace") { [quick] + (ws?.rows() ?? []) }
         }
-        // [more-bots] A tester, 2026-11-14: a hidden Bots tab is a page in More too, first under Bots (above
-        // Bot Profiles). [mac] The owner, 2026-11-15: "it needs to be on the Mac build too in some way". The Mac has no
-        // More, and with Bots off its sidebar loses the bots: there the row is the first of the sidebar's Tools
-        // (`pageTabs`).
+        // [more-bots] A hidden Bots tab is a page in More too, at the top of System (right above Bot Profiles). On the
+        // Mac it stays the first of the sidebar's Tools (`pageTabs`).
         if !shown.contains(.main(.bots)) {
-            let rest = all["bots"]
+            let rest = all["system"]
             let bots = MoreRow(id: Self.botsRowID, title: "Bots", symbol: nil, image: TabIcons.bot,
                                tile: UIColor(red: 0x32 / 255, green: 0xAD / 255, blue: 0xE6 / 255, alpha: 1)) { [weak self] in self?.makeBots() }
-            all["bots"] = MoreSection(id: "bots", header: rest?.header ?? "Bots") { [bots] + (rest?.rows() ?? []) }
+            all["system"] = MoreSection(id: "system", header: rest?.header ?? "System") { [bots] + (rest?.rows() ?? []) }
         }
         return all.values.sorted { a, b in
             (Self.sectionOrder.firstIndex(of: a.id) ?? 99, a.id) < (Self.sectionOrder.firstIndex(of: b.id) ?? 99, b.id)

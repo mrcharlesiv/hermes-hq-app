@@ -232,23 +232,29 @@ final class SettingsRootModel {
         }
     }
 
-    /// [macpass-settings2] The category whose section draws a root row (`row:<id>`, `SettingsRootView`'s
-    /// `shows(_:)` blocks); nil for one this table doesn't know.
     /// [appearance-groups] Whether `row` is on Appearance's own page here (one column), not on this list.
     func opensAppearancePage(for row: String) -> Bool {
         !twoColumn && AppearanceRows.contains(row)
     }
 
+    /// Whether `row` is on Chat's own page here (one column), not on the Settings root list.
+    func opensChatPage(for row: String) -> Bool {
+        !twoColumn && ChatSettingsRows.contains(row)
+    }
+
+    /// Whether `row` is on Sounds & Haptics' own page here (one column), not on the Settings root list.
+    func opensSoundsPage(for row: String) -> Bool {
+        !twoColumn && SoundsHapticsRows.contains(row)
+    }
+
     static func category(ofRow row: String) -> SettingsCategory? {
         if AppearanceRows.contains(row) { return .appearance }
-        return switch row {
-        case "row:share-menu": .general   // [macpass-settings2]
-        case "row:plugin-update-checks", "row:check-plugin-updates": .tools
-        case "row:thinking-drive", "row:haptics", "row:completion-sound", "row:sound": .sounds
-        case "row:fewer-timestamps", "row:show-file-changes", "row:attachment-limit", "row:new-chat-asks-project", "row:wait-for-models",
-             "row:send-while-busy", "row:open-links-in", "row:new-chat-mode", "row:new-chat-key", "row:new-chat-project",
-             "row:resume-last-chat", "row:tips", "row:intro-splash", "row:file-browser", "row:session-strip", "row:message-reactions": .chat
-        default: nil
+        if SoundsHapticsRows.contains(row) { return .general }
+        switch row {
+        case "row:share-menu", "row:resume-last-chat", "row:tips": return .general
+        case "row:plugin-update-checks", "row:check-plugin-updates": return .tools
+        case "row:tasks": return .gateway
+        default: return ChatSettingsRows.contains(row) ? .chat : nil
         }
     }
 
@@ -607,9 +613,21 @@ final class SettingsRootController: UIHostingController<HQScaledRoot<SettingsRoo
         #if targetEnvironment(macCatalyst)
         if let stack = paneStack, stack.viewControllers.count > 1 { stack.popToRootViewController(animated: false) }
         #endif
-        // [appearance-groups] A row of Appearance's own page: the page over this one, scrolled to the row.
+        // [appearance-groups] A row of Appearance's, Chat's, or Sounds' own page: open the page scrolled to the row.
         if model.opensAppearancePage(for: id) {
             router.push(AppearancePage.make(model: model, router: router, reveal: id))
+            return
+        }
+        if model.opensChatPage(for: id) {
+            router.push(ChatSettingsPage.make(model: model, router: router, actions: actions, reveal: id))
+            return
+        }
+        if model.opensSoundsPage(for: id) {
+            router.push(SoundsHapticsPage.make(model: model, router: router, reveal: id))
+            return
+        }
+        if id == "row:tasks", let workspace = ConfigCatalog.section("workspace") {
+            ConfigScreens.open(section: workspace, router: router, reveal: id)
             return
         }
         if viewIfLoaded?.window != nil { model.reveal(id) } else { pendingReveal = id }
@@ -668,15 +686,6 @@ struct SettingsRootView: View {
     let actions: SettingsFileActions
     /// [mac-ui-issues] The right side of two columns (`SettingsRootController.paneStack`'s first page): the list alone.
     var pane = false
-
-    /// [macpass-settings] A section's header, left out in two columns when it only repeats the page's title (the
-    /// category's): "Sounds" sat under "Sounds", "Bots & Tools" under "Bots & Tools", while General and About had none.
-    /// Search results (every section at once) keep it.
-    @ViewBuilder private func categoryHeader(_ title: String) -> some View {
-        if !(model.twoColumn && model.category?.title == title) {
-            HQSectionLabel { Text(title) }
-        }
-    }
 
     var body: some View {
         if pane {
@@ -748,13 +757,18 @@ struct SettingsRootView: View {
     private func open(_ target: SettingsSearchEntry.Target) {
         let open = { [router, actions, model] in
             // UX study 2026-10-21 #108: a row on this list is scrolled to and marked, not left for the person to find.
-            // [appearance-groups] A row of Appearance's own page: the page opens scrolled to it, the row marked.
+            // Rows of Appearance, Chat, Sounds & Haptics, and Workspace › Tasks open their page scrolled to the row.
             if case .root(let id) = target, model.opensAppearancePage(for: id) { router.push(AppearancePage.make(model: model, router: router, reveal: id)) }
+            else if case .root(let id) = target, model.opensChatPage(for: id) { router.push(ChatSettingsPage.make(model: model, router: router, actions: actions, reveal: id)) }
+            else if case .root(let id) = target, model.opensSoundsPage(for: id) { router.push(SoundsHapticsPage.make(model: model, router: router, reveal: id)) }
+            else if target == .root("row:tasks"), let workspace = ConfigCatalog.section("workspace") {
+                ConfigScreens.open(section: workspace, router: router, reveal: "row:tasks")
+            }
             else if case .root(let id) = target, id.hasPrefix("row:") { model.reveal(id) }
-            // [mac] Stress test 2026-10-28 #51 (review): the search result lands on the root's field, not a page.
-            else if DeviceWord.isMac, target == .root("attachment-limit") { model.reveal("row:attachment-limit") }
-            // [Mac UI check 2026-11-13] Sound is a pop-up in its row on the Mac, not the iPhone's page (the switch
-            // above it when the sound is off and the row isn't drawn).
+            else if target == .root("backup-reset") { router.push(BackupResetPage.make(model: model, actions: actions)) }
+            // [mac] Stress test 2026-10-28 #51 (review): the search result lands on Chat Behavior › Attachments when connected.
+            else if DeviceWord.isMac, target == .root("attachment-limit"), model.configStore == nil { model.reveal("row:attachment-limit") }
+            // [Mac UI check 2026-11-13] Sound is a pop-up in its row on the Mac (inside General), not the iPhone's page.
             else if DeviceWord.isMac, target == .root("sound-picker") { model.reveal(model.completionSound ? "row:sound" : "row:completion-sound") }
             // [macpass-settings2] Two columns: the gateway's page opens as the card does (the card marked, the page the
             // right side's root); a result ("keychain", "sign out") pushed it over the category shown, with Back to it.
@@ -909,593 +923,321 @@ struct SettingsRootView: View {
         }
 
         if model.shows(.general) {
-        Section {
-            if !model.twoColumn {
-                let _ = Theme.touch()
-                NavRow(title: AppearancePage.title, systemImage: "paintbrush", value: Theme.shared.state.skin.label) {
-                    router.push(AppearancePage.make(model: model, router: router))
-                }
-                .accessibilityIdentifier("settings.appearance-row")
-            }
-            // UX study 2026-10-21 #119: its state, as the rows beside it show theirs.
-            NavRow(title: "Notifications", systemImage: "bell.badge", value: model.notificationsSummary) {
-                router.push(NotificationsSettingsController(app: model.services as? AppModel))
-            }
-            .accessibilityIdentifier("settings.notifications")
-            // [device-access] What the bots may use from this phone.
-            NavRow(title: "Device Access", systemImage: "hand.raised", value: DeviceAccessCenter.shared.settings.rowSummary) {
-                router.push(DeviceAccessSettingsController())
-            }
-            .accessibilityIdentifier("settings.device-access")
-            // [proactivity-beta] Opt-in Beta proactivity add-on (off by default).
-            if model.configStore != nil {
-                NavRow(title: ProactivityBetaPage.title, systemImage: "sparkles", value: "Beta") {
-                    router.push(ProactivityBetaPage.make(router: router))
-                }
-                .accessibilityIdentifier("settings.proactivity-beta")
-            }
-        }
-
-        if let tasks = TasksSwitchRow() {
-            Section {
-                tasks.revealed(model.revealed)
-            } footer: { HQSectionFooter { Text(TasksSwitchRow.footer) } }
-        }
-        }
-
-        if model.shows(.chat) {
-        // [Mac AAA 2026-11-17] Q18, owner: on the Mac each row's explanation is under its own title (`ChatRowNotes`),
-        // and the paragraph under the card goes. The iPhone keeps its paragraph.
-        let notes = DeviceWord.isMac
-        Section {
-            if let screen = SettingsHooks.toolCallsScreen {
-                NavRow(title: SettingsHooks.toolCallsTitle, systemImage: "wrench.and.screwdriver", value: model.toolCallsSummary) { router.push(screen()) }
-            }
-            // The switch itself ticks (a system control): no cue of ours on top.
-            Toggle(isOn: Binding(get: { model.fewerTimestamps }, set: { on in
-                model.fewerTimestamps = on
-                ToolCallSettings.fewerTimestamps = on
-            })) {
-                SettingsRowLabel(title: "Fewer Timestamps", systemImage: "clock", subtitle: notes ? ChatRowNotes.fewerTimestamps : nil)
-            }
-            .accessibilityIdentifier("settings.fewer-timestamps")
-            .revealRow("row:fewer-timestamps", model.revealed)
-            // [files] Owner 2026-11-20 (tester Mordred): Off / Folded / Open, Folded by default — the card as one line,
-            // like a reply's work line, that opens on it.
-            let fileChanges = Binding(get: { model.fileChanges }, set: { (value: FileChangesLook) in
-                Haptics.play(.selection)
-                model.fileChanges = value
-                ToolCallSettings.fileChanges = value
-                AppLog.note("settings", "File Changes set to \(value.rawValue)")
-            })
-            if DeviceWord.isMac {
-                HStack(alignment: .firstTextBaseline, spacing: 12) {   // [Mac AAA 2026-11-17] on the title's line, as the switches
-                    SettingsRowLabel(title: "File Changes", systemImage: "doc.badge.ellipsis", subtitle: ChatRowNotes.showFileChanges)
-                    Spacer(minLength: 16)
-                    MacPopUp(label: "File Changes", selection: fileChanges, options: FileChangesLook.allCases) { $0.title }
-                        .accessibilityIdentifier("settings.show-file-changes")
-                        .hqMacSettingsControl()
-                }
-                .revealRow("row:show-file-changes", model.revealed)
-            } else {
-                SettingsMenuRowFace(label: SettingsRowLabel(title: "File Changes", systemImage: "doc.badge.ellipsis"),
-                                    value: model.fileChanges.title)
-                .overlay {
-                    Menu {
-                        Picker("File Changes", selection: fileChanges) {
-                            ForEach(FileChangesLook.allCases) { Text($0.title).tag($0) }
-                        }
-                    } label: {
-                        Color.clear.contentShape(Rectangle())
+            if model.twoColumn {
+                Section {
+                    // UX study 2026-10-21 #119: its state, as the rows beside it show theirs.
+                    NavRow(title: "Notifications", systemImage: "bell.badge", value: model.notificationsSummary) {
+                        router.push(NotificationsSettingsController(app: model.services as? AppModel))
                     }
-                    .accessibilityLabel("File Changes")
-                    .accessibilityValue(model.fileChanges.title)
-                    .accessibilityIdentifier("settings.show-file-changes")
-                }
-                .revealRow("row:show-file-changes", model.revealed)
-            }
-            Toggle(isOn: Binding(get: { model.newChatAsksProject }, set: { on in
-                model.newChatAsksProject = on
-                NewChatProjectChoice.isOn = on
-            })) {
-                SettingsRowLabel(title: "New Chat Asks for a Project", systemImage: "folder", subtitle: notes ? ChatRowNotes.newChatAsksProject : nil)
-            }
-            .accessibilityIdentifier("settings.new-chat-asks-project")
-            .revealRow("row:new-chat-asks-project", model.revealed)
-            // [ghost-stars] A provider removed in Hermes itself leaves its stars in a new chat until its models load.
-            Toggle(isOn: Binding(get: { model.waitForModels }, set: { on in
-                model.waitForModels = on
-                ModelPrefs.waitForModels = on
-            })) {
-                SettingsRowLabel(title: "Favorites Wait for Models", systemImage: "star.slash")
-            }
-            .accessibilityIdentifier("settings.wait-for-models")
-            .revealRow("row:wait-for-models", model.revealed)
-            // [settings] §4
-            if DeviceWord.isMac {
-                // [mac] Stress test 2026-10-28 #81, round 2: with a gateway it lives in Chat Behavior › Attachments,
-                // beside Image Attachments (MacAttachmentLimitRow); here only while there is no Chat Behavior.
-                if model.configStore == nil {
-                // [mac] Stress test 2026-10-28 #51: typed in place with its unit, not a page with iOS's "− | +".
-                HStack(spacing: 12) {
-                    SettingsRowLabel(title: "Largest Attachment", systemImage: "paperclip")
-                    Spacer(minLength: 16)
-                    MacIntField(value: Binding(get: { model.attachmentLimit }, set: { value in
-                        AttachmentLimit.megabytes = value
-                        model.attachmentLimit = value
-                    }), range: AttachmentLimit.range, unit: "MB", label: "Largest Attachment")
-                }
-                .help(AttachmentLimit.footer())
-                .accessibilityIdentifier("settings.attachment-limit")
-                .revealRow("row:attachment-limit", model.revealed)
-                }
-            } else {
-            NavRow(title: "Largest Attachment", systemImage: "paperclip", value: "\(model.attachmentLimit) MB") {
-                router.push("Largest Attachment", AttachmentLimitPage { model.attachmentLimit = $0 })
-            }
-            .accessibilityIdentifier("settings.attachment-limit")
-            }
-            // [send-while-busy] Tester 2026-11-08: Queue, not Steer, as what Send does while a reply runs.
-            let sendWhileBusy = Binding(get: { model.sendWhileBusy }, set: { (value: SendWhileBusy) in
-                Haptics.play(.selection)
-                model.sendWhileBusy = value
-                SendWhileBusy.chosen = value
-            })
-            if DeviceWord.isMac {
-                HStack(alignment: .firstTextBaseline, spacing: 12) {   // [Mac AAA 2026-11-17] on the title's line, as the switches
-                    SettingsRowLabel(title: SettingsSearch.sendWhileBusyLabel, systemImage: "text.line.last.and.arrowtriangle.forward",
-                                     subtitle: ChatRowNotes.sendWhileBusy(mac: true))
-                    Spacer(minLength: 16)
-                    MacPopUp(label: SettingsSearch.sendWhileBusyLabel, selection: sendWhileBusy, options: SendWhileBusy.allCases) { $0.title }
-                        .accessibilityIdentifier("settings.send-while-busy")
-                        .hqMacSettingsControl()
-                }
-                .revealRow("row:send-while-busy", model.revealed)
-            } else {
-                SettingsMenuRowFace(label: SettingsRowLabel(title: SettingsSearch.sendWhileBusyLabel, systemImage: "text.line.last.and.arrowtriangle.forward"),
-                                    value: model.sendWhileBusy.title)
-                .overlay {
-                    Menu {
-                        Picker(SettingsSearch.sendWhileBusyLabel, selection: sendWhileBusy) {
-                            ForEach(SendWhileBusy.allCases) { Text($0.title).tag($0) }
-                        }
-                    } label: {
-                        Color.clear.contentShape(Rectangle())
-                    }
-                    .accessibilityLabel(SettingsSearch.sendWhileBusyLabel)
-                    .accessibilityValue(model.sendWhileBusy.title)
-                    .accessibilityIdentifier("settings.send-while-busy")
-                }
-                .revealRow("row:send-while-busy", model.revealed)
-            }
-            // [links-browser] Owner 2026-11-12: web links in a browser of your choice. A file a bot made (a page, a
-            // tile) opens in the app whatever is chosen here (`LinkRoute`).
-            let linkChoice = Binding(get: { model.linkChoice }, set: { (value: LinkBrowserChoice) in
-                Haptics.play(.selection)
-                model.linkChoice = value
-                LinkBrowserChoice.stored = value
-                AppLog.note("settings", "Open Links In set to \(value.saved)")
-            })
-            let linkChoices = LinkOpener.choices(installed: model.linkBrowsers)
-            if DeviceWord.isMac {
-                HStack(alignment: .firstTextBaseline, spacing: 12) {   // [Mac AAA 2026-11-17] on the title's line, as the switches
-                    SettingsRowLabel(title: SettingsSearch.openLinksInLabel, systemImage: "safari", subtitle: ChatRowNotes.openLinksIn)
-                    Spacer(minLength: 16)
-                    MacPopUp(label: SettingsSearch.openLinksInLabel, selection: linkChoice, options: linkChoices) {
-                        $0.title(installed: model.linkBrowsers)
-                    }
-                    .accessibilityIdentifier("settings.open-links-in")
-                    .hqMacSettingsControl()
-                }
-                .help("Web links open in this browser. Pages and files your bots make always open in the app.")
-                .revealRow("row:open-links-in", model.revealed)
-            } else {
-                SettingsMenuRowFace(label: SettingsRowLabel(title: SettingsSearch.openLinksInLabel, systemImage: "safari"),
-                                    value: model.linkChoice.title(installed: model.linkBrowsers))
-                .overlay {
-                    Menu {
-                        Picker(SettingsSearch.openLinksInLabel, selection: linkChoice) {
-                            ForEach(linkChoices, id: \.self) { Text($0.title(installed: model.linkBrowsers)).tag($0) }
-                        }
-                    } label: {
-                        Color.clear.contentShape(Rectangle())
-                    }
-                    .accessibilityLabel(SettingsSearch.openLinksInLabel)
-                    .accessibilityValue(model.linkChoice.title(installed: model.linkBrowsers))
-                    .accessibilityIdentifier("settings.open-links-in")
-                }
-                .revealRow("row:open-links-in", model.revealed)
-            }
-            if DeviceWord.isMac {
-                // [cmd-n] A tester 2026-11-02: ⌘N opens the bot's own chat instead of a new one, when asked.
-                HStack(alignment: .firstTextBaseline, spacing: 12) {   // [Mac AAA 2026-11-17] on the title's line, as the switches
-                    SettingsRowLabel(title: "⌘N Opens", systemImage: "command",
-                                     subtitle: ChatRowNotes.newChatMode(botChat: model.newChatKeyMode == .botChat))
-                    Spacer(minLength: 16)
-                    MacPopUp(label: "⌘N Opens", selection: Binding(get: { model.newChatKeyMode }, set: { mode in
-                        NewChatKeyBot.mode = mode
-                        model.newChatKeyMode = mode
-                    }), options: NewChatKeyBot.Mode.allCases) { $0.title }
-                        .accessibilityIdentifier("settings.new-chat-mode")
-                        .hqMacSettingsControl()
-                }
-                .revealRow("row:new-chat-mode", model.revealed)
-                // [cmd-n] Tester 2026-11-02: the bot ⌘N starts a chat with, no chooser (⇧⌘N keeps it).
-                HStack(spacing: 12) {
-                    SettingsRowLabel(title: "⌘N Bot", systemImage: "square.and.pencil")
-                    Spacer(minLength: 16)
-                    MacPopUp(label: "⌘N Bot", selection: Binding(get: { model.newChatKeyBot }, set: { id in
-                        NewChatKeyBot.chosen = id
-                        model.newChatKeyBot = id
-                    }), options: model.newChatKeyOptions, title: model.newChatKeyTitle)
-                        .accessibilityIdentifier("settings.new-chat-key")
-                        .hqMacSettingsControl()
-                }
-                .revealRow("row:new-chat-key", model.revealed)
-                // [cmd-n] Owner 2026-11-02: "have the session default to a certain project". Shown once there is a
-                // project to pick (or one is picked).
-                // A bot's own chat has no project: the row goes while ⌘N opens it.
-                if model.newChatKeyMode == .session, model.newChatKeyProjects.count > 1 {
-                    HStack(spacing: 12) {
-                        SettingsRowLabel(title: "⌘N Project", systemImage: "folder.badge.plus")
-                        Spacer(minLength: 16)
-                        MacPopUp(label: "⌘N Project", selection: Binding(get: { model.newChatKeyProject }, set: { key in
-                            NewChatKeyBot.project = key.isEmpty ? nil : key
-                            model.newChatKeyProject = key
-                        }), options: model.newChatKeyProjects, title: model.newChatKeyProjectTitle)
-                            .accessibilityIdentifier("settings.new-chat-project")
-                            .hqMacSettingsControl()
-                    }
-                    .revealRow("row:new-chat-project", model.revealed)
-                }
-            }
-            if model.configStore != nil {
-                Toggle(isOn: Binding(get: { model.resumeLastSession }, set: { model.setResumeLastSession($0) })) {
-                    SettingsRowLabel(title: "Reopen Last Chat on Launch", systemImage: "arrow.counterclockwise", subtitle: notes ? ChatRowNotes.resumeLastChat : nil)
-                }
-                .accessibilityIdentifier("settings.resume-last-chat")
-                .revealRow("row:resume-last-chat", model.revealed)
-            }
-            Toggle(isOn: Binding(get: { model.inAppTips }, set: { on in
-                Haptics.play(.selection)
-                model.inAppTips = on
-                InAppTips.isOn = on
-            })) {
-                SettingsRowLabel(title: "In-App Tips", systemImage: "lightbulb")
-            }
-            .accessibilityIdentifier("settings.tips")
-            .revealRow("row:tips", model.revealed)
-            // [settings] §7. The switch itself ticks (a system control): no cue of ours on top (DECISION 2.1).
-            Toggle(isOn: Binding(get: { model.introSplash }, set: { on in
-                model.introSplash = on
-                IntroSplash.isOn = on
-            })) {
-                SettingsRowLabel(title: SettingsSearch.introSplashLabel, systemImage: "hand.wave")   // UX study #69: was "Intro Splash"
-            }
-            .accessibilityIdentifier("settings.intro-splash")
-            .revealRow("row:intro-splash", model.revealed)
-            // [settings] §12
-            Toggle(isOn: Binding(get: { model.fileBrowser }, set: { on in
-                model.fileBrowser = on
-                FileBrowserPref.isOn = on
-            })) {
-                SettingsRowLabel(title: SettingsSearch.fileBrowserLabel, systemImage: "folder")   // UX study #69: was "File Browser"
-            }
-            .accessibilityIdentifier("settings.file-browser")
-            .revealRow("row:file-browser", model.revealed)
-            // [session-strip] [bot-chat-sessions] On the Mac too.
-            Toggle(isOn: Binding(get: { model.sessionStrip }, set: { on in
-                model.sessionStrip = on
-                SessionStripPref.isOn = on
-            })) {
-                SettingsRowLabel(title: "Other Chats at the Top", systemImage: "capsule")
-            }
-            .accessibilityIdentifier("settings.session-strip")
-            .revealRow("row:session-strip", model.revealed)
-            Toggle(isOn: Binding(get: { model.messageReactions }, set: { on in
-                model.messageReactions = on
-                MessageReactionsPref.isOn = on
-            })) {
-                SettingsRowLabel(title: "Message Reactions", systemImage: "face.smiling", subtitle: notes ? ChatRowNotes.messageReactions : nil)
-            }
-            .accessibilityIdentifier("settings.message-reactions")
-            .revealRow("row:message-reactions", model.revealed)
-        } header: { categoryHeader("Chat") }
-        }
-
-        // [settings] §1, §18: "Sounds & Haptics". The Haptics row does not depend on the completion cue being wired.
-        if model.shows(.sounds) {
-        Section {
-            // Owner 2026-11-01: every row of the card has its symbol (these three had none on the iPhone).
-            if SettingsHooks.completionCueWired {
-                Toggle(isOn: $model.completionSound) { SettingsRowLabel(title: "Completion Sound", systemImage: "speaker.wave.2") }
-                    .accessibilityIdentifier("settings.completion-sound")
-                    .onChange(of: model.completionSound) { _, value in
-                        Haptics.play(.selection)
-                        CompletionCue.isOn = value
-                    }
-                    .revealRow("row:completion-sound", model.revealed)
-                if model.completionSound {
-                    if DeviceWord.isMac {
-                        // [mac] Owner 2026-11-09 (Settings "too iOS-like"): one choice is a pop-up in its row, not a
-                        // page of its own. Choosing a sound plays it; the play button hears the chosen one again.
-                        HStack(spacing: 12) {
-                            SettingsRowLabel(title: "Sound", systemImage: "music.note")
-                            Spacer(minLength: 16)
-                            Button { CompletionCue.preview(CompletionCue.variant) } label: {
-                                Image(systemName: "play.circle")
-                                    .font(MacIcon.rowFont)
-                                    .foregroundStyle(Color.hqLabel2)
-                                    .frame(width: MacIcon.rowColumn, height: MacIcon.rowColumn)
-                                    .contentShape(Rectangle())
+                    .accessibilityIdentifier("settings.notifications")
+                    if SettingsHooks.completionCueWired {
+                        Toggle(isOn: $model.completionSound) { SettingsRowLabel(title: "Completion Sound", systemImage: "speaker.wave.2") }
+                            .accessibilityIdentifier("settings.completion-sound")
+                            .onChange(of: model.completionSound) { _, value in
+                                Haptics.play(.selection)
+                                CompletionCue.isOn = value
                             }
-                            .buttonStyle(.borderless)
-                            .help("Play \(model.soundName)")
-                            .accessibilityLabel("Play \(model.soundName)")
-                            MacPopUp(label: "Sound", selection: Binding(get: { CompletionSoundVariant.preset(CompletionCue.variant).id }, set: { id in
-                                CompletionCue.variant = id
-                                model.soundName = CompletionSoundVariant.preset(id).name
-                                CompletionCue.preview(id)
-                            }), options: CompletionSoundVariant.presets.map(\.id)) { CompletionSoundVariant.preset($0).name }
-                                .accessibilityIdentifier("settings.sound")
-                                .hqMacSettingsControl()
+                            .revealRow(SoundsHapticsRows.completionSound, model.revealed)
+                        if model.completionSound {
+                            // [mac] Owner 2026-11-09 (Settings "too iOS-like"): one choice is a pop-up in its row, not a
+                            // page of its own. Choosing a sound plays it; the play button hears the chosen one again.
+                            HStack(spacing: 12) {
+                                SettingsRowLabel(title: "Sound", systemImage: "music.note")
+                                Spacer(minLength: 16)
+                                Button { CompletionCue.preview(CompletionCue.variant) } label: {
+                                    Image(systemName: "play.circle")
+                                        .font(MacIcon.rowFont)
+                                        .foregroundStyle(Color.hqLabel2)
+                                        .frame(width: MacIcon.rowColumn, height: MacIcon.rowColumn)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.borderless)
+                                .help("Play \(model.soundName)")
+                                .accessibilityLabel("Play \(model.soundName)")
+                                MacPopUp(label: "Sound", selection: Binding(get: { CompletionSoundVariant.preset(CompletionCue.variant).id }, set: { id in
+                                    CompletionCue.variant = id
+                                    model.soundName = CompletionSoundVariant.preset(id).name
+                                    CompletionCue.preview(id)
+                                }), options: CompletionSoundVariant.presets.map(\.id)) { CompletionSoundVariant.preset($0).name }
+                                    .accessibilityIdentifier("settings.sound")
+                                    .hqMacSettingsControl()
+                            }
+                            .revealRow(SoundsHapticsRows.sound, model.revealed)   // [Mac UI check 2026-11-13] Settings search lands here
                         }
-                        .revealRow("row:sound", model.revealed)   // [Mac UI check 2026-11-13] Settings search lands here
-                    } else {
-                    NavRow(title: "Sound", systemImage: "music.note", value: model.soundName) { router.push("Sound", CompletionSoundPicker()) }
-                        .accessibilityIdentifier("settings.sound")
                     }
-                }
-            }
-            if SettingsSearch.hasHaptics {   // [mac] not on the Mac (SettingsSearch.hasHaptics)
-                Toggle(isOn: Binding(get: { model.haptics }, set: { on in
-                    model.haptics = on
-                    Haptics.isOn = on
-                })) {
-                    SettingsRowLabel(title: "Haptics", systemImage: "hand.tap")
-                }
-                .accessibilityIdentifier("settings.haptics")
-                .revealRow("row:haptics", model.revealed)
-            }
-            // [thinking-drive] Owner 2026-11-01: the thinking bar "going into hyperspace", felt and seen.
-            let drive = Binding(get: { model.thinkingDrive }, set: { (value: ThinkingDrive) in
-                Haptics.play(.selection)
-                model.thinkingDrive = value
-                ThinkingDrive.chosen = value
-            })
-            // [macpass-settings2] On the Mac it is in Appearance (`macThinkingBarRow`): nothing there is heard or felt.
-            if !DeviceWord.isMac {
-                SettingsMenuRowFace(label: SettingsRowLabel(title: "Thinking Bar", systemImage: "gauge.with.dots.needle.67percent"), value: model.thinkingDrive.title)
-                .overlay {
-                    Menu {
-                        Picker("Thinking Bar", selection: drive) {
-                            ForEach(ThinkingDrive.allCases) { Text($0.title).tag($0) }
+                    // [device-access] What the bots may use from this Mac.
+                    NavRow(title: "Device Access", systemImage: "hand.raised", value: DeviceAccessCenter.shared.settings.rowSummary) {
+                        router.push(DeviceAccessSettingsController())
+                    }
+                    .accessibilityIdentifier("settings.device-access")
+                    // [proactivity-beta] Opt-in Beta proactivity add-on (off by default).
+                    if model.configStore != nil {
+                        NavRow(title: ProactivityBetaPage.title, systemImage: "sparkles", value: "Beta") {
+                            router.push(ProactivityBetaPage.make(router: router))
                         }
-                    } label: {
-                        Color.clear.contentShape(Rectangle())
+                        .accessibilityIdentifier("settings.proactivity-beta")
                     }
-                    .accessibilityLabel("Thinking Bar")
-                    .accessibilityValue(model.thinkingDrive.title)
-                    .accessibilityIdentifier("settings.thinking-drive")
+                } header: { HQSectionLabel { Text("System & Alerts") } }
+
+                Section {
+                    if model.configStore != nil {
+                        Toggle(isOn: Binding(get: { model.resumeLastSession }, set: { model.setResumeLastSession($0) })) {
+                            SettingsRowLabel(title: "Reopen Last Chat on Launch", systemImage: "arrow.counterclockwise", subtitle: ChatRowNotes.resumeLastChat)
+                        }
+                        .accessibilityIdentifier("settings.resume-last-chat")
+                        .revealRow(ChatSettingsRows.resumeLastChat, model.revealed)
+                    }
+                    Toggle(isOn: Binding(get: { model.inAppTips }, set: { on in
+                        Haptics.play(.selection)
+                        model.inAppTips = on
+                        InAppTips.isOn = on
+                    })) {
+                        SettingsRowLabel(title: "In-App Tips", systemImage: "lightbulb")
+                    }
+                    .accessibilityIdentifier("settings.tips")
+                    .revealRow(ChatSettingsRows.tips, model.revealed)
+                    #if targetEnvironment(macCatalyst)
+                    // [mac] Stress test 2026-10-28 #40: macOS keeps a new app's Share extension off until it is switched on, and
+                    // nothing said so. The row opens the System Settings page that does it.
+                    HStack(spacing: 12) {
+                        SettingsRowLabel(title: "Share Menu", systemImage: "square.and.arrow.up")
+                        Spacer(minLength: 16)
+                        Button("Open System Settings") {
+                            if let url = URL(string: "x-apple.systempreferences:com.apple.ExtensionsPreferences?extensionPointIdentifier=com.apple.share-services") {
+                                UIApplication.shared.open(url)
+                            }
+                        }
+                        .hqMacPushButton()
+                        .fixedSize()
+                        .accessibilityIdentifier("settings.share-menu")
+                    }
+                    .hqMacFormRowHeight()
+                    .revealRow("row:share-menu", model.revealed)
+                    #endif
+                } header: { HQSectionLabel { Text("App & Sharing") } } footer: {
+                    #if targetEnvironment(macCatalyst)
+                    HQSectionFooter {
+                        Text("To send files, links and text to a bot from other apps' Share menus, switch on Hermes HQ in System Settings › General › Login Items & Extensions › Sharing.")
+                    }
+                    #endif
                 }
-                .revealRow("row:thinking-drive", model.revealed)
+            } else {
+                Section {
+                    let _ = Theme.touch()
+                    NavRow(title: AppearancePage.title, systemImage: "paintbrush", value: Theme.shared.state.skin.label) {
+                        router.push(AppearancePage.make(model: model, router: router))
+                    }
+                    .accessibilityIdentifier("settings.appearance-row")
+                    NavRow(title: ChatSettingsPage.title, systemImage: "bubble.left.and.bubble.right") {
+                        router.push(ChatSettingsPage.make(model: model, router: router, actions: actions))
+                    }
+                    .accessibilityIdentifier("settings.chat-row")
+                    // UX study 2026-10-21 #119: its state, as the rows beside it show theirs.
+                    NavRow(title: "Notifications", systemImage: "bell.badge", value: model.notificationsSummary) {
+                        router.push(NotificationsSettingsController(app: model.services as? AppModel))
+                    }
+                    .accessibilityIdentifier("settings.notifications")
+                    NavRow(title: SoundsHapticsPage.title, systemImage: "speaker.wave.2", value: SoundsHapticsPage.summary(model: model)) {
+                        router.push(SoundsHapticsPage.make(model: model, router: router))
+                    }
+                    .accessibilityIdentifier("settings.sounds-row")
+                    // [device-access] What the bots may use from this phone.
+                    NavRow(title: "Device Access", systemImage: "hand.raised", value: DeviceAccessCenter.shared.settings.rowSummary) {
+                        router.push(DeviceAccessSettingsController())
+                    }
+                    .accessibilityIdentifier("settings.device-access")
+                    // [proactivity-beta] Opt-in Beta proactivity add-on (off by default).
+                    if model.configStore != nil {
+                        NavRow(title: ProactivityBetaPage.title, systemImage: "sparkles", value: "Beta") {
+                            router.push(ProactivityBetaPage.make(router: router))
+                        }
+                        .accessibilityIdentifier("settings.proactivity-beta")
+                    }
+                } header: { HQSectionLabel { Text("App") } }
             }
-        } header: { categoryHeader(!SettingsSearch.hasHaptics ? "Sounds" : SettingsHooks.completionCueWired ? "Sounds & Haptics" : "Haptics") }
+        }
+
+        if model.shows(.chat), model.twoColumn {
+            ChatSections(model: model, router: router, actions: actions, revealed: model.revealed, includeAppStartup: false)
         }
 
         if model.shows(.gateway) {
-        if model.configStore != nil {
-            Section {
-                ForEach(ConfigCatalog.sections) { section in
-                    NavRow(title: section.title, systemImage: section.symbol) { ConfigScreens.open(section: section, router: router) }
+            if model.configStore != nil {
+                Section {
+                    ForEach(ConfigCatalog.sections) { section in
+                        if !model.twoColumn, section.id == "advanced" {
+                            // [cap-pages] Capabilities sits alongside the gateway configuration sections on iPhone/iPad.
+                            let issue = CapabilitiesIssues.moreStatus()
+                            NavRow(title: "Capabilities", systemImage: "square.grid.2x2", value: issue?.text, valueIsIssue: issue != nil) {
+                                router.push(CapabilitiesHubController(services: model.services, settingsPage: true))
+                            }
+                            .accessibilityValue(issue?.spoken ?? "")
+                            .accessibilityIdentifier("settings.capabilities")
+                        }
+                        NavRow(title: ConfigScreens.displayTitle(for: section), systemImage: section.symbol) {
+                            ConfigScreens.open(section: section, router: router)
+                        }
                         .accessibilityIdentifier("settings.config.\(section.id)")
-                    if section.id == "browser" {
-                        // UX study #67: Safety keeps the shield; Keys already has "key".
-                        NavRow(title: "Passwords", systemImage: "person.badge.key") { SettingsNavigator.openRoot("vault", router: router) }
-                            .accessibilityIdentifier("settings.vault")
                     }
-                }
-                // UX study #68: not "Sessions", the tab's name: the page sets new chats' folder and archives old ones.
-                NavRow(title: SettingsSearch.sessionsPageTitle, systemImage: "folder.badge.gearshape") {
-                    SettingsNavigator.openRoot("sessions", router: router)
-                }
-                    .accessibilityIdentifier("settings.sessions")
-            } header: { HQSectionLabel {
-                Text("On Your Gateway")   // UX study #72: was "Hermes", which said nothing about where these are kept
-            } }
+                } header: { HQSectionLabel {
+                    Text(model.twoColumn ? "Behavior & Runtime" : "Hermes")
+                } }
 
+                if model.twoColumn {
+                    Section {
+                        // [mac] Stress test 2026-10-28 #51: push buttons at the row's trailing edge, not rows in link blue.
+                        let fileButtons = HStack(spacing: 10) {
+                            Button("Export Settings…") { actions.export() }
+                                .accessibilityIdentifier("settings.export")
+                                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { actions.exportAnchor = $0 }   // [Mac UI check 2026-11-13]
+                            Button("Import Settings…") { actions.pickImport() }
+                                .accessibilityIdentifier("settings.import")
+                        }
+                        let resetButtons = HStack(spacing: 10) {
+                            Button("Reset to Defaults…", role: .destructive) { actions.confirmReset() }
+                                .disabled(model.resetting)
+                                .accessibilityIdentifier("settings.reset")
+                        }
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 10) { fileButtons; resetButtons }.fixedSize()
+                            VStack(alignment: .leading, spacing: 8) { fileButtons; resetButtons }.fixedSize()
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .hqMacBordered()   // [mac] Stress test 2026-10-28 #55 (round 6): the Mac push button; Reset keeps red words (its role)
+                    } header: { HQSectionLabel {
+                        Text("Backup & Reset")
+                    } } footer: { HQSectionFooter {
+                        VStack(alignment: .leading, spacing: 6) {
+                            if let status = model.fileStatus {
+                                Text(status).foregroundStyle(Color.hqLabel).accessibilityIdentifier("settings.file-status")
+                            }
+                            Text("Exported files leave out keys, tokens and passwords.")
+                        }
+                    } }
+                }
+            }
+
+            // [talk] Without the gateway's settings Voice still opens: its switches belong to this device (3x-talk §9.1).
+            if model.configStore == nil {
+                Section {
+                    NavRow(title: "Voice & Calls", systemImage: "mic") { VoiceSettingsScreens.openSection(router: router) }
+                        .accessibilityIdentifier("settings.config.voice")
+                }
+            }
+        }
+
+        if model.shows(.accounts), model.configStore != nil {
             Section {
-                NavRow(title: "Phone Calls (Beta)", systemImage: "phone") { SettingsNavigator.openRoot("phone-calls", router: router) }
-                    .accessibilityIdentifier("settings.phone-calls")
+                // UX study #67: Safety keeps the shield; Keys already has "key".
+                NavRow(title: "Passwords", systemImage: "person.badge.key") { SettingsNavigator.openRoot("vault", router: router) }
+                    .accessibilityIdentifier("settings.vault")
                 NavRow(title: "Providers", systemImage: "bolt") { SettingsNavigator.openRoot("providers", router: router) }
                     .accessibilityIdentifier("settings.providers")
                 NavRow(title: "Keys", systemImage: "key") { SettingsNavigator.openRoot("keys", router: router) }
                     .accessibilityIdentifier("settings.keys")
                 NavRow(title: "Billing", systemImage: "creditcard") { SettingsNavigator.openRoot("billing", router: router) }
                     .accessibilityIdentifier("settings.billing")
-                // The owner 2026-11-14: Browser Use Cloud was per bot only; its key and "Use for All Bots" live here.
-                NavRow(title: "Browser Use Cloud", systemImage: "cloud") { SettingsNavigator.openRoot("browser-use-cloud", router: router) }
-                    .accessibilityIdentifier("settings.browser-use-cloud")
-            } header: { HQSectionLabel {
-                Text("Accounts & Keys")
-            } }
-        }
-
-        // [talk] Without the gateway's settings Voice still opens: its switches belong to this iPhone (3x-talk §9.1).
-        if model.configStore == nil {
-            Section {
-                NavRow(title: "Voice", systemImage: "mic") { VoiceSettingsScreens.openSection(router: router) }
-                    .accessibilityIdentifier("settings.config.voice")
+            } header: {
+                if !model.twoColumn {
+                    HQSectionLabel { Text("Accounts, Keys & Passwords") }
+                }
             }
-        }
         }
 
         if model.shows(.tools) {
-        Section {
-            // [cap-pages] Owner 2026-11-03 (one home per page): Capabilities by its own name, the page More lists, not
-            // Skills, Connectors and Plugins rows that each opened it under the title "Capabilities".
-            let issue = CapabilitiesIssues.moreStatus()
-            NavRow(title: "Capabilities", systemImage: "square.grid.2x2", value: issue?.text, valueIsIssue: issue != nil) {
-                router.push(CapabilitiesHubController(services: model.services, settingsPage: true))
-            }
-            .accessibilityValue(issue?.spoken ?? "")
-            .accessibilityIdentifier("settings.capabilities")
-            // [tile-models] Owner 2026-11-18: the model the tiles' jobs run, and their fallback (each tile can have its own).
-            if let summary = model.tileModelSummary {
-                NavRow(title: "Tile Model", systemImage: "rectangle.3.group", value: summary) {
-                    SettingsNavigator.openRoot("tile-model", router: router)
-                }
-                .accessibilityIdentifier("settings.tile-model")
-            }
-            #if targetEnvironment(macCatalyst)
-            // [mac-layout] Owner 2026-11-03 (the layout study): More dissolves on the Mac. Its setup pages (the bots'
-            // profiles, messaging apps, webhooks, imports) are here in the Settings window; its working pages are the
-            // sidebar's Tools. (Capabilities is the row above.)
-            if model.ownWindow || model.twoColumn {
-                ForEach(Self.movedFromMore(), id: \.id) { row in
-                    NavRow(title: row.title, systemImage: row.symbol.map(PagesTabs.outlineSymbol)) {
-                        if let page = row.make() { router.push(page) }
+            if model.twoColumn {
+                Section {
+                    // [cap-pages] Owner 2026-11-03 (one home per page): Capabilities by its own name, the page More lists.
+                    let issue = CapabilitiesIssues.moreStatus()
+                    NavRow(title: "Capabilities", systemImage: "square.grid.2x2", value: issue?.text, valueIsIssue: issue != nil) {
+                        router.push(CapabilitiesHubController(services: model.services, settingsPage: true))
                     }
-                    .accessibilityIdentifier("settings.more.\(row.id)")
-                }
+                    .accessibilityValue(issue?.spoken ?? "")
+                    .accessibilityIdentifier("settings.capabilities")
+                    #if targetEnvironment(macCatalyst)
+                    // [mac-layout] Owner 2026-11-03 (the layout study): More dissolves on the Mac. Its setup pages (the bots'
+                    // profiles, messaging apps, webhooks, imports) are here in the Settings window; its working pages are the
+                    // sidebar's Tools. (Capabilities is the row above.)
+                    if model.ownWindow || model.twoColumn {
+                        ForEach(Self.movedFromMore(), id: \.id) { row in
+                            NavRow(title: row.title, systemImage: row.symbol.map(PagesTabs.outlineSymbol)) {
+                                if let page = row.make() { router.push(page) }
+                            }
+                            .accessibilityIdentifier("settings.more.\(row.id)")
+                        }
+                    }
+                    #endif
+                    // [kanban-tab-one] Owner 2026-11-03 (one home per page): no Kanban Tab row here. Its one picker is on
+                    // Appearance › Tabs, with the other tab choices.
+                } header: { HQSectionLabel { Text("Capabilities & Channels") } }
             }
-            #endif
-            // [kanban-tab-one] Owner 2026-11-03 (one home per page): no Kanban Tab row here. Its one picker is on
-            // Appearance › Tabs, with the other tab choices.
-        } header: { categoryHeader("Bots & Tools") }
 
-        if let app = model.services as? AppModel, model.services.account != nil,
-           !(app.settingsHub.capabilitiesStore?.readOnlyGateway ?? false) {
-            let update = AddOnUpdate.shared
-            let busy = update.busy && update.pluginRun
-            Section {
-                Toggle(isOn: Binding(get: { model.autoPluginUpdateChecks }, set: { model.setAutoPluginUpdateChecks($0) })) {
-                    SettingsRowLabel(title: "Check Automatically", systemImage: "arrow.triangle.2.circlepath")
-                }
-                .accessibilityIdentifier("settings.plugin-update-checks")
-                .revealRow("row:plugin-update-checks", model.revealed)
-                Button {
-                    PluginUpdateFlow.shared.run(model: app, from: router.presenter)
-                } label: {
-                    HStack(spacing: 12) {
-                        SettingsRowLabel(title: busy ? update.rowLabel : SettingsSearch.checkPluginUpdatesLabel,
-                                         systemImage: "arrow.down.circle")
-                        Spacer(minLength: 16)
-                        if busy { ProgressView().controlSize(.small) } else { SettingsChevron() }
+            if let app = model.services as? AppModel, model.services.account != nil,
+               !(app.settingsHub.capabilitiesStore?.readOnlyGateway ?? false) {
+                let update = AddOnUpdate.shared
+                let busy = update.busy && update.pluginRun
+                Section {
+                    Toggle(isOn: Binding(get: { model.autoPluginUpdateChecks }, set: { model.setAutoPluginUpdateChecks($0) })) {
+                        SettingsRowLabel(title: "Check Automatically", systemImage: "arrow.triangle.2.circlepath")
                     }
-                    .contentShape(Rectangle())
-                    .hqMacRowHover()
-                }
-                .hqMacFormRowHeight()
-                .accessibilityAddTraits(.isButton)
-                .accessibilityIdentifier("settings.check-plugin-updates")
-                .revealRow("row:check-plugin-updates", model.revealed)
-            } header: { HQSectionLabel {
-                Text("Plugin Updates")
-            } } footer: { HQSectionFooter {
-                Text(PluginUpdateReminder.autoCheckFooter)
-            } }
-        }
-        }
-
-        #if targetEnvironment(macCatalyst)
-        // [mac] Stress test 2026-10-28 #40: macOS keeps a new app's Share extension off until it is switched on, and
-        // nothing said so. The row opens the System Settings page that does it.
-        if model.shows(.general) {
-        Section {
-            // [macpass-settings2] The row leaves the app for System Settings, so it is a push button that says so, not a
-            // page row (a click that seemed to open a page here brought System Settings forward instead).
-            HStack(spacing: 12) {
-                SettingsRowLabel(title: "Share Menu", systemImage: "square.and.arrow.up")
-                Spacer(minLength: 16)
-                Button("Open System Settings") {
-                    if let url = URL(string: "x-apple.systempreferences:com.apple.ExtensionsPreferences?extensionPointIdentifier=com.apple.share-services") {
-                        UIApplication.shared.open(url)
+                    .accessibilityIdentifier("settings.plugin-update-checks")
+                    .revealRow("row:plugin-update-checks", model.revealed)
+                    Button {
+                        PluginUpdateFlow.shared.run(model: app, from: router.presenter)
+                    } label: {
+                        HStack(spacing: 12) {
+                            SettingsRowLabel(title: busy ? update.rowLabel : SettingsSearch.checkPluginUpdatesLabel,
+                                             systemImage: "arrow.down.circle")
+                            Spacer(minLength: 16)
+                            if busy { ProgressView().controlSize(.small) } else { SettingsChevron() }
+                        }
+                        .contentShape(Rectangle())
+                        .hqMacRowHover()
                     }
-                }
-                .hqMacPushButton()
-                .fixedSize()
-                .accessibilityIdentifier("settings.share-menu")
+                    .hqMacFormRowHeight()
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityIdentifier("settings.check-plugin-updates")
+                    .revealRow("row:check-plugin-updates", model.revealed)
+                } header: { HQSectionLabel {
+                    Text("Plugin Updates")
+                } } footer: { HQSectionFooter {
+                    Text(PluginUpdateReminder.autoCheckFooter)
+                } }
             }
-            .hqMacFormRowHeight()
-            .revealRow("row:share-menu", model.revealed)
-        } footer: { HQSectionFooter {
-            Text("To send files, links and text to a bot from other apps' Share menus, switch on Hermes HQ in System Settings › General › Login Items & Extensions › Sharing.")
-        } }
         }
-        #endif
 
         if model.shows(.about) {
-        Section {
-            NavRow(title: "About", systemImage: "info.circle") {
-                router.push(AboutController(services: model.services, router: router))
-            }
-            .accessibilityIdentifier("settings.about")
-        }
-
-        if model.configStore != nil {
             Section {
-                if DeviceWord.isMac {
-                    // [mac] Stress test 2026-10-28 #51: push buttons at the row's trailing edge, not rows in link blue.
-                    // [macpass-settings] Four buttons don't fit one line of the Settings window's page: they squeezed
-                    // into two-line labels. One line when they fit, else two lines of two, each label on one line.
-                    let fileButtons = HStack(spacing: 10) {
-                        Button("Export Settings…") { actions.export() }
-                            .accessibilityIdentifier("settings.export")
-                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { actions.exportAnchor = $0 }   // [Mac UI check 2026-11-13]
-                        Button("Import Settings…") { actions.pickImport() }
-                            .accessibilityIdentifier("settings.import")
-                    }
-                    let resetButtons = HStack(spacing: 10) {
-                        Button("Clear Model Favorites…") { actions.confirmClearModels() }
-                            .accessibilityIdentifier("settings.clear-models")
-                        Button("Reset to Defaults…", role: .destructive) { actions.confirmReset() }
-                            .disabled(model.resetting)
-                            .accessibilityIdentifier("settings.reset")
-                    }
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 10) { fileButtons; resetButtons }.fixedSize()
-                        VStack(alignment: .leading, spacing: 8) { fileButtons; resetButtons }.fixedSize()
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .hqMacBordered()   // [mac] Stress test 2026-10-28 #55 (round 6): the Mac push button; Reset keeps red words (its role)
-                } else {
-                Button("Export Settings…") { actions.export() }
-                    .accessibilityIdentifier("settings.export")
-                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { actions.exportAnchor = $0 }   // [Mac UI check 2026-11-13]
-                Button("Import Settings…") { actions.pickImport() }
-                    .accessibilityIdentifier("settings.import")
-                // [stale-stars] Tester 2026-11-09: above Reset, where he looked for it.
-                Button("Clear Favorite & Recent Models…") { actions.confirmClearModels() }
-                    .accessibilityIdentifier("settings.clear-models")
-                Button("Reset to Defaults…", role: .destructive) { actions.confirmReset() }
-                    .disabled(model.resetting)   // UX study 2026-10-21 #209: "Resetting…" shows below while it writes
-                    .accessibilityIdentifier("settings.reset")
+                NavRow(title: "About", systemImage: "info.circle") {
+                    router.push(AboutController(services: model.services, router: router))
                 }
-            } footer: { HQSectionFooter {
-                VStack(alignment: .leading, spacing: 6) {
-                    if let status = model.fileStatus {
-                        Text(status).foregroundStyle(Color.hqLabel).accessibilityIdentifier("settings.file-status")
+                .accessibilityIdentifier("settings.about")
+                if !model.twoColumn, model.configStore != nil {
+                    NavRow(title: BackupResetPage.title, systemImage: "arrow.up.arrow.down.circle") {
+                        router.push(BackupResetPage.make(model: model, actions: actions))
                     }
-                    Text("Exported files leave out keys, tokens and passwords.")
+                    .accessibilityIdentifier("settings.backup-reset")
                 }
-            } }
-        }
+            } header: {
+                if !model.twoColumn {
+                    HQSectionLabel { Text("Backup & About") }
+                }
+            }
         }
     }
 }
 
 /// [mac-ui-issues] Settings' categories on the Mac (`SettingsRootModel.twoColumn`).
 enum SettingsCategory: String, CaseIterable, Identifiable {
-    case general, appearance, chat, sounds, gateway, tools, about
+    case general, appearance, chat, gateway, accounts, tools, about
     var id: String { rawValue }
     var title: String {
         switch self {
         case .general: "General"
         case .appearance: "Appearance"
         case .chat: "Chat"
-        case .sounds: SettingsSearch.hasHaptics ? "Sounds & Haptics" : "Sounds"
         case .gateway: "Hermes"
+        case .accounts: "Accounts & Keys"
         case .tools: "Bots & Tools"
         case .about: "About"
         }
@@ -1505,8 +1247,8 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
         case .general: "gearshape"
         case .appearance: "paintbrush"
         case .chat: "bubble.left.and.bubble.right"
-        case .sounds: "speaker.wave.2"
         case .gateway: "server.rack"
+        case .accounts: "key"
         case .tools: "wrench.and.screwdriver"
         case .about: "info.circle"
         }
@@ -2080,7 +1822,15 @@ extension SettingsRowLabel {
         "lightbulb": ("lightbulb.fill", Tile.amber),
         "hand.wave": ("hand.wave.fill", Tile.green),
         "folder": ("folder.fill", Tile.blue),
+        "folder.badge.plus": ("folder.fill.badge.plus", Tile.blue),
         "face.smiling": ("face.smiling.inverse", Tile.pink),
+        "doc.badge.ellipsis": ("doc.badge.ellipsis", Tile.teal),
+        "capsule": ("capsule.fill", Tile.indigo),
+        "safari": ("safari.fill", Tile.sky),
+        "text.line.last.and.arrowtriangle.forward": ("text.line.last.and.arrowtriangle.forward", Tile.orange),
+        "command": ("command", Tile.graphite),
+        "star": ("star.fill", Tile.amber),
+        "star.slash": ("star.slash.fill", Tile.grey),
         // Sounds & Haptics
         "speaker.wave.2": ("speaker.wave.2.fill", Tile.pink),
         "hand.tap": ("hand.tap.fill", Tile.rose),

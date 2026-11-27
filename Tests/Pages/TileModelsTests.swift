@@ -338,6 +338,6 @@ struct TileModelsTests {
 
     @Test func tileModelIsFoundInSettingsSearch() {
         #expect(SettingsSearch.rootPages.contains { $0.target == .root("tile-model") && $0.label == "Tile Model" })
-        #expect(SettingsNavigator.category(of: "tile-model") == .tools)
+        #expect(SettingsNavigator.category(of: "tile-model") == .gateway)
     }
 }

@@ -29,23 +29,9 @@ import UIKit
 
         // Owner 2026-11-23: the Hermes HQ Discord card over the gateway card, until it's closed.
         HQCommunity.registerMoreCard()
-        // [settings] → pages: the gateway card heads More (spec 1x-pages §1.2, `S/ui-nav/more-account.tsx`): the gateway's
-        // name and "● Connected · 9 Bots · Hermes 0.21.5"; it opens Settings › Gateway on More's own stack.
-        PagesTabs.registerMoreSection(MoreSection(id: "account", header: nil) {
-            guard let model = M2Wiring.model, model.account != nil else { return [] }
-            return [MoreRow(id: "gateway", title: "Gateway", symbol: nil, image: nil, tile: .clear, make: { [weak model] in
-                guard let model else { return nil }
-                return GatewayPageController(services: model, router: SettingsRouter(services: model, navigation: nil))
-            }, card: { [weak model] in
-                guard let model else { return UIListContentConfiguration.cell().hqScaled() }
-                let card = SettingsRootModel(services: model)
-                return UIHostingConfiguration { GatewayCardView(model: card) }.margins(.vertical, 0)
-            })]
-        })
-        // [settings] → pages: More lists Settings alone, then Bots › Capabilities (S/ui-nav/more-model.ts:12-17; tints
-        // and glyphs from S/phone-tab-bar.tsx). Both push on More's own stack, inline titles (owner: headers sit high).
-        PagesTabs.registerMoreSection(MoreSection(id: "settings", header: nil) {
-            guard let model = M2Wiring.model else { return [] }
+        // [settings] → pages: the gateway card and Settings share the top card on More (on the Mac, MoreViewController
+        // filters out Settings since it has its own window).
+        func makeSettingsRow(_ model: AppModel) -> MoreRow {
             var row = MoreRow(id: "settings", title: "Settings", symbol: "gearshape.fill", image: nil,
                               tile: UIColor(red: 0x8E / 255, green: 0x8E / 255, blue: 0x93 / 255, alpha: 1)) { [weak model] in
                 guard let model else { return nil }
@@ -63,52 +49,58 @@ import UIKit
                 let count = (addOn == nil ? 0 : 1) + plugins.count
                 return count > 0 ? (count, [addOn, plugins.spoken].compactMap { $0 }.joined(separator: ", ")) : nil
             }
-            return [row]
-        })
-        PagesTabs.registerMoreSection(MoreSection(id: "bots", header: "Bots") {
+            return row
+        }
+        PagesTabs.registerMoreSection(MoreSection(id: "account", header: nil) {
             guard let model = M2Wiring.model else { return [] }
-            var row = MoreRow(id: "capabilities", title: "Capabilities", symbol: "square.grid.2x2.fill", image: nil,
-                              tile: UIColor(red: 0x0A / 255, green: 0x84 / 255, blue: 1, alpha: 1)) { [weak model] in
+            let settings = makeSettingsRow(model)
+            guard model.account != nil else { return [settings] }
+            let gateway = MoreRow(id: "gateway", title: "Gateway", symbol: nil, image: nil, tile: .clear, make: { [weak model] in
                 guard let model else { return nil }
-                // [cap-pages] Owner 2026-11-03: four rows (Skills, Tools, Connectors, Plugins), each its own page. An
-                // issue is on the Connectors row too, which then opens on the newest one's bot (3x §8.5).
+                return GatewayPageController(services: model, router: SettingsRouter(services: model, navigation: nil))
+            }, card: { [weak model] in
+                guard let model else { return UIListContentConfiguration.cell().hqScaled() }
+                let card = SettingsRootModel(services: model)
+                return UIHostingConfiguration { GatewayCardView(model: card) }.margins(.vertical, 0)
+            })
+            return [gateway, settings]
+        })
+        // Apps & Extensions: Marketplace, Capabilities, Connectors, Composio (plus Messaging & Webhooks appended by MorePages).
+        PagesTabs.registerMoreSection(MoreSection(id: "apps", header: "Apps & Extensions") {
+            guard let model = M2Wiring.model else { return [] }
+            var capabilities = MoreRow(id: "capabilities", title: "Capabilities", symbol: "square.grid.2x2.fill", image: nil,
+                                       tile: UIColor(red: 0x0A / 255, green: 0x84 / 255, blue: 1, alpha: 1)) { [weak model] in
+                guard let model else { return nil }
                 return CapabilitiesHubController(services: model)
             }
-            row.status = { CapabilitiesIssues.moreStatus() }
-            // [marketplace-row] Owner 2026-11-04: the Hermes Marketplace one tap from More, beside Capabilities, and
-            // only here ("it's in two places": no row inside Capabilities). It can be a tab, and on the Mac it is one of
-            // the sidebar's Tools. The Plugins and Skills pages still link to it for what they list.
-            guard model.account != nil else { return [row] }
+            capabilities.status = { CapabilitiesIssues.moreStatus() }
+            guard model.account != nil else { return [capabilities] }
             let market = MoreRow(id: "marketplace", title: "Marketplace", symbol: "bag.fill", image: nil,
                                  tile: UIColor(red: 0x34 / 255, green: 0xC7 / 255, blue: 0x59 / 255, alpha: 1)) { [weak model] in
                 guard let model else { return nil }
                 return MarketplaceController.page(services: model)
             }
-            // [directory] More › Connectors: the desktop's Connectors page on its own (Hermes' app catalog, the Nous
-            // apps, MCP servers, and Composio with your own key).
-            // [cap-pages] The same page as Capabilities › Connectors (one page, two ways in; it can be a tab).
-            // [connect-find] Owner 2026-11-11 ("the whole thing is hidden"): beside Marketplace, where what a bot can
-            // be given is, not at the foot of More under Integrations (two screens down).
             let connectors = MoreRow(id: "connectors", title: "Connectors", symbol: "powerplug.fill", image: nil,
                                      tile: UIColor(red: 1, green: 0x9F / 255, blue: 0x0A / 255, alpha: 1)) { [weak model] in
                 guard let model else { return nil }
                 return CapabilitiesPages.page(.connectors, services: model)
             }
-            // [composio-row] Owner 2026-11-12: Composio is a row of its own, right under Connectors (and off the
-            // Connectors page), so Hermes' own connectors and Composio are each easy to find and apart.
             let composio = MoreRow(id: ComposioRow.id, title: ComposioRow.title, symbol: ComposioRow.symbol, image: nil,
                                    tile: UIColor(red: 0x30 / 255, green: 0xB0 / 255, blue: 0xC7 / 255, alpha: 1)) { [weak model] in
                 guard let model else { return nil }
                 return ConnectAppsScreens.makeRoot(services: model)
             }
-            // [passwords-page] Owner 2026-11-11: every password in one organized place, a tap from More (the same page
-            // as Settings › Passwords): what the bots fill, password managers, keys, and this device's Keychain.
+            return [market, capabilities, connectors] + (ConnectAppsFeature.isOn ? [composio] : [])
+        })
+        // System: admin, secrets & bot management (Bot Profiles, Passwords, Status & Maintenance, Import Sessions).
+        PagesTabs.registerMoreSection(MoreSection(id: "system", header: "System") {
+            guard let model = M2Wiring.model, model.account != nil else { return [] }
             let passwords = MoreRow(id: "passwords", title: "Passwords", symbol: "key.fill", image: nil,
                                     tile: UIColor(red: 0x5E / 255, green: 0x5C / 255, blue: 0xE6 / 255, alpha: 1)) { [weak model] in
                 guard let model else { return nil }
                 return PasswordsPageController(router: SettingsRouter(services: model, navigation: nil))
             }
-            return [row, market, connectors] + (ConnectAppsFeature.isOn ? [composio] : []) + [passwords]
+            return [passwords]
         })
 
         // [morepages] More › Bot Profiles, Messaging, Files, Review, Status & Maintenance, Usage, Spawn Tree, Star Map,

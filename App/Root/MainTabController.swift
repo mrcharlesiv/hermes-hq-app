@@ -56,7 +56,7 @@ final class MainTabController: UITabBarController, UITabBarControllerDelegate {
     }
 
     /// [badges] The iPhone bar's count badges, over its glass (`fitBadgesInSelection`).
-    private var badgeOverlay: TabBadgeOverlay?
+    private(set) var badgeOverlay: TabBadgeOverlay?
 
     init(services: any AppServices, makeChat: @escaping (any ChatSessionModel) -> UIViewController) {
         self.services = services

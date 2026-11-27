@@ -271,12 +271,20 @@ final class DesktopTabBar: UIView {
         let capsule = CGRect(x: Glass.margin, y: 0, width: max(0, bounds.width - Glass.margin * 2), height: Glass.capsuleHeight)
         if platter.frame != capsule { platter.frame = capsule }
         let (pill, centres) = Glass.layout(width: capsule.width, count: buttons.count)
+        let pillRects = centres.map { CGRect(x: $0 - pill / 2, y: Glass.inset, width: pill, height: Glass.buttonHeight) }
+        let capsuleBounds = CGRect(origin: .zero, size: capsule.size)
         for (index, button) in buttons.enumerated() {
             // Each button takes its share of the capsule (the ends reach its edges); its icon and label sit at the centre.
             let left = index == 0 ? 0 : (centres[index - 1] + centres[index]) / 2
             let right = index == buttons.count - 1 ? capsule.width : (centres[index] + centres[index + 1]) / 2
             button.frame = CGRect(x: left, y: Glass.inset, width: right - left, height: Glass.buttonHeight)
             button.centreOffset = centres[index] - (left + right) / 2
+            button.glassPillGeometry = (
+                pill: pillRects[index].offsetBy(dx: -left, dy: -Glass.inset),
+                prevPill: index > 0 ? pillRects[index - 1].offsetBy(dx: -left, dy: -Glass.inset) : nil,
+                nextPill: index + 1 < pillRects.count ? pillRects[index + 1].offsetBy(dx: -left, dy: -Glass.inset) : nil,
+                capsule: capsuleBounds.offsetBy(dx: -left, dy: -Glass.inset)
+            )
         }
         for view in [selectionPill, hoverPill] { view.layer.cornerRadius = Glass.buttonHeight / 2 }
         placePill(selectionPill, at: host?.selectedIndex, width: pill, centres: centres)
@@ -522,6 +530,10 @@ private final class TabButton: UIControl {
     var badge: String? { didSet { showBadge() } }
     /// [mac] Glass: where the tab's centre sits from the button's own (the ends of the bar are wider than their tab).
     var centreOffset: CGFloat = 0 { didSet { if centreX?.constant != centreOffset { centreX?.constant = centreOffset } } }
+    /// Glass capsule geometry in this button's coordinates, so badges clamp clear of neighbouring pills and capsule edges.
+    var glassPillGeometry: (pill: CGRect, prevPill: CGRect?, nextPill: CGRect?, capsule: CGRect)? {
+        didSet { if style == .glass { setNeedsLayout() } }
+    }
 
     init(item: UITabBarItem, style: DesktopTabBar.Style = .desktop) {
         self.item = item
@@ -551,31 +563,32 @@ private final class TabButton: UIControl {
         }
         if style == .glass {
             // The system bar on macOS 27: the symbol's middle 20 pt below the button's top, the 16 pt label line 31 pt
-            // below it, a 20 pt badge 14 pt right of the tab's centre and 2 pt below the top.
+            // below it; the badge is placed in `layoutSubviews` via `TabBadgeLayout` so it stays clear of adjacent pills.
             // [paper-solid] Paper's phone bar: the iPhone system bar's (the symbol's middle 20 pt down, a 12 pt label
             // line 35 pt down).
             let phone = DesktopTabBar.paperPhone
             let centre = icon.centerXAnchor.constraint(equalTo: centerXAnchor)
             centreX = centre
+            badgeLabel.translatesAutoresizingMaskIntoConstraints = true
             NSLayoutConstraint.activate([
                 centre, icon.centerYAnchor.constraint(equalTo: topAnchor, constant: 20),
                 label.centerXAnchor.constraint(equalTo: icon.centerXAnchor),
                 label.topAnchor.constraint(equalTo: topAnchor, constant: phone ? 35 : 31),
                 label.heightAnchor.constraint(equalToConstant: phone ? 12 : 16),
                 label.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -4),
-                badgeLabel.leadingAnchor.constraint(equalTo: icon.centerXAnchor, constant: 14),
-                badgeLabel.topAnchor.constraint(equalTo: topAnchor, constant: 2),
-                badgeLabel.heightAnchor.constraint(equalToConstant: 20), badgeLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 20),
             ])
-            badgeLabel.layer.cornerRadius = 10
+            badgeLabel.layer.cornerRadius = TabBadgeLayout.badgeHeight / 2
+            badgeLabel.layer.cornerCurve = .continuous
             if let image = item.image, image.isSymbolImage {
                 icon.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: phone ? 19 : 18, weight: .medium, scale: .large)
             }
             label.text = item.title
         } else {
             // The badge grows rightwards from just inside the glyph's right edge, as the system bar's does: centred on
-            // the icon's corner, "3" hid half the robot and "128" most of the Sessions bubbles.
+            // the icon's corner, "3" hid half the robot and "128" most of the Sessions bubbles. Lower priority on leading
+            // lets wide counts ("99+") tuck inward rather than touching the neighbouring tab or bar edge.
             let badgeLeading = badgeLabel.leadingAnchor.constraint(equalTo: icon.centerXAnchor, constant: Self.badgeOffset)
+            badgeLeading.priority = .defaultHigh
             self.badgeLeading = badgeLeading
             NSLayoutConstraint.activate([
                 icon.centerXAnchor.constraint(equalTo: centerXAnchor), icon.topAnchor.constraint(equalTo: topAnchor, constant: 7),
@@ -584,6 +597,8 @@ private final class TabButton: UIControl {
                 label.topAnchor.constraint(equalTo: icon.bottomAnchor, constant: 3),
                 label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2), label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
                 badgeLeading,
+                badgeLabel.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 4),
+                badgeLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -4),
                 badgeLabel.centerYAnchor.constraint(equalTo: icon.topAnchor, constant: 3),
                 badgeLabel.heightAnchor.constraint(equalToConstant: 16), badgeLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 16),
             ])
@@ -595,14 +610,33 @@ private final class TabButton: UIControl {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        if style == .glass { positionGlassBadge() }
+    }
+
+    private func positionGlassBadge() {
+        guard !badgeLabel.isHidden else { return }
+        let height = TabBadgeLayout.badgeHeight
+        let width = max(height, ceil(badgeLabel.intrinsicContentSize.width))
+        let iconRect = icon.frame.isEmpty ? CGRect(x: bounds.midX + centreOffset - 12, y: 8, width: 24, height: 24) : icon.frame
+        let slot: TabBadgeLayout.Slot
+        if let g = glassPillGeometry {
+            slot = TabBadgeLayout.Slot(icon: iconRect, pill: g.pill, prevPill: g.prevPill, nextPill: g.nextPill, capsule: g.capsule)
+        } else {
+            slot = TabBadgeLayout.Slot(icon: iconRect, pill: bounds)
+        }
+        badgeLabel.frame = TabBadgeLayout.frame(for: slot, badgeSize: CGSize(width: width, height: height))
+    }
 
     private func showBadge() {
         badgeLabel.isHidden = (badge ?? "").isEmpty
         badgeLabel.text = badge
         badgeLabel.font = style == .glass
-            ? UIFont.systemFont(ofSize: 13, weight: .regular)       // a11y-font-ok: the system bar's badge on the Mac (13 iPad pt = 10 pt on screen)
+            ? UIFont.systemFont(ofSize: 12, weight: .semibold)       // a11y-font-ok: compact capsule tab bar badge
             : UIFont.systemFont(ofSize: 11, weight: .semibold)   // a11y-font-ok: Desktop Look badge is a fixed size like the desktop app
         accessibilityValue = (badge ?? "").isEmpty ? item.accessibilityValue : "\(badge ?? "") new"
+        if style == .glass { setNeedsLayout() }
     }
 
     /// [tabmotion] The icon's tap motion (`TabMotion`).

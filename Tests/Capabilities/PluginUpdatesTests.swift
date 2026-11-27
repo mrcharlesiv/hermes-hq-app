@@ -3,6 +3,7 @@
 // and steps when it runs a plugin update.
 
 import Foundation
+import Synchronization
 import Testing
 @testable import HermesHQNative
 
@@ -325,5 +326,105 @@ import Testing
         #expect(!update.pluginRun && update.headline == "Update the Add-on?" && update.fillsHeight)
         #expect(update.demo("installing", bot: "Hermes", model: nil))
         #expect(update.rowLabel == AddOnUpdate.rowTitle)
+    }
+
+    // MARK: Automatic checks opt-out and timeout protection
+
+    @Test func automaticPluginUpdateChecksDefaultOnAndOptOutPerGateway() throws {
+        let defaults = try #require(UserDefaults(suiteName: "plugin-auto-\(UUID().uuidString)"))
+        #expect(PluginUpdateReminder.isAutomatic(account: "A", defaults: defaults))
+        #expect(PluginUpdateReminder.isAutomatic(account: nil, defaults: defaults))
+        #expect(PluginUpdateReminder.isAutomatic(account: "", defaults: defaults))
+
+        PluginUpdateReminder.setAutomatic(false, account: "A", defaults: defaults)
+        #expect(!PluginUpdateReminder.isAutomatic(account: "A", defaults: defaults))
+        #expect(PluginUpdateReminder.isAutomatic(account: "B", defaults: defaults), "per gateway")
+
+        PluginUpdateReminder.setAutomatic(true, account: "A", defaults: defaults)
+        #expect(PluginUpdateReminder.isAutomatic(account: "A", defaults: defaults))
+        #expect(defaults.dictionary(forKey: PluginUpdateReminder.autoCheckOffKey) == nil)
+    }
+
+    @Test func launchSweepRespectsOptOutReadOnlyAndTimeoutBackoff() async throws {
+        let defaults = try #require(UserDefaults(suiteName: "plugin-sweep-\(UUID().uuidString)"))
+        let root = FileManager.default.temporaryDirectory.appending(path: "plugin-sweep-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        final class StateBox: Sendable {
+            let state = Mutex((failing: Set<String>(), out: 0, most: 0))
+        }
+        final class MockGateway: Sendable {
+            let client = FakeGatewayClient()
+            let box = StateBox()
+            init() {
+                client.onCall { [box] method, params in
+                    guard method == "plugins.manage", params["action"]?.string == "list", let profile = params["profile"]?.string else {
+                        return .object(["ok": true])
+                    }
+                    let shouldFail = box.state.withLock { s -> Bool in s.out += 1; s.most = max(s.most, s.out); return s.failing.contains(profile) }
+                    try? await Task.sleep(for: .milliseconds(10))
+                    box.state.withLock { $0.out -= 1 }
+                    if shouldFail { throw URLError(.timedOut) }
+                    return .object(["plugins": .array([.object(["name": "web-clipper", "version": "1.0.0", "status": "enabled",
+                                                                "update_available": true, "catalog_version": "1.1.0"])])])
+                }
+            }
+            var asked: [String] { client.calls("plugins.manage").compactMap { $0.params["profile"]?.string } }
+        }
+
+        let gateway = MockGateway()
+        let store = CapabilitiesStore(client: gateway.client)
+        store.pluginLists = PluginListCache(root: root)
+        let reminder = PluginUpdateReminder(defaults: defaults)
+        let account = gateway.client.account.id
+
+        // Opted out: sends no requests at all.
+        PluginUpdateReminder.setAutomatic(false, account: account, defaults: defaults)
+        let optedOut = await PluginUpdateFlow.checkStale(account: account, profiles: ["default", "otto", "ivy"],
+                                                         store: store, reminder: reminder, defaults: defaults)
+        #expect(optedOut == 0 && gateway.asked.isEmpty)
+
+        // Read-only gateway: sends no requests.
+        PluginUpdateReminder.setAutomatic(true, account: account, defaults: defaults)
+        store.readOnlyGateway = true
+        let readOnly = await PluginUpdateFlow.checkStale(account: account, profiles: ["default", "otto"],
+                                                         store: store, reminder: reminder, defaults: defaults)
+        #expect(readOnly == 0 && gateway.asked.isEmpty)
+        store.readOnlyGateway = false
+
+        // Timeout on the first stale bot stops the sweep immediately instead of piling up requests.
+        gateway.box.state.withLock { $0.failing = ["otto"] }
+        let hitTimeout = await PluginUpdateFlow.checkStale(account: account, profiles: ["otto", "ivy", "wren"],
+                                                           store: store, reminder: reminder, defaults: defaults)
+        #expect(hitTimeout == 1 && gateway.asked == ["otto"])
+        #expect(store.pluginListTimedOutRecently())
+
+        // A subsequent automatic sweep skips while in timeout backoff.
+        let skipped = await PluginUpdateFlow.checkStale(account: account, profiles: ["ivy", "wren"],
+                                                        store: store, reminder: reminder, defaults: defaults)
+        #expect(skipped == 0 && gateway.asked == ["otto"])
+
+        // A manual list read that succeeds clears the timeout backoff.
+        gateway.box.state.withLock { $0.failing = [] }
+        _ = try await store.plugins("default")
+        #expect(!store.pluginListTimedOutRecently())
+        reminder.report(account: account, profile: "default", list: [])
+
+        // Now the automatic sweep checks only the remaining stale bots, one at a time.
+        let resumed = await PluginUpdateFlow.checkStale(account: account, profiles: ["default", "otto", "ivy"],
+                                                        store: store, reminder: reminder, defaults: defaults)
+        #expect(resumed == 2)
+        #expect(gateway.asked == ["otto", "default", "otto", "ivy"])
+        #expect(gateway.box.state.withLock { $0.most } == 1)
+    }
+
+    @Test func settingsSearchFindsPluginUpdateControls() {
+        let index = SettingsSearch.index()
+        let auto = SettingsSearch.results("automatic plugin update", in: index)
+        #expect(auto.contains { $0.id == "app:plugin-update-checks" && $0.target == .root("row:plugin-update-checks") })
+        let manual = SettingsSearch.results("check for plugin updates", in: index)
+        #expect(manual.contains { $0.id == "app:check-plugin-updates" && $0.target == .root("row:check-plugin-updates") })
+        #expect(SettingsRootModel.category(ofRow: "row:plugin-update-checks") == .tools)
+        #expect(SettingsRootModel.category(ofRow: "row:check-plugin-updates") == .tools)
     }
 }

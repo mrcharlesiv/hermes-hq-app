@@ -126,6 +126,27 @@ import UIKit
         if account == self.account { show(Saved()) }
     }
 
+    // MARK: Automatic checks
+
+    /// Account → true where automatic plugin-update checks after launch are turned off.
+    nonisolated static let autoCheckOffKey = "plugins.updateCheck.autoOff"
+
+    /// Whether this gateway checks for plugin updates automatically after launch (on by default).
+    nonisolated static func isAutomatic(account: String?, defaults: UserDefaults = .standard) -> Bool {
+        guard let account, !account.isEmpty else { return true }
+        return defaults.dictionary(forKey: autoCheckOffKey)?[account] as? Bool != true
+    }
+
+    nonisolated static func setAutomatic(_ on: Bool, account: String?, defaults: UserDefaults = .standard) {
+        guard let account, !account.isEmpty else { return }
+        var all = defaults.dictionary(forKey: autoCheckOffKey) ?? [:]
+        all[account] = on ? nil : true
+        defaults.set(all.isEmpty ? nil : all, forKey: autoCheckOffKey)
+    }
+
+    /// Settings footer for the automatic plugin update checks section.
+    nonisolated static let autoCheckFooter = "Checks your bots for plugin updates after launch. Turn off on slow gateways to check only when you ask or open Plugins."
+
     private func show(_ value: Saved) {
         guard value != saved else { return }
         let before = names
@@ -380,18 +401,23 @@ nonisolated enum PluginUpdateWords {
 
     /// A sign-out or switch: nothing pending for the old account (PushSetupOffer.reset closes the sheet).
     func reset() {
-        launchCheck?.cancel(); launchCheck = nil
+        cancelLaunchCheck()
         watch?.cancel(); watch = nil; watchToken = nil
         pending = nil
         running = false
     }
 
+    /// Stops any launch-time plugin-update check currently waiting or running.
+    func cancelLaunchCheck() {
+        launchCheck?.cancel(); launchCheck = nil
+    }
+
     // MARK: The quiet read after launch
 
     /// Once the roster is there, and the launch's own reads have had their turn: the bots whose plugin list wasn't
-    /// read in the last six hours are asked, one at a time (Hermes answers lists on the pool a chat's open needs).
+    /// read in the last six hours are asked, one at a time, unless automatic checks are off for this gateway.
     func afterLaunch(model: AppModel) {
-        launchCheck?.cancel()
+        cancelLaunchCheck()
         launchCheck = Task { @MainActor [weak model] in
             for _ in 0..<30 {
                 if let model, model.botsLoaded, !model.bots.isEmpty { break }
@@ -400,19 +426,47 @@ nonisolated enum PluginUpdateWords {
             try? await Task.sleep(for: .seconds(20))
             guard !Task.isCancelled, let model, model.botsLoaded, let account = model.account?.id,
                   let store = model.settingsHub.capabilitiesStore else { return }
-            let reminder = PluginUpdateReminder.shared
-            reminder.use(account: account)
             let profiles = model.bots.map(\.id)
-            reminder.keep(account: account, profiles: profiles)
-            let stale = profiles.filter { !reminder.isFresh($0) }
-            guard !stale.isEmpty else { return }
-            AppLog.trace("plugins", "update check: reading \(stale.count) of \(profiles.count) bots' plugin lists")
-            for profile in stale {
-                guard !Task.isCancelled, model.connection == .ready else { return }
-                _ = try? await store.plugins(profile)   // the store reports each list to the reminder
-            }
-            AppLog.note("plugins", "update check: \(reminder.count) plugin(s) with an update")
+            await Self.checkStale(account: account, profiles: profiles, store: store,
+                                  reminder: PluginUpdateReminder.shared,
+                                  isConnected: { [weak model] in model?.connection == .ready })
         }
+    }
+
+    /// Reads each stale bot's plugin list one at a time unless automatic checks are turned off, the gateway is
+    /// read-only, or a plugin list read timed out (in which case the sweep stops early so slow backends aren't
+    /// saturated). Returns how many profiles were queried.
+    @discardableResult
+    static func checkStale(account: String, profiles: [String], store: CapabilitiesStore,
+                           reminder: PluginUpdateReminder, defaults: UserDefaults = .standard,
+                           isConnected: () -> Bool = { true }) async -> Int {
+        guard !account.isEmpty, !store.readOnlyGateway,
+              PluginUpdateReminder.isAutomatic(account: account, defaults: defaults) else { return 0 }
+        reminder.use(account: account)
+        reminder.keep(account: account, profiles: profiles)
+        guard !store.pluginListTimedOutRecently() else {
+            AppLog.note("plugins", "update check: skipped after a recent plugin list timeout")
+            return 0
+        }
+        let stale = profiles.filter { !reminder.isFresh($0) }
+        guard !stale.isEmpty else { return 0 }
+        AppLog.trace("plugins", "update check: reading \(stale.count) of \(profiles.count) bots' plugin lists")
+        var checked = 0
+        for profile in stale {
+            guard !Task.isCancelled, isConnected(),
+                  PluginUpdateReminder.isAutomatic(account: account, defaults: defaults) else { return checked }
+            checked += 1
+            do {
+                _ = try await store.plugins(profile)   // the store reports each list to the reminder
+            } catch {
+                if QueryRetry.timedOut(error) {
+                    AppLog.note("plugins", "update check: stopped after timeout")
+                    return checked
+                }
+            }
+        }
+        AppLog.note("plugins", "update check: \(reminder.count) plugin(s) with an update")
+        return checked
     }
 
     // MARK: The update
@@ -899,20 +953,13 @@ nonisolated enum PluginUpdateWords {
 
     // MARK: Pieces
 
-    /// The bots' lists, two at a time (PushSetupOffer.listReadWidth); a list that can't be read is left out.
+    /// The bots' lists, one at a time; a list that can't be read is left out.
     static func readLists(store: CapabilitiesStore, profiles: [String]) async -> [String: [PluginInfo]] {
         guard !profiles.isEmpty else { return [:] }
         var out: [String: [PluginInfo]] = [:]
-        await withChildTasks(of: (String, [PluginInfo]?).self) { group in
-            var queue = profiles.makeIterator()
-            for _ in 0..<PushSetupOffer.listReadWidth {
-                guard let id = queue.next() else { break }
-                group.addTask { (id, try? await store.plugins(id)) }
-            }
-            while let (id, list) = await group.next() {
-                if let list { out[id] = list }
-                if let next = queue.next() { group.addTask { (next, try? await store.plugins(next)) } }
-            }
+        for id in profiles {
+            guard !Task.isCancelled else { break }
+            if let list = try? await store.plugins(id) { out[id] = list }
         }
         return out
     }

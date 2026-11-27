@@ -130,6 +130,29 @@ import Testing
         #expect(PluginPagesMore.merge(["finance": [wiki]], bots: ["default"]).isEmpty, "a bot that isn't listed (hidden, removed) adds nothing")
         #expect(PluginPagesMore.merge([:], bots: ["default"]).isEmpty, "no pages: no section")
     }
+
+    @Test func moreReadsPluginPagesWithBoundedConcurrency() async {
+        let pages = PluginDashboardPage.read(Data(list.utf8))
+        let wiki = pages[0]
+        let box = ConcurrencyBox()
+        let profiles = ["default", "otto", "herald", "ivy", "wren"]
+        let read = await PluginPagesMore.readPages(profiles: profiles) { profile in
+            box.enter()
+            try? await Task.sleep(for: .milliseconds(15))
+            box.leave()
+            return profile == "herald" ? nil : [wiki]
+        }
+        #expect(Set(read.keys) == ["default", "otto", "ivy", "wren"])
+        #expect(box.most <= PluginPagesMore.readWidth, "never fans out across every profile at once")
+    }
+}
+
+nonisolated final class ConcurrencyBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var out = 0
+    private(set) var most = 0
+    func enter() { lock.withLock { out += 1; most = max(most, out) } }
+    func leave() { lock.withLock { out -= 1 } }
 }
 
 /// A flag the fake client's responder can set from its own task.

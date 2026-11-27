@@ -67,7 +67,7 @@ import UIKit
         #if DEBUG
         // UI tests: Settings › Notifications as on a fresh install (all on, previews on, setup not yet offered).
         if UserDefaults.standard.bool(forKey: "HQDebugResetNotificationPrefs") {
-            for key in [NotificationPrefs.key, NotificationPrefs.bannersKey, "hermes.pushSetup.offeredLevel", AddOnUpdate.byHandKey] { UserDefaults.standard.removeObject(forKey: key) }
+            for key in [NotificationPrefs.key, NotificationPrefs.bannersKey, "hermes.pushSetup.offeredLevel", AddOnUpdate.byHandKey, PluginUpdateReminder.autoCheckOffKey] { UserDefaults.standard.removeObject(forKey: key) }
             // [addon-reminder] and every account's quiet reminder
             for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("push.addOnReminder.") {
                 UserDefaults.standard.removeObject(forKey: key)

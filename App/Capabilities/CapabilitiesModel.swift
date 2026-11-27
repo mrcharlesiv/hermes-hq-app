@@ -105,6 +105,7 @@ final class CapabilitiesModel {
     @ObservationIgnored private var statusTimer: Task<Void, Never>?
     @ObservationIgnored private var waitTimer: Timer?
     @ObservationIgnored private nonisolated(unsafe) var updateObserver: NSObjectProtocol?
+    private static let liveModels = NSHashTable<CapabilitiesModel>.weakObjects()
 
     init(services: any AppServices, profile: String?, tab: CapabilitiesTab) {
         self.services = services
@@ -122,9 +123,47 @@ final class CapabilitiesModel {
                 Task { await self.reloadPlugins() }
             }
         }
+        Self.liveModels.add(self)
     }
 
     deinit { if let updateObserver { NotificationCenter.default.removeObserver(updateObserver) } }
+
+    /// Releases cached payloads for profiles other than the currently selected one.
+    func trimInactiveProfiles() {
+        let active = profile
+        skillCache = skillCache.filter { $0.key == active }
+        serverCache = serverCache.filter { $0.key == active }
+        catalogCache = catalogCache.filter { $0.key == active }
+        toolCache = toolCache.filter { $0.key == active }
+        usageCache = usageCache.filter { $0.key == active }
+        pluginCache = pluginCache.filter { $0.key == active }
+        pagesRescanned = pagesRescanned.filter { $0.key == active }
+        loadedAt = loadedAt.filter { $0.key.hasSuffix("|\(active)") }
+    }
+
+    /// Trims non-active profile caches on any open Capabilities page, and drops the global Marketplace catalogs from
+    /// memory whenever Capabilities/Marketplace is not open.
+    static func trimCaches() {
+        let models = liveModels.allObjects
+        for model in models { model.trimInactiveProfiles() }
+        if models.isEmpty {
+            PluginCatalogStore.shared.trimMemory()
+            SkillCatalogStore.shared.trimMemory()
+        }
+    }
+
+    /// `nonisolated` so the closure registered on `MemoryTrim.queue` carries no implicit `@MainActor` check.
+    nonisolated static func installMemoryTrim() {
+        MemoryTrim.register("capabilities") { _ in
+            PagesCache.flush()
+            Task { @MainActor in
+                CapabilitiesWarmCache.shared.trimMemory()
+                PluginListCache.shared.trimMemory()
+                CapabilitiesModel.trimCaches()
+            }
+            return 0
+        }
+    }
 
     /// [offline] §6.10: what the launch warm-up (or this page: [load-cache] up to a week ago, kept on disk) read for this
     /// bot fills the first frame; `load()` refreshes behind it as before.

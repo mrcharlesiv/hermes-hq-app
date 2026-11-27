@@ -116,6 +116,25 @@ import Foundation
     }
 
     func forgetAll() { entries = [:]; looked = []; generation += 1 }
+
+    /// Releases decoded skill lists from memory once their `capabilities-<bot>.json` file is on disk to restore them.
+    func trimMemory() {
+        guard root != nil else { return }
+        var kept: [String: Entry] = [:]
+        var keptLooked: Set<String> = []
+        for (k, entry) in entries {
+            let parts = k.split(separator: "\u{1F}", maxSplits: 1, omittingEmptySubsequences: false)
+            if parts.count == 2, let file = url(String(parts[0]), String(parts[1])),
+               FileManager.default.fileExists(atPath: file.path) {
+                continue
+            }
+            kept[k] = entry
+            keptLooked.insert(k)
+        }
+        entries = kept
+        looked = keptLooked
+        generation += 1
+    }
 }
 
 /// When the warm-up runs. One run per activation.

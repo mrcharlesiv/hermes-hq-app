@@ -81,4 +81,12 @@ import Foundation
     func forget(account: GatewayAccount) {
         accounts[RosterDisk.accountKey(account)] = nil
     }
+
+    /// Releases in-memory entries whose `plugin-lists.json` file is already on disk to restore them on the next check.
+    func trimMemory() {
+        accounts = accounts.filter { key, _ in
+            let file = root.appending(path: key, directoryHint: .isDirectory).appending(path: Self.fileName)
+            return !FileManager.default.fileExists(atPath: file.path)
+        }
+    }
 }

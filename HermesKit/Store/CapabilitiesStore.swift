@@ -16,6 +16,22 @@ import Foundation
     var toolRuleVault: (any ToolRuleVault)?
     /// [load-cache] Where each bot's add-on list is kept between launches (tests pass their own).
     var pluginLists: PluginListCache = .shared
+    /// [plugin-updates] Coalesces duplicate in-flight `plugins.manage list` reads per profile and serializes them
+    /// across profiles so a slow backend cannot saturate Hermes's shared RPC pool.
+    final class PluginListFlight {
+        let id: UInt64
+        let generation: UInt64
+        var waiters: Set<UUID> = []
+        var task: Task<[PluginInfo], Error>!
+        init(id: UInt64, generation: UInt64) { self.id = id; self.generation = generation }
+    }
+    var pluginListFlights: [String: PluginListFlight] = [:]
+    var pluginListTail: Task<Void, Never>?
+    var pluginListGeneration: [String: UInt64] = [:]
+    var nextPluginListFlightId: UInt64 = 0
+    /// When a `plugins.manage list` read last timed out on this store; cleared once any list read succeeds.
+    var pluginListTimedOutAt: Date?
+    var pluginListNow: () -> Date = Date.init
 
     init(client: any GatewayClient) { self.client = client }
 

@@ -93,11 +93,41 @@ enum PluginPagesMore {
     /// installed or switched, and Capabilities tells More at once: `note`). The owner's logs, 2026-11-18: one read per
     /// bot on every reconnect, about 1,800 calls a day.
     nonisolated static let reconnectGap: TimeInterval = 600
+    /// How many bots' dashboard page lists are asked for at once so cold launch doesn't fan out across every bot simultaneously.
+    nonisolated static let readWidth = 2
     private static var lastRead: [String: Date] = [:]
 
     /// Whether a reconnect should read the pages again.
     nonisolated static func isDue(lastRead: Date?, now: Date = Date()) -> Bool {
         lastRead.map { now.timeIntervalSince($0) >= reconnectGap } ?? true
+    }
+
+    /// Reads `profiles` at most `width` at a time, returning the profiles whose page list succeeded.
+    static func readPages(profiles: [String], width: Int = readWidth,
+                          fetch: @escaping @Sendable (String) async -> [PluginDashboardPage]?) async -> [String: [PluginDashboardPage]] {
+        guard !profiles.isEmpty, width > 0 else { return [:] }
+        var read: [String: [PluginDashboardPage]] = [:]
+        // Not `withTaskGroup`: optimized builds abort when a child finishes into a destroyed group (ChildTasks.swift).
+        await withChildTasks(of: (String, [PluginDashboardPage]?).self) { group in
+            var queue = profiles.makeIterator()
+            for _ in 0..<width {
+                guard let profile = queue.next() else { break }
+                group.addTask {
+                    // The read before the tuple: `(key, try await f())` can lose `key` in -O builds (Swift tuple bug).
+                    let pages = await fetch(profile)
+                    return (profile, pages)
+                }
+            }
+            while let (profile, pages) = await group.next() {
+                if let pages { read[profile] = pages }
+                guard !Task.isCancelled, let next = queue.next() else { continue }
+                group.addTask {
+                    let nextPages = await fetch(next)
+                    return (next, nextPages)
+                }
+            }
+        }
+        return read
     }
 
     /// Reads every bot's pages (attach; `gateway.ready` with `reconnect`, at most every `reconnectGap`).
@@ -112,15 +142,12 @@ enum PluginPagesMore {
         let started = ContinuousClock.now
         task = Task {
             var read: [String: [PluginDashboardPage]] = pagesByAccount[account] ?? [:]
-            // Not `withTaskGroup`: optimized builds abort when a child finishes into a destroyed group (ChildTasks.swift).
-            await withChildTasks(of: (String, [PluginDashboardPage]?).self) { group in
-                for profile in profiles {
-                    // The read before the tuple: `(key, try await f())` can lose `key` in -O builds (Swift tuple bug).
-                    group.addTask { let pages = try? await DashboardPagesAPI.list(client, profile: profile); return (profile, pages) }
-                }
-                while let (profile, pages) = await group.next() { if let pages { read[profile] = pages } }
+            let fetched = await readPages(profiles: profiles) { profile in
+                try? await DashboardPagesAPI.list(client, profile: profile)
             }
+            for (profile, pages) in fetched { read[profile] = pages }
             guard !Task.isCancelled, MorePages.context?.account.id == account else { return }
+            if fetched.isEmpty { lastRead[account] = nil }
             let total = read.values.reduce(0) { $0 + $1.count }
             AppLog.trace("plugin-pages", "More read \(profiles.count) bot(s) in \(AppLog.ms(since: started)) ms: \(total) page(s), \(Set(read.values.flatMap { $0.map(\.name) }).sorted().joined(separator: ", "))")
             store(read, account: account)

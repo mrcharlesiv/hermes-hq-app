@@ -50,6 +50,14 @@ final class SkillCatalogStore {
         running = nil
     }
 
+    /// Releases the decoded skill catalog from memory when its kept file is on disk to restore it on the next visit.
+    func trimMemory() {
+        guard running == nil, !loading, entries != nil,
+              let file, FileManager.default.fileExists(atPath: file.path) else { return }
+        entries = nil
+        readAt = nil
+    }
+
     private func read(force: Bool) async {
         let start = ContinuousClock.now
         var keptAt: Date?

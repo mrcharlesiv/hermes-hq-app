@@ -117,7 +117,7 @@ import Testing
         var asked: [String] { client.calls("plugins.manage").compactMap { $0.params["profile"]?.string }.sorted() }
     }
 
-    private static func row(_ version: String, enabled: Bool = true) -> JSONValue {
+    private nonisolated static func row(_ version: String, enabled: Bool = true) -> JSONValue {
         .object(["name": .string(PushPolicy.pluginName), "version": .string(version), "status": .string(enabled ? "enabled" : "disabled")])
     }
 
@@ -171,6 +171,165 @@ import Testing
         _ = try? await store.plugin(.toggle(key: PushPolicy.pluginName, enable: false), profile: "a")
         #expect(store.pluginLists.entry(account: gateway.client.account, profile: "a") == nil)
         #expect(store.pluginLists.entry(account: gateway.client.account, profile: "b") != nil)
+    }
+
+    @Test func pluginListReadsCoalescePerProfileAndSerializeAcrossProfiles() async throws {
+        let root = Self.tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gate = Gate()
+        let state = Mutex((out: 0, most: 0, started: [String]()))
+        let client = FakeGatewayClient()
+        client.onCall { method, params in
+            guard method == "plugins.manage", params["action"]?.string == "list", let profile = params["profile"]?.string else {
+                return .object(["ok": true])
+            }
+            state.withLock { s in
+                s.out += 1
+                s.most = max(s.most, s.out)
+                s.started.append(profile)
+            }
+            if profile == "otto" { await gate.wait() }
+            try? await Task.sleep(for: .milliseconds(15))
+            state.withLock { $0.out -= 1 }
+            return .object(["plugins": .array([Self.row(PushPolicy.everyBotVersion)])])
+        }
+        let store = CapabilitiesStore(client: client)
+        store.pluginLists = PluginListCache(root: root)
+
+        async let first = store.plugins("otto")
+        async let duplicate = store.plugins("otto")
+        async let other = store.plugins("herald")
+        await Self.waitUntil { state.withLock { $0.started.count == 1 } }
+        try await Task.sleep(for: .milliseconds(20))
+        // Duplicate for "otto" joined the in-flight RPC; "herald" waits until "otto" finishes.
+        #expect(state.withLock { $0.started } == ["otto"])
+        await gate.release()
+        let results = try await (first, duplicate, other)
+        #expect(results.0.count == 1 && results.1.count == 1 && results.2.count == 1)
+        #expect(state.withLock { $0.started } == ["otto", "herald"])
+        #expect(state.withLock { $0.most } == 1, "at most one plugins.manage list RPC in flight at a time")
+    }
+
+    @Test func pluginMutationInvalidatesInFlightListRead() async throws {
+        let root = Self.tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gate = Gate()
+        let calls = Counter()
+        let client = FakeGatewayClient()
+        client.onCall { method, params in
+            guard method == "plugins.manage", let action = params["action"]?.string else { return .object(["ok": true]) }
+            if action == "list" {
+                let n = calls.next()
+                if n == 1 { await gate.wait() }
+                return .object(["plugins": .array([Self.row(n == 1 ? "0.1.0" : PushPolicy.everyBotVersion)])])
+            }
+            return .object(["ok": true])
+        }
+        let store = CapabilitiesStore(client: client)
+        store.pluginLists = PluginListCache(root: root)
+
+        let before = Task { try await store.plugins("otto") }
+        await Self.waitUntil { calls.value == 1 }
+        _ = try await store.plugin(.toggle(key: PushPolicy.pluginName, enable: true), profile: "otto")
+        await gate.release()
+        let old = try await before.value
+        #expect(old.first?.version == "0.1.0")
+        #expect(store.pluginLists.entry(account: client.account, profile: "otto") == nil,
+                "a pre-mutation read finishing late must not overwrite the cache")
+        let fresh = try await store.plugins("otto")
+        #expect(fresh.first?.version == PushPolicy.everyBotVersion)
+        #expect(calls.value == 2)
+    }
+
+    @Test func launchAddOnCheckStopsAfterFirstTimeout() async {
+        let root = Self.tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gateway = AddOnGateway(["a": [], "b": [], "c": []], failing: ["a"])
+        let store = CapabilitiesStore(client: gateway.client)
+        store.pluginLists = PluginListCache(root: root)
+        let bots = ["default", "a", "b", "c"].map(Self.bot)
+
+        let first = await PushSetupOffer.botsWithout(store: store, bots: bots, fresh: false)
+        #expect(first.isEmpty)
+        #expect(gateway.asked == ["a"], "stops immediately on timeout instead of hammering the rest")
+
+        // Backoff skips another launch check right after a timeout.
+        let second = await PushSetupOffer.botsWithout(store: store, bots: bots, fresh: false)
+        #expect(second.isEmpty && gateway.asked == ["a"])
+
+        // A manual check from Settings (`fresh: true`) still runs every bot.
+        let manual = await PushSetupOffer.botsWithoutCheck(store: store, bots: bots, fresh: true)
+        #expect(manual.without.map(\.id) == ["b", "c"])
+        #expect(!manual.complete, "bot a still timed out during the manual sweep")
+        #expect(gateway.asked == ["a", "a", "b", "c"])
+    }
+
+    @Test func launchAddOnCheckRespectsAutomaticPluginChecksOptOut() async throws {
+        let root = Self.tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = try #require(UserDefaults(suiteName: "addon-optout-\(UUID().uuidString)"))
+        let gateway = AddOnGateway(["otto": [], "ivy": [Self.row(PushPolicy.everyBotVersion)]])
+        let store = CapabilitiesStore(client: gateway.client)
+        store.pluginLists = PluginListCache(root: root)
+        let bots = ["default", "otto", "ivy"].map(Self.bot)
+
+        PluginUpdateReminder.setAutomatic(false, account: gateway.client.account.id, defaults: defaults)
+        let launch = await PushSetupOffer.botsWithoutCheck(store: store, bots: bots, fresh: false, defaults: defaults)
+        #expect(launch.without.isEmpty && !launch.complete)
+        #expect(gateway.asked.isEmpty, "opting out skips launch-time plugins.manage list reads across bots")
+
+        // Manual check from Settings (`fresh: true`) still inspects every bot even when automatic checks are off.
+        let manual = await PushSetupOffer.botsWithoutCheck(store: store, bots: bots, fresh: true, defaults: defaults)
+        #expect(manual.without.map(\.id) == ["otto"] && manual.complete)
+        #expect(gateway.asked == ["ivy", "otto"])
+    }
+
+    @Test func alreadyOfferedLaunchCheckCachesBotsWithoutAddOn() async {
+        let root = Self.tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let gateway = AddOnGateway(["otto": [], "ivy": [Self.row(PushPolicy.everyBotVersion)]])
+        let store = CapabilitiesStore(client: gateway.client)
+        store.pluginLists = PluginListCache(root: root)
+        let bots = ["default", "otto", "ivy"].map(Self.bot)
+
+        let first = await PushSetupOffer.botsWithoutCheck(store: store, bots: bots, fresh: false, alreadyOffered: false)
+        #expect(first.without.map(\.id) == ["otto"] && first.complete)
+        #expect(gateway.client.calls("plugins.manage").count == 2)
+
+        // Once the launch offer has already been shown for this level, cold launches reuse the 6h cache for bots
+        // without the add-on too—sending zero RPCs while still reporting otto as lacking it.
+        let second = await PushSetupOffer.botsWithoutCheck(store: store, bots: bots, fresh: false, alreadyOffered: true)
+        #expect(second.without.map(\.id) == ["otto"] && second.complete)
+        #expect(gateway.client.calls("plugins.manage").count == 2)
+
+        // Manual check from Settings (`fresh: true`) still asks every bot.
+        let manual = await PushSetupOffer.botsWithoutCheck(store: store, bots: bots, fresh: true, alreadyOffered: true)
+        #expect(manual.without.map(\.id) == ["otto"] && manual.complete)
+        #expect(gateway.client.calls("plugins.manage").count == 4)
+    }
+
+    @Test func memoryTrimDropsInMemoryListsAndWarmCacheWithoutTouchingDisk() throws {
+        let root = Self.tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let lists = PluginListCache(root: root)
+        lists.store([Self.plugin(PushPolicy.pluginName, PushPolicy.everyBotVersion)], account: Self.account, profile: "otto")
+        let warm = CapabilitiesWarmCache(root: root)
+        let skill = SkillInfo(name: "garden-notes", description: "", category: nil, enabled: true, usage: 0, provenance: nil)
+        warm.store(skills: [skill], official: [], account: "acct", profile: "otto")
+        PagesCache.flush()
+
+        lists.trimMemory()
+        warm.trimMemory()
+
+        #expect(lists.entry(account: Self.account, profile: "otto") != nil, "restored from plugin-lists.json on disk")
+        #expect(warm.entry(account: "acct", profile: "otto")?.skills.map(\.name) == ["garden-notes"], "restored from capabilities-otto.json on disk")
+
+        // Verify the MemoryTrim registration runs safely off the main thread without tripping @MainActor isolation.
+        MemoryTrim.resetForTests()
+        defer { MemoryTrim.resetForTests() }
+        CapabilitiesModel.installMemoryTrim()
+        let dropped = DispatchQueue(label: "test.capabilities-trim").sync { MemoryTrim.runNow(.background) }
+        #expect(dropped == 0)
     }
 
     // MARK: SharedConfigReads

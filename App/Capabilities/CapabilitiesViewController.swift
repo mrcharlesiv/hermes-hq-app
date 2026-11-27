@@ -70,6 +70,11 @@ final class CapabilitiesViewController: UIHostingController<HQScaledRoot<Capabil
                 items.append(UIAction(title: "Add Your Own…", image: UIImage(systemName: "plus")) { [weak self] _ in self?.addConnector() })
             }
         case .plugins:   // [find-plugins]
+            if !model.readOnly, !model.pluginsUnavailable, let app = (model.services as? AppModel) ?? M2Wiring.model {
+                items.append(UIAction(title: "Check for Updates", image: UIImage(systemName: "arrow.down.circle")) { [weak self] _ in
+                    PluginUpdateFlow.shared.run(model: app, from: self)
+                })
+            }
             items.append(UIAction(title: "Marketplace", image: UIImage(systemName: "bag")) { [weak self] _ in   // [marketplace]
                 guard let self else { return }
                 self.rootView.router.push(MarketplaceController(model: model, router: self.rootView.router, kind: .plugins))

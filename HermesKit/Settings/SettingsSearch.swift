@@ -69,6 +69,8 @@ nonisolated enum SettingsSearch {
     static let sessionsPageTitle = "Archiving & Project Folder"   // UX study 2026-10-21 #117: the page's two sections
     static let markLabel = "Mark a Slow Moment"
     static let liveActivitiesLabel = "Show Progress on Lock Screen"   // [live]
+    static let autoPluginUpdateChecksLabel = "Automatic Plugin Update Checks"
+    static let checkPluginUpdatesLabel = "Check for Plugin Updates"
     // [mac] No Haptics switch on the Mac (it has nothing that taps back): the section is "Sounds" there.
     #if targetEnvironment(macCatalyst)
     static let hasHaptics = false, soundsSection = "Sounds"
@@ -166,6 +168,8 @@ nonisolated enum SettingsSearch {
         .init(id: "app:licenses", label: "Open-Source Licenses", context: "About", keywords: ["licence", "license", "open source"], target: .root("licenses")),
         .init(id: "app:default-folder", label: "Default Project Folder", context: sessionsPageTitle, keywords: ["folder", "directory", "project", "workspace", "cwd", "new chat"], target: .root("sessions")),
         .init(id: "app:auto-archive", label: "Auto-Archive Stale Chats", context: sessionsPageTitle, keywords: ["archive", "old chats", "retention", "inactive"], target: .root("sessions")),
+        .init(id: "app:plugin-update-checks", label: autoPluginUpdateChecksLabel, context: "Bots & Tools", keywords: ["plugin", "plugins", "updates", "automatic", "background", "manual", "slow", "check"], target: .root("row:plugin-update-checks")),
+        .init(id: "app:check-plugin-updates", label: checkPluginUpdatesLabel, context: "Bots & Tools", keywords: ["plugin", "plugins", "updates", "check", "manual"], target: .root("row:check-plugin-updates")),
     ] + shareMenuRow + VoiceSettingsCatalog.searchRows
 
     /// [macpass-settings2] The Mac's Share Menu row (General): "share" found only Share Logs.

@@ -291,23 +291,84 @@ extension CapabilitiesStore {
 
     // MARK: Plugins (§9)
 
+    /// How long automatic background sweeps back off after a `plugins.manage list` timeout on this gateway.
+    nonisolated static let pluginListTimeoutBackoff: TimeInterval = 15 * 60
+
+    func pluginListTimedOutRecently(within window: TimeInterval = pluginListTimeoutBackoff) -> Bool {
+        guard let at = pluginListTimedOutAt else { return false }
+        let age = pluginListNow().timeIntervalSince(at)
+        return age >= 0 && age < window
+    }
+
+    func invalidatePluginListFlight(_ profile: String) {
+        pluginListGeneration[profile, default: 0] &+= 1
+        pluginListFlights[profile] = nil
+    }
+
     /// Every list read here is kept for the launch's add-on check ([load-cache] PluginListCache).
+    /// Concurrent reads for the same profile join one in-flight RPC; reads across profiles run one at a time
+    /// so a slow backend cannot saturate Hermes's shared RPC pool.
     func plugins(_ profile: String) async throws -> [PluginInfo] {
-        let value = try await client.call("plugins.manage", ["action": "list", "profile": .string(profile)], timeout: .seconds(30))
-        let list = (value["plugins"]?.array ?? []).compactMap(PluginInfo.read)
-        if value["plugins"]?.array != nil {
-            pluginLists.store(list, account: client.account, profile: profile)
-            // [plugin-updates] Every list read says which of the bot's plugins have an update (none to make on a
-            // gateway this phone only reads).
-            PluginUpdateReminder.shared.report(account: client.account.id, profile: profile, list: readOnlyGateway ? [] : list)
+        try Task.checkCancellation()
+        let flight: PluginListFlight
+        if let existing = pluginListFlights[profile] {
+            flight = existing
+        } else {
+            nextPluginListFlightId &+= 1
+            let id = nextPluginListFlightId
+            let generation = pluginListGeneration[profile, default: 0]
+            let created = PluginListFlight(id: id, generation: generation)
+            let previous = pluginListTail
+            created.task = Task { @MainActor [weak self] () async throws -> [PluginInfo] in
+                await previous?.value
+                try Task.checkCancellation()
+                guard let self else { throw CancellationError() }
+                defer {
+                    if self.pluginListFlights[profile]?.id == id { self.pluginListFlights[profile] = nil }
+                }
+                do {
+                    let value = try await self.client.call("plugins.manage", ["action": "list", "profile": .string(profile)], timeout: .seconds(30))
+                    let list = (value["plugins"]?.array ?? []).compactMap(PluginInfo.read)
+                    self.pluginListTimedOutAt = nil
+                    if value["plugins"]?.array != nil, self.pluginListGeneration[profile, default: 0] == generation {
+                        self.pluginLists.store(list, account: self.client.account, profile: profile)
+                        // [plugin-updates] Every list read says which of the bot's plugins have an update (none to make on a
+                        // gateway this phone only reads).
+                        PluginUpdateReminder.shared.report(account: self.client.account.id, profile: profile, list: self.readOnlyGateway ? [] : list)
+                    }
+                    return list
+                } catch {
+                    if QueryRetry.timedOut(error) { self.pluginListTimedOutAt = self.pluginListNow() }
+                    throw error
+                }
+            }
+            pluginListTail = Task { @MainActor in _ = try? await created.task.value }
+            pluginListFlights[profile] = created
+            flight = created
         }
-        return list
+        let waiter = UUID()
+        flight.waiters.insert(waiter)
+        let detach: @MainActor () -> Void = { [weak self] in
+            guard flight.waiters.remove(waiter) != nil, flight.waiters.isEmpty else { return }
+            if self?.pluginListFlights[profile]?.id == flight.id { self?.pluginListFlights[profile] = nil }
+            flight.task.cancel()
+        }
+        return try await withTaskCancellationHandler {
+            defer { detach() }
+            return try await flight.task.value
+        } onCancel: {
+            Task { @MainActor in detach() }
+        }
     }
 
     func plugin(_ action: PluginAction, profile: String) async throws -> PluginResult {
         try refuse("")
+        invalidatePluginListFlight(profile)
         // [load-cache] Whatever the answer, the kept list may be wrong now.
-        defer { pluginLists.forget(account: client.account, profile: profile) }
+        defer {
+            invalidatePluginListFlight(profile)
+            pluginLists.forget(account: client.account, profile: profile)
+        }
         return try await serial(profile) { [client] in
             PluginResult.read(try await client.call("plugins.manage", action.params(profile: profile), timeout: action.timeout))
         }

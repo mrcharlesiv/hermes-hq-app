@@ -236,12 +236,15 @@ import UserNotifications
             return false
         }
         let store = model.settingsHub.capabilitiesStore
-        var state = answer.state, without: [Bot] = []
+        var state = answer.state, without: [Bot] = [], botsChecked = true
         if needsIdeas, state == .ready, !PushRegistrar.shared.taskIdeasServed { state = .outdated }
         // The main bot's copy is current: the other bots each need their own.
         if state == .ready {
             if fromSettings { update.detail(.check, AddOnUpdate.eachBot) }
-            without = await Self.botsWithout(store: store, bots: model.bots, fresh: fromSettings)
+            let alreadyOffered = !fromSettings && offered(account) == PushPolicy.offerLevel
+            let check = await Self.botsWithoutCheck(store: store, bots: model.bots, fresh: fromSettings, alreadyOffered: alreadyOffered)
+            without = check.without
+            botsChecked = check.complete
             if !without.isEmpty { state = .outdated }
         }
         // [browser-update] The browser add-on's own answer (not asked when Hermes didn't answer the first read).
@@ -250,9 +253,19 @@ import UserNotifications
         // isn't there goes in the way its update does. Never on its own: Hermes Cloud's first setup leaves it out.
         let browserAbsent = browserSetup && browserRead == .absent
         let browserNeed = browserRead.need ?? (browserAbsent ? .outdated : nil)
-        // [addon-reminder] The quiet reminder follows every answer, whether or not the alert shows.
+        // [addon-reminder] The quiet reminder follows every answer, whether or not the alert shows. When a launch sweep
+        // skipped or stopped reading the other bots' lists (opt-out or timeout), an existing `.bots` reminder stands.
         if let id = model.account?.id {
-            AddOnReminder.shared.report(account: id, state: answer.state, without: without.map(\.name))
+            AddOnReminder.shared.use(account: id)
+            let keepBotsNeed: Bool
+            if case .bots = AddOnReminder.shared.need, answer.state == .ready, without.isEmpty, !botsChecked {
+                keepBotsNeed = true
+            } else {
+                keepBotsNeed = false
+            }
+            if !keepBotsNeed {
+                AddOnReminder.shared.report(account: id, state: answer.state, without: without.map(\.name))
+            }
             if browserRead != .unknown { AddOnReminder.shared.reportBrowser(account: id, need: browserRead.need) }
         }
         let pushWork = state == .missing || state == .outdated
@@ -600,41 +613,73 @@ import UserNotifications
         return PushPolicy.versionAtLeast(PushPolicy.wantedVersion, PushPolicy.everyBotVersion) ? PushPolicy.wantedVersion : PushPolicy.everyBotVersion
     }
 
-    /// How many bots' lists are asked for at once ([load-cache]): Hermes answers them on the RPC pool that opening a
-    /// chat needs too (PluginListCache).
-    static let listReadWidth = 2
+    /// How many bots' lists are asked for at once ([load-cache]): serialized one at a time so slow backends cannot
+    /// saturate the shared RPC pool that opening a chat needs too (PluginListCache).
+    static let listReadWidth = 1
+
+    struct BotsCheck: Equatable {
+        var without: [Bot]
+        /// False when the sweep was skipped (automatic checks off, timeout backoff) or failed to read every bot's list.
+        var complete: Bool
+    }
 
     /// The bots besides the main one whose own copy is missing, off or older than PushPolicy.everyBotVersion, in roster
     /// order. A bot whose list can't be read is left out (no offer on a guess).
-    /// `fresh`: every list is asked for (Settings); otherwise a list kept by PluginListCache that has the add-on stands
-    /// in for its bot. One without it is asked again: the main bot installs it from its terminal, which this phone
-    /// doesn't see, so "not there" goes out of date in a way "there" rarely does.
-    static func botsWithout(store: CapabilitiesStore?, bots: [Bot], fresh: Bool) async -> [Bot] {
-        guard let store else { return [] }
-        let others = bots.filter { $0.id != "default" }
+    /// `fresh`: every list is asked for (Settings); otherwise a list kept by PluginListCache stands in for a bot known
+    /// to have the add-on—and once the launch offer was already shown (`alreadyOffered`), for bots known to lack it too
+    /// for `PluginListCache.keep` so cold launches don't re-query secondary bots on every open. Automatic checks opt-out
+    /// skips the sweep, and a timeout stops it early so a slow backend's RPC pool isn't saturated.
+    static func botsWithout(store: CapabilitiesStore?, bots: [Bot], fresh: Bool,
+                            alreadyOffered: Bool = false, defaults: UserDefaults = .standard) async -> [Bot] {
+        await botsWithoutCheck(store: store, bots: bots, fresh: fresh, alreadyOffered: alreadyOffered, defaults: defaults).without
+    }
+
+    static func botsWithoutCheck(store: CapabilitiesStore?, bots: [Bot], fresh: Bool,
+                                 alreadyOffered: Bool = false, defaults: UserDefaults = .standard) async -> BotsCheck {
+        guard let store else { return BotsCheck(without: [], complete: false) }
         let account = store.client.account
+        if !fresh, !PluginUpdateReminder.isAutomatic(account: account.id, defaults: defaults) {
+            AppLog.trace("push", "setup: skipping launch add-on list read (automatic plugin checks off)")
+            return BotsCheck(without: [], complete: false)
+        }
+        if !fresh, store.pluginListTimedOutRecently() {
+            AppLog.note("push", "setup: skipping launch add-on list read after a recent timeout")
+            return BotsCheck(without: [], complete: false)
+        }
+        let others = bots.filter { $0.id != "default" }
         var lacking = Set<String>()
+        var complete = true
         let toRead = others.map(\.id).filter { id in
             guard !fresh, let entry = store.pluginLists.entry(account: account, profile: id) else { return true }
-            return !PushPolicy.botHasPlugin(entry)
+            if PushPolicy.botHasPlugin(entry) { return false }
+            if alreadyOffered {
+                lacking.insert(id)
+                return false
+            }
+            return true
         }
         if !toRead.isEmpty {
-            AppLog.trace("push", "setup: reading \(toRead.count) of \(others.count) bots' add-on lists, \(listReadWidth) at a time")
-            // Not `withTaskGroup`: optimized builds abort when a child finishes into a destroyed group (ChildTasks.swift).
-            await withChildTasks(of: (String, [PluginInfo]?).self) { group in
-                var queue = toRead.makeIterator()
-                for _ in 0..<listReadWidth {
-                    guard let id = queue.next() else { break }
-                    group.addTask { (id, try? await store.plugins(id)) }
+            AppLog.trace("push", "setup: reading \(toRead.count) of \(others.count) bots' add-on lists, one at a time")
+            for id in toRead {
+                guard !Task.isCancelled else { complete = false; break }
+                if !fresh, !PluginUpdateReminder.isAutomatic(account: account.id, defaults: defaults) {
+                    complete = false
+                    break
                 }
-                while let (id, list) = await group.next() {
-                    if let list, !PushPolicy.botHasPlugin(list) { lacking.insert(id) }
-                    if let next = queue.next() { group.addTask { (next, try? await store.plugins(next)) } }
+                do {
+                    let list = try await store.plugins(id)
+                    if !PushPolicy.botHasPlugin(list) { lacking.insert(id) }
+                } catch {
+                    complete = false
+                    if !fresh, QueryRetry.timedOut(error) {
+                        AppLog.note("push", "setup: stopping launch add-on list read after timeout")
+                        break
+                    }
                 }
             }
         }
         if !lacking.isEmpty { AppLog.note("push", "setup: \(lacking.count) bot(s) without their own add-on") }
-        return others.filter { lacking.contains($0.id) }
+        return BotsCheck(without: others.filter { lacking.contains($0.id) }, complete: complete)
     }
 
     /// "Gym", "Gym and Ivy", "Gym, Ivy and 3 more".

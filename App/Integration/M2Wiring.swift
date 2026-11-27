@@ -116,6 +116,7 @@ import UIKit
         MorePages.install()
         // [plugin-pages-more] More › Plugin Pages: each page the bots' plugins add (Memory Wiki…), a place of its own.
         PluginPagesMore.install()
+        CapabilitiesModel.installMemoryTrim()
 
         // Bots extras (parity §3): the row menu's New Chat, Mute, Duplicate and Delete Bot.
         BotExtras.install()

@@ -63,6 +63,8 @@ final class SettingsRootModel {
     var toolCallsSummary: String?
     /// [tile-models] Tile Model's value ("Each Bot’s Own Model", or the picked model); nil when signed out.
     var tileModelSummary: String?
+    /// [plugin-updates] Whether this gateway checks for plugin updates automatically after launch.
+    var autoPluginUpdateChecks = true
     /// The search field's text (the list shows results while it isn't empty).
     var query = ""
     var inAppTips = InAppTips.isOn
@@ -183,10 +185,12 @@ final class SettingsRootModel {
 
     var searchResults: [SettingsSearchEntry] {
         // A search never leads to a row a page doesn't show (Kanban Tab, on Tabs, only shows once the board is known).
+        let canUpdatePlugins = services.account != nil && !((services as? AppModel)?.settingsHub.capabilitiesStore?.readOnlyGateway ?? false)
         let index = SettingsSearch.index(schema: configStore?.schema ?? [:]).filter {
             ($0.target != .root(SettingsSearch.kanbanTabTarget) || kanbanTabShown) && Self.searchRowShown($0)
                 // [Mac UI check 2026-11-13] ⌘N Project is drawn only once there is a project to pick.
                 && ($0.id != "app:new-chat-project" || newChatKeyProjects.count > 1)
+                && (($0.id != "app:plugin-update-checks" && $0.id != "app:check-plugin-updates") || canUpdatePlugins)
         }
         let status = SettingsHooks.commandCenter?() != nil ? [SettingsSearch.statusEntry] : []   // [macpass-settings2]
         return SettingsSearch.results(query, in: index + status + Self.movedFromMoreEntries())
@@ -239,6 +243,7 @@ final class SettingsRootModel {
         if AppearanceRows.contains(row) { return .appearance }
         return switch row {
         case "row:share-menu": .general   // [macpass-settings2]
+        case "row:plugin-update-checks", "row:check-plugin-updates": .tools
         case "row:thinking-drive", "row:haptics", "row:completion-sound", "row:sound": .sounds
         case "row:fewer-timestamps", "row:show-file-changes", "row:attachment-limit", "row:new-chat-asks-project", "row:wait-for-models",
              "row:send-while-busy", "row:open-links-in", "row:new-chat-mode", "row:new-chat-key", "row:new-chat-project",
@@ -287,6 +292,15 @@ final class SettingsRootModel {
         attachmentLimit = AttachmentLimit.megabytes   // [settings] the page that changes it pops back here
         appIconTitle = AppIcons.wornTitle          // [app-icons]
         kanbanTabShown = TabOrderPage.kanbanChoice(services.account) != nil
+        autoPluginUpdateChecks = PluginUpdateReminder.isAutomatic(account: services.account?.id)
+    }
+
+    func setAutoPluginUpdateChecks(_ on: Bool) {
+        guard let account = services.account?.id else { return }
+        autoPluginUpdateChecks = on
+        PluginUpdateReminder.setAutomatic(on, account: account)
+        if !on { PluginUpdateFlow.shared.cancelLaunchCheck() }
+        AppLog.note("settings", "automatic plugin update checks \(on ? "on" : "off")")
     }
 
     // MARK: The card's status line (§3.3)
@@ -1342,6 +1356,39 @@ struct SettingsRootView: View {
             // [kanban-tab-one] Owner 2026-11-03 (one home per page): no Kanban Tab row here. Its one picker is on
             // Appearance › Tabs, with the other tab choices.
         } header: { categoryHeader("Bots & Tools") }
+
+        if let app = model.services as? AppModel, model.services.account != nil,
+           !(app.settingsHub.capabilitiesStore?.readOnlyGateway ?? false) {
+            let update = AddOnUpdate.shared
+            let busy = update.busy && update.pluginRun
+            Section {
+                Toggle(isOn: Binding(get: { model.autoPluginUpdateChecks }, set: { model.setAutoPluginUpdateChecks($0) })) {
+                    SettingsRowLabel(title: "Check Automatically", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .accessibilityIdentifier("settings.plugin-update-checks")
+                .revealRow("row:plugin-update-checks", model.revealed)
+                Button {
+                    PluginUpdateFlow.shared.run(model: app, from: router.presenter)
+                } label: {
+                    HStack(spacing: 12) {
+                        SettingsRowLabel(title: busy ? update.rowLabel : SettingsSearch.checkPluginUpdatesLabel,
+                                         systemImage: "arrow.down.circle")
+                        Spacer(minLength: 16)
+                        if busy { ProgressView().controlSize(.small) } else { SettingsChevron() }
+                    }
+                    .contentShape(Rectangle())
+                    .hqMacRowHover()
+                }
+                .hqMacFormRowHeight()
+                .accessibilityAddTraits(.isButton)
+                .accessibilityIdentifier("settings.check-plugin-updates")
+                .revealRow("row:check-plugin-updates", model.revealed)
+            } header: { HQSectionLabel {
+                Text("Plugin Updates")
+            } } footer: { HQSectionFooter {
+                Text(PluginUpdateReminder.autoCheckFooter)
+            } }
+        }
         }
 
         #if targetEnvironment(macCatalyst)
@@ -2069,6 +2116,8 @@ extension SettingsRowLabel {
         "square.and.arrow.up": ("square.and.arrow.up.fill", Tile.blue),
         "info.circle": ("info.circle.fill", Tile.grey),
         "puzzlepiece.extension": ("puzzlepiece.extension.fill", Tile.green),
+        "arrow.triangle.2.circlepath": ("arrow.triangle.2.circlepath", Tile.teal),
+        "arrow.down.circle": ("arrow.down.circle.fill", Tile.blue),
         "square.grid.2x2": ("square.grid.2x2.fill", Tile.blue),   // [cap-pages] More's Capabilities tile
         "hammer": ("hammer.fill", Tile.orange),   // [cap-pages] Capabilities › Tools
     ]

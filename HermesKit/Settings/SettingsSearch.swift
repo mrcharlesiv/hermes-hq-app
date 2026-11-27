@@ -40,10 +40,12 @@ nonisolated enum SettingsSearch {
             return terms.allSatisfy { haystack.contains($0) }
         }
         var seen = Set<String>()
+        var seenIDs = Set<String>()
         var out: [SettingsSearchEntry] = []
         for entry in entries.filter(\.isPage) + entries.filter({ !$0.isPage }) where matches(entry) {
             let key = normalize(entry.context) + "\u{0}" + normalize(entry.label)
-            guard seen.insert(key).inserted else { continue }
+            guard !seen.contains(key), seenIDs.insert(entry.id).inserted else { continue }
+            seen.insert(key)
             out.append(entry)
             if out.count == limit { break }
         }

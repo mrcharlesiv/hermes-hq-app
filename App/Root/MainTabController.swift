@@ -144,7 +144,10 @@ final class MainTabController: UITabBarController, UITabBarControllerDelegate {
         botsViewController.onDataChange = { [weak self] in
             self?.updateBadges()
             #if targetEnvironment(macCatalyst)
-            if self?.split?.isViewLoaded == true { self?.split?.macSidebar.botsChanged() }   // [bots-rail] the rail's heads
+            if self?.split?.isViewLoaded == true {
+                self?.split?.macSidebar.botsChanged()   // [bots-rail] the rail's heads
+                self?.split?.macWorkspaceBar.sync()
+            }
             #endif
             self?.sessionsViewController.setNeedsReload(animated: false)
         }
@@ -153,8 +156,10 @@ final class MainTabController: UITabBarController, UITabBarControllerDelegate {
             self?.botsViewController.setNeedsReload(animated: false)   // [chats-under] the chats under the bots
             #if targetEnvironment(macCatalyst)
             // [chats-under] The Mac's are under the sidebar's bot rows.
-            if let self, let split = self.split, split.isViewLoaded,
-               self.botsViewController.listsChatsUnderBots || split.macSidebar.hasChatRows { split.macSidebar.botsChanged() }
+            if let self, let split = self.split, split.isViewLoaded {
+                if self.botsViewController.listsChatsUnderBots || split.macSidebar.hasChatRows { split.macSidebar.botsChanged() }
+                split.macWorkspaceBar.sync()
+            }
             #endif
         }
         #if targetEnvironment(macCatalyst)
@@ -446,6 +451,7 @@ final class MainTabController: UITabBarController, UITabBarControllerDelegate {
         #if targetEnvironment(macCatalyst)
         if split?.isViewLoaded == true {   // [mac]
             split?.macSidebar.selectionChanged()
+            split?.macWorkspaceBar.sync()
             split?.listFoldMayHaveChanged()   // [bots-rail] Bots folds into the rail; another tab's list comes back
         }
         // [mac] Stress test 2026-10-28 #17: a tab's own list never passed through a push's `didShow`, so only pushed

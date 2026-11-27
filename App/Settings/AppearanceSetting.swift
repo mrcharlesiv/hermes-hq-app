@@ -48,12 +48,20 @@ enum AppearanceSetting: String, CaseIterable, Identifiable {
 
     static func apply(to window: UIWindow?) {
         window?.overrideUserInterfaceStyle = Theme.shared.style(for: current.style)   // [desktoplook] a one-look skin
+        #if targetEnvironment(macCatalyst)
+        if window?.rootViewController is RootSplitController { MacGlassShell.apply(to: window) }
+        #endif
     }
 
     static func applyEverywhere() {
         for scene in UIApplication.shared.connectedScenes {
             guard let windowScene = scene as? UIWindowScene else { continue }
-            for window in windowScene.windows { window.overrideUserInterfaceStyle = Theme.shared.style(for: current.style) }
+            for window in windowScene.windows {
+                window.overrideUserInterfaceStyle = Theme.shared.style(for: current.style)
+                #if targetEnvironment(macCatalyst)
+                if window.rootViewController is RootSplitController { MacGlassShell.apply(to: window) }
+                #endif
+            }
         }
     }
 }

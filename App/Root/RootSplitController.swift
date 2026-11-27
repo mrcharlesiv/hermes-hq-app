@@ -41,6 +41,15 @@ final class RootSplitController: UIViewController {
     }
     /// [mac] The tabs, down the window's leading edge (App/Mac/MacSidebar.swift); the panes share what is left.
     private(set) lazy var macSidebar = MacSidebar(tabs: tabs)
+    /// [mac] Translucent frosted-glass backdrop behind the sidebar, top bar, and floating canvas card.
+    private let macBackdrop = MacShellBackdrop()
+    /// [mac] Unified top navigation & workspace tab bar aligned with the traffic lights.
+    private(set) lazy var macWorkspaceBar = MacWorkspaceBar(split: self, tabs: tabs)
+    /// [mac] Ambient drop-shadow host for the floating rounded content canvas card.
+    private let macCanvasShadow = UIView()
+    /// [mac] Rounded, clipped elevated card holding the list, detail, and inspector panes.
+    let macCanvas = UIView()
+    private var macThemeToken: NSObjectProtocol?
     private static var macSidebarWidth: CGFloat { MacSidebar.width }
     #else
     private static let macSidebarWidth: CGFloat = 0
@@ -115,28 +124,52 @@ final class RootSplitController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        #if targetEnvironment(macCatalyst)
+        view.backgroundColor = Self.debugWidth != nil || Self.debugHeight != nil ? .black : .clear
+        view.isOpaque = false
+        view.addSubview(macBackdrop)
+        macCanvasShadow.backgroundColor = .clear
+        macCanvasShadow.layer.shadowColor = UIColor.black.cgColor
+        macCanvasShadow.layer.shadowOffset = CGSize(width: 0, height: 4)
+        macCanvasShadow.layer.shadowRadius = 16
+        view.addSubview(macCanvasShadow)
+        macCanvas.clipsToBounds = true
+        macCanvas.layer.cornerRadius = MacGlassShell.canvasCornerRadius
+        macCanvas.layer.cornerCurve = .continuous
+        macCanvas.accessibilityIdentifier = "mac-canvas"
+        macCanvasShadow.addSubview(macCanvas)
+        macCanvas.addSubview(tabs.view)
+        macCanvas.addSubview(detail.view)
+        hairline.backgroundColor = HQPalette.paneLine
+        hairline.isUserInteractionEnabled = false
+        macCanvas.addSubview(hairline)
+        view.addSubview(macSidebar)
+        view.addSubview(macWorkspaceBar)
+        grip.addGestureRecognizer(MacGripPan(target: self, action: #selector(dragged(_:))))
+        grip.addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:))))
+        macCanvas.addSubview(grip)
+        #else
         view.backgroundColor = Self.debugWidth != nil || Self.debugHeight != nil ? .black : HQPalette.page
         view.addSubview(tabs.view)
         view.addSubview(detail.view)
         hairline.backgroundColor = HQPalette.separator   // the theme's line, as the lists' own hairlines
-        #if targetEnvironment(macCatalyst)
-        hairline.backgroundColor = HQPalette.paneLine     // [mac] stress test #26: a neutral divider, not the navy outline
-        #endif
         hairline.isUserInteractionEnabled = false
         view.addSubview(hairline)
-        #if targetEnvironment(macCatalyst)
-        view.addSubview(macSidebar)
-        grip.addGestureRecognizer(MacGripPan(target: self, action: #selector(dragged(_:))))
-        grip.addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hovered(_:))))
-        view.addSubview(grip)
         #endif
         tabs.didMove(toParent: self)
         detail.didMove(toParent: self)
         #if targetEnvironment(macCatalyst)
         addChild(inspector)
         inspector.view.frame = .zero   // placed by placePanes; never the window's whole size, over the panes, before that
-        view.addSubview(inspector.view)
+        macCanvas.addSubview(inspector.view)
         inspector.didMove(toParent: self)
+        registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self, UITraitDisplayScale.self]) {
+            (vc: RootSplitController, _) in vc.restyleMacCanvas()
+        }
+        macThemeToken = NotificationCenter.default.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.restyleMacCanvas() }
+        }
+        restyleMacCanvas()
         inspector.takesRoom = { [weak self] in (self?.inspectorRoom ?? 0) > 0 }
         inspector.makeRoom = { [weak self] in self?.foldListForInspector() ?? false }
         inspector.onWidthChange = { [weak self] in   // [mac-ui-issues] its edge dragged: follow the pointer, no glide
@@ -183,6 +216,18 @@ final class RootSplitController: UIViewController {
         applyLayout()
     }
 
+    #if targetEnvironment(macCatalyst)
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        restyleMacCanvas()
+        macWorkspaceBar.sync()
+    }
+
+    isolated deinit {
+        if let macThemeToken { NotificationCenter.default.removeObserver(macThemeToken) }
+    }
+    #endif
+
     override var childForStatusBarStyle: UIViewController? { tabs }
     override var childForHomeIndicatorAutoHidden: UIViewController? { tabs }
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .all }
@@ -197,8 +242,43 @@ final class RootSplitController: UIViewController {
                       width: size.width, height: size.height)
     }
 
-    /// The room the panes get: the window's, less the Mac's sidebar.
-    private var contentRect: CGRect { split(windowRect).panes }
+    /// The room the panes get: inside the floating canvas card on Mac (local coordinates), or the window's rect elsewhere.
+    private var contentRect: CGRect {
+        #if targetEnvironment(macCatalyst)
+        let canvas = macShellFrames(windowRect).canvas
+        let room = inspectorRoom
+        let rightToLeft = view.effectiveUserInterfaceLayoutDirection == .rightToLeft
+        let local = CGRect(origin: .zero, size: canvas.size)
+        return local.divided(atDistance: room, from: rightToLeft ? .minXEdge : .maxXEdge).remainder
+        #else
+        return split(windowRect).panes
+        #endif
+    }
+
+    #if targetEnvironment(macCatalyst)
+    private func macShellFrames(_ rect: CGRect) -> (sidebar: CGRect, topBar: CGRect, canvas: CGRect) {
+        let rightToLeft = view.effectiveUserInterfaceLayoutDirection == .rightToLeft
+        let (strip, rightArea) = rect.divided(atDistance: min(Self.macSidebarWidth, rect.width), from: rightToLeft ? .maxXEdge : .minXEdge)
+        let inset = MacGlassShell.canvasInset
+        let topH = MacGlassShell.topBarHeight
+        let x = rightToLeft ? rightArea.minX + inset : rightArea.minX
+        let w = max(0, rightArea.width - inset)
+        let topBar = CGRect(x: x, y: rightArea.minY, width: w, height: topH)
+        let canvas = CGRect(x: x, y: rightArea.minY + topH, width: w, height: max(0, rightArea.height - topH - inset))
+        return (strip, topBar, canvas)
+    }
+
+    private func restyleMacCanvas() {
+        let dark = traitCollection.userInterfaceStyle == .dark
+        macCanvas.backgroundColor = HQPalette.page
+        macCanvas.layer.borderWidth = HQShape.pixel(traitCollection.displayScale)
+        macCanvas.layer.borderColor = MacGlassShell.canvasBorderColor.resolvedColor(with: traitCollection).cgColor
+        macCanvasShadow.layer.shadowOpacity = dark ? 0.42 : 0.095
+        hairline.backgroundColor = dark ? UIColor(white: 1, alpha: 0.08) : UIColor(white: 0, alpha: 0.075)
+        macBackdrop.refresh()
+        MacGlassShell.apply(to: viewIfLoaded?.window)
+    }
+    #endif
 
     #if targetEnvironment(macCatalyst)
     /// [mac-layout] The inspector at the chat's trailing edge (⌘I), see `MacInspector`.
@@ -287,7 +367,12 @@ final class RootSplitController: UIViewController {
     }
 
     private static func panesSize(_ window: CGSize) -> CGSize {
+        #if targetEnvironment(macCatalyst)
+        CGSize(width: max(0, window.width - macSidebarWidth - MacGlassShell.canvasInset),
+               height: max(0, window.height - MacGlassShell.topBarHeight - MacGlassShell.canvasInset))
+        #else
         CGSize(width: max(0, window.width - macSidebarWidth), height: window.height)
+        #endif
     }
 
     private func applyLayout() {
@@ -401,18 +486,23 @@ final class RootSplitController: UIViewController {
         if tabs.view.isHidden != folded, !(folded && slidingList) { tabs.view.isHidden = folded }   // [ipad-polish] slides out first
         #endif
         #if targetEnvironment(macCatalyst)
+        let shell = macShellFrames(windowRect)
+        if macBackdrop.frame != windowRect { macBackdrop.frame = windowRect }
+        if macSidebar.frame != shell.sidebar { macSidebar.frame = shell.sidebar }
+        if macWorkspaceBar.frame != shell.topBar { macWorkspaceBar.frame = shell.topBar }
+        if macCanvasShadow.frame != shell.canvas { macCanvasShadow.frame = shell.canvas }
+        let canvasBounds = CGRect(origin: .zero, size: shell.canvas.size)
+        if macCanvas.frame != canvasBounds { macCanvas.frame = canvasBounds }
+        macCanvasShadow.layer.shadowPath = UIBezierPath(roundedRect: canvasBounds, cornerRadius: MacGlassShell.canvasCornerRadius).cgPath
         grip.frame = lineFrame.insetBy(dx: -4, dy: 0)
         grip.isHidden = !double || folded || wide || boardPanel != nil   // the panel's width is the board's call, not the lists'
-        let strip = split(windowRect).sidebar
-        if macSidebar.frame != strip { macSidebar.frame = strip }
-        // [mac-layout] The inspector beside the chat: off the window's edge while hidden, so it slides in and out.
+        // [mac-layout] The inspector beside the chat inside the floating canvas card: off its trailing edge while hidden.
         let room = inspectorRoom
         let rightToLeft = view.effectiveUserInterfaceLayoutDirection == .rightToLeft
-        let window = windowRect
         let panel = room > 0 ? room : max(MacInspector.narrowest, inspector.view.frame.width)
-        let inspectorFrame = CGRect(x: rightToLeft ? (room > 0 ? window.minX : window.minX - panel)
-                                                   : (room > 0 ? window.maxX - room : window.maxX),
-                                    y: window.minY, width: panel, height: window.height)
+        let inspectorFrame = CGRect(x: rightToLeft ? (room > 0 ? 0 : -panel)
+                                                   : (room > 0 ? canvasBounds.maxX - room : canvasBounds.maxX),
+                                    y: 0, width: panel, height: canvasBounds.height)
         if inspector.view.frame != inspectorFrame { inspector.view.frame = inspectorFrame }
         inspector.view.isHidden = room == 0 && !inspector.slidingOut
         syncInspectorHeader(inspectorFrame: inspectorFrame)
@@ -431,13 +521,13 @@ final class RootSplitController: UIViewController {
         guard isViewLoaded else { return }
         let frame = inspectorFrame ?? inspector.view.frame
         let bar = detail.navigationBar
-        let barBottom = bar.isHidden || bar.window == nil ? 0 : max(0, bar.convert(bar.bounds, to: view).maxY - frame.minY)
+        let barBottom = bar.isHidden || bar.window == nil ? 0 : max(0, bar.convert(bar.bounds, to: macCanvas).maxY - frame.minY)
         let stripHeight = (detail.topViewController as? ChatViewController)?.visibleSessionStripHeight ?? 0
         let pixel = HQShape.pixel(traitCollection.displayScale)
         inspector.bandBottom = barBottom > 0 ? barBottom + (stripHeight > 0 ? max(0, stripHeight - pixel) : 0) : 0
         // [mac-ten] Its tabs sit level with the bar's buttons. The bar is 54 pt tall on the Mac and its buttons stand
         // in its top 44 pt (measured 2026-11-11: bar y 41, buttons y 41 to 85), so the middle is that row's, not the bar's.
-        let barFrame = bar.convert(bar.bounds, to: view)
+        let barFrame = bar.convert(bar.bounds, to: macCanvas)
         inspector.barMiddle = bar.isHidden || bar.window == nil ? 0 : max(0, barFrame.minY + min(barFrame.height, 44) / 2 - frame.minY)
     }
 
@@ -455,7 +545,7 @@ final class RootSplitController: UIViewController {
         case .began:
             dragStart = layout.sidebar
         case .changed:
-            let moved = (pan as? MacGripPan)?.travel(in: view).x ?? pan.translation(in: view).x   // [rest-hands 2026-11-17]
+            let moved = (pan as? MacGripPan)?.travel(in: macCanvas).x ?? pan.translation(in: macCanvas).x   // [rest-hands 2026-11-17]
             dragWidth = dragStart + (view.effectiveUserInterfaceLayoutDirection == .rightToLeft ? -moved : moved)
             MacWindow.cursor("resizeLeftRightCursor")
             view.setNeedsLayout()
@@ -563,6 +653,7 @@ final class RootSplitController: UIViewController {
         }
         if isViewLoaded, listFolded != (layout == .double(sidebar: 0)) { listFoldMayHaveChanged() }   // [mac-ui-issues] Settings opened or closed
         syncInspectorHeader()
+        if isViewLoaded { macWorkspaceBar.sync() }
         #else
         // [ipad-polish] Nothing left on the right: the list comes back, and stays for the next thing opened.
         if detailIsEmpty { listHidden = false }
@@ -577,6 +668,9 @@ final class RootSplitController: UIViewController {
     /// The tabs were made again for another gateway (`MainTabController.installTabs(fresh:)`): a chat belonged to the
     /// old one; Settings pages read the current gateway and stay (a switch lands on the page it was made from).
     func tabsRebuilt() {
+        #if targetEnvironment(macCatalyst)
+        if isViewLoaded { macWorkspaceBar.reloadForGateway() }
+        #endif
         guard isDouble else { return }
         let first = detail.viewControllers.first
         if first is SettingsRootController || first is GatewayPageController {
@@ -889,7 +983,7 @@ final class RootSplitController: UIViewController {
     /// The picture sits under the sidebar and the inspector and takes no clicks. Nothing under Reduce Motion.
     private func fadePanes() {
         guard panesGhost == nil, isViewLoaded, view.window != nil, !HQMotion.reduced else { return }
-        var rect = split(windowRect).panes
+        var rect = macCanvas.bounds
         // Not the inspector's own picture: the panel slides, and a still copy of it fading in place would blur that.
         let panel = inspector.view.isHidden ? .null : inspector.view.frame.intersection(rect)
         if !panel.isNull, panel.width > 0 {
@@ -897,11 +991,11 @@ final class RootSplitController: UIViewController {
             else if panel.minX <= rect.minX + 0.5 { rect = CGRect(x: panel.maxX, y: rect.minY, width: rect.maxX - panel.maxX, height: rect.height) }
         }
         guard rect.width > 1, rect.height > 1,
-              let old = view.resizableSnapshotView(from: rect, afterScreenUpdates: false, withCapInsets: .zero) else { return }
+              let old = macCanvas.resizableSnapshotView(from: rect, afterScreenUpdates: false, withCapInsets: .zero) else { return }
         old.frame = rect
         old.isUserInteractionEnabled = false
         old.accessibilityElementsHidden = true
-        view.insertSubview(old, belowSubview: macSidebar)
+        macCanvas.insertSubview(old, belowSubview: inspector.view)
         panesGhost = old
         HQMotion.animate(HQMotion.quick, options: [.curveEaseOut, .allowUserInteraction], changes: { old.alpha = 0 },   // motion-ok: opacity only
                          completion: { _ in old.removeFromSuperview() })
@@ -1226,7 +1320,11 @@ final class RootSplitController: UIViewController {
         Self.debugWidth = width
         Self.debugHeight = height
         guard isViewLoaded else { return }
+        #if targetEnvironment(macCatalyst)
+        view.backgroundColor = width != nil || height != nil ? .black : .clear
+        #else
         view.backgroundColor = width != nil || height != nil ? .black : HQPalette.page
+        #endif
         view.setNeedsLayout()
         view.layoutIfNeeded()
     }

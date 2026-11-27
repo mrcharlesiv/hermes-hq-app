@@ -100,8 +100,8 @@ nonisolated(unsafe) private var pageBarKey: UInt8 = 0
         unsafeBitCast(method_getImplementation(method), to: Setter.self)(window, selector, false)
     }
 
-    /// In the iPad points the Mac draws at 77 %: the sidebar and a 375 pt list (about 470 × 460 pt on the screen).
-    static var minimumSize: CGSize { CGSize(width: (MacSidebar.isCollapsed ? MacSidebar.width : MacSidebar.narrowestOpen) + 375, height: 600) }   // [sidebar-width] a wider sidebar squeezes back before the window stops
+    /// In the iPad points the Mac draws at 77 %: the sidebar, floating canvas inset, and a 375 pt list.
+    static var minimumSize: CGSize { CGSize(width: (MacSidebar.isCollapsed ? MacSidebar.width : MacSidebar.narrowestOpen) + 375 + MacGlassShell.canvasInset, height: 600) }   // [sidebar-width] a wider sidebar squeezes back before the window stops
 
     // MARK: Text size (View › Make Text Bigger / Smaller / Actual Size, as in Mail and Safari)
 

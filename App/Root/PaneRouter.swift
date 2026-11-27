@@ -254,6 +254,14 @@ extension MainTabController {
             }
         } else if let chat = root as? ChatViewController, let group = chat.session as? ChatRoomSurface {
             room = group.roomKey   // [groups] a group chat marks its row in the Bots list too
+        } else if let chat = root as? ChatViewController {
+            #if DEBUG
+            if let match = services.bots.first(where: { $0.name == chat.session.title }) {
+                bot = match.id
+            } else if let match = services.sessions.first(where: { SessionRowView.title($0) == chat.session.title || $0.title == chat.session.title }) {
+                session = match.profile + "\u{1F}" + match.id
+            }
+            #endif
         } else if root is OtherAppsViewController {
             session = SessionsViewController.otherAppsKey   // the page beside the list marks the row that opened it
         }
@@ -269,7 +277,10 @@ extension MainTabController {
         TasksViewController.markOnShow(root: root, keepsSelection: double)   // [mac] Mac polish #41: Tasks marks the open task's row
         #if targetEnvironment(macCatalyst)
         // [bots-rail] the rail's head [rail-more] or room [chats-under] or a chat listed under its bot
-        if split?.isViewLoaded == true { split?.macSidebar.markOpen(bot: double ? bot : nil, room: double ? room : nil, chat: double ? session : nil) }
+        if split?.isViewLoaded == true {
+            split?.macSidebar.markOpen(bot: double ? bot : nil, room: double ? room : nil, chat: double ? session : nil)
+            split?.macWorkspaceBar.sync()
+        }
         split?.inspector.follow(double ? root as? ChatViewController : nil)   // [mac-layout] the inspector shows the chat beside it
         // [tasks-first] Step 5: beside a task's page the pane is the bot's conversation.
         let taskModel = double ? (root as? TodoSheetHost)?.model : nil

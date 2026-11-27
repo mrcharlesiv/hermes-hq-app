@@ -25,9 +25,9 @@ import UIKit
     }
 
     /// The box's room inside its row and its corners: the Desktop Look's 4 pt radius is its brand, the iOS look's
-    /// rounder one matches its cards.
+    /// rounder one matches its cards and HeroSpace's soft rounded sidebar pills.
     static var insets: NSDirectionalEdgeInsets { DesktopRows.pressInset }
-    static var radius: CGFloat { Theme.isDesktop ? DesktopRows.radius : 8 }
+    static var radius: CGFloat { Theme.isDesktop ? DesktopRows.radius : 10 }
 
     /// [sidebar-intent] Whether the window is the one in front. Behind another window (or another app) its one accent
     /// mark stayed as bright as in front, the loudest thing on a screen it no longer had; a Mac's source lists go
@@ -47,8 +47,26 @@ import UIKit
 
     /// The fill for a row: nil at rest.
     static func fill(selected: Bool, pressed: Bool, in pane: Pane) -> UIColor? {
+        if pane == .sidebar {
+            if selected { return emphasized(pane) ? sidebarSelected : sidebarUnfocused }
+            return pressed ? sidebarPressed : nil
+        }
         if selected { return emphasized(pane) ? accent : grey }
         return pressed ? grey : nil
+    }
+
+    /// Calm translucent neutral pill selection for rows sitting on the frosted glass sidebar shell.
+    static let sidebarSelected = UIColor { traits in
+        let dark = traits.userInterfaceStyle == .dark
+        return dark ? UIColor(white: 1, alpha: 0.13) : UIColor(white: 0, alpha: 0.075)
+    }
+    static let sidebarUnfocused = UIColor { traits in
+        let dark = traits.userInterfaceStyle == .dark
+        return dark ? UIColor(white: 1, alpha: 0.08) : UIColor(white: 0, alpha: 0.048)
+    }
+    static let sidebarPressed = UIColor { traits in
+        let dark = traits.userInterfaceStyle == .dark
+        return dark ? UIColor(white: 1, alpha: 0.16) : UIColor(white: 0, alpha: 0.10)
     }
 
     /// The accent, soft enough that the row's own label and grey text still read on it (the rows draw their own

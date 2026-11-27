@@ -1342,6 +1342,9 @@ extension AppDelegate {
         #endif
         AppLog.note("keys", "close chat")
         if root.split?.isDouble == true {
+            #if targetEnvironment(macCatalyst)
+            if root.split?.macWorkspaceBar.closeActiveTab() == true { return }
+            #endif
             root.closeDetail(animated: true)
         } else if let chat = root.chatOnShow {
             chat.navigationController?.popToRootViewController(animated: true)

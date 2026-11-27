@@ -160,8 +160,9 @@ final class PanePresentation: UIPresentationController {
         // third of a 900 pt window, beside the chat's Info that took no clicks while it was up. It covers the inspector too.
         var rect = split.viewerRect
         let inspector = split.inspector.view.frame
-        if !split.inspector.view.isHidden, inspector.width > 0, inspector.intersects(split.view.bounds) { rect = rect.union(inspector) }
-        return split.view.convert(rect, to: containerView)
+        let canvas = split.macCanvas
+        if !split.inspector.view.isHidden, inspector.width > 0, inspector.intersects(canvas.bounds) { rect = rect.union(inspector) }
+        return canvas.convert(rect, to: containerView)
     }
 
     override func presentationTransitionWillBegin() {

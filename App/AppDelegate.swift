@@ -210,6 +210,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate, LaunchHost {
         self.window = window
         #if targetEnvironment(macCatalyst)
         MacHoverScout.start()   // [mac] hover reaches sheets, the right panel and late-made controls too
+        MacGlassShell.apply(to: window)
         #endif
         #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments

@@ -30,8 +30,8 @@ final class MacSidebar: UIView {
     static var narrowestOpen: CGFloat { (160 + 88 * chrome).rounded() }   // [mac-layout] room for a bot's name and its step
     static var widestOpen: CGFloat { (520 * chrome).rounded() }
     static let openWidthKey = "HQMacSidebarOpenWidth"
-    /// At 100 %: 300 is about 231 pt on the screen (Mail's and Finder's sidebars open near there).
-    static let defaultOpenWidth: CGFloat = 300
+    /// At 100 %: 286 is about 220 pt on the screen, matching the airy frosted sidebar proportion.
+    static let defaultOpenWidth: CGFloat = 286
     static var savedOpenWidth: CGFloat {
         get { storedOpenWidth > 0 ? storedOpenWidth : defaultOpenWidth }
         set { storedOpenWidth = newValue; UserDefaults.standard.set(Double(newValue), forKey: openWidthKey) }
@@ -302,6 +302,10 @@ final class MacSidebar: UIView {
     /// When the sidebar came on show: its lists glide to a row only once it has been up a moment (`glidesScroll`).
     private var shownAt: CFTimeInterval = .greatestFiniteMagnitude
     private var tools: MacSidebarTools?
+    /// HeroSpace-inspired open sidebar header: traffic-light-aligned Search/Compose icons + Workspace/Gateway Switcher pill.
+    private var openHeader: MacSidebarHeader?
+    /// Scroll top constraint anchored to either `openHeader` (open) or `tools` (collapsed rail).
+    private var scrollTop: NSLayoutConstraint?
     /// The head whose chat is on show beside the rail, by `MacBotsRail.Item.key` (`MainTabController.paneSelectionChanged`).
     private var openHead: String?
     /// Watch on the saved gateways for the foot's gateway line and switcher.
@@ -709,15 +713,37 @@ final class MacSidebar: UIView {
         // [Mac UI check 2026-11-13] Search and New Chat stay put over the bots' list, not as its first row: revealing a
         // low bot or group chat scrolled them half off the top (Mac polish #27 only kept the foot's offset off this list).
         self.tools?.removeFromSuperview()
-        let tools = MacSidebarTools(folded: folded, named: named)
-        tools.translatesAutoresizingMaskIntoConstraints = false
-        self.tools = tools
-        addSubview(tools)
-        NSLayoutConstraint.activate([
-            tools.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
-            tools.trailingAnchor.constraint(equalTo: scroll.trailingAnchor),
-            scroll.topAnchor.constraint(equalTo: tools.bottomAnchor, constant: stack.spacing),
-        ])
+        self.tools = nil
+        self.openHeader?.removeFromSuperview()
+        self.openHeader = nil
+        scrollTop?.isActive = false
+        if folded {
+            let tools = MacSidebarTools(folded: true, named: named)
+            tools.translatesAutoresizingMaskIntoConstraints = false
+            self.tools = tools
+            addSubview(tools)
+            let top = scroll.topAnchor.constraint(equalTo: tools.bottomAnchor, constant: stack.spacing)
+            scrollTop = top
+            NSLayoutConstraint.activate([
+                tools.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
+                tools.trailingAnchor.constraint(equalTo: scroll.trailingAnchor),
+                top,
+            ])
+        } else {
+            let header = MacSidebarHeader()
+            header.translatesAutoresizingMaskIntoConstraints = false
+            self.openHeader = header
+            addSubview(header)
+            let top = scroll.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 2)
+            scrollTop = top
+            NSLayoutConstraint.activate([
+                header.topAnchor.constraint(equalTo: topAnchor),
+                header.leadingAnchor.constraint(equalTo: leadingAnchor),
+                header.trailingAnchor.constraint(equalTo: trailingAnchor),
+                header.heightAnchor.constraint(equalToConstant: MacSidebarHeader.totalHeight),
+                top,
+            ])
+        }
         var placeRows: [Row] = []
         var toolRows: [Row] = []
         let places = tabs.placedTabs   // [mac-sidebar] every place, the ones the tab controller doesn't hold now too
@@ -1328,7 +1354,7 @@ final class MacSidebar: UIView {
     private var switcherActive: Bool { tabs?.botsViewController.gatewaySwitcher?.isActive ?? false }
 
     /// [sidebar-tidy] The foot's gateway line: the current gateway's name and a dot for the connection (green
-    /// connected, orange while it connects, red offline or signed out).
+    /// connected, orange while it connects, red offline or signed out), and the gateway switcher dropdown when multiple gateways exist.
     private func showGateway() {
         let shown = Self.tidy && !Self.isCollapsed
         gatewayDot.isHidden = !shown
@@ -1337,14 +1363,15 @@ final class MacSidebar: UIView {
         guard shown, let tabs else { return }
         let gateways = tabs.botsViewController.gatewaySwitcher?.gateways
         let rows = gateways?.accounts ?? []
-        let current = rows.first(where: \.isCurrent)?.title ?? tabs.services.account?.baseURL.host() ?? ""
+        let current = rows.first(where: \.isCurrent)?.title ?? tabs.services.account?.label ?? tabs.services.account?.baseURL.host() ?? ""
         // [gateway-foot] More than one gateway: the line opens the Gateways menu, as the rail's switcher does.
         let switcher = switcherActive
         let switching = switcher ? gateways?.switchingTo.flatMap { id in rows.first { $0.id == id }?.title } : nil
         let news = switcher && switching == nil && (gateways?.otherNews ?? 0) > 0
         let title = switching.map { "Switching to \($0)…" } ?? current
         let state = tabs.services.connection
-        gatewayLeading.constant = Self.contentInset + MacBotsRail.nameLeading   // UI Scale moves the column
+        let toggleWidth = (32 * Self.chrome).rounded()
+        gatewayLeading.constant = max(Self.contentInset + MacBotsRail.nameLeading, Self.contentInset + toggleWidth + 22)
         gatewayName.text = title
         // [macpass-sidebar] Type pass: 14.5 (11.2 pt on the screen), the size of the headings and a bot's step line; at 14
         // the gateway's name was 10.8 pt, the one word in the sidebar under the 11 pt floor `sized` keeps.
@@ -1770,7 +1797,8 @@ final class MacSidebar: UIView {
             // list takes that much less, so the foot keeps the room it had (the folded rail in a short window lost
             // its Tools button to the bots' list, and "+" showed where it hadn't).
             let startedAt = Self.glassTop + 8
-            let lead = max(0, (tools?.frame.maxY ?? startedAt) + stack.spacing - startedAt)
+            let headerEnd = openHeader?.frame.maxY ?? tools?.frame.maxY ?? startedAt
+            let lead = max(0, headerEnd + stack.spacing - startedAt)
             var room = max(Self.botsMinHeight - lead, min(content, (bounds.height * 0.5).rounded() - lead))
             // [Mac AAA 2026-11-16] Open, a list too long for its room ends on a whole bot's row, not part way into the
             // next: a group's heading left alone at the foot faded out over a blank band (70 pt under "Unassigned" at
@@ -1882,38 +1910,13 @@ final class MacSidebar: UIView {
     }
 
     private func recolor() {
-        let desktop = Self.solid   // [sidebar-solid] the iOS look's strip is solid too: no glass, no page round it
-        if desktop { backgroundColor = Self.background } else { followNeighbour() }
-        // [glass-mac] The glass in the iOS look only.
-        // [sidebar-light] Owner 2026-11-03: in light mode "it's all white behind it… you can't really tell that there's this
-        // like floating sidebar": clear glass over a white page drew white (and black over iOS dark's black). It carries
-        // the theme's page colour a step towards its ink now (`glassTintColor`), with a hairline edge (`cardEdge`), so it
-        // reads as a panel on any page and in every theme.
-        if desktop {
-            if glass.effect != nil { glass.effect = nil }
-        } else {
-            let tint = Self.glassTintColor
-            if !(glass.effect is UIGlassEffect) || glassTint != tint.resolvedColor(with: traitCollection) {
-                let effect = UIGlassEffect(style: .regular)
-                effect.tintColor = tint
-                glass.effect = effect
-                glassTint = tint.resolvedColor(with: traitCollection)
-            }
-        }
-        // The glass's own sheen lifts whatever is under it towards white in light mode (measured: 255 on a 243 page in
-        // iOS System, 245 on 242 in Nous), so the tint is laid over it as well, not only given to the effect.
-        glass.contentView.backgroundColor = desktop ? nil : Self.glassTintColor
-        glass.layer.cornerRadius = Self.glassRadius
-        glass.layer.cornerCurve = .continuous
-        // Owner 2026-11-04 ("the corners look like something is wrong"): the tint above filled the panel's square, so
-        // each corner showed a square behind the rounded edge. It keeps to the panel's curve now.
-        glass.contentView.layer.cornerRadius = Self.glassRadius
-        glass.contentView.layer.cornerCurve = .continuous
-        glass.contentView.layer.masksToBounds = true
-        glass.layer.borderWidth = desktop ? 0 : HQShape.pixel(traitCollection.displayScale)
-        glass.layer.borderColor = HQPalette.cardEdge.resolvedColor(with: traitCollection).cgColor
-        glass.isHidden = desktop
-        edge.isHidden = !desktop
+        // Transparent over the unified behind-window frosted glass shell (`MacGlassShell`); no hard divider wall
+        // because the floating rounded content canvas card beside the sidebar provides clean spatial separation.
+        backgroundColor = .clear
+        isOpaque = false
+        if glass.effect != nil { glass.effect = nil }
+        glass.isHidden = true
+        edge.isHidden = true
         let inset = Self.contentInset
         if stackLeading.constant != inset {
             stackLeading.constant = inset
@@ -1922,10 +1925,10 @@ final class MacSidebar: UIView {
             addTrailing.constant = -inset
             toggleBottom.constant = -inset
         }
-        edge.backgroundColor = HQPalette.paneLine   // stress test #26: neutral, as the divider between the panes
-        toggle.tintColor = HQPalette.label   // [mac] stress test #65: label 2 on the iOS look's grey was about 2:1
-        addButton.tintColor = HQPalette.label
-        settingsButton.tintColor = HQPalette.label
+        let iconInk = HQPalette.label.withAlphaComponent(traitCollection.userInterfaceStyle == .dark ? 0.68 : 0.62)
+        toggle.tintColor = iconInk
+        addButton.tintColor = iconInk
+        settingsButton.tintColor = iconInk
         dropLine.backgroundColor = tintColor
         selectionChanged()
         rows.forEach { $0.recolor() }
@@ -1938,6 +1941,7 @@ final class MacSidebar: UIView {
         botsStack.arrangedSubviews.compactMap { $0 as? MacSidebarHeading }.forEach { $0.recolor() }
         botsStack.arrangedSubviews.compactMap { $0 as? MacSidebarEmptyHint }.forEach { $0.recolor() }
         tools?.recolor()
+        openHeader?.recolor()
     }
 
     /// [sidebar-light] A pane beside the strip laid out (a page pushed or popped, the list folded or opened).
@@ -2030,10 +2034,9 @@ final class MacSidebar: UIView {
     /// The strip's colour: the solid panel (`panelColor`); while the glass panel floats, the page beside it shows round it.
     static var background: UIColor { solid ? panelColor : .clear }
 
-    /// What the rows sit on: the Desktop Look's raised panel, or the glass panel's tint made solid (Mac polish #55: what
-    /// a face's badges are ringed in here).
+    /// What the rows sit on: the frosted glass shell fallback tint (what a face's badges are ringed in here).
     static var panelColor: UIColor {
-        Theme.isDesktop ? ChatPalette.sidebar : UIColor { glassTintColor.resolvedColor(with: $0).withAlphaComponent(1) }
+        MacGlassShell.fallbackShellColor
     }
 }
 
@@ -2529,12 +2532,13 @@ private final class Row: UIControl {
     override var isHighlighted: Bool { didSet { recolor() } }
 
     func recolor() {
-        icon.tintColor = isMarked ? tintColor : HQPalette.label2
+        let dark = traitCollection.userInterfaceStyle == .dark
+        icon.tintColor = isMarked ? HQPalette.label : HQPalette.label.withAlphaComponent(dark ? 0.62 : 0.58)
         label.textColor = isTool && !isMarked && !folded && MacSidebar.tidy ? HQPalette.label.withAlphaComponent(Self.toolInk) : HQPalette.label
         let type = MacSidebar.scheme
-        label.font = MacSidebar.font(named ? type.railPlace : MacSidebar.placeSize, weight: isMarked ? type.markedWeight : .regular)
+        label.font = MacSidebar.font(named ? type.railPlace : MacSidebar.placeSize, weight: isMarked ? .medium : .regular)
         label.minimumScaleFactor = MacSidebar.shrink(label.font, least: named ? type.railPlaceLeast / type.railPlace : 0.85)
-        count.textColor = HQPalette.label2
+        count.textColor = HQPalette.label.withAlphaComponent(dark ? 0.56 : 0.52)
         dot.backgroundColor = tintColor
         // [mac] Stress test 2026-10-28 #54: the window's one source-list mark (`MacSelection`), its corners too.
         backgroundColor = MacSelection.fill(selected: isMarked, pressed: isHighlighted, in: .sidebar) ?? (hovered ? MacSidebar.rowHover : .clear)   // [Mac AAA 2026-11-16] one hover fill (four copies of it before)

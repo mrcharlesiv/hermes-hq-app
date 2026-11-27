@@ -55,10 +55,10 @@ final class MacTitleBarClick: NSObject, UIGestureRecognizerDelegate {
             if current is UIScrollView { scrolls = true }
             view = current.superview
         }
-        guard let bar else { return !scrolls && point.y <= titleStrip(window) + gap }
-        // The pane's own bar, right under the title strip: not a bar further down (a sheet's, a page inside a page).
+        guard let bar else { return !scrolls && point.y <= max(titleStrip(window) + gap, MacGlassShell.topBarHeight + 8) }
+        // The pane's own bar, right under the top chrome bar: not a bar further down (a sheet's, a page inside a page).
         let frame = bar.convert(bar.bounds, to: window)
-        return frame.minY <= titleStrip(window) + 8 && point.y <= frame.maxY
+        return frame.minY <= max(titleStrip(window), MacGlassShell.topBarHeight) + 12 && point.y <= frame.maxY
     }
 
     private static var interactiveKey: UInt8 = 0

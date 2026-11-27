@@ -1,0 +1,56 @@
+import Foundation
+
+// Synthetic config: every secret shape SettingsFile handles. All values invented.
+let configText = #"""
+{
+  "model": {"default": "demo-model", "provider": "anthropic", "base_url": "https://user:pw123@llm.example.com/v1?api_key=abc123&page=2", "api_key": "plain-secret-value", "api_key_env": "DEMO_API_KEY"},
+  "agent": {"max_turns": 120, "ratio": 0.5, "enabled": true, "nothing": null},
+  "providers": {"openrouter": {"api_key": "sk-fix...0000", "token": "", "password": "${DEMO_PASSWORD}", "password_store": "keychain", "secret_backend": "vault"}},
+  "notes": "my key is sk-abcdefghijklmnop and jwt eyJhbGciOi.eyJzdWIiOi.c2lnbmF0dXJl here",
+  "github_pat": "ghp_abcdefghijklmn",
+  "cookie_jar": ["a", "b"],
+  "toolsets": ["hermes-cli", "web"],
+  "terminal": {"env_passthrough": ["GITHUB_TOKEN"], "cwd": "~/work", "url": "https://example.com/path?sig=zzz&q=ok"},
+  "empty": {},
+  "list": [],
+  "unicode": "café – «quoted» / slash",
+  "mcp_servers": {
+    "github": {"url": "https://api.example.com/mcp/", "headers": {"Authorization": "Bearer fixture-bearer-not-real-0000", "Accept": "application/json", "Content-Type": "application/json", "X-Ref": "${GH_TOKEN}"}},
+    "files": {"command": "npx", "args": ["files-mcp", "--api-key", "fixture-files-key-0000", "--verbose", "--token=abc", "API_TOKEN=xyz", "plain", "Authorization: Bearer abc", "a1b2c3d4e5f6g7h8i9", "123e4567-e89b-12d3-a456-426614174000", "ALLLETTERSNODIGITSHERE"], "env": {"DEMO_KEY": "value-1", "EMPTY": "", "REF": "${X}"}},
+    "plain": {"command": "run", "timeout": 30, "credential_file": "/tmp/c", "key_env": "X"}
+  },
+  "fallback_providers": [{"provider": "openrouter", "model": "m", "api_key": "secret-in-list"}]
+}
+"""#
+FileManager.default.createFile(atPath: "config.json", contents: Data(configText.utf8))
+let config = try JSONValue.parse(Data(configText.utf8))
+let file = try SettingsFile.fileData(config)
+FileManager.default.createFile(atPath: "export.json", contents: file)
+
+// Import: the exported file with a few edits laid over the current record.
+let current = config
+var edited = try JSONValue.parse(file)
+if case .object(var o) = edited {
+    o["agent"] = ["max_turns": 90, "ratio": 0.5, "enabled": true, "nothing": nil]
+    o["timezone"] = "UTC"
+    o["fallback_providers"] = [["provider": "openrouter", "model": "m2"]]
+    edited = .object(o)
+}
+let patch = SettingsFile.importPatch(file: edited, current: current)
+let enc = JSONEncoder(); enc.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+FileManager.default.createFile(atPath: "import-file.json", contents: try enc.encode(edited))
+FileManager.default.createFile(atPath: "import-patch.json", contents: try enc.encode(patch))
+print("changes", SettingsImportWords.changeCount(patch))
+print(SettingsImportWords.confirmMessage(changes: SettingsImportWords.changeCount(patch)))
+var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "UTC")!
+let d = Date(timeIntervalSince1970: 1795310000)
+for p in ["Hermes", "  My:Bot/Name? ", "", "a\u{1}b|c"] { print("name", SettingsFile.exportFileName(profile: p, now: d, calendar: cal)) }
+print("empty", String(decoding: try SettingsFile.fileData(.object([:])), as: UTF8.self).debugDescription)
+print("emptyarr", String(decoding: try SettingsFile.fileData(.object(["a": .array([]), "b": .object([:]), "n": .number(1e20), "f": .number(0.1)])), as: UTF8.self).debugDescription)
+for t in ["«left out of this export»", "«redacted»", "***", " **** ", "**", "abc"] { print("ph", t, SettingsFile.isPlaceholder(.string(t))) }
+print("clears", ConfigPath.clearsEnabledToolsets(["toolsets": ["a"]], ["toolsets": []]), ConfigPath.clearsEnabledToolsets(["toolsets": []], ["toolsets": []]))
+print("roundtrip", SettingsImportWords.changeCount(SettingsFile.importPatch(file: try JSONValue.parse(file), current: config)))
+let urls: [JSONValue] = ["https://h/${X}?token=abc", "https://h/é?token=abc&n=1", "see https://h/a%20b?token=abc now", "https://h/a?token=abc&x=%zz", "https://:pw@h/", "https://u@h/p", "https://${U}:${P}@h/", "https://h/?b&token=&c=a=b&token=q#frag", "https://h/?token=abc#f%20g", "https://h/a+b?q=a+b&token=1", "https://h:80/p?Code=1&user_id=2&SessionId=3&hash=4&x-api-key=5&page=6", "ftp://x.example/file?sig=${S}", "two urls https://a.example/?auth=1 and https://b.example/?ok=1.", "https://h/?q=%E2%9C%93&token=t", "Bearer xoxb-1234567890-abc", "gho_ABCDEFGH12345 and sk-short", "line\nwith\ttabs"]
+let urlConfig: JSONValue = ["u": .array(urls), "mcp_servers": ["s": ["args": .array(urls + ["--password", "p", "-k", "Cookie: a=b", "x-api-key: ${K}", "PASSWORD=", "--auth-header=Bearer abcd", "deadbeefdeadbeef1234", "ABCDEFGHIJKLMNOP", "abcdefghijklmnop1"]), "env": ["Accept-Language": "en", "TOKEN": "v", "N": .number(3)], "environment": ["X": "y"]]]]
+FileManager.default.createFile(atPath: "urls-in.json", contents: try enc.encode(urlConfig))
+FileManager.default.createFile(atPath: "urls-out.json", contents: try SettingsFile.fileData(urlConfig))

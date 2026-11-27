@@ -1,0 +1,62 @@
+{
+  "mcp_servers" : {
+    "s" : {
+      "args" : [
+        "https://h/${X}?token=«left out of this export»",
+        "https://h/é?token=«left out of this export»&n=1",
+        "see https://h/a b?token=«left out of this export» now",
+        "https://h/a?token=«left out of this export»&x=%zz",
+        "https://«left out of this export»:«left out of this export»@h/",
+        "https://«left out of this export»@h/p",
+        "https://${U}:${P}@h/",
+        "https://h/?b&token=&c=a=b&token=«left out of this export»#frag",
+        "https://h/?token=«left out of this export»#f g",
+        "https://h/a+b?q=a+b&token=«left out of this export»",
+        "https://h:80/p?Code=«left out of this export»&user_id=«left out of this export»&SessionId=«left out of this export»&hash=«left out of this export»&x-api-key=«left out of this export»&page=6",
+        "ftp://x.example/file?sig=${S}",
+        "two urls https://a.example/?auth=«left out of this export» and https://b.example/?ok=1.",
+        "https://h/?q=✓&token=«left out of this export»",
+        "Bearer «left out of this export»",
+        "«left out of this export» and sk-short",
+        "line\nwith\ttabs",
+        "--password",
+        "«left out of this export»",
+        "-k",
+        "Cookie: «left out of this export»",
+        "x-api-key: ${K}",
+        "PASSWORD=",
+        "--auth-header=Bearer abcd",
+        "«left out of this export»",
+        "ABCDEFGHIJKLMNOP",
+        "«left out of this export»"
+      ],
+      "env" : {
+        "Accept-Language" : "en",
+        "N" : 3,
+        "TOKEN" : "«left out of this export»"
+      },
+      "environment" : {
+        "X" : "«left out of this export»"
+      }
+    }
+  },
+  "u" : [
+    "https://h/${X}?token=«left out of this export»",
+    "https://h/é?token=«left out of this export»&n=1",
+    "see https://h/a b?token=«left out of this export» now",
+    "https://h/a?token=«left out of this export»&x=%zz",
+    "https://«left out of this export»:«left out of this export»@h/",
+    "https://«left out of this export»@h/p",
+    "https://${U}:${P}@h/",
+    "https://h/?b&token=&c=a=b&token=«left out of this export»#frag",
+    "https://h/?token=«left out of this export»#f g",
+    "https://h/a+b?q=a+b&token=«left out of this export»",
+    "https://h:80/p?Code=«left out of this export»&user_id=«left out of this export»&SessionId=«left out of this export»&hash=«left out of this export»&x-api-key=«left out of this export»&page=6",
+    "ftp://x.example/file?sig=${S}",
+    "two urls https://a.example/?auth=«left out of this export» and https://b.example/?ok=1.",
+    "https://h/?q=✓&token=«left out of this export»",
+    "Bearer «left out of this export»",
+    "«left out of this export» and sk-short",
+    "line\nwith\ttabs"
+  ]
+}

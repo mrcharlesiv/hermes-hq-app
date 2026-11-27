@@ -1,0 +1,69 @@
+<UserControl
+    x:Class="HermesHQ.Features.Onboarding.WelcomeScreen"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    IsTabStop="False" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch">
+    <Grid x:Name="PageGround" Background="{ThemeResource HQPageBrush}">
+        <Grid.Resources>
+            <ResourceDictionary>
+                <ResourceDictionary.ThemeDictionaries>
+                    <ResourceDictionary x:Key="Light">
+                        <ImageBrush x:Key="WelcomeMark" ImageSource="ms-appx:///Assets/HermesHQ-256.png" Stretch="UniformToFill" />
+                    </ResourceDictionary>
+                    <ResourceDictionary x:Key="Dark">
+                        <ImageBrush x:Key="WelcomeMark" ImageSource="ms-appx:///Assets/Onboarding/Welcome-dark.png" Stretch="UniformToFill" />
+                    </ResourceDictionary>
+                    <ResourceDictionary x:Key="HighContrast">
+                        <ImageBrush x:Key="WelcomeMark" ImageSource="ms-appx:///Assets/HermesHQ-256.png" Stretch="UniformToFill" />
+                    </ResourceDictionary>
+                </ResourceDictionary.ThemeDictionaries>
+                <!-- The actual, otherwise empty, guide bar below the unmodified Windows caption (44 Catalyst points). -->
+                <Style x:Key="WelcomeGuideBar" TargetType="Grid">
+                    <Setter Property="MinHeight" Value="33.88" />
+                    <Setter Property="Background" Value="{ThemeResource HQPageBrush}" />
+                </Style>
+                <DataTemplate x:Key="ActionWords">
+                    <TextBlock Text="{Binding}" TextWrapping="Wrap" TextAlignment="Center" />
+                </DataTemplate>
+                <Style x:Key="PointTitle" TargetType="TextBlock">
+                    <Setter Property="Foreground" Value="{ThemeResource HQLabelBrush}" />
+                    <Setter Property="FontWeight" Value="SemiBold" />
+                </Style>
+                <Style x:Key="PointDetail" TargetType="TextBlock">
+                    <Setter Property="Foreground" Value="{ThemeResource HQLabel2Brush}" />
+                </Style>
+                <Style x:Key="PointSymbol" TargetType="FontIcon">
+                    <Setter Property="Foreground" Value="{ThemeResource HQTintBrush}" />
+                    <Setter Property="IsTextScaleFactorEnabled" Value="True" />
+                </Style>
+            </ResourceDictionary>
+        </Grid.Resources>
+        <ScrollViewer x:Name="Viewport" SizeChanged="ViewportChanged" HorizontalScrollMode="Disabled" HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch">
+            <!-- WelcomeView.swift:60–63; OnboardingKit.swift:142–163. The 440 pt limit is on the words and
+                 actions, BEFORE the 24 pt gutters. Centre in the visible room; a taller block starts at the top. -->
+            <Grid x:Name="Room" Padding="18.48">
+                <StackPanel x:Name="Column" MaxWidth="338.8" VerticalAlignment="Center">
+                    <!-- WornAppIcon (AppIconChoice.swift:239–250): paint the artwork into the 22.37%-radius surface. -->
+                    <Border x:Name="AppMark" Width="55.44" Height="55.44" CornerRadius="12.402" Background="{ThemeResource WelcomeMark}" HorizontalAlignment="Center"
+                            AutomationProperties.AccessibilityView="Raw" />
+                    <TextBlock x:Name="Heading" Margin="0,15.4,0,0" FontWeight="SemiBold" Foreground="{ThemeResource HQLabelBrush}"
+                               TextWrapping="Wrap" TextAlignment="Center" LineStackingStrategy="BlockLineHeight" AutomationProperties.HeadingLevel="Level1" />
+                    <TextBlock x:Name="Lead" Margin="0,9.24,0,0" Foreground="{ThemeResource HQLabel2Brush}" TextWrapping="Wrap"
+                               TextAlignment="Center" LineStackingStrategy="BlockLineHeight" />
+                    <StackPanel x:Name="Points" Margin="0,21.56,0,0" Spacing="13.86" />
+                    <!-- The Mac's footer is IN the scrolling block: 28 pt after the points, 12 pt between actions. -->
+                    <StackPanel x:Name="Actions" Margin="0,21.56,0,0" Spacing="9.24">
+                        <Button x:Name="Start" Style="{StaticResource AccentButtonStyle}" Background="{ThemeResource AccentButtonBackground}"
+                                Foreground="{ThemeResource AccentButtonForeground}" BorderBrush="{ThemeResource AccentButtonBorderBrush}"
+                                MinWidth="0" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" FontWeight="SemiBold"
+                                Padding="9.24,3.08" ContentTemplate="{StaticResource ActionWords}" />
+                        <Button x:Name="Address" Background="{ThemeResource ButtonBackground}" BackgroundSizing="OuterBorderEdge" Foreground="{ThemeResource ButtonForeground}"
+                                BorderBrush="{ThemeResource ButtonBorderBrush}" MinWidth="0" HorizontalAlignment="Stretch"
+                                HorizontalContentAlignment="Stretch" FontWeight="SemiBold" Padding="9.24,3.08" ContentTemplate="{StaticResource ActionWords}" />
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

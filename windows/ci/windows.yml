@@ -1,0 +1,632 @@
+# The Windows build (copied to .github/workflows/ in the private CI mirror by windows/scripts/ci-sync.sh).
+# Builds and tests Hermes.Core, runs the end-to-end walk against the stand-in gateways, builds the WinUI app, then
+# runs it in automation mode (Services/Automation.cs) against a stand-in gateway and keeps a screenshot of every page.
+name: windows
+on:
+  push:
+    branches: [feat/windows]
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    if: github.event_name == 'push' && github.repository == 'mrcharlesiv/hermes-hq-windows' && github.event.repository.private == true && github.ref == 'refs/heads/feat/windows'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+      # Fixture files (including HTML tiles) are UTF-8, independent of the runner's ANSI code page.
+      PYTHONUTF8: '1'
+      HQW_PRIVATE_MIRROR: ${{ toJSON(github.event.repository.private) }}
+      HQW_DESKTOP_PROOF: ${{ vars.HQW_DESKTOP_PROOF }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+      # The SDK pin lives in windows/global.json; the steps run from the repo root, so put a copy where dotnet looks.
+      - name: Pin the .NET SDK
+        shell: pwsh
+        run: Copy-Item windows/global.json global.json; dotnet --version
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Core tests
+        run: dotnet test windows/HermesHQ.sln --filter "Category!=E2E" --logger "console;verbosity=minimal"
+
+      - name: End-to-end against the stand-in gateways
+        shell: pwsh
+        run: |
+          $fix = "windows/build/fixtures"; New-Item -ItemType Directory -Force $fix | Out-Null
+          $perf = Start-Process python -ArgumentList "windows/ci/fixtures/performance-fixture-gateway.py","--port","9715","--credentials","$fix/e2e-perf.json" -PassThru -RedirectStandardOutput "$fix/perf.log" -RedirectStandardError "$fix/perf.err"
+          $nous = Start-Process python -ArgumentList "windows/ci/fixtures/nous-fixture-gateway.py","--port","9716","--portal-port","9717","--public-url","http://127.0.0.1:9716","--access-ttl","4" -PassThru -RedirectStandardOutput "$fix/nous.log" -RedirectStandardError "$fix/nous.err"
+          $attach = Start-Process python -ArgumentList "windows/ci/fixtures/attachments-gateway.py","--port","9760","--credentials","$fix/e2e-attach.json","--files",(Join-Path (Resolve-Path $fix).Path "e2e-attach-files") -PassThru -RedirectStandardOutput "$fix/attach.log" -RedirectStandardError "$fix/attach.err"
+          $gwa = Start-Process python -ArgumentList "windows/ci/fixtures/onboarding-gateway.py","--port","9740","--credentials","$fix/e2e-gw-a.json" -PassThru -RedirectStandardOutput "$fix/gwa.log" -RedirectStandardError "$fix/gwa.err"
+          $gwb = Start-Process python -ArgumentList "windows/ci/fixtures/onboarding-gateway.py","--port","9741","--credentials","$fix/e2e-gw-b.json","--release-date","2026.9.10" -PassThru -RedirectStandardOutput "$fix/gwb.log" -RedirectStandardError "$fix/gwb.err"
+          $composer = Start-Process python -ArgumentList "windows/ci/fixtures/composer-gateway.py","--port","9750","--credentials","$fix/e2e-composer.json" -PassThru -RedirectStandardOutput "$fix/composer.log" -RedirectStandardError "$fix/composer.err"
+          $capabilities = Start-Process python -ArgumentList "windows/ci/fixtures/connectors-gateway.py","--port","9840","--credentials","$fix/e2e-capabilities.json" -PassThru -RedirectStandardOutput "$fix/capabilities.log" -RedirectStandardError "$fix/capabilities.err"
+          $settings = Start-Process python -ArgumentList "windows/ci/fixtures/settings-gateway.py","--port","9830","--credentials","$fix/e2e-settings.json" -PassThru -RedirectStandardOutput "$fix/settings.log" -RedirectStandardError "$fix/settings.err"
+          # [groups] The sidebar's group chat rows: the settings stand-in with two rooms in its mirror.
+          $groups = Start-Process python -ArgumentList "windows/ci/fixtures/settings-gateway.py","--port","9831","--group-rooms","--credentials","$fix/e2e-groups.json" -PassThru -RedirectStandardOutput "$fix/groups.log" -RedirectStandardError "$fix/groups.err"
+          # [groups] A room's management writes the bots and the mirror: its own --group-rooms stand-in (WIN-46).
+          $groupmanage = Start-Process python -ArgumentList "windows/ci/fixtures/settings-gateway.py","--port","9832","--group-rooms","--credentials","$fix/e2e-groupmanage.json" -PassThru -RedirectStandardOutput "$fix/groupmanage.log" -RedirectStandardError "$fix/groupmanage.err"
+          # [WIN-57] A room's Activity and its empty view (GroupActivityEndToEndTests): --quiet-room adds Quiet Room.
+          $groupactivity = Start-Process python -ArgumentList "windows/ci/fixtures/settings-gateway.py","--port","9834","--group-rooms","--quiet-room","--credentials","$fix/e2e-groupactivity.json" -PassThru -RedirectStandardOutput "$fix/groupactivity.log" -RedirectStandardError "$fix/groupactivity.err"
+          # [WIN-59] A room's @ list and a line for one member: its own --group-rooms stand-in (GroupMentionsEndToEndTests).
+          $groupmentions = Start-Process python -ArgumentList "windows/ci/fixtures/settings-gateway.py","--port","9836","--group-rooms","--credentials","$fix/e2e-groupmentions.json" -PassThru -RedirectStandardOutput "$fix/groupmentions.log" -RedirectStandardError "$fix/groupmentions.err"
+          # [WIN-ROWS-STEP-WALK] Held turns on one step each and one bot's slow open: its own settings stand-in (RowStepsEndToEndTests).
+          $rowsteps = Start-Process python -ArgumentList "windows/ci/fixtures/settings-gateway.py","--port","9837","--credentials","$fix/e2e-rowsteps.json" -PassThru -RedirectStandardOutput "$fix/rowsteps.log" -RedirectStandardError "$fix/rowsteps.err"
+          $botslist = Start-Process python -ArgumentList "windows/ci/fixtures/botslist-gateway.py","--port","9770","--hermes-cookies","--credentials","$fix/e2e-botslist.json" -PassThru -RedirectStandardOutput "$fix/botslist.log" -RedirectStandardError "$fix/botslist.err"
+          $sessions = Start-Process python -ArgumentList "windows/ci/fixtures/sessions-gateway.py","--port","9771","--credentials","$fix/e2e-sessions.json" -PassThru -RedirectStandardOutput "$fix/sessions.log" -RedirectStandardError "$fix/sessions.err"
+          $questions = Start-Process python -ArgumentList "windows/ci/fixtures/questions-gateway.py","--port","9730","--credentials","$fix/e2e-questions.json" -PassThru -RedirectStandardOutput "$fix/questions.log" -RedirectStandardError "$fix/questions.err"
+          $insights = 0..3 | ForEach-Object { Start-Process python -ArgumentList "windows/ci/fixtures/morepages-gateway.py","--port","$(9871 + $_)","--credentials","$fix/e2e-insights-$_.json","--files","$fix/e2e-insights-files-$_","--tick-seconds","0" -PassThru -RedirectStandardOutput "$fix/insights-$_.log" -RedirectStandardError "$fix/insights-$_.err" }
+          $botpages = Start-Process python -ArgumentList "windows/ci/fixtures/morepages-gateway.py","--port","9870","--credentials","$fix/e2e-botpages.json","--files","$fix/e2e-botpages-files","--tick-seconds","0" -PassThru -RedirectStandardOutput "$fix/botpages.log" -RedirectStandardError "$fix/botpages.err"
+          $artifacts = Start-Process python -ArgumentList "windows/ci/fixtures/artifacts-gateway.py","--port","9820","--credentials","$fix/e2e-artifacts.json","--files","$fix/artifacts-files","--tick-seconds","0" -PassThru -RedirectStandardOutput "$fix/artifacts.log" -RedirectStandardError "$fix/artifacts.err"
+          $pages = Start-Process python -ArgumentList "-X","utf8","windows/ci/fixtures/pages-fixture-gateway.py","--port","9811","--credentials","$fix/e2e-pages.json","--files","$fix/pages-files" -PassThru -RedirectStandardOutput "$fix/pages.log" -RedirectStandardError "$fix/pages.err"
+          # [walk proof] Tasks Sort By and Select: the pages stand-in with its lists, as the "tasks" screenshot extra runs it.
+          $tasks = Start-Process python -ArgumentList "-X","utf8","windows/ci/fixtures/pages-fixture-gateway.py","--port","9815","--credentials","$fix/e2e-tasks.json","--files","$fix/tasks-files","--task-lists","--tick-seconds","0" -PassThru -RedirectStandardOutput "$fix/tasks.log" -RedirectStandardError "$fix/tasks.err"
+          # [WIN-42] Tasks › Goals and Today's Goals shelf: the pages stand-in with its five made-up goals and its lists.
+          $goals = Start-Process python -ArgumentList "-X","utf8","windows/ci/fixtures/pages-fixture-gateway.py","--port","9818","--credentials","$fix/e2e-goals.json","--files","$fix/goals-files","--task-goals","--task-lists","--tick-seconds","0" -PassThru -RedirectStandardOutput "$fix/goals.log" -RedirectStandardError "$fix/goals.err"
+          # [kanban boards] The board picker past eight boards: 9 boards (the Boards list) and 13 (with its search).
+          $boards9 = Start-Process python -ArgumentList "-X","utf8","windows/ci/fixtures/pages-fixture-gateway.py","--port","9812","--credentials","$fix/e2e-boards9.json","--files","$fix/boards9-files","--many-boards","9","--tick-seconds","0" -PassThru -RedirectStandardOutput "$fix/boards9.log" -RedirectStandardError "$fix/boards9.err"
+          $boards13 = Start-Process python -ArgumentList "-X","utf8","windows/ci/fixtures/pages-fixture-gateway.py","--port","9813","--credentials","$fix/e2e-boards13.json","--files","$fix/boards13-files","--many-boards","13","--tick-seconds","0" -PassThru -RedirectStandardOutput "$fix/boards13.log" -RedirectStandardError "$fix/boards13.err"
+          $workspace = Start-Process python -ArgumentList "windows/ci/fixtures/workspace-gateway.py","--port","9850","--credentials","$fix/e2e-workspace.json" -PassThru -RedirectStandardOutput "$fix/workspace.log" -RedirectStandardError "$fix/workspace.err"
+          $jobs = Start-Process python -ArgumentList "windows/ci/fixtures/jobs-gateway.py","--port","9800","--credentials","$fix/e2e-jobs.json","--files","$fix/jobs-files","--tick-seconds","0" -PassThru -RedirectStandardOutput "$fix/jobs.log" -RedirectStandardError "$fix/jobs.err"
+          for ($i = 0; $i -lt 100 -and -not ((Test-Path "$fix/e2e-perf.json") -and (Test-Path "$fix/e2e-questions.json") -and (Test-Path "$fix/e2e-attach.json") -and (Test-Path "$fix/e2e-gw-a.json") -and (Test-Path "$fix/e2e-gw-b.json") -and (Test-Path "$fix/e2e-composer.json") -and (Test-Path "$fix/e2e-botslist.json") -and (Test-Path "$fix/e2e-sessions.json") -and (Test-Path "$fix/e2e-jobs.json") -and (Test-Path "$fix/e2e-settings.json") -and (Test-Path "$fix/e2e-groups.json") -and (Test-Path "$fix/e2e-groupmanage.json") -and (Test-Path "$fix/e2e-groupactivity.json") -and (Test-Path "$fix/e2e-groupmentions.json") -and (Test-Path "$fix/e2e-rowsteps.json") -and (Test-Path "$fix/e2e-workspace.json") -and (Test-Path "$fix/e2e-pages.json") -and (Test-Path "$fix/e2e-tasks.json") -and (Test-Path "$fix/e2e-goals.json") -and (Test-Path "$fix/e2e-boards9.json") -and (Test-Path "$fix/e2e-boards13.json") -and (Test-Path "$fix/e2e-artifacts.json") -and (Test-Path "$fix/e2e-botpages.json") -and (Test-Path "$fix/e2e-insights-0.json") -and (Test-Path "$fix/e2e-insights-1.json") -and (Test-Path "$fix/e2e-insights-2.json") -and (Test-Path "$fix/e2e-insights-3.json") -and (Test-Path "$fix/e2e-capabilities.json")); $i++) { Start-Sleep -Milliseconds 200 }
+          Start-Sleep -Seconds 1
+          $missing = @("e2e-perf.json","e2e-questions.json","e2e-attach.json","e2e-gw-a.json","e2e-gw-b.json","e2e-composer.json","e2e-botslist.json","e2e-sessions.json","e2e-jobs.json","e2e-settings.json","e2e-groups.json","e2e-groupmanage.json","e2e-groupactivity.json","e2e-groupmentions.json","e2e-rowsteps.json","e2e-workspace.json","e2e-pages.json","e2e-tasks.json","e2e-goals.json","e2e-boards9.json","e2e-boards13.json","e2e-artifacts.json","e2e-botpages.json","e2e-insights-0.json","e2e-insights-1.json","e2e-insights-2.json","e2e-insights-3.json","e2e-capabilities.json") | Where-Object { -not (Test-Path "$fix/$_") }
+          if ($missing) {
+            Write-Host "stand-ins that didn't start: $missing"
+            Get-ChildItem $fix -Filter *.err | ForEach-Object { Write-Host "--- $($_.Name)"; Get-Content $_.FullName -Tail 30 }
+            exit 1
+          }
+          $env:HQW_E2E_BOTSLIST = (Resolve-Path "$fix/e2e-botslist.json").Path
+          $env:HQW_E2E_SESSIONS = (Resolve-Path "$fix/e2e-sessions.json").Path
+          $env:HQW_E2E_JOBS_CREDENTIALS = (Resolve-Path "$fix/e2e-jobs.json").Path
+          $env:HQW_E2E_COMPOSER_CREDENTIALS = (Resolve-Path "$fix/e2e-composer.json").Path
+          $env:HQW_E2E_SETTINGS_CREDENTIALS = (Resolve-Path "$fix/e2e-settings.json").Path
+          $env:HQW_E2E_GROUPS_CREDENTIALS = (Resolve-Path "$fix/e2e-groups.json").Path
+          $env:HQW_E2E_GROUPMANAGE_CREDENTIALS = (Resolve-Path "$fix/e2e-groupmanage.json").Path
+          $env:HQW_E2E_GROUPACTIVITY_CREDENTIALS = (Resolve-Path "$fix/e2e-groupactivity.json").Path
+          $env:HQW_E2E_GROUPMENTIONS_CREDENTIALS = (Resolve-Path "$fix/e2e-groupmentions.json").Path
+          $env:HQW_E2E_ROWSTEPS_CREDENTIALS = (Resolve-Path "$fix/e2e-rowsteps.json").Path
+          $env:HQW_E2E_WORKSPACE_CREDENTIALS = (Resolve-Path "$fix/e2e-workspace.json").Path
+          $env:HQW_E2E_PAGES_CREDENTIALS = (Resolve-Path "$fix/e2e-pages.json").Path
+          $env:HQW_E2E_TASKS_CREDENTIALS = (Resolve-Path "$fix/e2e-tasks.json").Path
+          $env:HQW_E2E_GOALS_CREDENTIALS = (Resolve-Path "$fix/e2e-goals.json").Path
+          $env:HQW_E2E_BOARDS9_CREDENTIALS = (Resolve-Path "$fix/e2e-boards9.json").Path
+          $env:HQW_E2E_BOARDS13_CREDENTIALS = (Resolve-Path "$fix/e2e-boards13.json").Path
+          $env:HQW_E2E_ARTIFACTS_CREDENTIALS = (Resolve-Path "$fix/e2e-artifacts.json").Path
+          $env:HQW_E2E_BOTPAGES_CREDENTIALS = (Resolve-Path "$fix/e2e-botpages.json").Path
+          $env:HQW_E2E_CAPABILITIES_CREDENTIALS = (Resolve-Path "$fix/e2e-capabilities.json").Path
+          $env:HQW_E2E_GW_A = (Resolve-Path "$fix/e2e-gw-a.json").Path
+          $env:HQW_E2E_GW_B = (Resolve-Path "$fix/e2e-gw-b.json").Path
+          $env:HQW_E2E_ATTACH_CREDENTIALS = (Resolve-Path "$fix/e2e-attach.json").Path
+          $env:HQW_E2E_QUESTIONS_CREDENTIALS = (Resolve-Path "$fix/e2e-questions.json").Path
+          $env:HQW_E2E_CREDENTIALS = (Resolve-Path "$fix/e2e-perf.json").Path
+          $env:HQW_E2E_NOUS_URL = "http://127.0.0.1:9716"
+          $env:HQW_E2E_INSIGHTS_STATUS = (Resolve-Path "$fix/e2e-insights-0.json").Path
+          $env:HQW_E2E_INSIGHTS_SPAWN = (Resolve-Path "$fix/e2e-insights-1.json").Path
+          $env:HQW_E2E_INSIGHTS_STARMAP = (Resolve-Path "$fix/e2e-insights-2.json").Path
+          $env:HQW_E2E_INSIGHTS_TILES = (Resolve-Path "$fix/e2e-insights-3.json").Path
+          dotnet test windows/HermesHQ.sln --filter "Category=E2E" --logger "console;verbosity=normal"
+          $code = $LASTEXITCODE
+          Stop-Process -Id $perf.Id, $nous.Id, $questions.Id, $attach.Id, $gwa.Id, $gwb.Id, $composer.Id, $botslist.Id, $sessions.Id, $jobs.Id, $settings.Id, $groups.Id, $groupmanage.Id, $groupactivity.Id, $groupmentions.Id, $rowsteps.Id, $workspace.Id, $pages.Id, $tasks.Id, $goals.Id, $boards9.Id, $boards13.Id, $artifacts.Id, $botpages.Id, $capabilities.Id -Force -ErrorAction SilentlyContinue
+          $insights | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
+          exit $code
+
+      - name: Build the app
+        run: dotnet publish windows/src/HermesHQ.Windows -c Release -r win-x64 -p:Platform=x64 -o windows/build/app
+
+      - name: Compile the reply-only shell probe
+        run: dotnet publish windows/tools/reply-probe -c Release -r win-x64 --self-contained false -o windows/build/reply-probe
+
+      - name: Full desktop safety contracts
+        shell: pwsh
+        run: |
+          python windows/tests/test_desktop_proof.py; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python windows/tests/test_reply_evidence.py; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python windows/tests/test_toast_quiet.py; exit $LASTEXITCODE
+
+      - name: Desktop proof not opted in
+        if: vars.HQW_DESKTOP_PROOF != '1'
+        run: Write-Output '::notice::Open gap - no desktop walks or desktop screenshots on this run.'
+
+      - name: Run the app and take screenshots
+        if: runner.os == 'Windows' && runner.environment == 'github-hosted' && vars.HQW_DESKTOP_PROOF == '1'
+        env:
+          HQW_QUIET_PUSH: ${{ format('{0}|{1}|{2}|{3}|{4}|{5}', github.event.repository.full_name, toJSON(github.event.repository.private), toJSON(github.event.repository.fork), github.event.ref, github.event.after, toJSON(github.event.deleted)) }}
+        shell: pwsh
+        run: |
+          & ./windows/build/reply-probe/ReplyProbe.exe guard toasts; if ($LASTEXITCODE -ne 0) { throw 'Desktop proof refused.' }
+          if ((Test-Path "$env:LOCALAPPDATA/HermesHQ") -or (Get-Process HermesHQ -ErrorAction SilentlyContinue)) { throw 'Refusing an existing app profile or process.' }
+          if (Test-Path "windows/build/shots") { throw 'Refusing a pre-existing screenshot directory.' }
+          $fix = "windows/build/fixtures"; $shots = (New-Item -ItemType Directory "windows/build/shots").FullName
+          Remove-Item "$fix/shots-perf.json" -ErrorAction SilentlyContinue
+          $gw = Start-Process python -ArgumentList "windows/ci/fixtures/performance-fixture-gateway.py","--port","9711","--credentials","$fix/shots-perf.json" -PassThru -RedirectStandardOutput "$fix/shots.log" -RedirectStandardError "$fix/shots.err"
+          for ($i = 0; $i -lt 100 -and -not (Test-Path "$fix/shots-perf.json"); $i++) { Start-Sleep -Milliseconds 200 }
+          Start-Sleep -Seconds 1
+          Invoke-RestMethod -Method Post -Uri http://127.0.0.1:9711/__fixture/history -ContentType application/json -Body '{"profile":"default","count":40}' | Out-Null
+          Invoke-RestMethod -Method Post -Uri http://127.0.0.1:9711/__fixture/plan -ContentType application/json -Body '{"plans":[{"chunks":["Let me ","run ","three steps. ","All **done**.\n\n```python\nprint(\"hi\")\n```"],"tools":3,"toolBytes":64}]}' | Out-Null
+          # Stand-ins with each page's own data, visited after the performance walk (Automation "extras").
+          $env:HQN_MOREPAGES_ANY_PORT = "1"
+          $extraDefs = @(
+            # [walk proof] Ctrl+Shift+N: the New Chat sheet, Research and its project Reading picked by keyboard (the stand-in
+            # records session.create for Research in /home/hermes/reading), the new chat open with the keyboard in its box.
+            @{ tag = "sessions"; args = @("windows/ci/fixtures/sessions-gateway.py","--port","9771"); places = @("sessions"); walks = @("new-chat-sheet","new-chat-here","sessions-working-chip"); shots = @("new-chat-sheet-started","new-chat-here-project","new-chat-here-home","new-chat-here-bot","sessions-working-chip","sessions-working-chip-narrow") },
+            # [walk proof] Quick Actions' Run Job tile (Morning inbox triage, saved as the list first): the stand-in records its
+            # one trigger for inbox and the page says "✓ Running Morning inbox triage".
+            @{ tag = "jobs"; args = @("windows/ci/fixtures/jobs-gateway.py","--port","9800","--files","$fix/shots-jobs-files","--tick-seconds","0"); places = @("jobs"); walks = @("quick-action-run") },
+            # [walk proof] Ctrl+Shift+K: Quick Actions' starter set; Edit, Move Down, a − badge, Done (quick-actions.json saved in
+            # that order); then the Add Task tile opens the Tasks page. [WIN-08] kanban-task-markdown: three Release 2.4
+            # task panels with their description, comments and Result drawn as Markdown, and Edit showing the raw text.
+            @{ tag = "pages"; args = @("-X","utf8","windows/ci/fixtures/pages-fixture-gateway.py","--port","9811","--files","$fix/shots-pages-files"); places = @("kanban","tasks"); walks = @("quick-actions","kanban-task-markdown"); shots = @("quick-actions-editing","quick-actions-edit","kanban-task-markdown-edit","kanban-task-markdown-comments","kanban-task-markdown-result") },
+            # [kanban boards] The board picker: 8 boards are its menu, 9 the Boards list, 13 the list searched for "plan".
+            @{ tag = "boards8"; args = @("-X","utf8","windows/ci/fixtures/pages-fixture-gateway.py","--port","9814","--files","$fix/shots-boards8-files","--many-boards","8","--tick-seconds","0"); places = @("kanban"); walks = @("kanban-boards-menu") },
+            @{ tag = "boards9"; args = @("-X","utf8","windows/ci/fixtures/pages-fixture-gateway.py","--port","9812","--files","$fix/shots-boards9-files","--many-boards","9","--tick-seconds","0"); places = @("kanban"); walks = @("kanban-boards-list") },
+            @{ tag = "boards13"; args = @("-X","utf8","windows/ci/fixtures/pages-fixture-gateway.py","--port","9813","--files","$fix/shots-boards13-files","--many-boards","13","--tick-seconds","0"); places = @("kanban"); walks = @("kanban-boards-search") },
+            # [walk proof] File and page windows: the release page and a Markdown note opened as a chat's file click opens
+            # them, each in a window of its own (its bar: Open in…, Share…, Save As…); the page again brings its window
+            # forward (no new one); Ctrl+W closes it and the main window keeps Project notes. Services/ProofWalks.Windows.cs.
+            @{ tag = "artifacts"; args = @("windows/ci/fixtures/artifacts-gateway.py","--port","9820","--files","$fix/shots-artifacts-files","--tick-seconds","0"); places = @("artifacts"); walks = @("file-windows"); shots = @("file-windows-page","file-windows-note") },
+            @{ tag = "workspace"; args = @("windows/ci/fixtures/workspace-gateway.py","--port","9850"); places = @("files","review","terminal") },
+            @{ tag = "capabilities"; args = @("windows/ci/fixtures/connectors-gateway.py","--port","9840"); places = @("capabilities","marketplace") },
+            @{ tag = "star-first"; args = @("windows/ci/fixtures/morepages-gateway.py","--port","9875","--files","$fix/shots-star-first-files","--tick-seconds","0"); places = @(); walks = @("star-map-first-open"); shots = @("star-map-first-seeded","star-map-first-error","star-map-first-empty","star-map-first-unsupported","star-map-first-bare") },
+            @{ tag = "more"; args = @("windows/ci/fixtures/morepages-gateway.py","--port","9870","--files","$fix/shots-more-files","--tick-seconds","0"); places = @("profiles","messaging","webhooks","import-sessions","command-center","usage","spawn-tree","star-map","tiles") },
+            # [walk proof] /new in a chat (the stand-in records no prompt), then Ctrl+/ and Esc; Auto-Archive on with 14 days
+            # (the stand-in records the PUT /api/config). Services/ProofWalks.cs.
+            # Then Ctrl+K (Recent, a bot's results, ↓ and Enter, no results), Ctrl+F in Trip planning ("food", F3), letters
+            # typed with the transcript focused; and on the pages stand-in with its lists, ⋯ › Sort By › Due Date (the
+            # stand-in records the PUT /tasks/settings) and Select with two rows picked. "shots": the walks' other pictures.
+            # The sidebar's Search clicked open and folded into the rail (Open Quickly from each); Settings › About, its
+            # licences and one notice; Settings search "verbose", Detailed Logging off and on by keyboard against the app log.
+            # Quick Actions' Send a Message tile with Open the Chat on: the bot's chat opens and the stand-in records the words.
+            # Window keys: Ctrl+R on Sessions (the stand-in records a second GET of the list) and Ctrl+Down to its first row;
+            # Ctrl+Down through the bots until it stops, Ctrl+Up back; Ctrl+3 then Ctrl+1 brings the bot's chat back; the
+            # sidebar foot's menu with Hermes HQ Support (not clicked).
+            # [WIN-36] Transcript extras in the stand-in's unlisted Release review chat: the link chip with the title of the page
+            # the stand-in serves on loopback, the model note, a job's byline, “2 files changed”, the table's footer; Expand opens
+            # the Table sheet and Esc closes it; a usage-limit turn's Choose a Model opens the Models sheet; a refused send
+            # shows Couldn’t Send (the stand-in records both sends). Services/ProofWalks.Transcript.cs.
+            # [walk proof] [WIN-54] read-aloud: Trip planning's latest reply's menu reads Copy, Read Aloud, Share…; Read Aloud
+            # reads it, the menu then says Stop Reading, and Stop Reading stops it. Services/ProofWalks.ReadAloud.cs.
+            # [WIN-62] read-replies: Hermes's own chat: ⋯ › Read Replies Aloud says “Read Replies Aloud is on”, the stand-in's
+            # reply is handed to the voice (the app's log), the header's speaker › Stop Reading Replies Aloud says “… is off”
+            # and the next reply is not read. Services/ProofWalks.ReadRepliesAloud.cs.
+            @{ tag = "composer"; args = @("windows/ci/fixtures/composer-gateway.py","--port","9750"); places = @(); walks = @("new-chat-draft","new-chat-bare","chat-intro","shortcuts-sheet","open-quickly","chat-find","type-to-chat","chat-keys","archive-undo","sidebar-search","quick-action-send","window-keys","transcript-extras","chat-actions","read-aloud","read-replies"); shots = @("chat-intro-off","chat-intro-sent","open-quickly-recent","open-quickly-results","open-quickly-settings","open-quickly-settings-opened","chat-find-closed","chat-keys-closed","archive-undo-pill","archive-undo-back","sidebar-search-open","sidebar-search-rail","quick-action-tiles","window-keys-sessions","window-keys-last","window-keys-first","window-keys-support","transcript-extras-chip","transcript-extras-table","transcript-extras-models","models-sheet-rows","chat-actions-menu","chat-branched","read-aloud-menu","read-aloud-speaking","read-replies-on","read-replies-indicator") },
+            # [WIN-48] settings-window: Ctrl+, opens Settings in a window of its own (Sessions kept in the main window), again
+            # brings the one window forward, a category picked in it, Ctrl+W closes it alone (Services/ProofWalks.SettingsWindow.cs).
+            # [WIN-06] settings-file, last (its reset puts the stand-in back to Hermes' defaults): the About category's Export /
+            # Import / Reset buttons; export with no stand-in credential, a JSON array turned away, an edited export imported
+            # (one PUT of its one setting), Reset's Cancel (nothing sent) and Reset to Defaults (GET defaults, then one PUT).
+            # The pickers are stood in for by files in the walk's temp folder; the dialogs are real (ProofWalks.SettingsFile.cs).
+            # [WIN-06a] Also Clear Model Favorites… (the Mac's fourth button): its confirm for 2 seeded stars and 1 recent,
+            # Cancel keeps them, Clear empties them, no settings call reaches the stand-in.
+            # [WIN-06b/d] Then Search Settings: "factory" → Reset to Defaults… (settings-file-search) and "unstar" → Clear Model
+            # Favorites… (settings-file-search-clear-models), each under About and asking as its button does.
+            # [WIN-APPEARANCE-WALK] Last, appearance-pages (ProofWalks.Appearance.cs): Chat Bubbles (Corners 20, Tinted; the
+            # Desktop Look's own Corners), Density Compact on the sidebar and Sessions ("Trip ideas"), the Sidebar page (a
+            # switch on, Move Up, Use Default Tabs) and Capabilities › Skills' one-line rows; every setting put back.
+            @{ tag = "settings"; args = @("windows/ci/fixtures/settings-gateway.py","--port","9830"); places = @(); walks = @("settings-auto-archive-on","about-licenses","about-detailed-log","settings-window","settings-file","appearance-pages"); shots = @("about-page","about-license-text","about-detailed-log-search","settings-window","settings-window-section","settings-file-buttons","settings-file-not-settings","settings-file-imported","settings-file-clear-models-confirm","settings-file-reset-confirm","settings-file-reset-done","settings-file-search","settings-file-search-clear-models","appearance-chat-bubbles","appearance-chat-bubbles-desktop","appearance-density-compact-sidebar","appearance-density-compact-sessions","appearance-sidebar-page","appearance-sidebar-moved","capabilities-skills-oneline") },
+            # [groups] The sidebar's group chat rows (two rooms in the settings stand-in's mirror): open, under Unassigned among
+            # its bot, newest first, a click opens the room; then folded into the rail. [WIN-41] group-room: Launch Room
+            # opened from its unread row (the row read), a synthetic line and both members' replies under their names, a
+            # second line stopped mid-round (Services/ProofWalks.GroupRoom.cs); [WIN-52] its typing row, then Find in the room.
+            # [WIN-51] group-manage also shoots Group Info's member faces and Name & Photo with a synthetic photo
+            # (Services/ProofWalks.GroupManage.cs; it writes nothing).
+            @{ tag = "groups"; args = @("windows/ci/fixtures/settings-gateway.py","--port","9831","--group-rooms"); places = @(); walks = @("sidebar-group-chats","group-room","group-manage"); shots = @("sidebar-group-chats-rail","group-room-open","group-room-replies","group-room-typing","group-room-find","group-row-menu","group-info","group-info-faces","group-bots-picker","group-photo") },
+            # [walk proof] Tasks › Home after Sort By: Select's actions by pointer and keys, two rows Marked Done, one Moved To
+            # Work, one Deleted with its confirmation (the stand-in records each PATCH and the DELETE).
+            @{ tag = "tasks"; args = @("-X","utf8","windows/ci/fixtures/pages-fixture-gateway.py","--port","9815","--files","$fix/shots-tasks-files","--task-lists","--tick-seconds","0"); places = @(); walks = @("tasks-sort-select","tasks-select-actions"); shots = @("tasks-sorted-due","tasks-select","tasks-select-done","tasks-select-moved","tasks-select-deleted") },
+            # [WIN-42] Tasks › Goals: Today's Goals shelf (folded and opened), All 3 › the Goals view with Achieved's fold,
+            # and a card's circle ticking its next task (the stand-in records the one PATCH); [WIN-47] a search's Goals group
+            # and a row's goal mark after Add to Goal (one PATCH).
+            @{ tag = "tasks-goals"; args = @("-X","utf8","windows/ci/fixtures/pages-fixture-gateway.py","--port","9818","--files","$fix/shots-goals-files","--task-goals","--task-lists","--tick-seconds","0"); places = @(); walks = @("tasks-goals"); shots = @("tasks-today-goals","tasks-goals","tasks-goals-search","tasks-goal-mark") }
+            # [WIN-49] The Mac's selection mark on the roster's first bot (window in front) and the Sessions and Tasks page bars
+            # (title token, items with the magnifier at the edge). Services/ProofWalks.SelectionAndBars.cs.
+            # [WIN-50] Jobs' and Kanban's bars too (All Bots ⌄ · New Job · Search; How Kanban Works · New Task · Search).
+            @{ tag = "selection-and-bars"; args = @("-X","utf8","windows/ci/fixtures/pages-fixture-gateway.py","--port","9819","--files","$fix/shots-bars-files","--task-lists","--tick-seconds","0"); places = @(); walks = @("selection-and-bars"); shots = @("selection-and-bars-sessions","selection-and-bars-tasks","selection-and-bars-jobs","selection-and-bars-kanban") },
+            # [WIN-55] a11y-audit: every Button, ToggleButton, MenuFlyoutItem, TextBox, ListViewItem, HyperlinkButton and
+            # AppBarButton on Chats, Sessions, Tasks, Jobs, Kanban, Files, the Settings window and Bot Info has a name Narrator
+            # reads as words (the Mac's VoiceOver labels). Services/ProofWalks.A11yAudit.cs.
+            @{ tag = "a11y-audit"; args = @("-X","utf8","windows/ci/fixtures/pages-fixture-gateway.py","--port","9861","--files","$fix/shots-a11y-files","--task-lists","--tick-seconds","0"); places = @(); walks = @("a11y-audit"); shots = @("a11y-audit-chats","a11y-audit-settings") },
+            # [WIN-57] group-room-activity: its own --group-rooms stand-in with Quiet Room (nothing said yet). Quiet Room's
+            # empty view and empty Activity; Launch Room's typing dots moving while a round runs (still when the desktop's
+            # animations are off), its ⋯ menu, and its Activity newest first, Esc closing it. Services/ProofWalks.GroupActivity.cs.
+            @{ tag = "group-activity"; args = @("windows/ci/fixtures/settings-gateway.py","--port","9833","--group-rooms","--quiet-room"); places = @(); walks = @("group-room-activity"); shots = @("group-room-empty","group-room-activity-empty","group-room-menu") },
+            # [WIN-59] group-mentions: its own --group-rooms stand-in. "@Re" typed in Launch Room: the @ list above the box offers
+            # Research alone, with its face ("group-mention-drawer"); Down marks it, the page's own Enter picks it ("@research "),
+            # Esc closes the list until the words change, Tab picks too; the rest typed and sent asks Research alone, and only
+            # Research answers ("group-mention-picked"). Services/ProofWalks.GroupMentions.cs.
+            @{ tag = "group-mentions"; args = @("windows/ci/fixtures/settings-gateway.py","--port","9835","--group-rooms"); places = @(); walks = @("group-mentions"); shots = @("group-mention-drawer","group-mention-picked") },
+            # [WIN-58] keyboard-only: the main window by Tab and Shift+Tab alone (FocusManager.TryMoveFocus, no pointer, no
+            # injected key), as the Mac's key loop: the sidebar's chat row, Chat Actions, Inspector, the message box (typed and
+            # sent), back out to the sidebar, Settings by Ctrl+, and Esc, then Search Tasks and a task's row. Every stop sized,
+            # inside the window and drawing a focus visual; the order the Mac's (Hermes.Core/Shell/KeyboardOnlyWalkProof.cs).
+            @{ tag = "keyboard-only"; args = @("-X","utf8","windows/ci/fixtures/pages-fixture-gateway.py","--port","9862","--files","$fix/shots-keys-files","--task-lists","--tick-seconds","0"); places = @(); walks = @("keyboard-only"); shots = @("keyboard-only-composer","keyboard-only-tasks") },
+            # [WIN-PAGE-CARDS] page-cards (ProofWalks.PageCards.cs): the release page handed over twice in s-page-cards, the first
+            # card folded to "Updated below", its menu, Pin as Tile (badge), click opens its page window.
+            @{ tag = "page-cards"; args = @("-X","utf8","windows/ci/fixtures/pages-fixture-gateway.py","--port","9876","--files","$fix/shots-page-cards-files","--page-cards","--tick-seconds","0"); places = @(); walks = @("page-cards"); shots = @("page-card","page-card-menu","page-card-pinned","page-card-open") },
+            # [WIN-MATH-UI] chat-math (ProofWalks.Math.cs): s-chat-math's reply of formulas drawn by the typesetter (inline
+            # fraction on the baseline, aligned/cases/pmatrix/sum as centred blocks, \stackrel as text), copied as source, redrawn in the other theme.
+            @{ tag = "chat-math"; args = @("-X","utf8","windows/ci/fixtures/pages-fixture-gateway.py","--port","9877","--files","$fix/shots-chat-math-files","--chat-math","--tick-seconds","0"); places = @(); walks = @("chat-math"); shots = @("chat-math-theme") },
+            # [WIN-QUESTIONS-SETTLED-WALK] questions-settled (ProofWalks.SettledQuestions.cs): a settled answer's card, a skipped
+            # question's Answer Now, its dock, the answers sent as the card's message; a fresh session on its own stand-in.
+            @{ tag = "questions-settled"; args = @("windows/ci/fixtures/questions-gateway.py","--port","9737"); places = @(); walks = @("questions-settled"); shots = @("questions-settled-card","questions-answer-now","questions-answer-now-dock","questions-answer-now-sent") },
+            # [WIN-SCREEN-WALK] bot-screen-wire (ProofWalks.Screen.cs, Hermes.Core ScreenWireWalkProof): Bot Screen for otto over the
+            # real wire on windows/ci/fixtures/screen-gateway.py (a generated test picture, a socket that only records input):
+            # the setup card, Screen Control, the fitted picture, zoomed, Take Control; a tap and a key in the record as the Mac's bytes.
+            # [WIN-SCREEN-SETUP-SEND-WALK] bot-screen-setup-send (ProofWalks.ScreenSetup.cs, ScreenSetupWalkProof): Set Up with Hermes
+            # pressed on the setup card: the Screen closes, otto's chat opens, file.attach then prompt.submit recorded as the Mac sends them.
+            @{ tag = "screen"; args = @("windows/ci/fixtures/screen-gateway.py","--port","9880"); places = @(); walks = @("bot-screen-wire","bot-screen-setup-send"); shots = @("bot-screen-setup-card","bot-screen-control-sheet","bot-screen-viewer","bot-screen-zoomed","bot-screen-take-over","bot-screen-setup-sent") },
+            # [WIN-DELIVERY-WALK] chat-delivery (ProofWalks.Delivery.cs, Hermes.Core DeliveryWalkProof): the send-delivery cards
+            # with the Mac's words, on a performance stand-in whose plans refuse prompt.submit with error data {reason}:
+            # Delivery Unconfirmed · Check and its notice, Your message is waiting then sent, the locked chat, Working….
+            @{ tag = "delivery"; args = @("windows/ci/fixtures/performance-fixture-gateway.py","--port","9890"); places = @(); walks = @("chat-delivery"); shots = @("delivery-unconfirmed","delivery-check-notice","owner-wait","chat-locked","external-working") },
+            # [WIN-ROWS-STEP-WALK] row-steps (ProofWalks.RowSteps.cs, Hermes.Core RowStepsWalkProof): on its own settings stand-in,
+            # turns held on one step (/__settings/hold): Ivy's row “Reading package.json…” and the Trip ideas Sessions row
+            # “Running npm test…” off screen, both gone after /__settings/release; Research's slow open's “Waking up…”.
+            @{ tag = "row-steps"; args = @("windows/ci/fixtures/settings-gateway.py","--port","9838"); places = @(); walks = @("row-steps"); shots = @("row-step-bots","row-step-sessions","row-waking") },
+            # [WIN-THINKING-WALK] chat-thinking (ProofWalks.Thinking.cs, Hermes.Core ThinkingWalkProof): on its own settings stand-in,
+            # Ivy's turn held on `npm test` (/__settings/hold): the chat's thinking row “Ivy is running npm test…”, its timer from
+            # 10 s, its click opening the inspector's Steps, and the row gone once /__settings/release lets the reply write; then
+            # [WIN-STEPS-AFTER-REPLY] Steps keeps the finished step from the stored turn (the stand-in saves its tool rows).
+            @{ tag = "chat-thinking"; args = @("windows/ci/fixtures/settings-gateway.py","--port","9841"); places = @(); walks = @("chat-thinking"); shots = @("thinking-step","thinking-steps-open") },
+            # Picture attachment proof (ProofWalks.Attachments.cs): first-click + menu, WinAppSDK 1.8 FileOpenPicker,
+            # opaque->JPEG and transparent->PNG WindowsPhotoNormalizer, AttachmentTray and send.
+            @{ tag = "attachments"; args = @("windows/ci/fixtures/attachments-gateway.py","--port","9765","--files","$fix/shots-attachments-files"); places = @(); walks = @("attachments-photo"); shots = @("attachments-plus-menu","attachments-tray","attachments-photo") },
+            # Last: the normal shell activation needs this signed-in fixture after the first app exits.
+            # Only buttonless replies are invoked. Sensitive labels/routes are recorded in memory, not posted.
+            @{ tag = "toasts"; args = @("windows/ci/fixtures/reply-toast-gateway.py","--port","9736"); places = @(); walks = @("toasts"); shots = @("toast-before-reply","toast-reply","toast-failure","toast-reply-away") }
+          )
+          $extraProcs = @()
+          foreach ($d in $extraDefs) {
+            Remove-Item "$fix/shots-$($d.tag).json" -ErrorAction SilentlyContinue
+            $extraProcs += Start-Process python -ArgumentList ($d.args + @("--credentials","$fix/shots-$($d.tag).json")) -PassThru -RedirectStandardOutput "$fix/shots-$($d.tag).log" -RedirectStandardError "$fix/shots-$($d.tag).err"
+          }
+          for ($i = 0; $i -lt 100 -and ($extraDefs | Where-Object { -not (Test-Path "$fix/shots-$($_.tag).json") }); $i++) { Start-Sleep -Milliseconds 200 }
+          Start-Sleep -Seconds 1
+          $extras = @()
+          foreach ($d in $extraDefs) {
+            if (-not (Test-Path "$fix/shots-$($d.tag).json")) { throw "Missing synthetic fixture receipt: $($d.tag)" }
+            $c = Get-Content "$fix/shots-$($d.tag).json" | ConvertFrom-Json
+            $port = $d.args[[array]::IndexOf($d.args, '--port') + 1]
+            if ($c.url -cne "http://127.0.0.1:$port") { throw "Wrong fixture for $($d.tag)" }
+            $extras += [pscustomobject]@{ url = $c.url; username = $c.username; password = $c.password; tag = $d.tag; places = $d.places; walks = @($d.walks | Where-Object { $_ }) }
+          }
+          $cfg = Get-Content "$fix/shots-perf.json" | ConvertFrom-Json
+          if ($cfg.url -cne 'http://127.0.0.1:9711') { throw 'Wrong baseline fixture.' }
+          $cfg | Add-Member shots $shots
+          $cfg | Add-Member message "Run three steps"
+          $cfg | Add-Member extras $extras
+          $cfg | ConvertTo-Json -Depth 5 | Set-Content "$fix/automation.json"
+          $env:HQW_AUTOMATION = (Resolve-Path "$fix/automation.json").Path
+          # [WIN-EXIT-CRASH-DUMP] 0xC000027B (a stowed WinUI exception) at exit hit 4 of 7 runs on 2026-11-22 with an empty
+          # Application event log. Windows Error Reporting keeps a minidump of any HermesHQ.exe crash (every launch in this
+          # job, runner only) in shots/dumps, and a crash's dump is read with cdb's !analyze below, so the run names what threw.
+          $dumps = "$shots/dumps"
+          New-Item -ItemType Directory -Force -Path $dumps | Out-Null
+          $wer = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\HermesHQ.exe'
+          New-Item -Force -Path $wer | Out-Null
+          New-ItemProperty -Force -Path $wer -Name DumpFolder -PropertyType ExpandString -Value (Resolve-Path $dumps).Path | Out-Null
+          New-ItemProperty -Force -Path $wer -Name DumpType -PropertyType DWord -Value 2 | Out-Null
+          New-ItemProperty -Force -Path $wer -Name DumpCount -PropertyType DWord -Value 2 | Out-Null
+          # [WIN-EXIT-CRASH-DUMP] Run 45159071442 (7c4dc2a99) crashed 0xC000027B at exit with this folder empty: log why.
+          # Windows Error Reporting writes LocalDumps only while it is on and its service can start, so turn both on for
+          # this disposable runner and log the state the image had (Disabled, DontShowUI, WerSvc) in launch.log.
+          $werRoot = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting'
+          $werBefore = Get-ItemProperty $werRoot -ErrorAction SilentlyContinue
+          $werSvc = Get-Service WerSvc -ErrorAction SilentlyContinue
+          "wer before: Disabled=$($werBefore.Disabled) DontShowUI=$($werBefore.DontShowUI) WerSvc=$($werSvc.Status)/$($werSvc.StartType)" | Tee-Object -FilePath "$shots/launch.log" -Append
+          New-ItemProperty -Force -Path $werRoot -Name Disabled -PropertyType DWord -Value 0 | Out-Null
+          New-ItemProperty -Force -Path $werRoot -Name DontShowUI -PropertyType DWord -Value 1 | Out-Null
+          if ($werSvc -and $werSvc.StartType -eq 'Disabled') { Set-Service WerSvc -StartupType Manual -ErrorAction SilentlyContinue }
+          Start-Service WerSvc -ErrorAction SilentlyContinue
+          $werSvc = Get-Service WerSvc -ErrorAction SilentlyContinue
+          "wer now: Disabled=0 DontShowUI=1 WerSvc=$($werSvc.Status)/$($werSvc.StartType) LocalDumps=$((Resolve-Path $dumps).Path)" | Tee-Object -FilePath "$shots/launch.log" -Append
+          $launchLog = "$shots/launch.log"
+          "runner shell: $((whoami /groups | Select-String 'Mandatory Label') -replace '\s+', ' ')" | Tee-Object -FilePath $launchLog -Append
+          "runner UAC EnableLUA: $((Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name EnableLUA -ErrorAction SilentlyContinue).EnableLUA)" | Tee-Object -FilePath $launchLog -Append
+          $exe = (Resolve-Path "windows/build/app/HermesHQ.exe").Path
+          $app = Start-Process $exe -PassThru
+          "launch: normal app process (pid $($app.Id))" | Tee-Object -FilePath $launchLog -Append
+          if (-not $app.WaitForExit(900000)) { Stop-Process -Id $app.Id -Force; Write-Host "the app didn't finish in 15 minutes" }
+          Write-Host "exit code: $($app.ExitCode)"
+          # [WIN-EXIT-CRASH-DUMP] Any crash dump, read with the runner's cdb (Windows SDK debuggers) into shots/dumps/*.txt.
+          # WerFault writes the dump after the exit code is known: wait (up to 60 s) for it to finish first.
+          Start-Sleep -Seconds 5
+          $werDeadline = (Get-Date).AddSeconds(60)
+          while ((Get-Process WerFault, WerFaultSecure -ErrorAction SilentlyContinue) -and (Get-Date) -lt $werDeadline) { Start-Sleep -Seconds 2 }
+          if ($app.ExitCode -ne 0) {
+            "wer after exit $($app.ExitCode): $(@(Get-ChildItem $dumps -ErrorAction SilentlyContinue).Count) file(s) in dumps; WerFault still running: $([bool](Get-Process WerFault -ErrorAction SilentlyContinue))" | Tee-Object -FilePath $launchLog -Append
+            Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Windows Error Reporting'; StartTime = (Get-Date).AddMinutes(-20) } -MaxEvents 5 -ErrorAction SilentlyContinue |
+              ForEach-Object { "wer event $($_.Id): $(($_.Message -split "`n" | Select-Object -First 12) -join ' | ')" } | Tee-Object -FilePath $launchLog -Append
+          }
+          $cdb = @("${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64\cdb.exe", "$env:ProgramFiles\Windows Kits\10\Debuggers\x64\cdb.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          foreach ($dmp in @(Get-ChildItem "$shots/dumps" -Filter *.dmp -ErrorAction SilentlyContinue)) {
+            Write-Host "crash dump: $($dmp.Name) ($($dmp.Length) bytes)"
+            if ($cdb) {
+              & $cdb -z $dmp.FullName -c ".symfix; .reload; !analyze -v; .ecxr; kb 40; q" 2>&1 | Set-Content "$($dmp.FullName).txt"
+              $stowed = (Get-Content "$($dmp.FullName).txt" | Select-String -Pattern 'dt 0x[0-9a-fA-F]+ combase!STOWED_EXCEPTION_INFORMATION_V2[^;]*;\s*dps 0x[0-9a-fA-F]+ L0x[0-9a-fA-F]+').Matches.Value | Select-Object -First 1
+              if ($stowed) {
+                $stowedOut = & $cdb -z $dmp.FullName -c ".symfix; .reload; $stowed; q" 2>&1
+                "--- stowed exception details ($stowed)" | Add-Content "$($dmp.FullName).txt"
+                $stowedOut | Add-Content "$($dmp.FullName).txt"
+              }
+              Get-Content "$($dmp.FullName).txt" | Select-String -Pattern 'EXCEPTION_CODE|STOWED|ExceptionCode|FAILURE_BUCKET|SYMBOL_NAME|STACK_TEXT' -Context 0,6 | Select-Object -First 40 | ForEach-Object { Write-Host $_ }
+              if ($stowed) {
+                Write-Host "--- stowed exception details ($stowed)"
+                $stowedOut | Select-Object -Last 100 | ForEach-Object { Write-Host $_ }
+              }
+            } else { Write-Host "cdb isn't on this runner; only the dump's name and size are kept" }
+            # [WIN-EXIT-CRASH-DUMP] The dump holds process memory: it never leaves the runner. Only cdb's text analysis
+            # (exception code, bucket, symbols, stack) goes into the screenshots artifact.
+            Remove-Item -Force $dmp.FullName
+          }
+          Get-ChildItem $shots | Format-Table Name, Length
+          if (Test-Path "$shots/automation.log") { Get-Content "$shots/automation.log" }
+          # Only the exact cold reply read back by THIS app/run; no synthetic activation, relaunch, or fallback.
+          $coldLog = "$shots/toast-cold.log"
+          $stamp = "$($env:GITHUB_RUN_ID).$($env:GITHUB_RUN_ATTEMPT)"
+          $appLog = "$env:LOCALAPPDATA/HermesHQ/logs/hermes-hq.log"
+          $walkLogs = @("$appLog.1", $appLog) | Where-Object { Test-Path $_ }
+          $quietVerdict = python windows/ci/check_toast_quiet.py
+          $quietOk = $LASTEXITCODE -eq 0 -and $quietVerdict -is [string] -and $quietVerdict -ceq 'quiet readback: complete; banner unverified'
+          $prefix = '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} \[automation\] walk toasts: '
+          $pattern = $prefix + 'cold toast left for chat key ([0-9a-f]{8}) run ' + [regex]::Escape($stamp) + '$'
+          $ready = @(if ($walkLogs) { Select-String -CaseSensitive -LiteralPath $walkLogs -Pattern $pattern })
+          $noCold = @(if ($walkLogs) { Select-String -CaseSensitive -LiteralPath $walkLogs -Pattern ($prefix + 'cold: (open gap: .+)$') })
+          $warm = @(if ($walkLogs) { Select-String -CaseSensitive -LiteralPath $walkLogs -Pattern ($prefix + 'warm: (.+)$') })
+          $banner = @(if ($walkLogs) { Select-String -CaseSensitive -LiteralPath $walkLogs -Pattern ($prefix + '(open gap: banner pixels not verified; .+)$') })
+          $receipt = "$env:LOCALAPPDATA/HermesHQ/fixture-reply-run.txt"
+          if (!$quietOk) {
+            "cold launch not attempted: $quietVerdict" | Tee-Object -FilePath $coldLog
+          } elseif ($app.ExitCode -ne 0) {
+            'cold launch not attempted: first app did not exit cleanly' | Tee-Object -FilePath $coldLog
+          } elseif ($ready.Count -eq 0 -and $noCold.Count -eq 1 -and !(Test-Path -LiteralPath $receipt)) {
+            "cold launch: $($noCold[0].Matches[0].Groups[1].Value)" | Tee-Object -FilePath $coldLog
+          } elseif ($ready.Count -ne 1 -or $noCold.Count -ne 0) {
+            throw 'Missing or conflicting verdict for the cold notification; no invocation.'
+          } elseif (!(Test-Path -LiteralPath $receipt -PathType Leaf) -or (Get-Item -LiteralPath $receipt).Length -ne $stamp.Length -or ![string]::Equals([IO.File]::ReadAllText($receipt), $stamp, [StringComparison]::Ordinal)) {
+            throw 'Missing or stale one-use cold receipt; no invocation.'
+          } elseif (Get-Process HermesHQ -ErrorAction SilentlyContinue) {
+            throw 'Cold launch requires the app to be stopped.'
+          } else {
+            $coldKey = $ready[0].Matches[0].Groups[1].Value
+            $mark = @(Get-Content $appLog).Count
+            Remove-Item Env:HQW_AUTOMATION -ErrorAction SilentlyContinue
+            $invokeAt = [DateTime]::UtcNow
+            $probe = Start-Process ./windows/build/reply-probe/ReplyProbe.exe -ArgumentList cold -PassThru -NoNewWindow -RedirectStandardOutput "$fix/cold-probe.out"
+            if (-not $probe.WaitForExit(35000)) { $probe.Kill(); throw 'Cold reply probe timed out.' }
+            $verdict = (Get-Content "$fix/cold-probe.out" -Raw).Trim()
+            if ($probe.ExitCode -eq 2 -and $verdict.StartsWith('reply probe: gap: ')) {
+              "cold launch: open gap: $verdict" | Tee-Object -FilePath $coldLog
+            } elseif ($probe.ExitCode -ne 0 -or $verdict -cne 'reply probe: invoked') {
+              throw "Cold reply probe failed ($($probe.ExitCode))."
+            } else {
+              for ($i = 0; $i -lt 60; $i++) {
+                Start-Sleep -Milliseconds 500
+                $new = @(Get-Content $appLog -ErrorAction SilentlyContinue | Select-Object -Skip $mark)
+                $launched = ($new -match 'launched by a toast click \(Kind AppNotification\)') -and ($new -match ('fixture reply activation Cold ' + [regex]::Escape($stamp) + '$'))
+                $opened = $new -match "toast cold launch opened chat key $coldKey$"
+                if ($launched -and $opened) { break }
+              }
+              $relaunched = @(Get-Process HermesHQ -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe -and $_.StartTime.ToUniversalTime() -ge $invokeAt })
+              if ($launched -and $opened -and $relaunched.Count -eq 1 -and (Test-Path "$shots/toast-cold-opened.png")) {
+                "cold launch: verified new app, Kind AppNotification and loaded chat key $coldKey" | Tee-Object -FilePath $coldLog
+              } elseif ($relaunched.Count -gt 0 -or $launched -or $opened) {
+                throw 'Cold activation started but did not prove the intended fixture chat and its screenshot.'
+              } else {
+                'cold launch: open gap: shell invocation did not launch the unpackaged app' | Tee-Object -FilePath $coldLog
+              }
+              $relaunched | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
+            }
+          }
+          Copy-Item "$env:LOCALAPPDATA/HermesHQ/logs/*" $shots -ErrorAction SilentlyContinue
+          # [link-drop guard] AppState's '[rpc] link dropped' and 'listener threw' notes between the first composer walk
+          # and the next extra's sign-in (WalkProof.LinkDrops): printed first, and the step fails on any.
+          $linkDrops = @(); $inComposer = $false
+          foreach ($line in @(Get-Content "$shots/hermes-hq.log.1", "$shots/hermes-hq.log" -ErrorAction SilentlyContinue)) {
+            if ($line.Contains('[automation] composer walk ')) { $inComposer = $true }
+            elseif ($inComposer -and ($line.Contains('[automation] signed in to ') -or $line.EndsWith('[automation] done'))) { $inComposer = $false }
+            if ($inComposer -and ($line.Contains('[rpc] link dropped') -or $line.Contains('listener threw'))) { $linkDrops += $line }
+          }
+          Write-Host "--- link drops during the composer walks: $($linkDrops.Count)"; $linkDrops | ForEach-Object { Write-Host $_ }
+          Write-Host "--- app log"; Get-Content "$shots/hermes-hq.log" -ErrorAction SilentlyContinue
+          Write-Host "--- .pri files"; Get-ChildItem windows/build/app -Filter *.pri | Format-Table Name, Length
+          Write-Host "--- Windows Application log errors (last 10 min)"
+          Get-WinEvent -FilterHashtable @{LogName='Application'; Level=2; StartTime=(Get-Date).AddMinutes(-10)} -ErrorAction SilentlyContinue |
+            Select-Object -First 6 | ForEach-Object { $_.TimeCreated; $_.ProviderName; $_.Message; "" }
+          Stop-Process -Id $gw.Id -Force -ErrorAction SilentlyContinue
+          $extraProcs | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
+          # Each stand-in's stderr: a socket loop that ended on anything but the app hanging up prints its exception and
+          # traceback there ('[ws] socket loop ended: …'), the side of a '[rpc] link dropped' the app log can't see (WIN-29).
+          foreach ($tag in @("perf") + @($extraDefs | ForEach-Object { $_.tag })) {
+            $err = if ($tag -eq "perf") { "$fix/shots.err" } else { "$fix/shots-$tag.err" }
+            Write-Host "--- stand-in $tag stderr"; Get-Content $err -ErrorAction SilentlyContinue
+          }
+          if ($linkDrops.Count -gt 0) { throw "The gateway link dropped (or a listener threw) during the composer walks." }
+          if (!$quietOk) { throw 'Reply quiet-state check stopped; no cold invocation.' }
+          if ($app.ExitCode -ne 0 -or -not (Test-Path "$shots/automation.log")) { throw "The app did not finish the screenshot walk." }
+          if ($warm.Count -ne 1 -or $banner.Count -ne 1) { throw 'Missing or duplicate notification verdicts.' }
+          $warmResult = $warm[0].Matches[0].Groups[1].Value
+          if ($warmResult -ceq 'NotificationInvoked opened chat A') {
+            $before = @(Get-ChildItem "$shots/*-toast-before-reply.png"); $after = @(Get-ChildItem "$shots/*-toast-warm-opened.png")
+            if ($before.Count -ne 1 -or $after.Count -ne 1) { throw 'Missing or ambiguous navigation screenshots.' }
+            if ((Get-FileHash $before[0].FullName).Hash -eq (Get-FileHash $after[0].FullName).Hash) { throw 'Navigation screenshots did not change.' }
+          } elseif (!$warmResult.StartsWith('open gap: ')) { throw 'Unexpected warm navigation verdict.' }
+          @('### Notification proof', "- Warm: $warmResult", "- $(Get-Content $coldLog -Raw)", "- $($banner[0].Matches[0].Groups[1].Value)") >> $env:GITHUB_STEP_SUMMARY
+          python windows/ci/check_walk_pngs.py $shots; if ($LASTEXITCODE -ne 0) { throw "Invalid screenshots." }
+          $walk = Get-Content "$shots/automation.log"
+          if (-not ($walk -match ' done$') -or ($walk -match ' failed:')) { throw "The screenshot walk did not finish cleanly." }
+          if (Select-String -Path "$shots/hermes-hq.log" -SimpleMatch "couldn't open ") { throw "A place opened its error page." }
+          foreach ($d in $extraDefs) {
+            foreach ($place in $d.places) {
+              if (-not (Test-Path "$shots/*-$($d.tag)-$place.png")) { throw "Missing screenshot: $($d.tag)-$place" }
+            }
+            foreach ($walk in @($d.walks | Where-Object { $_ })) {
+              if (-not (Test-Path "$shots/*-$walk.png")) { throw "Missing screenshot: $walk" }
+            }
+            foreach ($shot in @($d.shots | Where-Object { $_ })) {
+              if (-not (Test-Path "$shots/*-$shot.png")) { throw "Missing screenshot: $shot" }
+            }
+          }
+
+      # [WIN-60] Larger text and high contrast: two more short app runs ("extrasOnly": straight to one walk) on their own
+      # pages stand-ins, with the runner's Windows set first and always put back after (runner only).
+      # text-scale (port 9863): HKCU\Software\Microsoft\Accessibility TextScaleFactor = 150. The walk wants
+      # UISettings.TextScaleFactor 1.5, and on Chats, Tasks and Settings no text cut short where the Mac wraps it
+      # (Hermes.Core/Shell/TextScaleWalkProof.cs). high-contrast (port 9864): a contrast theme on through
+      # windows/ci/high-contrast.ps1 (SystemParametersInfo SPI_SETHIGHCONTRAST, SPIF_SENDCHANGE, not saved to the
+      # profile), off again after. If Windows won't switch, high-contrast.log names the exact reason as an open gap and
+      # that pass is skipped, never counted as a pass. Services/ProofWalks.TextScale.cs.
+      - name: Larger text and high contrast
+        if: runner.os == 'Windows' && runner.environment == 'github-hosted' && vars.HQW_DESKTOP_PROOF == '1'
+        shell: pwsh
+        run: |
+          & ./windows/build/reply-probe/ReplyProbe.exe guard; if ($LASTEXITCODE -ne 0) { throw 'Desktop proof refused.' }
+          $fix = "windows/build/fixtures"
+          $exe = (Resolve-Path "windows/build/app/HermesHQ.exe").Path
+          function Run-Pass($tag, $port, $walk, $shotNames) {
+            $dir = (New-Item -ItemType Directory -Force "windows/build/shots/$tag").FullName
+            Remove-Item "$fix/shots-$tag.json" -ErrorAction SilentlyContinue
+            $gw = Start-Process python -ArgumentList "-X","utf8","windows/ci/fixtures/pages-fixture-gateway.py","--port","$port","--files","$fix/shots-$tag-files","--task-lists","--tick-seconds","0","--credentials","$fix/shots-$tag.json" -PassThru -RedirectStandardOutput "$fix/shots-$tag.log" -RedirectStandardError "$fix/shots-$tag.err"
+            try {
+              for ($i = 0; $i -lt 100 -and -not (Test-Path "$fix/shots-$tag.json"); $i++) { Start-Sleep -Milliseconds 200 }
+              if (-not (Test-Path "$fix/shots-$tag.json")) { Get-Content "$fix/shots-$tag.err" -Tail 20 -ErrorAction SilentlyContinue; throw "the $tag stand-in didn't start" }
+              Start-Sleep -Seconds 1
+              $c = Get-Content "$fix/shots-$tag.json" | ConvertFrom-Json
+              if ($c.url -cne "http://127.0.0.1:$port") { throw "Wrong fixture for $tag" }
+              $cfg = [pscustomobject]@{ shots = $dir; extrasOnly = $true; extras = @([pscustomobject]@{ url = $c.url; username = $c.username; password = $c.password; tag = $tag; places = @(); walks = @($walk) }) }
+              $cfg | ConvertTo-Json -Depth 5 | Set-Content "$fix/automation-$tag.json"
+              $env:HQW_AUTOMATION = (Resolve-Path "$fix/automation-$tag.json").Path
+              $app = Start-Process $exe -PassThru
+              if (-not $app.WaitForExit(300000)) { Stop-Process -Id $app.Id -Force; Write-Host "the $tag run didn't finish in 5 minutes" }
+              Write-Host "$tag exit code: $($app.ExitCode)"
+            } finally {
+              Remove-Item Env:HQW_AUTOMATION -ErrorAction SilentlyContinue
+              Stop-Process -Id $gw.Id -Force -ErrorAction SilentlyContinue
+              Copy-Item "$env:LOCALAPPDATA/HermesHQ/logs/hermes-hq.log" "$dir/hermes-hq.log" -ErrorAction SilentlyContinue
+            }
+            Get-ChildItem $dir | Format-Table Name, Length
+            if (-not (Test-Path "$dir/automation.log")) { throw "The $tag run left no automation.log." }
+            Get-Content "$dir/automation.log"
+            Select-String -Path "$dir/hermes-hq.log" -SimpleMatch "walk $walk" -ErrorAction SilentlyContinue | ForEach-Object { $_.Line }
+            $log = Get-Content "$dir/automation.log"
+            if ($app.ExitCode -ne 0 -or -not ($log -match ' done$') -or ($log -match ' failed:')) { throw "The $tag walk did not finish cleanly." }
+            python windows/ci/check_walk_pngs.py $dir; if ($LASTEXITCODE -ne 0) { throw "Invalid $tag screenshots." }
+            foreach ($shot in $shotNames) { if (-not (Test-Path "$dir/*-$shot.png")) { throw "Missing screenshot: $shot" } }
+          }
+
+          $acc = "HKCU:\Software\Microsoft\Accessibility"
+          if (-not (Test-Path $acc)) { New-Item $acc | Out-Null }
+          $before = (Get-ItemProperty $acc -Name TextScaleFactor -ErrorAction SilentlyContinue).TextScaleFactor
+          Write-Host "TextScaleFactor before: $(if ($null -eq $before) { 'unset' } else { $before })"
+          try {
+            Set-ItemProperty $acc -Name TextScaleFactor -Value 150 -Type DWord
+            Run-Pass "text-scale" 9863 "text-scale" @("text-scale-chat","text-scale-tasks","text-scale-settings","text-scale-foot")
+          } finally {
+            if ($null -eq $before) { Remove-ItemProperty $acc -Name TextScaleFactor -ErrorAction SilentlyContinue }
+            else { Set-ItemProperty $acc -Name TextScaleFactor -Value $before -Type DWord }
+            Write-Host "TextScaleFactor restored: $((Get-ItemProperty $acc -Name TextScaleFactor -ErrorAction SilentlyContinue).TextScaleFactor)"
+          }
+
+          $hcLog = (New-Item -ItemType Directory -Force "windows/build/shots").FullName + "/high-contrast.log"
+          function Contrast($turn) {
+            $p = Start-Process pwsh -ArgumentList "-NoProfile","-File","windows/ci/high-contrast.ps1","-Turn",$turn -PassThru -NoNewWindow -RedirectStandardOutput "$fix/contrast-$turn.out" -RedirectStandardError "$fix/contrast-$turn.err"
+            if (-not $p.WaitForExit(60000)) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; throw 'Contrast helper timed out.' }
+            $said = @(Get-Content "$fix/contrast-$turn.out" -ErrorAction SilentlyContinue) + @(Get-Content "$fix/contrast-$turn.err" -ErrorAction SilentlyContinue) | Where-Object { $_ } | Select-Object -Last 1
+            if ($p.ExitCode -eq 2 -and $said -match '^failed: SPI_(GET|SET)HIGHCONTRAST ') { return $said }
+            if ($p.ExitCode -ne 0 -or $said -cnotin @('on','was on','off')) { throw "Unexpected contrast helper result ($($p.ExitCode))." }
+            return $said
+          }
+          $state = Contrast "On"
+          "high contrast: turn on: $state" | Tee-Object -FilePath $hcLog -Append
+          if ($state -eq "on" -or $state -eq "was on") {
+            Start-Sleep -Seconds 3   # the theme settles before the app starts
+            try { Run-Pass "high-contrast" 9864 "high-contrast" @("high-contrast-chat","high-contrast-tasks","high-contrast-settings") }
+            finally {
+              if ($state -eq "on") {
+                $restored = Contrast 'Off'
+                "high contrast: turn off: $restored" | Tee-Object -FilePath $hcLog -Append
+                if ($restored -ne 'off') { throw 'Did not restore the contrast state.' }
+              }
+            }
+          } elseif ($state.StartsWith('failed: ')) {
+            "high contrast: open gap: Windows didn't switch to a contrast theme ($state); no high-contrast pass ran" | Tee-Object -FilePath $hcLog -Append >> $env:GITHUB_STEP_SUMMARY
+          } else { throw 'Invalid contrast transition.' }
+
+      - uses: actions/upload-artifact@v4
+        if: always() && runner.environment == 'github-hosted' && vars.HQW_DESKTOP_PROOF == '1'
+        with:
+          name: screenshots
+          path: |
+            windows/build/shots
+            !windows/build/shots/**/*.dmp
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: HermesHQ-win-x64
+          path: windows/build/app
+
+  # One push must explicitly request this proof. No repository setting grants it;
+  # broad desktop proof may be unset or exactly 1. Any other value or a nonempty Narrator disable vetoes it.
+  narrator-chat:
+    if: >-
+      github.event_name == 'push' && github.repository == 'mrcharlesiv/hermes-hq-windows' &&
+      github.event.repository.full_name == github.repository && toJSON(github.event.repository.private) == 'true' &&
+      github.ref == 'refs/heads/feat/windows' && github.event.ref == github.ref &&
+      toJSON(github.event.deleted) == 'false' && github.event.after == github.sha && github.event.head_commit.id == github.sha &&
+      startsWith(github.event.head_commit.message, fromJSON('"Proof: narrator-chat-only\n\nFrom feat/windows at "')) &&
+      (vars.HQW_DESKTOP_PROOF == '' || vars.HQW_DESKTOP_PROOF == '1') && vars.HQW_NARRATOR_CHAT_DISABLE == ''
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Admit only the exact chat proof request
+        run: python -B ci/narrator_chat_job.py admit
+      - name: Publish the separate x64 chat fixture
+        run: |
+          dotnet restore src/HermesHQ.Windows -r win-x64 -p:Platform=x64 -p:Configuration=Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $targets = (Resolve-Path ci/narrator-chat/Fixture.targets).Path
+          dotnet publish src/HermesHQ.Windows -c Release -r win-x64 -p:Platform=x64 "-p:CustomAfterMicrosoftCommonTargets=$targets" --no-restore -o build/narrator-chat-app
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Test-Path -LiteralPath build/narrator-chat) { throw 'Refusing pre-existing Narrator evidence.' }
+      - name: Observe the chat with the reviewed Narrator fixture
+        id: walk
+        run: |
+          python -B ci/narrator_chat.py --disposable-narrator-chat
+          exit $LASTEXITCODE
+      - name: Verify the receipt even when the walk fails
+        id: receipt
+        if: ${{ !cancelled() && (steps.walk.outcome == 'success' || steps.walk.outcome == 'failure') }}
+        run: |
+          python -B ci/narrator_chat_job.py receipt
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() && steps.receipt.outputs.bound == 'true' }}
+        with:
+          name: narrator-chat-${{ github.run_id }}-${{ github.run_attempt }}
+          path: windows/build/narrator-chat/result.json
+          if-no-files-found: error
+          retention-days: 1

@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The real composed reply, lane and palette selectors, without loading WinUI or the app. -->
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <Renderer>../../src/HermesHQ.Windows</Renderer>
+    <Python Condition="'$(OS)' == 'Windows_NT'">python</Python>
+    <Python Condition="'$(Python)' == ''">python3</Python>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(Renderer)/Controls/ChatBubbleLane.cs" Link="ChatBubbleLane.cs" />
+    <Compile Include="$(Renderer)/ViewModels/MessageItem.cs" Link="MessageItem.cs" />
+    <Compile Include="$(Renderer)/ViewModels/Observable.cs" Link="Observable.cs" />
+    <Compile Include="$(IntermediateOutputPath)ReplyRenderer.g.cs" />
+    <ProjectReference Include="../../src/Hermes.Core/Hermes.Core.csproj" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+  <Target Name="ReadRenderer" BeforeTargets="CoreCompile"
+          Inputs="extract.py;$(Renderer)/Controls/MessageView.cs;$(Renderer)/ViewModels/ChatViewModel.cs;$(Renderer)/Features/Settings/ThemeService.cs"
+          Outputs="$(IntermediateOutputPath)ReplyRenderer.g.cs">
+    <Exec Command="$(Python) &quot;extract.py&quot; &quot;$(Renderer)&quot; &quot;$(IntermediateOutputPath)ReplyRenderer.g.cs&quot;" />
+  </Target>
+</Project>

@@ -1,0 +1,1 @@
+{"agent":{"max_turns":90},"fallback_providers":[{"api_key":"secret-in-list","model":"m2","provider":"openrouter"}],"timezone":"UTC"}

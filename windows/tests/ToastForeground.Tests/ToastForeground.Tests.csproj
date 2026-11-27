@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Compile the actual guard against inert XAML/Win32 edges. The production imports are not linked. -->
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <ForegroundSource Condition="'$(ForegroundSource)' == ''">../../src/HermesHQ.Windows/Services/ReplyQuietReadback.Foreground.cs</ForegroundSource>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(ForegroundSource)" Link="ReplyQuietReadback.Foreground.cs" />
+    <Compile Include="../Hermes.Core.Tests/ToastQuietRunner.cs" Link="ToastQuietRunner.cs" />
+    <ProjectReference Include="../../src/Hermes.Core/Hermes.Core.csproj" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <Using Include="Xunit" />
+  </ItemGroup>
+</Project>

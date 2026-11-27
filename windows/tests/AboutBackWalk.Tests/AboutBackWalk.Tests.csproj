@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Run the actual walk against inert controls; no WinUI runtime, gateway, input, or capture. -->
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <!-- Override only in this test project to replay an exported parent blob with the same cases. -->
+    <AboutBackSource Condition="'$(AboutBackSource)' == ''">../../src/HermesHQ.Windows/Services/ProofWalks.AboutBack.cs</AboutBackSource>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(AboutBackSource)" Link="ProofWalks.AboutBack.cs" />
+    <ProjectReference Include="../../src/Hermes.Core/Hermes.Core.csproj" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+</Project>

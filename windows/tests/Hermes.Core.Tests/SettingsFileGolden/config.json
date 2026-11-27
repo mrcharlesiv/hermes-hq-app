@@ -1,0 +1,19 @@
+{
+  "model": {"default": "demo-model", "provider": "anthropic", "base_url": "https://user:pw123@llm.example.com/v1?api_key=abc123&page=2", "api_key": "plain-secret-value", "api_key_env": "DEMO_API_KEY"},
+  "agent": {"max_turns": 120, "ratio": 0.5, "enabled": true, "nothing": null},
+  "providers": {"openrouter": {"api_key": "sk-fix...0000", "token": "", "password": "${DEMO_PASSWORD}", "password_store": "keychain", "secret_backend": "vault"}},
+  "notes": "my key is sk-abcdefghijklmnop and jwt eyJhbGciOi.eyJzdWIiOi.c2lnbmF0dXJl here",
+  "github_pat": "ghp_abcdefghijklmn",
+  "cookie_jar": ["a", "b"],
+  "toolsets": ["hermes-cli", "web"],
+  "terminal": {"env_passthrough": ["GITHUB_TOKEN"], "cwd": "~/work", "url": "https://example.com/path?sig=zzz&q=ok"},
+  "empty": {},
+  "list": [],
+  "unicode": "café – «quoted» / slash",
+  "mcp_servers": {
+    "github": {"url": "https://api.example.com/mcp/", "headers": {"Authorization": "Bearer fixture-bearer-not-real-0000", "Accept": "application/json", "Content-Type": "application/json", "X-Ref": "${GH_TOKEN}"}},
+    "files": {"command": "npx", "args": ["files-mcp", "--api-key", "fixture-files-key-0000", "--verbose", "--token=abc", "API_TOKEN=xyz", "plain", "Authorization: Bearer abc", "a1b2c3d4e5f6g7h8i9", "123e4567-e89b-12d3-a456-426614174000", "ALLLETTERSNODIGITSHERE"], "env": {"DEMO_KEY": "value-1", "EMPTY": "", "REF": "${X}"}},
+    "plain": {"command": "run", "timeout": 30, "credential_file": "/tmp/c", "key_env": "X"}
+  },
+  "fallback_providers": [{"provider": "openrouter", "model": "m", "api_key": "secret-in-list"}]
+}

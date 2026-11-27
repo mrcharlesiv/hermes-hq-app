@@ -1,0 +1,102 @@
+<Page
+    x:Class="HermesHQ.Pages.SessionsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition x:Name="ListColumn" Width="360" MinWidth="280" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- The list (App/Sessions/SessionsViewController.swift, the Mac's sessions pane): rows drawn in code. -->
+        <Grid x:Name="ListPane" Padding="12,12,8,8" RowSpacing="8" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,0,1,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Grid>
+                <!-- [WIN-49] The Mac's page bar (MacWindow.pageBar, Shell/PageBar.cs): the page-title token, and the
+                     magnifier at the trailing edge (DesktopBars.searchToEdge): Filter · New Chat · Search. -->
+                <TextBlock x:Name="BarTitle" Text="Sessions" VerticalAlignment="Center" />
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="2">
+                    <Button x:Name="FilterButton" Style="{StaticResource QuietButtonStyle}" Click="Filter_Click"
+                            ToolTipService.ToolTip="Filter and Sort" AutomationProperties.AutomationId="sessions.filter"
+                            AutomationProperties.Name="Filter and Sort">
+                        <FontIcon x:Name="FilterGlyph" Glyph="&#xE71C;" FontSize="15" />
+                    </Button>
+                    <Button Style="{StaticResource QuietButtonStyle}" Click="Compose_Click" ToolTipService.ToolTip="New Chat"
+                            AutomationProperties.AutomationId="sessions.compose" AutomationProperties.Name="New Chat">
+                        <FontIcon Glyph="&#xE70F;" FontSize="15" />
+                    </Button>
+                    <Button Style="{StaticResource QuietButtonStyle}" Click="SearchToggle_Click" ToolTipService.ToolTip="Search"
+                            AutomationProperties.AutomationId="sessions.search" AutomationProperties.Name="Search">
+                        <FontIcon Glyph="&#xE721;" FontSize="15" />
+                    </Button>
+                </StackPanel>
+            </Grid>
+
+            <TextBox x:Name="SearchBox" Grid.Row="1" PlaceholderText="Search" Visibility="Collapsed"
+                     TextChanged="SearchBox_TextChanged" />
+
+            <!-- [WIN-SESSIONS-WORKING-CHIP] Chats | Projects, the bot or project scope, then the New and Working counts: the
+                 Mac's macRow, drawn in code (Features/Sessions/SessionsHeaderBar.cs) at the first of its four drawings that
+                 fits (Hermes.Core SessionsHeaderRow); the probe measures them and holds none. -->
+            <Canvas x:Name="HeaderProbe" Grid.Row="2" Opacity="0" IsHitTestVisible="False" />
+            <Border x:Name="HeaderHost" Grid.Row="2" SizeChanged="HeaderHost_SizeChanged" />
+
+            <!-- The strip under the bar while a filter is on: what narrows the list, and Clear. -->
+            <Grid x:Name="Strip" Grid.Row="3" Visibility="Collapsed" Padding="10,4" CornerRadius="6"
+                  Background="{ThemeResource SubtleFillColorSecondaryBrush}">
+                <TextBlock x:Name="StripText" VerticalAlignment="Center" FontSize="12" />
+                <HyperlinkButton Content="Clear" HorizontalAlignment="Right" Padding="4,0" Click="StripClear_Click" />
+            </Grid>
+
+            <!-- A project's page: back to every project, its name and what its chats need. -->
+            <Grid x:Name="PageHeader" Grid.Row="4" Visibility="Collapsed" ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Button Style="{StaticResource QuietButtonStyle}" Click="PageBack_Click" ToolTipService.ToolTip="All Projects"
+                        AutomationProperties.Name="All Projects">
+                    <FontIcon Glyph="&#xE72B;" FontSize="13" />
+                </Button>
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock x:Name="PageTitle" FontSize="16" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                    <TextBlock x:Name="PageLine" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+                <Button Grid.Column="2" Style="{StaticResource QuietButtonStyle}" Click="PageCompose_Click" ToolTipService.ToolTip="New Chat in This Project"
+                        AutomationProperties.Name="New Chat in This Project">
+                    <FontIcon Glyph="&#xE8BD;" FontSize="13" />
+                </Button>
+            </Grid>
+
+            <ListView x:Name="SessionList" Grid.Row="5" SelectionMode="Single" IsItemClickEnabled="True"
+                      ItemClick="SessionList_ItemClick" Padding="0" />
+            <StackPanel x:Name="ListEmpty" Grid.Row="5" VerticalAlignment="Center" Spacing="8" Visibility="Collapsed" Padding="16">
+                <TextBlock x:Name="ListEmptyTitle" HorizontalAlignment="Center" FontWeight="SemiBold" TextAlignment="Center" TextWrapping="Wrap" />
+                <TextBlock x:Name="ListEmptyText" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+                    <Button x:Name="EmptyCompose" Content="New Chat" Click="Compose_Click" />
+                    <Button x:Name="EmptyClear" Content="Clear Filters" Click="StripClear_Click" />
+                    <Button x:Name="RetryButton" Content="Retry" Click="Refresh_Click" />
+                </StackPanel>
+            </StackPanel>
+            <ProgressRing x:Name="ListLoading" Grid.Row="5" IsActive="True" Width="28" Height="28" />
+            <Grid x:Name="PillHost" Grid.Row="6" />
+        </Grid>
+
+        <Grid Grid.Column="1">
+            <Frame x:Name="ChatFrame" />
+            <Grid x:Name="ChatPlaceholder" Visibility="Collapsed" />
+        </Grid>
+    </Grid>
+</Page>

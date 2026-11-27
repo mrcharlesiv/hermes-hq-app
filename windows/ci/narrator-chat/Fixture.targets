@@ -1,0 +1,17 @@
+<Project>
+  <!-- Opt-in, separate publish only. Do not modify the shipping project or any registered walk. -->
+  <ItemGroup Condition="'$(MSBuildProjectName)' == 'HermesHQ.Windows' or '$(MSBuildProjectName)' == 'CompileCheck'">
+    <Compile Include="$(MSBuildThisFileDirectory)Fixture.cs;$(MSBuildThisFileDirectory)NarratorChatWalk.cs;$(MSBuildThisFileDirectory)NarratorDesktop.cs" />
+  </ItemGroup>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'HermesHQ.Windows'">
+    <StartupObject>HermesHQ.NarratorChatEntry</StartupObject>
+  </PropertyGroup>
+  <Target Name="StampNarratorChat" AfterTargets="Publish"
+          Condition="'$(MSBuildProjectName)' == 'HermesHQ.Windows' and '$(StartupObject)' == 'HermesHQ.NarratorChatEntry' and '$(RuntimeIdentifier)' == 'win-x64'">
+    <GetFileHash Files="$([System.IO.Path]::Combine('$(PublishDir)', 'HermesHQ.exe'));$([System.IO.Path]::Combine('$(PublishDir)', 'HermesHQ.dll'))" Algorithm="SHA256">
+      <Output TaskParameter="Items" ItemName="_NarratorBinary" />
+    </GetFileHash>
+    <WriteLinesToFile File="$([System.IO.Path]::Combine('$(PublishDir)', 'narrator-chat.build'))"
+                      Lines="$(GITHUB_SHA);@(_NarratorBinary->'%(FileHash)')" Overwrite="true" />
+  </Target>
+</Project>

@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- [WIN-MATH-ENGINE] The typesetter behind Hermes.Core's MathTypeset rules: CSharpMath (the MIT C# port of iosMath,
+       the lineage of the Mac's Vendor/SwiftMath) in Latin Modern Math, drawn with SkiaSharp into BGRA pixels. Its own
+       project so Hermes.Core keeps no package or native dependency; it references Hermes.Core (MathMeasure, MathFit),
+       never the other way round. Headless: it measures and draws on macOS and Windows alike, no UI. -->
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>13</LangVersion>
+    <RootNamespace>Hermes.Typeset</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Hermes.Core.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Stable 0.5.1 (2021). It embeds latinmodern-math.otf, byte for byte the Mac's (SHA-256 6075562b…be0f, v1.959),
+         so no font file is shipped beside it. -->
+    <PackageReference Include="CSharpMath.SkiaSharp" Version="0.5.1" />
+    <!-- 0.5.1 asks for SkiaSharp >= 2.80.1, whose macOS native has no arm64 slice an Apple Silicon Mac will load
+         ("have 'x86_64'") and whose libwebp predates CVE-2023-4863. 2.88.9 is the newest 2.x: the same API, native
+         assets for win-x64/arm64/x86 and a universal macOS build. -->
+    <PackageReference Include="SkiaSharp" Version="2.88.9" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Hermes.Core\Hermes.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="THIRD-PARTY.md;licenses/*.txt" />
+  </ItemGroup>
+</Project>

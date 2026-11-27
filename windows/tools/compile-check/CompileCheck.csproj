@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Type-checks HermesHQ.Windows's C# on any OS (tools/compile-check/check.sh). Not the real build. -->
+  <PropertyGroup>
+    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <OutputType>Library</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>13</LangVersion>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultPageItems>false</EnableDefaultPageItems>
+    <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
+    <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
+    <WindowsPackageType>None</WindowsPackageType>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <RootNamespace>HermesHQ</RootNamespace>
+    <AppxGeneratePriEnabled>false</AppxGeneratePriEnabled>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- __XamlChecks is never called; it only has to compile. -->
+    <NoWarn>$(NoWarn);CS8321;IDE0051</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../src/HermesHQ.Windows/**/*.cs" Exclude="../../src/HermesHQ.Windows/obj/**;../../src/HermesHQ.Windows/bin/**" />
+    <Compile Include="obj/XamlStubs.g.cs" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260921001" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.9457" />
+    <PackageReference Include="Markdig" Version="0.45.0" />
+    <ProjectReference Include="../../src/Hermes.Core/Hermes.Core.csproj" />
+    <!-- [WIN-MATH-UI] The app references Hermes.Math (the formulas' typesetter). -->
+    <ProjectReference Include="../../src/Hermes.Math/Hermes.Math.csproj" />
+  </ItemGroup>
+</Project>

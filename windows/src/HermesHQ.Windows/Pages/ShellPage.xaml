@@ -1,0 +1,107 @@
+<Page
+    x:Class="HermesHQ.Pages.ShellPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    SizeChanged="Page_SizeChanged">
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition x:Name="SidebarColumn" Width="Auto" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- The sidebar (App/Mac/MacSidebar.swift): its rows are drawn in code (Shell/SidebarItems.cs). -->
+        <Grid x:Name="SidebarPane" Background="{ThemeResource HQSidebarPanelBrush}" Padding="8,0,6,8" RowSpacing="6">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <!-- Search (Open Quickly, Ctrl+K) and New Chat (Ctrl+N), drawn in code for the open sidebar or the rail
+                 (Shell/SidebarTools.cs, App/Mac/MacBotsRail.swift MacSidebarTools). -->
+            <ContentControl x:Name="ToolsHost" HorizontalContentAlignment="Stretch" IsTabStop="False" />
+            <InfoBar x:Name="ConnectionBar" Grid.Row="1" IsClosable="False" Severity="Warning" />
+            <ListView x:Name="Sidebar" Grid.Row="2" SelectionMode="Single" IsItemClickEnabled="True"
+                      ItemClick="Sidebar_ItemClick" Padding="0,0,0,10" CanDragItems="True" AllowDrop="True"
+                      DragItemsStarting="Sidebar_DragItemsStarting" DragOver="Sidebar_DragOver" Drop="Sidebar_Drop">
+                <ListView.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel />
+                    </ItemsPanelTemplate>
+                </ListView.ItemsPanel>
+            </ListView>
+            <ProgressRing x:Name="ListLoading" Grid.Row="2" IsActive="True" Width="24" Height="24" VerticalAlignment="Top"
+                          Margin="0,40,0,0" />
+            <Grid x:Name="Foot" Grid.Row="3" ColumnSpacing="2">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Button x:Name="FoldButton" Style="{StaticResource QuietButtonStyle}" Click="Fold_Click"
+                        ToolTipService.ToolTip="Hide Sidebar (Ctrl+Shift+S)" AutomationProperties.Name="Hide Sidebar">
+                    <FontIcon Glyph="&#xE89F;" FontSize="14" />
+                </Button>
+                <!-- The gateway in use; the gateways feature replaces it with its own line (ShellExtensions.GatewayFoot). -->
+                <ContentControl IsTabStop="False" x:Name="GatewayFootHost" Grid.Column="1" HorizontalContentAlignment="Stretch" VerticalAlignment="Center">
+                    <StackPanel x:Name="AccountPanel" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" Margin="4,0,0,0">
+                        <Ellipse x:Name="ConnectionDot" Width="7" Height="7" Fill="{ThemeResource SystemFillColorSuccessBrush}" />
+                        <TextBlock x:Name="AccountLabel" TextTrimming="CharacterEllipsis" MaxWidth="140"
+                                   Style="{StaticResource CaptionTextBlockStyle}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                </ContentControl>
+                <StackPanel x:Name="FootButtons" Grid.Column="2" Orientation="Horizontal" Spacing="2">
+                    <Button x:Name="SettingsButton" Style="{StaticResource QuietButtonStyle}" Click="Settings_Click" ToolTipService.ToolTip="Settings (Ctrl+,)"
+                            AutomationProperties.Name="Settings">
+                        <FontIcon Glyph="&#xE713;" FontSize="14" />
+                    </Button>
+                    <Button x:Name="AddButton" Style="{StaticResource QuietButtonStyle}" Click="Add_Click" ToolTipService.ToolTip="Add"
+                            AutomationProperties.Name="Add to Sidebar">
+                        <FontIcon Glyph="&#xE710;" FontSize="14" />
+                    </Button>
+                    <Button Style="{StaticResource QuietButtonStyle}" ToolTipService.ToolTip="Account" AutomationProperties.Name="Account"
+                            AutomationProperties.AutomationId="shell.account">
+                        <FontIcon Glyph="&#xE77B;" FontSize="14" />
+                        <Button.Flyout>
+                            <MenuFlyout x:Name="AccountMenu" Placement="TopEdgeAlignedRight">
+                                <MenuFlyoutItem x:Name="AccountItem" IsEnabled="False" />
+                                <MenuFlyoutSeparator />
+                                <MenuFlyoutItem Text="Refresh" Click="Refresh_Click">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xE72C;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutItem Text="Sign out" Click="SignOut_Click">
+                                    <MenuFlyoutItem.Icon><FontIcon Glyph="&#xF3B1;" /></MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                            </MenuFlyout>
+                        </Button.Flyout>
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Grid>
+
+        <!-- The sidebar's edge: drags its width (open) or the rail's names in and out (folded). -->
+        <Border x:Name="Grip" Width="6" HorizontalAlignment="Right" Background="Transparent"
+                PointerPressed="Grip_PointerPressed" PointerMoved="Grip_PointerMoved"
+                PointerReleased="Grip_PointerReleased" PointerCaptureLost="Grip_PointerCaptureLost" />
+
+        <!-- What the sidebar opened -->
+        <Border Grid.Column="1" Background="{ThemeResource LayerFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1,1,0,0" CornerRadius="8,0,0,0">
+            <Grid x:Name="PaneGrid">
+                <Frame x:Name="ContentFrame" />
+                <StackPanel x:Name="ContentPlaceholder" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="6" Margin="40">
+                    <FontIcon Glyph="&#xE8A1;" FontSize="34" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                    <TextBlock x:Name="PlaceholderTitle" Text="No Chat Open" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                    <TextBlock x:Name="PlaceholderText" Text="Choose a bot to open its chat." HorizontalAlignment="Center"
+                               TextWrapping="Wrap" TextAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                </StackPanel>
+                <!-- The Undo pill ("Archived “Work”", "Hidden · Undo"): over the pane, centred, 16 in from its edges and 8
+                     above its foot or the chat's message box, as the Mac's (App/Kit/UndoPill.swift `shownPane`); in the
+                     sidebar's foot the folded rail cut it to "Arc" (Hermes.Core.Shell.UndoPillPlacement). The pill's own
+                     margin is 6, so the host's is 10 at the sides and the lift less 6 below. -->
+                <Grid x:Name="PillHost" VerticalAlignment="Bottom" HorizontalAlignment="Stretch" Margin="10,0,10,2" />
+            </Grid>
+        </Border>
+    </Grid>
+</Page>

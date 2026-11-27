@@ -1,0 +1,93 @@
+{
+  "agent" : {
+    "enabled" : true,
+    "max_turns" : 120,
+    "nothing" : null,
+    "ratio" : 0.5
+  },
+  "cookie_jar" : [
+    "«left out of this export»",
+    "«left out of this export»"
+  ],
+  "empty" : {
+
+  },
+  "fallback_providers" : [
+    {
+      "api_key" : "«left out of this export»",
+      "model" : "m",
+      "provider" : "openrouter"
+    }
+  ],
+  "github_pat" : "«left out of this export»",
+  "list" : [
+
+  ],
+  "mcp_servers" : {
+    "files" : {
+      "args" : [
+        "files-mcp",
+        "--api-key",
+        "«left out of this export»",
+        "--verbose",
+        "--token=«left out of this export»",
+        "API_TOKEN=«left out of this export»",
+        "plain",
+        "Authorization: «left out of this export»",
+        "«left out of this export»",
+        "«left out of this export»",
+        "ALLLETTERSNODIGITSHERE"
+      ],
+      "command" : "npx",
+      "env" : {
+        "DEMO_KEY" : "«left out of this export»",
+        "EMPTY" : "",
+        "REF" : "${X}"
+      }
+    },
+    "github" : {
+      "headers" : {
+        "Accept" : "application/json",
+        "Authorization" : "«left out of this export»",
+        "Content-Type" : "application/json",
+        "X-Ref" : "${GH_TOKEN}"
+      },
+      "url" : "https://api.example.com/mcp/"
+    },
+    "plain" : {
+      "command" : "run",
+      "credential_file" : "«left out of this export»",
+      "key_env" : "X",
+      "timeout" : 30
+    }
+  },
+  "model" : {
+    "api_key" : "«left out of this export»",
+    "api_key_env" : "DEMO_API_KEY",
+    "base_url" : "https://«left out of this export»:«left out of this export»@llm.example.com/v1?api_key=«left out of this export»&page=2",
+    "default" : "demo-model",
+    "provider" : "anthropic"
+  },
+  "notes" : "my key is «left out of this export» and jwt «left out of this export» here",
+  "providers" : {
+    "openrouter" : {
+      "api_key" : "«left out of this export»",
+      "password" : "${DEMO_PASSWORD}",
+      "password_store" : "keychain",
+      "secret_backend" : "vault",
+      "token" : ""
+    }
+  },
+  "terminal" : {
+    "cwd" : "~/work",
+    "env_passthrough" : [
+      "GITHUB_TOKEN"
+    ],
+    "url" : "https://example.com/path?sig=«left out of this export»&q=ok"
+  },
+  "toolsets" : [
+    "hermes-cli",
+    "web"
+  ],
+  "unicode" : "café – «quoted» / slash"
+}

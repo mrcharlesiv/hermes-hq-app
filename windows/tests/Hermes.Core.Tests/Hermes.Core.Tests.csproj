@@ -1,0 +1,56 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.2" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <!-- Exercise the Find walk's actual geometry checks without pretending to run XAML on this host. -->
+    <Compile Include="../../src/HermesHQ.Windows/Services/ProofWalks.FindReflow.cs" Link="Proof/FindPaneEvidence.cs" />
+    <!-- Exercise the shipping quit registrations and lifetime hooks without starting WinUI or OS services.
+         The historical WalkShutdownReceipt is only a temp-file sink in this test assembly, never in the app. -->
+    <Compile Include="../../src/HermesHQ.Windows/Services/AppShutdown.cs" Link="Shutdown/Production/AppShutdown.cs" />
+    <Compile Include="../../src/HermesHQ.Windows/Services/WindowShutdown.cs" Link="Shutdown/Production/WindowShutdown.cs" />
+    <Compile Include="../../src/HermesHQ.Windows/Services/AppState.Switch.cs" Link="Shutdown/Production/AppState.Switch.cs" />
+    <Compile Include="../../src/HermesHQ.Windows/Features/Settings/CompletionCue.cs" Link="Shutdown/Production/CompletionCue.cs" />
+    <Compile Include="../../src/HermesHQ.Windows/Features/Jobs/JobsSidebarBadge.cs" Link="Shutdown/Production/JobsSidebarBadge.cs" />
+    <Compile Include="../../src/HermesHQ.Windows/Features/Gateways/GatewaysFeature.News.cs" Link="Shutdown/Production/GatewaysFeature.News.cs" />
+    <Compile Include="../../src/HermesHQ.Windows/Features/Gateways/LaunchFlow.cs" Link="Shutdown/Production/LaunchFlow.cs" />
+    <Compile Include="../../src/HermesHQ.Windows/Features/Gateways/OfflineView.Countdown.cs" Link="Shutdown/Production/OfflineView.Countdown.cs" />
+    <Compile Include="../../src/HermesHQ.Windows/Pages/ChatPage.Lifetime.cs" Link="Shutdown/Production/ChatPage.Lifetime.cs" />
+    <Compile Include="../../src/HermesHQ.Windows/ViewModels/ChatViewModel.Lifetime.cs" Link="Shutdown/Production/ChatViewModel.Lifetime.cs" />
+    <Compile Include="../../src/HermesHQ.Windows/Shell/ChatExtensions.cs" Link="Shutdown/Production/ChatExtensions.cs" />
+    <Compile Include="../../src/HermesHQ.Windows/Features/Artifacts/ArtifactFileWindow.Lifetime.cs" Link="Shutdown/Production/ArtifactFileWindow.Lifetime.cs" />
+    <Compile Include="../../src/HermesHQ.Windows/Features/Attachments/MediaViewerWindow.Lifetime.cs" Link="Shutdown/Production/MediaViewerWindow.Lifetime.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Hermes.Core\Hermes.Core.csproj" />
+    <!-- [WIN-INSTALL-PACK] The unsigned local MSIX pack's plan and checks (MsixPackTests). -->
+    <ProjectReference Include="..\..\tools\msix-pack\MsixPack.csproj" />
+    <!-- [WIN-MATH-ENGINE] The typesetter behind MathTypeset (MathEngineTests). -->
+    <ProjectReference Include="..\..\src\Hermes.Math\Hermes.Math.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The JSON the real fixtures sent, shared with the Swift tests. -->
+    <None Include="../../../Tests/Fixtures/**/*.json" LinkBase="Fixtures" CopyToOutputDirectory="PreserveNewest" />
+    <!-- [WIN-SCREEN-RFB-CORE] The RFB decoder vectors the Swift tests read (screen-gateway.py emit-vectors), and the
+         test JPEGs the Swift ScreenTestImage makes, saved once (.NET has no JPEG encoder). -->
+    <None Include="../../../Tests/Fixtures/screen/*.rfb;../../../Tests/Fixtures/screen/*.bgrx" LinkBase="Fixtures/screen" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Screen/Fixtures/*.jpg" CopyToOutputDirectory="PreserveNewest" />
+    <!-- [WIN-MATH-ENGINE] What the Mac's SwiftMath measures for the golden formulas (tools/swiftmath-metrics). -->
+    <None Update="Typeset/mac-swiftmath-metrics.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,47 @@
+# Installed INSTEAD OF the broad desktop workflow for this separately approved component test.
+name: Windows app proof (search, chat, keyboard and accessible names)
+on:
+  push:
+    branches: [feat/windows]
+permissions:
+  contents: read
+jobs:
+  app-proof:
+    if: github.repository == 'mrcharlesiv/hermes-hq-windows' && github.ref == 'refs/heads/feat/windows'
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: windows
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test the evidence contract
+        run: python tests/test_app_proof.py
+      - name: Core tests
+        run: dotnet test HermesHQ.sln --filter "Category!=E2E"
+      - name: Build the native app
+        run: dotnet publish src/HermesHQ.Windows -c Release -r win-x64 -p:Platform=x64 -o build/app
+      - name: Run the app against local stand-ins
+        run: python ci/app_proof.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots
+          retention-days: 1
+          if-no-files-found: warn
+          path: |
+            windows/build/shots/*.png
+            windows/build/shots/automation.log
+            windows/build/shots/hermes-hq.log
+            windows/build/shots/hermes-hq.log.1

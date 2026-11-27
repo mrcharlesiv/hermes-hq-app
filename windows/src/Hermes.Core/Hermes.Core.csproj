@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The C# twin of HermesKit: gateway protocol, auth, models, transcript fold. No UI, no Windows APIs, so it builds
+       and tests on any OS. The WinUI app (HermesHQ.Windows) supplies the Windows-only services behind its interfaces. -->
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>13</LangVersion>
+    <RootNamespace>Hermes.Core</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Hermes.Core.Tests" />
+    <EmbeddedResource Include="Settings/licenses.json" LogicalName="Hermes.Core.Settings.licenses.json" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,1070 @@
+[
+  {
+    "ascent" : 15.7548,
+    "block" : false,
+    "descent" : 0.209,
+    "latex" : "E = mc^2",
+    "size" : 19,
+    "source" : "E = mc^2",
+    "width" : 70.91855555555556
+  },
+  {
+    "ascent" : 15.7548,
+    "block" : true,
+    "descent" : 0.209,
+    "latex" : "E = mc^2",
+    "size" : 19,
+    "source" : "E = mc^2",
+    "width" : 70.91855555555556
+  },
+  {
+    "ascent" : 27.893900000000002,
+    "block" : false,
+    "descent" : 10.773,
+    "latex" : "x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}",
+    "size" : 19,
+    "source" : "x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}",
+    "width" : 165.06144444444445
+  },
+  {
+    "ascent" : 34.5819,
+    "block" : true,
+    "descent" : 13.243,
+    "latex" : "x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}",
+    "size" : 19,
+    "source" : "x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}",
+    "width" : 168.23444444444445
+  },
+  {
+    "ascent" : 33.6889,
+    "block" : false,
+    "descent" : 24.0711,
+    "latex" : "\\| \\vec{v} \\| = \\sqrt{\\sum_{i=1}^{n} v_i^2}",
+    "size" : 19,
+    "source" : "\\lVert \\vec{v} \\rVert = \\sqrt{\\sum_{i=1}^{n} v_i^2}",
+    "width" : 114.58034444444444
+  },
+  {
+    "ascent" : 34.619899999999994,
+    "block" : true,
+    "descent" : 23.140100000000004,
+    "latex" : "\\| \\vec{v} \\| = \\sqrt{\\sum_{i=1}^{n} v_i^2}",
+    "size" : 19,
+    "source" : "\\lVert \\vec{v} \\rVert = \\sqrt{\\sum_{i=1}^{n} v_i^2}",
+    "width" : 114.58034444444444
+  },
+  {
+    "ascent" : 15.808000000000002,
+    "block" : false,
+    "descent" : 0.817,
+    "latex" : "\\vec{v} \\in \\mathbb{R}^n",
+    "size" : 19,
+    "source" : "\\vec{v} \\in \\mathbb{R}^n",
+    "width" : 52.56455555555556
+  },
+  {
+    "ascent" : 15.808000000000002,
+    "block" : true,
+    "descent" : 0.817,
+    "latex" : "\\vec{v} \\in \\mathbb{R}^n",
+    "size" : 19,
+    "source" : "\\vec{v} \\in \\mathbb{R}^n",
+    "width" : 52.56455555555556
+  },
+  {
+    "ascent" : 28.412599999999998,
+    "block" : false,
+    "descent" : 20.7271,
+    "latex" : "\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2} \\qquad \\int_{0}^{\\infty} e^{-x^2}\\,dx = \\frac{\\sqrt{\\pi}}{2}",
+    "size" : 19,
+    "source" : "\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2} \\qquad \\int_{0}^{\\infty} e^{-x^2}\\,dx = \\frac{\\sqrt{\\pi}}{2}",
+    "width" : 275.85867777777776
+  },
+  {
+    "ascent" : 28.899,
+    "block" : true,
+    "descent" : 20.7271,
+    "latex" : "\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2} \\qquad \\int_{0}^{\\infty} e^{-x^2}\\,dx = \\frac{\\sqrt{\\pi}}{2}",
+    "size" : 19,
+    "source" : "\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2} \\qquad \\int_{0}^{\\infty} e^{-x^2}\\,dx = \\frac{\\sqrt{\\pi}}{2}",
+    "width" : 275.85867777777776
+  },
+  {
+    "ascent" : 27.6659,
+    "block" : false,
+    "descent" : 18.1659,
+    "latex" : "\\begin{aligned} (a+b)^2 &= (a+b)(a+b) \\\\ &= a^2 + 2ab + b^2 \\end{aligned}",
+    "size" : 19,
+    "source" : "\\begin{aligned} (a+b)^2 &= (a+b)(a+b) \\\\ &= a^2 + 2ab + b^2 \\end{aligned}",
+    "width" : 200.61888888888888
+  },
+  {
+    "ascent" : 27.6659,
+    "block" : true,
+    "descent" : 18.1659,
+    "latex" : "\\begin{aligned} (a+b)^2 &= (a+b)(a+b) \\\\ &= a^2 + 2ab + b^2 \\end{aligned}",
+    "size" : 19,
+    "source" : "\\begin{aligned} (a+b)^2 &= (a+b)(a+b) \\\\ &= a^2 + 2ab + b^2 \\end{aligned}",
+    "width" : 200.61888888888888
+  },
+  {
+    "ascent" : 24.7,
+    "block" : false,
+    "descent" : 15.2,
+    "latex" : "f(x) = \\begin{cases} x^2 & \\text{if } x \\ge 0 \\\\ -x & \\text{otherwise} \\end{cases}",
+    "size" : 19,
+    "source" : "f(x) = \\begin{cases} x^2 & \\text{if } x \\ge 0 \\\\ -x & \\text{otherwise} \\end{cases}",
+    "width" : 210.36377777777778
+  },
+  {
+    "ascent" : 24.7,
+    "block" : true,
+    "descent" : 15.2,
+    "latex" : "f(x) = \\begin{cases} x^2 & \\text{if } x \\ge 0 \\\\ -x & \\text{otherwise} \\end{cases}",
+    "size" : 19,
+    "source" : "f(x) = \\begin{cases} x^2 & \\text{if } x \\ge 0 \\\\ -x & \\text{otherwise} \\end{cases}",
+    "width" : 210.36377777777778
+  },
+  {
+    "ascent" : 22.8475,
+    "block" : false,
+    "descent" : 13.3475,
+    "latex" : "A = \\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}",
+    "size" : 19,
+    "source" : "A = \\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}",
+    "width" : 105.42677777777777
+  },
+  {
+    "ascent" : 22.8475,
+    "block" : true,
+    "descent" : 13.3475,
+    "latex" : "A = \\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}",
+    "size" : 19,
+    "source" : "A = \\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}",
+    "width" : 105.42677777777777
+  },
+  {
+    "ascent" : 22.8475,
+    "block" : false,
+    "descent" : 13.3475,
+    "latex" : "\\begin{bmatrix} 1 & 0 \\\\ 0 & 1 \\end{bmatrix} \\begin{vmatrix} a & b \\\\ c & d \\end{vmatrix} \\begin{Bmatrix} 1 \\\\ 2 \\end{Bmatrix}",
+    "size" : 19,
+    "source" : "\\begin{bmatrix} 1 & 0 \\\\ 0 & 1 \\end{bmatrix} \\begin{vmatrix} a & b \\\\ c & d \\end{vmatrix} \\begin{Bmatrix} 1 \\\\ 2 \\end{Bmatrix}",
+    "width" : 152.94366666666667
+  },
+  {
+    "ascent" : 22.8475,
+    "block" : true,
+    "descent" : 13.3475,
+    "latex" : "\\begin{bmatrix} 1 & 0 \\\\ 0 & 1 \\end{bmatrix} \\begin{vmatrix} a & b \\\\ c & d \\end{vmatrix} \\begin{Bmatrix} 1 \\\\ 2 \\end{Bmatrix}",
+    "size" : 19,
+    "source" : "\\begin{bmatrix} 1 & 0 \\\\ 0 & 1 \\end{bmatrix} \\begin{vmatrix} a & b \\\\ c & d \\end{vmatrix} \\begin{Bmatrix} 1 \\\\ 2 \\end{Bmatrix}",
+    "width" : 152.94366666666667
+  },
+  {
+    "ascent" : 33.2861,
+    "block" : false,
+    "descent" : 23.786099999999998,
+    "latex" : "\\begin{aligned} \\nabla \\cdot \\mathbf{E} &= \\frac{\\rho}{\\varepsilon_0} \\\\ \\nabla \\times \\mathbf{B} &= \\mu_0 \\mathbf{J} \\end{aligned}",
+    "size" : 19,
+    "source" : "\\begin{align} \\nabla \\cdot \\mathbf{E} &= \\frac{\\rho}{\\varepsilon_0} \\\\ \\nabla \\times \\mathbf{B} &= \\mu_0 \\mathbf{J} \\end{align}",
+    "width" : 110.39
+  },
+  {
+    "ascent" : 37.2001,
+    "block" : true,
+    "descent" : 27.7001,
+    "latex" : "\\begin{aligned} \\nabla \\cdot \\mathbf{E} &= \\frac{\\rho}{\\varepsilon_0} \\\\ \\nabla \\times \\mathbf{B} &= \\mu_0 \\mathbf{J} \\end{aligned}",
+    "size" : 19,
+    "source" : "\\begin{align} \\nabla \\cdot \\mathbf{E} &= \\frac{\\rho}{\\varepsilon_0} \\\\ \\nabla \\times \\mathbf{B} &= \\mu_0 \\mathbf{J} \\end{align}",
+    "width" : 110.39
+  },
+  {
+    "ascent" : 25.697499999999998,
+    "block" : false,
+    "descent" : 16.1975,
+    "latex" : "\\begin{aligned} a &= b  \\\\ c &= d  \\end{aligned}",
+    "size" : 19,
+    "source" : "\\begin{align*} a &= b \\tag{1} \\\\ c &= d \\label{eq:x} \\end{align*}",
+    "width" : 45.26855555555555
+  },
+  {
+    "ascent" : 25.697499999999998,
+    "block" : true,
+    "descent" : 16.1975,
+    "latex" : "\\begin{aligned} a &= b  \\\\ c &= d  \\end{aligned}",
+    "size" : 19,
+    "source" : "\\begin{align*} a &= b \\tag{1} \\\\ c &= d \\label{eq:x} \\end{align*}",
+    "width" : 45.26855555555555
+  },
+  {
+    "ascent" : 21.432,
+    "block" : false,
+    "descent" : 11.931999999999999,
+    "latex" : "\\frac{\\partial u}{\\partial t} = \\alpha \\nabla^2 u",
+    "size" : 19,
+    "source" : "\\begin{equation} \\dfrac{\\partial u}{\\partial t} = \\alpha \\nabla^2 u \\end{equation}",
+    "width" : 92.86355555555555
+  },
+  {
+    "ascent" : 26.467,
+    "block" : true,
+    "descent" : 13.452,
+    "latex" : "\\frac{\\partial u}{\\partial t} = \\alpha \\nabla^2 u",
+    "size" : 19,
+    "source" : "\\begin{equation} \\dfrac{\\partial u}{\\partial t} = \\alpha \\nabla^2 u \\end{equation}",
+    "width" : 92.86355555555555
+  },
+  {
+    "ascent" : 20.102,
+    "block" : false,
+    "descent" : 12.3234,
+    "latex" : "\\lim_{x \\to 0} \\frac{\\sin x}{x} = 1",
+    "size" : 19,
+    "source" : "\\lim_{x \\to 0} \\frac{\\sin x}{x} = 1",
+    "width" : 105.04804444444444
+  },
+  {
+    "ascent" : 25.346,
+    "block" : true,
+    "descent" : 13.243,
+    "latex" : "\\lim_{x \\to 0} \\frac{\\sin x}{x} = 1",
+    "size" : 19,
+    "source" : "\\lim_{x \\to 0} \\frac{\\sin x}{x} = 1",
+    "width" : 105.04804444444444
+  },
+  {
+    "ascent" : 21.774,
+    "block" : false,
+    "descent" : 12.274000000000001,
+    "latex" : "\\left( \\frac{a}{b} \\right)^n \\cdot \\binom{n}{k}",
+    "size" : 19,
+    "source" : "\\left( \\frac{a}{b} \\right)^n \\cdot \\binom{n}{k}",
+    "width" : 87.16566666666667
+  },
+  {
+    "ascent" : 27.474,
+    "block" : true,
+    "descent" : 17.974,
+    "latex" : "\\left( \\frac{a}{b} \\right)^n \\cdot \\binom{n}{k}",
+    "size" : 19,
+    "source" : "\\left( \\frac{a}{b} \\right)^n \\cdot \\binom{n}{k}",
+    "width" : 99.09766666666667
+  },
+  {
+    "ascent" : 14.25,
+    "block" : false,
+    "descent" : 4.8393,
+    "latex" : "\\mathcal{L} = \\operatorname{argmin}_\\theta \\mathbb{E}[\\ell(\\theta)]",
+    "size" : 19,
+    "source" : "\\mathcal{L} = \\operatorname{argmin}_\\theta \\mathbb{E}[\\ell(\\theta)]",
+    "width" : 159.17925555555553
+  },
+  {
+    "ascent" : 14.25,
+    "block" : true,
+    "descent" : 4.8393,
+    "latex" : "\\mathcal{L} = \\operatorname{argmin}_\\theta \\mathbb{E}[\\ell(\\theta)]",
+    "size" : 19,
+    "source" : "\\mathcal{L} = \\operatorname{argmin}_\\theta \\mathbb{E}[\\ell(\\theta)]",
+    "width" : 159.17925555555553
+  },
+  {
+    "ascent" : 14.212,
+    "block" : false,
+    "descent" : 4.712,
+    "latex" : "\\hat{y} = \\sigma(\\mathbf{W}\\mathbf{x} + \\mathbf{b})",
+    "size" : 19,
+    "source" : "\\hat{y} = \\sigma(\\mathbf{W}\\mathbf{x} + \\mathbf{b})",
+    "width" : 129.77
+  },
+  {
+    "ascent" : 14.212,
+    "block" : true,
+    "descent" : 4.712,
+    "latex" : "\\hat{y} = \\sigma(\\mathbf{W}\\mathbf{x} + \\mathbf{b})",
+    "size" : 19,
+    "source" : "\\hat{y} = \\sigma(\\mathbf{W}\\mathbf{x} + \\mathbf{b})",
+    "width" : 129.77
+  },
+  {
+    "ascent" : 26.41,
+    "block" : false,
+    "descent" : 16.834,
+    "latex" : "P(A \\mid B) = \\frac{P(B \\mid A)\\,P(A)}{P(B)}",
+    "size" : 19,
+    "source" : "P(A \\mid B) = \\frac{P(B \\mid A)\\,P(A)}{P(B)}",
+    "width" : 212.71133333333336
+  },
+  {
+    "ascent" : 27.113,
+    "block" : true,
+    "descent" : 17.746000000000002,
+    "latex" : "P(A \\mid B) = \\frac{P(B \\mid A)\\,P(A)}{P(B)}",
+    "size" : 19,
+    "source" : "P(A \\mid B) = \\frac{P(B \\mid A)\\,P(A)}{P(B)}",
+    "width" : 212.71133333333336
+  },
+  {
+    "ascent" : 13.186,
+    "block" : false,
+    "descent" : 4.8393,
+    "latex" : "\\overline{z} \\cdot {a + b}_{c} \\to \\infty",
+    "size" : 19,
+    "source" : "\\overline{z} \\cdot \\underbrace{a + b}_{c} \\to \\infty",
+    "width" : 119.40634444444446
+  },
+  {
+    "ascent" : 13.186,
+    "block" : true,
+    "descent" : 4.8393,
+    "latex" : "\\overline{z} \\cdot {a + b}_{c} \\to \\infty",
+    "size" : 19,
+    "source" : "\\overline{z} \\cdot \\underbrace{a + b}_{c} \\to \\infty",
+    "width" : 119.40634444444446
+  },
+  {
+    "ascent" : 25.697499999999998,
+    "block" : false,
+    "descent" : 16.1975,
+    "latex" : "\\begin{gather} a = b \\\\ c = d \\end{gather}",
+    "size" : 19,
+    "source" : "\\begin{gather} a = b \\\\ c = d \\end{gather}",
+    "width" : 43.53955555555555
+  },
+  {
+    "ascent" : 25.697499999999998,
+    "block" : true,
+    "descent" : 16.1975,
+    "latex" : "\\begin{gather} a = b \\\\ c = d \\end{gather}",
+    "size" : 19,
+    "source" : "\\begin{gather} a = b \\\\ c = d \\end{gather}",
+    "width" : 43.53955555555555
+  },
+  {
+    "ascent" : 14.668,
+    "block" : false,
+    "descent" : 4.37,
+    "latex" : "{x = 1} \\quad \\text{and} \\quad \\boldsymbol{\\beta} \\neq \\emptyset",
+    "size" : 19,
+    "source" : "\\boxed{x = 1} \\quad \\text{and} \\quad \\boldsymbol{\\beta} \\neq \\emptyset",
+    "width" : 130.04444444444445
+  },
+  {
+    "ascent" : 14.668,
+    "block" : true,
+    "descent" : 4.37,
+    "latex" : "{x = 1} \\quad \\text{and} \\quad \\boldsymbol{\\beta} \\neq \\emptyset",
+    "size" : 19,
+    "source" : "\\boxed{x = 1} \\quad \\text{and} \\quad \\boldsymbol{\\beta} \\neq \\emptyset",
+    "width" : 130.04444444444445
+  },
+  {
+    "ascent" : 22.8475,
+    "block" : false,
+    "descent" : 13.3475,
+    "latex" : "\\begin{matrix} a & b \\\\ c & d \\end{matrix}",
+    "size" : 19,
+    "source" : "\\begin{array}{cc} a & b \\\\ c & d \\end{array}",
+    "width" : 38.931
+  },
+  {
+    "ascent" : 22.8475,
+    "block" : true,
+    "descent" : 13.3475,
+    "latex" : "\\begin{matrix} a & b \\\\ c & d \\end{matrix}",
+    "size" : 19,
+    "source" : "\\begin{array}{cc} a & b \\\\ c & d \\end{array}",
+    "width" : 38.931
+  },
+  {
+    "ascent" : 15.7548,
+    "block" : false,
+    "descent" : 4.712,
+    "latex" : "a \\equiv b \\pmod{n}, \\quad \\mathrm{d}x, \\quad x \\mapsto x^2, \\quad \\forall \\epsilon > 0\\ \\exists \\delta",
+    "size" : 19,
+    "source" : "a \\equiv b \\pmod{n}, \\quad \\mathrm{d}x, \\quad x \\mapsto x^2, \\quad \\forall \\epsilon > 0\\ \\exists \\delta",
+    "width" : 299.0135555555555
+  },
+  {
+    "ascent" : 15.7548,
+    "block" : true,
+    "descent" : 4.712,
+    "latex" : "a \\equiv b \\pmod{n}, \\quad \\mathrm{d}x, \\quad x \\mapsto x^2, \\quad \\forall \\epsilon > 0\\ \\exists \\delta",
+    "size" : 19,
+    "source" : "a \\equiv b \\pmod{n}, \\quad \\mathrm{d}x, \\quad x \\mapsto x^2, \\quad \\forall \\epsilon > 0\\ \\exists \\delta",
+    "width" : 299.0135555555555
+  },
+  {
+    "ascent" : 15.6883,
+    "block" : false,
+    "descent" : 1.577,
+    "latex" : "e^{i\\pi} + 1 = 0",
+    "size" : 19,
+    "source" : "e^{i\\pi} + 1 = 0",
+    "width" : 89.6515
+  },
+  {
+    "ascent" : 15.6883,
+    "block" : true,
+    "descent" : 1.577,
+    "latex" : "e^{i\\pi} + 1 = 0",
+    "size" : 19,
+    "source" : "e^{i\\pi} + 1 = 0",
+    "width" : 89.6515
+  },
+  {
+    "ascent" : 11.077,
+    "block" : false,
+    "descent" : 4.693,
+    "latex" : "x_1 + x_2",
+    "size" : 19,
+    "source" : "x_1 + x_2",
+    "width" : 59.32644444444445
+  },
+  {
+    "ascent" : 11.077,
+    "block" : true,
+    "descent" : 4.693,
+    "latex" : "x_1 + x_2",
+    "size" : 19,
+    "source" : "x_1 + x_2",
+    "width" : 59.32644444444445
+  },
+  {
+    "ascent" : 13.414000000000001,
+    "block" : false,
+    "descent" : 3.686,
+    "latex" : "\\alpha \\le \\beta",
+    "size" : 19,
+    "source" : "\\alpha \\le \\beta",
+    "width" : 48.40355555555555
+  },
+  {
+    "ascent" : 13.414000000000001,
+    "block" : true,
+    "descent" : 3.686,
+    "latex" : "\\alpha \\le \\beta",
+    "size" : 19,
+    "source" : "\\alpha \\le \\beta",
+    "width" : 48.40355555555555
+  },
+  {
+    "ascent" : 16.127200000000002,
+    "block" : false,
+    "descent" : 0.209,
+    "latex" : "a^{b^c}",
+    "size" : 19,
+    "source" : "a^{b^c}",
+    "width" : 18.63615
+  },
+  {
+    "ascent" : 16.127200000000002,
+    "block" : true,
+    "descent" : 0.209,
+    "latex" : "a^{b^c}",
+    "size" : 19,
+    "source" : "a^{b^c}",
+    "width" : 18.63615
+  },
+  {
+    "ascent" : 8.398,
+    "block" : false,
+    "descent" : 7.419499999999999,
+    "latex" : "x_{ij}",
+    "size" : 19,
+    "source" : "x_{ij}",
+    "width" : 20.9361
+  },
+  {
+    "ascent" : 8.398,
+    "block" : true,
+    "descent" : 7.419499999999999,
+    "latex" : "x_{ij}",
+    "size" : 19,
+    "source" : "x_{ij}",
+    "width" : 20.9361
+  },
+  {
+    "ascent" : 12.7756,
+    "block" : false,
+    "descent" : 0.209,
+    "latex" : "a^{x_1}",
+    "size" : 19,
+    "source" : "a^{x_1}",
+    "width" : 20.9836
+  },
+  {
+    "ascent" : 12.7756,
+    "block" : true,
+    "descent" : 0.209,
+    "latex" : "a^{x_1}",
+    "size" : 19,
+    "source" : "a^{x_1}",
+    "width" : 20.9836
+  },
+  {
+    "ascent" : 15.7548,
+    "block" : false,
+    "descent" : 0.209,
+    "latex" : "x^{2}",
+    "size" : 19,
+    "source" : "x^{2}",
+    "width" : 17.518
+  },
+  {
+    "ascent" : 15.7548,
+    "block" : true,
+    "descent" : 0.209,
+    "latex" : "x^{2}",
+    "size" : 19,
+    "source" : "x^{2}",
+    "width" : 17.518
+  },
+  {
+    "ascent" : 8.398,
+    "block" : false,
+    "descent" : 0.209,
+    "latex" : "a",
+    "size" : 19,
+    "source" : "  \\begin{equation*} a \\nonumber \\end{equation*}  ",
+    "width" : 10.051
+  },
+  {
+    "ascent" : 8.398,
+    "block" : true,
+    "descent" : 0.209,
+    "latex" : "a",
+    "size" : 19,
+    "source" : "  \\begin{equation*} a \\nonumber \\end{equation*}  ",
+    "width" : 10.051
+  },
+  {
+    "ascent" : 23.3035,
+    "block" : false,
+    "descent" : 13.8035,
+    "latex" : "\\begin{gather} a \\\\ b \\end{gather}",
+    "size" : 19,
+    "source" : "\\begin{multline*} a \\\\ b \\end{multline*}",
+    "width" : 10.051
+  },
+  {
+    "ascent" : 23.3035,
+    "block" : true,
+    "descent" : 13.8035,
+    "latex" : "\\begin{gather} a \\\\ b \\end{gather}",
+    "size" : 19,
+    "source" : "\\begin{multline*} a \\\\ b \\end{multline*}",
+    "width" : 10.051
+  },
+  {
+    "ascent" : 9.0535,
+    "block" : false,
+    "descent" : 0,
+    "latex" : "\\begin{gather} a \\end{gather}",
+    "size" : 19,
+    "source" : "\\begin{gathered} a \\end{gathered}",
+    "width" : 10.051
+  },
+  {
+    "ascent" : 9.0535,
+    "block" : true,
+    "descent" : 0,
+    "latex" : "\\begin{gather} a \\end{gather}",
+    "size" : 19,
+    "source" : "\\begin{gathered} a \\end{gathered}",
+    "width" : 10.051
+  },
+  {
+    "ascent" : 11.4475,
+    "block" : false,
+    "descent" : 1.9475000000000002,
+    "latex" : "\\begin{eqnarray} a &=& b \\end{eqnarray}",
+    "size" : 19,
+    "source" : "\\begin{eqnarray*} a &=& b \\end{eqnarray*}",
+    "width" : 76.26177777777777
+  },
+  {
+    "ascent" : 11.4475,
+    "block" : true,
+    "descent" : 1.9475000000000002,
+    "latex" : "\\begin{eqnarray} a &=& b \\end{eqnarray}",
+    "size" : 19,
+    "source" : "\\begin{eqnarray*} a &=& b \\end{eqnarray*}",
+    "width" : 76.26177777777777
+  },
+  {
+    "ascent" : 14.25,
+    "block" : false,
+    "descent" : 4.75,
+    "latex" : "\\begin{cases} a & b \\end{cases}",
+    "size" : 19,
+    "source" : "\\begin{dcases} a & b \\end{dcases}",
+    "width" : 51.97977777777777
+  },
+  {
+    "ascent" : 14.25,
+    "block" : true,
+    "descent" : 4.75,
+    "latex" : "\\begin{cases} a & b \\end{cases}",
+    "size" : 19,
+    "source" : "\\begin{dcases} a & b \\end{dcases}",
+    "width" : 51.97977777777777
+  },
+  {
+    "ascent" : 14.212,
+    "block" : false,
+    "descent" : 4.712,
+    "latex" : "\\begin{pmatrix} 1 \\end{pmatrix}",
+    "size" : 19,
+    "source" : "\\begin{pmatrix*} 1 \\end{pmatrix*}",
+    "width" : 28.504222222222225
+  },
+  {
+    "ascent" : 14.212,
+    "block" : true,
+    "descent" : 4.712,
+    "latex" : "\\begin{pmatrix} 1 \\end{pmatrix}",
+    "size" : 19,
+    "source" : "\\begin{pmatrix*} 1 \\end{pmatrix*}",
+    "width" : 28.504222222222225
+  },
+  {
+    "ascent" : 14.25,
+    "block" : false,
+    "descent" : 4.75,
+    "latex" : "\\begin{bmatrix} 1 \\end{bmatrix}",
+    "size" : 19,
+    "source" : "\\begin{bmatrix*} 1 \\end{bmatrix*}",
+    "width" : 24.28622222222222
+  },
+  {
+    "ascent" : 14.25,
+    "block" : true,
+    "descent" : 4.75,
+    "latex" : "\\begin{bmatrix} 1 \\end{bmatrix}",
+    "size" : 19,
+    "source" : "\\begin{bmatrix*} 1 \\end{bmatrix*}",
+    "width" : 24.28622222222222
+  },
+  {
+    "ascent" : 11.077,
+    "block" : false,
+    "descent" : 1.577,
+    "latex" : "\\begin{matrix} 1 \\end{matrix}",
+    "size" : 19,
+    "source" : "\\begin{matrix*} 1 \\end{matrix*}",
+    "width" : 9.5
+  },
+  {
+    "ascent" : 11.077,
+    "block" : true,
+    "descent" : 1.577,
+    "latex" : "\\begin{matrix} 1 \\end{matrix}",
+    "size" : 19,
+    "source" : "\\begin{matrix*} 1 \\end{matrix*}",
+    "width" : 9.5
+  },
+  {
+    "ascent" : 11.4475,
+    "block" : false,
+    "descent" : 1.9475000000000002,
+    "latex" : "\\begin{matrix} a & b \\end{matrix}",
+    "size" : 19,
+    "source" : "\\begin{array} \n {l|r} a & b \\end{array}",
+    "width" : 37.202
+  },
+  {
+    "ascent" : 11.4475,
+    "block" : true,
+    "descent" : 1.9475000000000002,
+    "latex" : "\\begin{matrix} a & b \\end{matrix}",
+    "size" : 19,
+    "source" : "\\begin{array} \n {l|r} a & b \\end{array}",
+    "width" : 37.202
+  },
+  {
+    "ascent" : 20.14,
+    "block" : false,
+    "descent" : 10.564,
+    "latex" : "\\binom{n}{k} + \\binom{n}{k} + \\frac{1}{2}",
+    "size" : 19,
+    "source" : "\\tbinom{n}{k} + \\dbinom{n}{k} + \\tfrac{1}{2}",
+    "width" : 110.82488888888889
+  },
+  {
+    "ascent" : 27.474,
+    "block" : true,
+    "descent" : 17.974,
+    "latex" : "\\binom{n}{k} + \\binom{n}{k} + \\frac{1}{2}",
+    "size" : 19,
+    "source" : "\\tbinom{n}{k} + \\dbinom{n}{k} + \\tfrac{1}{2}",
+    "width" : 134.6888888888889
+  },
+  {
+    "ascent" : 14.25,
+    "block" : false,
+    "descent" : 4.75,
+    "latex" : "| x | + \\mathbb{1} + ( ) [ ]",
+    "size" : 19,
+    "source" : "\\lvert x \\rvert + \\mathds{1} + \\bigl( \\Bigr) \\biggl[ \\Biggr]",
+    "width" : 103.79488888888889
+  },
+  {
+    "ascent" : 14.25,
+    "block" : true,
+    "descent" : 4.75,
+    "latex" : "| x | + \\mathbb{1} + ( ) [ ]",
+    "size" : 19,
+    "source" : "\\lvert x \\rvert + \\mathds{1} + \\bigl( \\Bigr) \\biggl[ \\Biggr]",
+    "width" : 103.79488888888889
+  },
+  {
+    "block" : false,
+    "latex" : "a   b \\nonumbers",
+    "size" : 19,
+    "source" : "a \\tag*{A} \\notag b \\nonumbers"
+  },
+  {
+    "block" : true,
+    "latex" : "a   b \\nonumbers",
+    "size" : 19,
+    "source" : "a \\tag*{A} \\notag b \\nonumbers"
+  },
+  {
+    "ascent" : 12.7756,
+    "block" : false,
+    "descent" : 0.209,
+    "latex" : "{a}^{n}",
+    "size" : 19,
+    "source" : "\\displaystyle \\overbrace{a}^{n} \\textstyle",
+    "width" : 18.031
+  },
+  {
+    "ascent" : 12.7756,
+    "block" : true,
+    "descent" : 0.209,
+    "latex" : "{a}^{n}",
+    "size" : 19,
+    "source" : "\\displaystyle \\overbrace{a}^{n} \\textstyle",
+    "width" : 18.031
+  },
+  {
+    "ascent" : 8.398,
+    "block" : false,
+    "descent" : 0.209,
+    "latex" : "x",
+    "size" : 19,
+    "source" : "\\begin{math} x \\end{math}",
+    "width" : 10.868
+  },
+  {
+    "ascent" : 8.398,
+    "block" : true,
+    "descent" : 0.209,
+    "latex" : "x",
+    "size" : 19,
+    "source" : "\\begin{math} x \\end{math}",
+    "width" : 10.868
+  },
+  {
+    "ascent" : 8.398,
+    "block" : false,
+    "descent" : 3.895,
+    "latex" : "y",
+    "size" : 19,
+    "source" : "\\begin{displaymath} y \\end{displaymath}",
+    "width" : 9.31
+  },
+  {
+    "ascent" : 8.398,
+    "block" : true,
+    "descent" : 3.895,
+    "latex" : "y",
+    "size" : 19,
+    "source" : "\\begin{displaymath} y \\end{displaymath}",
+    "width" : 9.31
+  },
+  {
+    "block" : false,
+    "latex" : "",
+    "size" : 19,
+    "source" : "\\begin{equation}\\label{e1}\\end{equation}"
+  },
+  {
+    "block" : true,
+    "latex" : "",
+    "size" : 19,
+    "source" : "\\begin{equation}\\label{e1}\\end{equation}"
+  },
+  {
+    "block" : false,
+    "latex" : "{}",
+    "size" : 19,
+    "source" : "\\boxed{}"
+  },
+  {
+    "block" : true,
+    "latex" : "{}",
+    "size" : 19,
+    "source" : "\\boxed{}"
+  },
+  {
+    "ascent" : 14.174,
+    "block" : false,
+    "descent" : 0.209,
+    "latex" : "\\tilde{x}",
+    "size" : 19,
+    "source" : "\\tilde{x}",
+    "width" : 10.868
+  },
+  {
+    "ascent" : 14.174,
+    "block" : true,
+    "descent" : 0.209,
+    "latex" : "\\tilde{x}",
+    "size" : 19,
+    "source" : "\\tilde{x}",
+    "width" : 10.868
+  },
+  {
+    "block" : false,
+    "latex" : "\\over",
+    "size" : 19,
+    "source" : "\\over"
+  },
+  {
+    "block" : true,
+    "latex" : "\\over",
+    "size" : 19,
+    "source" : "\\over"
+  },
+  {
+    "block" : false,
+    "latex" : "\\Bigg",
+    "size" : 19,
+    "source" : "\\Bigg"
+  },
+  {
+    "block" : true,
+    "latex" : "\\Bigg",
+    "size" : 19,
+    "source" : "\\Bigg"
+  },
+  {
+    "block" : false,
+    "latex" : "\\big",
+    "size" : 19,
+    "source" : "\\big"
+  },
+  {
+    "block" : true,
+    "latex" : "\\big",
+    "size" : 19,
+    "source" : "\\big"
+  },
+  {
+    "block" : false,
+    "latex" : "\\under",
+    "size" : 19,
+    "source" : "\\under"
+  },
+  {
+    "block" : true,
+    "latex" : "\\under",
+    "size" : 19,
+    "source" : "\\under"
+  },
+  {
+    "ascent" : 8.588,
+    "block" : false,
+    "descent" : 0.152,
+    "latex" : "\\bm{x}",
+    "size" : 19,
+    "source" : "\\bm{x}",
+    "width" : 12.520999999999999
+  },
+  {
+    "ascent" : 8.588,
+    "block" : true,
+    "descent" : 0.152,
+    "latex" : "\\bm{x}",
+    "size" : 19,
+    "source" : "\\bm{x}",
+    "width" : 12.520999999999999
+  },
+  {
+    "ascent" : 8.93,
+    "block" : false,
+    "descent" : 3.971,
+    "latex" : "\\mathfrak{g}",
+    "size" : 19,
+    "source" : "\\mathfrak{g}",
+    "width" : 9.557
+  },
+  {
+    "ascent" : 8.93,
+    "block" : true,
+    "descent" : 3.971,
+    "latex" : "\\mathfrak{g}",
+    "size" : 19,
+    "source" : "\\mathfrak{g}",
+    "width" : 9.557
+  },
+  {
+    "ascent" : 25.858999999999998,
+    "block" : false,
+    "descent" : 16.358999999999998,
+    "latex" : "\\oint",
+    "size" : 19,
+    "source" : "\\oint",
+    "width" : 18.980999999999998
+  },
+  {
+    "ascent" : 25.858999999999998,
+    "block" : true,
+    "descent" : 16.358999999999998,
+    "latex" : "\\oint",
+    "size" : 19,
+    "source" : "\\oint",
+    "width" : 18.980999999999998
+  },
+  {
+    "ascent" : 18.05,
+    "block" : false,
+    "descent" : 8.55,
+    "latex" : "\\prod",
+    "size" : 19,
+    "source" : "\\prod",
+    "width" : 24.282
+  },
+  {
+    "ascent" : 18.05,
+    "block" : true,
+    "descent" : 8.55,
+    "latex" : "\\prod",
+    "size" : 19,
+    "source" : "\\prod",
+    "width" : 24.282
+  },
+  {
+    "ascent" : 9.0535,
+    "block" : false,
+    "descent" : 0,
+    "latex" : "\\substack{a}",
+    "size" : 19,
+    "source" : "\\substack{a}",
+    "width" : 10.051
+  },
+  {
+    "ascent" : 9.0535,
+    "block" : true,
+    "descent" : 0,
+    "latex" : "\\substack{a}",
+    "size" : 19,
+    "source" : "\\substack{a}",
+    "width" : 10.051
+  },
+  {
+    "block" : false,
+    "latex" : "\\stackrel{a}{b}",
+    "size" : 19,
+    "source" : "\\stackrel{a}{b}"
+  },
+  {
+    "block" : true,
+    "latex" : "\\stackrel{a}{b}",
+    "size" : 19,
+    "source" : "\\stackrel{a}{b}"
+  },
+  {
+    "ascent" : 12.16,
+    "block" : false,
+    "descent" : 0.209,
+    "latex" : "\\bar x",
+    "size" : 19,
+    "source" : "\\bar x",
+    "width" : 10.868
+  },
+  {
+    "ascent" : 12.16,
+    "block" : true,
+    "descent" : 0.209,
+    "latex" : "\\bar x",
+    "size" : 19,
+    "source" : "\\bar x",
+    "width" : 10.868
+  },
+  {
+    "ascent" : 12.863,
+    "block" : false,
+    "descent" : 0.209,
+    "latex" : "\\dot x",
+    "size" : 19,
+    "source" : "\\dot x",
+    "width" : 10.868
+  },
+  {
+    "ascent" : 12.863,
+    "block" : true,
+    "descent" : 0.209,
+    "latex" : "\\dot x",
+    "size" : 19,
+    "source" : "\\dot x",
+    "width" : 10.868
+  },
+  {
+    "ascent" : 16.127200000000002,
+    "block" : false,
+    "descent" : 0.209,
+    "latex" : "x^{ab}",
+    "size" : 19,
+    "source" : "x^{ab}",
+    "width" : 23.6094
+  },
+  {
+    "ascent" : 16.127200000000002,
+    "block" : true,
+    "descent" : 0.209,
+    "latex" : "x^{ab}",
+    "size" : 19,
+    "source" : "x^{ab}",
+    "width" : 23.6094
+  },
+  {
+    "ascent" : 12.7756,
+    "block" : false,
+    "descent" : 5.6658,
+    "latex" : "x^{a}_{b}",
+    "size" : 19,
+    "source" : "x^{a}_{b}",
+    "width" : 17.9037
+  },
+  {
+    "ascent" : 12.7756,
+    "block" : true,
+    "descent" : 5.6658,
+    "latex" : "x^{a}_{b}",
+    "size" : 19,
+    "source" : "x^{a}_{b}",
+    "width" : 17.9037
+  },
+  {
+    "ascent" : 8.398,
+    "block" : false,
+    "descent" : 0.209,
+    "latex" : "x^{\n}",
+    "size" : 19,
+    "source" : "x^{\n}",
+    "width" : 10.868
+  },
+  {
+    "ascent" : 8.398,
+    "block" : true,
+    "descent" : 0.209,
+    "latex" : "x^{\n}",
+    "size" : 19,
+    "source" : "x^{\n}",
+    "width" : 10.868
+  }
+]

@@ -1,0 +1,153 @@
+<Page
+    x:Class="HermesHQ.Pages.ChatPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:HermesHQ.Controls"
+    NavigationCacheMode="Disabled" Background="{ThemeResource HQPageBrush}">
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition x:Name="InspectorColumn" Width="0" />
+        </Grid.ColumnDefinitions>
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- Header: the bot's name and model in the middle, as the Mac's; actions on the right. -->
+            <Grid Padding="16,8,10,8" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,0,0,1">
+                <StackPanel HorizontalAlignment="Center" Orientation="Horizontal" Spacing="8">
+                    <controls:BotHead x:Name="Head" Width="22" Height="22" VerticalAlignment="Center" />
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock x:Name="TitleText" FontWeight="Bold" FontSize="13" CharacterSpacing="40"
+                                   TextTrimming="CharacterEllipsis" HorizontalAlignment="Center" />
+                        <TextBlock x:Name="StatusText" FontSize="12" HorizontalAlignment="Center"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                </StackPanel>
+                <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="2">
+                    <!-- [WIN-62] Buttons features add before the ⋯ (the Mac's Read Replies Aloud speaker). -->
+                    <StackPanel x:Name="HeaderTrailing" Orientation="Horizontal" Spacing="2" />
+                    <!-- [WIN-55] VoiceOver names: ChatViewController.swift "Chat Actions" (the ⋯) and "Inspector". -->
+                    <Button x:Name="MoreButton" Style="{StaticResource QuietButtonStyle}" ToolTipService.ToolTip="More"
+                            AutomationProperties.Name="Chat Actions">
+                        <FontIcon Glyph="&#xE712;" FontSize="14" />
+                        <Button.Flyout>
+                            <MenuFlyout x:Name="MoreMenu" Placement="BottomEdgeAlignedRight" />
+                        </Button.Flyout>
+                    </Button>
+                    <ToggleButton x:Name="InspectorToggle" Style="{StaticResource DefaultToggleButtonStyle}"
+                                  Background="Transparent" BorderThickness="0" Padding="8,6" Click="InspectorToggle_Click"
+                                  KeyboardAcceleratorPlacementMode="Hidden"
+                                  ToolTipService.ToolTip="Info, Steps, Files (Ctrl+I)" AutomationProperties.Name="Inspector">
+                        <FontIcon Glyph="&#xE8A0;" FontSize="14" />
+                        <ToggleButton.KeyboardAccelerators>
+                            <KeyboardAccelerator Key="I" Modifiers="Control" />
+                        </ToggleButton.KeyboardAccelerators>
+                    </ToggleButton>
+                </StackPanel>
+            </Grid>
+
+            <ListView x:Name="Messages" Grid.Row="1" SelectionMode="None" IsItemClickEnabled="False"
+                      AutomationProperties.AutomationId="chat.transcript"
+                      Padding="0,12,0,12" ShowsScrollingPlaceholders="False">
+                <ListView.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <!-- KeepItemsInView, so older history loading at the top doesn't move what you're reading.
+                             ChatPage keeps the end in view itself while you're at the bottom. -->
+                        <ItemsStackPanel ItemsUpdatingScrollMode="KeepItemsInView" />
+                    </ItemsPanelTemplate>
+                </ListView.ItemsPanel>
+                <ListView.ItemContainerStyle>
+                    <Style TargetType="ListViewItem" BasedOn="{StaticResource DefaultListViewItemStyle}">
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Setter Property="Margin" Value="0" />
+                        <Setter Property="Padding" Value="0" />
+                        <Setter Property="MinHeight" Value="0" />
+                        <Setter Property="IsTabStop" Value="False" />
+                    </Style>
+                </ListView.ItemContainerStyle>
+                <ListView.ItemTemplate>
+                    <DataTemplate>
+                        <controls:MessageView Item="{Binding}" />
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+                <!-- The transcript's newest end: features' rows after the last message (approval card, question note) -->
+                <ListView.Footer>
+                    <StackPanel x:Name="TranscriptFooter" Spacing="6" MaxWidth="900" />
+                </ListView.Footer>
+            </ListView>
+            <!-- [WIN-CHAT-INTRO] The empty chat's intro (Features/ChatIntro): no background, so the list under it takes clicks -->
+            <Grid x:Name="TranscriptEmpty" Grid.Row="1" />
+            <!-- Over the transcript's bottom edge, above the message box (Approval needed) -->
+            <Grid x:Name="TranscriptOverlay" Grid.Row="1" VerticalAlignment="Bottom" HorizontalAlignment="Center"
+                  Margin="0,0,0,12" />
+            <ProgressRing x:Name="LoadingRing" Grid.Row="1" IsActive="True" Width="32" Height="32" />
+            <TextBlock x:Name="LoadProblem" Grid.Row="1" Visibility="Collapsed" HorizontalAlignment="Center"
+                       VerticalAlignment="Center" TextWrapping="Wrap" Margin="40" TextAlignment="Center"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+            <!-- The shelf: subagents, goal, queue, browser cards -->
+            <StackPanel x:Name="Shelf" Grid.Row="2" Spacing="6" Margin="16,0,16,6" MaxWidth="900" />
+
+            <!-- The message box, or a dock in its place -->
+            <Grid Grid.Row="3" Padding="16,0,16,14" MaxWidth="900">
+                <Border x:Name="ComposerBox" CornerRadius="20" Padding="8,4,6,4"
+                        Background="{ThemeResource ControlFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}" BorderThickness="1">
+                    <Border.Resources>
+                        <Thickness x:Key="TextControlBorderThemeThicknessFocused">0</Thickness>
+                        <SolidColorBrush x:Key="TextControlBackgroundPointerOver" Color="Transparent" />
+                        <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="Transparent" />
+                    </Border.Resources>
+                    <Grid x:Name="ComposerRow">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel x:Name="ComposerLeading" Grid.Row="1" Margin="0,0,4,0" Orientation="Horizontal" VerticalAlignment="Bottom" Spacing="2" />
+                        <!-- Canvas measures its words unbounded but requests no room. Its final slot covers just the edit and the model. -->
+                        <Canvas x:Name="ComposerMetrics" Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2"
+                                Opacity="0" IsHitTestVisible="False" AutomationProperties.AccessibilityView="Raw" />
+                        <!-- [WIN-58] No border of its own, so the keyboard's focus shows as the system ring round the box
+                             (the Mac's message box draws its focus ring: ComposerView.swift "[desktoplook2] focus ring"). -->
+                        <TextBox x:Name="Composer" Grid.Row="1" Grid.Column="1" MinWidth="0" PlaceholderText="Message" AcceptsReturn="True"
+                                 AutomationProperties.Name="Message"
+                                 AutomationProperties.AutomationId="chat.composer" UseSystemFocusVisuals="True"
+                                 TextWrapping="Wrap" MaxHeight="220" ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                 BorderThickness="0" Background="Transparent" VerticalAlignment="Center"
+                                 PreviewKeyDown="Composer_PreviewKeyDown" TextChanged="Composer_TextChanged" />
+                        <Button x:Name="ComposerModel" Grid.Row="1" Grid.Column="2" VerticalAlignment="Bottom"
+                                Margin="4,0,0,2" Padding="10,4" MinWidth="56" FontSize="13" CornerRadius="14"
+                                BorderThickness="0" Background="{ThemeResource SubtleFillColorSecondaryBrush}" Visibility="Collapsed"
+                                ToolTipService.ToolTip="Model" AutomationProperties.Name="Model" Click="ComposerModel_Click" />
+                        <StackPanel x:Name="ComposerTrailing" Grid.Row="1" Grid.Column="3" Orientation="Horizontal"
+                                    VerticalAlignment="Bottom" Spacing="2" />
+                        <Button x:Name="SendButton" Grid.Row="1" Grid.Column="4" Margin="4,0,0,0" Style="{StaticResource AccentButtonStyle}"
+                                AutomationProperties.AutomationId="chat.send"
+                                VerticalAlignment="Bottom" Height="32" Width="32" Padding="0" CornerRadius="16"
+                                Click="Send_Click" IsEnabled="False" ToolTipService.ToolTip="Send (Enter)" AutomationProperties.Name="Send">
+                            <FontIcon x:Name="SendGlyph" Glyph="&#xE74A;" FontSize="13" />
+                        </Button>
+                    </Grid>
+                </Border>
+                <ContentControl IsTabStop="False" x:Name="Dock" HorizontalContentAlignment="Stretch" Visibility="Collapsed" />
+            </Grid>
+        </Grid>
+
+        <!-- The inspector (Info, Steps, Files, Helpers) -->
+        <Border Grid.Column="1" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1,0,0,0">
+            <ContentControl IsTabStop="False" x:Name="Inspector" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
+        </Border>
+    </Grid>
+</Page>

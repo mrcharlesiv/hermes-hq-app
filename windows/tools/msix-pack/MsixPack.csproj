@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- [WIN-INSTALL-PACK] An opt-in, unsigned, local MSIX pack of an existing `dotnet publish` folder of HermesHQ.Windows.
+       The app itself stays unpackaged (WindowsPackageType=None); nothing here signs, installs or uploads anything.
+       Run on Windows through windows/scripts/pack-msix.ps1; `plan` also runs on any OS (no MakeAppx). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <RootNamespace>HermesHQ.MsixPack</RootNamespace>
+    <AssemblyName>HermesHQ.MsixPack</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>13</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+</Project>

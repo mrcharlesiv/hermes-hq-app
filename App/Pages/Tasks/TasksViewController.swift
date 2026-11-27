@@ -640,10 +640,19 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         let ideaHeadCell = UICollectionView.CellRegistration<SoftCardListCell, Item> { [weak self] cell, _, _ in
             guard let self, let page = self.ideas.page else { return }
             let enabled = !self.store.readOnlyGateway
+            let botPairs = self.bots.map { ($0.id, self.botName($0.id)) }
+            let lookerLabel = TaskIdeasSummary.activeBotsLabel(active: page.activeBots, bots: botPairs)
+            let activeSources = page.sources ?? self.store.settings.ideasSources
+            let summary = activeSources.map {
+                TaskIdeasSummary.activeSourcesLabel(sources: $0, available: page.availableSources?.connectors ?? [])
+            }
+            let openSources: (() -> Void)? = summary == nil ? nil : { [weak self] in self?.openIdeasSources() }
             cell.contentConfiguration = UIHostingConfiguration {
-                TaskIdeasHead(botName: self.botName(page.bot), count: self.ideaCards.count, at: page.at, ranAt: page.ranAt,
-                              looking: page.looking, enabled: enabled,
-                              lookNow: { [weak self] in self?.lookForIdeas() }, settings: { [weak self] in self?.openSettings() })
+                TaskIdeasHead(botName: lookerLabel, count: self.ideaCards.count, at: page.at, ranAt: page.ranAt,
+                              looking: page.looking, enabled: enabled, sourcesSummary: summary,
+                              lookNow: { [weak self] in self?.lookForIdeas() },
+                              openSources: openSources,
+                              settings: { [weak self] in self?.openSettings() })
             }.margins(.all, 0)
             cell.backgroundConfiguration = .clear()
         }
@@ -2025,7 +2034,14 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
     }
 
     func openSettings() {
-        present(TodoSettingsSheet.make(store: store, bots: bots) { [weak self] in
+        present(TodoSettingsSheet.make(store: store, bots: bots, initialSources: ideas.page?.availableSources) { [weak self] in
+            guard let self else { return }
+            Task { await self.ideas.refresh(force: true) }
+        }, animated: true)
+    }
+
+    func openIdeasSources() {
+        present(TodoIdeasSourcesSheet.make(store: store, bots: bots, initialSources: ideas.page?.availableSources) { [weak self] in
             guard let self else { return }
             Task { await self.ideas.refresh(force: true) }
         }, animated: true)

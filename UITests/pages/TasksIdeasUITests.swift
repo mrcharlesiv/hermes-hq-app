@@ -35,12 +35,38 @@ extension PagesTests {
         let status = app.staticTexts["tasks.ideas.status"].firstMatch
         XCTAssertTrue(status.exists)
         XCTAssertTrue(status.label.hasPrefix("Suggested by Hermes") && status.label.hasSuffix("3"), status.label)
+        let sourcesBar = app.buttons["tasks.ideas.sources"].firstMatch
+        XCTAssertTrue(sourcesBar.waitForExistence(timeout: 5), "Where to Look summary strip shows on Suggested page")
+        XCTAssertTrue(sourcesBar.label.contains("Chats, Memory"), sourcesBar.label)
         let look = app.buttons["tasks.ideas.look"].firstMatch
         XCTAssertTrue(look.exists, "when it looked is the heading's menu")
         XCTAssertTrue(look.label.hasPrefix("Look"), look.label)
         let internet = "Compare internet plans before the promo ends"
         XCTAssertFalse(app.buttons["tasks.idea.start.\(internet)"].exists, "a row has Add and ×; the bot starting is on its card")
         shot("tasks-ideas-3-rows" + Self.lookName)
+
+        // Tap Sources › to open Where to Look, enable Notion (on Finance -> multi-bot sweep!), and confirm live update.
+        sourcesBar.tap()
+        let notionToggle = app.switches["tasks.ideas.connector.mcp:notion"].firstMatch
+        for _ in 0..<4 where !(notionToggle.exists && notionToggle.isHittable) { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(notionToggle.waitForExistence(timeout: 5), "auto-discovered Notion connector appears (off by default)")
+        XCTAssertEqual(notionToggle.value as? String, "0", "newly connected apps default to off")
+        shot("tasks-ideas-3a-where-to-look" + Self.lookName)
+        notionToggle.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertTrue(waitUntil(10) {
+            self.restCalls("PUT", suffix: "/tasks/settings").contains { call in
+                guard let body = call["body"] as? [String: Any],
+                      let src = body["ideas_sources"] as? [String: Any],
+                      let conns = src["connectors"] as? [String],
+                      let bots = body["ideas_bots"] as? [String] else { return false }
+                return conns.contains("mcp:notion") && bots.contains("default") && bots.contains("finance")
+            }
+        }, "enabling Notion saves connector and auto-includes Finance in multi-bot ideas_bots")
+        let closeBtn = app.navigationBars["Where to Look"].buttons.firstMatch
+        if closeBtn.exists { closeBtn.tap() } else { app.swipeDown(velocity: .fast) }
+        XCTAssertTrue(waitUntil(10) { sourcesBar.exists && sourcesBar.label.contains("Notion") },
+                      "Suggested banner updates with Notion: \(sourcesBar.label)")
+        shot("tasks-ideas-3a2-after-sources" + Self.lookName)
 
         // Back on Overview: pending suggestions now appear inline right under the Smart Views grid.
         backToTasksOverview()

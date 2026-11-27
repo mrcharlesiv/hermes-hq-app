@@ -13,14 +13,105 @@ final class TodoSettingsModel {
     var draft: TodoSettings
     /// The bots that could look for ideas (id, name).
     let bots: [(id: String, name: String)]
+    /// Auto-discovered connectors across all bot profiles (`GET /tasks/ideas/sources`).
+    var availableSources: TaskIdeasAvailableSources?
+    var loadingSources = false
     @ObservationIgnored weak var controller: UIViewController?
     /// [task-ideas] An Ideas setting was saved: the Ideas page reads again.
     @ObservationIgnored var ideasChanged: (() -> Void)?
 
-    init(store: TasksStore, bots: [(id: String, name: String)] = []) {
+    init(store: TasksStore, bots: [(id: String, name: String)] = [], initialSources: TaskIdeasAvailableSources? = nil) {
         self.store = store
         self.bots = bots
+        self.availableSources = initialSources
         draft = store.settings
+    }
+
+    var supportsSources: Bool { draft.ideasSources != nil || availableSources != nil }
+
+    var sources: TodoIdeasSources { draft.ideasSources ?? TodoIdeasSources() }
+
+    var activeBots: [String] { draft.activeIdeasBots }
+
+    var connectors: [TaskIdeasConnector] { availableSources?.connectors ?? [] }
+
+    var sourcesSummary: String {
+        TaskIdeasSummary.activeSourcesLabel(sources: sources, available: connectors)
+    }
+
+    var botsSummary: String {
+        TaskIdeasSummary.activeBotsLabel(active: activeBots, bots: bots)
+    }
+
+    func loadSources() async {
+        guard !loadingSources else { return }
+        loadingSources = true
+        defer { loadingSources = false }
+        if let fetched = try? await store.api.ideasSources() {
+            availableSources = fetched
+        }
+    }
+
+    func updateSources(_ mutate: (inout TodoIdeasSources) -> Void) {
+        var next = sources
+        mutate(&next)
+        draft.ideasSources = next
+        save()
+    }
+
+    func setActiveBot(_ id: String, on: Bool) {
+        var next = activeBots
+        if on {
+            if !next.contains(id) { next.append(id) }
+        } else {
+            guard next.count > 1 else { return }   // at least one bot must stay selected
+            next.removeAll { $0 == id }
+        }
+        PagesHaptics.selection()
+        draft.ideasBots = next
+        draft.ideasBot = next.first ?? "default"
+        save()
+    }
+
+    func isChatBotIncluded(_ id: String) -> Bool {
+        let picked = sources.chatBots
+        return picked.isEmpty || picked.contains(id)
+    }
+
+    func setChatBot(_ id: String, on: Bool) {
+        let allIDs = bots.map(\.id)
+        var picked = sources.chatBots.isEmpty ? allIDs : sources.chatBots.filter { allIDs.contains($0) }
+        if on {
+            if !picked.contains(id) { picked.append(id) }
+        } else {
+            guard picked.count > 1 else { return }   // to scan zero chats, toggle Recent Chats off
+            picked.removeAll { $0 == id }
+        }
+        PagesHaptics.selection()
+        updateSources { s in
+            s.chatBots = Set(picked) == Set(allIDs) ? [] : picked
+        }
+    }
+
+    func setConnector(_ connector: TaskIdeasConnector, on: Bool) {
+        PagesHaptics.selection()
+        var nextSources = sources
+        var nextBots = activeBots
+        TaskIdeasSummary.toggleConnector(connector.id, on: on, connector: connector,
+                                         sources: &nextSources, activeBots: &nextBots)
+        draft.ideasSources = nextSources
+        if nextBots != activeBots {
+            draft.ideasBots = nextBots
+            draft.ideasBot = nextBots.first ?? "default"
+        }
+        save()
+    }
+
+    func setNote(_ text: String) {
+        let trimmed = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(800))
+        guard trimmed != (draft.ideasNote ?? "") else { return }
+        draft.ideasNote = trimmed
+        save()
     }
 
     func save() {
@@ -32,8 +123,9 @@ final class TodoSettingsModel {
     func commit() async {
         guard draft != store.settings else { return }
         let next = draft, before = store.settings
-        let ideas = next.ideas != before.ideas || next.ideasBot != before.ideasBot || next.ideasAt != before.ideasAt
-            || next.ideasMax != before.ideasMax
+        let ideas = next.ideas != before.ideas || next.ideasBot != before.ideasBot || next.ideasBots != before.ideasBots
+            || next.ideasAt != before.ideasAt || next.ideasMax != before.ideasMax
+            || next.ideasSources != before.ideasSources || next.ideasNote != before.ideasNote
         guard await store.saveSettings(next) else {
             PagesHaptics.error()   // the HUD says why
             if draft == next { draft = store.settings }
@@ -56,13 +148,30 @@ final class TodoSettingsModel {
 }
 
 enum TodoSettingsSheet {
-    static func make(store: TasksStore, bots: [Bot] = [], ideasChanged: (() -> Void)? = nil) -> UIViewController {
-        let model = TodoSettingsModel(store: store, bots: bots.map { ($0.id, PagesNames.botName($0.id, bots: bots)) })
+    static func make(store: TasksStore, bots: [Bot] = [], initialSources: TaskIdeasAvailableSources? = nil,
+                     ideasChanged: (() -> Void)? = nil) -> UIViewController {
+        let model = TodoSettingsModel(store: store, bots: bots.map { ($0.id, PagesNames.botName($0.id, bots: bots)) },
+                                      initialSources: initialSources)
         model.ideasChanged = ideasChanged
         let host = UIHostingController(rootView: HQScaledRoot(TodoSettingsView(model: model)))
         model.controller = host
         let nav = ChatSheet.wrap(host, title: "Tasks Settings")
         // Half height cut off the quiet hours' footer and Import from Reminders.
+        nav.sheetPresentationController?.selectedDetentIdentifier = .large
+        return nav
+    }
+}
+
+/// Standalone sheet opening directly on "Where to Look" (from the Suggested page's Sources pill).
+enum TodoIdeasSourcesSheet {
+    static func make(store: TasksStore, bots: [Bot] = [], initialSources: TaskIdeasAvailableSources? = nil,
+                     ideasChanged: (() -> Void)? = nil) -> UIViewController {
+        let model = TodoSettingsModel(store: store, bots: bots.map { ($0.id, PagesNames.botName($0.id, bots: bots)) },
+                                      initialSources: initialSources)
+        model.ideasChanged = ideasChanged
+        let host = UIHostingController(rootView: HQScaledRoot(TodoIdeasSourcesView(model: model)))
+        model.controller = host
+        let nav = ChatSheet.wrap(host, title: "Where to Look")
         nav.sheetPresentationController?.selectedDetentIdentifier = .large
         return nav
     }
@@ -123,7 +232,7 @@ struct TodoSettingsView: View {
         .hqGroupedPage()
     }
 
-    /// [task-ideas] Shown when the add-on keeps Ideas (0.9.39+).
+    /// [task-ideas] Shown when the add-on keeps Ideas (0.9.39+); Where to Look & multi-bot controls appear on 0.9.86+.
     @ViewBuilder private var ideasSection: some View {
         let on = model.draft.ideas == true
         let looker = model.draft.ideasBot ?? "default"
@@ -133,7 +242,31 @@ struct TodoSettingsView: View {
             }
             .accessibilityIdentifier("tasks.settings.ideas")
             if on {
-                if model.bots.count > 1 {
+                if model.supportsSources {
+                    NavigationLink {
+                        TodoIdeasSourcesView(model: model)
+                    } label: {
+                        LabeledContent("Where to Look") {
+                            Text(model.sourcesSummary)
+                                .foregroundStyle(Color.hqLabel2)
+                                .lineLimit(1)
+                        }
+                    }
+                    .accessibilityIdentifier("tasks.settings.ideas-sources")
+
+                    if model.bots.count > 1 {
+                        NavigationLink {
+                            TodoIdeasBotsView(model: model)
+                        } label: {
+                            LabeledContent("Who Looks") {
+                                Text(model.botsSummary)
+                                    .foregroundStyle(Color.hqLabel2)
+                                    .lineLimit(1)
+                            }
+                        }
+                        .accessibilityIdentifier("tasks.settings.ideas-bot")
+                    }
+                } else if model.bots.count > 1 {
                     Picker("Who Looks", selection: Binding(get: { looker }, set: { PagesHaptics.selection(); model.draft.ideasBot = $0; model.save() })) {
                         ForEach(model.bots, id: \.id) { bot in Text(bot.name).tag(bot.id) }
                     }
@@ -151,10 +284,256 @@ struct TodoSettingsView: View {
                 }
                 .accessibilityIdentifier("tasks.settings.ideas-max")
             }
-        } header: { HQSectionLabel { Text("Ideas") } } footer: { HQSectionFooter {
-            Text("Once a day, \(model.botName(looker)) looks through your recent chats and whatever else it can reach, like your calendar or email, and suggests a few tasks under Ideas. It can’t put anything on your list itself: nothing goes there until you add it.")
+        } header: { HQSectionLabel { Text("Suggested Tasks") } } footer: { HQSectionFooter {
+            if model.supportsSources {
+                Text("Once a day, \(model.botsSummary) checks only the sources you switch on and suggests a few tasks. Disabled sources and write actions are blocked during runs, and nothing goes on your list until you tap Add.")
+            } else {
+                Text("Once a day, \(model.botName(looker)) looks through your recent chats and whatever else it can reach, like your calendar or email, and suggests a few tasks. It can’t put anything on your list itself: nothing goes there until you add it.")
+            }
         } }
         .hqSheetRows()
+        .task { if model.draft.ideas != nil && model.availableSources == nil { await model.loadSources() } }
+    }
+}
+
+// MARK: - Where to Look (Sources, Connected Apps, Multi-Bot Sweep, Focus & Skip)
+
+struct TodoIdeasSourcesView: View {
+    @Bindable var model: TodoSettingsModel
+    @State private var noteText: String = ""
+    @FocusState private var noteFocused: Bool
+
+    var body: some View {
+        let src = model.sources
+        Form {
+            Section {
+                Toggle(isOn: Binding(get: { src.chats }, set: { on in
+                    PagesHaptics.selection()
+                    model.updateSources { $0.chats = on }
+                })) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Recent Chats")
+                        Text(TaskIdeasSummary.chatBotsSubtitle(sources: src, bots: model.bots))
+                            .font(Font.hq(.footnote))
+                            .foregroundStyle(Color.hqLabel2)
+                    }
+                }
+                .accessibilityIdentifier("tasks.ideas.source.chats")
+
+                if src.chats && model.bots.count > 1 {
+                    NavigationLink {
+                        TodoIdeasChatBotsView(model: model)
+                    } label: {
+                        LabeledContent("Chats From") {
+                            let picked = src.chatBots
+                            Text(picked.isEmpty || picked.count >= model.bots.count ? "All Bots" : "\(picked.count) of \(model.bots.count) Bots")
+                                .foregroundStyle(Color.hqLabel2)
+                        }
+                    }
+                    .accessibilityIdentifier("tasks.ideas.source.chat-bots")
+                }
+
+                Toggle(isOn: Binding(get: { src.memory }, set: { on in
+                    PagesHaptics.selection()
+                    model.updateSources { $0.memory = on }
+                })) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Memory")
+                        Text(src.memory ? "Ongoing projects and preferences" : "Off · blocked during runs")
+                            .font(Font.hq(.footnote))
+                            .foregroundStyle(Color.hqLabel2)
+                    }
+                }
+                .accessibilityIdentifier("tasks.ideas.source.memory")
+
+                Toggle(isOn: Binding(get: { src.files }, set: { on in
+                    PagesHaptics.selection()
+                    model.updateSources { $0.files = on }
+                })) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Local Files & Notes")
+                        Text(src.files ? "Read-only sweep of workspace files" : "Off · blocked during runs")
+                            .font(Font.hq(.footnote))
+                            .foregroundStyle(Color.hqLabel2)
+                    }
+                }
+                .accessibilityIdentifier("tasks.ideas.source.files")
+
+                Toggle(isOn: Binding(get: { src.web }, set: { on in
+                    PagesHaptics.selection()
+                    model.updateSources { $0.web = on }
+                })) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Web Search")
+                        Text(src.web ? "Search the web while vetting ideas" : "Off · blocked during runs")
+                            .font(Font.hq(.footnote))
+                            .foregroundStyle(Color.hqLabel2)
+                    }
+                }
+                .accessibilityIdentifier("tasks.ideas.source.web")
+            } header: { HQSectionLabel { Text("Built-in Sources") } }
+            .hqSheetRows()
+
+            Section {
+                if model.loadingSources && model.connectors.isEmpty {
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        Text("Checking connected apps…")
+                            .font(Font.hq(.subheadline))
+                            .foregroundStyle(Color.hqLabel2)
+                    }
+                } else if model.connectors.isEmpty {
+                    Text("No connected apps found yet. Connect Gmail, Google Calendar, Notion, or other apps in Connectors to include them here.")
+                        .font(Font.hq(.footnote))
+                        .foregroundStyle(Color.hqLabel2)
+                } else {
+                    ForEach(model.connectors) { connector in
+                        let enabled = src.connectors.contains(connector.id)
+                        let owners = connector.bots.map { model.botName($0) }.joined(separator: ", ")
+                        Toggle(isOn: Binding(get: { enabled }, set: { on in
+                            model.setConnector(connector, on: on)
+                        })) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(connector.name)
+                                Text(enabled ? "Read-only sweep · \(owners)" : "Off · on \(owners)")
+                                    .font(Font.hq(.footnote))
+                                    .foregroundStyle(Color.hqLabel2)
+                            }
+                        }
+                        .accessibilityIdentifier("tasks.ideas.connector.\(connector.id)")
+                    }
+                }
+            } header: { HQSectionLabel { Text("Connected Apps") } } footer: { HQSectionFooter {
+                Text("Newly connected apps start off. Turning an app on checks it on each run (and includes its bot in Who Looks automatically); turning it off blocks it during runs.")
+            } }
+            .hqSheetRows()
+
+            if model.bots.count > 1 {
+                Section {
+                    NavigationLink {
+                        TodoIdeasBotsView(model: model)
+                    } label: {
+                        LabeledContent("Who Looks") {
+                            Text(model.botsSummary)
+                                .foregroundStyle(Color.hqLabel2)
+                                .lineLimit(1)
+                        }
+                    }
+                    .accessibilityIdentifier("tasks.ideas.sources.who-looks")
+                } header: { HQSectionLabel { Text("Participating Bots") } } footer: { HQSectionFooter {
+                    Text("Pick one or more bots to run the daily sweep. Each bot checks its own enabled apps and merges into one Suggested list.")
+                } }
+                .hqSheetRows()
+            }
+
+            Section {
+                TextField("e.g. Check my Notion Inbox and unread client emails. Ignore newsletters and receipts.",
+                          text: $noteText, axis: .vertical)
+                    .lineLimit(3...6)
+                    .focused($noteFocused)
+                    .onSubmit { model.setNote(noteText) }
+                    .onChange(of: noteFocused) { _, focused in if !focused { model.setNote(noteText) } }
+                    .accessibilityIdentifier("tasks.ideas.note")
+            } header: { HQSectionLabel { Text("Focus & Skip") } } footer: { HQSectionFooter {
+                Text("Always read-only: during a Suggested Tasks run, bots cannot add tasks directly or send, edit, book, buy, or delete anything.")
+            } }
+            .hqSheetRows()
+        }
+        .hqGroupedPage()
+        .navigationTitle("Where to Look")
+        .onAppear { noteText = model.draft.ideasNote ?? "" }
+        .onDisappear { model.setNote(noteText) }
+        .task { await model.loadSources() }
+    }
+}
+
+/// Multi-select picker for which bots run the daily Task ideas sweep.
+struct TodoIdeasBotsView: View {
+    @Bindable var model: TodoSettingsModel
+
+    var body: some View {
+        let active = Set(model.activeBots)
+        let enabledConnectors = Set(model.sources.connectors)
+        Form {
+            Section {
+                ForEach(model.bots, id: \.id) { bot in
+                    let on = active.contains(bot.id)
+                    let apps = model.connectors.filter { $0.bots.contains(bot.id) && enabledConnectors.contains($0.id) }.map(\.name)
+                    Button {
+                        model.setActiveBot(bot.id, on: !on)
+                    } label: {
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(bot.name)
+                                    .foregroundStyle(Color.hqLabel)
+                                if !apps.isEmpty {
+                                    Text("Checks \(apps.joined(separator: ", "))")
+                                        .font(Font.hq(.footnote))
+                                        .foregroundStyle(Color.hqLabel2)
+                                } else if model.activeBots.first == bot.id && model.sources.chats {
+                                    Text("Primary · scans recent chats")
+                                        .font(Font.hq(.footnote))
+                                        .foregroundStyle(Color.hqLabel2)
+                                }
+                            }
+                            Spacer(minLength: 8)
+                            if on {
+                                Image(systemName: "checkmark")
+                                    .font(Font.hq(.footnote).weight(.semibold))
+                                    .foregroundStyle(Color.hqTintText)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("tasks.ideas.bot.\(bot.id)")
+                    .accessibilityAddTraits(on ? .isSelected : [])
+                }
+            } footer: { HQSectionFooter {
+                Text("At least one bot stays selected. When multiple bots look, the primary bot covers recent chats and each bot sweeps its own enabled apps.")
+            } }
+            .hqSheetRows()
+        }
+        .hqGroupedPage()
+        .navigationTitle("Who Looks")
+    }
+}
+
+/// Multi-select picker for which bots' recent chats are included when Recent Chats is enabled.
+struct TodoIdeasChatBotsView: View {
+    @Bindable var model: TodoSettingsModel
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(model.bots, id: \.id) { bot in
+                    let on = model.isChatBotIncluded(bot.id)
+                    Button {
+                        model.setChatBot(bot.id, on: !on)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Text(bot.name)
+                                .foregroundStyle(Color.hqLabel)
+                            Spacer(minLength: 8)
+                            if on {
+                                Image(systemName: "checkmark")
+                                    .font(Font.hq(.footnote).weight(.semibold))
+                                    .foregroundStyle(Color.hqTintText)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("tasks.ideas.chat-bot.\(bot.id)")
+                    .accessibilityAddTraits(on ? .isSelected : [])
+                }
+            } footer: { HQSectionFooter {
+                Text("Uncheck any bot whose chats you don’t want Suggested Tasks to scan.")
+            } }
+            .hqSheetRows()
+        }
+        .hqGroupedPage()
+        .navigationTitle("Chats From")
     }
 }
 

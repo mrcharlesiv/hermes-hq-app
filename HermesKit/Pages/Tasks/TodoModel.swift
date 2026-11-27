@@ -303,6 +303,37 @@ nonisolated struct TodoLogEntry: Codable, Hashable, Sendable {
     }
 }
 
+/// [task-ideas 0.9.86] Which built-in sources and opt-in connected apps the Task ideas run may check.
+nonisolated struct TodoIdeasSources: Codable, Hashable, Sendable {
+    var chats: Bool = true
+    /// Empty = all bots; non-empty = only these bot profile IDs have their recent chats included.
+    var chatBots: [String] = []
+    var memory: Bool = true
+    var files: Bool = false
+    var web: Bool = false
+    /// Opt-in list of enabled connector IDs (`"mcp:<name>"` or `"composio:<slug>"`). Newly connected apps start off.
+    var connectors: [String] = []
+
+    enum CodingKeys: String, CodingKey {
+        case chats, chatBots = "chat_bots", memory, files, web, connectors
+    }
+
+    init(chats: Bool = true, chatBots: [String] = [], memory: Bool = true, files: Bool = false, web: Bool = false, connectors: [String] = []) {
+        self.chats = chats; self.chatBots = chatBots; self.memory = memory
+        self.files = files; self.web = web; self.connectors = connectors
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        chats = (try? c.decodeIfPresent(Bool.self, forKey: .chats)) ?? true
+        chatBots = (try? c.decodeIfPresent([String].self, forKey: .chatBots)) ?? []
+        memory = (try? c.decodeIfPresent(Bool.self, forKey: .memory)) ?? true
+        files = (try? c.decodeIfPresent(Bool.self, forKey: .files)) ?? false
+        web = (try? c.decodeIfPresent(Bool.self, forKey: .web)) ?? false
+        connectors = (try? c.decodeIfPresent([String].self, forKey: .connectors)) ?? []
+    }
+}
+
 /// `GET/PUT /tasks/settings`.
 nonisolated struct TodoSettings: Codable, Hashable, Sendable {
     /// Settings › Tasks (hermes-hq-push 0.9.36). Off: the page leaves the app, and the bots lose the tools, the note
@@ -321,20 +352,31 @@ nonisolated struct TodoSettings: Codable, Hashable, Sendable {
     var group: String = "smart"
     /// A list's order: "smart" (your drag order) | "due" | "added" | "priority" (hermes-hq-push 0.9.53).
     var sort: String = "smart"
-    /// [task-ideas] Ideas (hermes-hq-push 0.9.39): one bot reads your recent chats each day and suggests a few tasks.
-    /// nil from an older add-on, and then never sent back.
+    /// [task-ideas] Ideas (hermes-hq-push 0.9.39): daily Task ideas sweep. nil from an older add-on, never sent back.
     var ideas: Bool?
-    /// The bot that looks.
+    /// Primary bot that looks (kept in sync with `ideasBots.first`).
     var ideasBot: String?
+    /// [task-ideas 0.9.86] Participating bots for multi-bot Task ideas sweeps. nil from an older add-on.
+    var ideasBots: [String]?
     /// "07:30", on the computer's clock.
     var ideasAt: String?
     /// Ideas a day, 1–5.
     var ideasMax: Int?
+    /// [task-ideas 0.9.86] Built-in source toggles and opt-in connected apps. nil from an older add-on.
+    var ideasSources: TodoIdeasSources?
+    /// [task-ideas 0.9.86] Optional plain-English Focus & Skip instructions. nil from an older add-on.
+    var ideasNote: String?
+
+    var activeIdeasBots: [String] {
+        if let bots = ideasBots, !bots.isEmpty { return bots }
+        return [ideasBot ?? "default"]
+    }
 
     enum CodingKeys: String, CodingKey {
         case enabled, capture, prepPerDay = "prep_per_day", quietStart = "quiet_start", quietEnd = "quiet_end", prepEveryHours = "prep_every_hours"
         case group, sort
-        case ideas, ideasBot = "ideas_bot", ideasAt = "ideas_at", ideasMax = "ideas_max"
+        case ideas, ideasBot = "ideas_bot", ideasBots = "ideas_bots", ideasAt = "ideas_at", ideasMax = "ideas_max"
+        case ideasSources = "ideas_sources", ideasNote = "ideas_note"
     }
 
     init() {}
@@ -351,8 +393,11 @@ nonisolated struct TodoSettings: Codable, Hashable, Sendable {
         sort = (try? c.decodeIfPresent(String.self, forKey: .sort)) ?? "smart"
         ideas = try? c.decodeIfPresent(Bool.self, forKey: .ideas)
         ideasBot = try? c.decodeIfPresent(String.self, forKey: .ideasBot)
+        ideasBots = try? c.decodeIfPresent([String].self, forKey: .ideasBots)
         ideasAt = try? c.decodeIfPresent(String.self, forKey: .ideasAt)
         ideasMax = try? c.decodeIfPresent(Int.self, forKey: .ideasMax)
+        ideasSources = try? c.decodeIfPresent(TodoIdeasSources.self, forKey: .ideasSources)
+        ideasNote = try? c.decodeIfPresent(String.self, forKey: .ideasNote)
     }
 }
 

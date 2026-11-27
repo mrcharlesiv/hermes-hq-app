@@ -1,6 +1,7 @@
 // Unit tests for Tasks' Grouped Overview and Mac collapsible sidebar layout rules.
 
 import CoreGraphics
+import Foundation
 import Testing
 @testable import HermesHQNative
 
@@ -74,6 +75,56 @@ struct TasksNavigationTests {
         let botsOnly = TasksOverviewAgentsModel(suggested: nil, botsCount: 2)
         #expect(!botsOnly.isEmpty)
         #expect(botsOnly.botsSpoken == "Bots’ Tasks, 2 tasks")
+    }
+
+    @Test func ideasSourcesSummaryAndMultiBotConnectorAutoInclude() throws {
+        let connectors = [
+            TaskIdeasConnector(id: "composio:gmail", name: "Gmail", kind: "composio", bots: ["default"]),
+            TaskIdeasConnector(id: "mcp:notion", name: "Notion", kind: "mcp", bots: ["work"]),
+            TaskIdeasConnector(id: "composio:slack", name: "Slack", kind: "composio", bots: ["work"]),
+        ]
+        var sources = TodoIdeasSources()
+        #expect(sources.chats && sources.memory && !sources.files && !sources.web && sources.connectors.isEmpty)
+        #expect(TaskIdeasSummary.activeSourcesLabel(sources: sources, available: connectors) == "Chats, Memory")
+
+        // Turning on Notion (owned by "work") automatically includes "work" in activeBots for multi-bot sweeps.
+        var activeBots = ["default"]
+        TaskIdeasSummary.toggleConnector("mcp:notion", on: true, connector: connectors[1], sources: &sources, activeBots: &activeBots)
+        #expect(sources.connectors == ["mcp:notion"])
+        #expect(activeBots == ["default", "work"])
+        #expect(TaskIdeasSummary.activeSourcesLabel(sources: sources, available: connectors) == "Chats, Memory, Notion")
+
+        // Turning on Gmail (owned by "default", already active) keeps activeBots deduplicated.
+        TaskIdeasSummary.toggleConnector("composio:gmail", on: true, connector: connectors[0], sources: &sources, activeBots: &activeBots)
+        #expect(activeBots == ["default", "work"])
+        #expect(TaskIdeasSummary.activeSourcesLabel(sources: sources, available: connectors) == "Chats, Memory, Notion, Gmail")
+
+        // Turning off Notion removes it cleanly.
+        TaskIdeasSummary.toggleConnector("mcp:notion", on: false, connector: connectors[1], sources: &sources, activeBots: &activeBots)
+        #expect(sources.connectors == ["composio:gmail"])
+
+        // Bot and chat-bot summary formatting.
+        let roster = [(id: "default", name: "Hermes"), (id: "work", name: "Work"), (id: "research", name: "Research")]
+        #expect(TaskIdeasSummary.activeBotsLabel(active: ["default"], bots: roster) == "Hermes")
+        #expect(TaskIdeasSummary.activeBotsLabel(active: ["default", "work"], bots: roster) == "Hermes & Work")
+        #expect(TaskIdeasSummary.activeBotsLabel(active: ["default", "work", "research"], bots: roster) == "Hermes, Work +1")
+        #expect(TaskIdeasSummary.chatBotsSubtitle(sources: sources, bots: roster) == "All bots")
+        sources.chatBots = ["default", "work"]
+        #expect(TaskIdeasSummary.chatBotsSubtitle(sources: sources, bots: roster) == "Hermes, Work · 1 bot excluded")
+        sources.chats = false
+        #expect(TaskIdeasSummary.chatBotsSubtitle(sources: sources, bots: roster) == "Off · blocked during runs")
+
+        // JSON round-trip for TodoSettings with ideas_bots, ideas_sources, and ideas_note.
+        var settings = TodoSettings()
+        settings.ideas = true
+        settings.ideasBot = "default"
+        settings.ideasBots = ["default", "work"]
+        settings.ideasSources = sources
+        settings.ideasNote = "Check Notion Inbox. Skip newsletters."
+        let encoded = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(TodoSettings.self, from: encoded)
+        #expect(decoded == settings)
+        #expect(decoded.activeIdeasBots == ["default", "work"])
     }
 
     @Test func scrollEdgeFadeSkipsMaskOnLiveLiquidGlassRails() {

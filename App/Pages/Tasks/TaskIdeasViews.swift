@@ -229,7 +229,8 @@ struct TaskIdeaCard: View {
     }
 }
 
-/// "Suggested by Hermes 3" over the ideas, with when it last looked at its end: a menu with Look Now.
+/// "Suggested by Hermes 3" over the ideas, with when it last looked at its end (a menu with Look Now, Where to Look,
+/// and Ideas Settings) and a compact 1-tap sources strip when the add-on supports Where to Look (0.9.86+).
 struct TaskIdeasHead: View {
     var botName: String
     var count: Int
@@ -237,7 +238,9 @@ struct TaskIdeasHead: View {
     var ranAt: String?
     var looking: Bool
     var enabled: Bool
+    var sourcesSummary: String? = nil
     var lookNow: () -> Void
+    var openSources: (() -> Void)? = nil
     var settings: () -> Void
 
     static func time(_ at: String) -> String {
@@ -252,39 +255,84 @@ struct TaskIdeasHead: View {
     }
 
     var body: some View {
-        HStack(spacing: 6) {
-            TodoGroupHeaderView.Words(title: "Suggested by \(botName)", detail: nil, count: count > 0 ? count : nil)
-                .accessibilityAddTraits(.isHeader)
-                .accessibilityIdentifier("tasks.ideas.status")
-            Spacer(minLength: 8)
-            if looking {
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.mini)
-                    Text("Looking…").font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
-                }
-                .accessibilityIdentifier("tasks.ideas.looking")
-            } else {
-                Menu {
-                    Button { lookNow() } label: { Label("Look Now", systemImage: "arrow.clockwise") }.disabled(!enabled)
-                    Button { settings() } label: { Label("Ideas Settings…", systemImage: "gearshape") }
+        let _ = Theme.touch()
+        VStack(alignment: .leading, spacing: 10) {
+            if let sourcesSummary, let openSources {
+                let shape = RoundedRectangle(cornerRadius: Theme.isDesktop ? DesktopRows.radius : 12, style: .continuous)
+                Button {
+                    PagesHaptics.selection()
+                    openSources()
                 } label: {
-                    HStack(spacing: 3) {
-                        Text(looked).font(Font.hq(.footnote))
-                        Image(systemName: "chevron.down").font(Font.hq(.caption2).weight(.semibold))
+                    HStack(alignment: .center, spacing: 8) {
+                        Image(systemName: "sparkle")
+                            .font(Font.hq(.caption).weight(.semibold))
+                            .foregroundStyle(Color.hqOrange)
+                            .accessibilityHidden(true)
+                        Text("Checking \(sourcesSummary)")
+                            .font(Font.hq(.footnote))
+                            .foregroundStyle(Color.hqLabel2)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        HStack(spacing: 3) {
+                            Text("Sources")
+                                .font(Font.hq(.footnote).weight(.semibold))
+                            Image(systemName: "chevron.right")
+                                .font(Font.hq(.caption2).weight(.bold))
+                                .accessibilityHidden(true)
+                        }
+                        .foregroundStyle(Color.hqTintText)
                     }
-                    .foregroundStyle(Color.hqLabel2)
-                    .padding(.vertical, 8).padding(.leading, 12)
-                    .contentShape(Rectangle())
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background {
+                        shape.fill(Color.hqOrange.opacity(0.08))
+                            .overlay { shape.strokeBorder(Color.hqOrange.opacity(0.24), lineWidth: HQShape.hairline) }
+                    }
+                    .contentShape(shape)
                 }
-                .menuStyle(.button)
                 .buttonStyle(.plain)
-                .padding(.vertical, -8)
-                .accessibilityLabel("\(looked). Options")
-                .accessibilityIdentifier("tasks.ideas.look")
+                .accessibilityLabel("Checking \(sourcesSummary). Edit sources")
+                .accessibilityIdentifier("tasks.ideas.sources")
+            }
+
+            HStack(spacing: 6) {
+                TodoGroupHeaderView.Words(title: "Suggested by \(botName)", detail: nil, count: count > 0 ? count : nil)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityIdentifier("tasks.ideas.status")
+                Spacer(minLength: 8)
+                if looking {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.mini)
+                        Text("Looking…").font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
+                    }
+                    .accessibilityIdentifier("tasks.ideas.looking")
+                } else {
+                    Menu {
+                        Button { lookNow() } label: { Label("Look Now", systemImage: "arrow.clockwise") }.disabled(!enabled)
+                        if let openSources {
+                            Button { openSources() } label: { Label("Where to Look…", systemImage: "slider.horizontal.3") }
+                        }
+                        Button { settings() } label: { Label("Ideas Settings…", systemImage: "gearshape") }
+                    } label: {
+                        HStack(spacing: 3) {
+                            Text(looked).font(Font.hq(.footnote))
+                            Image(systemName: "chevron.down").font(Font.hq(.caption2).weight(.semibold))
+                        }
+                        .foregroundStyle(Color.hqLabel2)
+                        .padding(.vertical, 8).padding(.leading, 12)
+                        .contentShape(Rectangle())
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .padding(.vertical, -8)
+                    .accessibilityLabel("\(looked). Options")
+                    .accessibilityIdentifier("tasks.ideas.look")
+                }
             }
         }
         .padding(.horizontal, 20)
-        .padding(.top, 20)
+        .padding(.top, 16)
         .padding(.bottom, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
     }

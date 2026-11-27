@@ -52,21 +52,141 @@ nonisolated struct TaskIdea: Codable, Hashable, Sendable, Identifiable {
     var botHelps: Bool { who != "me" }
 }
 
+/// An auto-discovered connected app (direct MCP server or Composio app) on one or more bot profiles.
+nonisolated struct TaskIdeasConnector: Codable, Hashable, Sendable, Identifiable {
+    var id: String
+    var name: String
+    /// `"mcp"` or `"composio"`.
+    var kind: String = "mcp"
+    var bots: [String] = []
+
+    init(id: String, name: String, kind: String = "mcp", bots: [String] = []) {
+        self.id = id; self.name = name; self.kind = kind; self.bots = bots
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = (try? c.decodeIfPresent(String.self, forKey: .name)) ?? id
+        kind = (try? c.decodeIfPresent(String.self, forKey: .kind)) ?? "mcp"
+        bots = (try? c.decodeIfPresent([String].self, forKey: .bots)) ?? []
+    }
+}
+
+/// Auto-discovered connectors and bot profiles from `GET /tasks/ideas` or `GET /tasks/ideas/sources`.
+nonisolated struct TaskIdeasAvailableSources: Codable, Hashable, Sendable {
+    var connectors: [TaskIdeasConnector] = []
+    var bots: [String] = []
+
+    init(connectors: [TaskIdeasConnector] = [], bots: [String] = []) {
+        self.connectors = connectors; self.bots = bots
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        connectors = (try? c.decodeIfPresent([TaskIdeasConnector].self, forKey: .connectors)) ?? []
+        bots = (try? c.decodeIfPresent([String].self, forKey: .bots)) ?? []
+    }
+}
+
+/// Pure formatting and toggle rules for Suggested Tasks' Where to Look controls (unit-tested).
+nonisolated enum TaskIdeasSummary {
+    static func prettyConnectorName(_ id: String) -> String {
+        let slug = id.split(separator: ":", maxSplits: 1).last.map(String.init) ?? id
+        let map = [
+            "gmail": "Gmail", "googlecalendar": "Google Calendar", "google_calendar": "Google Calendar",
+            "google-calendar": "Google Calendar", "googledrive": "Google Drive", "notion": "Notion",
+            "slack": "Slack", "github": "GitHub", "linear": "Linear", "jira": "Jira",
+            "asana": "Asana", "trello": "Trello", "airtable": "Airtable", "hubspot": "HubSpot",
+            "salesforce": "Salesforce", "outlook": "Outlook", "todoist": "Todoist",
+        ]
+        if let hit = map[slug.lowercased()] { return hit }
+        return slug.split(whereSeparator: { $0 == "-" || $0 == "_" })
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .joined(separator: " ")
+    }
+
+    /// Concise summary shown on the Suggested page banner and in Tasks Settings ("Chats, Memory, Gmail, Notion").
+    static func activeSourcesLabel(sources: TodoIdeasSources, available: [TaskIdeasConnector]) -> String {
+        var parts: [String] = []
+        if sources.chats { parts.append("Chats") }
+        if sources.memory { parts.append("Memory") }
+        if sources.files { parts.append("Files") }
+        if sources.web { parts.append("Web") }
+        let byID = Dictionary(available.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        for cid in sources.connectors {
+            parts.append(byID[cid] ?? prettyConnectorName(cid))
+        }
+        return parts.isEmpty ? "No sources selected" : parts.joined(separator: ", ")
+    }
+
+    /// Concise label for the participating bots ("Hermes", "Hermes & Work", "Hermes, Work +1").
+    static func activeBotsLabel(active: [String], bots: [(id: String, name: String)]) -> String {
+        let names = active.map { id in bots.first { $0.id == id }?.name ?? id }
+        switch names.count {
+        case 0: return bots.first?.name ?? "Hermes"
+        case 1: return names[0]
+        case 2: return "\(names[0]) & \(names[1])"
+        default: return "\(names[0]), \(names[1]) +\(names.count - 2)"
+        }
+    }
+
+    /// Subtitle for the Recent Chats row in Where to Look.
+    static func chatBotsSubtitle(sources: TodoIdeasSources, bots: [(id: String, name: String)]) -> String {
+        guard sources.chats else { return "Off · blocked during runs" }
+        guard bots.count > 1 else { return "Recent messages from your chats" }
+        let allIDs = Set(bots.map(\.id))
+        let picked = sources.chatBots.filter { allIDs.contains($0) }
+        if picked.isEmpty || picked.count >= bots.count { return "All bots" }
+        let excluded = bots.count - picked.count
+        let names = picked.prefix(2).map { id in bots.first { $0.id == id }?.name ?? id }.joined(separator: ", ")
+        let suffix = picked.count > 2 ? " +\(picked.count - 2)" : ""
+        return "\(names)\(suffix) · \(excluded) \(excluded == 1 ? "bot" : "bots") excluded"
+    }
+
+    /// Toggles a connected app on or off. Turning on an app that lives on a bot not yet in `activeBots`
+    /// automatically adds that bot to `activeBots` so multi-bot sweeps cover it seamlessly.
+    static func toggleConnector(_ id: String, on: Bool, connector: TaskIdeasConnector?,
+                                sources: inout TodoIdeasSources, activeBots: inout [String]) {
+        if on {
+            if !sources.connectors.contains(id) { sources.connectors.append(id) }
+            if let owners = connector?.bots, !owners.isEmpty, !owners.contains(where: { activeBots.contains($0) }) {
+                activeBots.append(owners[0])
+            }
+        } else {
+            sources.connectors.removeAll { $0 == id }
+        }
+    }
+}
+
 /// `GET /tasks/ideas`.
 nonisolated struct TaskIdeasPage: Codable, Hashable, Sendable {
     var on = false
-    /// The bot that looks each day.
+    /// Primary bot that looks each day.
     var bot = "default"
+    /// [task-ideas 0.9.86] Participating bots for multi-bot sweeps.
+    var bots: [String]?
     /// "07:30", on the computer's clock.
     var at = "07:30"
     var max = 3
+    /// [task-ideas 0.9.86] Active sources, instructions, and auto-discovered connectors.
+    var sources: TodoIdeasSources?
+    var note: String?
+    var availableSources: TaskIdeasAvailableSources?
     var ideas: [TaskIdea] = []
     /// When the daily look last answered.
     var ranAt: String?
     /// Look Now is under way.
     var looking = false
 
-    enum CodingKeys: String, CodingKey { case on, bot, at, max, ideas, ranAt = "ran_at", looking }
+    var activeBots: [String] {
+        if let bots, !bots.isEmpty { return bots }
+        return [bot]
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case on, bot, bots, at, max, sources, note, availableSources = "available_sources", ideas, ranAt = "ran_at", looking
+    }
 
     init() {}
 
@@ -74,8 +194,12 @@ nonisolated struct TaskIdeasPage: Codable, Hashable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         on = (try? c.decodeIfPresent(Bool.self, forKey: .on)) ?? false
         bot = (try? c.decodeIfPresent(String.self, forKey: .bot)) ?? "default"
+        bots = try? c.decodeIfPresent([String].self, forKey: .bots)
         at = (try? c.decodeIfPresent(String.self, forKey: .at)) ?? "07:30"
         max = (try? c.decodeIfPresent(Int.self, forKey: .max)) ?? 3
+        sources = try? c.decodeIfPresent(TodoIdeasSources.self, forKey: .sources)
+        note = try? c.decodeIfPresent(String.self, forKey: .note)
+        availableSources = try? c.decodeIfPresent(TaskIdeasAvailableSources.self, forKey: .availableSources)
         // One bad idea never loses the page.
         if let raw = try? c.decodeIfPresent([JSONValue].self, forKey: .ideas) {
             ideas = raw.compactMap { value in (try? value.encoded()).flatMap { try? JSONDecoder().decode(TaskIdea.self, from: $0) } }
@@ -91,6 +215,11 @@ extension TasksAPI {
     @concurrent
     func ideas() async throws -> TaskIdeasPage {
         try JSONDecoder().decode(TaskIdeasPage.self, from: try await PagesREST.send(client, "GET", Self.ideasBase))
+    }
+
+    @concurrent
+    func ideasSources() async throws -> TaskIdeasAvailableSources {
+        try JSONDecoder().decode(TaskIdeasAvailableSources.self, from: try await PagesREST.send(client, "GET", Self.ideasBase + "/sources"))
     }
 
     /// The idea becomes a task (or the open one that's the same thing). `start`: its bot starts on its part now.

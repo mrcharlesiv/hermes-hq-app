@@ -558,7 +558,10 @@ def seed_tasks():
     TPAGES.clear()
     TSTATE['rev'] = 7 + int(time.time()) % 100000 * 10   # a new run never answers `unchanged` to the last run's cache
     TSTATE['settings'] = {'enabled': True, 'capture': 'ask', 'prep_per_day': 6, 'quiet_start': '22:00', 'quiet_end': '08:00', 'prep_every_hours': 3,
-                          'group': 'smart', 'sort': 'smart', 'ideas': False, 'ideas_bot': 'default', 'ideas_at': '07:30', 'ideas_max': 3}
+                          'group': 'smart', 'sort': 'smart', 'ideas': False, 'ideas_bot': 'default', 'ideas_bots': ['default'],
+                          'ideas_at': '07:30', 'ideas_max': 3,
+                          'ideas_sources': {'chats': True, 'chat_bots': [], 'memory': True, 'files': False, 'web': False, 'connectors': []},
+                          'ideas_note': ''}
     TSTATE['sections'] = []
     OFFERS.clear()
     t0 = local(T0)
@@ -1944,10 +1947,24 @@ def ideas_on(): return bool(TSTATE['settings'].get('ideas')) and TSTATE['setting
 
 def ideas_new(): return sorted((i for i in IDEAS.values() if i['state'] == 'new'), key=lambda i: i['created_at'], reverse=True)
 
+def ideas_available_sources():
+    return {
+        'connectors': [
+            {'id': 'composio:gmail', 'name': 'Gmail', 'kind': 'composio', 'bots': ['default']},
+            {'id': 'composio:googlecalendar', 'name': 'Google Calendar', 'kind': 'composio', 'bots': ['default']},
+            {'id': 'mcp:notion', 'name': 'Notion', 'kind': 'mcp', 'bots': ['finance']},
+            {'id': 'composio:slack', 'name': 'Slack', 'kind': 'composio', 'bots': ['research']},
+        ],
+        'bots': ['default', 'finance', 'research'],
+    }
+
 def ideas_page():
     st = TSTATE['settings']
     looking = bool(ISTATE['asked_at']) and ISTATE['asked_at'] > (ISTATE['ran_at'] or '')
-    return {'on': ideas_on(), 'bot': st['ideas_bot'], 'at': st['ideas_at'], 'max': st['ideas_max'],
+    bots = st.get('ideas_bots') or [st['ideas_bot']]
+    return {'on': ideas_on(), 'bot': bots[0], 'bots': bots, 'at': st['ideas_at'], 'max': st['ideas_max'],
+            'sources': copy.deepcopy(st.get('ideas_sources')), 'note': st.get('ideas_note', ''),
+            'available_sources': ideas_available_sources(),
             'ideas': copy.deepcopy(ideas_new()), 'ran_at': ISTATE['ran_at'], 'looking': looking}
 
 def ideas_looked():
@@ -1962,6 +1979,7 @@ def ideas_looked():
 
 def ideas_route(method, rest, body):
     if rest == 'ideas' and method == 'GET': return 200, ideas_page()
+    if rest == 'ideas/sources' and method == 'GET': return 200, ideas_available_sources()
     if rest == 'ideas/run' and method == 'POST':
         if not ideas_on(): return 409, {'detail': 'Ideas is off.'}
         asked = ISTATE['asked_at']

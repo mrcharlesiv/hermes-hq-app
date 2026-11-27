@@ -243,7 +243,7 @@ nonisolated struct LiveGroupedItem: Codable, Hashable, Sendable, Identifiable {
     var subject: LiveActivitySubject
     /// Primary bold title on the left: side chat title, job title, or bot name (for a main bot chat).
     var title: String
-    /// Muted secondary context in the middle: bot name (for side chats and jobs) or live step / step count (main bot chats).
+    /// Muted secondary context beside the title: bot name (for side chats and jobs) or live step / step count (main bot chats).
     var subtitle: String?
     var phase: LiveActivityContent.Phase
     var startedAt: Date
@@ -252,8 +252,20 @@ nonisolated struct LiveGroupedItem: Codable, Hashable, Sendable, Identifiable {
     var link: String?
     /// Stored session id (for turns) so NotificationService can match a `turnDone` push to the exact row.
     var session: String? = nil
+    /// Bot display name (preserved for adaptive 1-item layout on side chats and jobs).
+    var botName: String? = nil
+    /// Side-chat or job title (nil for main bot chats; preserved for adaptive 1-item layout).
+    var detail: String? = nil
+    /// Live step trail for turns (preserved for adaptive 1-item layout).
+    var trail: LiveStepTrail? = nil
 
     var isOver: Bool { phase == .done || phase == .failed }
+
+    /// True when `subtitle` carries a live step/step-count for a main bot chat (so `title` keeps priority and `subtitle`
+    /// fills the remaining width), false when `subtitle` is a short bot tag beside a side-chat or job title.
+    var subtitleIsStep: Bool {
+        subject.kind == .turn && (detail == nil || detail?.isEmpty == true)
+    }
 
     /// Short status word on the trailing column ("Working", "Running", "Done", "Failed").
     var statusWord: String {
@@ -263,6 +275,13 @@ nonisolated struct LiveGroupedItem: Codable, Hashable, Sendable, Identifiable {
         case .done: return "Done"
         case .failed: return "Failed"
         }
+    }
+
+    /// Reconstructs `LiveActivityContent` for rendering the rich single-item view when this is the sole item in the card.
+    var singleContent: LiveActivityContent {
+        var content = LiveActivityContent(phase: phase, startedAt: startedAt, endedAt: endedAt)
+        if let trail { content.trail = trail }
+        return content
     }
 
     /// Build a row from a subject's start info and current content.
@@ -297,8 +316,10 @@ nonisolated struct LiveGroupedItem: Codable, Hashable, Sendable, Identifiable {
                 }
             }
         }
+        let storedTrail: LiveStepTrail? = (subject.kind == .turn && !content.trail.isEmpty) ? content.trail : nil
         return LiveGroupedItem(subject: subject, title: title, subtitle: subtitle, phase: content.phase,
-                               startedAt: content.startedAt, endedAt: content.endedAt, link: link, session: session)
+                               startedAt: content.startedAt, endedAt: content.endedAt, link: link, session: session,
+                               botName: botName, detail: detail, trail: storedTrail)
     }
 }
 
@@ -319,6 +340,12 @@ nonisolated struct LiveGroupedContent: Codable, Hashable, Sendable {
     var totalCount: Int { items.count + extraCount }
     var isOver: Bool { activeCount == 0 }
     var hasFailed: Bool { items.contains { $0.phase == .failed } }
+
+    /// The sole item when only 1 item is tracked: renders with the rich single-item layout and live timer instead of
+    /// a sparse 1-row table.
+    var soleItem: LiveGroupedItem? {
+        items.count == 1 && extraCount == 0 ? items[0] : nil
+    }
 
     /// Header summary ("3 active", "All done", "Done", "Failed").
     var summary: String {
@@ -384,6 +411,14 @@ nonisolated struct LiveGroupedContent: Codable, Hashable, Sendable {
         var updated = items
         updated[index].phase = .done
         updated[index].endedAt = now
+        if let settled = updated[index].trail?.settled() {
+            updated[index].trail = settled
+            if updated[index].subtitleIsStep {
+                updated[index].subtitle = settled.steps > 0 ? LiveStepTrail.count(settled.steps) : nil
+            }
+        } else if updated[index].subtitleIsStep {
+            updated[index].subtitle = nil
+        }
         return LiveGroupedContent(items: Self.sorted(updated), extraCount: extraCount)
     }
 }

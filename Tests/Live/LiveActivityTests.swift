@@ -730,6 +730,10 @@ nonisolated private func sideChat(_ profile: String, _ session: String, title: S
                                          link: "hermes://job/deploys%7Cj1", now: t0.addingTimeInterval(40))
         guard case .startGroup(let started)? = jobCmds.first else { Issue.record("expected startGroup"); return }
         #expect(started.activeCount == 1)
+        #expect(started.soleItem?.title == "Morning brief")
+        #expect(started.soleItem?.botName == "Deploys")
+        #expect(started.soleItem?.detail == "Morning brief")
+        #expect(started.soleItem?.subtitleIsStep == false)
         #expect(started.items.map(\.title) == ["Morning brief"])
         #expect(started.items.map(\.subtitle) == ["Deploys"])
         #expect(started.items.map(\.statusWord) == ["Running"])
@@ -737,6 +741,12 @@ nonisolated private func sideChat(_ profile: String, _ session: String, title: S
         let leaveCmds = planner.leaving([main, side], now: t0.addingTimeInterval(50))
         guard case .updateGroup(let grouped)? = leaveCmds.first else { Issue.record("expected updateGroup"); return }
         #expect(grouped.activeCount == 3)
+        #expect(grouped.soleItem == nil)
+        #expect(grouped.items[0].subtitleIsStep == true)
+        #expect(grouped.items[0].trail?.step == "running npm test")
+        #expect(grouped.items[1].subtitleIsStep == false)
+        #expect(grouped.items[1].botName == "ORCH")
+        #expect(grouped.items[1].detail == "Update hermes plugins")
         #expect(grouped.summary == "3 active")
         #expect(grouped.compactLabel == "3 active")
         #expect(grouped.items.map(\.title) == ["Otto", "Update hermes plugins", "Morning brief"])

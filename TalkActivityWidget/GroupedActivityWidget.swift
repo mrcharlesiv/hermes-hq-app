@@ -1,7 +1,10 @@
 // [live-grouped] Draws the grouped Live Activity combining active bot replies, side chats, and jobs into a single
-// Lock Screen card and Dynamic Island pill. Vended from the same WidgetBundle as TalkActivityWidget and
-// ReplyActivityWidget (TalkActivityWidget.swift), requiring no new App ID or provisioning profile.
-// Each row is an individual SwiftUI `Link` opening its exact chat or job directly.
+// Lock Screen card and Dynamic Island pill. Adapts automatically:
+// - 1 item: renders the rich single-item view (bot name, step count, live timer, full 2-line step, earlier steps)
+//   so a single active bot never shows a sparse table or duplicate app header.
+// - 2+ items: renders a balanced multi-row card (`[icon] Hermes HQ` left, `3 active` right-aligned over the status
+//   column, hairline divider, and natural left-flowing `[Title]  [Subtitle]  [Spacer]  [Status]` rows). Each row is
+//   an individual SwiftUI `Link` opening its exact chat or job directly.
 
 import ActivityKit
 import SwiftUI
@@ -10,50 +13,107 @@ import WidgetKit
 struct GroupedActivityWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: HQGroupedLiveAttributes.self) { context in
+            let url = (context.state.soleItem?.link ?? context.attributes.link).flatMap(URL.init(string:))
             GroupedBannerView(attributes: context.attributes, state: context.state, stale: context.isStale)
-                .widgetURL(context.attributes.link.flatMap(URL.init(string:)))
+                .widgetURL(url)
         } dynamicIsland: { context in
             let attributes = context.attributes
             let state = context.state
+            let single = state.soleItem.map { item -> (HQLiveAttributes, LiveActivityContent, LiveCard) in
+                let attrs = GroupedLook.singleAttributes(item, accent: attributes.accent)
+                let content = item.singleContent
+                return (attrs, content, LiveCard(attrs, content, stale: context.isStale))
+            }
+            let url = (state.soleItem?.link ?? attributes.link).flatMap(URL.init(string:))
             return DynamicIsland {
-                DynamicIslandExpandedRegion(.leading) {
-                    Image(systemName: GroupedLook.symbol(state))
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(GroupedLook.tint(state, accent: attributes.accent))
-                        .padding(.leading, 6)
-                        .dynamicTypeSize(...DynamicTypeSize.large)
+                DynamicIslandExpandedRegion(.leading, priority: 1) {
+                    if let (attrs, content, _) = single {
+                        HStack(spacing: 6) {
+                            Image(systemName: LiveLook.symbol(attrs.subject.kind, content.phase))
+                                .font(.headline)
+                                .foregroundStyle(LiveLook.tint(content.phase, accent: attrs.accent))
+                            Text(attrs.botName)
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                        .padding(.leading, 4)
+                        .dynamicTypeSize(...DynamicTypeSize.xLarge)
+                        .dynamicIsland(verticalPlacement: .belowIfTooWide)
+                    } else {
+                        Image(systemName: GroupedLook.symbol(state))
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(GroupedLook.tint(state, accent: attributes.accent))
+                            .padding(.leading, 6)
+                            .dynamicTypeSize(...DynamicTypeSize.large)
+                    }
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    Text(context.isStale && !state.isOver ? "Check app" : state.summary)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(context.isStale && !state.isOver ? Color.secondary : GroupedLook.tint(state, accent: attributes.accent))
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .padding(.trailing, 6)
-                        .dynamicTypeSize(...DynamicTypeSize.xLarge)
+                    if let (_, content, _) = single {
+                        LiveElapsed(state: content, stale: context.isStale, short: true)
+                            .font(.headline)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .padding(.trailing, 4)
+                            .dynamicTypeSize(...DynamicTypeSize.xLarge)
+                    } else {
+                        Text(context.isStale && !state.isOver ? "Check app" : state.summary)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(context.isStale && !state.isOver ? Color.secondary : GroupedLook.tint(state, accent: attributes.accent))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .padding(.trailing, 6)
+                            .dynamicTypeSize(...DynamicTypeSize.xLarge)
+                    }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    GroupedExpandedBottomView(state: state, accent: attributes.accent)
-                        .padding(.horizontal, 4)
-                        .padding(.top, 2)
-                        .padding(.bottom, 2)
-                        .dynamicTypeSize(...DynamicTypeSize.large)
+                    if let (attrs, content, card) = single {
+                        LiveExpandedBottomView(attributes: attrs, state: content, card: card)
+                            .padding(.horizontal, 4)
+                            .padding(.bottom, 2)
+                            .dynamicTypeSize(...DynamicTypeSize.xLarge)
+                    } else {
+                        GroupedExpandedBottomView(state: state, accent: attributes.accent)
+                            .padding(.horizontal, 4)
+                            .padding(.top, 2)
+                            .padding(.bottom, 2)
+                            .dynamicTypeSize(...DynamicTypeSize.large)
+                    }
                 }
             } compactLeading: {
-                Image(systemName: GroupedLook.symbol(state))
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(GroupedLook.tint(state, accent: attributes.accent))
-                    .dynamicTypeSize(...DynamicTypeSize.large)
+                if let (attrs, content, _) = single {
+                    Image(systemName: LiveLook.symbol(attrs.subject.kind, content.phase))
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(LiveLook.tint(content.phase, accent: attrs.accent))
+                        .dynamicTypeSize(...DynamicTypeSize.large)
+                } else {
+                    Image(systemName: GroupedLook.symbol(state))
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(GroupedLook.tint(state, accent: attributes.accent))
+                        .dynamicTypeSize(...DynamicTypeSize.large)
+                }
             } compactTrailing: {
-                GroupedCompactTrailing(state: state, stale: context.isStale, accent: attributes.accent)
-                    .dynamicTypeSize(...DynamicTypeSize.large)
+                if let (_, content, _) = single {
+                    LiveCompactTrailing(state: content, stale: context.isStale)
+                        .dynamicTypeSize(...DynamicTypeSize.large)
+                } else {
+                    GroupedCompactTrailing(state: state, stale: context.isStale, accent: attributes.accent)
+                        .dynamicTypeSize(...DynamicTypeSize.large)
+                }
             } minimal: {
-                Image(systemName: GroupedLook.symbol(state))
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(GroupedLook.tint(state, accent: attributes.accent))
-                    .dynamicTypeSize(...DynamicTypeSize.large)
+                if let (attrs, content, _) = single {
+                    Image(systemName: LiveLook.symbol(attrs.subject.kind, content.phase))
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(LiveLook.tint(content.phase, accent: attrs.accent))
+                        .dynamicTypeSize(...DynamicTypeSize.large)
+                } else {
+                    Image(systemName: GroupedLook.symbol(state))
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(GroupedLook.tint(state, accent: attributes.accent))
+                        .dynamicTypeSize(...DynamicTypeSize.large)
+                }
             }
-            .widgetURL(attributes.link.flatMap(URL.init(string:)))
+            .widgetURL(url)
             .keylineTint(GroupedLook.tint(state, accent: attributes.accent))
         }
         .supplementalActivityFamilies([.small])
@@ -70,23 +130,39 @@ private struct GroupedBannerView: View {
     var body: some View {
         switch activityFamily {
         case .small:
-            GroupedSmallBannerView(attributes: attributes, state: state, stale: stale)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .activityBackgroundTint(.clear)
-                .environment(\.colorScheme, .dark)
+            Group {
+                if let sole = state.soleItem {
+                    LiveSmallBannerView(attributes: GroupedLook.singleAttributes(sole, accent: attributes.accent),
+                                        state: sole.singleContent, stale: stale)
+                } else {
+                    GroupedSmallBannerView(attributes: attributes, state: state, stale: stale)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .activityBackgroundTint(.clear)
+            .environment(\.colorScheme, .dark)
         default:
-            GroupedLockScreenView(attributes: attributes, state: state, stale: stale)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .lockScreenGlass()
+            Group {
+                if let sole = state.soleItem {
+                    LiveLockScreenView(attributes: GroupedLook.singleAttributes(sole, accent: attributes.accent),
+                                       state: sole.singleContent, stale: stale)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
+                } else {
+                    GroupedLockScreenView(attributes: attributes, state: state, stale: stale)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .lockScreenGlass()
         }
     }
 }
 
-/// Compact 2-line banner for Apple Watch Smart Stack and CarPlay (`.small` activity family).
+/// Compact 2-line banner for Apple Watch Smart Stack and CarPlay (`.small` activity family) when 2+ items exist.
 private struct GroupedSmallBannerView: View {
     let attributes: HQGroupedLiveAttributes
     let state: LiveGroupedContent
@@ -132,7 +208,8 @@ private struct GroupedSmallBannerView: View {
     }
 }
 
-/// Lock Screen grouped card: centered status header over up to 5 compact, individually tappable rows.
+/// Lock Screen grouped card for 2+ items: balanced left/right header with subtle hairline divider over up to 5
+/// individually tappable rows.
 struct GroupedLockScreenView: View {
     let attributes: HQGroupedLiveAttributes
     let state: LiveGroupedContent
@@ -140,26 +217,32 @@ struct GroupedLockScreenView: View {
 
     var body: some View {
         let shown = state.visible(limit: LiveGroupedContent.lockScreenLimit, reserveOverflowRow: true)
-        VStack(alignment: .leading, spacing: 6) {
-            ZStack {
-                HStack(spacing: 6) {
-                    Image(systemName: GroupedLook.symbol(state))
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(GroupedLook.tint(state, accent: attributes.accent))
-                    Text(attributes.appName)
-                        .font(.subheadline.weight(.bold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                }
-                Text(stale && !state.isOver ? "Check app" : state.summary)
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: GroupedLook.symbol(state))
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(stale && !state.isOver ? .white.opacity(0.65) : .white.opacity(0.92))
+                    .foregroundStyle(GroupedLook.tint(state, accent: attributes.accent))
+                Text(attributes.appName)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.white)
                     .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 8)
+                Text(stale && !state.isOver ? "Check app" : state.summary)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(stale && !state.isOver ? .white.opacity(0.65) : GroupedLook.tint(state, accent: attributes.accent))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(2)
             }
-            .padding(.bottom, 1)
+            .padding(.bottom, 6)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(.white.opacity(0.10))
+                    .frame(height: 0.5)
+            }
 
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 5.5) {
                 ForEach(shown.rows) { item in
                     GroupedRowView(item: item, accent: attributes.accent)
                 }
@@ -175,7 +258,7 @@ struct GroupedLockScreenView: View {
     }
 }
 
-/// Expanded Dynamic Island bottom region: up to 4 tappable rows (or 3 rows + "+N more" when overflowing) so nothing clips.
+/// Expanded Dynamic Island bottom region for 2+ items: up to 4 tappable rows (or 3 rows + "+N more" when overflowing).
 private struct GroupedExpandedBottomView: View {
     let state: LiveGroupedContent
     let accent: [Double]?
@@ -197,7 +280,10 @@ private struct GroupedExpandedBottomView: View {
     }
 }
 
-/// One compact single-line row (`[Title]  [Bot / Step]  [Status]`), wrapped in a `Link` when it carries a deep link.
+/// One compact single-line row (`[Title]  [Subtitle]  [Spacer]  [Status]`), wrapped in a `Link` when it carries a deep
+/// link. Subtitles flow naturally right beside the title with no artificial width cap or dead middle gap:
+/// - For main bot chats (`subtitleIsStep`), the bot name stays whole while the live step uses all remaining width.
+/// - For side chats & jobs, the short bot tag stays whole beside the title while very long titles truncate neatly.
 private struct GroupedRowView: View {
     let item: LiveGroupedItem
     let accent: [Double]?
@@ -213,34 +299,35 @@ private struct GroupedRowView: View {
 
     private var rowBody: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(item.title)
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            if let subtitle = item.subtitle, !subtitle.isEmpty {
-                Text(subtitle)
-                    .font(.footnote)
-                    .foregroundStyle(.white.opacity(0.55))
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(item.title)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.white)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .frame(maxWidth: 118, alignment: .trailing)
-                    .layoutPriority(1)
+                    .layoutPriority(item.subtitleIsStep ? 1 : 0)
+                if let subtitle = item.subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.footnote)
+                        .foregroundStyle(.white.opacity(0.52))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .layoutPriority(item.subtitleIsStep ? 0 : 1)
+                }
             }
+            Spacer(minLength: 8)
             Text(item.statusWord)
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(GroupedLook.statusColor(item.phase, accent: accent))
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
-                .frame(minWidth: 54, alignment: .trailing)
                 .layoutPriority(2)
         }
         .accessibilityElement(children: .combine)
     }
 }
 
-/// [island-fit] Compact trailing Dynamic Island view for grouped mode: shows "3 active" when solo, steps down to
+/// [island-fit] Compact trailing Dynamic Island view for 2+ grouped items: shows "3 active" when solo, steps down to
 /// "• 3" and "3" when competing Live Activities squeeze the island so it never clips to "3 ac…".
 struct GroupedCompactTrailing: View {
     let state: LiveGroupedContent
@@ -301,6 +388,11 @@ struct GroupedCompactTrailing: View {
 }
 
 enum GroupedLook {
+    static func singleAttributes(_ item: LiveGroupedItem, accent: [Double]?) -> HQLiveAttributes {
+        HQLiveAttributes(subject: item.subject, botName: item.botName ?? item.title, detail: item.detail,
+                         link: item.link, accent: accent)
+    }
+
     static func symbol(_ state: LiveGroupedContent) -> String {
         if state.activeCount > 0 {
             let active = state.items.filter { !$0.isOver }

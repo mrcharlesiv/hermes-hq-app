@@ -102,7 +102,7 @@ private struct LiveBannerView: View {
 }
 
 /// Compact 2-line banner for Apple Watch Smart Stack and CarPlay (`.small` activity family).
-private struct LiveSmallBannerView: View {
+struct LiveSmallBannerView: View {
     let attributes: HQLiveAttributes
     let state: LiveActivityContent
     let stale: Bool
@@ -138,7 +138,7 @@ private struct LiveSmallBannerView: View {
 
 /// Full-width bottom area of the expanded Dynamic Island: side-chat title (if any), step count, running step / job
 /// status (up to 2 lines so nothing is clipped), and the most recent finished step.
-private struct LiveExpandedBottomView: View {
+struct LiveExpandedBottomView: View {
     let attributes: HQLiveAttributes
     let state: LiveActivityContent
     let card: LiveCard

@@ -3,6 +3,15 @@
 import SwiftUI
 import UIKit
 
+/// [mac-glass] Set on the Mac floating content canvas (`RootSplitController.macCanvas`) when behind-window glass is
+/// active so root pane surfaces inside it stay transparent and let the canvas's unified frosted surface show through.
+/// Stays `false` on iPhone/iPad, in modal sheets, and under Reduce Transparency.
+nonisolated struct MacGlassCanvasTrait: UITraitDefinition {
+    static let defaultValue = false
+    static let affectsColorAppearance = true
+    static let name = "hqMacGlassCanvas"
+}
+
 enum HQPalette {
     // [desktoplook] Every colour reads the live theme (App/Theme): the Nous values below are the defaults the resolver
     // returns with no skin picked and the Desktop Look off (HermesKit/Theme/ThemeTokens.swift `base`), so nothing
@@ -11,6 +20,25 @@ enum HQPalette {
     // Head's page); a main-actor provider closure trapped there (EXC_BREAKPOINT in New Task).
     /// Page / list background.
     static let page = ThemedColor.make(\.page)
+    /// Root pane surface inside the Mac floating glass canvas: `.clear` inside `macCanvas` (when Reduce Transparency
+    /// is off) so the canvas's unified translucent surface shows through; `HQPalette.page` everywhere else.
+    static let panePage = UIColor { @Sendable traits in
+        #if targetEnvironment(macCatalyst)
+        if traits[MacGlassCanvasTrait.self], !HQAccessibility.reduceTransparency { return .clear }
+        #endif
+        return page.resolvedColor(with: traits)
+    }
+    /// Grouped / inspector pane surface inside the Mac floating glass canvas: a subtle translucent tint over
+    /// `macCanvas` when Reduce Transparency is off, instead of an opaque grey block; `HQPalette.groupedPage` elsewhere.
+    static let paneGroupedPage = UIColor { @Sendable traits in
+        #if targetEnvironment(macCatalyst)
+        if traits[MacGlassCanvasTrait.self], !HQAccessibility.reduceTransparency {
+            let dark = traits.userInterfaceStyle == .dark
+            return dark ? UIColor(white: 1, alpha: 0.025) : UIColor(white: 0, alpha: 0.022)
+        }
+        #endif
+        return groupedPage.resolvedColor(with: traits)
+    }
     static let label = ThemedColor.make(\.label)
     static let label2 = ThemedColor.make(\.label2)
     /// [paper-icons] A row icon's tile in a skin with ink icons (`Theme.inkIcons`).

@@ -117,24 +117,78 @@ enum MacGlassShell {
         return UIColor(red: min(max(r + delta, 0), 1), green: min(max(g + delta, 0), 1), blue: min(max(b + delta, 0), 1), alpha: 1)
     }
 
-    /// Subtle translucent tint over the live behind-window vibrancy so text stays crisp in both light & dark modes
-    /// while letting the desktop wallpaper bloom cleanly through the frosted shell.
+    /// Subtle translucent tint over the live behind-window vibrancy so the sidebar and top bar stay cohesive with
+    /// the floating content canvas while letting the desktop wallpaper bloom cleanly through the frosted shell.
     static let glassVeilColor = UIColor { @Sendable traits in
         let dark = traits.userInterfaceStyle == .dark
         let set = ThemeTable.set(generation: traits[ThemeGenerationTrait.self])
         if set.groupedPageIsSystem {
-            return dark ? UIColor(red: 0.08, green: 0.085, blue: 0.10, alpha: 0.18)
-                        : UIColor(red: 0.99, green: 0.992, blue: 1.0, alpha: 0.28)
+            // Light: luminous airy veil so the frosted shell stays close in brightness to the white card (never muddy grey).
+            // Dark: deep smoked obsidian veil so the shell sits slightly deeper than the elevated dark glass canvas.
+            return dark ? UIColor(red: 0.052, green: 0.058, blue: 0.076, alpha: 0.58)
+                        : UIColor(red: 0.985, green: 0.988, blue: 0.994, alpha: 0.44)
         }
         let page = HQPalette.page.resolvedColor(with: traits)
-        return page.withAlphaComponent(dark ? 0.34 : 0.28)
+        if dark {
+            return adjusted(page, delta: -0.025).withAlphaComponent(0.60)
+        }
+        return page.withAlphaComponent(0.46)
     }
 
-    /// Subtle crisp floating canvas border color.
+    /// Opaque base tone of the floating content canvas (used by `canvasSurfaceColor` and scrolled header frosts
+    /// so scrolled bars match the lifted dark canvas tone instead of dropping back to darker raw `HQPalette.page`).
+    static let canvasBaseColor = UIColor { @Sendable traits in
+        let dark = traits.userInterfaceStyle == .dark
+        let set = ThemeTable.set(generation: traits[ThemeGenerationTrait.self])
+        let page = HQPalette.page.resolvedColor(with: traits)
+        if set.groupedPageIsSystem {
+            if dark {
+                let lift: CGFloat = set.state.desktopLook ? 0.028 : 0.052
+                return adjusted(page, delta: lift)
+            }
+            return .white
+        }
+        return dark ? adjusted(page, delta: 0.026) : page
+    }
+
+    /// Unified translucent surface for the floating content canvas (`RootSplitController.macCanvas`).
+    /// Lets a whisper of the behind-window frosted glass continue across the main workspace (~13–18% live ambient
+    /// tint) so the sidebar and content pane feel cut from the same window while preserving razor-sharp legibility.
+    static let canvasSurfaceColor = UIColor { @Sendable traits in
+        if HQAccessibility.reduceTransparency {
+            return HQPalette.page.resolvedColor(with: traits)
+        }
+        let dark = traits.userInterfaceStyle == .dark
+        let set = ThemeTable.set(generation: traits[ThemeGenerationTrait.self])
+        let base = canvasBaseColor.resolvedColor(with: traits)
+        if set.groupedPageIsSystem {
+            return base.withAlphaComponent(dark ? 0.76 : 0.74)
+        }
+        return base.withAlphaComponent(dark ? 0.78 : 0.76)
+    }
+
+    /// Frosted header veil matching `canvasBaseColor` when scrolled content passes under the chat bar.
+    static let canvasBarVeilColor = UIColor { @Sendable traits in
+        let base = HQAccessibility.reduceTransparency
+            ? HQPalette.page.resolvedColor(with: traits)
+            : canvasBaseColor.resolvedColor(with: traits)
+        return base.withAlphaComponent(HQAccessibility.reduceTransparency ? 1.0 : 0.90)
+    }
+
+    /// Whisper-thin glass seam separating the floating canvas from the outer frosted shell.
     static let canvasBorderColor = UIColor { @Sendable traits in
         traits.userInterfaceStyle == .dark
-            ? UIColor(white: 1, alpha: 0.11)
-            : UIColor(white: 0, alpha: 0.07)
+            ? UIColor(white: 1, alpha: 0.085)
+            : UIColor(white: 0, alpha: 0.052)
+    }
+
+    private static func adjusted(_ color: UIColor, delta: CGFloat) -> UIColor {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        guard color.getRed(&r, green: &g, blue: &b, alpha: &a) else { return color }
+        return UIColor(red: min(max(r + delta, 0), 1),
+                       green: min(max(g + delta, 0), 1),
+                       blue: min(max(b + delta, 0), 1),
+                       alpha: a)
     }
 
     // MARK: - AppKit Bridge
@@ -167,8 +221,9 @@ enum MacGlassShell {
         if let effectView {
             // NSVisualEffectBlendingModeBehindWindow = 0
             setInt(effectView, selector: "setBlendingMode:", value: 0)
-            // NSVisualEffectMaterialSidebar = 7 (luminous frosted translucency that picks up wallpaper hues cleanly)
-            setInt(effectView, selector: "setMaterial:", value: 7)
+            // Light: NSVisualEffectMaterialSidebar (7) for airy luminous vibrancy.
+            // Dark: NSVisualEffectMaterialUnderWindowBackground (18) for deep smoked glass without grey washout.
+            setInt(effectView, selector: "setMaterial:", value: dark ? 18 : 7)
             // NSVisualEffectStateActive = 1 (or Inactive = 2 when Reduce Transparency is on)
             setInt(effectView, selector: "setState:", value: reduced ? 2 : 1)
             setBool(effectView, selector: "setHidden:", value: reduced)

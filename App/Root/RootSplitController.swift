@@ -50,6 +50,7 @@ final class RootSplitController: UIViewController {
     /// [mac] Rounded, clipped elevated card holding the list, detail, and inspector panes.
     let macCanvas = UIView()
     private var macThemeToken: NSObjectProtocol?
+    private var macA11yToken: NSObjectProtocol?
     private static var macSidebarWidth: CGFloat { MacSidebar.width }
     #else
     private static let macSidebarWidth: CGFloat = 0
@@ -129,15 +130,20 @@ final class RootSplitController: UIViewController {
         view.isOpaque = false
         view.addSubview(macBackdrop)
         macCanvasShadow.backgroundColor = .clear
+        macCanvasShadow.isOpaque = false
         macCanvasShadow.layer.shadowColor = UIColor.black.cgColor
-        macCanvasShadow.layer.shadowOffset = CGSize(width: 0, height: 4)
-        macCanvasShadow.layer.shadowRadius = 16
+        macCanvasShadow.layer.shadowOffset = CGSize(width: 0, height: 2)
+        macCanvasShadow.layer.shadowRadius = 12
         view.addSubview(macCanvasShadow)
         macCanvas.clipsToBounds = true
+        macCanvas.isOpaque = false
         macCanvas.layer.cornerRadius = MacGlassShell.canvasCornerRadius
         macCanvas.layer.cornerCurve = .continuous
         macCanvas.accessibilityIdentifier = "mac-canvas"
         macCanvasShadow.addSubview(macCanvas)
+        tabs.view.isOpaque = false
+        detail.view.isOpaque = false
+        detail.view.backgroundColor = .clear
         macCanvas.addSubview(tabs.view)
         macCanvas.addSubview(detail.view)
         hairline.backgroundColor = HQPalette.paneLine
@@ -161,12 +167,16 @@ final class RootSplitController: UIViewController {
         #if targetEnvironment(macCatalyst)
         addChild(inspector)
         inspector.view.frame = .zero   // placed by placePanes; never the window's whole size, over the panes, before that
+        inspector.view.isOpaque = false
         macCanvas.addSubview(inspector.view)
         inspector.didMove(toParent: self)
         registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self, UITraitDisplayScale.self]) {
             (vc: RootSplitController, _) in vc.restyleMacCanvas()
         }
         macThemeToken = NotificationCenter.default.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.restyleMacCanvas() }
+        }
+        macA11yToken = NotificationCenter.default.addObserver(forName: UIAccessibility.reduceTransparencyStatusDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.restyleMacCanvas() }
         }
         restyleMacCanvas()
@@ -225,6 +235,7 @@ final class RootSplitController: UIViewController {
 
     isolated deinit {
         if let macThemeToken { NotificationCenter.default.removeObserver(macThemeToken) }
+        if let macA11yToken { NotificationCenter.default.removeObserver(macA11yToken) }
     }
     #endif
 
@@ -270,11 +281,15 @@ final class RootSplitController: UIViewController {
 
     private func restyleMacCanvas() {
         let dark = traitCollection.userInterfaceStyle == .dark
-        macCanvas.backgroundColor = HQPalette.page
+        let glass = !HQAccessibility.reduceTransparency
+        macCanvas.traitOverrides[MacGlassCanvasTrait.self] = glass
+        macCanvas.backgroundColor = MacGlassShell.canvasSurfaceColor
         macCanvas.layer.borderWidth = HQShape.pixel(traitCollection.displayScale)
         macCanvas.layer.borderColor = MacGlassShell.canvasBorderColor.resolvedColor(with: traitCollection).cgColor
-        macCanvasShadow.layer.shadowOpacity = dark ? 0.42 : 0.095
-        hairline.backgroundColor = dark ? UIColor(white: 1, alpha: 0.08) : UIColor(white: 0, alpha: 0.075)
+        macCanvasShadow.layer.shadowOffset = CGSize(width: 0, height: dark ? 3 : 2)
+        macCanvasShadow.layer.shadowRadius = dark ? 14 : 12
+        macCanvasShadow.layer.shadowOpacity = dark ? 0.22 : 0.055
+        hairline.backgroundColor = dark ? UIColor(white: 1, alpha: 0.07) : UIColor(white: 0, alpha: 0.06)
         macBackdrop.refresh()
         MacGlassShell.apply(to: viewIfLoaded?.window)
     }

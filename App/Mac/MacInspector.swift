@@ -286,7 +286,7 @@ final class MacInspector: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = HQPalette.groupedPage
+        view.backgroundColor = HQPalette.paneGroupedPage
         view.accessibilityIdentifier = "mac.inspector"
         edge.backgroundColor = HQPalette.paneLine
         edge.isUserInteractionEnabled = false
@@ -465,8 +465,8 @@ final class MacInspector: UIViewController {
         taskTitle.isHidden = !Self.taskMode
         holderTop.constant = browser ? 0 : 8
         band.isHidden = !desktop
-        band.backgroundColor = HQPalette.page
-        bandFrost.color = HQPalette.page
+        band.backgroundColor = .clear
+        bandFrost.color = MacGlassShell.canvasBaseColor
         strip?.view.isHidden = !desktop || Self.taskMode || thread || browser
     }
 

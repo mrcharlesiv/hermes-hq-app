@@ -216,10 +216,10 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
             navigationItem.largeTitleDisplayMode = .never
             scopeItem.compact = !barFilterHost   // UX study #88: "All Bots ⌄" beside search pushed the title off centre
         }
-        view.backgroundColor = HQPalette.page
+        view.backgroundColor = HQPalette.panePage
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: makeLayout())
         collectionView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        collectionView.backgroundColor = HQPalette.page
+        collectionView.backgroundColor = HQPalette.panePage
         collectionView.delegate = self
         collectionView.alwaysBounceVertical = true
         collectionView.keyboardDismissMode = .onDrag

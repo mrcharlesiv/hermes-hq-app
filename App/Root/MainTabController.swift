@@ -483,7 +483,7 @@ final class MainTabController: UITabBarController, UITabBarControllerDelegate {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = HQPalette.page
+        view.backgroundColor = HQPalette.panePage
         desktopTabBar.sync()                 // [desktoplook] shows only with the look on (or on the Mac); follows Theme.didChange itself
         // Both lists listen from the start, so the tab badges are right before Sessions is first opened.
         botsViewController.loadViewIfNeeded()

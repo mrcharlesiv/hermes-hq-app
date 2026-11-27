@@ -703,7 +703,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         claimLandsNext()   // [notify] the chat a tapped alert named
         applyChatColour()   // [bot-colour] before the first row is drawn
         watchChatColour()
-        view.backgroundColor = ChatPalette.page
+        view.backgroundColor = HQPalette.panePage
         backdrop.frame = view.bounds
         backdrop.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.insertSubview(backdrop, at: 0)
@@ -2286,16 +2286,15 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         let band = UINavigationBarAppearance()
         band.configureWithTransparentBackground()
         band.backgroundEffect = UIBlurEffect(style: .systemUltraThinMaterial)
-        // [Mac AAA 2026-11-17] The page's veil over the frost (the pop-overs' and the reply peek's, `popupVeil`): the
-        // thin blur alone went dark grey across the whole bar under a black message. Now a message under the bar shows
-        // as a faint, local shade and the bar keeps its own tone.
-        band.backgroundColor = ChatPalette.popupVeil
+        // [Mac AAA 2026-11-17] The canvas's veil over the frost: matches the softly lifted Mac glass canvas
+        // tone while keeping scrolled messages blurred cleanly behind the bar.
+        band.backgroundColor = MacGlassShell.canvasBarVeilColor
         band.shadowColor = HQPalette.paneLine   // the panes' own line, at the bar's foot, level with the inspector's rule
         // [Mac AAA 2026-11-17] …drawn solid, as it shows on the page: the line lies just under the band, over the rows,
         // and see-through it went dark green across the width under the owner's green message (93,142,109 against its
         // 198 grey on the page).
         band.shadowColor = UIColor { traits in
-            let line = HQPalette.paneLine.resolvedColor(with: traits), page = ChatPalette.page.resolvedColor(with: traits)
+            let line = HQPalette.paneLine.resolvedColor(with: traits), page = MacGlassShell.canvasBaseColor.resolvedColor(with: traits)
             var lr: CGFloat = 0, lg: CGFloat = 0, lb: CGFloat = 0, la: CGFloat = 0, pr: CGFloat = 0, pg: CGFloat = 0, pb: CGFloat = 0, pa: CGFloat = 0
             guard line.getRed(&lr, green: &lg, blue: &lb, alpha: &la), page.getRed(&pr, green: &pg, blue: &pb, alpha: &pa) else { return line }
             return UIColor(red: lr * la + pr * (1 - la), green: lg * la + pg * (1 - la), blue: lb * la + pb * (1 - la), alpha: 1)

@@ -396,10 +396,10 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         // The bots are a filter glyph beside the magnifier and +: "All Bots" in words squeezed "Tasks" to "…". The
         // Mac's table has the room for the words.
         scopeItem.compact = true
-        view.backgroundColor = HQPalette.page
+        view.backgroundColor = HQPalette.panePage
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: makeLayout())
         collectionView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        collectionView.backgroundColor = HQPalette.page
+        collectionView.backgroundColor = HQPalette.panePage
         collectionView.delegate = self
         collectionView.alwaysBounceVertical = true
         collectionView.keyboardDismissMode = .onDrag

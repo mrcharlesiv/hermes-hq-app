@@ -961,9 +961,9 @@ private final class WorkspaceTabButton: UIControl {
         closeButton.alpha = (item.closable && hovered) ? 0.85 : 0
 
         if active {
-            bg.backgroundColor = dark ? UIColor(white: 1, alpha: 0.13) : UIColor(white: 1, alpha: 0.68)
+            bg.backgroundColor = dark ? UIColor(white: 1, alpha: 0.12) : UIColor(white: 1, alpha: 0.78)
             bg.layer.borderWidth = HQShape.pixel(traitCollection.displayScale)
-            bg.layer.borderColor = (dark ? UIColor(white: 1, alpha: 0.12) : UIColor(white: 0, alpha: 0.055)).cgColor
+            bg.layer.borderColor = (dark ? UIColor(white: 1, alpha: 0.11) : UIColor(white: 0, alpha: 0.05)).cgColor
         } else if isHighlighted {
             bg.backgroundColor = dark ? UIColor(white: 1, alpha: 0.10) : UIColor(white: 0, alpha: 0.07)
             bg.layer.borderWidth = 0

@@ -29,7 +29,7 @@ final class MoreViewController: UIViewController, UICollectionViewDelegate {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = HQPalette.groupedPage
+        view.backgroundColor = HQPalette.paneGroupedPage
         var config = UICollectionLayoutListConfiguration(appearance: .insetGrouped)
         config.headerMode = .supplementary
         // [backdrop-cards] Clear: the page under it is the grouped colour (it follows the skin). The list's own colour
@@ -68,7 +68,7 @@ final class MoreViewController: UIViewController, UICollectionViewDelegate {
         collectionView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         collectionView.delegate = self
         collectionView.accessibilityIdentifier = "more.list"
-        collectionView.backgroundColor = HQPalette.groupedPage   // [desktoplook] the page follows the skin
+        collectionView.backgroundColor = HQPalette.paneGroupedPage   // [desktoplook] the page follows the skin
         view.addSubview(collectionView)
         ListBarAppearance.pinTitle(in: self, grouped: true, softEdgeAround: collectionView)   // owner 2026-11-01: every tab's top
         PageBackdrop.install(in: self, clearing: [collectionView])   // [backdrop] Theme › App Background

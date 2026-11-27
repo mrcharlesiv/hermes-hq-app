@@ -80,6 +80,12 @@ final class PaneNavigationController: UINavigationController {
     required init?(coder: NSCoder) { super.init(coder: coder) }
 
     #if targetEnvironment(macCatalyst)
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.isOpaque = false
+        view.backgroundColor = .clear
+    }
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         NotificationCenter.default.post(name: MacSidebar.neighbourMayChange, object: nil)   // [sidebar-light]

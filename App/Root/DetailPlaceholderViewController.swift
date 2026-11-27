@@ -129,7 +129,7 @@ final class DetailPlaceholderViewController: UIViewController {
         #if targetEnvironment(macCatalyst)
         if let drawn = list.flatMap(Self.drawnColour) { color = drawn }
         #endif
-        let next = color == nil || color == .clear ? HQPalette.page : color
+        let next = color == nil || color == .clear ? HQPalette.panePage : color
         if view.backgroundColor != next { view.backgroundColor = next }
     }
 
@@ -166,7 +166,7 @@ final class DetailPlaceholderViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        if view.backgroundColor == nil { view.backgroundColor = HQPalette.page }
+        if view.backgroundColor == nil { view.backgroundColor = HQPalette.panePage }
         navigationItem.largeTitleDisplayMode = .never
         NotificationCenter.default.addObserver(self, selector: #selector(listChanged), name: Self.listStateChanged, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(refreshFonts), name: Theme.didChange, object: nil)

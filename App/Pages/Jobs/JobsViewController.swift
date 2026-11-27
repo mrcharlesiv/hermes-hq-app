@@ -87,10 +87,10 @@ final class JobsViewController: UIViewController, UICollectionViewDelegate, UISe
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = HQPalette.page
+        view.backgroundColor = HQPalette.panePage
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: makeLayout())
         collectionView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        collectionView.backgroundColor = HQPalette.page
+        collectionView.backgroundColor = HQPalette.panePage
         collectionView.delegate = self
         collectionView.alwaysBounceVertical = true
         collectionView.keyboardDismissMode = .onDrag

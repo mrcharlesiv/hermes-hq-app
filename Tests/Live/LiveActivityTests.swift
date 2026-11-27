@@ -289,6 +289,16 @@ nonisolated private func started(_ commands: [LiveActivityCommand]) -> [LiveActi
     func end(_ subject: LiveActivitySubject, _ content: LiveActivityContent?, _ dismissal: LiveActivityDismissal) {
         log.append("end \(subject.kind.rawValue):\(subject.id) \(content?.phase.rawValue ?? "removed") \(dismissal == .immediate ? "now" : "later")")
     }
+    func startGroup(_ content: LiveGroupedContent) -> Bool {
+        log.append("start-group \(content.activeCount)/\(content.totalCount) \(content.summary)")
+        return !refuse
+    }
+    func updateGroup(_ content: LiveGroupedContent) {
+        log.append("update-group \(content.activeCount)/\(content.totalCount) \(content.summary)")
+    }
+    func endGroup(_ content: LiveGroupedContent?, _ dismissal: LiveActivityDismissal) {
+        log.append("end-group \(content?.summary ?? "removed") \(dismissal == .immediate ? "now" : "later")")
+    }
     func endLeftovers() { leftoversEnded += 1 }
     func clearFinished() { log.append("clear finished") }
     var onPushToken: (@MainActor (LiveActivitySubject, String, String) -> Void)?
@@ -307,8 +317,8 @@ nonisolated private func started(_ commands: [LiveActivityCommand]) -> [LiveActi
 }
 
 @MainActor @Suite(.serialized) struct LiveActivityCenterTests {
-    private func center(_ driver: RecordingDriver, enabled: Bool = true) -> (LiveActivityCenter, () -> Void) {
-        let center = LiveActivityCenter(driver: driver, enabled: enabled)
+    private func center(_ driver: RecordingDriver, enabled: Bool = true, grouped: Bool = false) -> (LiveActivityCenter, () -> Void) {
+        let center = LiveActivityCenter(driver: driver, enabled: enabled, grouped: grouped)
         var clock = t0
         center.now = { clock }
         center.appActive = { false }
@@ -552,7 +562,7 @@ nonisolated private func stepping(_ id: String, _ step: String?) -> LiveBot {
     @Test func aTurnsPushTokenGoesToTheAddOnWithItsStartAndStepsAndIsWithdrawnAtTheEnd() async {
         let driver = RecordingDriver()
         let relay = RecordingRelay()
-        let center = LiveActivityCenter(driver: driver, enabled: true, steps: relay)
+        let center = LiveActivityCenter(driver: driver, enabled: true, grouped: false, steps: relay)
         var clock = t0
         center.now = { clock }
         center.appActive = { false }
@@ -573,7 +583,7 @@ nonisolated private func stepping(_ id: String, _ step: String?) -> LiveBot {
     @Test func aJobsCardHandsNothingOver() async {
         let driver = RecordingDriver()
         let relay = RecordingRelay()
-        let center = LiveActivityCenter(driver: driver, enabled: true, steps: relay)
+        let center = LiveActivityCenter(driver: driver, enabled: true, grouped: false, steps: relay)
         driver.onPushToken?(job("deploys|j1"), "activity-2", "abcd")
         await Task.yield()
         #expect(relay.handedOver.isEmpty)
@@ -626,7 +636,7 @@ nonisolated private func sideChat(_ profile: String, _ session: String, title: S
     @Test func aSideChatsPushTokenGoesToTheAddOnUnderItsBotAndItsOwnChat() async {
         let driver = RecordingDriver()
         let relay = RecordingRelay()
-        let center = LiveActivityCenter(driver: driver, enabled: true, steps: relay)
+        let center = LiveActivityCenter(driver: driver, enabled: true, grouped: false, steps: relay)
         var clock = t0
         center.now = { clock }
         center.appActive = { false }
@@ -704,5 +714,196 @@ nonisolated private func sideChat(_ profile: String, _ session: String, title: S
         #expect(LiveActivityContent.tookTiny(3600) == "1h")
         #expect(LiveActivityContent.tookTiny(45_296) == "12h")
         #expect(LiveActivityContent.tookTiny(-3) == "0s")
+    }
+}
+
+// MARK: [live-grouped] Single grouped Live Activity combining active turns, side chats, and jobs
+
+@Suite struct LiveActivityGroupedRulesTests {
+    @Test func mixesMainBotChatsSideChatsAndJobsIntoOneCardSortedByLongestRunningFirst() {
+        var planner = LiveActivityPlanner(grouped: true)
+        let main = stepping("otto", "running npm test")
+        let side = sideChat("orch", "s-plugins", title: "Update hermes plugins")
+        _ = planner.bots([main], now: t0, appActive: true)
+        _ = planner.bots([main, side], now: t0.addingTimeInterval(20), appActive: true)
+        let jobCmds = planner.jobStarted(key: "deploys|j1", title: "Morning brief", botName: "Deploys",
+                                         link: "hermes://job/deploys%7Cj1", now: t0.addingTimeInterval(40))
+        guard case .startGroup(let started)? = jobCmds.first else { Issue.record("expected startGroup"); return }
+        #expect(started.activeCount == 1)
+        #expect(started.items.map(\.title) == ["Morning brief"])
+        #expect(started.items.map(\.subtitle) == ["Deploys"])
+        #expect(started.items.map(\.statusWord) == ["Running"])
+
+        let leaveCmds = planner.leaving([main, side], now: t0.addingTimeInterval(50))
+        guard case .updateGroup(let grouped)? = leaveCmds.first else { Issue.record("expected updateGroup"); return }
+        #expect(grouped.activeCount == 3)
+        #expect(grouped.summary == "3 active")
+        #expect(grouped.compactLabel == "3 active")
+        #expect(grouped.items.map(\.title) == ["Otto", "Update hermes plugins", "Morning brief"])
+        #expect(grouped.items.map(\.subtitle) == ["Running npm test…", "ORCH", "Deploys"])
+        #expect(grouped.items.map(\.statusWord) == ["Working", "Working", "Running"])
+        #expect(grouped.items.map(\.link) == ["hermes://session/s-otto", "hermes://session/s-plugins", "hermes://job/deploys%7Cj1"])
+    }
+
+    @Test func finishedRowsLingerUnderActiveRowsAwayAndEndCardWhenLastItemFinishes() {
+        var planner = LiveActivityPlanner(grouped: true)
+        let a = stepping("otto", "reading package.json")
+        let b = sideChat("ivy", "s-audit", title: "Landing page audit")
+        _ = planner.bots([a, b], now: t0, appActive: true)
+        _ = planner.leaving([a, b], now: t0.addingTimeInterval(10))
+
+        // Side chat finishes while Otto keeps running away: stays visible underneath as Done.
+        let t1 = t0.addingTimeInterval(90)
+        let step1 = planner.bots([a], now: t1, appActive: false)
+        guard case .updateGroup(let mid)? = step1.first else { Issue.record("expected updateGroup"); return }
+        #expect(mid.activeCount == 1)
+        #expect(mid.totalCount == 2)
+        #expect(mid.items.map(\.title) == ["Otto", "Landing page audit"])
+        #expect(mid.items.map(\.statusWord) == ["Working", "Done"])
+
+        // Otto finishes too while away: card ends with both rows Done and lingers 15 min.
+        let t2 = t0.addingTimeInterval(150)
+        let step2 = planner.bots([], now: t2, appActive: false)
+        guard case .endGroup(let final?, let dismissal)? = step2.first else { Issue.record("expected endGroup"); return }
+        #expect(final.isOver)
+        #expect(final.summary == "All done")
+        #expect(final.compactLabel == "Done")
+        #expect(final.items.map(\.title) == ["Otto", "Landing page audit"], "most recently finished first")
+        #expect(dismissal == .after(t2.addingTimeInterval(LiveActivityTiming.doneLinger)))
+        #expect(!planner.groupShowing)
+        #expect(planner.live.isEmpty)
+    }
+
+    @Test func quickTurnsLingerOneMinuteAndReturnClearsFinishedRows() {
+        var planner = LiveActivityPlanner(grouped: true)
+        let a = bot("otto", working: true, name: "Otto")
+        let b = bot("ivy", working: true, name: "Ivy")
+        _ = planner.bots([a, b], now: t0, appActive: true)
+        _ = planner.leaving([a, b], now: t0.addingTimeInterval(2))
+
+        // A finishes away after 20s; user returns to the app before B finishes -> finished row clears.
+        _ = planner.bots([b], now: t0.addingTimeInterval(20), appActive: false)
+        let cleared = planner.clearFinished(now: t0.addingTimeInterval(25))
+        guard case .updateGroup(let afterReturn)? = cleared.first else { Issue.record("expected updateGroup after clearFinished"); return }
+        #expect(afterReturn.items.map(\.title) == ["Ivy"])
+
+        // B finishes away after 35s (< 60s quick turn) -> lingers 60s.
+        let tEnd = t0.addingTimeInterval(35)
+        let ended = planner.bots([], now: tEnd, appActive: false)
+        guard case .endGroup(let final?, let dismissal)? = ended.first else { Issue.record("expected endGroup"); return }
+        #expect(final.summary == "Done")
+        #expect(dismissal == .after(tEnd.addingTimeInterval(LiveActivityTiming.quickLinger)))
+    }
+
+    @Test func failedJobUpdatesSummaryAndOverflowReservesRowOnLockScreen() {
+        let items: [LiveGroupedItem] = (0..<7).map { i in
+            let phase: LiveActivityContent.Phase = if i < 5 { .working } else if i == 5 { .done } else { .failed }
+            let endedAt: Date? = i >= 5 ? t0.addingTimeInterval(100) : nil
+            return LiveGroupedItem(subject: turn("b\(i)"), title: "Task \(i)", subtitle: "Bot",
+                                   phase: phase, startedAt: t0.addingTimeInterval(Double(i)), endedAt: endedAt, link: nil)
+        }
+        let content = LiveGroupedContent(items: LiveGroupedContent.sorted(items))
+        #expect(content.activeCount == 5)
+        let lock = content.visible(limit: LiveGroupedContent.lockScreenLimit, reserveOverflowRow: true)
+        #expect(lock.rows.count == 4)
+        #expect(lock.overflow == 3)
+        let expanded = content.visible(limit: LiveGroupedContent.expandedLimit, reserveOverflowRow: false)
+        #expect(expanded.rows.count == 4)
+        #expect(expanded.overflow == 3)
+
+        let onlyFailed = LiveGroupedContent(items: [items[6]])
+        #expect(onlyFailed.summary == "Failed")
+        #expect(onlyFailed.compactLabel == "Failed")
+    }
+
+    @Test func notificationServiceMarkingTurnDoneMatchesSideChatAndMainBotChat() {
+        let main = LiveGroupedItem(subject: turn("otto"), title: "Otto", subtitle: "Running npm test…",
+                                   phase: .working, startedAt: t0, endedAt: nil, link: nil, session: "s-otto")
+        let side = LiveGroupedItem(subject: turn("ivy/s-audit"), title: "Audit", subtitle: "Ivy",
+                                   phase: .working, startedAt: t0.addingTimeInterval(5), endedAt: nil, link: nil, session: "s-audit")
+        let state = LiveGroupedContent(items: [main, side])
+
+        let afterSide = state.markingTurnDone(profile: "ivy", session: "s-audit", now: t0.addingTimeInterval(40))
+        #expect(afterSide?.activeCount == 1)
+        #expect(afterSide?.items.map(\.title) == ["Otto", "Audit"])
+        #expect(afterSide?.items.map(\.phase) == [.working, .done])
+
+        let afterMain = afterSide?.markingTurnDone(profile: "otto", session: "s-otto", now: t0.addingTimeInterval(80))
+        #expect(afterMain?.isOver == true)
+        #expect(afterMain?.summary == "All done")
+        #expect(afterMain?.markingTurnDone(profile: "otto", session: "s-otto", now: t0.addingTimeInterval(90)) == nil)
+
+        let target = LiveActivityPush.turnFinishedTarget(["kind": "turnDone", "profile": "ivy", "session": "s-audit"])
+        #expect(target?.profile == "ivy")
+        #expect(target?.session == "s-audit")
+    }
+
+    @Test func switchingGroupedModeReconcilesActiveActivities() {
+        var planner = LiveActivityPlanner(grouped: true)
+        _ = planner.bots([bot("a", working: true), bot("b", working: true)], now: t0, appActive: true)
+        _ = planner.leaving([bot("a", working: true), bot("b", working: true)], now: t0.addingTimeInterval(5))
+        #expect(planner.groupShowing)
+
+        // Switching grouped OFF ends the grouped card and starts individual cards.
+        let toIndividual = planner.setGrouped(false, now: t0.addingTimeInterval(10))
+        #expect(toIndividual.first == .endGroup(nil, .immediate))
+        #expect(started(toIndividual) == [turn("a"), turn("b")])
+        #expect(!planner.groupShowing)
+
+        // Switching grouped ON ends individual cards and starts one grouped card.
+        let toGrouped = planner.setGrouped(true, now: t0.addingTimeInterval(15))
+        #expect(toGrouped.count == 3)
+        if case .startGroup(let content) = toGrouped.last {
+            #expect(content.activeCount == 2)
+        } else {
+            Issue.record("expected startGroup at end of reconciliation")
+        }
+        #expect(planner.groupShowing)
+    }
+
+    @Test func groupedSettingsFooterMentionsIslandOnlyOnPhoneAndTalkUnchanged() {
+        let phone = LiveActivityWords.footer(island: true, grouped: true)
+        let pad = LiveActivityWords.footer(island: false, grouped: true)
+        #expect(phone.contains("Dynamic Island"))
+        #expect(!pad.contains("Dynamic Island"))
+        #expect(phone.contains("voice chat"))
+        #expect(phone.contains("Tap any row"))
+    }
+}
+
+@MainActor @Suite(.serialized) struct LiveActivityGroupedCenterTests {
+    @Test func groupedModeIsOnByDefaultAndFlowsThroughCenter() {
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: LiveActivityCenter.groupedDefaultsKey)
+        #expect(LiveActivityCenter.isGrouped == true)
+
+        let driver = RecordingDriver()
+        let center = LiveActivityCenter(driver: driver, enabled: true, grouped: true)
+        var clock = t0
+        center.now = { clock }
+        center.appActive = { false }
+
+        center.botsChanged([fixtureBot("otto", working: true)])
+        center.sideChatsChanged([sideChat("ivy", "s-audit", title: "Landing page audit")])
+        clock = t0.addingTimeInterval(30)
+        center.appLeaving()
+        #expect(driver.log == ["start-group 2/2 2 active"])
+
+        center.sideChatsChanged([])
+        #expect(driver.log.last == "update-group 1/2 1 active")
+
+        center.appBecameActive()
+        #expect(driver.log.suffix(2) == ["update-group 1/1 1 active", "clear finished"])
+
+        center.setGrouped(false)
+        #expect(LiveActivityCenter.isGrouped == false)
+        #expect(driver.log.suffix(2) == ["end-group removed now", "start turn:otto working OTTO"])
+
+        center.setGrouped(true)
+        #expect(LiveActivityCenter.isGrouped == true)
+        #expect(driver.log.suffix(2) == ["end turn:otto removed now", "start-group 1/1 1 active"])
+
+        center.accountLeft()
+        #expect(driver.log.last == "end-group removed now")
     }
 }

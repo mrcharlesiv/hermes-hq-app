@@ -42,8 +42,11 @@ extension SettingsEndToEndTests {
                     reveal(toggle, in: list)
                     XCTAssertTrue(toggle.exists, "the switch shows (\(look.name), \(appearance), \(size.name))")
                     XCTAssertEqual(toggle.value as? String, "1", "on by default")
-                    XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label == %@", SettingsLiveWords.footer)).firstMatch.exists,
-                                  "the footer says what it does, and that Talk's own controls aren't affected")
+                    let groupToggle = app.switches["notifications.live-activities-group"]
+                    XCTAssertTrue(groupToggle.exists, "the group switch shows when progress is on")
+                    XCTAssertEqual(groupToggle.value as? String, "1", "grouped on by default")
+                    XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label == %@", SettingsLiveWords.groupedFooter)).firstMatch.exists,
+                                  "the footer says what grouped mode does, and that Talk's own controls aren't affected")
                     named(app, "live-settings-\(look.name)-\(appearance)-\(size.name)")
                     if first {
                         first = false
@@ -280,5 +283,7 @@ extension SettingsEndToEndTests {
 /// The words the app shows (App/Notifications/NotificationsSettingsView.swift, HermesKit/Live/LiveActivityRules.swift).
 enum SettingsLiveWords {
     static let label = "Show Progress on Lock Screen"
+    static let groupLabel = "Group Into One Card"
     static let footer = "A bot’s reply that’s still going when you leave the app, or a job you run from Jobs, shows on the Lock Screen and in the Dynamic Island until it’s done. Your voice chat’s own Lock Screen controls aren’t affected."
+    static let groupedFooter = "Combines active replies and jobs into a single Lock Screen card and Dynamic Island pill. Tap any row to jump straight to that chat or job. Your voice chat’s own Lock Screen controls aren’t affected."
 }

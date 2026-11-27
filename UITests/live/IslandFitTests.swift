@@ -12,7 +12,9 @@ final class IslandFitTests: XCTestCase {
         "side:970", "sidedone:45296", "stale:2400",
         "job:970", "longjob:3725", "done:970", "done:45296", "failed:970",
         "talk:5", "talk:970", "talk:3725", "talklong:3725", "talkmuted:970", "talkpaused:970", "talkended:970",
+        "grouped:970", "grouped1:970", "groupedmany:970", "groupeddone:970", "groupedfailed:970",
         "twin,turn:970", "turn:970,twin", "twin,talk:970", "turn:970,talk:30",
+        "twin,grouped:970", "grouped:970,twin", "grouped:970,talk:30",
     ]
 
     @MainActor func testIslandShapes() {

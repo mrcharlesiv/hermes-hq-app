@@ -13,6 +13,7 @@ import UIKit
         guard let spec = UserDefaults.standard.string(forKey: "HQDebugIsland"), !spec.isEmpty else { return }
         Task { @MainActor in
             for activity in Activity<HQLiveAttributes>.activities { await activity.end(nil, dismissalPolicy: .immediate) }
+            for activity in Activity<HQGroupedLiveAttributes>.activities { await activity.end(nil, dismissalPolicy: .immediate) }
             for activity in Activity<TalkActivityAttributes>.activities { await activity.end(nil, dismissalPolicy: .immediate) }
             // iOS starts one only for an app in front: a first launch can take a while to get there.
             for _ in 0..<40 where UIApplication.shared.applicationState != .active { try? await Task.sleep(for: .seconds(0.5)) }
@@ -30,6 +31,83 @@ import UIKit
         do {
             switch what {
             case "twin": break   // another app's, started by the tour itself (UITests/live/IslandFitTests.swift)
+            case "grouped", "grouped1", "groupedmany", "groupeddone", "groupedfailed", "groupedstale":
+                let now = Date()
+                let scheme = AppIdentity.current.urlScheme
+                let items: [LiveGroupedItem] = switch what {
+                case "grouped1":
+                    [
+                        LiveGroupedItem(subject: LiveActivitySubject(kind: .turn, id: "otto"), title: "Otto",
+                                        subtitle: "Running npm test…", phase: .working, startedAt: began, endedAt: nil,
+                                        link: "\(scheme)://session/s-otto", session: "s-otto"),
+                    ]
+                case "groupeddone":
+                    [
+                        LiveGroupedItem(subject: LiveActivitySubject(kind: .turn, id: "ivy/s-audit"), title: "Landing page audit",
+                                        subtitle: "Ivy", phase: .done, startedAt: began, endedAt: now,
+                                        link: "\(scheme)://session/s-audit", session: "s-audit"),
+                        LiveGroupedItem(subject: LiveActivitySubject(kind: .job, id: "deploys|j1"), title: "Morning brief",
+                                        subtitle: "Deploys", phase: .done, startedAt: began, endedAt: now.addingTimeInterval(-30),
+                                        link: "\(scheme)://job/deploys%7Cj1"),
+                    ]
+                case "groupedfailed":
+                    [
+                        LiveGroupedItem(subject: LiveActivitySubject(kind: .job, id: "ops|j2"), title: "Weekly deploy check",
+                                        subtitle: "Ops", phase: .failed, startedAt: began, endedAt: now,
+                                        link: "\(scheme)://job/ops%7Cj2"),
+                        LiveGroupedItem(subject: LiveActivitySubject(kind: .turn, id: "ivy/s-audit"), title: "Landing page audit",
+                                        subtitle: "Ivy", phase: .done, startedAt: began, endedAt: now.addingTimeInterval(-45),
+                                        link: "\(scheme)://session/s-audit", session: "s-audit"),
+                    ]
+                case "groupedmany":
+                    [
+                        LiveGroupedItem(subject: LiveActivitySubject(kind: .turn, id: "orch/s-1"), title: "Update hermes plugins and scanner rules",
+                                        subtitle: "Orchestrator", phase: .working, startedAt: began, endedAt: nil,
+                                        link: "\(scheme)://session/s-1", session: "s-1"),
+                        LiveGroupedItem(subject: LiveActivitySubject(kind: .turn, id: "otto"), title: "Otto",
+                                        subtitle: "Running swift test…", phase: .working, startedAt: began.addingTimeInterval(30), endedAt: nil,
+                                        link: "\(scheme)://session/s-otto", session: "s-otto"),
+                        LiveGroupedItem(subject: LiveActivitySubject(kind: .job, id: "deploys|j1"), title: "Morning brief",
+                                        subtitle: "Deploys", phase: .running, startedAt: began.addingTimeInterval(60), endedAt: nil,
+                                        link: "\(scheme)://job/deploys%7Cj1"),
+                        LiveGroupedItem(subject: LiveActivitySubject(kind: .turn, id: "ivy/s-2"), title: "Refactor sidebar navigation layout",
+                                        subtitle: "Ivy", phase: .working, startedAt: began.addingTimeInterval(90), endedAt: nil,
+                                        link: "\(scheme)://session/s-2", session: "s-2"),
+                        LiveGroupedItem(subject: LiveActivitySubject(kind: .turn, id: "ops/s-3"), title: "Check staging cluster metrics",
+                                        subtitle: "Ops", phase: .working, startedAt: began.addingTimeInterval(120), endedAt: nil,
+                                        link: "\(scheme)://session/s-3", session: "s-3"),
+                        LiveGroupedItem(subject: LiveActivitySubject(kind: .turn, id: "ivy/s-4"), title: "Landing page audit",
+                                        subtitle: "Ivy", phase: .done, startedAt: began, endedAt: now.addingTimeInterval(-20),
+                                        link: "\(scheme)://session/s-4", session: "s-4"),
+                        LiveGroupedItem(subject: LiveActivitySubject(kind: .job, id: "ops|j2"), title: "Weekly deploy check",
+                                        subtitle: "Ops", phase: .failed, startedAt: began, endedAt: now.addingTimeInterval(-60),
+                                        link: "\(scheme)://job/ops%7Cj2"),
+                    ]
+                default:
+                    [
+                        LiveGroupedItem(subject: LiveActivitySubject(kind: .turn, id: "orch/s-1"), title: "Update hermes plugins and scanner rules",
+                                        subtitle: "Orchestrator", phase: .working, startedAt: began, endedAt: nil,
+                                        link: "\(scheme)://session/s-1", session: "s-1"),
+                        LiveGroupedItem(subject: LiveActivitySubject(kind: .turn, id: "otto"), title: "Otto",
+                                        subtitle: "Running npm test…", phase: .working, startedAt: began.addingTimeInterval(40), endedAt: nil,
+                                        link: "\(scheme)://session/s-otto", session: "s-otto"),
+                        LiveGroupedItem(subject: LiveActivitySubject(kind: .job, id: "deploys|j1"), title: "Morning brief",
+                                        subtitle: "Deploys", phase: .running, startedAt: began.addingTimeInterval(80), endedAt: nil,
+                                        link: "\(scheme)://job/deploys%7Cj1"),
+                        LiveGroupedItem(subject: LiveActivitySubject(kind: .turn, id: "ivy/s-audit"), title: "Landing page audit",
+                                        subtitle: "Ivy", phase: .done, startedAt: began, endedAt: now.addingTimeInterval(-25),
+                                        link: "\(scheme)://session/s-audit", session: "s-audit"),
+                        LiveGroupedItem(subject: LiveActivitySubject(kind: .job, id: "ops|j2"), title: "Weekly deploy check",
+                                        subtitle: "Ops", phase: .failed, startedAt: began, endedAt: now.addingTimeInterval(-60),
+                                        link: "\(scheme)://job/ops%7Cj2"),
+                    ]
+                }
+                let state = LiveGroupedContent(items: LiveGroupedContent.sorted(items))
+                let staleDate: Date? = what == "groupedstale" ? Date().addingTimeInterval(3) : nil
+                let attributes = HQGroupedLiveAttributes(appName: AppIdentity.current.displayName,
+                                                         link: "\(scheme)://",
+                                                         accent: HQPalette.cardAccent)
+                _ = try Activity.request(attributes: attributes, content: ActivityContent(state: state, staleDate: staleDate), pushType: nil)
             case "talk", "talkended", "talklong", "talkmuted", "talkpaused":
                 let ended = what == "talkended" || what == "talkpaused"
                 let muted = what == "talkmuted"

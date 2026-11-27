@@ -14,6 +14,7 @@ final class NotificationsSettingsModel {
     var banners = NotificationPrefs.banners()
     /// [live] Show Progress on Lock Screen; offered only in a build with the widget extension.
     var liveActivities = LiveActivityCenter.isOn
+    var groupLiveActivities = LiveActivityCenter.isGrouped
     let liveOffered = LiveActivityCenter.shared.isOffered
     var status: UNAuthorizationStatus = .notDetermined
     var plugin = PushRegistrar.shared.lastPluginState
@@ -54,6 +55,8 @@ final class NotificationsSettingsModel {
         status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
         prefs = NotificationPrefs.load()
         banners = NotificationPrefs.banners()
+        liveActivities = LiveActivityCenter.isOn
+        groupLiveActivities = LiveActivityCenter.isGrouped
         registered = PushRegistrar.shared.active
         restartsByHand = AddOnUpdate.restartsByHand(account: app?.account?.id)
         let counts = PushAlertDiagnostics.counts()
@@ -105,6 +108,12 @@ final class NotificationsSettingsModel {
         Haptics.play(.selection)
         liveActivities = on
         LiveActivityCenter.shared.setOn(on)
+    }
+
+    func setGroupLiveActivities(_ on: Bool) {
+        Haptics.play(.selection)
+        groupLiveActivities = on
+        LiveActivityCenter.shared.setGrouped(on)
     }
 
     func openSettings() {
@@ -306,8 +315,13 @@ struct NotificationsSettingsView: View {
                 Section {
                     Toggle(SettingsSearch.liveActivitiesLabel, isOn: Binding(get: { model.liveActivities }, set: { model.setLiveActivities($0) }))
                         .accessibilityIdentifier("notifications.live-activities")
+                    if model.liveActivities {
+                        Toggle(SettingsSearch.groupLiveActivitiesLabel, isOn: Binding(get: { model.groupLiveActivities }, set: { model.setGroupLiveActivities($0) }))
+                            .accessibilityIdentifier("notifications.live-activities-group")
+                    }
                 } footer: { HQSectionFooter {
-                    Text(LiveActivityWords.footer(island: UIDevice.current.userInterfaceIdiom == .phone))
+                    Text(LiveActivityWords.footer(island: UIDevice.current.userInterfaceIdiom == .phone,
+                                                  grouped: model.liveActivities && model.groupLiveActivities))
                 } }
             }
 

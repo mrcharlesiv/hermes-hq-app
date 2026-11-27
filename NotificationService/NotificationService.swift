@@ -67,12 +67,12 @@ final class NotificationService: UNNotificationServiceExtension {
         nonisolated(unsafe) let opened = NotificationOpener.process(request.content, environment: .live)
         once.setOpened(opened)
         #if canImport(ActivityKit) && !targetEnvironment(macCatalyst)
-        if let dispatch = opened.userInfo["dispatch"] as? [String: Any], let subject = LiveActivityPush.turnFinished(dispatch) {
+        if let dispatch = opened.userInfo["dispatch"] as? [String: Any], let target = LiveActivityPush.turnFinishedTarget(dispatch) {
             // Held until this finishes (or `serviceExtensionTimeWillExpire` cuts it short, showing the opened alert
             // itself): the alert shows either way, just not before the Lock Screen had its chance to catch up. Only
             // the one-shot `once` crosses into the Task, never `self`.
             Task {
-                await Self.endLiveActivity(subject)
+                await Self.endLiveActivity(profile: target.profile, session: target.session)
                 once.send(opened)
             }
             return
@@ -93,29 +93,48 @@ final class NotificationService: UNNotificationServiceExtension {
     }
 
     #if canImport(ActivityKit) && !targetEnvironment(macCatalyst)
-    /// `subject` is a bot's turn (profile id). If this process can see the activity the app started, end it Done,
-    /// lingering as the app's own ending does while it is away (LiveActivityTiming.linger) — found by no means
-    /// other than the subject matching: this extension never touches the app's own planner state.
-    private nonisolated static func endLiveActivity(_ subject: LiveActivitySubject) async {
-        // Counted (PushAlertDiagnostics; the app's log names them when it next ends a card): whether this extension
-        // ever sees the app's cards at all. "none" (no card in sight) also counts the many short turns that had none;
-        // only "other", "over" or "ended" show it can see them — never any of those, and only the add-on's push ends one.
-        let cards = Activity<HQLiveAttributes>.activities
-        guard let activity = cards.first(where: { $0.attributes.subject == subject }) else {
-            PushAlertDiagnostics.record(cards.isEmpty ? "liveEnd.none" : "liveEnd.other")
-            return
-        }
-        var content = activity.content.state
-        guard !content.isOver else {
-            PushAlertDiagnostics.record("liveEnd.over")
-            return
-        }
-        PushAlertDiagnostics.record("liveEnd.ended")
+    /// Marks a finished turn Done on whichever Live Activity is showing it — either the grouped card
+    /// (`HQGroupedLiveAttributes`) or an individual card (`HQLiveAttributes`, matching main bot chat or side chat).
+    private nonisolated static func endLiveActivity(profile: String, session: String?) async {
         let now = Date()
-        content.phase = .done
-        content.endedAt = now
-        let linger = LiveActivityTiming.linger(ran: now.timeIntervalSince(content.startedAt))
-        await activity.end(ActivityContent(state: content, staleDate: nil), dismissalPolicy: .after(now.addingTimeInterval(linger)))
+        var handled = false
+
+        // 1. Grouped Live Activity: flip the matching row to Done; end the card only when no active rows remain.
+        for group in Activity<HQGroupedLiveAttributes>.activities where group.activityState != .ended {
+            guard let updated = group.content.state.markingTurnDone(profile: profile, session: session, now: now) else { continue }
+            handled = true
+            PushAlertDiagnostics.record("liveEnd.ended")
+            if updated.isOver {
+                let linger = updated.dismissalLinger(now: now)
+                await group.end(ActivityContent(state: updated, staleDate: nil), dismissalPolicy: .after(now.addingTimeInterval(linger)))
+            } else {
+                await group.update(ActivityContent(state: updated, staleDate: now.addingTimeInterval(LiveActivityTiming.staleAfter)))
+            }
+        }
+
+        // 2. Individual Live Activity (ungrouped mode): match side chat (`profile/session`) first, then main bot chat (`profile`).
+        let cards = Activity<HQLiveAttributes>.activities
+        let sideSubject = session.map { LiveActivitySubject(kind: .turn, id: "\(profile)/\($0)") }
+        let mainSubject = LiveActivitySubject(kind: .turn, id: profile)
+        if let activity = (sideSubject.flatMap { s in cards.first { $0.attributes.subject == s } }
+                           ?? cards.first { $0.attributes.subject == mainSubject }) {
+            var content = activity.content.state
+            guard !content.isOver else {
+                if !handled { PushAlertDiagnostics.record("liveEnd.over") }
+                return
+            }
+            PushAlertDiagnostics.record("liveEnd.ended")
+            content.phase = .done
+            content.endedAt = now
+            let linger = LiveActivityTiming.linger(ran: now.timeIntervalSince(content.startedAt))
+            await activity.end(ActivityContent(state: content, staleDate: nil), dismissalPolicy: .after(now.addingTimeInterval(linger)))
+            return
+        }
+
+        if !handled {
+            let anyShown = !cards.isEmpty || !Activity<HQGroupedLiveAttributes>.activities.isEmpty
+            PushAlertDiagnostics.record(anyShown ? "liveEnd.other" : "liveEnd.none")
+        }
     }
     #endif
 }

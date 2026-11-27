@@ -35,6 +35,10 @@ import ActivityKit
     var onPushToken: (@MainActor (LiveActivitySubject, String, String) -> Void)? { get set }
     func update(_ subject: LiveActivitySubject, _ content: LiveActivityContent)
     func end(_ subject: LiveActivitySubject, _ content: LiveActivityContent?, _ dismissal: LiveActivityDismissal)
+    /// [live-grouped] Single grouped Live Activity combining active turns and jobs.
+    func startGroup(_ content: LiveGroupedContent) -> Bool
+    func updateGroup(_ content: LiveGroupedContent)
+    func endGroup(_ content: LiveGroupedContent?, _ dismissal: LiveActivityDismissal)
     /// Ends what an earlier run of the app left on show (it can no longer follow them).
     func endLeftovers()
     /// The person is back in the app: every card that is already over (Done or Failed, lingering on the Lock Screen)
@@ -45,10 +49,13 @@ import ActivityKit
 @MainActor final class LiveActivityCenter {
     static let shared = LiveActivityCenter(driver: LiveActivityCenter.systemDriver(), steps: PushRegistrar.shared)
 
-    /// `-HQDebugLiveReset YES` (Debug builds): a UI test starts from the default (on), whatever an earlier test left.
+    /// `-HQDebugLiveReset YES` (Debug builds): a UI test starts from the defaults (on, grouped), whatever an earlier test left.
     private static let debugReset: Void = {
         #if DEBUG
-        if UserDefaults.standard.bool(forKey: "HQDebugLiveReset") { UserDefaults.standard.removeObject(forKey: defaultsKey) }
+        if UserDefaults.standard.bool(forKey: "HQDebugLiveReset") {
+            UserDefaults.standard.removeObject(forKey: defaultsKey)
+            UserDefaults.standard.removeObject(forKey: groupedDefaultsKey)
+        }
         #endif
     }()
 
@@ -62,6 +69,19 @@ import ActivityKit
         set {
             if newValue { UserDefaults.standard.removeObject(forKey: defaultsKey) }
             else { UserDefaults.standard.set(false, forKey: defaultsKey) }
+        }
+    }
+
+    /// [live-grouped] Settings › Notifications › Group Into One Card. Absent = on.
+    nonisolated static let groupedDefaultsKey = "hq.liveActivities.grouped"
+    static var isGrouped: Bool {
+        get {
+            _ = debugReset
+            return UserDefaults.standard.object(forKey: groupedDefaultsKey) as? Bool ?? true
+        }
+        set {
+            if newValue { UserDefaults.standard.removeObject(forKey: groupedDefaultsKey) }
+            else { UserDefaults.standard.set(false, forKey: groupedDefaultsKey) }
         }
     }
 
@@ -83,10 +103,11 @@ import ActivityKit
     private var leftoversCleared = false
     private weak var jobs: JobsStore?
 
-    init(driver: any LiveActivityDriver, enabled: Bool = LiveActivityCenter.isOn, steps: (any LiveStepsRelay)? = nil) {
+    init(driver: any LiveActivityDriver, enabled: Bool = LiveActivityCenter.isOn,
+         grouped: Bool = LiveActivityCenter.isGrouped, steps: (any LiveStepsRelay)? = nil) {
         self.driver = driver
         self.steps = steps
-        planner = LiveActivityPlanner(enabled: enabled, available: driver.isOffered)
+        planner = LiveActivityPlanner(enabled: enabled, available: driver.isOffered, grouped: grouped)
         #if DEBUG
         let seconds = UserDefaults.standard.double(forKey: "HQDebugLiveThreshold")   // a launch argument is a string; this reads it
         if seconds > 0 { planner.turnThreshold = seconds }
@@ -100,6 +121,11 @@ import ActivityKit
     func setOn(_ on: Bool) {
         Self.isOn = on
         run(planner.setEnabled(on))
+    }
+
+    func setGrouped(_ on: Bool) {
+        Self.isGrouped = on
+        run(planner.setGrouped(on, now: now()))
     }
 
     // MARK: Turns
@@ -143,6 +169,7 @@ import ActivityKit
             leftoversCleared = true
             driver.endLeftovers()
         }
+        run(planner.clearFinished(now: now()))
         driver.clearFinished()
         if let jobs, !planner.followedJobs.isEmpty { Task { await jobs.refresh(background: true) } }
     }
@@ -251,9 +278,21 @@ import ActivityKit
                 lastEnd = "\(subject.kind.rawValue):\(subject.id)=\(content?.phase.rawValue ?? "removed")"
                 #endif
                 driver.end(subject, content, dismissal)
+            case .startGroup(let content):
+                if driver.startGroup(content) {
+                    AppLog.note("live", "start group (\(content.activeCount) active, \(content.totalCount) total)")
+                } else {
+                    planner.groupStartFailed()
+                }
+            case .updateGroup(let content):
+                driver.updateGroup(content)
+            case .endGroup(let content, let dismissal):
+                AppLog.note("live", "end group (\(content?.summary ?? "removed"))")
+                driver.endGroup(content, dismissal)
             }
         }
         #if DEBUG
+        if let ended = planner.lastEndedDescription { lastEnd = ended }
         showProbe()
         #endif
     }
@@ -304,6 +343,9 @@ import ActivityKit
     func start(_ start: LiveActivityStart) -> Bool { false }
     func update(_ subject: LiveActivitySubject, _ content: LiveActivityContent) {}
     func end(_ subject: LiveActivitySubject, _ content: LiveActivityContent?, _ dismissal: LiveActivityDismissal) {}
+    func startGroup(_ content: LiveGroupedContent) -> Bool { false }
+    func updateGroup(_ content: LiveGroupedContent) {}
+    func endGroup(_ content: LiveGroupedContent?, _ dismissal: LiveActivityDismissal) {}
     func endLeftovers() {}
     func clearFinished() {}
 }
@@ -313,6 +355,8 @@ import ActivityKit
     /// Subject → its activity's id. The activities themselves are looked up by id where they are used (off the main
     /// actor), so none is shared across isolation.
     private var ids: [LiveActivitySubject: String] = [:]
+    /// [live-grouped] Active grouped Live Activity id, when grouped mode is showing.
+    private var groupId: String?
     /// The last change handed to ActivityKit: each waits for the one before, so an end that lingers and the return's
     /// clear-out that follows it reach the card in that order.
     private var last: Task<Void, Never>?
@@ -379,9 +423,40 @@ import ActivityKit
         }
     }
 
+    func startGroup(_ content: LiveGroupedContent) -> Bool {
+        let attributes = HQGroupedLiveAttributes(appName: AppIdentity.current.displayName,
+                                                 link: "\(AppIdentity.current.urlScheme)://",
+                                                 accent: HQPalette.cardAccent)
+        let activityContent = ActivityContent(state: content, staleDate: LiveActivityPlanner.staleDate(content, now: Date()))
+        do {
+            let activity = try Activity.request(attributes: attributes, content: activityContent, pushType: nil)
+            groupId = activity.id
+            return true
+        } catch {
+            AppLog.note("live", "group start refused: \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    func updateGroup(_ content: LiveGroupedContent) {
+        guard let id = groupId else { return }
+        then { await Self.updateGroup(id: id, content) }
+    }
+
+    func endGroup(_ content: LiveGroupedContent?, _ dismissal: LiveActivityDismissal) {
+        guard let id = groupId else { return }
+        groupId = nil
+        let time = BackgroundTime.begin("Hermes HQ Live Activity")
+        then {
+            await Self.endGroup(id: id, content, dismissal)
+            time.end()
+        }
+    }
+
     func endLeftovers() {
         let known = Set(ids.values)
-        then { await Self.endAll(except: known) }
+        let knownGroup = groupId
+        then { await Self.endAll(except: known, groupExcept: knownGroup) }
     }
 
     func clearFinished() {
@@ -417,16 +492,43 @@ import ActivityKit
         await activity.end(over ? nil : content.map { ActivityContent(state: $0, staleDate: nil) }, dismissalPolicy: policy)
     }
 
+    @concurrent private nonisolated static func updateGroup(id: String, _ content: LiveGroupedContent) async {
+        guard let activity = Activity<HQGroupedLiveAttributes>.activities.first(where: { $0.id == id }) else { return }
+        await activity.update(ActivityContent(state: content, staleDate: LiveActivityPlanner.staleDate(content, now: Date())))
+    }
+
+    @concurrent private nonisolated static func endGroup(id: String, _ content: LiveGroupedContent?, _ dismissal: LiveActivityDismissal) async {
+        guard let activity = Activity<HQGroupedLiveAttributes>.activities.first(where: { $0.id == id }) else {
+            AppLog.note("live", "end group: the card was already gone")
+            return
+        }
+        let policy: ActivityUIDismissalPolicy
+        switch dismissal {
+        case .immediate: policy = .immediate
+        case .after(let date): policy = .after(date)
+        }
+        let over = activity.activityState == .ended
+        await activity.end(over ? nil : content.map { ActivityContent(state: $0, staleDate: nil) }, dismissalPolicy: policy)
+    }
+
     @concurrent private nonisolated static func clearFinished() async {
         for activity in Activity<HQLiveAttributes>.activities where activity.activityState == .ended || activity.content.state.isOver {
             AppLog.note("live", "clear \(activity.attributes.subject.kind.rawValue): the card was \(described(activity))")
             await activity.end(nil, dismissalPolicy: .immediate)
         }
+        for activity in Activity<HQGroupedLiveAttributes>.activities where activity.activityState == .ended || activity.content.state.isOver {
+            AppLog.note("live", "clear group: \(activity.content.state.summary)")
+            await activity.end(nil, dismissalPolicy: .immediate)
+        }
     }
 
-    @concurrent private nonisolated static func endAll(except known: Set<String>) async {
+    @concurrent private nonisolated static func endAll(except known: Set<String>, groupExcept knownGroup: String?) async {
         for activity in Activity<HQLiveAttributes>.activities where !known.contains(activity.id) {
             AppLog.note("live", "end leftover \(activity.attributes.subject.kind.rawValue): the card was \(described(activity))")
+            await activity.end(nil, dismissalPolicy: .immediate)
+        }
+        for activity in Activity<HQGroupedLiveAttributes>.activities where activity.id != knownGroup {
+            AppLog.note("live", "end leftover group: \(activity.content.state.summary)")
             await activity.end(nil, dismissalPolicy: .immediate)
         }
     }

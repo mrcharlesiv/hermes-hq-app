@@ -69,6 +69,7 @@ nonisolated enum SettingsSearch {
     static let sessionsPageTitle = "Archiving & Project Folder"   // UX study 2026-10-21 #117: the page's two sections
     static let markLabel = "Mark a Slow Moment"
     static let liveActivitiesLabel = "Show Progress on Lock Screen"   // [live]
+    static let groupLiveActivitiesLabel = "Group Into One Card"       // [live-grouped]
     static let autoPluginUpdateChecksLabel = "Automatic Plugin Update Checks"
     static let checkPluginUpdatesLabel = "Check for Plugin Updates"
     // [mac] No Haptics switch on the Mac: Completion Sound lives in General there, and Sounds & Haptics is its own page on iOS.
@@ -136,6 +137,7 @@ nonisolated enum SettingsSearch {
         .init(id: "app:banners", label: "Bot Activity Banners", context: "Notifications", keywords: ["banners", "alerts", "peek", "in-app"], target: .root("notifications")),
         // [live] Only in a build with the widget extension (`liveActivities`, filtered in `index`).
         .init(id: "app:live-activities", label: liveActivitiesLabel, context: "Notifications", keywords: ["live activity", "live activities", "lock screen", "dynamic island", "progress", "running"], target: .root("notifications")),
+        .init(id: "app:live-activities-group", label: groupLiveActivitiesLabel, context: "Notifications", keywords: ["group", "grouped", "combine", "live activity", "live activities", "lock screen", "dynamic island", "one card", "stack"], target: .root("notifications")),
         .init(id: "app:tool-call-style", label: "Tool Call Style", context: "Chat", keywords: ["tool calls", "steps", "bubbles", "rows", "telegram", "commands"], target: .root("tool-calls")),
         .init(id: "app:tool-calls", label: "Tool Calls After Reply", context: "Chat", keywords: ["tool calls", "steps", "hide steps", "keep"], target: .root("tool-calls")),
         .init(id: "app:send-while-busy", label: sendWhileBusyLabel, context: "Chat", keywords: ["steer", "queue", "send mode", "busy", "while running", "interrupt", "busy input mode", "command return", "default send", ChatRowNotes.sendWhileBusy()], target: .root("row:send-while-busy")),   // [send-while-busy]
@@ -262,6 +264,6 @@ nonisolated enum SettingsSearch {
     }
 
     static func index(schema: [String: ConfigFieldSchema] = [:]) -> [SettingsSearchEntry] {
-        rootPages + configEntries(schema: schema) + appRows.filter { (hasHaptics || $0.id != "app:haptics") && (liveActivities || $0.id != "app:live-activities") && (!hasHaptics || !$0.id.hasPrefix("app:new-chat-")) } + actions
+        rootPages + configEntries(schema: schema) + appRows.filter { (hasHaptics || $0.id != "app:haptics") && (liveActivities || ($0.id != "app:live-activities" && $0.id != "app:live-activities-group")) && (!hasHaptics || !$0.id.hasPrefix("app:new-chat-")) } + actions
     }
 }

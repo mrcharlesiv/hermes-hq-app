@@ -15,8 +15,17 @@ nonisolated enum LiveActivityPush {
     /// this push says nothing about a Live Activity (not a finished turn, or no profile to match against
     /// `LiveActivitySubject.id` for `.turn`, which is the bot's profile — the same id the push already carries).
     static func turnFinished(_ dispatch: [String: Any]) -> LiveActivitySubject? {
+        guard let target = turnFinishedTarget(dispatch) else { return nil }
+        return LiveActivitySubject(kind: .turn, id: target.profile)
+    }
+
+    /// [live-grouped] Both the bot profile and optional session id from a `turnDone` push, so `NotificationService`
+    /// can match both main bot chats and side chats in individual or grouped Live Activities.
+    static func turnFinishedTarget(_ dispatch: [String: Any]) -> (profile: String, session: String?)? {
         guard dispatch["kind"] as? String == "turnDone" else { return nil }
         guard let profile = dispatch["profile"] as? String, !profile.isEmpty else { return nil }
-        return LiveActivitySubject(kind: .turn, id: profile)
+        let rawSession = dispatch["session"] as? String
+        let session = (rawSession?.isEmpty == false) ? rawSession : nil
+        return (profile, session)
     }
 }

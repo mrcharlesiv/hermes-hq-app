@@ -237,6 +237,157 @@ nonisolated enum LiveActivityBuild {
     }()
 }
 
+/// [live-grouped] One row inside the grouped Live Activity card: a bot chat turn, a side chat turn, or a job run.
+nonisolated struct LiveGroupedItem: Codable, Hashable, Sendable, Identifiable {
+    var id: String { "\(subject.kind.rawValue):\(subject.id)" }
+    var subject: LiveActivitySubject
+    /// Primary bold title on the left: side chat title, job title, or bot name (for a main bot chat).
+    var title: String
+    /// Muted secondary context in the middle: bot name (for side chats and jobs) or live step / step count (main bot chats).
+    var subtitle: String?
+    var phase: LiveActivityContent.Phase
+    var startedAt: Date
+    var endedAt: Date?
+    /// Per-row deep link (`<scheme>://session/<id>` or `<scheme>://job/<key>`) opened when this row is tapped.
+    var link: String?
+    /// Stored session id (for turns) so NotificationService can match a `turnDone` push to the exact row.
+    var session: String? = nil
+
+    var isOver: Bool { phase == .done || phase == .failed }
+
+    /// Short status word on the trailing column ("Working", "Running", "Done", "Failed").
+    var statusWord: String {
+        switch phase {
+        case .working: return "Working"
+        case .running: return "Running"
+        case .done: return "Done"
+        case .failed: return "Failed"
+        }
+    }
+
+    /// Build a row from a subject's start info and current content.
+    static func from(subject: LiveActivitySubject, botName: String, detail: String?, link: String?, session: String?,
+                     content: LiveActivityContent) -> LiveGroupedItem {
+        let title: String
+        let subtitle: String?
+        switch subject.kind {
+        case .job:
+            if let detail, !detail.isEmpty {
+                title = detail
+                subtitle = botName == detail ? nil : botName
+            } else {
+                title = botName
+                subtitle = nil
+            }
+        case .turn:
+            if let detail, !detail.isEmpty {
+                title = detail
+                subtitle = botName
+            } else {
+                title = botName
+                let trail = content.trail
+                if content.isOver {
+                    subtitle = trail.steps > 0 ? LiveStepTrail.count(trail.steps) : nil
+                } else if let step = trail.step {
+                    subtitle = LiveStepTrail.running(step)
+                } else if trail.steps > 0 {
+                    subtitle = "Writing…"
+                } else {
+                    subtitle = nil
+                }
+            }
+        }
+        return LiveGroupedItem(subject: subject, title: title, subtitle: subtitle, phase: content.phase,
+                               startedAt: content.startedAt, endedAt: content.endedAt, link: link, session: session)
+    }
+}
+
+/// [live-grouped] State of the single grouped Live Activity card carrying multiple active turns and jobs.
+nonisolated struct LiveGroupedContent: Codable, Hashable, Sendable {
+    /// Maximum rows carried in ActivityKit content state (stays well under the 4 KB payload cap).
+    static let maxItems = 12
+    /// Maximum rows drawn on the Lock Screen (fits cleanly inside iOS's 160 pt height ceiling).
+    static let lockScreenLimit = 5
+    /// Maximum rows drawn in the expanded Dynamic Island.
+    static let expandedLimit = 4
+
+    var items: [LiveGroupedItem]
+    /// Any additional active items beyond `maxItems`.
+    var extraCount: Int = 0
+
+    var activeCount: Int { items.filter { !$0.isOver }.count + extraCount }
+    var totalCount: Int { items.count + extraCount }
+    var isOver: Bool { activeCount == 0 }
+    var hasFailed: Bool { items.contains { $0.phase == .failed } }
+
+    /// Header summary ("3 active", "All done", "Done", "Failed").
+    var summary: String {
+        if activeCount > 0 { return "\(activeCount) active" }
+        let failed = items.filter { $0.phase == .failed }.count
+        if failed > 0 { return failed == 1 && items.count == 1 ? "Failed" : "\(failed) failed" }
+        return items.count == 1 ? "Done" : "All done"
+    }
+
+    /// Compact Dynamic Island trailing label ("3 active", "Done", "Failed").
+    var compactLabel: String {
+        if activeCount > 0 { return "\(activeCount) active" }
+        return hasFailed ? "Failed" : "Done"
+    }
+
+    /// Active rows first (longest-running at the top), then recently finished rows (most recently ended first).
+    static func sorted(_ items: [LiveGroupedItem]) -> [LiveGroupedItem] {
+        items.sorted { a, b in
+            if a.isOver != b.isOver { return !a.isOver }
+            if !a.isOver {
+                if a.startedAt != b.startedAt { return a.startedAt < b.startedAt }
+                return a.id < b.id
+            } else {
+                let aEnd = a.endedAt ?? a.startedAt
+                let bEnd = b.endedAt ?? b.startedAt
+                if aEnd != bEnd { return aEnd > bEnd }
+                return a.id < b.id
+            }
+        }
+    }
+
+    /// Visible rows and overflow count for a display surface.
+    /// When `reserveOverflowRow` is true and total exceeds `limit`, keeps the last slot for `"+N more"` so total lines
+    /// never exceed `limit`.
+    func visible(limit: Int, reserveOverflowRow: Bool = false) -> (rows: [LiveGroupedItem], overflow: Int) {
+        let total = totalCount
+        guard total > limit else { return (items, 0) }
+        let shownCount = reserveOverflowRow ? max(1, limit - 1) : limit
+        let rows = Array(items.prefix(shownCount))
+        return (rows, total - rows.count)
+    }
+
+    /// How long the grouped card lingers once all items are over: 60 s if every item was a quick turn, else 15 min.
+    func dismissalLinger(now: Date) -> TimeInterval {
+        guard !items.isEmpty else { return LiveActivityTiming.doneLinger }
+        let allQuickTurns = items.allSatisfy { item in
+            item.subject.kind == .turn &&
+            LiveActivityTiming.linger(ran: (item.endedAt ?? now).timeIntervalSince(item.startedAt)) == LiveActivityTiming.quickLinger
+        }
+        return allQuickTurns ? LiveActivityTiming.quickLinger : LiveActivityTiming.doneLinger
+    }
+
+    /// Mark a matching active turn row as Done (used by `NotificationService` on a `turnDone` push while suspended).
+    /// Returns nil when no active row matches.
+    func markingTurnDone(profile: String, session: String?, now: Date) -> LiveGroupedContent? {
+        let index: Int? = if let session, !session.isEmpty {
+            items.firstIndex { !$0.isOver && $0.subject.kind == .turn && ($0.session == session || $0.subject.id == "\(profile)/\(session)") }
+                ?? items.firstIndex { !$0.isOver && $0.subject.kind == .turn && $0.subject.id == profile }
+        } else {
+            items.firstIndex { !$0.isOver && $0.subject.kind == .turn && $0.subject.id == profile }
+        }
+        guard let index else { return nil }
+        var updated = items
+        updated[index].phase = .done
+        updated[index].endedAt = now
+        return LiveGroupedContent(items: Self.sorted(updated), extraCount: extraCount)
+    }
+}
+
 #if canImport(ActivityKit) && !targetEnvironment(macCatalyst)
 /// The Live Activity's fixed part. `link` is the app's own link (`<scheme>://session/<id>`, `<scheme>://job/<key>`),
 /// built by the app so the widget never needs to know which identity it is in.
@@ -250,6 +401,17 @@ nonisolated struct HQLiveAttributes: ActivityAttributes {
     var link: String?
     /// The app's accent (its theme's tint as a dark card draws it), red green blue 0…1: the extension has no theme of
     /// its own, so `.accentColor` drew system blue whatever theme the app wore.
+    var accent: [Double]? = nil
+}
+
+/// [live-grouped] Fixed attributes for the single grouped Live Activity combining active turns and jobs.
+nonisolated struct HQGroupedLiveAttributes: ActivityAttributes {
+    typealias ContentState = LiveGroupedContent
+    /// Display name shown in the card header ("Hermes HQ").
+    var appName: String
+    /// Default link when tapping the card header/background (`<scheme>://`).
+    var link: String?
+    /// The app's accent (RGB 0...1) for dark Lock Screen / Dynamic Island surfaces.
     var accent: [Double]? = nil
 }
 #endif

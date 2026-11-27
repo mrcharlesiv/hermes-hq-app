@@ -49,6 +49,8 @@ nonisolated enum MarkdownBlock: @unchecked Sendable {
     /// picture of the page that opens it live (`PageCardView`).
     case pageCard(MediaRef)
     case phoneProposal(URL, PhoneProposal)
+    /// [mermaid] A rendered Mermaid diagram block (flowchart, sequence, state, pie, or structured fallback).
+    case mermaid(MermaidDiagram)
 
     var isProse: Bool { if case .text = self { return true } else { return false } }
 }
@@ -164,12 +166,12 @@ nonisolated enum MarkdownRenderer {
             // Within the limits but deeply nested: parse where the stack is big (the recursion is per nesting level).
             let rendered = BigStackRunner.shared.run {
                 UncheckedSendable(parse(source, style: style, theme: theme, highlight: highlight, linkChips: linkChips,
-                                        filePaths: filePaths, pageCards: pageCards, phoneProposals: phoneProposals, formulas: formulas, plainText: shown))
+                                        filePaths: filePaths, streaming: streaming, pageCards: pageCards, phoneProposals: phoneProposals, formulas: formulas, plainText: shown))
             }
             return rendered.value
         case .simple:
             return parse(source, style: style, theme: theme, highlight: highlight, linkChips: linkChips,
-                         filePaths: filePaths, pageCards: pageCards, phoneProposals: phoneProposals, formulas: formulas, plainText: shown)
+                         filePaths: filePaths, streaming: streaming, pageCards: pageCards, phoneProposals: phoneProposals, formulas: formulas, plainText: shown)
         }
     }
 
@@ -200,11 +202,13 @@ nonisolated enum MarkdownRenderer {
     }
 
     private static func parse(_ source: String, style: ChatStyle, theme: MarkdownTheme, highlight: Bool,
-                              linkChips: Bool = false, filePaths: Bool = false, pageCards: Bool = false, phoneProposals: Bool = false,
+                              linkChips: Bool = false, filePaths: Bool = false, streaming: Bool = false,
+                              pageCards: Bool = false, phoneProposals: Bool = false,
                               formulas: [MathText.Span.Taken] = [], plainText: String) -> RenderedMarkdown {
         let document = Document(parsing: source, options: [.disableSmartOpts, .disableSourcePosOpts])
         var builder = BlockBuilder(style: style, theme: theme)
         builder.highlight = highlight
+        builder.streaming = streaming
         builder.linkChips = linkChips
         builder.pageCards = pageCards || linkChips
         builder.phoneProposals = phoneProposals && source.range(of: "://phone-call", options: .caseInsensitive) != nil
@@ -341,6 +345,7 @@ nonisolated private struct BlockBuilder {
     let style: ChatStyle
     let theme: MarkdownTheme
     var highlight = false
+    var streaming = false
     /// [transcript] The chat's replies: a bare web address alone on its paragraph gets a chip (§3.7).
     var linkChips = false
     /// [page-cards] A page alone on its line is a page card: a bot's reply in the chat, settled or still arriving (the
@@ -642,6 +647,7 @@ nonisolated private struct BlockBuilder {
             case .text(let t), .quote(let t, _): piece = t
             case .table(let table): piece = table.flat
             case .code(_, _, let t, _): piece = t
+            case .mermaid(let diagram): piece = NSAttributedString(string: diagram.source, attributes: [.font: style.code, .foregroundColor: ChatPalette.codeText])
             case .spacer, .linkChip, .pageCard, .phoneProposal: continue
             case .media(let refs): piece = styled(refs.map(\.label).joined(separator: ", "), InlineContext())   // [attachments]
             }
@@ -669,6 +675,10 @@ nonisolated private struct BlockBuilder {
         if body.hasSuffix("\n") { body.removeLast() }
         body = body.replacingOccurrences(of: "\t", with: "  ")
         if body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return }   // empty fences are dropped
+        if !streaming, MermaidParser.isMermaidLanguage(code.language), let diagram = MermaidParser.parse(body) {
+            out.append(.mermaid(diagram))
+            return
+        }
         let para = MarkdownRenderer.paragraphStyle(lineHeight: style.codeLineHeight, font: style.code, spacingBefore: 0,
                                                    lineBreak: ChatRenderOptions.codeBlocksWrap ? .byWordWrapping : .byClipping)
         let text = NSMutableAttributedString(string: body, attributes: [

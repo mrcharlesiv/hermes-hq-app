@@ -107,6 +107,11 @@ import UserNotifications
             let told = await call(PushPolicy.route + ShoppingCards.cardsPath, "PUT", nil)
             AppLog.note("shopping", "told the add-on this app draws shopping cards (\(told.status))")
         }
+        // [travel] The same for show_flights and show_hotels: offered to bots once an app that draws the cards says so.
+        if result.status == 200, !legacy, TravelCards.cardsUntold(result.body) {
+            let told = await call(PushPolicy.route + TravelCards.cardsPath, "PUT", nil)
+            AppLog.note("travel", "told the add-on this app draws travel cards (\(told.status))")
+        }
         // [asks] The same for ask_to_act: offered to bots once an app that draws the card says so.
         if result.status == 200, !legacy, AskCards.cardsUntold(result.body) {
             let told = await call(PushPolicy.route + AskCards.cardsPath, "PUT", nil)

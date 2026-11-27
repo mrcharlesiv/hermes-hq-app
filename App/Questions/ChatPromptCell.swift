@@ -23,12 +23,28 @@ import UIKit
     func shoppingAsk(_ card: ProductsCardRow, index: Int, ask: ShoppingCards.Ask)
     func shoppingFollowUp(_ card: ProductsCardRow, text: String)
     func orderCard(_ card: OrderCardRow, tapped answer: ShoppingCards.OrderAnswer)
+    func orderCard(_ card: OrderCardRow, openedItem index: Int)
+    /// [travel] Flight and hotel cards: detail sheets, booking/watch asks, follow-ups (App/Travel/ChatViewController+Travel.swift).
+    func travelOpenFlight(_ card: FlightsCardRow, index: Int)
+    func travelAskFlight(_ card: FlightsCardRow, index: Int, ask: TravelCards.Ask)
+    func travelOpenHotel(_ card: HotelsCardRow, index: Int)
+    func travelAskHotel(_ card: HotelsCardRow, index: Int, ask: TravelCards.Ask)
+    func travelFollowUp(rowId: String, text: String)
     /// [asks] An ask card's choice, its "Something else…" and its link (App/Asks/ChatViewController+Asks.swift).
     func askCard(_ card: AskCardRow, chose index: Int)
     func askCardOther(_ card: AskCardRow)
     func askCardOpen(_ card: AskCardRow)
     /// [asks v2] A picked choice's ready reply: Send or Edit.
     func askCardReply(_ card: AskCardRow, tapped button: DraftButton)
+}
+
+extension ChatPromptCellHandling {
+    func orderCard(_ card: OrderCardRow, openedItem index: Int) {}
+    func travelOpenFlight(_ card: FlightsCardRow, index: Int) {}
+    func travelAskFlight(_ card: FlightsCardRow, index: Int, ask: TravelCards.Ask) {}
+    func travelOpenHotel(_ card: HotelsCardRow, index: Int) {}
+    func travelAskHotel(_ card: HotelsCardRow, index: Int, ask: TravelCards.Ask) {}
+    func travelFollowUp(rowId: String, text: String) {}
 }
 
 final class ChatPromptCell: ChatBaseCell {
@@ -57,6 +73,8 @@ final class ChatPromptCell: ChatBaseCell {
     private var ticker: Timer?
     /// [shopping] The product cards' view and the order card's buttons, made on first use (ChatPromptCell+Shopping.swift).
     var shoppingViews = ShoppingCellViews()
+    /// [travel] The flight and hotel cards' views, made on first use (App/Travel/ChatPromptCell+Travel.swift).
+    var travelViews = TravelCellViews()
     /// [asks] The ask card's view, made on first use (App/Asks/ChatPromptCell+Asks.swift).
     var askViews = AskCellViews()
     private var baseAccessibility = ""
@@ -146,6 +164,7 @@ final class ChatPromptCell: ChatBaseCell {
         settled = nil
         stopTicking()
         resetShopping()   // [shopping]
+        resetTravel()     // [travel]
         resetAsk()        // [asks]
     }
 
@@ -214,6 +233,7 @@ final class ChatPromptCell: ChatBaseCell {
         baseAccessibility = l.accessibility
         configureAnswerNow(spec, l)
         configureShopping(spec, l)   // [shopping]
+        configureTravel(spec, l)     // [travel]
         configureAsk(spec, l)        // [asks]
 
         guard case .approval(let a) = spec.kind, let al = l.approval else {
@@ -249,6 +269,7 @@ final class ChatPromptCell: ChatBaseCell {
                     draftToggle.isHidden = true
                     card.accessibilityIdentifier = "clarify.note"
                     contentView.accessibilityElements = shoppingAccessibility(card: card)   // [shopping]
+                        ?? travelAccessibility()                                           // [travel]
                         ?? askAccessibility(card: card)                                    // [asks]
                         ?? ([card] + (answerNow.isHidden ? [] : [answerNow]))
                 }

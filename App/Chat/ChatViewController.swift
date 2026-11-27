@@ -325,6 +325,8 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     var draftAnswersShown: [String: DraftCards.Answer] = [:]
     /// [shopping] The shopping answers the rows were last built with (App/Shopping/ChatViewController+Shopping.swift).
     var shoppingAnswersShown = ShoppingCards.Answers()
+    /// [travel] The travel answers the rows were last built with (App/Travel/ChatViewController+Travel.swift).
+    var travelAnswersShown = TravelCards.Answers()
     /// [asks] The ask answers the rows were last built with (App/Asks/ChatViewController+Asks.swift).
     var askAnswersShown: [String: AskCards.Answer] = [:]
     /// [questions] The later answers to skipped questions the rows were last built with (ChatViewController+Prompts).
@@ -498,6 +500,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
                     switch block {
                     case .text(let t), .quote(let t, _), .code(_, _, let t, _): _ = TextKitLayout(t, width: 300)
                     case .table(let t): t.header.forEach { _ = TextKitLayout($0, width: nil) }
+                    case .mermaid: break
                     case .spacer, .media, .linkChip, .pageCard, .phoneProposal: break
                     }
                 }
@@ -623,6 +626,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         input.bots = DeliveryRoster.seats                                                      // [botdm]
         input.drafts = DraftEdits.shared.rowsInput(messages, queued: draftQueuedTexts, scope: scope)                      // [drafts]
         input.shopping = ShoppingCards.answers(messages, queued: shoppingQueuedTexts)                                    // [shopping]
+        input.travel = TravelCards.answers(messages, queued: travelQueuedTexts)                                          // [travel]
         input.asks = AskAnswering.shared.rowsInput(messages, queued: askQueuedTexts, scope: scope)                      // [asks]
         input.clarifyLate = ClarifyLate.answers(messages, queued: clarifyLateQueuedTexts)                                // [questions]
         input.fewerTimes = ToolCallSettings.fewerTimestamps
@@ -2541,8 +2545,10 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         // [drafts] A draft answered some other way than its card's buttons: that card is drawn again.
         switch change {
         case .appended, .state, .removed: pendingTouched += draftMessagesToRebuild() + clarifyLateMessagesToRebuild() + shoppingMessagesToRebuild()   // [shopping]
+            + travelMessagesToRebuild()   // [travel]
             + askMessagesToRebuild()   // [asks]
         case .reset: _ = draftMessagesToRebuild(); _ = clarifyLateMessagesToRebuild(); _ = shoppingMessagesToRebuild()   // everything is rebuilt; only the answers are noted
+            _ = travelMessagesToRebuild()   // [travel]
             _ = askMessagesToRebuild()   // [asks]
         default: break
         }
@@ -4766,6 +4772,10 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
 
     func chatCellOpenTable(_ table: MarkdownTable) {   // [transcript] L309
         TableSheetController.open(table, from: self)
+    }
+
+    func chatCellOpenMermaid(_ diagram: MermaidDiagram) {   // [mermaid]
+        MermaidSheetController.open(diagram, from: self)
     }
 
     func chatCellOpenPhoneResult(_ result: PhoneResultCard, sentAt: Date?) {

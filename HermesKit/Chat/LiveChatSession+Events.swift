@@ -415,6 +415,7 @@ extension LiveChatSession {
         let rawText = args.isEmpty ? p["args_text"]?.string : nil
         let argsText = DraftCards.wholeArgsText(name: name, args: args)   // [drafts] a draft card draws its call whole
             ?? ShoppingCards.wholeArgsText(name: name, args: args)        // [shopping] so do product and order cards
+            ?? TravelCards.wholeArgsText(name: name, args: args)          // [travel] so do flight and hotel cards
             ?? AskCards.wholeArgsText(name: name, args: args)             // [asks] and ask cards
             ?? input.map { ToolArgs.boundedText(args, input: $0) } ?? ToolArgs.boundedText(args, raw: rawText)
         turn.sawAssistantPayload = true
@@ -497,6 +498,7 @@ extension LiveChatSession {
         var call = ToolCall(id: toolId.isEmpty ? "live-tool-\(localCounter + 1)" : toolId, name: name, title: title,
                             argsText: DraftCards.wholeArgsText(name: name, args: args)   // [drafts]
                                 ?? ShoppingCards.wholeArgsText(name: name, args: args)   // [shopping]
+                                ?? TravelCards.wholeArgsText(name: name, args: args)     // [travel]
                                 ?? AskCards.wholeArgsText(name: name, args: args)        // [asks]
                                 ?? input.map { ToolArgs.boundedText(args, input: $0) }
                                 ?? ToolArgs.boundedText(args, raw: argsText),          // [activity] bounded per value

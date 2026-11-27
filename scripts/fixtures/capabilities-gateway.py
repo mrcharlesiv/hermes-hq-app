@@ -342,6 +342,7 @@ def mcp_add(profile, params):
         raise RPCFailure(4063, "config must specify a 'url' (HTTP) or 'command' (stdio)")
     if any(str(a).startswith('--upload-pack') for a in config.get('args') or []):
         raise RPCFailure(4001, f"server '{name}' rejected: suspicious command/args configuration")
+    sg.record_write('mcp.servers.add', {'profile': profile, 'name': name})   # the name only: an entry holds secrets
     entry = copy.deepcopy(config)
     if params.get('bearer_token'):
         var = 'MCP_' + re.sub(r'[^A-Z0-9]', '_', name.upper()) + '_API_KEY'

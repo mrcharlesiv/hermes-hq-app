@@ -67,9 +67,14 @@ final class ArtifactImageViewer: UIViewController, UIPageViewControllerDataSourc
             self.dismiss(animated: true) { self.showInChat(record) }
         })
         chat.accessibilityLabel = "Show in Chat"
+        let markup = UIBarButtonItem(image: UIImage(systemName: "pencil.tip.crop.circle"), primaryAction: UIAction { [weak self] _ in
+            self?.openMarkup()
+        })
+        markup.accessibilityLabel = "Mark Up"
+        markup.accessibilityIdentifier = "artifact.image.markup"
         let info = UIBarButtonItem(image: UIImage(systemName: "info.circle"), primaryAction: UIAction { [weak self] _ in self?.showInfo() })
         info.accessibilityLabel = "Info"
-        toolbarItems = [share, .flexibleSpace(), chat, .flexibleSpace(), info]
+        toolbarItems = [share, .flexibleSpace(), markup, .flexibleSpace(), chat, .flexibleSpace(), info]
         // Fling up or down to close (owner 2026-11-19): the image follows the finger and flies off the way it's thrown.
         fling = PhotoFling(host: self, directions: [.up, .down], flyOff: true, content: { [weak self] in self?.pages.view },
                            canBegin: { [weak self] in (self?.pages.viewControllers?.first as? ZoomImagePage)?.isAtMinimumZoom ?? true })
@@ -145,6 +150,20 @@ final class ArtifactImageViewer: UIViewController, UIPageViewControllerDataSourc
         guard completed, let current = pages.viewControllers?.first as? ZoomImagePage else { return }
         index = current.index
         updateTitle()
+    }
+
+    private func openMarkup() {
+        let record = records[index]
+        Task { [weak self] in
+            guard let self, let data = try? await self.previews.imageData(record), let image = UIImage(data: data) else { return }
+            ImageMarkupController.present(image: image, mode: .apply(confirmTitle: "Share…"), from: self) { [weak self] edited, note in
+                guard let self else { return }
+                let items: [Any] = note.isEmpty ? [edited] : [edited, note]
+                let sheet = UIActivityViewController(activityItems: items, applicationActivities: nil)
+                sheet.popoverPresentationController?.sourceItem = self.toolbarItems?.first
+                self.present(sheet, animated: true)
+            }
+        }
     }
 
     private func showInfo() {

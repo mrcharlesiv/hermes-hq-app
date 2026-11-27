@@ -55,6 +55,7 @@ class FakeChatSession: ChatSessionModel, ChatSessionDetails {
         if ChatDemo.flag("-HQDemoDrafts") { messages += FakeChatSession.draftMessages }
         if ChatDemo.flag("-HQDemoSkippedQuestion") { messages += FakeChatSession.skippedQuestionMessages }
         if ChatDemo.flag("-HQDemoShopping") { messages += FakeChatSession.shoppingMessages }   // [shopping]
+        if ChatDemo.flag("-HQDemoTravel") { messages += FakeChatSession.travelMessages }       // [travel]
         if ChatDemo.flag("-HQDemoAskCard") { messages += FakeChatSession.askMessages }         // [asks]
     }
 

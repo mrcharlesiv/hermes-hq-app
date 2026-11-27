@@ -62,6 +62,22 @@ extension ChatViewController {
         rebuildMessage(card.messageId)
     }
 
+    func orderCard(_ card: OrderCardRow, openedItem index: Int) {
+        guard card.order.items.indices.contains(index) else { return }
+        let item = card.order.items[index]
+        let history = ShoppingCards.catalogProducts(in: session.messages)
+        guard let product = ShoppingCards.product(for: item, in: card.order, matching: history) else { return }
+        let answers = ShoppingCards.answers(session.messages, queued: shoppingQueuedTexts)
+        AppLog.trace("shopping", "order \(AppLog.tag(card.order.id)) opened item \(index) \(logTag)")
+        Haptics.play(.selection)
+        ProductPageSheet.present(product, asks: answers.asked[product.id] ?? [], from: self) { [weak self] ask in
+            guard let self, let text = ShoppingCards.message(ask, product) else { return }
+            Haptics.play(.selection)
+            self.sendFromCard(text, display: text)
+            self.rebuildMessage(card.messageId)
+        }
+    }
+
     #if DEBUG
     /// `-HQDemoShoppingOpen <n>`: the n-th product of the chat (1 = the first, counting every card) on its page;
     /// `-HQDemoShoppingBuy <n>`: its Buy, as tapped.

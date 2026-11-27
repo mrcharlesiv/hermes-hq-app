@@ -488,16 +488,23 @@ enum DesktopLookTourHooks {
                 host.title = screen == "starnode" ? "Star Map" : "Toolsets"
                 nav.pushViewController(host, animated: false)
             }
-        case "htmlstatus":
-            guard let bot = services.bots.first(where: { $0.id == (wanted ?? $0.id) }) else { return retry() }
-            root.botsViewController.open(bot.id)
-            after(2.5) {
-                guard let chat = findChat(in: root) else { return }
+        case "htmlstatus", "htmlupdate":
+            let openPage: (UIViewController) -> Void = { host in
                 let url = FileManager.default.temporaryDirectory.appending(path: "dashboard.html")
                 let rows = (1...14).map { "<tr><td>Week \($0)</td><td>\(1200 + $0 * 137)</td><td style='color:#2a9d5b'>+\($0 % 7 + 2)%</td></tr>" }.joined()
                 let html = "<html><body style='font-family:-apple-system;margin:20px;background:linear-gradient(160deg,#ffd6a5,#bde0fe 55%,#cdb4db)'><h1>Sales Dashboard</h1><div style='display:flex;gap:10px'>" + ["#ff6b6b","#4ecdc4","#ffd93d","#6c5ce7"].map { "<div style='flex:1;height:90px;border-radius:14px;background:\($0)'></div>" }.joined() + "</div><table style='width:100%;font-size:17px;margin-top:16px'>\(rows)</table></body></html>"
                 try? html.write(to: url, atomically: true, encoding: .utf8)
-                HTMLPageSheet.present(url, from: chat)
+                HTMLPageSheet.present(url, from: host)
+            }
+            if let bot = services.bots.first(where: { $0.id == (wanted ?? $0.id) }) {
+                root.botsViewController.open(bot.id)
+                after(2.5) {
+                    openPage(findChat(in: root) ?? root)
+                }
+            } else if screen == "htmlupdate" {
+                after(0.8) { openPage(root) }
+            } else {
+                return retry()
             }
         case "newchat":
             root.selectedIndex = 1

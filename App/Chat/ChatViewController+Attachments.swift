@@ -13,7 +13,10 @@ extension ChatViewController: ChatMediaCellDelegate {
     }
 
     func chatCellOpenMedia(messageId: String, items: [MediaItem], index: Int, source: @escaping (Int) -> UIView?) {
-        MediaViewerController.present(from: self, items: items, index: index, source: source)
+        let markup: ((UIImage, String) -> Void)? = attachments != nil ? { [weak self] edited, prompt in
+            self?.attachments?.attachMarkup(edited, note: prompt)
+        } : nil
+        MediaViewerController.present(from: self, items: items, index: index, markupMode: .sendToChat, onMarkup: markup, source: source)
     }
 
     func chatCellOpenMediaAsFile(messageId: String, item: MediaItem) {
@@ -145,7 +148,10 @@ extension ChatViewController: ChatMediaCellDelegate {
         let context = mediaContext
         if ref.kind == .image {
             let item = MediaItem(attachment: ref.attachment, index: -1, context: context, label: ref.label)
-            MediaViewerController.present(from: self, items: [item], index: 0) { _ in nil }
+            let markup: ((UIImage, String) -> Void)? = attachments != nil ? { [weak self] edited, prompt in
+                self?.attachments?.attachMarkup(edited, note: prompt)
+            } : nil
+            MediaViewerController.present(from: self, items: [item], index: 0, markupMode: .sendToChat, onMarkup: markup) { _ in nil }
         } else if let context, let path = ref.attachment.gatewayPath {
             FilePreviewPresenter.shared.open(path: path, name: ref.attachment.name, context: context, from: self, row: nil)
         }

@@ -332,6 +332,98 @@ final class CapabilitiesEndToEndTests: XCTestCase {
         XCTAssertEqual(server("github")["_entry"] as? NSDictionary, entryBefore, "with the entry it had")
     }
 
+    // MARK: - Per-tool levels ([tool-levels]): Always allow, Auto-review, Needs approval, Blocked
+
+    /// With an add-on that enforces them (`-HQDebugToolLevels YES` stands in for its answer) each tool takes a level.
+    /// Levels by menu, a tool switched off and on again, the chips, Set All, Discard, then Save: the gateway's entry
+    /// carries the levels, and a blocked tool is an excluded one.
+    @MainActor func testC30_ConnectorToolLevels() throws {
+        let app = launch(["-HQDebugToolLevels", "YES"])
+        openCapabilities(app, tab: "Connectors")
+        let github = app.descendants(matching: .any)["connector-row-github"]
+        XCTAssertTrue(github.waitForExistence(timeout: 10)); github.tap()
+        /// A tool's level menu, scrolled into the list first (the list only builds the rows near the screen).
+        func badge(_ tool: String) -> XCUIElement {
+            let found = app.descendants(matching: .any)["mcp-tool-permission-\(tool)"].firstMatch
+            for _ in 0..<4 where !found.exists { app.swipeUp(velocity: .slow) }
+            for _ in 0..<4 where !found.exists { app.swipeDown(velocity: .slow) }
+            return found
+        }
+        func pick(_ tool: String, _ level: String, file: StaticString = #filePath, line: UInt = #line) {
+            reach(app, badge(tool)); badge(tool).tap()
+            let choice = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", level)).firstMatch
+            XCTAssertTrue(choice.waitForExistence(timeout: 5), "the menu offers \(level)", file: file, line: line)
+            choice.tap()
+            XCTAssertTrue(waitUntil(timeout: 5) { badge(tool).label.contains(level) }, "\(tool) reads \(level): \(badge(tool).label)", file: file, line: line)
+        }
+        func levels() -> [String: String] {
+            (((server("github")["_entry"] as? [String: Any])?["tools"] as? [String: Any])?["permissions"] as? [String: String]) ?? [:]
+        }
+        func excluded() -> [String] { (((server("github")["_entry"] as? [String: Any])?["tools"] as? [String: Any])?["exclude"] as? [String]) ?? [] }
+        XCTAssertTrue(badge("create_issue").waitForExistence(timeout: 10), "each tool has a level")
+        XCTAssertTrue(badge("create_issue").label.contains("Always allow"), "nothing stored: runs without asking")
+        XCTAssertTrue(badge("delete_repo").label.contains("Blocked"), "the tool the entry leaves out reads Blocked")
+        XCTAssertFalse(app.buttons["mcp-tools-save"].exists, "nothing to save yet")
+        shot(app, "connector-levels")
+
+        // Set All, then Discard: nothing reached the gateway and the rows are back.
+        app.descendants(matching: .any)["mcp-tools-policy-all"].firstMatch.tap()
+        let allApprove = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Needs approval'")).firstMatch
+        XCTAssertTrue(allApprove.waitForExistence(timeout: 5)); allApprove.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { badge("get_repo").label.contains("Needs approval") && badge("delete_repo").label.contains("Needs approval") })
+        shot(app, "connector-levels-set-all")
+        app.buttons["mcp-tools-discard"].tap()
+        XCTAssertTrue(waitUntil(timeout: 5) { badge("get_repo").label.contains("Always allow") && badge("delete_repo").label.contains("Blocked") }, "Discard puts every row back")
+        XCTAssertTrue(writes("mcp.servers.add").isEmpty && levels().isEmpty, "a discarded draft never reaches the gateway")
+
+        // One level each, and a switch flipped off and on again keeps the level it had.
+        pick("create_issue", "Needs approval")
+        pick("list_issues", "Auto-review")
+        flip(app, "mcp-tool-switch-create_issue")
+        XCTAssertTrue(waitUntil(timeout: 5) { badge("create_issue").label.contains("Blocked") }, "off reads Blocked")
+        for _ in 0..<4 { flip(app, "mcp-tool-switch-create_issue") }   // on, off, on, off
+        flip(app, "mcp-tool-switch-create_issue")                       // on
+        XCTAssertTrue(waitUntil(timeout: 5) { badge("create_issue").label.contains("Needs approval") }, "back on at the level it had: \(badge("create_issue").label)")
+        pick("search_code", "Blocked")
+        pick("delete_repo", "Auto-review")
+        // The chips count and filter.
+        let approve = app.buttons["mcp-filter-needs_approval"]
+        for _ in 0..<5 where !(approve.exists && approve.isHittable) { app.swipeDown(velocity: .slow) }
+        XCTAssertTrue(approve.label.contains("(1)"), "one tool asks every time: \(approve.label)")
+        approve.tap()
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            app.descendants(matching: .any)["mcp-tool-permission-create_issue"].firstMatch.exists
+                && !app.descendants(matching: .any)["mcp-tool-permission-list_issues"].firstMatch.exists
+        }, "the chip shows only its tools")
+        shot(app, "connector-levels-filter")
+        approve.tap()
+        XCTAssertTrue(badge("list_issues").waitForExistence(timeout: 5), "a second tap shows them all again")
+        let summary = app.descendants(matching: .any)["mcp-tools-summary"].firstMatch
+        XCTAssertTrue(summary.waitForExistence(timeout: 5))
+        shot(app, "connector-levels-draft")
+
+        // Save, tapped twice: one write, and the entry holds what the page shows.
+        let save = app.buttons["mcp-tools-save"]
+        reach(app, save); save.tap()
+        if save.exists, save.isHittable { save.tap() }
+        XCTAssertTrue(waitUntil(timeout: 12) { levels()["create_issue"] == "needs_approval" }, "the levels reached the gateway: \(entryText("github"))")
+        XCTAssertEqual(levels(), ["create_issue": "needs_approval", "list_issues": "auto_review", "delete_repo": "auto_review"],
+                       "only the asking levels are stored")
+        XCTAssertEqual(excluded(), ["search_code"], "Blocked is the gateway's own exclude list, and delete_repo is back")
+        XCTAssertEqual(writes("mcp.servers.add").count, 1, "one save, however often Save was tapped")
+        XCTAssertTrue(save.waitForNonExistence(timeout: 8), "a saved draft leaves nothing to save")
+        XCTAssertFalse(entryText("github").isEmpty)
+        shot(app, "connector-levels-saved")
+
+        // Leave and come back: the page reads the same from the gateway.
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(github.waitForExistence(timeout: 8)); github.tap()
+        XCTAssertTrue(badge("create_issue").waitForExistence(timeout: 10))
+        XCTAssertTrue(badge("create_issue").label.contains("Needs approval") && badge("list_issues").label.contains("Auto-review")
+                      && badge("search_code").label.contains("Blocked") && badge("delete_repo").label.contains("Auto-review")
+                      && badge("get_repo").label.contains("Always allow"), "the saved levels read back")
+    }
+
     // MARK: - Plugin update and uninstall (L722), terminal backend and web provider (L716 setup)
 
     @MainActor func testC12_PluginUpdateAndUninstall() throws {

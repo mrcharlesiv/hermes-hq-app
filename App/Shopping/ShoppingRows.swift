@@ -25,6 +25,8 @@ nonisolated struct OrderCardRow: Sendable, Hashable {
     var rowId: String
     var messageId: String
     var state: ShoppingCards.OrderState
+    /// Indices of `order.items` that can open a product page (direct URL, order site, or matched prior product).
+    var openableItems: Set<Int> = []
 }
 
 /// The drawing a shopping row hands its cell (`PromptRowLayout.shopping`).
@@ -48,8 +50,10 @@ nonisolated extension PromptRows {
         case ShoppingCards.orderTool:
             guard let order = ShoppingCards.order(call) else { return nil }
             let id = "\(message.id)|order\(call.id)"
+            let history = ShoppingCards.catalogProducts(in: input.messages)
             let card = OrderCardRow(order: order, rowId: id, messageId: message.id,
-                                    state: input.shopping.orderStates[call.id] ?? .waiting)
+                                    state: input.shopping.orderStates[call.id] ?? .waiting,
+                                    openableItems: ShoppingCards.openableItemIndices(in: order, matching: history))
             return row(id: id, messageId: message.id, kind: .order(card), scope: input.scope)
         default:
             return nil

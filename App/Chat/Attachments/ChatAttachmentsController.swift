@@ -242,6 +242,19 @@ private extension AttachmentPrepareError {
         importSources([.camera(image)])
     }
 
+    /// [image-markup] Attaches a marked-up image into the composer tray and fills the edit prompt into the composer.
+    func attachMarkup(_ image: UIImage, note: String, replacing draftId: String? = nil) {
+        if let draftId { center.remove(draftId, scope: scope) }
+        importSources([.camera(image)])
+        let cleaned = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let composer, !cleaned.isEmpty {
+            let existing = composer.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            composer.text = existing.isEmpty ? cleaned : (existing + "\n" + cleaned)
+            center.setText(composer.text, scope: scope, profile: profile)
+        }
+        screen?.focusComposer()
+    }
+
     // MARK: Importing
 
     private func importSources(_ sources: [AttachmentPickerCoordinator.PickedSource]) {
@@ -408,7 +421,11 @@ private extension AttachmentPrepareError {
             let media = MediaItem(attachment: MessageAttachment(kind: .image, source: .local(draftId: id), name: item.name,
                                                                 pixelWidth: item.pixelWidth, pixelHeight: item.pixelHeight),
                                   index: -1, context: sender.mediaContext, label: "Photo, \(item.name)")
-            MediaViewerController.present(from: screen, items: [media], index: 0) { [weak view] _ in view }
+            MediaViewerController.present(from: screen, items: [media], index: 0,
+                                          markupMode: .apply(confirmTitle: "Apply Markup"),
+                                          onMarkup: { [weak self] edited, prompt in
+                self?.attachMarkup(edited, note: prompt, replacing: id)
+            }) { [weak view] _ in view }
         } else if let url = center.staging.url(for: item) {
             // [talk] Audio plays in the preview sheet (docs/spec/3x-talk.md §11, row L411); the rest goes to Quick Look.
             if AudioPreviewText.isAudio(typeIdentifier: item.typeIdentifier, name: item.name) {

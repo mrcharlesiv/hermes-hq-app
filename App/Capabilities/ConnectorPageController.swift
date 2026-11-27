@@ -91,6 +91,18 @@ final class ConnectorPageModel {
     var redacted = false
     var savedOff: Set<String> = []
     var draftOff: Set<String> = []
+    /// Each tool's level (`Always allow`, `Auto-review`, `Needs approval`, `Blocked`): the saved one and the draft.
+    var savedPermissions: [String: McpToolPermission] = [:]
+    var draftPermissions: [String: McpToolPermission] = [:]
+    /// The level a tool had before it was switched off in this draft: switching it back on brings that back.
+    var lastEnabledPermission: [String: McpToolPermission] = [:]
+    var permissionFilter: McpToolPermission? = nil
+    /// Whether this computer's add-on enforces the asking levels (`CapabilitiesStore.addOnEnforcesToolLevels`).
+    /// While it doesn't, the page offers on and off only: a level nobody enforces would be a promise the app
+    /// can't keep. Levels already stored are left as they are.
+    var levels = false
+    /// False when that computer's Hermes is too old to ask: a tool set to ask is refused there, and the page says so.
+    var levelsCanAsk = true
     var saving = false
     var checking = false
     var signingIn = false
@@ -118,7 +130,7 @@ final class ConnectorPageModel {
     var isPlugin: Bool { server?.source == "plugin" }
     var readOnly: Bool { parent.readOnly }
     var canEditTools: Bool { !isPlugin && !readOnly && !redacted && entry != nil }
-    var dirty: Bool { draftOff != savedOff }
+    var dirty: Bool { draftOff != savedOff || draftPermissions != savedPermissions }
 
     enum Status { case ok, probing, off, needsAuth, error, unknown }
     var status: Status {
@@ -153,9 +165,22 @@ final class ConnectorPageModel {
 
     func appear() {
         Task {
+            await readLevels()
             await readEntry()
             if toolsState == .idle { await readTools() }
         }
+    }
+
+    private func readLevels() async {
+        #if DEBUG
+        // Simulator and UI tests: `-HQDebugToolLevels YES` shows the levels without an add-on behind them.
+        if UserDefaults.standard.bool(forKey: "HQDebugToolLevels") { levels = true; return }
+        #endif
+        guard let store, !isPlugin else { return }
+        let answer = await store.addOnToolLevels()
+        levels = answer.enforced
+        levelsCanAsk = answer.asks
+        if !answer.enforced { permissionFilter = nil }
     }
 
     func disappear() { signIn?.cancel() }
@@ -174,10 +199,16 @@ final class ConnectorPageModel {
     }
 
     private func applyRules() {
-        let off = Set(tools.map(\.name).filter { !McpToolFilter.isEnabled(entry, $0) })
+        let names = tools.map(\.name)
+        let perms = McpToolFilter.permissions(entry, discovered: names)
+        let off = Set(names.filter { perms[$0] == .blocked })
         let wasDirty = dirty
         savedOff = off
-        if !wasDirty { draftOff = off }
+        savedPermissions = perms
+        if !wasDirty {
+            draftOff = off
+            draftPermissions = perms
+        }
     }
 
     func readTools() async {
@@ -264,38 +295,114 @@ final class ConnectorPageModel {
         }
     }
 
-    // MARK: Tool rules (a draft)
+    // MARK: Tool rules & per-tool levels (a draft)
 
     var shownTools: [McpTool] {
         let q = search.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else { return tools }
-        return tools.filter { $0.name.localizedCaseInsensitiveContains(q) || $0.description.localizedCaseInsensitiveContains(q) }
+        return tools.filter { tool in
+            if let filter = permissionFilter, permission(for: tool.name) != filter { return false }
+            guard !q.isEmpty else { return true }
+            return tool.name.localizedCaseInsensitiveContains(q) || tool.description.localizedCaseInsensitiveContains(q)
+        }
     }
 
+    func permission(for tool: String) -> McpToolPermission {
+        if let draft = draftPermissions[tool] { return draft }
+        if draftOff.contains(tool) { return .blocked }
+        return McpToolFilter.permission(entry, tool)
+    }
+
+    func count(for level: McpToolPermission) -> Int {
+        tools.reduce(0) { $0 + (permission(for: $1.name) == level ? 1 : 0) }
+    }
+
+    var changedCount: Int {
+        tools.reduce(0) { count, tool in
+            let saved = savedPermissions[tool.name] ?? (savedOff.contains(tool.name) ? .blocked : .alwaysAllow)
+            return count + (permission(for: tool.name) != saved ? 1 : 0)
+        }
+    }
+
+    /// The bar's line. With levels: what the draft asks for, "2 changes · 1 asks every time, 3 blocked". Without:
+    /// the words the page has always used, "3 tools off, none back on".
     var draftSummary: String {
-        let off = draftOff.count
-        let back = savedOff.subtracting(draftOff).count
-        return "\(CapabilitiesModel.plural(off, "tool", "tools")) off, \(back == 0 ? "none" : String(back)) back on"
+        let blocked = draftOff.count
+        guard levels else {
+            let back = savedOff.subtracting(draftOff).count
+            return "\(CapabilitiesModel.plural(blocked, "tool", "tools")) off, \(back == 0 ? "none" : String(back)) back on"
+        }
+        let approval = count(for: .needsApproval), auto = count(for: .autoReview)
+        var parts: [String] = []
+        if approval > 0 { parts.append("\(approval) \(approval == 1 ? "asks" : "ask") every time") }
+        if auto > 0 { parts.append("\(auto) auto-review") }
+        if blocked > 0 { parts.append("\(blocked) blocked") }
+        if parts.isEmpty { parts.append("all run without asking") }
+        return "\(CapabilitiesModel.plural(changedCount, "change", "changes")) · " + parts.joined(separator: ", ")
+    }
+
+    /// What a tool comes back as when it is switched on again: the level it had before it was switched off in
+    /// this draft, else the level stored under it. Never `.blocked`.
+    private func restoredLevel(_ tool: String) -> McpToolPermission {
+        let level = lastEnabledPermission[tool] ?? McpToolFilter.storedLevel(entry, tool)
+        return level == .blocked ? .alwaysAllow : level
+    }
+
+    private func put(_ level: McpToolPermission, for tool: String) {
+        let current = permission(for: tool)
+        if level == .blocked {
+            if current != .blocked { lastEnabledPermission[tool] = current }
+            draftOff.insert(tool)
+        } else {
+            lastEnabledPermission[tool] = level
+            draftOff.remove(tool)
+        }
+        draftPermissions[tool] = level
+    }
+
+    func setPermission(_ level: McpToolPermission, for tool: String) {
+        guard !saving else { return }
+        Haptics.play(.selection)
+        put(level, for: tool)
+        lockChanged?()
+    }
+
+    func setAllPermissions(_ level: McpToolPermission) {
+        guard !saving else { return }
+        Haptics.play(.selection)
+        for tool in tools { put(level, for: tool.name) }
+        lockChanged?()
     }
 
     func setTool(_ tool: String, on: Bool) {
-        Haptics.play(.selection)
-        if on { draftOff.remove(tool) } else { draftOff.insert(tool) }
-        lockChanged?()
+        setPermission(on ? restoredLevel(tool) : .blocked, for: tool)
     }
 
+    /// The All Tools switch. On brings back only the tools that are off, each at its own level: it never wipes the
+    /// levels of the tools that were already on.
     func setAll(_ on: Bool) {
+        guard !saving else { return }
         Haptics.play(.selection)
-        draftOff = on ? [] : Set(tools.map(\.name))
+        for tool in tools {
+            if !on { put(.blocked, for: tool.name) }
+            else if permission(for: tool.name) == .blocked { put(restoredLevel(tool.name), for: tool.name) }
+        }
         lockChanged?()
     }
 
-    func discard() { draftOff = savedOff; lockChanged?() }
+    func discard() {
+        draftOff = savedOff
+        draftPermissions = savedPermissions
+        lastEnabledPermission = [:]
+        lockChanged?()
+    }
 
     func save() {
         guard let store, dirty, !saving, canEditTools else { return }
         saving = true
-        let disabled = tools.map(\.name).filter(draftOff.contains), discovered = tools.map(\.name)
+        let discovered = tools.map(\.name)
+        var policies: [String: McpToolPermission] = [:]
+        for name in discovered { policies[name] = permission(for: name) }
+        let disabled = discovered.filter { policies[$0] == .blocked }
         let before = entry
         lockChanged?()
         let start = ContinuousClock.now
@@ -307,14 +414,16 @@ final class ConnectorPageModel {
                 if leaveAfterSave { leaveAfterSave = false; if saved { onSaved?() } }
             }
             do {
-                switch try await store.saveToolRules(name, disabled: disabled, discovered: discovered, profile: profile) {
+                switch try await store.saveToolPolicies(name, permissions: policies, discovered: discovered, profile: profile) {
                 case .saved, .unchanged:
                     Haptics.play(.success)
                     savedOff = draftOff
+                    savedPermissions = draftPermissions
+                    lastEnabledPermission = [:]
                     saved = true
                     await readEntry()
                     await parent.reloadServers()
-                    AppLog.trace("connect", "connector \(name) tool rules saved in \(AppLog.ms(since: start)) ms, \(disabled.count) disabled of \(discovered.count)")
+                    AppLog.trace("connect", "connector \(name) tool policies saved in \(AppLog.ms(since: start)) ms, \(disabled.count) blocked of \(discovered.count)")
                 case .gone:
                     AppLog.note("connect", "connector \(name) tool rules save: connector gone")
                     FailureAlert.present(title: "Couldn’t Save", reason: "This connector is no longer on your gateway.", from: presenter)
@@ -598,47 +707,165 @@ struct ConnectorPageView: View {
             Text(page.toolsState == .loaded && server.enabled ? CapabilitiesModel.plural(page.tools.count, "Tool", "Tools") : "Tools")
         } } footer: { HQSectionFooter {
             if page.redacted { Text("This connector’s tool list can be changed on \(HostWord.phrase).") }
+            else if page.levels, page.canEditTools, page.toolsState == .loaded, server.enabled, !page.tools.isEmpty {
+                if page.levelsCanAsk {
+                    Text("Auto-review asks before a call that changes something. Needs approval asks every time. \(page.bot) waits for your answer.")
+                } else {
+                    Text("Hermes on \(HostWord.phrase) is too old to ask you. Until it is updated, a tool set to Auto-review or Needs approval is refused when it would have asked.")
+                }
+            }
         } }
     }
 
     @ViewBuilder private var toolRows: some View {
         let editable = page.canEditTools
+        let levels = page.levels
         if page.tools.count > 8 {
             TextField("Search \(page.tools.count) tools", text: $page.search)
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .accessibilityIdentifier("mcp-tools-search")
         }
-        if editable, page.search.isEmpty, !page.tools.isEmpty {
-            Toggle(isOn: Binding(get: { page.draftOff.isEmpty }, set: { page.setAll($0) })) {
-                Text("All Tools").font(Font.hq(.body).weight(.semibold))
+        if levels, page.tools.count > 3 || page.tools.contains(where: { page.permission(for: $0.name) != .alwaysAllow }) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    filterChip(title: "All (\(page.tools.count))", active: page.permissionFilter == nil, id: "mcp-filter-all") {
+                        page.permissionFilter = nil
+                    }
+                    ForEach(McpToolPermission.allCases, id: \.self) { level in
+                        let c = page.count(for: level)
+                        filterChip(title: "\(level.shortTitle) (\(c))", active: page.permissionFilter == level, id: "mcp-filter-\(level.rawValue)") {
+                            page.permissionFilter = page.permissionFilter == level ? nil : level
+                        }
+                    }
+                }
+                .padding(.vertical, 2)
             }
-            .accessibilityHint("Turn every tool on or off")
-            .accessibilityIdentifier("mcp-tool-switch-all")
+            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+        }
+        if editable, page.search.isEmpty, page.permissionFilter == nil, !page.tools.isEmpty {
+            if levels {
+                HStack(spacing: 12) {
+                    Text("All Tools").font(Font.hq(.body).weight(.semibold)).foregroundStyle(Color.hqLabel)
+                    Spacer(minLength: 8)
+                    Menu {
+                        ForEach(McpToolPermission.allCases, id: \.self) { level in
+                            Button {
+                                page.setAllPermissions(level)
+                            } label: {
+                                Label(level.title, systemImage: level.symbol)
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("Set All")
+                            Image(systemName: "chevron.up.chevron.down").font(Font.hq(.caption2))
+                        }
+                        .font(Font.hq(.footnote).weight(.semibold))
+                        .foregroundStyle(Color.hqTint)
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Color.hqTint.opacity(0.12), in: .capsule)
+                    }
+                    .disabled(page.saving)
+                    .accessibilityLabel("Set permission for all tools")
+                    .accessibilityIdentifier("mcp-tools-policy-all")
+                    Toggle("", isOn: Binding(get: { page.draftOff.isEmpty }, set: { page.setAll($0) }))
+                        .labelsHidden()
+                        .hqMacRowSwitch()
+                        .disabled(page.saving)
+                        .accessibilityLabel("All Tools")
+                        .accessibilityHint("Turn every tool on or off")
+                        .accessibilityIdentifier("mcp-tool-switch-all")
+                }
+            } else {
+                Toggle(isOn: Binding(get: { page.draftOff.isEmpty }, set: { page.setAll($0) })) {
+                    Text("All Tools").font(Font.hq(.body).weight(.semibold))
+                }
+                .disabled(page.saving)
+                .accessibilityHint("Turn every tool on or off")
+                .accessibilityIdentifier("mcp-tool-switch-all")
+            }
         }
         if page.shownTools.isEmpty {
             Text(page.tools.isEmpty ? "This connector brings no tools." : "No tool matches these filters.").foregroundStyle(Color.hqLabel2)
         }
         ForEach(page.shownTools) { tool in
-            HStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(tool.name).font(Font.hq(.body).monospaced()).foregroundStyle(Color.hqLabel)
+            let current = page.permission(for: tool.name)
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(tool.name).font(Font.hq(.body).monospaced()).foregroundStyle(current == .blocked ? Color.hqLabel2 : Color.hqLabel)
                     if !tool.description.isEmpty {
                         Text(tool.description).font(Font.hq(.subheadline)).foregroundStyle(Color.hqLabel2).lineLimit(2)
+                    }
+                    if levels, editable {
+                        Menu {
+                            ForEach(McpToolPermission.allCases, id: \.self) { level in
+                                Button {
+                                    page.setPermission(level, for: tool.name)
+                                } label: {
+                                    VStack(alignment: .leading) {
+                                        Label(level.title, systemImage: level == current ? "checkmark" : level.symbol)
+                                        Text(level.subtitle)
+                                    }
+                                }
+                            }
+                        } label: {
+                            permissionBadge(current, interactive: true)
+                        }
+                        .disabled(page.saving)
+                        .accessibilityLabel("\(tool.name), \(current.title)")
+                        .accessibilityHint(current.subtitle)
+                        .accessibilityIdentifier("mcp-tool-permission-\(tool.name)")
+                    } else if levels {
+                        permissionBadge(current, interactive: false)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 if editable {
-                    Toggle("", isOn: Binding(get: { !page.draftOff.contains(tool.name) }, set: { page.setTool(tool.name, on: $0) }))
+                    Toggle("", isOn: Binding(get: { current != .blocked }, set: { page.setTool(tool.name, on: $0) }))
                         .labelsHidden()
                         .hqMacRowSwitch()   // [mac] Stress test 2026-10-28 round 6
                         .disabled(page.saving)
                         .accessibilityLabel(tool.name)
                         .accessibilityIdentifier("mcp-tool-switch-\(tool.name)")
-                } else if !McpToolFilter.isEnabled(page.entry, tool.name) {
+                } else if !levels, current == .blocked {
                     Text("Off").font(Font.hq(.subheadline)).foregroundStyle(Color.hqLabel2)
                 }
             }
-            .padding(.vertical, 3)
+            .padding(.vertical, levels ? 4 : 3)
         }
+    }
+
+    private func filterChip(title: String, active: Bool, id: String, action: @escaping () -> Void) -> some View {
+        Button {
+            Haptics.play(.selection)
+            action()
+        } label: {
+            Text(title)
+                .font(Font.hq(.caption).weight(.semibold))
+                .foregroundStyle(active ? Color.hqOnTint : Color.hqLabel2)
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(active ? Color.hqTint : Color.hqFill3, in: .capsule)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(id)
+    }
+
+    private func permissionBadge(_ level: McpToolPermission, interactive: Bool) -> some View {
+        let tint: Color = switch level {
+        case .alwaysAllow: Color.hqLabel2
+        case .autoReview: Color.hqTint
+        case .needsApproval: Color.hqOrange
+        case .blocked: Color.hqRed
+        }
+        return HStack(spacing: 4) {
+            Image(systemName: level.symbol).font(Font.hq(.caption2))
+            Text(level.title).font(Font.hq(.caption).weight(.semibold))
+            if interactive {
+                Image(systemName: "chevron.up.chevron.down").font(Font.hq(.caption2))
+            }
+        }
+        .foregroundStyle(tint)
+        .padding(.horizontal, 8).padding(.vertical, 3)
+        .background(tint.opacity(0.13), in: .capsule)
     }
 }

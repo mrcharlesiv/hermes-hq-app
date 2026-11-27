@@ -12,6 +12,9 @@ final class ShoppingPhotoView: UIView {
     private var url: URL?
     private var task: Task<Void, Never>?
 
+    /// [travel] The whole picture inside the frame, not a crop that fills it: a full-screen viewer shows all of a photo.
+    var fits = false { didSet { imageView.contentMode = fits ? .scaleAspectFit : .scaleAspectFill } }
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         clipsToBounds = true

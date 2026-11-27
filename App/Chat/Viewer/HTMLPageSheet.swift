@@ -86,6 +86,12 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
     private let status = UILabel()
     /// [glass-audit] Floating over the page: Liquid Glass (flattened in the Desktop Look by ThemeChrome).
     private let statusBar = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+    /// [live-update-pill] Tappable glass pill shown when the bot rewrites this open page from chat/background;
+    /// tapping loads the new file while preserving the current scroll position (`keptScroll`).
+    private let updatePill = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+    private let updateButton = UIButton(type: .system)
+    private(set) var pendingUpdateURL: URL?
+    private var checkingUpdate = false
     private var lastIntent = Date.distantPast
     private var waitingForReply = false
     /// The theme key the page was handed (`themeKey`), so a change of look or mode hands it the new one.
@@ -391,6 +397,9 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
 
         statusBar.translatesAutoresizingMaskIntoConstraints = false
         statusBar.cornerConfiguration = .capsule()
+        updatePill.translatesAutoresizingMaskIntoConstraints = false
+        updatePill.cornerConfiguration = .capsule()
+        updatePill.isHidden = true
         shadeStatusBar()
         registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self, UITraitAccessibilityContrast.self]) { (page: HTMLPageSheet, _) in
             page.shadeStatusBar()
@@ -405,6 +414,31 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
         status.textAlignment = .center
         statusBar.contentView.addSubview(status)
         view.addSubview(statusBar)
+
+        var pillConfig = UIButton.Configuration.plain()
+        pillConfig.title = "New updates available"
+        pillConfig.image = UIImage(systemName: "arrow.clockwise")
+        pillConfig.imagePadding = 6
+        pillConfig.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(textStyle: .footnote)
+        pillConfig.baseForegroundColor = HQPalette.label
+        pillConfig.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14)
+        pillConfig.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attrs in
+            var out = attrs
+            out.font = HQFont.style(.footnote, weight: .semibold)
+            return out
+        }
+        updateButton.configuration = pillConfig
+        updateButton.translatesAutoresizingMaskIntoConstraints = false
+        updateButton.accessibilityLabel = "New updates available"
+        updateButton.accessibilityHint = "Reloads the page at your current scroll position"
+        updateButton.accessibilityIdentifier = "page.updatePill"
+        updateButton.addAction(UIAction { [weak self] _ in self?.applyPendingUpdate() }, for: .primaryActionTriggered)
+        #if targetEnvironment(macCatalyst)
+        PointerEffects.button(updateButton)
+        #endif
+        updatePill.contentView.addSubview(updateButton)
+        view.addSubview(updatePill)
+
         NSLayoutConstraint.activate([
             statusBar.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             statusBar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12),
@@ -413,6 +447,14 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
             status.trailingAnchor.constraint(equalTo: statusBar.contentView.trailingAnchor, constant: -14),
             status.topAnchor.constraint(equalTo: statusBar.contentView.topAnchor, constant: 8),
             status.bottomAnchor.constraint(equalTo: statusBar.contentView.bottomAnchor, constant: -8),
+            updatePill.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            updatePill.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 10),
+            updatePill.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, constant: -32),
+            updateButton.leadingAnchor.constraint(equalTo: updatePill.contentView.leadingAnchor),
+            updateButton.trailingAnchor.constraint(equalTo: updatePill.contentView.trailingAnchor),
+            updateButton.topAnchor.constraint(equalTo: updatePill.contentView.topAnchor),
+            updateButton.bottomAnchor.constraint(equalTo: updatePill.contentView.bottomAnchor),
+            updateButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 36),
         ])
 
         // [page-refine] The bar, as Grok Bot's page has it: Comment by itself, the rest (Find, Reload, Share…) under
@@ -511,6 +553,7 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
         }
         #if DEBUG
         if UserDefaults.standard.string(forKey: "HQDebugTour") == "htmlstatus" { show("Sent to Hermes — waiting for a reply…") }
+        if UserDefaults.standard.string(forKey: "HQDebugTour") == "htmlupdate" { noteExternalUpdateAvailable(url: file) }
         #endif
         // [tiles] A spinner only when drawing takes a moment: a page from this Mac's copy draws before it would show.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
@@ -614,9 +657,79 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
     }
 
     @objc private func turnEnded(_ note: Notification) {
-        guard (note.object as? ContextBox)?.context == source?.context, waitingForReply else { return }
-        waitingForReply = false
-        readAgain(note: "Updated")
+        guard (note.object as? ContextBox)?.context == source?.context else { return }
+        if waitingForReply {
+            waitingForReply = false
+            clearUpdatePill()
+            readAgain(note: "Updated")
+        } else {
+            checkForBackgroundUpdate()
+        }
+    }
+
+    /// Checks whether the bot rewrote the open page during an external chat turn; if bytes changed, surfaces the
+    /// "New updates available" pill instead of yanking the reader's view out from under them.
+    private func checkForBackgroundUpdate() {
+        guard !checkingUpdate, let source, let currentFile = file else { return }
+        let shownBytes = try? Data(contentsOf: currentFile)
+        checkingUpdate = true
+        Task { [weak self] in
+            defer { self?.checkingUpdate = false }
+            let freshURL: URL?
+            if let read = source.read {
+                freshURL = try? await read()
+            } else {
+                freshURL = try? await MediaLoader.shared.file(path: source.path, name: currentFile.lastPathComponent,
+                                                              context: source.context, progressKey: "page|" + source.path,
+                                                              fresh: true, keptOnFailure: false)
+            }
+            guard let self, let freshURL else { return }
+            let freshBytes = try? Data(contentsOf: freshURL)
+            guard let freshBytes, freshBytes != shownBytes else { return }
+            self.noteExternalUpdateAvailable(url: freshURL)
+        }
+    }
+
+    /// Surfaces the floating "New updates available" pill (exposed for background checks, DEBUG tours, and unit tests).
+    func noteExternalUpdateAvailable(url: URL?) {
+        pendingUpdateURL = url
+        guard updatePill.isHidden else { return }
+        updatePill.isHidden = false
+        if HQMotion.reduced {
+            updatePill.alpha = 1
+            updatePill.transform = .identity
+        } else {
+            updatePill.alpha = 0
+            updatePill.transform = CGAffineTransform(translationX: 0, y: -8)
+            UIView.animate(withDuration: HQMotion.quick) {
+                self.updatePill.alpha = 1
+                self.updatePill.transform = .identity
+            }
+        }
+        HQAnnounce.say("New updates available")
+    }
+
+    /// Whether the live-update pill is currently visible (tests).
+    var isUpdatePillVisible: Bool { !updatePill.isHidden }
+
+    /// Applies the staged update in place, preserving the user's current scroll position (`keptScroll`).
+    func applyPendingUpdate() {
+        let nextURL = pendingUpdateURL
+        clearUpdatePill()
+        Haptics.play(.light)
+        if let nextURL {
+            file = nextURL
+            load()
+            show("Updated", for: 2)
+            HQAnnounce.say("Page updated")
+        } else {
+            readAgain(note: "Updated")
+        }
+    }
+
+    private func clearUpdatePill() {
+        pendingUpdateURL = nil
+        updatePill.isHidden = true
     }
 
     /// The page from the bot's computer again (the bot may have rewritten it), then drawn again.
@@ -659,6 +772,9 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
         let effect = UIGlassEffect(style: .regular)
         if traitCollection.userInterfaceStyle == .dark { effect.tintColor = UIColor.black.withAlphaComponent(0.35) }
         statusBar.effect = effect
+        let pillEffect = UIGlassEffect(style: .regular)
+        if traitCollection.userInterfaceStyle == .dark { pillEffect.tintColor = UIColor.black.withAlphaComponent(0.35) }
+        updatePill.effect = pillEffect
     }
 
     private func show(_ text: String?, for seconds: Double? = nil) {

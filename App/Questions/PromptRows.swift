@@ -75,6 +75,9 @@ nonisolated struct PromptRow: Sendable {
         /// [shopping] A bot's product cards and its order card (HermesKit/Shopping/ShoppingCards.swift, App/Shopping).
         case products(ProductsCardRow)
         case order(OrderCardRow)
+        /// [travel] A bot's flight and hotel cards (HermesKit/Travel/TravelCards.swift, App/Travel).
+        case flights(FlightsCardRow)
+        case hotels(HotelsCardRow)
         /// [asks] A bot asks before it acts for you: the question, its choices, Something else (App/Asks).
         case ask(AskCardRow)
     }
@@ -169,6 +172,8 @@ nonisolated enum PromptRows {
         case .products(let p): h.combine(4); h.combine(p)   // [shopping]
         case .order(let o): h.combine(5); h.combine(o)
         case .ask(let a): h.combine(6); h.combine(a)   // [asks]
+        case .flights(let f): h.combine(7); h.combine(f)   // [travel]
+        case .hotels(let ht): h.combine(8); h.combine(ht)   // [travel]
         }
         return ChatRow(id: id, messageId: messageId, scope: scope, fingerprint: h.finalize(), kind: .prompt(PromptRow(kind: kind)),
                        gapAbove: ChatMetrics.turnGap, variant: 0)
@@ -230,6 +235,8 @@ nonisolated struct PromptRowLayout: @unchecked Sendable {
     var draft: DraftCardLayout? = nil
     /// [shopping] The product cards' or the order card's own drawing (App/Shopping).
     var shopping: ShoppingRowLayout? = nil
+    /// [travel] The flight or hotel cards' own drawing (App/Travel).
+    var travel: TravelRowLayout? = nil
     /// [asks] The ask card's buttons, links, bar and chips (App/Asks/AskCardView.swift).
     var ask: AskCardGeometry? = nil
     /// [calm-chat] Tap-to-expand toggle for a folded settled clarify card.
@@ -292,6 +299,8 @@ nonisolated enum PromptLayout {
         case .draft(let d): return draft(d, gap: row.gapAbove, width: width, category: style.category)
         case .products(let p): return ProductCardsLayout.make(p, gap: row.gapAbove, width: width, category: style.category)   // [shopping]
         case .order(let o): return OrderCardLayout.make(o, gap: row.gapAbove, width: width, category: style.category)
+        case .flights(let f): return FlightsCardLayout.make(f, gap: row.gapAbove, width: width, category: style.category)   // [travel]
+        case .hotels(let h): return HotelsCardLayout.make(h, gap: row.gapAbove, width: width, category: style.category)
         case .ask(let a): return AskCardLayout.make(a, gap: row.gapAbove, width: width, category: style.category)   // [asks]
         }
     }
@@ -1084,7 +1093,9 @@ nonisolated extension PromptLayout {
                     if over { y += lbl.size.height }
                     let valFont = PromptFonts.font(.footnote, category, weight: field.strong ? .semibold : nil)
                     let valW = max(60, innerW - mark - 8 - labelW)
-                    let (val, _) = clamped(text(field.value, valFont, ChatPalette.label, wrapAnywhere: !field.strong), width: valW, maxLines: 2)
+                    // People show whole and break between names (`DraftCards.shownPeople` keeps the list short).
+                    let val = field.people ? TextKitLayout(text(DraftCards.shownPeople(field.value), valFont, ChatPalette.label), width: valW)
+                        : clamped(text(field.value, valFont, ChatPalette.label, wrapAnywhere: !field.strong), width: valW, maxLines: 2).0
                     texts.append(PromptPlacedText(text: val, frame: CGRect(x: titleX + labelW, y: y, width: valW, height: val.size.height)))
                     y += max(val.size.height, over ? 0 : lbl.size.height) + 4
                 }
@@ -1184,7 +1195,10 @@ nonisolated extension PromptLayout {
                     texts.append(PromptPlacedText(text: label, frame: CGRect(x: x, y: y, width: label.size.width, height: label.size.height)))
                     if over { y += label.size.height }
                     let valueFont = PromptFonts.font(.subheadline, category, weight: field.strong ? .semibold : nil)
-                    let (value, _) = clamped(text(field.value, valueFont, ChatPalette.label, wrapAnywhere: !field.strong), width: innerW - labelW, maxLines: 2)
+                    // People show whole and break between names: a send is never approved with part of the list unseen.
+                    // (`DraftCards.shownPeople` keeps the list short enough to lay out whole.)
+                    let value = field.people ? TextKitLayout(text(DraftCards.shownPeople(field.value), valueFont, ChatPalette.label), width: innerW - labelW)
+                        : clamped(text(field.value, valueFont, ChatPalette.label, wrapAnywhere: !field.strong), width: innerW - labelW, maxLines: 2).0
                     texts.append(PromptPlacedText(text: value, frame: CGRect(x: x + labelW, y: y, width: innerW - labelW, height: value.size.height)))
                     y += max(value.size.height, over ? 0 : label.size.height) + (over ? 6 : 4)
                     spoken.append("\(field.label): \(field.value)")

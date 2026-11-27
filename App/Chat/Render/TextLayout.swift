@@ -1231,6 +1231,16 @@ nonisolated enum TextLayout {
                                           contentWidth: w, contentHeight: h, layoutWidth: nil, pieces: [], codeOpen: nil))
                 contentWidth = max(contentWidth, w)
                 y += h
+            case .mermaid(let diagram):
+                let listIndent = min(rendered.indents[i] ?? 0, maxText / 3)
+                let blockMax = max(180, maxText - listIndent)
+                let diagramSize = MermaidRenderer.inlineSize(for: diagram, maxWidth: blockMax - 16)
+                let h = MermaidCardView.headerHeight + diagramSize.height + 8
+                placed.append(PlacedBlock(block: block, frame: CGRect(x: listIndent, y: y, width: blockMax, height: h), textFrame: .zero,
+                                          contentWidth: blockMax, contentHeight: h, layoutWidth: nil, pieces: [], codeOpen: nil))
+                fullWidth = true
+                contentWidth = max(contentWidth, blockMax + listIndent)
+                y += h
             case .linkChip:
                 // [transcript] A fixed size from the start (§3.7): the title and icon land without moving anything.
                 let w = LinkChipView.width(maxText: maxText), h = LinkChipView.height(style: style)
@@ -1561,6 +1571,8 @@ nonisolated enum TextLayout {
                 let lines = ([t.header] + t.rows).map { $0.map(\.string).joined(separator: " · ") }
                 piece = NSAttributedString(string: lines.joined(separator: "\n"),
                                            attributes: [.font: style.body, .foregroundColor: ChatPalette.label])
+            case .mermaid(let d):
+                piece = NSAttributedString(string: d.source, attributes: [.font: style.code, .foregroundColor: ChatPalette.codeText])
             case .spacer, .media, .linkChip, .pageCard, .phoneProposal: piece = nil
             }
             guard let piece, piece.length > 0 else { continue }

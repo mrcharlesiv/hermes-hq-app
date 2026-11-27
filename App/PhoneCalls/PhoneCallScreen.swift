@@ -1,6 +1,46 @@
 import SwiftUI
 import UIKit
 
+/// Pure two-step accidental hang-up guard: the first tap arms it, a later tap on End call confirms. A tap that lands
+/// within `settle` of the arming tap is the same accidental double tap, so neither button answers it. The question
+/// goes away by itself after `disarmDelay` (`assistedDisarmDelay` with VoiceOver or Switch Control).
+nonisolated struct PhoneHangUpGuard: Equatable, Sendable {
+    static let disarmDelay: Duration = .seconds(4)
+    static let assistedDisarmDelay: Duration = .seconds(20)
+    /// How long after the arming tap the two answers stay deaf.
+    static let settle: TimeInterval = 0.45
+    private(set) var armed = false
+    private var armedAt: TimeInterval = 0
+
+    static func disarmDelay(assisted: Bool) -> Duration { assisted ? assistedDisarmDelay : disarmDelay }
+
+    mutating func arm(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        guard !armed else { return }   // a repeated arming tap never moves the clock
+        armed = true
+        armedAt = now
+    }
+
+    /// The timer ran out, the screen went away: always disarms.
+    mutating func cancel() { armed = false }
+
+    /// Keep call. False while the arming tap is still settling (the question stays up).
+    mutating func keep(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
+        guard armed, settled(now) else { return false }
+        armed = false
+        return true
+    }
+
+    /// End call. True only if armed and settled, then disarms.
+    mutating func confirm(at now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
+        guard armed, settled(now) else { return false }
+        armed = false
+        return true
+    }
+
+    /// A clock that went backwards counts as not settled.
+    private func settled(_ now: TimeInterval) -> Bool { now - armedAt >= Self.settle }
+}
+
 struct PhoneCallScreen: View {
     let controller: PhoneCallController
     let id: String
@@ -8,6 +48,8 @@ struct PhoneCallScreen: View {
     let open: (PhoneCallView.Page) -> Void
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var confirmDelete = false
+    @State private var hangUpGuard = PhoneHangUpGuard()
+    @State private var hangUpDisarmTask: Task<Void, Never>?
     @State private var sharing: String?
     @State private var message = ""
     @State private var answer = ""
@@ -288,38 +330,120 @@ struct PhoneCallScreen: View {
 
     private func dock(_ call: PhoneCallRecord) -> some View {
         let targetName = call.botName.flatMap { $0.isEmpty ? nil : $0 } ?? "the assistant"
-        return HStack(spacing: 10) {
-            HStack(spacing: 6) {
-                TextField("Tell the assistant", text: $message,
-                          prompt: Text("Tell \(targetName)…").foregroundStyle(Color.hqLabel2))
-                    .font(Font.hq(.subheadline))
-                    .focused($editing, equals: .message)
-                    .submitLabel(.send)
-                    .onSubmit { run(.tell(message)) }
-                    .frame(minHeight: 44).contentShape(.rect)
-                    .accessibilityIdentifier("phone.tell")
-                if !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Button("Send", systemImage: "arrow.up.circle.fill") { run(.tell(message)) }
-                        .labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
-                        .accessibilityIdentifier("phone.tell.send")
+        return Group {
+            if hangUpGuard.armed {
+                hangUpQuestion(call)
+            } else {
+                HStack(spacing: 10) {
+                    HStack(spacing: 6) {
+                        TextField("Tell the assistant", text: $message,
+                                  prompt: Text("Tell \(targetName)…").foregroundStyle(Color.hqLabel2))
+                            .font(Font.hq(.subheadline))
+                            .focused($editing, equals: .message)
+                            .submitLabel(.send)
+                            .onSubmit { run(.tell(message)) }
+                            .frame(minHeight: 44).contentShape(.rect)
+                            .accessibilityIdentifier("phone.tell")
+                        if !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Button("Send", systemImage: "arrow.up.circle.fill") { run(.tell(message)) }
+                                .labelStyle(.iconOnly).frame(minWidth: 44, minHeight: 44)
+                                .accessibilityIdentifier("phone.tell.send")
+                        }
+                    }
+                    .padding(.horizontal, 15).frame(minHeight: 44)
+                    .background(Color.phoneCardFill, in: .capsule)
+                    .shadow(color: .black.opacity(0.08), radius: 3, y: 1)
+                    .disabled(call.state == .ending || call.sendingMessage)
+                    Button("Hang up", systemImage: "phone.down.fill", role: .destructive) { armHangUp() }
+                        .labelStyle(.iconOnly)
+                        .font(Font(HQFont.scaled(22, weight: .semibold, like: .title3, cap: 22)))
+                        .foregroundStyle(Color(uiColor: PhoneCardColors.onRed))
+                        .frame(width: 54, height: 54)
+                        .background(Color.hqRed, in: .circle)
+                        .shadow(color: Color.hqRed.opacity(0.35), radius: 8, y: 4)
+                        .buttonStyle(.plain)
+                        .disabled(call.state == .ending)
                 }
+                .transition(.opacity)
             }
-            .padding(.horizontal, 15).frame(minHeight: 44)
-            .background(Color.phoneCardFill, in: .capsule)
-            .shadow(color: .black.opacity(0.08), radius: 3, y: 1)
-            .disabled(call.state == .ending || call.sendingMessage)
-            Button("Hang up", systemImage: "phone.down.fill", role: .destructive) { run(.hangUp) }
-                .labelStyle(.iconOnly)
-                .font(Font(HQFont.scaled(22, weight: .semibold, like: .title3, cap: 22)))
-                .foregroundStyle(Color(uiColor: PhoneCardColors.onRed))
-                .frame(width: 54, height: 54)
-                .background(Color.hqRed, in: .circle)
-                .shadow(color: Color.hqRed.opacity(0.35), radius: 8, y: 4)
-                .buttonStyle(.plain)
-                .disabled(call.state == .ending)
         }
+        .animation(HQMotion.swiftUI(.easeInOut(duration: HQMotion.quick)), value: hangUpGuard.armed)
         .padding(.horizontal, 12)
         .padding(.bottom, 6)
+        .onDisappear { disarmHangUp() }
+    }
+
+    /// "End this call?" with its two answers. Keep call takes the red button's place, so a tap that keeps landing in
+    /// that spot never ends the call. At the largest text sizes the words sit above the answers.
+    private func hangUpQuestion(_ call: PhoneCallRecord) -> some View {
+        let big = typeSize.isAccessibilitySize
+        let layout = big ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout(spacing: 10))
+        let end = Button("End call", role: .destructive) {
+            guard hangUpGuard.confirm() else { return }
+            hangUpDisarmTask?.cancel()
+            hangUpDisarmTask = nil
+            run(.hangUp)
+        }
+        .font(Font.hq(.subheadline).weight(.semibold))
+        .lineLimit(1).minimumScaleFactor(0.7)
+        .foregroundStyle(Color(uiColor: PhoneCardColors.onRed))
+        .padding(.horizontal, 16).frame(maxWidth: big ? .infinity : nil, minHeight: 44)
+        .background(Color.hqRed, in: .capsule)
+        .contentShape(.capsule)
+        .buttonStyle(.plain)
+        .disabled(call.state == .ending)
+        .accessibilityIdentifier("phone.hangup.confirm")
+        let keep = Button("Keep call") {
+            guard hangUpGuard.keep() else { return }
+            disarmHangUp()
+            Haptics.play(.selection)
+        }
+        .font(Font.hq(.subheadline).weight(.medium))
+        .lineLimit(1).minimumScaleFactor(0.7)
+        .foregroundStyle(Color.hqLabel)
+        .padding(.horizontal, 14).frame(maxWidth: big ? .infinity : nil, minHeight: 44)
+        .background(Color.hqFill3, in: .capsule)
+        .contentShape(.capsule)
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("phone.hangup.cancel")
+        return layout {
+            Text("End this call?")
+                .font(Font.hq(.subheadline).weight(.semibold))
+                .foregroundStyle(Color.hqLabel)
+                .lineLimit(big ? 2 : 1).minimumScaleFactor(0.8)
+                .accessibilityIdentifier("phone.hangup.prompt")
+            if !big { Spacer(minLength: 4) }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) { end; keep }
+                VStack(spacing: 8) { end; keep }
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, big ? 12 : 6)
+        .background(Color.phoneCardFill, in: .rect(cornerRadius: big ? 22 : 29))
+        .shadow(color: .black.opacity(0.08), radius: 3, y: 1)
+        .transition(.opacity)
+    }
+
+    private func armHangUp() {
+        editing = nil
+        hangUpGuard.arm()
+        Haptics.play(.light)
+        HQAnnounce.say("Confirm end call")
+        hangUpDisarmTask?.cancel()
+        hangUpDisarmTask = Task {
+            // With VoiceOver or Switch Control, reaching End call takes longer than four seconds.
+            let settings = HQAccessibility.current
+            let assisted = settings.voiceOver || settings.switchControl
+            try? await Task.sleep(for: PhoneHangUpGuard.disarmDelay(assisted: assisted))
+            guard !Task.isCancelled else { return }
+            hangUpGuard.cancel()
+        }
+    }
+
+    private func disarmHangUp() {
+        hangUpDisarmTask?.cancel()
+        hangUpDisarmTask = nil
+        hangUpGuard.cancel()
     }
 
     @ViewBuilder private func issue(_ call: PhoneCallRecord) -> some View {

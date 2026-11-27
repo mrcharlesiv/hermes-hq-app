@@ -140,6 +140,12 @@ nonisolated enum PushPolicy {
     static let ideasRunVersion = "0.9.45"
     /// [tasks] hermes-hq-push 0.9.32+ keeps the shared task list and serves `/tasks` (docs/tasks.md).
     static func tasks(_ body: [String: Any]?) -> Bool { (body?["tasks"] as? NSNumber)?.boolValue == true }
+    /// [tool-levels] hermes-hq-push 0.9.86+ enforces a connector tool's level (`tools.permissions`): it puts
+    /// Hermes's approval in front of a tool set to ask. Older add-ons save the level and never look at it.
+    static func toolPermissions(_ body: [String: Any]?) -> Bool { (body?["toolPermissions"] as? NSNumber)?.boolValue == true }
+    /// `toolPermissionsAsk`: false when that computer's Hermes is too old to ask (before v0.21.6). The add-on then
+    /// refuses a tool set to ask instead of running it unasked, and the page says so.
+    static func toolPermissionsAsk(_ body: [String: Any]?) -> Bool { (body?["toolPermissionsAsk"] as? NSNumber)?.boolValue != false }
     /// [terminal] hermes-hq-push 0.9.25+ has the Terminal socket: `terminal` says whether this computer can open a shell
     /// (false on Windows), `terminalOff` whether its plugin-data terminal.off turned it off.
     static func terminalKnown(_ body: [String: Any]?) -> Bool { body?["terminal"] is NSNumber }

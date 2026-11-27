@@ -111,12 +111,15 @@ final class BlockView: UIView, UIScrollViewDelegate {
     var onToggleCode: (() -> Void)?
     /// [transcript] The table's expand button (docs/spec/3x-transcript.md §3.4, L309).
     var onExpandTable: ((MarkdownTable) -> Void)?
+    /// [mermaid] Opens the expanded Mermaid diagram sheet with zoom and Copy PNG.
+    var onExpandMermaid: ((MermaidDiagram) -> Void)?
     /// [transcript] A link chip's tap (§3.7).
     var onOpenLink: ((URL) -> Void)?
     private var chip: LinkChipView?
     /// A page card (`PageCardView`): a bot's HTML page pictured, opened live on a tap.
     private var pageCard: PageCardView?
     private var phoneCard: PhoneChatCardControl?
+    private var mermaidCard: MermaidCardView?
     /// [transcript] A table card's footer: its size and Expand, a button the width of the card.
     private let expandButton = TableFooterControl()
     /// [transcript] A wide table's edges fade where columns go on past them.
@@ -129,10 +132,11 @@ final class BlockView: UIView, UIScrollViewDelegate {
         if let chip, !chip.isHidden { views.append(chip) }
         if let pageCard, !pageCard.isHidden { views.append(pageCard) }
         if let phoneCard, !phoneCard.isHidden { views.append(phoneCard) }
+        if let mermaidCard, !mermaidCard.isHidden { views.append(mermaidCard) }
         return views
     }
     /// Whether this block is a page card: the card is its own element, not part of the bubble's words.
-    var showsStandaloneCard: Bool { pageCard?.isHidden == false || phoneCard?.isHidden == false }
+    var showsStandaloneCard: Bool { pageCard?.isHidden == false || phoneCard?.isHidden == false || mermaidCard?.isHidden == false }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -359,6 +363,14 @@ final class BlockView: UIView, UIScrollViewDelegate {
             layer.borderWidth = 0
             desktopOutlined = Theme.isDesktop
             bubbleOutlined = !Theme.isDesktop && !mine
+        case .mermaid(let diagram):
+            isCard = true
+            backgroundColor = ChatPalette.codeFill
+            layer.cornerRadius = ChatMetrics.codeRadius
+            layer.borderWidth = 0
+            desktopOutlined = Theme.isDesktop
+            bubbleOutlined = !Theme.isDesktop && !mine
+            copyText = diagram.source
         case .phoneProposal, .spacer, .media:                     // [attachments] a media block draws in the bubble's media view
             isCard = false
             backgroundColor = .clear
@@ -409,6 +421,21 @@ final class BlockView: UIView, UIScrollViewDelegate {
             view.open = { [weak self] in self?.onOpenLink?(url) }
         } else {
             phoneCard?.isHidden = true
+        }
+        if case .mermaid(let diagram) = placed.block {
+            let view = mermaidCard ?? {
+                let made = MermaidCardView()
+                made.onExpand = { [weak self] d in self?.onExpandMermaid?(d) }
+                addSubview(made)
+                mermaidCard = made
+                return made
+            }()
+            view.isHidden = false
+            view.frame = CGRect(origin: .zero, size: placed.frame.size)
+            view.configure(diagram, size: placed.frame.size)
+        } else if let mermaidCard {
+            mermaidCard.isHidden = true
+            mermaidCard.reset()
         }
         if !isCard { layer.cornerRadius = 0; layer.borderWidth = 0 }
         outlineForDesktop()

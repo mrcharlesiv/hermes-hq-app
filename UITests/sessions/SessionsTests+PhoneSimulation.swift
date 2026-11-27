@@ -170,9 +170,7 @@ extension SessionsTests {
         XCTAssertEqual(answers.first?["roles"] as? [String], ["tool", "system"])
         shot(app, "phone-answered")
 
-        let hangup = app.buttons["Hang up"]
-        for _ in 0..<3 where !hangup.isHittable { app.swipeUp() }
-        hangup.tap()
+        hangUp(app)
         XCTAssertTrue(app.staticTexts["You hung up"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["Hang up"].exists)
         XCTAssertTrue(statusText(app, prefix: "Finished · ").waitForExistence(timeout: 30), "settled from the event log")
@@ -255,11 +253,76 @@ extension SessionsTests {
         for _ in 0..<3 where !morning.isHittable { app.swipeUp() }
         XCTAssertTrue(morning.waitForExistence(timeout: 10)); morning.tap()
         XCTAssertTrue(app.staticTexts["Simulated answer received: Morning"].waitForExistence(timeout: 15))
-        let hangup = app.buttons["Hang up"]
-        for _ in 0..<3 where !hangup.isHittable { app.swipeUp() }
-        hangup.tap()
+        hangUp(app)
         XCTAssertTrue(app.staticTexts["You hung up"].waitForExistence(timeout: 10))
         shot(app, "phone-switch-a-ended")
+        XCTAssertEqual(try samplehost.control("/__fixture/state")["problems"] as? [String], [])
+        try assertKeyOnlyInHeader(samplehost)
+    }
+
+    /// The red button, then End call: hanging up takes both taps.
+    @MainActor func hangUp(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        let hangup = app.buttons["Hang up"]
+        let confirm = app.buttons["phone.hangup.confirm"]
+        // The question answers no tap for its first half second, and goes away by itself after four: ask again then.
+        for _ in 0..<3 {
+            for _ in 0..<3 where !hangup.isHittable && !confirm.exists { app.swipeUp() }
+            if !confirm.exists { hangup.tap() }
+            XCTAssertTrue(confirm.waitForExistence(timeout: 5), "the red button asks first", file: file, line: line)
+            confirm.tap()
+            if confirm.waitForNonExistence(timeout: 2), !app.staticTexts["phone.hangup.prompt"].exists { return }
+        }
+    }
+
+    /// The accidental hang-up guard: a double tap, a run of taps in the same spot, Keep call and four seconds of
+    /// waiting all leave the call up. Only the red button followed by End call ends it, once.
+    @MainActor func testPhoneCallsHangUpTakesTwoTaps() throws {
+        let samplehost = try samplehostFixture()
+        let app = try phoneChat(samplehost, scenario: "live")
+        try placeSimulatedCall(app, samplehost)
+        XCTAssertTrue(app.textFields["phone.tell"].waitForExistence(timeout: 25), "the call is up")
+        let hangup = app.buttons["Hang up"]
+        let prompt = app.staticTexts["phone.hangup.prompt"]
+        let tell = app.textFields["phone.tell"]
+        for _ in 0..<3 where !hangup.isHittable { app.swipeUp() }
+        func hangUps() throws -> Int { try XCTUnwrap(try samplehost.control("/__fixture/state")["hangups"] as? Int) }
+
+        // 1. A double tap on the red button: the question comes up and stays up; nothing was hung up.
+        hangup.doubleTap()
+        XCTAssertTrue(prompt.waitForExistence(timeout: 5), "the question shows")
+        XCTAssertTrue(app.buttons["phone.hangup.confirm"].isHittable && app.buttons["phone.hangup.cancel"].isHittable)
+        XCTAssertGreaterThanOrEqual(app.buttons["phone.hangup.confirm"].frame.height, 44)
+        XCTAssertGreaterThanOrEqual(app.buttons["phone.hangup.cancel"].frame.height, 44)
+        shot(app, "phone-hangup-question")
+        XCTAssertEqual(try hangUps(), 0, "a double tap never ends the call")
+
+        // 2. Keep call puts the dock back.
+        app.buttons["phone.hangup.cancel"].tap()
+        XCTAssertTrue(tell.waitForExistence(timeout: 5) && hangup.waitForExistence(timeout: 5), "Keep call brings the dock back")
+        XCTAssertFalse(prompt.exists)
+        XCTAssertEqual(try hangUps(), 0)
+
+        // 3. Taps that keep landing where the red button is: what comes up under the finger is Keep call.
+        let red = hangup.frame   // a place on the screen: the red button itself is gone while the question is up
+        let spot = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: red.midX, dy: red.midY))
+        for _ in 0..<6 { spot.tap() }
+        XCTAssertEqual(try hangUps(), 0, "six taps in the red button's spot never end the call")
+        XCTAssertTrue(statusText(app, prefix: "Finished").exists == false && !app.staticTexts["You hung up"].exists)
+        if prompt.exists { app.buttons["phone.hangup.cancel"].tap() }
+        XCTAssertTrue(hangup.waitForExistence(timeout: 5))
+
+        // 4. The question goes away by itself.
+        hangup.tap()
+        XCTAssertTrue(prompt.waitForExistence(timeout: 5))
+        XCTAssertTrue(prompt.waitForNonExistence(timeout: 8), "four seconds without an answer: back to the dock")
+        XCTAssertTrue(tell.waitForExistence(timeout: 5))
+        XCTAssertEqual(try hangUps(), 0)
+
+        // 5. The red button, then End call: one hang-up.
+        hangUp(app)
+        XCTAssertTrue(app.staticTexts["You hung up"].waitForExistence(timeout: 10))
+        XCTAssertFalse(hangup.exists || prompt.exists)
+        XCTAssertEqual(try hangUps(), 1)
         XCTAssertEqual(try samplehost.control("/__fixture/state")["problems"] as? [String], [])
         try assertKeyOnlyInHeader(samplehost)
     }
@@ -335,9 +398,7 @@ extension SessionsTests {
         XCTAssertEqual(Set(answers.first?["tool_call_ids"] as? [String] ?? []), ["call_ask_1", "call_ask_2"])
         XCTAssertEqual(answers.first?["roles"] as? [String], ["tool", "tool", "system"])
         XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label == 'You answered: Morning'")).count >= 1, true, "the You line")
-        let hangup = app.buttons["Hang up"]
-        for _ in 0..<3 where !hangup.isHittable { app.swipeUp() }
-        hangup.tap()
+        hangUp(app)
         XCTAssertTrue(app.staticTexts["You hung up"].waitForExistence(timeout: 10))
         XCTAssertEqual(try samplehost.control("/__fixture/state")["problems"] as? [String], [])
         try assertKeyOnlyInHeader(samplehost)
@@ -374,9 +435,7 @@ extension SessionsTests {
         notice.tap()
         XCTAssertTrue(app.textFields["phone.tell"].waitForExistence(timeout: 10) || revealed(app, app.textFields["phone.tell"]),
                       "one tap on the notice opens the call sheet")
-        let hangup = app.buttons["Hang up"]
-        for _ in 0..<3 where !hangup.isHittable { app.swipeUp() }
-        hangup.tap()
+        hangUp(app)
         XCTAssertTrue(app.staticTexts["You hung up"].waitForExistence(timeout: 10))
         app.buttons["phone.close"].tap()
         XCTAssertTrue(notice.waitForNonExistence(timeout: 10), "the notice goes when the call ends")
@@ -569,7 +628,7 @@ extension SessionsTests {
         XCTAssertTrue(app.staticTexts["You answered: 7:15"].waitForExistence(timeout: 10))
         XCTAssertFalse(question.exists)
         XCTAssertEqual((try samplehost.control("/__fixture/state")["answers"] as? [[String: Any]])?.count, 1, "one tap sent one answer")
-        app.buttons["Hang up"].tap()
+        hangUp(app)
         let summary = app.staticTexts["phone.call.summary"]
         XCTAssertTrue(statusText(app, prefix: "Finished").waitForExistence(timeout: 20))
         XCTAssertTrue(waitUntil(20) { summary.exists && summary.label.contains("Corner Bistro booked a table for two at 7:15 under Alex.") })
@@ -606,7 +665,7 @@ extension SessionsTests {
         shot(app, "phone-6-chat-\(mode)")
         timer.tap()
         XCTAssertTrue(app.buttons["Hang up"].waitForExistence(timeout: 10))
-        app.buttons["Hang up"].tap()
+        hangUp(app)
         XCTAssertTrue(app.staticTexts["You hung up"].waitForExistence(timeout: 10))
         app.buttons["phone.close"].tap()
         try samplehost.control("/__fixture/scenario", ["name": "voicemail"])
@@ -644,7 +703,7 @@ extension SessionsTests {
                       "the question starts in view at the largest text size")
         XCTAssertTrue(large.buttons["Hang up"].isHittable, "the dock remains reachable at the largest text size")
         shot(large, "phone-accessibility-text")
-        large.buttons["Hang up"].tap()
+        hangUp(large)
         XCTAssertTrue(statusText(large, prefix: "Finished").waitForExistence(timeout: 30))
         try assertKeyOnlyInHeader(samplehost)
     }

@@ -95,6 +95,8 @@ nonisolated enum ShoppingCards {
         var qty: Int
         var price: Double?
         var image: URL?
+        var url: URL? = nil
+        var options: [Option] = []
     }
 
     struct Charge: Hashable, Sendable {
@@ -197,8 +199,9 @@ nonisolated enum ShoppingCards {
             guard let i = value.object else { return nil }
             let title = trimmed(i["title"])
             guard !title.isEmpty else { return nil }
+            let opts = pairs(i["options"], keys: ("name", "value"), max: maxOptions).map { Option(name: $0.0, value: $0.1) }
             return Item(title: title, detail: text(i["detail"], 120), qty: quantity(i["qty"]), price: amount(i["price"]),
-                        image: https(trimmed(i["image"])))
+                        image: https(trimmed(i["image"])), url: https(trimmed(i["url"])), options: opts)
         }
         guard !items.isEmpty else { return nil }
         let kept = Array(items.prefix(maxItems))
@@ -213,6 +216,98 @@ nonisolated enum ShoppingCards {
                      site: https(trimmed(o["site"])), items: kept, charges: Array(charges.prefix(maxCharges)), total: total,
                      currency: code, shipName: text(ship["name"], 80), shipAddress: text(ship["address"], 200),
                      payWith: text(o["pay_with"] ?? o["payWith"], 60), arrives: text(o["arrives"], 60), note: text(o["note"], 160))
+    }
+
+    /// Every product shown by `show_products` across `messages` (newest last).
+    static func catalogProducts(in messages: [ChatMessage]) -> [Product] {
+        var out: [Product] = []
+        for message in messages where message.role == .assistant {
+            for case .tool(let call) in message.parts {
+                if let shown = products(call) { out.append(contentsOf: shown.products) }
+            }
+        }
+        return out
+    }
+
+    /// The product page an order line opens, with the line's own options and price. In order: the shown product
+    /// with the line's link; the shown product of that name from that store (at the line's link, if it has one);
+    /// a page made from the line's own link; a shown product of that name when the order names no store (or the
+    /// product doesn't); the store's site.
+    /// A line with its own link never opens another product's page, and a name alone never crosses to another
+    /// store: "USB-C cable" from one shop is not the "USB-C cable" another shop showed earlier.
+    static func product(for item: Item, in order: Order, matching history: [Product] = []) -> Product? {
+        let selectedOptions = parsedOptions(for: item)
+        if let url = item.url, let found = history.last(where: { $0.url == url }) {
+            return applying(selectedOptions, item: item, to: found)
+        }
+        func norm(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        let normTitle = norm(item.title), normStore = norm(order.store)
+        if !normTitle.isEmpty {
+            if let found = history.last(where: { norm($0.title) == normTitle && norm($0.store) == normStore }) {
+                // The same product from the same store: its pictures and reasons, at the line's own link if it has
+                // one (a link to the chosen colour, say).
+                var product = applying(selectedOptions, item: item, to: found)
+                if let url = item.url { product.url = url }
+                return product
+            }
+            if item.url == nil, let found = history.last(where: { norm($0.title) == normTitle && (normStore.isEmpty || norm($0.store).isEmpty) }) {
+                return applying(selectedOptions, item: item, to: found)
+            }
+        }
+        guard let url = item.url ?? order.site else { return nil }
+        return Product(
+            id: productId(title: item.title, store: order.store, url: url.absoluteString),
+            title: cut(item.title, 160),
+            store: order.store,
+            url: url,
+            price: item.price,
+            currency: order.currency,
+            was: nil,
+            images: item.image.map { [$0] } ?? [],
+            brand: "",
+            rating: nil,
+            reviews: nil,
+            badge: "",
+            stock: .inStock,
+            delivery: order.arrives,
+            why: [],
+            caution: [],
+            options: selectedOptions,
+            specs: [],
+            offers: []
+        )
+    }
+
+    /// Indices of items in `order` that can open a product page.
+    static func openableItemIndices(in order: Order, matching history: [Product]) -> Set<Int> {
+        var out: Set<Int> = []
+        for (i, item) in order.items.enumerated() where product(for: item, in: order, matching: history) != nil {
+            out.insert(i)
+        }
+        return out
+    }
+
+    private static func applying(_ options: [Option], item: Item, to base: Product) -> Product {
+        var copy = base
+        if !options.isEmpty { copy.options = options }
+        if let price = item.price { copy.price = price }
+        if let img = item.image, !copy.images.contains(img) { copy.images.insert(img, at: 0) }
+        return copy
+    }
+
+    /// Parses selected options from `item.options` or falls back to splitting `item.detail` ("Navy, M" / "Color: Navy, Size: M").
+    private static func parsedOptions(for item: Item) -> [Option] {
+        if !item.options.isEmpty { return item.options }
+        guard !item.detail.isEmpty else { return [] }
+        let parts = item.detail.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        return parts.prefix(maxOptions).enumerated().map { idx, part in
+            if let colon = part.firstIndex(of: ":") {
+                let k = String(part[..<colon]).trimmingCharacters(in: .whitespaces)
+                let v = String(part[part.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+                if !k.isEmpty && !v.isEmpty { return Option(name: k, value: v) }
+            }
+            return Option(name: idx == 0 ? "Option" : "Detail", value: part)
+        }
     }
 
     // MARK: Ids (both sides compute them)

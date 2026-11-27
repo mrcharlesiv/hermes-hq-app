@@ -54,6 +54,7 @@ tests=(-only-testing:HermesHQNativeUITests/SessionsTests/testPhoneCallsSimulated
   -only-testing:HermesHQNativeUITests/SessionsTests/testPhoneCallsTellTheAssistant -only-testing:HermesHQNativeUITests/SessionsTests/testPhoneCallsHistorySurvivesRelaunch
   -only-testing:HermesHQNativeUITests/SessionsTests/testPhoneCallsAgentProposal
   -only-testing:HermesHQNativeUITests/SessionsTests/testPhoneCallsRingingCancel
+  -only-testing:HermesHQNativeUITests/SessionsTests/testPhoneCallsHangUpTakesTwoTaps
   -only-testing:HermesHQNativeUITests/SessionsTests/testPhoneCallsDesignLight
   -only-testing:HermesHQNativeUITests/SessionsTests/testPhoneCallsDesignDark
   -only-testing:HermesHQNativeUITests/SessionsTests/testPhoneCallsLargeText)

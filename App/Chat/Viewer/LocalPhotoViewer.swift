@@ -82,10 +82,26 @@ final class LocalPhotoViewer: UIViewController, UIScrollViewDelegate {
         }
         share.accessibilityLabel = "Share"
         share.accessibilityIdentifier = "file.photo.share"
-        toolbarItems = [share, .flexibleSpace()]
+        let markup = UIBarButtonItem(image: UIImage(systemName: "pencil.tip.crop.circle"), primaryAction: UIAction { [weak self] _ in
+            self?.openMarkup()
+        })
+        markup.accessibilityLabel = "Mark Up"
+        markup.accessibilityIdentifier = "file.photo.markup"
+        toolbarItems = [share, .flexibleSpace(), markup]
         // Fling up or down to close: the photo follows the finger and flies off the way it's thrown.
         fling = PhotoFling(host: self, directions: [.up, .down], flyOff: true, content: { [weak self] in self?.scroll },
                            canBegin: { [weak self] in self?.isAtMinimumZoom ?? true })
+    }
+
+    private func openMarkup() {
+        guard let image = imageView.image else { return }
+        ImageMarkupController.present(image: image, mode: .apply(confirmTitle: "Share…"), from: self) { [weak self] edited, note in
+            guard let self else { return }
+            let items: [Any] = note.isEmpty ? [edited] : [edited, note]
+            let sheet = UIActivityViewController(activityItems: items, applicationActivities: nil)
+            sheet.popoverPresentationController?.barButtonItem = self.toolbarItems?.last
+            self.present(sheet, animated: true)
+        }
     }
 
     override func viewDidLayoutSubviews() {

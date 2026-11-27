@@ -1025,6 +1025,7 @@ nonisolated private struct Folder {
         var toolCall = ToolCall(id: tool.id, name: tool.name, title: title.isEmpty ? tool.name : title,
                                 argsText: DraftCards.wholeArgsText(name: tool.name, args: tool.args)   // [drafts]
                                     ?? ShoppingCards.wholeArgsText(name: tool.name, args: tool.args)   // [shopping]
+                                    ?? TravelCards.wholeArgsText(name: tool.name, args: tool.args)     // [travel]
                                     ?? AskCards.wholeArgsText(name: tool.name, args: tool.args)        // [asks]
                                     ?? (tool.argsText.isEmpty ? nil : ToolArgs.boundedText(tool.args, raw: tool.argsText)),   // [activity]
                                 summary: summary, state: failed ? .failed : .done, durationSeconds: nil)

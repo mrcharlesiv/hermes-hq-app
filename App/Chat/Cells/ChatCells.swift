@@ -44,6 +44,8 @@ import UIKit
     func chatCellToggleReadAloud(rowId: String)
     /// [transcript] A table's expand button: the Table sheet (docs/spec/3x-transcript.md §3.4).
     func chatCellOpenTable(_ table: MarkdownTable)
+    /// [mermaid] A Mermaid diagram's expand tap: the Mermaid sheet with zoom and Copy PNG.
+    func chatCellOpenMermaid(_ diagram: MermaidDiagram)
     /// Your Tapback badge tapped: it comes off (with Message Reactions on).
     func chatCellRemoveReaction(rowId: String)
     /// Swipe to Reply: whether a bot's bubble can be replied to here, and the reply begun (a quote over the composer).
@@ -60,6 +62,7 @@ extension ChatCellDelegate {
     func chatCellShowAllSteps(rowId: String) {}
     func chatCellShowLiveSteps() {}
     func chatCellOpenTable(_ table: MarkdownTable) {}
+    func chatCellOpenMermaid(_ diagram: MermaidDiagram) {}
     func chatCellOpenPhoneResult(_ result: PhoneResultCard, sentAt: Date?) {}
     func chatCellOpenModelFallback(_ detail: ModelFallbackRow.Detail) {}
     func chatCellRunFallbackCommand(_ command: String) {}
@@ -716,6 +719,7 @@ final class ChatBubbleCell: ChatBaseCell, UIContextMenuInteractionDelegate {
                 self.delegate?.chatCellToggleCode(rowId: self.rowId, block: index)
             }
             v.onExpandTable = { [weak self] table in self?.delegate?.chatCellOpenTable(table) }   // [transcript] L309
+            v.onExpandMermaid = { [weak self] diagram in self?.delegate?.chatCellOpenMermaid(diagram) }
             v.onOpenLink = { [weak self] url in self?.delegate?.chatCellOpen(url: url) }           // [transcript] link chip
             bubble.insertSubview(v, belowSubview: timeLabel)
             blockViews.append(v)

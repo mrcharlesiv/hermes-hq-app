@@ -53,6 +53,11 @@ nonisolated enum PagesMarkdown {
             case .table(let table) where tableCards:
                 out.append(NSAttributedString(attachment: PreviewTableAttachment(table: table, style: style)))
             case .table(let table): out.append(lined(table))
+            case .mermaid(let diagram):
+                let code = NSAttributedString(string: diagram.source,
+                                              attributes: [.font: style.code, .foregroundColor: ChatPalette.codeText,
+                                                           .backgroundColor: ChatPalette.inlineCodeFill])
+                out.append(code)
             case .spacer, .linkChip, .pageCard, .phoneProposal: break
             case .media(let refs):
                 // Integration ([attachments] × pages): a reply's images and `MEDIA:` files read as their names here.

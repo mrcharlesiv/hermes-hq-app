@@ -39,6 +39,9 @@ nonisolated enum DraftCards {
         var app: String
         /// Who or where: "#finance", "dana@example.com". May be empty.
         var to: String
+        /// Optional Cc / Bcc recipients (email drafts; comma-joined if the tool passed an array).
+        var cc: String = ""
+        var bcc: String = ""
         var subject: String
         var body: String
         /// The account or address it's sent from, when the bot said (`from`, or "Email — from me@x.com" in `app`).
@@ -56,6 +59,8 @@ nonisolated enum DraftCards {
         var label: String
         var value: String
         var strong = false
+        /// A list of people (To, Cc, Bcc): the card shows it whole, broken between names, never in the middle of one.
+        var people = false
     }
 
     enum Answer: Hashable, Sendable {
@@ -93,7 +98,8 @@ nonisolated enum DraftCards {
         let app = trimmed(args["app"])
         guard !body.isEmpty, !app.isEmpty else { return nil }
         let to = trimmed(args["to"]), subject = trimmed(args["subject"])
-        var draft = Draft(id: id(app: app, to: to, subject: subject, body: body), app: app, to: to, subject: subject, body: body)
+        let cc = recipients(args["cc"]), bcc = recipients(args["bcc"])
+        var draft = Draft(id: id(app: app, to: to, subject: subject, body: body), app: app, to: to, cc: cc, bcc: bcc, subject: subject, body: body)
         let parts = split(app: app)
         draft.appName = parts.name
         draft.via = parts.via
@@ -101,6 +107,16 @@ nonisolated enum DraftCards {
         draft.from = from.isEmpty ? parts.from : from
         draft.thread = thread(args["thread"])
         return draft
+    }
+
+    /// Reads an optional recipient list (`cc` / `bcc`): a string, or an array of strings, as one line joined by
+    /// ", ". Line breaks inside it are separators too, so a list can never start a line of its own in the message
+    /// that goes back to the bot (where a line reads as a header).
+    private static func recipients(_ value: JSONValue?) -> String {
+        let raw = value?.array.map { $0.compactMap(\.string) } ?? [value?.string ?? ""]
+        return raw.flatMap { $0.split(whereSeparator: \.isNewline) }
+            .map { $0.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ",;"))) }
+            .filter { !$0.isEmpty }.joined(separator: ", ")
     }
 
     /// The `thread` argument as messages: objects of {from, when, text} (a bot's near names for them read too) or bare
@@ -265,7 +281,7 @@ nonisolated enum DraftCards {
         let text = message.parts.compactMap { if case .text(let t) = $0 { return t } else { return nil } }
             .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         if text.hasPrefix(markLead) || text.hasPrefix("[Hermes HQ ask ") || text.hasPrefix("[Hermes HQ question ")
-            || text.hasPrefix("[Hermes HQ order ") { return false }
+            || text.hasPrefix("[Hermes HQ order ") || text.hasPrefix(TravelCards.lead) { return false }
         return true
     }
 
@@ -361,11 +377,28 @@ nonisolated enum DraftCards {
     /// The lines under the header, in a letter's order; the ones the bot left out aren't there.
     static func fields(_ draft: Draft) -> [Field] {
         var out: [Field] = []
-        if !draft.to.isEmpty { out.append(Field(label: "To", value: draft.to)) }
+        if !draft.to.isEmpty { out.append(Field(label: "To", value: draft.to, people: true)) }
+        if !draft.cc.isEmpty { out.append(Field(label: "Cc", value: draft.cc, people: true)) }
+        if !draft.bcc.isEmpty { out.append(Field(label: "Bcc", value: draft.bcc, people: true)) }
         if !draft.from.isEmpty { out.append(Field(label: "From", value: draft.from)) }
         if !draft.via.isEmpty { out.append(Field(label: "Via", value: draft.via)) }
         if !draft.subject.isEmpty { out.append(Field(label: "Subject", value: draft.subject, strong: true)) }
         return out
+    }
+
+    /// Names of a list of people the card shows before it counts the rest.
+    static let peopleShown = 12
+    /// Characters of one name the card shows (a real address is far shorter; a bot's mistake can be any length).
+    static let peopleNameLength = 80
+
+    /// A list of people as the card shows it: every name while there are few, then the first `peopleShown` and how
+    /// many more there are, so a send is never approved with part of the list silently missing. It is short enough to
+    /// lay out whole (at most `peopleShown` + 1 names of `peopleNameLength`), so the card never cuts it.
+    static func shownPeople(_ value: String) -> String {
+        let names = value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+            .map { $0.count > peopleNameLength ? String($0.prefix(peopleNameLength)) + "…" : $0 }
+        guard names.count > peopleShown + 1 else { return names.joined(separator: ", ") }
+        return names.prefix(peopleShown).joined(separator: ", ") + ", and \(names.count - peopleShown) more"
     }
 
     // MARK: The answer
@@ -380,6 +413,8 @@ nonisolated enum DraftCards {
         var lines = ["[Hermes HQ draft \(draft.id): send]",
                      (edited ? editedLead : "") + (draft.to.isEmpty ? "Send this on \(name(draft))" : "Send this to \(place(draft))")
                          + (draft.from.isEmpty ? "" : " from \(draft.from)") + (draft.via.isEmpty ? "" : " (\(draft.via))") + written]
+        if !draft.cc.isEmpty { lines.append("Cc: \(draft.cc)") }
+        if !draft.bcc.isEmpty { lines.append("Bcc: \(draft.bcc)") }
         if !draft.subject.isEmpty { lines.append("Subject: \(draft.subject)") }
         return lines.joined(separator: "\n") + "\n\n" + final
     }

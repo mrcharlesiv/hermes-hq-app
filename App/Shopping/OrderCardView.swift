@@ -10,8 +10,15 @@ import UIKit
 // MARK: - Layout
 
 nonisolated struct OrderCardGeometry: @unchecked Sendable {
+    struct ItemHit: Sendable, Hashable {
+        var index: Int
+        var frame: CGRect
+        var title: String
+    }
     /// Cancel and Pay, in the row's coordinates (none once the card is settled).
     var buttons: [(ShoppingCards.OrderAnswer, CGRect)]
+    /// Tappable line items (multi-product or URL-backed order items) in row coordinates.
+    var items: [ItemHit] = []
     var payTitle: String
     var font: UIFont
     var stacked: Bool
@@ -56,25 +63,40 @@ nonisolated enum OrderCardLayout {
         let ink = settled ? ChatPalette.label2 : ChatPalette.label
 
         /// A line with words at the leading edge and an amount at the trailing edge; the words take one line.
-        func line(_ words: String, _ font: UIFont, _ color: UIColor, amount: String?, amountFont: UIFont, amountColor: UIColor) {
-            var right: CGFloat = 0
+        func line(_ words: String, _ font: UIFont, _ color: UIColor, amount: String?, amountFont: UIFont, amountColor: UIColor, trailingReserve: CGFloat = 0) {
+            var right: CGFloat = trailingReserve
             if let amount {
                 let a = TextKitLayout(PromptLayout.text(amount, amountFont, amountColor), width: nil)
-                right = a.size.width + 10
-                texts.append(PromptPlacedText(text: a, frame: CGRect(x: x + innerW - a.size.width, y: y, width: a.size.width, height: a.size.height)))
+                let ax = x + innerW - trailingReserve - a.size.width
+                right = a.size.width + 10 + trailingReserve
+                texts.append(PromptPlacedText(text: a, frame: CGRect(x: ax, y: y, width: a.size.width, height: a.size.height)))
             }
             let (w, _) = PromptLayout.clamped(PromptLayout.text(words, font, color), width: max(40, innerW - right), maxLines: 1)
             texts.append(PromptPlacedText(text: w, frame: CGRect(x: x, y: y, width: max(40, innerW - right), height: w.size.height)))
             y += max(w.size.height, ceil(font.lineHeight))
         }
 
-        for item in o.items {
+        var itemHits: [OrderCardGeometry.ItemHit] = []
+        let chevronSide: CGFloat = 12
+        for (index, item) in o.items.enumerated() {
+            let itemTop = y
+            let openable = card.openableItems.contains(index)
+            let reserve: CGFloat = openable ? (chevronSide + 6) : 0
             let price = item.price.map { ShoppingCards.price($0, currency: o.currency) }
-            line("\(item.qty) × \(item.title)", body, ink, amount: price, amountFont: amountFont, amountColor: ink)
+            line("\(item.qty) × \(item.title)", body, openable && !settled ? ChatPalette.tintText : ink,
+                 amount: price, amountFont: amountFont, amountColor: ink, trailingReserve: reserve)
             if !item.detail.isEmpty {
-                let (d, _) = PromptLayout.clamped(PromptLayout.text(item.detail, small, ChatPalette.label2), width: innerW, maxLines: 1)
-                texts.append(PromptPlacedText(text: d, frame: CGRect(x: x, y: y, width: innerW, height: d.size.height)))
+                let (d, _) = PromptLayout.clamped(PromptLayout.text(item.detail, small, ChatPalette.label2), width: max(40, innerW - reserve), maxLines: 1)
+                texts.append(PromptPlacedText(text: d, frame: CGRect(x: x, y: y, width: max(40, innerW - reserve), height: d.size.height)))
                 y += d.size.height
+            }
+            if openable {
+                let itemHeight = max(32, y - itemTop)
+                let midY = itemTop + itemHeight / 2
+                symbols.append(PromptSymbol(frame: CGRect(x: x + innerW - chevronSide, y: midY - chevronSide / 2, width: chevronSide, height: chevronSide),
+                                            name: "chevron.right", style: .quiet))
+                let hitFrame = CGRect(x: x - 6, y: itemTop - 3, width: innerW + 12, height: max(36, y - itemTop + 6))
+                itemHits.append(OrderCardGeometry.ItemHit(index: index, frame: hitFrame, title: item.title))
             }
             y += 4
             spoken.append(["\(item.qty) \(item.title)", item.detail, price ?? ""].filter { !$0.isEmpty }.joined(separator: ", "))
@@ -162,7 +184,7 @@ nonisolated enum OrderCardLayout {
         }
         let cardFrame = CGRect(x: side, y: top, width: cardW, height: ceil(y + padV - top))
         let layout = PromptRowLayout(cardFrame: cardFrame, texts: texts, approval: nil, symbols: symbols, rules: rules,
-                                     shopping: .order(OrderCardGeometry(buttons: placed, payTitle: pay, font: font, stacked: stacked)),
+                                     shopping: .order(OrderCardGeometry(buttons: placed, items: itemHits, payTitle: pay, font: font, stacked: stacked)),
                                      accessibility: spoken.joined(separator: ". "))
         return RowLayout(height: ceil(cardFrame.maxY + 6), content: .prompt(layout))
     }
@@ -172,11 +194,13 @@ nonisolated enum OrderCardLayout {
 
 // MARK: - View
 
-/// The order card's Cancel and Pay (the cell places it over the whole row; touches elsewhere pass through to the row).
+/// The order card's clickable line items, Cancel and Pay (the cell places it over the whole row; touches elsewhere pass through).
 final class OrderCardButtons: UIView {
     var onTap: ((ShoppingCards.OrderAnswer) -> Void)?
+    var onOpenItem: ((Int) -> Void)?
     private var buttons: [ShoppingCards.OrderAnswer: UIButton] = [:]
-    private(set) var ordered: [UIButton] = []
+    private var itemControls: [UIControl] = []
+    private(set) var ordered: [UIView] = []
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         let hit = super.hitTest(point, with: event)
@@ -185,7 +209,7 @@ final class OrderCardButtons: UIView {
 
     func configure(_ g: OrderCardGeometry) {
         var shown = Set<ShoppingCards.OrderAnswer>()
-        ordered = []
+        var actionButtons: [UIButton] = []
         for (kind, frame) in g.buttons {
             let button = buttons[kind] ?? make(kind)
             buttons[kind] = button
@@ -193,11 +217,46 @@ final class OrderCardButtons: UIView {
             button.frame = frame
             button.configuration = config(kind, title: OrderCardLayout.title(for: kind, pay: g.payTitle), font: g.font)
             shown.insert(kind)
-            ordered.append(button)
+            actionButtons.append(button)
         }
         for (kind, button) in buttons where !shown.contains(kind) { button.isHidden = true }
         // VoiceOver reads Pay first, as the stacked layout shows it.
-        if !g.stacked { ordered.reverse() }
+        if !g.stacked { actionButtons.reverse() }
+
+        while itemControls.count < g.items.count {
+            let control = makeItemControl()
+            itemControls.append(control)
+        }
+        var activeItems: [UIControl] = []
+        for (slot, hit) in g.items.enumerated() {
+            let control = itemControls[slot]
+            control.isHidden = false
+            control.frame = hit.frame
+            control.tag = hit.index
+            control.accessibilityLabel = "Open \(hit.title)"
+            control.accessibilityIdentifier = "order.item.\(hit.index)"
+            activeItems.append(control)
+        }
+        for slot in g.items.count..<itemControls.count { itemControls[slot].isHidden = true }
+        ordered = activeItems + actionButtons
+    }
+
+    private func makeItemControl() -> UIControl {
+        let control = UIControl()
+        control.layer.cornerRadius = 8
+        control.layer.cornerCurve = .continuous
+        control.isAccessibilityElement = true
+        control.accessibilityTraits = .button
+        control.addTarget(self, action: #selector(itemTapped(_:)), for: .touchUpInside)
+        addSubview(control)
+        #if targetEnvironment(macCatalyst)
+        PointerEffects.surface(control)
+        #endif
+        return control
+    }
+
+    @objc private func itemTapped(_ sender: UIControl) {
+        onOpenItem?(sender.tag)
     }
 
     private func make(_ kind: ShoppingCards.OrderAnswer) -> UIButton {

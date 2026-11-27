@@ -235,7 +235,7 @@ final class ChatQueueCard: UIView {
             // [drafts] A draft card's answer waits as its short words ("Send it"), as its bubble will read.
             // [voice record] A voice chat's words waiting behind a reply read as their line will ("Voice Chat · 4:12").
             if let record = VoiceChatRecord.parse(item.text) { return (record.title, true) }
-            let words = DraftCards.bubbleWords(item.text) ?? ShoppingCards.bubbleWords(item.text) ?? AskCards.bubbleWords(item.text)   // [asks]
+            let words = DraftCards.bubbleWords(item.text) ?? ShoppingCards.bubbleWords(item.text) ?? TravelCards.bubbleWords(item.text) ?? AskCards.bubbleWords(item.text)   // [travel] [asks]
                 ?? ClarifyLate.bubbleWords(item.text) ?? (item.display ?? item.text).replacingOccurrences(of: "\n", with: " ")
             // Nothing at all to show (no words, nothing attached, no memo): the web's "Empty Message" (spec §15.3).
             if words.trimmingCharacters(in: .whitespaces).isEmpty, item.attachments.isEmpty, item.memo == nil {

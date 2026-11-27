@@ -195,13 +195,39 @@ extension CapabilitiesStore {
     /// §5.5-b: read the entry fresh, apply the rules, remove, add; one rollback when the add fails. All inside the
     /// bot's serial queue so no other write of this app lands in between.
     func saveToolRules(_ name: String, disabled: [String], discovered: [String], profile: String) async throws -> ToolRulesOutcome {
+        try await saveToolEntry(name, profile: profile) { old in
+            McpToolFilter.setDisabled(old, disabled: disabled, discovered: discovered)
+        }
+    }
+
+    /// Whether the add-on on this computer puts an approval in front of a tool set to ask (`toolPermissions` in its
+    /// status, hermes-hq-push 0.9.86). Without it the levels would be saved and do nothing, so the page offers
+    /// only on and off. False when the status can't be read.
+    func addOnEnforcesToolLevels() async -> Bool { await addOnToolLevels().enforced }
+
+    /// `enforced` as above; `asks` is false when that computer's Hermes is too old to ask, so a tool set to ask is
+    /// refused there until Hermes is updated (`PushPolicy.toolPermissionsAsk`).
+    func addOnToolLevels() async -> (enforced: Bool, asks: Bool) {
+        guard let data = try? await PagesREST.send(client, "GET", PushPolicy.route + "/status", timeout: 15),
+              let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return (false, true) }
+        return (PushPolicy.toolPermissions(body), PushPolicy.toolPermissionsAsk(body))
+    }
+
+    /// Saves granular per-tool connector permissions (Always allow / Auto-review / Needs approval / Blocked) atomically.
+    func saveToolPolicies(_ name: String, permissions: [String: McpToolPermission], discovered: [String], profile: String) async throws -> ToolRulesOutcome {
+        try await saveToolEntry(name, profile: profile) { old in
+            McpToolFilter.setPermissions(old, permissions: permissions, discovered: discovered)
+        }
+    }
+
+    private func saveToolEntry(_ name: String, profile: String, transform: @Sendable @escaping (JSONValue) -> JSONValue) async throws -> ToolRulesOutcome {
         try refuse("Couldn’t Save")
         return try await serial(profile) { [self, client] in
             guard let old = try await mcpEntry(name, profile: profile) else { return .gone }
             guard !McpToolFilter.looksRedacted(old) else {
                 throw BotWriteError(title: "Couldn’t Save", reason: "This connector’s tool list can be changed on \(HostWord.phrase).")
             }
-            let new = McpToolFilter.setDisabled(old, disabled: disabled, discovered: discovered)
+            let new = transform(old)
             if new == old { return .unchanged }
             // Kept until the connector is known to be back, so a save cut off between the two calls is repaired on
             // the next Connectors read (`recoverConnectors`).

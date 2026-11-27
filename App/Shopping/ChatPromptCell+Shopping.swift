@@ -85,6 +85,10 @@ extension ChatPromptCell {
             guard let self, let row = self.shoppingViews.orderRow, row.state == .waiting else { return }
             self.handler?.orderCard(row, tapped: answer)
         }
+        buttons.onOpenItem = { [weak self] index in
+            guard let self, let row = self.shoppingViews.orderRow else { return }
+            self.handler?.orderCard(row, openedItem: index)
+        }
         contentView.addSubview(buttons)
         shoppingViews.orderButtons = buttons
         return buttons

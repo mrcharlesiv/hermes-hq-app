@@ -12,6 +12,9 @@ final class MediaViewerController: UIViewController, UIPageViewControllerDataSou
     private var chromeHidden = false
     private var saveItem: UIBarButtonItem!
     private var shareItem: UIBarButtonItem!
+    private var markupItem: UIBarButtonItem?
+    private let onMarkup: ((UIImage, String) -> Void)?
+    private let markupMode: ImageMarkupController.Mode
     private var restoreSave: DispatchWorkItem?
     /// [mac] Previous / next at the sides (round 2 #38); ← and → page everywhere.
     private var arrows: PhotoPagerArrows?
@@ -19,9 +22,13 @@ final class MediaViewerController: UIViewController, UIPageViewControllerDataSou
     private var fling: PhotoFling?
 
     /// Presents the viewer over `presenter`, zooming from `source(index)` (nil → a plain cover).
-    static func present(from presenter: UIViewController, items: [MediaItem], index: Int, source: @escaping (Int) -> UIView?) {
+    static func present(from presenter: UIViewController, items: [MediaItem], index: Int,
+                        markupMode: ImageMarkupController.Mode = .sendToChat,
+                        onMarkup: ((UIImage, String) -> Void)? = nil,
+                        source: @escaping (Int) -> UIView?) {
         guard !items.isEmpty else { return }
-        let viewer = MediaViewerController(items: items, index: min(max(0, index), items.count - 1))
+        let viewer = MediaViewerController(items: items, index: min(max(0, index), items.count - 1),
+                                           markupMode: markupMode, onMarkup: onMarkup)
         let nav = UINavigationController(rootViewController: viewer)
         nav.modalPresentationStyle = .fullScreen
         nav.overrideUserInterfaceStyle = .dark          // bars and title read on the black page
@@ -43,9 +50,12 @@ final class MediaViewerController: UIViewController, UIPageViewControllerDataSou
         presenter.present(nav, animated: true)
     }
 
-    init(items: [MediaItem], index: Int) {
+    init(items: [MediaItem], index: Int, markupMode: ImageMarkupController.Mode = .sendToChat,
+         onMarkup: ((UIImage, String) -> Void)? = nil) {
         self.items = items
         self.index = index
+        self.markupMode = markupMode
+        self.onMarkup = onMarkup
         pages = UIPageViewController(transitionStyle: .scroll, navigationOrientation: .horizontal,
                                      options: [.interPageSpacing: 12])
         super.init(nibName: nil, bundle: nil)
@@ -79,7 +89,11 @@ final class MediaViewerController: UIViewController, UIPageViewControllerDataSou
         saveItem = UIBarButtonItem(image: UIImage(systemName: "square.and.arrow.down"), primaryAction: UIAction { [weak self] _ in self?.save() })
         saveItem.accessibilityLabel = "Save"
         saveItem.accessibilityIdentifier = "viewer.save"
-        toolbarItems = [shareItem, .flexibleSpace(), saveItem]
+        let item = UIBarButtonItem(image: UIImage(systemName: "pencil.tip.crop.circle"), primaryAction: UIAction { [weak self] _ in self?.openMarkup() })
+        item.accessibilityLabel = "Mark Up"
+        item.accessibilityIdentifier = "viewer.markup"
+        markupItem = item
+        rebuildToolbar()
         if items.count > 1 { arrows = PhotoPagerArrows(in: view, identifier: "viewer") { [weak self] in self?.step(forward: $0) } }
         fling = PhotoFling(host: self, directions: .up, flyOff: false, content: { [weak self] in self?.pages.view },
                            canBegin: { [weak self] in self?.currentPage?.isAtMinimumZoom ?? true })
@@ -173,6 +187,33 @@ final class MediaViewerController: UIViewController, UIPageViewControllerDataSou
 
     // MARK: Share / Save (spec §9.4, §9.5)
 
+    private func rebuildToolbar() {
+        if let markupItem {
+            toolbarItems = [shareItem, .flexibleSpace(), markupItem, .flexibleSpace(), saveItem]
+        } else {
+            toolbarItems = [shareItem, .flexibleSpace(), saveItem]
+        }
+    }
+
+    private func openMarkup() {
+        guard let image = currentPage?.loadedImage else { return }
+        if let onMarkup {
+            ImageMarkupController.present(image: image, mode: markupMode, from: self) { [weak self] edited, prompt in
+                guard let self else { return }
+                self.dismiss(animated: true) {
+                    onMarkup(edited, prompt)
+                }
+            }
+        } else {
+            ImageMarkupController.present(image: image, mode: .apply(confirmTitle: "Share"), from: self) { [weak self] edited, _ in
+                guard let self else { return }
+                let sheet = UIActivityViewController(activityItems: [edited], applicationActivities: nil)
+                sheet.popoverPresentationController?.barButtonItem = self.markupItem
+                self.present(sheet, animated: true)
+            }
+        }
+    }
+
     /// "Saved" with a checkmark for 1.8 s (a new item, so the bar and VoiceOver both pick the change up).
     private func showSaved(_ saved: Bool) {
         let item = UIBarButtonItem(image: UIImage(systemName: saved ? "checkmark" : "square.and.arrow.down"),
@@ -180,7 +221,7 @@ final class MediaViewerController: UIViewController, UIPageViewControllerDataSou
         item.accessibilityLabel = saved ? "Saved" : "Save"
         item.accessibilityIdentifier = "viewer.save"
         saveItem = item
-        toolbarItems = [shareItem, .flexibleSpace(), item]
+        rebuildToolbar()
     }
 
     private func share() {
@@ -237,6 +278,7 @@ final class MediaPageController: UIViewController, UIScrollViewDelegate {
     isolated deinit { loadTask?.cancel() }
 
     var isAtMinimumZoom: Bool { scroll.zoomScale <= scroll.minimumZoomScale + 0.01 }
+    var loadedImage: UIImage? { imageView.image }
 
     override func viewDidLoad() {
         super.viewDidLoad()

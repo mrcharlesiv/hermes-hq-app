@@ -80,7 +80,7 @@ struct DraftCardsTests {
     @Test func theHeadingNamesWhereItGoes() throws {
         let slack = try #require(DraftCards.draft(call()))
         #expect(DraftCards.heading(slack) == "Slack draft")
-        #expect(DraftCards.fields(slack) == [DraftCards.Field(label: "To", value: "#finance")])
+        #expect(DraftCards.fields(slack) == [DraftCards.Field(label: "To", value: "#finance", people: true)])
         #expect(DraftCards.fields(try #require(DraftCards.draft(call(to: nil)))).isEmpty)
     }
 

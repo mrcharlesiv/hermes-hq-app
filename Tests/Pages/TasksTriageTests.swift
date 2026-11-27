@@ -440,4 +440,26 @@ struct TasksTriageTests {
         #expect(promoted["tags"]?.array?.compactMap(\.string) == ["friends"])
         #expect(store.task("t_1")?.steps.contains(where: { $0.id == "s2" }) == false)
     }
+
+    /// A live approval/vault/clarify prompt arriving on a task's chat rolls the covering brief up immediately, unless editing.
+    @Test func revealLivePromptTucksEmbeddedBriefUnlessEditing() {
+        let client = PagesFakeClient()
+        let store = TasksStore(api: TasksAPI(client: client), account: client.account, directory: nil)
+        let pages = TriageFakePages(client)
+        let context = MorePages.Context(services: FakeAppServices(), pages: pages, client: client, account: client.account,
+                                        makeChat: { _ in UIViewController() })
+        let model = TodoSheetModel(taskID: "t_live", store: store, context: context)
+        model.embedded = true
+        #expect(!model.tucked)
+
+        // While actively editing a brief field, leave the brief alone.
+        model.editingTitle = true
+        model.revealLivePrompt()
+        #expect(!model.tucked)
+
+        // Once not editing, a live prompt tucks the brief immediately to uncover the chat's prompt card.
+        model.editingTitle = false
+        model.revealLivePrompt()
+        #expect(model.tucked && model.tuckReason == TodoSheetModel.TuckReason.alert)
+    }
 }

@@ -63,6 +63,7 @@ final class TaskBriefHost: UIHostingController<HQScaledRoot<TaskBriefRoot>> {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        if model.chat?.promptsUI?.prompts.needsInput != nil { model.revealLivePrompt() }
         onKeysChanged?()
     }
 
@@ -156,6 +157,12 @@ enum TaskPage {
         }
         sheet.onBriefLayoutChange = { apply(true) }
         chat.onShelfRoom = { [weak sheet] room in sheet?.shelfRoom = room }
+        chat.onLivePromptWaiting = { [weak sheet] in sheet?.revealLivePrompt() }
+        chat.onBrowserChipChanged = { [weak sheet, weak chat] in
+            guard let sheet, let chat else { return }
+            let ask = chat.activity.browserChip.flatMap { $0.asking ? $0.words : nil }
+            if sheet.liveBrowserAsk != ask { sheet.liveBrowserAsk = ask }
+        }
         sheet.onTuckChange = { apply(true) }
         chat.suppressesTalkTip = true
         chat.onEngage = { [weak sheet] engagement in
@@ -215,6 +222,11 @@ enum TaskPage {
         sheet.chat = chat
         sheet.keptChat = chat
         sheet.observeChat(chatModel)
+        chat.onBrowserChipChanged = { [weak sheet, weak chat] in
+            guard let sheet, let chat else { return }
+            let ask = chat.activity.browserChip.flatMap { $0.asking ? $0.words : nil }
+            if sheet.liveBrowserAsk != ask { sheet.liveBrowserAsk = ask }
+        }
         chat.suppressesTalkTip = true
         chat.view.accessibilityIdentifier = "task.chat-pane"
         chat.menus?.isTaskChat = true

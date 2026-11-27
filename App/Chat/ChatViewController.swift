@@ -209,6 +209,11 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     /// [tasks-first] The room the activity shelf takes over the box it stands on (0 with no chips): a task's or goal's
     /// view leaves that much at its foot so its last lines scroll clear of the chips.
     var onShelfRoom: ((CGFloat) -> Void)? { didSet { onShelfRoom?(activity.lastShelfRoom) } }   // chips already up count
+    /// [tasks-first] A live approval, clarify, or vault prompt is waiting in this chat: a covering task brief rolls up
+    /// so timed confirmations are never trapped out of sight.
+    var onLivePromptWaiting: (() -> Void)?
+    /// [tasks-first] The browser chip changed (e.g. `browser_ask_user` started or cleared).
+    var onBrowserChipChanged: (() -> Void)? { didSet { onBrowserChipChanged?() } }
     /// [tasks-first] While `transcriptCovered`: the height of the cover's own message box at the composer's foot
     /// (`TaskMessageLine`), which the shelf stands on in place of the hidden composer; 0 when it shows none.
     var coverFootHeight: CGFloat = 0 {
@@ -4891,6 +4896,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         if let last = session.messages.last?.id { pendingTouched.append(last) } else { pendingNewest = true }
         updateVerificationCodeBanner()
         scheduleFlush()
+        if promptsUI?.prompts.needsInput != nil { onLivePromptWaiting?() }
     }
 
     /// Shows or clears the inline `.oneTimeCode` AutoFill bar above the composer when the agent's latest message asks

@@ -1043,11 +1043,16 @@ struct TaskTeammate: View {
         }()
         let answer = model.sentAnswer.flatMap { running || $0.rev == task.rev ? $0.words : nil }
         let choices = asks ? Array(task.choices.prefix(3)) : []
+        let actionLinks = asks ? TodoViews.askActionLinks(for: task) : []
+        let browserAsk = model.liveBrowserAsk
         Group {
             switch part {
             case .ask:
-                if asks, words != nil || question != nil || !choices.isEmpty {
-                    askCard(name: name, profile: profile, words: words, question: question, choices: choices)
+                if let browserAsk {
+                    browserAskCard(name: name, profile: profile, words: browserAsk)
+                }
+                if asks, words != nil || question != nil || !choices.isEmpty || !actionLinks.isEmpty {
+                    askCard(name: name, profile: profile, words: words, question: question, choices: choices, links: actionLinks)
                 }
             case .foot:
                 foot(name: name, profile: profile, running: running, asks: asks, words: words, question: question,
@@ -1056,8 +1061,47 @@ struct TaskTeammate: View {
         }
     }
 
+    /// Live `browser_ask_user` handoff surfaced at the top of the task even while the bot's turn is still running.
+    private func browserAskCard(name: String, profile: String, words: String) -> some View {
+        let ink = TodoInk.color(.needsYou)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 7) {
+                HeadImage(raw: model.head(profile), profile: profile, size: 18).frame(width: 18, height: 18).accessibilityHidden(true)
+                Text("\(name) needs you in its browser")
+                    .font(Font.hq(.footnote).weight(.semibold)).foregroundStyle(ink)
+                Spacer(minLength: 0)
+            }
+            .lineLimit(1)
+            Text(words)
+                .font(Font.hq(.callout).weight(.semibold))
+                .foregroundStyle(Color.hqLabel)
+                .fixedSize(horizontal: false, vertical: true)
+            Button { model.openWatchBrowser() } label: {
+                Label("Watch Browser", systemImage: "safari")
+                    .font(Font.hq(.subheadline).weight(.semibold))
+                    .foregroundStyle(Color.hqOnTint)
+                    .padding(.horizontal, 12)
+                    .frame(maxWidth: .infinity, minHeight: 40)
+                    .background(Capsule().fill(Color.hqTint))
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("task.browser-ask.open")
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: Theme.isDesktop ? DesktopRows.radius : 14, style: .continuous)
+                .fill(ink.opacity(0.12))
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 6).padding(.bottom, 10)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("task.browser-ask")
+    }
+
     /// The bot's question, set off as one soft card in its state's colour, under the who row.
-    private func askCard(name: String, profile: String, words: String?, question: String?, choices: [String]) -> some View {
+    private func askCard(name: String, profile: String, words: String?, question: String?, choices: [String], links: [TodoMade]) -> some View {
         let tone: TodoTone = task.status == "needs_you" ? .needsYou : .ready
         let ink = TodoInk.color(tone)
         let since = TodoWords.stateTime(task, now: Date())
@@ -1077,6 +1121,32 @@ struct TaskTeammate: View {
                     .foregroundStyle(Color.hqLabel)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("task.question")
+            }
+            if !links.isEmpty {
+                VStack(spacing: 6) {
+                    ForEach(Array(links.enumerated()), id: \.element.id) { index, link in
+                        let primary = choices.isEmpty && index == 0
+                        Button { model.open(link) } label: {
+                            HStack(spacing: 6) {
+                                Text(TaskPlainView.fileName(link))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.85)
+                                Image(systemName: "arrow.up.right")
+                                    .font(Font.hq(.caption).weight(.semibold))
+                                    .accessibilityHidden(true)
+                            }
+                            .font(Font.hq(.subheadline).weight(primary ? .semibold : .medium))
+                            .foregroundStyle(primary ? Color.hqOnTint : Color.hqTintText)
+                            .padding(.horizontal, 12)
+                            .frame(maxWidth: .infinity, minHeight: 40)
+                            .background(Capsule().fill(primary ? Color.hqTint : Color(uiColor: TaskPanel.fill)))
+                            .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("task.ask.link.\(index)")
+                    }
+                }
+                .padding(.top, 2)
             }
             if !choices.isEmpty { answers(choices, name: name).padding(.top, 2) }
         }

@@ -97,6 +97,9 @@ final class TodoSheetModel {
     /// Observable mirror of `chat?.session.isRunning` + message updates (replaces 1 Hz `TimelineView` polling).
     private(set) var chatRunning = false
     private(set) var chatVersion = 0
+    /// Live `browser_ask_user` prompt from the task's chat (`BrowserChatCard`), surfaced in the top ask card even
+    /// while the bot's turn is still running.
+    var liveBrowserAsk: String? = nil
     /// Steps whose long title is shown whole (a tap on the title).
     var openSteps: Set<String> = []
     @ObservationIgnored private var noticeWork: DispatchWorkItem?
@@ -197,6 +200,20 @@ final class TodoSheetModel {
         tuck(.chat)
         // [notify] Owner 2026-11-19: "New reply ›" opens on that reply's top, not its last lines.
         if unread { chat?.landOnNewestReply() }
+    }
+
+    /// A live approval, clarify, or vault prompt arrived on this task's chat while the brief was covering it:
+    /// roll the brief up immediately so timed confirmation cards are never hidden behind the task panel.
+    func revealLivePrompt() {
+        guard embedded, !tucked, !editingBrief else { return }
+        tuck(.alert)
+        chat?.scrollToBottom(animated: true)
+    }
+
+    /// Opens Watch Browser for this task's chat when the bot asks for browser takeover.
+    func openWatchBrowser() {
+        PagesHaptics.selection()
+        chat?.activity.onBrowserChip?()
     }
 
     /// The bar's tap, or the title's: the whole brief again.

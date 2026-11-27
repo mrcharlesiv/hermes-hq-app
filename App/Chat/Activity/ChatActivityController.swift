@@ -112,7 +112,12 @@ import UIKit
     private var stepsSheetMessage: String??
     private weak var openStepDetail: StepDetailViewController?
     /// [browser] The browser chip's words (App/Browser/BrowserChatCard.swift), nil while the bot isn't browsing.
-    var browserChip: (words: String, asking: Bool)? { didSet { if installed { updateShelf(animated: true) } } }
+    var browserChip: (words: String, asking: Bool)? {
+        didSet {
+            if installed { updateShelf(animated: true) }
+            chat.onBrowserChipChanged?()
+        }
+    }
     /// [browser] The chip was tapped (opens Watch Browser).
     var onBrowserChip: (() -> Void)?
     /// [browser] The chat came on screen / left it.

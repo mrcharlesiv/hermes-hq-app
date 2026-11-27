@@ -975,6 +975,34 @@ struct TaskWorkspaceTests {
         guard case .text(let shown)? = notes.first?.parts.first else { Issue.record("no text"); return }
         #expect(shown == "Any news?")
     }
+
+    /// External approval/handoff links attached by a bot surface directly inside the ask card when `needs_you`.
+    @Test func askActionLinksSurfaceBotLinksOnNeedsYou() {
+        let approveLink: JSONValue = .object(["id": "l1", "title": "Approve checkout at ExamplePay", "kind": "link",
+                                              "ref": "https://pay.example.com/approve/req_1"])
+        let userLink: JSONValue = .object(["id": "l2", "title": "My reference", "kind": "link",
+                                           "ref": "https://example.com/ref", "by": "you"])
+        let noteItem: JSONValue = .object(["id": "n1", "title": "Details", "kind": "note", "ref": "Summary"])
+
+        let noChoices = task(["status": "needs_you", "status_note": "Approve the request in ExamplePay.",
+                              "made": [noteItem, userLink, approveLink]])
+        #expect(TodoViews.askActionLinks(for: noChoices).map(\.id) == ["l1"])
+
+        // When choices are present, only surface a bot link relevant to the question/summary.
+        let withChoices = task(["status": "needs_you", "status_note": "Approve the request in ExamplePay.",
+                                "choices": ["Done", "Hold off"], "made": [approveLink]])
+        #expect(TodoViews.askActionLinks(for: withChoices).map(\.id) == ["l1"])
+
+        let unrelatedChoices = task(["status": "needs_you", "status_note": "Pick Tuesday or Wednesday?",
+                                     "choices": ["Tuesday", "Wednesday"], "made": [approveLink]])
+        #expect(TodoViews.askActionLinks(for: unrelatedChoices).isEmpty)
+
+        // Ready / done tasks never promote links into an ask card.
+        let ready = task(["status": "ready", "made": [approveLink]])
+        #expect(TodoViews.askActionLinks(for: ready).isEmpty)
+        let done = task(["status": "done", "made": [approveLink]])
+        #expect(TodoViews.askActionLinks(for: done).isEmpty)
+    }
 }
 
 // MARK: - The brief's one move and its words (Pinned Task step 1, 2026-11-07)

@@ -282,7 +282,10 @@ nonisolated struct BrowserPacing: Sendable, Equatable {
         work = Task { [weak self] in
             guard let self else { return }
             do {
-                let task = try await self.service.sockets.pluginSocket(path: path, query: [URLQueryItem(name: "profile", value: self.profile)])
+                // Never pass `?profile=` on `/sessions/{id}/watch`: the watch stream routes through the launch
+                // profile's in-process browser plugin (just like `/activity`), whereas a secondary `?profile=` triggers
+                // Hermes's plugin host socket refusal (HTTP 501).
+                let task = try await self.service.sockets.pluginSocket(path: path, query: [])
                 guard dial == self.dials else { task.cancel(with: .normalClosure, reason: nil); return }
                 let socket = BrowserSocket<BrowserServerMessage>(task: task, parse: BrowserServerMessage.parse)
                 self.socket = socket

@@ -11,11 +11,13 @@ import UIKit
 nonisolated final class CountingSockets: GatewayPluginSockets, @unchecked Sendable {
     private let lock = NSLock()
     private var dialled: [String] = []
+    private var dialledQueries: [[URLQueryItem]] = []
     private var hanging: Bool
 
     init(hang: Bool = false) { hanging = hang }
 
     var paths: [String] { lock.withLock { dialled } }
+    var queries: [[URLQueryItem]] { lock.withLock { dialledQueries } }
     var count: Int { lock.withLock { dialled.count } }
     var hang: Bool {
         get { lock.withLock { hanging } }
@@ -23,7 +25,11 @@ nonisolated final class CountingSockets: GatewayPluginSockets, @unchecked Sendab
     }
 
     func pluginSocket(path: String, query: [URLQueryItem]) async throws -> URLSessionWebSocketTask {
-        let wait = lock.withLock { dialled.append(path); return hanging }
+        let wait = lock.withLock {
+            dialled.append(path)
+            dialledQueries.append(query)
+            return hanging
+        }
         if wait { try await Task.sleep(for: .seconds(600)) }
         throw URLError(.notConnectedToInternet)
     }
@@ -191,6 +197,20 @@ nonisolated final class Flag: @unchecked Sendable {
         #expect(one.debugDials == dials.0 && two.debugDials == dials.1)
         try? await Task.sleep(for: .milliseconds(150))
         #expect(sockets.count == 4)
+    }
+
+    /// Secondary-profile watch sockets must not pass `?profile=`: Hermes's secondary-profile plugin host refuses
+    /// plugin websockets with HTTP 501, while the launch profile's browser plugin resolves every session by `rowId`.
+    @Test func secondaryProfileWatchSocketOmitsProfileQueryParam() async {
+        let sockets = CountingSockets()
+        let (service, _) = service(sockets: sockets)
+        let viewer = BrowserWatchSession(service: service, rowId: "0123456789abcdef01234569", base: BrowserWire.plugin,
+                                         profile: "ivy", name: "Ivy")
+        viewer.setShown(true)
+        #expect(await BotsTest.waitUntil { sockets.count == 1 })
+        #expect(sockets.paths.first?.hasSuffix("/sessions/0123456789abcdef01234569/watch") == true)
+        #expect(sockets.queries.first?.contains(where: { $0.name == "profile" }) == false)
+        viewer.stop()
     }
 
     // MARK: The list socket (the Bots rows' "Browsing …" line)

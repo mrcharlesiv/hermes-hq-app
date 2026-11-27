@@ -122,6 +122,29 @@ nonisolated enum TodoViews {
     /// A bot finished its part, or has a question: the task waits on you.
     static func waitsOnYou(_ task: TodoTask) -> Bool { task.status == "ready" || task.status == "needs_you" }
 
+    /// Bot-authored links from `made` that should be surfaced directly as action buttons inside the top ask card
+    /// when a task is waiting on you (`needs_you`), so approval or handoff links are not buried below Notes and Steps.
+    static func askActionLinks(for task: TodoTask) -> [TodoMade] {
+        guard !task.isDone, task.status == "needs_you" else { return [] }
+        let links = task.made.reversed().filter { item in
+            !item.isYours && item.kind == "link" && TodoMade.linkURL(item.ref) != nil
+        }
+        guard !links.isEmpty else { return [] }
+        if task.choices.isEmpty { return Array(links.prefix(2)) }
+        let context = [task.statusNote, task.page?.summary ?? ""].joined(separator: " ").lowercased()
+        guard !context.isEmpty else { return [] }
+        let matched = links.filter { item in
+            let title = item.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if title.count >= 4, context.contains(title) { return true }
+            if let host = TodoMade.linkURL(item.ref)?.host?.lowercased() {
+                let parts = host.split(separator: ".").map(String.init).filter { $0.count >= 4 && $0 != "www" && $0 != "app" && $0 != "com" }
+                if parts.contains(where: { context.contains($0) }) { return true }
+            }
+            return false
+        }
+        return Array(matched.prefix(1))
+    }
+
     /// A task a bot does by itself.
     static func botsOwn(_ task: TodoTask) -> Bool { task.whoKind == .bot }
 

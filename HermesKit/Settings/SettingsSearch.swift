@@ -96,6 +96,7 @@ nonisolated enum SettingsSearch {
         // [appearance-groups] A row of Appearance's Look group (it headed Theme).
         .init(id: "app:desktop-look", label: "Hermes Look", context: "Appearance", keywords: ["native", "look", "desktop look", "desktop app", "square corners", "flat"], target: .root("row:desktop-look")),
         .init(id: "app:high-contrast", label: "High Contrast", context: "Appearance", keywords: ["contrast", "borders", "crisp", "hermes look", "desktop look"], target: .root("row:high-contrast")),
+        .init(id: "app:desktop-radius", label: "Corners", context: "Appearance", keywords: ["border radius", "corner radius", "corners", "rounded", "boxy", "square", "hermes look", "desktop look"], target: .root("row:desktop-radius")),
     ] : [])
 
     private static let appRowsAlways: [SettingsSearchEntry] = [

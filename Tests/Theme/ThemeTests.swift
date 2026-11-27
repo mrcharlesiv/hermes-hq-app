@@ -1093,6 +1093,67 @@ private let allStates: [ThemeState] = SkinCatalog.all.flatMap { skin in
         #expect(suite.object(forKey: "hqn.theme.desktopCorners") == nil && store.load() == .default)
     }
 
+    /// [desktop-radius] Hermes Look app-wide corner radius: default 4 pt (stored as nothing), synced across devices,
+    /// proportionally scaled by role, and inherited by chat bubbles unless Chat Bubbles explicitly overrides it.
+    @Test func hermesLookCornerRadiusStoresScalesAndLinksToBubbles() {
+        let suite = defaults()
+        let store = ThemeStore(defaults: suite)
+        #expect(store.load().desktopRadius == 4)
+        #expect(SyncedSettingKeys.settings.contains(ThemeStore.Key.desktopRadius))
+
+        store.setDesktopRadius(12)
+        #expect(suite.integer(forKey: ThemeStore.Key.desktopRadius) == 12)
+        var state = store.load()
+        state.desktopLook = true
+        #expect(state.desktopRadius == 12)
+        #expect(state.appliedDesktopRadius == 12)
+        #expect(state.appliedDesktopCorners == 12, "chat bubbles inherit Hermes Corners when not overridden")
+        #expect(state.appliedBubbleCorners == 12)
+        #expect(state.layoutSignature != ThemeState(skinID: "nous", desktopLook: true).layoutSignature)
+
+        // Role scaling preserves exact legacy defaults at 4 pt and scales proportionally across 0...20 pt.
+        #expect(HQShape.desktopRadius(.inline, base: 4) == 2)
+        #expect(HQShape.desktopRadius(.control, base: 4) == 3)
+        #expect(HQShape.desktopRadius(.card, base: 4) == 4)
+        #expect(HQShape.desktopRadius(.sheet, base: 4) == 8)
+        #expect(HQShape.desktopRadius(.card, base: 0) == 0 && HQShape.desktopRadius(.sheet, base: 0) == 0)
+        #expect(HQShape.desktopRadius(.inline, base: 12) == 6)
+        #expect(HQShape.desktopRadius(.control, base: 12) == 9)
+        #expect(HQShape.desktopRadius(.card, base: 12) == 12)
+        #expect(HQShape.desktopRadius(.sheet, base: 12) == 16)
+
+        ThemeTable.$testSet.withValue(ThemeResolver.resolve(state)) {
+            #expect(DesktopRows.radius == 12)
+            #expect(HQShape.radius(14, .card) == 12)
+            #expect(HQShape.radius(8, .card) == 8, "never rounder than the native standard")
+            #expect(ChatMetrics.bubbleRadius == 12)
+        }
+
+        // Overriding Chat Bubbles › Corners works even back to 4 pt while Hermes Corners is 12 pt, and resets to 12.
+        store.setBubbleCorners(4, desktop: true)
+        #expect(suite.object(forKey: ThemeStore.Key.desktopCorners) != nil)
+        var overridden = store.load()
+        overridden.desktopLook = true
+        #expect(overridden.appliedDesktopCorners == 4 && overridden.desktopRadius == 12)
+        store.setBubbleCorners(12, desktop: true)
+        #expect(suite.object(forKey: ThemeStore.Key.desktopCorners) == nil, "matching Hermes Corners clears the override")
+
+        // Clamping, garbage handling, and reset.
+        store.setDesktopRadius(99)
+        #expect(store.load().desktopRadius == 20)
+        store.setDesktopRadius(0)
+        #expect(store.load().desktopRadius == 0)
+        for bad: Any in [-1, 21, "12", Double.nan, Double.infinity] {
+            suite.set(bad, forKey: ThemeStore.Key.desktopRadius)
+            #expect(store.load().desktopRadius == 4, "\(bad)")
+        }
+        store.setDesktopRadius(4)
+        #expect(suite.object(forKey: ThemeStore.Key.desktopRadius) == nil)
+        store.setDesktopRadius(14)
+        store.reset()
+        #expect(suite.object(forKey: ThemeStore.Key.desktopRadius) == nil && store.load() == .default)
+    }
+
     @Test func theDesktopLooksTextBoxDefaultsToDesktopUnlessGlassIsPicked() {
         let suite = defaults()
         let store = ThemeStore(defaults: suite)

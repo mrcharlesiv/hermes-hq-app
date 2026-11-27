@@ -462,7 +462,7 @@ final class TalkBarView: UIView, ComposerRowDock, UIContextMenuInteractionDelega
             plan.strip = CGRect(x: -m.outset.left, y: 0, width: stripWidth, height: height)
             plan.notice = CGRect(x: lead, y: (height - textHeight) / 2, width: max(20, stripWidth - lead - trail), height: textHeight)
             plan.copy = copyShown ? CGRect(x: stripWidth - 4 - 32, y: (height - 32) / 2, width: 32, height: 32) : nil
-            plan.stripRadius = desktop ? HQShape.desktopRadius(.field) : min(16, height / 2)
+            plan.stripRadius = desktop ? min(HQShape.desktopRadius(.field), min(16, height / 2)) : min(16, height / 2)
             top = height + 8 + m.outset.top
         }
 
@@ -531,7 +531,7 @@ final class TalkBarView: UIView, ComposerRowDock, UIContextMenuInteractionDelega
                 plan.box = CGRect(x: -m.outset.left, y: top - m.outset.top, width: boxWidth, height: boxHeight)
             }
             let boxHeight = plan.box.height
-            plan.boxRadius = desktop ? HQShape.desktopRadius(.field) : boxHeight / 2
+            plan.boxRadius = desktop ? min(HQShape.desktopRadius(.field), boxHeight / 2) : boxHeight / 2
             plan.visual = CGRect(x: m.lead, y: (boxHeight - visualSize.height) / 2, width: visualSize.width, height: visualSize.height)
             plan.height = top + boxHeight - m.outset.top - m.outset.bottom
             return plan
@@ -557,7 +557,7 @@ final class TalkBarView: UIView, ComposerRowDock, UIContextMenuInteractionDelega
         let stackedHeight = rowTop + control + m.inset
         _ = row(y: rowTop, height: control)
         plan.box = CGRect(x: -m.outset.left, y: top - m.outset.top, width: boxWidth, height: stackedHeight)
-        plan.boxRadius = desktop ? HQShape.desktopRadius(.field) : control / 2 + m.inset
+        plan.boxRadius = desktop ? min(HQShape.desktopRadius(.field), control / 2 + m.inset) : control / 2 + m.inset
         plan.height = top + stackedHeight - m.outset.top - m.outset.bottom
         return plan
     }

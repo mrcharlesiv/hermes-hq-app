@@ -16,6 +16,7 @@ enum AppearanceRows {
     static let lightOrDark = "row:appearance"
     static let desktopLook = "row:desktop-look"
     static let highContrast = "row:high-contrast"
+    static let desktopRadius = "row:desktop-radius"
     static let uiScale = "row:ui-scale"
     static let density = "row:density"
     static let workingRing = "row:working-ring"
@@ -25,7 +26,7 @@ enum AppearanceRows {
     /// Whether Appearance draws `row` on this device (Thinking Bar lives in Appearance › Chats on both iOS and Mac).
     static func contains(_ row: String) -> Bool {
         switch row {
-        case lightOrDark, desktopLook, highContrast, uiScale, density, workingRing, topEdge, thinkingBar: true
+        case lightOrDark, desktopLook, highContrast, desktopRadius, uiScale, density, workingRing, topEdge, thinkingBar: true
         default: false
         }
     }
@@ -127,6 +128,7 @@ struct AppearanceSections: View {
         let parts = [
             AppearanceSetting.forcedBySkin.map { "\(state.skin.label) has only a \($0 == .dark ? "dark" : "light") look." },
             state.desktopLook ? ThemeContrast.switchNote(state, increaseContrast: increaseContrast) ?? ThemeSettingsView.contrastNote : nil,
+            state.desktopLook ? "Corners sets the border radius across Hermes Look (4 pt is the default)." : nil,
         ].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
@@ -151,6 +153,11 @@ struct AppearanceSections: View {
             themeRow(state)
             if state.desktopLook {
                 highContrastRow(state)
+                HermesCornersRow(stored: state.desktopRadius, symbol: "rectangle.roundedtop") { points in
+                    Theme.shared.setDesktopRadius(points)
+                    AppLog.trace("settings", "hermes corners \(points) pt")
+                }
+                .revealRow(AppearanceRows.desktopRadius, revealed)
             }
         } header: { header(.look) } footer: {
             if let note = lookNote(state) { HQSectionFooter { Text(note) } }
@@ -248,7 +255,7 @@ struct AppearanceSections: View {
     /// In the Desktop Look the page holds that look's own Corners and Text Box.
     private func chatBubblesRow(_ state: ThemeState) -> some View {
         NavRow(title: "Chat Bubbles", systemImage: "bubble.left.and.bubble.right",
-               value: state.desktopLook ? "\(state.desktopCorners) pt" : BubbleStyles.shown(state.bubbleStyle).title) {
+               value: state.desktopLook ? "\(state.appliedDesktopCorners) pt" : BubbleStyles.shown(state.bubbleStyle).title) {
             SettingsNavigator.openRoot("chat-bubbles", router: router)
         }
         .accessibilityIdentifier("settings.chat-bubbles-row")
@@ -408,8 +415,9 @@ private struct LookModePicker: View {
     }
 
     private func card(title: String, isDesktop: Bool, selected: Bool) -> some View {
-        let corner: CGFloat = desktop ? 4 : 12
-        let miniCorner: CGFloat = isDesktop ? 4 : 9
+        let corner: CGFloat = desktop ? HQShape.radius(12, .card) : 12
+        let miniCorner: CGFloat = isDesktop ? min(9, HQShape.desktopRadius(.card)) : 9
+        let miniBubble: CGFloat = min(5.5, HQShape.desktopRadius(.control))
         return Button { pick(isDesktop) } label: {
             VStack(alignment: .leading, spacing: 8) {
                 VStack(alignment: .leading, spacing: 6) {
@@ -419,9 +427,9 @@ private struct LookModePicker: View {
                             .frame(width: 68, height: 6)
                         HStack {
                             Spacer(minLength: 0)
-                            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                            RoundedRectangle(cornerRadius: miniBubble, style: .continuous)
                                 .fill(Color.hqTint.opacity(0.18))
-                                .overlay(RoundedRectangle(cornerRadius: 3, style: .continuous).strokeBorder(Color.hqTintText, lineWidth: 1))
+                                .overlay(RoundedRectangle(cornerRadius: miniBubble, style: .continuous).strokeBorder(Color.hqTintText, lineWidth: 1))
                                 .frame(width: 48, height: 11)
                         }
                     } else {
@@ -576,6 +584,135 @@ struct TopEdgeRow: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("theme.topEdge")
+    }
+}
+
+/// [desktop-radius] Appearance › Look › Corners: edits the Hermes Look's app-wide border radius with a live preview
+/// strip, continuous slider (0–20 pt), Reset back to 4 pt, and tappable preset ticks.
+struct HermesCornersRow: View {
+    var stored: Int
+    var symbol: String?
+    var commit: (Int) -> Void
+    @State private var draft: Double?
+    @State private var dragging = false
+
+    private static let range = ThemeState.desktopRadiusRange
+    private static let ticks = [0, 4, 8, 12, 16, 20]
+
+    var body: some View {
+        let points = Int((draft ?? Double(stored)).rounded())
+        let cardR = HQShape.desktopRadius(.card, base: CGFloat(points))
+        let controlR = HQShape.desktopRadius(.control, base: CGFloat(points))
+        let pillR = HQShape.desktopRadius(.capsule, base: CGFloat(points))
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                AppearanceControlTitle(title: "Corners", symbol: symbol)
+                Spacer(minLength: 8)
+                Text("\(points) pt").monospacedDigit().foregroundStyle(Color.hqLabel2)
+                if points != ThemeState.defaultDesktopRadius {
+                    Button("Reset") {
+                        Haptics.play(.selection)
+                        draft = nil
+                        commit(ThemeState.defaultDesktopRadius)
+                    }
+                    .font(Font.hq(.footnote).weight(.medium))
+                    .foregroundStyle(Color.hqTintText)
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("theme.desktopRadiusReset")
+                }
+            }
+
+            // Live miniature showing a Hermes card, primary + outlined button, pill chip, and bubble morphing together.
+            HStack(spacing: 8) {
+                Text("Primary")
+                    .font(Font.hq(.caption).weight(.semibold))
+                    .foregroundStyle(Color.hqOnTint)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.hqTint, in: RoundedRectangle(cornerRadius: min(controlR, 13), style: .continuous))
+                Text("Button")
+                    .font(Font.hq(.caption))
+                    .foregroundStyle(Color.hqLabel)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.clear, in: RoundedRectangle(cornerRadius: min(controlR, 13), style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: min(controlR, 13), style: .continuous)
+                        .strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline))
+                Text("Tag")
+                    .font(Font.hq(.caption2).weight(.medium))
+                    .foregroundStyle(Color.hqLabel2)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.hqFill3, in: RoundedRectangle(cornerRadius: min(pillR, 11), style: .continuous))
+                Spacer(minLength: 0)
+                Text("Hi!")
+                    .font(Font.hq(.caption))
+                    .foregroundStyle(Color.hqMeText)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .background(Color.hqMeBubble, in: RoundedRectangle(cornerRadius: min(cardR, 13), style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: min(cardR, 13), style: .continuous)
+                        .strokeBorder(Color(uiColor: ChatPalette.meBorder), lineWidth: HQShape.hairline))
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity)
+            .background(Color(uiColor: ChatPalette.editor), in: RoundedRectangle(cornerRadius: cardR, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: cardR, style: .continuous)
+                .strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline))
+            .accessibilityHidden(true)
+
+            VStack(spacing: 2) {
+                Slider(value: Binding(get: { draft ?? Double(stored) }, set: { value in
+                    if Int(value.rounded()) != points { Haptics.play(.selection) }
+                    draft = value
+                    if !dragging { finish() }
+                }), in: Double(Self.range.lowerBound)...Double(Self.range.upperBound)) {
+                    Text("Hermes Corners")
+                } minimumValueLabel: {
+                    Image(systemName: "square").foregroundStyle(Color.hqLabel2).accessibilityHidden(true)
+                } maximumValueLabel: {
+                    Image(systemName: "capsule").foregroundStyle(Color.hqLabel2).accessibilityHidden(true)
+                } onEditingChanged: { editing in
+                    dragging = editing
+                    if !editing { finish() }
+                }
+                .tint(Color.hqTint)
+                .accessibilityValue("\(points) points")
+                .accessibilityIdentifier("theme.desktopRadius")
+
+                HStack {
+                    ForEach(Self.ticks, id: \.self) { tick in
+                        Button {
+                            guard tick != points else { return }
+                            Haptics.play(.selection)
+                            draft = nil
+                            commit(tick)
+                        } label: {
+                            Text("\(tick)")
+                                .font(Font.hq(.caption2).weight(tick == points ? .semibold : .regular))
+                                .monospacedDigit()
+                                .foregroundStyle(tick == points ? Color.hqLabel : Color.hqLabel3)
+                                .padding(.vertical, 2)
+                                .padding(.horizontal, 4)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("\(tick) points")
+                        .accessibilityIdentifier("theme.desktopRadius.\(tick)")
+                        if tick != Self.ticks.last { Spacer(minLength: 0) }
+                    }
+                }
+                .padding(.horizontal, 22)
+            }
+        }
+        .hqRowPadding(4)
+    }
+
+    private func finish() {
+        guard let draft else { return }
+        self.draft = nil
+        let points = Int(draft.rounded())
+        if points != stored { commit(points) }
     }
 }
 

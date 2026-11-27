@@ -357,7 +357,8 @@ enum QuickAddSheet {
             sheet.prefersGrabberVisible = false
             sheet.prefersScrollingExpandsWhenScrolledToEdge = false
             sheet.prefersEdgeAttachedInCompactHeight = true
-            sheet.preferredCornerRadius = Theme.isDesktop ? DesktopRows.radius + 6 : nil
+            let sheetRadius = HQShape.desktopRadius(.sheet)
+            sheet.preferredCornerRadius = Theme.isDesktop ? (sheetRadius == 0 ? 0 : min(26, sheetRadius + 2)) : nil
         }
     }
 

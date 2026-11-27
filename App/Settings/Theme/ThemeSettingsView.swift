@@ -138,9 +138,10 @@ struct ThemeSettingsView: View {
         .onAppear { installer.refresh() }
     }
 
-    static var desktopChatsNote: String {
-        ThemeState.textBoxIsFixed ? "How round your messages and the message box are. 4 pt is the Hermes desktop app’s."
-            : "How round your messages and the text box are. 4 pt is the Hermes desktop app’s. Liquid Glass is the \(DeviceWord.name)’s own text box, rounded to match; Hermes is the desktop app’s flat box."
+    static func desktopChatsNote(_ state: ThemeState) -> String {
+        let base = "How round your messages and the text box are. Follows Hermes Look’s Corners (\(state.desktopRadius) pt) unless changed here."
+        return ThemeState.textBoxIsFixed ? base
+            : "\(base) Liquid Glass is the \(DeviceWord.name)’s own text box, rounded to match; Hermes is the desktop app’s flat box."
     }
 
     /// [a11y] iOS Increase Contrast (the debug override too) turns High Contrast on: the switch shows it, and is held.
@@ -235,7 +236,7 @@ struct ChatBubblesSettingsView: View {
     /// (when High Contrast is on), and its Text Box style.
     @ViewBuilder private func desktopSection(_ state: ThemeState) -> some View {
         Section {
-            BubbleCornersRow(stored: state.desktopCorners, standard: ThemeState.defaultDesktopCorners,
+            BubbleCornersRow(stored: state.appliedDesktopCorners, standard: state.desktopRadius,
                              style: .solid, composer: state.boxComposer ? .box : .glass,
                              plainReply: state.appliedPlainReplies) { points in
                 theme.setBubbleCorners(points)
@@ -264,7 +265,7 @@ struct ChatBubblesSettingsView: View {
                 .accessibilityIdentifier("theme.desktopComposer")
             }
         } footer: { HQSectionFooter {
-            Text(ThemeSettingsView.desktopChatsNote)
+            Text(ThemeSettingsView.desktopChatsNote(state))
         } }
     }
 
@@ -846,8 +847,8 @@ private struct DesktopGroup<Content: View>: View {
                 .padding(.horizontal, DeviceWord.isMac ? MacInset.side : 14)
                 .padding(.vertical, 12)
                 .frame(maxWidth: .infinity, minHeight: DeviceWord.isMac ? MacForm.settingsRowHeight : nil, alignment: .leading)
-                .background(Color.hqPage)
-                .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline))
+                .background(Color.hqPage, in: RoundedRectangle(cornerRadius: DesktopRows.radius))
+                .overlay(RoundedRectangle(cornerRadius: DesktopRows.radius).strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline))
             if let footer {
                 Text(footer).font(Font.hq(.footnote)).foregroundStyle(Color.hqLabel2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -864,6 +865,7 @@ struct ScaleSegments: View {
     var pick: (Int) -> Void
 
     var body: some View {
+        let radius = min(DesktopRows.radius, 18)
         HStack(spacing: 0) {
             ForEach(Array(ThemeState.scalePresets.enumerated()), id: \.element) { index, percent in
                 let on = percent == selected
@@ -878,8 +880,8 @@ struct ScaleSegments: View {
                         .frame(maxWidth: .infinity, minHeight: 36)
                         // The fill's own corners (the box isn't clipped: a clip would cut the taller hit area below).
                         .background(on ? Color.hqTint : Color.clear,
-                                    in: UnevenRoundedRectangle(topLeadingRadius: index == 0 ? 4 : 0, bottomLeadingRadius: index == 0 ? 4 : 0,
-                                                               bottomTrailingRadius: last ? 4 : 0, topTrailingRadius: last ? 4 : 0))
+                                    in: UnevenRoundedRectangle(topLeadingRadius: index == 0 ? radius : 0, bottomLeadingRadius: index == 0 ? radius : 0,
+                                                               bottomTrailingRadius: last ? radius : 0, topTrailingRadius: last ? radius : 0))
                         // UX #160: drawn 36 pt tall, touched over 44 pt.
                         .padding(.vertical, 4)
                         .contentShape(Rectangle())
@@ -894,7 +896,7 @@ struct ScaleSegments: View {
                 }
             }
         }
-        .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline))
+        .overlay(RoundedRectangle(cornerRadius: radius).strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("UI Scale")   // UX #160: VoiceOver names the group on entering it
         .accessibilityIdentifier("theme.uiScale")
@@ -973,13 +975,13 @@ private struct SkinCard: View {
 
     var body: some View {
         let desktop = Theme.shared.state.desktopLook
-        let radius: CGFloat = desktop ? 4 : 18
+        let radius: CGFloat = desktop ? HQShape.radius(18, .card) : 18
         // The card previews the skin as it would draw now (the look, the contrast option and the mode on screen).
         var preview = Theme.shared.state
         preview.skinID = skin.id
         let resolved = ThemeResolver.resolve(preview)
         let tokens = resolved.tokens(dark: dark)
-        let previewRadius: CGFloat = desktop ? 3 : 10
+        let previewRadius: CGFloat = desktop ? HQShape.radius(10, .control) : 10
         return Button(action: action) {
             VStack(alignment: .leading, spacing: 8) {
                 Group {

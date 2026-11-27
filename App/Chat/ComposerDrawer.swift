@@ -871,7 +871,7 @@ final class ComposerDrawerCell: UITableViewCell {
         #endif
         if state.isHighlighted || marked {
             background.backgroundColor = ChatPalette.fill3
-            background.cornerRadius = Theme.isDesktop ? 4 : 10
+            background.cornerRadius = HQShape.radius(10, .card)
             background.backgroundInsets = NSDirectionalEdgeInsets(top: 1, leading: 6, bottom: 1, trailing: 6)
             #if targetEnvironment(macCatalyst)
             // [mac-popups] The window's selection, as the pop-overs mark their rows.

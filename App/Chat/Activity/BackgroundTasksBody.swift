@@ -326,7 +326,7 @@ final class BackgroundTaskRow: ShelfRowControl {
         self.command = command
         self.timing = timing
         self.picked = picked
-        layer.cornerRadius = Theme.isDesktop ? 4 : 12
+        layer.cornerRadius = HQShape.radius(12, .card)
         backgroundColor = picked ? ChatPalette.fill4 : .clear
         let name = command.headline
         if title.text != name { title.text = name }
@@ -349,7 +349,7 @@ final class BackgroundTaskRow: ShelfRowControl {
         earlierOutput.isHidden = earlier.isEmpty
         if earlierOutput.text != earlier { earlierOutput.text = earlier }
         outputBox.backgroundColor = hasOutput ? ChatPalette.fill4 : .clear
-        outputBox.layer.cornerRadius = Theme.isDesktop ? 4 : 8
+        outputBox.layer.cornerRadius = HQShape.radius(8, .card)
         outputTrailingMore.isActive = !hasOutput
         outputTrailingEdge.isActive = hasOutput
         outputClearMore.isActive = hasOutput

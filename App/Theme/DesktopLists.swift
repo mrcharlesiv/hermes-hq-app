@@ -197,7 +197,15 @@ import UIKit
     static func fit(_ cell: UIView, bare: Bool) {
         let corners: [UIRectCorner] = [.topLeft, .topRight, .bottomLeft, .bottomRight]
         let now = corners.map { cell.effectiveRadius(corner: $0) }
-        let want = now.map { bare ? 0 : $0 > 0.01 ? min($0, DesktopRows.radius) : 0 }
+        let target = DesktopRows.radius
+        let want: [CGFloat]
+        if bare {
+            want = [0, 0, 0, 0]
+        } else if let outer = sectionOuterCorners(of: cell), cell.hqCornerFitApplied || now.contains(where: { $0 > 0.01 }) {
+            want = corners.map { outer.contains($0) ? target : 0 }
+        } else {
+            want = now.map { $0 > 0.01 ? min($0, target) : 0 }
+        }
         guard zip(now, want).contains(where: { abs($0 - $1) > 0.01 }) else { return }
         let time = CACurrentMediaTime()
         var budget = cell.hqCornerFitBudget
@@ -205,17 +213,43 @@ import UIKit
         budget.count += 1
         cell.hqCornerFitBudget = budget
         guard budget.count <= 8 else { return }
+        cell.hqCornerFitApplied = true
         cell.cornerConfiguration = .corners(topLeftRadius: .fixed(want[0]), topRightRadius: .fixed(want[1]),
                                             bottomLeftRadius: .fixed(want[2]), bottomRightRadius: .fixed(want[3]))
+    }
+
+    private static func sectionOuterCorners(of cell: UIView) -> UIRectCorner? {
+        if let item = cell as? UICollectionViewCell,
+           let list = sequence(first: item.superview, next: { $0?.superview }).lazy.compactMap({ $0 as? UICollectionView }).first,
+           let path = list.indexPath(for: item), path.section < list.numberOfSections {
+            var out: UIRectCorner = []
+            if path.item == 0 { out.formUnion([.topLeft, .topRight]) }
+            if path.item == list.numberOfItems(inSection: path.section) - 1 { out.formUnion([.bottomLeft, .bottomRight]) }
+            return out
+        }
+        if let row = cell as? UITableViewCell,
+           let table = sequence(first: row.superview, next: { $0?.superview }).lazy.compactMap({ $0 as? UITableView }).first,
+           let path = table.indexPath(for: row), path.section < table.numberOfSections {
+            var out: UIRectCorner = []
+            if path.row == 0 { out.formUnion([.topLeft, .topRight]) }
+            if path.row == table.numberOfRows(inSection: path.section) - 1 { out.formUnion([.bottomLeft, .bottomRight]) }
+            return out
+        }
+        return nil
     }
 }
 
 private let cornerFitPendingKey = malloc(1)!
 private let cornerFitBudgetKey = malloc(1)!
+private let cornerFitAppliedKey = malloc(1)!
 extension UIView {
     fileprivate var hqCornerFitPending: Bool {
         get { (objc_getAssociatedObject(self, cornerFitPendingKey) as? Bool) ?? false }
         set { objc_setAssociatedObject(self, cornerFitPendingKey, newValue, .OBJC_ASSOCIATION_RETAIN) }
+    }
+    fileprivate var hqCornerFitApplied: Bool {
+        get { (objc_getAssociatedObject(self, cornerFitAppliedKey) as? Bool) ?? false }
+        set { objc_setAssociatedObject(self, cornerFitAppliedKey, newValue, .OBJC_ASSOCIATION_RETAIN) }
     }
     fileprivate var hqCornerFitBudget: (since: CFTimeInterval, count: Int) {
         get { (objc_getAssociatedObject(self, cornerFitBudgetKey) as? [Double]).map { ($0[0], Int($0[1])) } ?? (0, 0) }

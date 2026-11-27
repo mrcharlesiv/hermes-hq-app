@@ -600,7 +600,7 @@ private struct BackdropTile<Face: View>: View {
     var name: String
     var selected: Bool
     @ViewBuilder var face: Face
-    private static var radius: CGFloat { Theme.isDesktop ? 4 : 10 }
+    private static var radius: CGFloat { HQShape.radius(10, .card) }
 
     var body: some View {
         VStack(spacing: 6) {

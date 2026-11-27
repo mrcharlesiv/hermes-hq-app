@@ -15,9 +15,13 @@ nonisolated struct ThemeState: Sendable, Hashable {
     /// The stored choice (points); it only applies with the Desktop Look off (the look has `desktopCorners`).
     var bubbleCorners = ThemeState.defaultBubbleCorners
     /// [desktop-corners] The Desktop Look's own corner for your messages and its text box (owner 2026-11-08: "I want to
-    /// be able to still control the radius of the chat bubbles"). The desktop's 4 pt unless another was picked, so the
-    /// look's boxes stay as they were for whoever never moves the slider.
+    /// be able to still control the radius of the chat bubbles"). Follows `desktopRadius` unless customized in Chat Bubbles.
     var desktopCorners = ThemeState.defaultDesktopCorners
+    /// True when Chat Bubbles › Corners was explicitly overridden for the Desktop Look instead of following `desktopRadius`.
+    var desktopCornersOverridden = false
+    /// [desktop-radius] Base corner radius (points) for all surfaces in the Hermes Look (cards, lists, buttons, pills,
+    /// sheets, and chats unless Chat Bubbles overrides them). 4 pt is the Hermes desktop app's default.
+    var desktopRadius = ThemeState.defaultDesktopRadius
     /// [desktop-composer] The Desktop Look's text box: the desktop's flat bordered box by default for chrome cohesion,
     /// with an option in Chat Bubbles › Text Box to switch to the iOS look's Liquid Glass bar.
     var desktopComposer = DesktopComposer.box
@@ -55,6 +59,9 @@ nonisolated struct ThemeState: Sendable, Hashable {
     static let bubbleCornerRange = 0...24
     /// [desktop-corners] The desktop's own box corner (phone-ui-desktop.css:59-66), on the same slider.
     static let defaultDesktopCorners = 4
+    /// [desktop-radius] The Hermes Look's default base border radius and slider range (points).
+    static let defaultDesktopRadius = 4
+    static let desktopRadiusRange = 0...20
 
     var skin: Skin { SkinCatalog.resolved(skinID) }
     var contrastApplies: Bool { desktopLook && highContrast }
@@ -103,8 +110,12 @@ nonisolated struct ThemeState: Sendable, Hashable {
     /// (ui-scale.ts:21) kept the iOS look at 100 %, and so did the iPhone until 2026-11-09 (the Mac stopped in October,
     /// as its text size).
     var scale: Double { Double(uiScalePercent) / 100 * Self.macBase(desktopLook: desktopLook) }
-    /// The corner bubbles are drawn with: the look in use's own (`bubbleCorners`, `desktopCorners`).
-    var appliedBubbleCorners: Int { desktopLook ? desktopCorners : bubbleCorners }
+    /// [desktop-radius] The Hermes Look's base border radius in effect (4 pt while the look is off).
+    var appliedDesktopRadius: Int { desktopLook ? desktopRadius : Self.defaultDesktopRadius }
+    /// [desktop-corners] Chat bubble & text-box corner in the Hermes Look: follows `desktopRadius` unless overridden.
+    var appliedDesktopCorners: Int { (desktopCornersOverridden || desktopCorners != Self.defaultDesktopCorners) ? desktopCorners : desktopRadius }
+    /// The corner bubbles are drawn with: the look in use's own (`bubbleCorners`, `appliedDesktopCorners`).
+    var appliedBubbleCorners: Int { desktopLook ? appliedDesktopCorners : bubbleCorners }
     /// [desktop-composer] The desktop's one flat box draws the text box (and Talk's bar in its place); otherwise the
     /// iOS look's glass bar does, in both looks. [mac] The Mac's Desktop Look always has the box (its own message box
     /// in either look, owner 2026-11-08), so Text Box isn't offered there.
@@ -156,6 +167,8 @@ nonisolated struct ThemeState: Sendable, Hashable {
         hasher.combine(skin.accentReadsAsText)   // [paper-links] its replies' links are underlined
         // Photo albums and voice memos inside a bubble keep its corner in their layouts.
         hasher.combine(appliedBubbleCorners)
+        // [desktop-radius] Hermes Look cards, buttons, lists, segments and sheets follow this radius.
+        hasher.combine(appliedDesktopRadius)
         // [plain-replies] A plain reply keeps no bubble padding.
         hasher.combine(appliedPlainReplies)
         return hasher.finalize()
@@ -278,8 +291,10 @@ nonisolated struct ThemeStore: @unchecked Sendable {
         /// [top-edge] `TopEdge`'s raw value, stored only when it isn't Hard (the default since build 734; 732 and 733
         /// stored Hard and nothing for Soft).
         static let topEdge = "hqn.theme.topEdge"
-        /// [desktop-corners] Stored only when it isn't the desktop's 4 pt.
+        /// [desktop-corners] Stored only when it differs from the Hermes Look's base radius.
         static let desktopCorners = "hqn.theme.desktopCorners"
+        /// [desktop-radius] Stored only when it isn't the Hermes Look's 4 pt default.
+        static let desktopRadius = "hqn.theme.desktopRadius"
         /// [desktop-composer] `DesktopComposer`'s raw value, stored only when it isn't Glass.
         static let desktopComposer = "hqn.theme.desktopComposer"
         /// [density] `ListDensity`'s raw value, stored only when it isn't Standard.
@@ -291,7 +306,7 @@ nonisolated struct ThemeStore: @unchecked Sendable {
         /// [plain-replies] Stored only when on (`true`).
         static let plainReplies = "hqn.theme.plainReplies"
         static let all = [skin, chosen, desktopLook, skinBeforeLook, highContrast, uiScale, bubbleCorners, glassBubbles, bubbleStyle, topEdge,
-                          desktopCorners, desktopComposer, density, desktopDensity, messageColour, plainReplies]
+                          desktopCorners, desktopRadius, desktopComposer, density, desktopDensity, messageColour, plainReplies]
     }
 
     var defaults: UserDefaults = .standard
@@ -313,12 +328,26 @@ nonisolated struct ThemeStore: @unchecked Sendable {
         return Int(percent.rounded())
     }
 
-    /// Outside `bubbleCornerRange` or not a number is the standard (12 pt, or the Desktop Look's 4).
-    static func clampedBubbleCorners(_ value: Any?, standard: Int = ThemeState.defaultBubbleCorners) -> Int {
-        guard let number = value as? NSNumber, !(value is String) else { return standard }
+    /// Valid bubble corner value inside `bubbleCornerRange`, or nil if missing / invalid.
+    static func validBubbleCorners(_ value: Any?) -> Int? {
+        guard let number = value as? NSNumber, !(value is String) else { return nil }
         let points = number.doubleValue.rounded()
         let range = ThemeState.bubbleCornerRange
-        guard points.isFinite, points >= Double(range.lowerBound), points <= Double(range.upperBound) else { return standard }
+        guard points.isFinite, points >= Double(range.lowerBound), points <= Double(range.upperBound) else { return nil }
+        return Int(points)
+    }
+
+    /// Outside `bubbleCornerRange` or not a number is the standard (12 pt, or the Desktop Look's 4).
+    static func clampedBubbleCorners(_ value: Any?, standard: Int = ThemeState.defaultBubbleCorners) -> Int {
+        validBubbleCorners(value) ?? standard
+    }
+
+    /// Outside `desktopRadiusRange` or not a number is the Hermes Look default (4 pt).
+    static func clampedDesktopRadius(_ value: Any?) -> Int {
+        guard let number = value as? NSNumber, !(value is String) else { return ThemeState.defaultDesktopRadius }
+        let points = number.doubleValue.rounded()
+        let range = ThemeState.desktopRadiusRange
+        guard points.isFinite, points >= Double(range.lowerBound), points <= Double(range.upperBound) else { return ThemeState.defaultDesktopRadius }
         return Int(points)
     }
 
@@ -331,7 +360,14 @@ nonisolated struct ThemeStore: @unchecked Sendable {
         let stored = defaults.object(forKey: Key.uiScale)
         state.uiScalePercent = stored == nil ? Self.defaultScale : ThemeStore.clampedScale(stored)
         state.bubbleCorners = ThemeStore.clampedBubbleCorners(defaults.object(forKey: Key.bubbleCorners))
-        state.desktopCorners = ThemeStore.clampedBubbleCorners(defaults.object(forKey: Key.desktopCorners), standard: ThemeState.defaultDesktopCorners)
+        state.desktopRadius = ThemeStore.clampedDesktopRadius(defaults.object(forKey: Key.desktopRadius))
+        if let customDesktopCorners = ThemeStore.validBubbleCorners(defaults.object(forKey: Key.desktopCorners)) {
+            state.desktopCorners = customDesktopCorners
+            state.desktopCornersOverridden = true
+        } else {
+            state.desktopCorners = ThemeState.defaultDesktopCorners
+            state.desktopCornersOverridden = false
+        }
         if let composer = (defaults.object(forKey: Key.desktopComposer) as? String).flatMap(DesktopComposer.init(rawValue:)) {
             state.desktopComposer = composer
         }
@@ -399,12 +435,24 @@ nonisolated struct ThemeStore: @unchecked Sendable {
     }
 
     /// Stored only when it is not the standard 12 pt. [desktop-corners] `desktop`: the Desktop Look's own corner,
-    /// stored only when it is not its 4 pt.
+    /// stored only when it differs from the Hermes Look's base radius (`desktopRadius`).
     func setBubbleCorners(_ points: Int, desktop: Bool = false) {
         let points = min(max(points, ThemeState.bubbleCornerRange.lowerBound), ThemeState.bubbleCornerRange.upperBound)
         let key = desktop ? Key.desktopCorners : Key.bubbleCorners
-        let standard = desktop ? ThemeState.defaultDesktopCorners : ThemeState.defaultBubbleCorners
+        let standard = desktop
+            ? ThemeStore.clampedDesktopRadius(defaults.object(forKey: Key.desktopRadius))
+            : ThemeState.defaultBubbleCorners
         if points == standard { defaults.removeObject(forKey: key) } else { defaults.set(points, forKey: key) }
+    }
+
+    /// [desktop-radius] Stored only when it is not the Hermes Look's 4 pt default.
+    func setDesktopRadius(_ points: Int) {
+        let points = min(max(points, ThemeState.desktopRadiusRange.lowerBound), ThemeState.desktopRadiusRange.upperBound)
+        if points == ThemeState.defaultDesktopRadius {
+            defaults.removeObject(forKey: Key.desktopRadius)
+        } else {
+            defaults.set(points, forKey: Key.desktopRadius)
+        }
     }
 
     /// [desktop-composer] Desktop (`box`), the default, is stored as nothing.

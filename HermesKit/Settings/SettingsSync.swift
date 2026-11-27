@@ -17,7 +17,7 @@ nonisolated enum SyncedSettingKeys {
         // Appearance and Theme
         "hqn.appearance", "hqn.theme.skin", "hqn.theme.chosen", "hqn.theme.desktopLook", "hqn.theme.skinBeforeLook",
         "hqn.theme.highContrast", "hqn.theme.bubbleCorners", "hqn.theme.bubbleStyle", "hqn.theme.glassBubbles", "hqn.theme.topEdge",
-        "hqn.theme.desktopCorners", "hqn.theme.desktopComposer", "hqn.theme.messageColour",
+        "hqn.theme.desktopCorners", "hqn.theme.desktopRadius", "hqn.theme.desktopComposer", "hqn.theme.messageColour",
         "hqn.theme.plainReplies", "hqn.workingRing",
         "hqn.head.style",
         // Chat

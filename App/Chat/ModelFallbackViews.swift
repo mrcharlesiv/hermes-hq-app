@@ -520,7 +520,7 @@ private final class ModelFallbackPillControl: UIButton {
     private func applyChrome() {
         backgroundColor = ChatPalette.promptCard.resolvedColor(with: traitCollection)
             .withAlphaComponent(interactive ? 0.92 : 0.76)
-        layer.cornerRadius = Theme.isDesktop ? HQShape.desktopRadius(.capsule) : bounds.height / 2
+        layer.cornerRadius = Theme.isDesktop ? min(HQShape.desktopRadius(.capsule), bounds.height / 2) : bounds.height / 2
         layer.cornerCurve = .continuous
         let edge = ChatPalette.promptEdge.resolvedColor(with: traitCollection)
         let fallbackEdge = ChatPalette.separator.resolvedColor(with: traitCollection).withAlphaComponent(0.35)
@@ -546,7 +546,7 @@ private final class ModelFallbackPillControl: UIButton {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        layer.cornerRadius = Theme.isDesktop ? HQShape.desktopRadius(.capsule) : bounds.height / 2
+        layer.cornerRadius = Theme.isDesktop ? min(HQShape.desktopRadius(.capsule), bounds.height / 2) : bounds.height / 2
         let padH: CGFloat = 14
         let dotSize: CGFloat = 8
         let dotGap: CGFloat = 8

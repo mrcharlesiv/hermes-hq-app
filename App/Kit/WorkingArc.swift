@@ -210,7 +210,7 @@ extension WorkingArc {
     /// rule beneath (owner, build 328). There the ring is a rounded card 5 pt in at the top and foot, and the list
     /// hides the hairlines that touch a ringed row (`ringHidesSeparator`), as UIKit does round a pressed row.
     static let rowLine: CGFloat = 1.25
-    static var rowCorner: CGFloat { Theme.isDesktop ? 2 : 14 }
+    static var rowCorner: CGFloat { HQShape.radius(14, .inline) }
     static var rowInsets: EdgeInsets {
         guard Theme.isDesktop else { return EdgeInsets(top: 5, leading: 8, bottom: 5, trailing: 8) }
         let inset = DesktopRows.pressInset

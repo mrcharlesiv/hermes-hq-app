@@ -9,6 +9,7 @@
 // - `-HQDebugDesktopDensity standard|compact`   [desktop-density] the Desktop Look's own Density
 // - `-HQDebugAppearanceReveal row:<id>`   [appearance-groups] Appearance scrolled to that row (row:density, row:ui-scale…)
 // - `-HQDebugBubbleCorners <pt>`    Bubble Corners (the iOS look's chat bubbles)
+// - `-HQDebugDesktopRadius <pt>`    [desktop-radius] the Hermes Look's app-wide Corners (0–20 pt)
 // - `-HQDebugDesktopCorners <pt>`   [desktop-corners] the Desktop Look's own Corners
 // - `-HQDebugDesktopComposer glass|box`   [desktop-composer] the Desktop Look's Text Box
 // - `-HQDebugGlassBubbles YES|NO`   [glass-bubbles] Chat Bubbles › Glass
@@ -68,6 +69,7 @@ enum ThemeDebugHooks {
         if let density = defaults.string(forKey: "HQDebugDensity").flatMap(ListDensity.init(rawValue:)) { store.setDensity(density) }
         if let density = defaults.string(forKey: "HQDebugDesktopDensity").flatMap(ListDensity.init(rawValue:)) { store.setDensity(density, desktop: true) }
         if defaults.object(forKey: "HQDebugBubbleCorners") != nil { store.setBubbleCorners(defaults.integer(forKey: "HQDebugBubbleCorners")) }
+        if defaults.object(forKey: "HQDebugDesktopRadius") != nil { store.setDesktopRadius(defaults.integer(forKey: "HQDebugDesktopRadius")) }
         if defaults.object(forKey: "HQDebugDesktopCorners") != nil { store.setBubbleCorners(defaults.integer(forKey: "HQDebugDesktopCorners"), desktop: true) }
         if let composer = defaults.string(forKey: "HQDebugDesktopComposer").flatMap(DesktopComposer.init(rawValue:)) { store.setDesktopComposer(composer) }
         if defaults.object(forKey: "HQDebugGlassBubbles") != nil { store.setGlassBubbles(defaults.bool(forKey: "HQDebugGlassBubbles")) }

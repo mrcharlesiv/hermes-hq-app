@@ -39,7 +39,8 @@ nonisolated enum DesktopRows {
     @MainActor static var underBar: CGFloat { Theme.isDesktop && !DeviceWord.isMac ? 8 : 0 }
     /// A pressed row's box: 2 pt in from the row's top and foot, 8 pt in from its sides (phone-ui-desktop.css:330).
     static let pressInset = NSDirectionalEdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8)
-    static let radius: CGFloat = 4
+    /// [desktop-radius] The Hermes Look's card/box corner radius (4 pt by default).
+    static var radius: CGFloat { HQShape.desktopRadius(.card) }
     /// The desktop's label (SESSIONS, WORK · 2): 11 pt semibold capitals tracked 0.08 em (phone-ui-desktop.css:74-75).
     static let labelSize: CGFloat = 11
     static let labelTracking: CGFloat = 0.08
@@ -292,10 +293,11 @@ struct DesktopSegmentStrip<Value: Hashable>: View {
     var ticks = true
 
     var body: some View {
+        let stripRadius = min(DesktopRows.radius, 16)
         HStack(spacing: 0) {
             ForEach(Array(options.enumerated()), id: \.offset) { index, option in
                 if index > 0 { HQHairline(axis: .vertical, color: .hqStroke) }
-                let first = index == 0, last = index == options.count - 1, radius = DesktopRows.radius
+                let first = index == 0, last = index == options.count - 1, radius = stripRadius
                 Button {
                     if ticks, selection != option.value { Haptics.play(.selection) }
                     selection = option.value
@@ -327,7 +329,7 @@ struct DesktopSegmentStrip<Value: Hashable>: View {
                 .accessibilityAddTraits(selection == option.value ? [.isSelected] : [])
             }
         }
-        .overlay(RoundedRectangle(cornerRadius: DesktopRows.radius).strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline))
+        .overlay(RoundedRectangle(cornerRadius: stripRadius).strokeBorder(Color.hqStroke, lineWidth: HQShape.hairline))
         .fixedSize(horizontal: false, vertical: true)
     }
 }

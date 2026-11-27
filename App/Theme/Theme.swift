@@ -179,6 +179,12 @@ final class Theme {
         reload()
     }
 
+    /// [desktop-radius] Appearance › Look › Corners (the Hermes Look's app-wide border radius).
+    func setDesktopRadius(_ points: Int) {
+        store.setDesktopRadius(points)
+        reload()
+    }
+
     /// [desktop-composer] Theme › Text Box (the Desktop Look).
     func setDesktopComposer(_ composer: DesktopComposer) {
         store.setDesktopComposer(composer)

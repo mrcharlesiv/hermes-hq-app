@@ -16,6 +16,8 @@ nonisolated enum ThemeTable {
         var desktopLook = false
         /// `current.state.appliedBubbleCorners`, for the same reason (read for every bubble outline).
         var bubbleCorners = ThemeState.defaultBubbleCorners
+        /// `current.state.desktopRadius`, for the same reason (read for every Hermes Look shape and card).
+        var desktopRadius = ThemeState.defaultDesktopRadius
         /// `current.state.appliedBubbleStyle`, for the same reason (read for every bubble's fill).
         var bubbleStyle = ThemeState().appliedBubbleStyle
     }
@@ -52,6 +54,14 @@ nonisolated enum ThemeTable {
         return lock.withLock { $0.bubbleCorners }
     }
 
+    /// The current set's `state.desktopRadius`, without copying the set.
+    static var desktopRadius: Int {
+        #if DEBUG
+        if let testSet { return testSet.state.desktopRadius }
+        #endif
+        return lock.withLock { $0.desktopRadius }
+    }
+
     /// [glass-bubbles] [tinted-bubbles] The current set's `state.appliedBubbleStyle`, without copying the set.
     static var bubbleStyle: BubbleStyle {
         #if DEBUG
@@ -69,6 +79,7 @@ nonisolated enum ThemeTable {
             storage.current = set
             storage.desktopLook = set.state.desktopLook
             storage.bubbleCorners = set.state.appliedBubbleCorners
+            storage.desktopRadius = set.state.desktopRadius
             storage.bubbleStyle = set.state.appliedBubbleStyle
             storage.recent[storage.generation] = set
             for key in storage.recent.keys where key <= storage.generation - keep { storage.recent[key] = nil }

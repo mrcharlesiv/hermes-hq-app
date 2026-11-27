@@ -634,7 +634,7 @@ final class UpdateCardCell: UITableViewCell, UIContextMenuInteractionDelegate {
         let ink = (Theme.isDesktop ? HQPalette.stroke : GlassSheetKit.designed ? HQPalette.glassEdge : nil)?
             .resolvedColor(with: traitCollection).cgColor
         let edge = ink.flatMap { $0.alpha > 0 ? $0 : nil }
-        let radius: CGFloat = GlassSheetKit.designed ? 20 : Theme.isDesktop ? 10 : 12
+        let radius: CGFloat = GlassSheetKit.designed ? 20 : Theme.isDesktop ? min(16, ProjectCard.radius) : 12
         card.backgroundColor = fill
         card.layer.cornerRadius = radius
         card.layer.borderWidth = edge == nil ? 0 : HQShape.hairline

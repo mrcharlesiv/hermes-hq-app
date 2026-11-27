@@ -209,6 +209,7 @@ enum ThemeChrome {
                 objc_setAssociatedObject(sheet, sheetRadiusKey, NSNumber(value: Double(sheet.preferredCornerRadius ?? -1)), .OBJC_ASSOCIATION_RETAIN)
             }
             sheet.preferredCornerRadius = HQShape.desktopRadius(.sheet)
+            roundSheetBottom(sheet)
         } else if let stored = objc_getAssociatedObject(sheet, sheetRadiusKey) as? NSNumber {
             sheet.preferredCornerRadius = stored.doubleValue < 0 ? nil : CGFloat(stored.doubleValue)
             objc_setAssociatedObject(sheet, sheetRadiusKey, nil, .OBJC_ASSOCIATION_RETAIN)
@@ -384,11 +385,13 @@ enum ThemeChrome {
             view.backgroundColor = ChatPalette.editor
             view.layer.borderWidth = HQShape.hairline
             view.layer.borderColor = ChatPalette.strokeSecondary.resolvedColor(with: view.traitCollection).cgColor
-            // [desktop-corners] The cards docked on the text box round as your messages and the text box do.
-            let radius = insideCornersDock(view) ? ChatMetrics.bubbleRadius : 4
-            view.layer.cornerRadius = min(saved.radius > 0 ? saved.radius : radius, radius)
+            // [desktop-corners] [desktop-radius] The cards docked on the text box round as your messages and the text
+            // box do; all other flattened panels follow the Hermes Look's card corner radius.
+            let radius = insideCornersDock(view) ? ChatMetrics.bubbleRadius : HQShape.desktopRadius(.card)
+            let effective = saved.radius > 0 ? min(saved.radius, radius) : radius
+            view.layer.cornerRadius = effective
             view.layer.masksToBounds = true
-            view.cornerConfiguration = .corners(radius: .fixed(radius))
+            view.cornerConfiguration = .corners(radius: .fixed(effective))
         } else if let stash {
             // Mac polish #79: an effect its owner set as the look went off is newer than the stash (the Talk disc's
             // tinted glass); putting the stashed one back turned the blue disc grey.

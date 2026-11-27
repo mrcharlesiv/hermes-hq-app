@@ -34,7 +34,11 @@ enum ProjectCardSlice {
     static let gap: CGFloat = 12
     /// Space between two closed projects: none, they are rows on the page 44 pt apart, as Pinned's.
     static let rowGap: CGFloat = 0
-    static var radius: CGFloat { Theme.isDesktop ? 10 : 22 }
+    static var radius: CGFloat {
+        guard Theme.isDesktop else { return 22 }
+        let sheet = HQShape.desktopRadius(.sheet)
+        return sheet == 0 ? 0 : min(22, sheet + 2)
+    }
     /// The face column: 40 pt from the list's edge plus 20 pt in, as Pinned's rows, so faces line up with Pinned's.
     /// [card-gutters] Owner 2026-11-15 (a screenshot of Sessions, Bot Faces off): "there's less open space on the right
     /// hand side than there is on the left … the stuff that's on the left should move over to the left". Under Group By

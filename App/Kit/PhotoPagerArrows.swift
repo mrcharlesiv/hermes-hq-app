@@ -43,7 +43,7 @@ extension UIKeyCommand {
         if let button = close.customView as? UIButton, var config = button.configuration {
             config.background.backgroundColor = UIColor(white: 1, alpha: 0.18)
             config.cornerStyle = Theme.isDesktop ? .fixed : .capsule
-            config.background.cornerRadius = MacPush.radius
+            config.background.cornerRadius = MacPush.shapeRadius
             config.contentInsets = NSDirectionalEdgeInsets(top: 5, leading: 14, bottom: 5, trailing: 14)
             button.configuration = config
             button.sizeToFit()

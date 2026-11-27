@@ -13,7 +13,7 @@ enum PluginPageTheme {
         }
         let dark = traits.userInterfaceStyle == .dark
         let desktop = Theme.isDesktop
-        let radius: Int = desktop ? 8 : (DeviceWord.isMac ? 12 : 20)
+        let radius: Int = desktop ? Int(HQShape.desktopRadius(.sheet).rounded()) : (DeviceWord.isMac ? 12 : 20)
         let vars: [(String, String)] = [
             ("--hq-scheme", dark ? "dark" : "light"),
             ("--hq-bg", css(HQPalette.groupedPage)),

@@ -443,9 +443,11 @@ final class ShelfPieceView: UIView {
     private var themeWatch: NSObjectProtocol?
     isolated deinit { if let themeWatch { NotificationCenter.default.removeObserver(themeWatch) } }
 
-    /// Capsule chip, 18 pt card; the Desktop Look's 4 pt corners either way (its flat panels).
+    /// Capsule chip, 18 pt card; the Desktop Look's corners either way (its flat panels).
     private func applyCorners() {
-        cornerConfiguration = Theme.isDesktop ? .corners(radius: .fixed(4)) : isOpen ? .corners(radius: .fixed(18)) : .capsule()
+        cornerConfiguration = Theme.isDesktop
+            ? .corners(radius: .fixed(HQShape.radius(isOpen ? 18 : 22, isOpen ? .card : .capsule)))
+            : isOpen ? .corners(radius: .fixed(18)) : .capsule()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }

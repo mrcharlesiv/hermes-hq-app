@@ -387,7 +387,7 @@ final class SubagentRowView: ShelfRowControl {
     func update(_ child: SubagentProgress, picked: Bool, drillIn: Bool, now: Double) {
         self.child = child
         self.picked = picked
-        layer.cornerRadius = panel ? 0 : Theme.isDesktop ? 4 : 12
+        layer.cornerRadius = panel ? 0 : HQShape.radius(12, .card)
         backgroundColor = picked ? ChatPalette.fill4 : .clear
         if title.text != child.goal { title.text = child.goal }
         title.numberOfLines = panel ? 1 : ShelfText.isLarge ? 0 : 2

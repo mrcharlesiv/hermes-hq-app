@@ -80,7 +80,7 @@ final class ChatReactionsCell: ChatBaseCell {
             capsule.backgroundColor = chip.mine ? ChatPalette.meBubble : ChatPalette.botBubble
             // Desktop Look: the bubbles are outlined boxes on the page, so the badge is one too (filled with the
             // bubble colour it was a chip the page's own colour, invisible in dark).
-            capsule.layer.cornerRadius = Theme.isDesktop ? DesktopRows.radius : chip.frame.height / 2
+            capsule.layer.cornerRadius = Theme.isDesktop ? min(HQShape.desktopRadius(.capsule), chip.frame.height / 2) : chip.frame.height / 2
             capsule.layer.borderWidth = HQShape.line(Theme.isDesktop ? 1 : 1.5)
             capsule.layer.borderColor = Self.edge.resolvedColor(with: traitCollection).cgColor
             capsule.isUserInteractionEnabled = false

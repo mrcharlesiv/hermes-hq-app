@@ -282,7 +282,7 @@ struct KanbanBoardColumn: Equatable {
         guard let cell = collectionView.cellForItem(at: indexPath) else { return nil }
         let parameters = UIDragPreviewParameters()
         parameters.backgroundColor = .clear
-        parameters.visiblePath = UIBezierPath(roundedRect: cell.bounds, cornerRadius: Theme.isDesktop ? 3 : KanbanCardView.radius)
+        parameters.visiblePath = UIBezierPath(roundedRect: cell.bounds, cornerRadius: HQShape.radius(KanbanCardView.radius, .control))
         return parameters
     }
 

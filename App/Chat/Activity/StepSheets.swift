@@ -985,8 +985,8 @@ final class StepLineCell: UITableViewCell {
         let ink = (Theme.isDesktop ? HQPalette.stroke : GlassSheetKit.designed ? HQPalette.glassEdge : nil)?
             .resolvedColor(with: traitCollection).cgColor
         let edge = ink.flatMap { $0.alpha > 0 ? $0 : nil }
-        // 20: the code block's 8 plus the 12 pt between; the Desktop Look's cards are 10 (a project's on Sessions).
-        card.layer.cornerRadius = GlassSheetKit.designed ? 20 : Theme.isDesktop ? 10 : 12
+        // 20: the code block's 8 plus the 12 pt between; the Desktop Look's cards follow ProjectCard (10 pt at default).
+        card.layer.cornerRadius = GlassSheetKit.designed ? 20 : Theme.isDesktop ? min(16, ProjectCard.radius) : 12
         card.layer.borderWidth = edge == nil ? 0 : HQShape.hairline
         card.layer.borderColor = edge
         badge.backgroundColor = fill

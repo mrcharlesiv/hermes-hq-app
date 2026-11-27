@@ -731,9 +731,17 @@ enum MacPushKind { case plain, prominent, destructive }
 @MainActor enum MacPush {
     /// About 6 pt on the screen (the Mac draws the app at 77 %).
     static let radius: CGFloat = 7.5
-    /// [Mac UI check 2026-11-13] The corner the button draws now: the Desktop Look's flat `radius`; in the iOS look a
+    /// [desktop-radius] The Desktop Look's push button corner, scaling from sharp 0 through 7.5 (at 4 pt) up to a capsule.
+    static var desktopShapeRadius: CGFloat {
+        let base = HQShape.desktopRadius(.card)
+        if base <= 4 { return (base / 4) * radius }
+        let pill = (MacForm.controlHeight / 2).rounded(.up)
+        let t = min(1, (base - 4) / 12)
+        return radius + (pill - radius) * t
+    }
+    /// [Mac UI check 2026-11-13] The corner the button draws now: the Desktop Look's `desktopShapeRadius`; in the iOS look a
     /// capsule, as its soft rounded cards' other controls are (square grey bezels sat hard inside them).
-    static var shapeRadius: CGFloat { Theme.isDesktop ? radius : (MacForm.controlHeight / 2).rounded(.up) }
+    static var shapeRadius: CGFloat { Theme.isDesktop ? desktopShapeRadius : (MacForm.controlHeight / 2).rounded(.up) }
     static let insets = NSDirectionalEdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12)
 
     /// The control fill: the card colour in the iOS look's light mode (white, as a Mac's push button), the look's
@@ -761,7 +769,7 @@ enum MacPushKind { case plain, prominent, destructive }
     static func configuration(_ kind: MacPushKind = .plain) -> UIButton.Configuration {
         var config = UIButton.Configuration.plain()
         config.cornerStyle = Theme.isDesktop ? .fixed : .capsule   // [Mac UI check 2026-11-13] `shapeRadius`
-        config.background.cornerRadius = radius
+        config.background.cornerRadius = Theme.isDesktop ? desktopShapeRadius : radius
         config.contentInsets = insets
         config.titleLineBreakMode = .byTruncatingTail
         // [Mac full pass 2026-11-14] An icon beside the word is the word's size, not the system's large default.
@@ -968,7 +976,12 @@ extension View {
 
 /// [mac] #7 (review): the Mac's field and pop-up box, one look for both.
 @MainActor enum MacField {
-    static let radius: CGFloat = 5
+    /// 5 pt in Native look (and at the Hermes Look's 4 pt default), scaling cleanly with Hermes Look's Corners.
+    static var radius: CGFloat {
+        guard Theme.isDesktop else { return 5 }
+        let base = HQShape.desktopRadius(.field)
+        return base == 0 ? 0 : min(14, base + 1)
+    }
     static var fill: Color { Theme.isDesktop ? Color.hqFill3 : Color.hqGroupedCard }
     static var stroke: Color { Color.hqLabel3.opacity(Theme.isDesktop ? 0.7 : 0.5) }
     /// A placeholder in the dimmed colour (the system's was too dim to read in the Desktop Look dark).

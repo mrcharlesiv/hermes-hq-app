@@ -7,19 +7,21 @@ import UIKit
 nonisolated enum HQShape {
     enum Role { case inline, control, card, bubble, field, capsule, tile, group, sheet }
 
-    /// The desktop's corners (phone-ui-desktop.css:59-66).
-    static func desktopRadius(_ role: Role) -> CGFloat {
+    /// The desktop's corners scaled proportionally from `base` (default `ThemeTable.desktopRadius`, 4 pt by default,
+    /// matching phone-ui-desktop.css:59-66 at 4 pt: inline 2, control/tile 3, card/bubble/field/capsule/group 4, sheet 8).
+    static func desktopRadius(_ role: Role, base: CGFloat = CGFloat(ThemeTable.desktopRadius)) -> CGFloat {
+        let r = max(0, base)
         switch role {
-        case .inline: 2
-        case .control, .tile: 3
-        case .card, .bubble, .field, .capsule, .group: 4
-        case .sheet: 8
+        case .inline: return (r * 0.5).rounded()
+        case .control, .tile: return (r * 0.75).rounded()
+        case .card, .bubble, .field, .capsule, .group: return r
+        case .sheet: return r == 0 ? 0 : (r <= 4 ? r * 2 : min(28, r + 4))
         }
     }
 
-    /// `standard` with the look off; the desktop's corner for the role with it on.
+    /// `standard` with the look off; the desktop's corner for the role with it on, never rounder than `standard`.
     static func radius(_ standard: CGFloat, _ role: Role) -> CGFloat {
-        ThemeTable.current.state.desktopLook ? min(standard, desktopRadius(role)) : standard
+        ThemeTable.desktopLook ? min(standard, desktopRadius(role)) : standard
     }
 
     /// List and sheet gutter: 20 pt in the Desktop Look (phone-ui-desktop.css:349-351).

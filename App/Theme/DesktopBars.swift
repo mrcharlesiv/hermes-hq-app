@@ -500,15 +500,19 @@ extension UIBarButtonItem {
         return [(box(fill: .clear), .normal), (box(fill: HQPalette.cellPressed), .selected), (box(fill: HQPalette.cellPressed), .highlighted)]
     }
 
-    /// A resizable outlined box, light and dark variants in one asset.
+    /// A resizable outlined box, light and dark variants in one asset. Size and cap insets grow with `DesktopRows.radius`
+    /// so corners above 4 pt never distort inside a 32 pt segmented control.
     static func box(fill: UIColor, height: CGFloat = 11) -> UIImage {
-        dynamic { traits in
-            let size = CGSize(width: 11, height: height)
+        let radius = min(DesktopRows.radius, 14)
+        let cap = max(5, ceil(radius) + 1)
+        let side = max(height, cap * 2 + 1)
+        return dynamic { traits in
+            let size = CGSize(width: side, height: side)
             return UIGraphicsImageRenderer(size: size).image { _ in
-                let path = UIBezierPath(roundedRect: CGRect(origin: .zero, size: size).insetBy(dx: 0.5, dy: 0.5), cornerRadius: DesktopRows.radius)
+                let path = UIBezierPath(roundedRect: CGRect(origin: .zero, size: size).insetBy(dx: 0.5, dy: 0.5), cornerRadius: radius)
                 fill.resolvedColor(with: traits).setFill(); path.fill()
                 ChatPalette.strokeSecondary.resolvedColor(with: traits).setStroke(); path.lineWidth = HQShape.hairline; path.stroke()
-            }.resizableImage(withCapInsets: UIEdgeInsets(top: 5, left: 5, bottom: 5, right: 5), resizingMode: .stretch)
+            }.resizableImage(withCapInsets: UIEdgeInsets(top: cap, left: cap, bottom: cap, right: cap), resizingMode: .stretch)
         }
     }
 

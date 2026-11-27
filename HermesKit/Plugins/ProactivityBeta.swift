@@ -148,9 +148,23 @@ nonisolated enum ProactivityBetaAPI {
         return try ProactivityBeta.SweepOutcome.parse(data)
     }
 
-    /// True when the gateway answered FastAPI's bare 404 Not Found (plugin installed, web server needs restart).
+    /// True when the gateway answered 404 on `/status` (plugin not installed, disabled, or routes not mounted yet).
+    /// Hermes's runtime gate answers `404 {"detail":"Plugin not found"}` and FastAPI's fallback answers
+    /// `404 {"detail":"Not Found"}`; `/status` itself never returns a domain 404.
     static func isRouteMissing(_ error: Error) -> Bool {
         guard let http = error as? HTTPError else { return false }
-        return PluginPageBridge.routeMissing(status: http.status, body: http.body)
+        return http.status == 404
+    }
+
+    static func errorWords(_ error: Error, fallback: String = "Couldn’t reach Hermes.") -> String {
+        if let http = error as? HTTPError {
+            if let body = http.body, let data = body.data(using: .utf8), let parsed = try? JSONValue.parse(data),
+               let detail = RosterText.trimmed(parsed["detail"]) ?? RosterText.trimmed(parsed["error"]) ?? RosterText.trimmed(parsed["message"]),
+               !detail.isEmpty {
+                return detail
+            }
+            return "Hermes answered HTTP \(http.status)."
+        }
+        return (error as? LocalizedError)?.errorDescription ?? fallback
     }
 }

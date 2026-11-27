@@ -61,10 +61,16 @@ struct ProactivityBetaTests {
         #expect(status.loopRadarEnabled == false)
     }
 
-    @Test func routeMissingDetectsFastAPIBare404Only() {
+    @Test func routeMissingDetectsHermesPluginNotFoundAndFastAPI404() {
+        #expect(ProactivityBetaAPI.isRouteMissing(HTTPError(status: 404, body: #"{"detail":"Plugin not found"}"#)) == true)
         #expect(ProactivityBetaAPI.isRouteMissing(HTTPError(status: 404, body: #"{"detail":"Not Found"}"#)) == true)
-        #expect(ProactivityBetaAPI.isRouteMissing(HTTPError(status: 404, body: #"{"detail":"Offer not found."}"#)) == false)
+        #expect(ProactivityBetaAPI.isRouteMissing(HTTPError(status: 404, body: nil)) == true)
         #expect(ProactivityBetaAPI.isRouteMissing(HTTPError(status: 500, body: "boom")) == false)
+    }
+
+    @Test func errorWordsSurfacesHTTPDetailInsteadOfGenericUnreachable() {
+        #expect(ProactivityBetaAPI.errorWords(HTTPError(status: 502, body: #"{"detail":"Plugin host restarting"}"#)) == "Plugin host restarting")
+        #expect(ProactivityBetaAPI.errorWords(HTTPError(status: 503, body: "")) == "Hermes answered HTTP 503.")
     }
 
     @Test func profileQueryOmitsDefaultAndIncludesNamedBot() {

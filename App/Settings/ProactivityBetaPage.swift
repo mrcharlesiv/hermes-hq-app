@@ -92,7 +92,7 @@ final class ProactivityBetaModel {
             return
         } catch {
             if !ProactivityBetaAPI.isRouteMissing(error) {
-                phase = .failed((error as? LocalizedError)?.errorDescription ?? "Couldn’t reach Hermes.")
+                phase = .failed(ProactivityBetaAPI.errorWords(error))
                 return
             }
         }
@@ -140,7 +140,7 @@ final class ProactivityBetaModel {
             notice = "Installed Proactivity (Beta) for \(botName). It starts off by default."
             await refresh()
         } catch {
-            self.error = (error as? LocalizedError)?.errorDescription ?? "Couldn’t install Proactivity (Beta)."
+            self.error = ProactivityBetaAPI.errorWords(error, fallback: "Couldn’t install Proactivity (Beta).")
         }
     }
 
@@ -156,7 +156,7 @@ final class ProactivityBetaModel {
             if let note { notice = note }
         } catch {
             phase = previous
-            self.error = (error as? LocalizedError)?.errorDescription ?? "Couldn’t save Proactivity settings."
+            self.error = ProactivityBetaAPI.errorWords(error, fallback: "Couldn’t save Proactivity settings.")
         }
     }
 
@@ -176,7 +176,7 @@ final class ProactivityBetaModel {
             let updated = try await ProactivityBetaAPI.status(client, profile: profile)
             phase = .ready(updated)
         } catch {
-            self.error = (error as? LocalizedError)?.errorDescription ?? "Signal check failed."
+            self.error = ProactivityBetaAPI.errorWords(error, fallback: "Signal check failed.")
         }
     }
 

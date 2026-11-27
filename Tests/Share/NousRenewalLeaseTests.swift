@@ -19,8 +19,8 @@ nonisolated func leaseFolder(_ name: String) -> URL {
         let first = try #require(NousRenewalLease.acquire(account: "a", in: dir))
         #expect(NousRenewalLease.acquire(account: "a", in: dir)?.token == nil, "a second taker waits")
         #expect(NousRenewalLease.acquire(account: "b", in: dir)?.token != nil, "another account is not held up")
-        // A lease whose process went away mid-renewal is ignored after 20 s.
-        #expect(NousRenewalLease.acquire(account: "a", in: dir, now: Date().addingTimeInterval(25))?.token != nil)
+        // A lease whose process went away mid-renewal is ignored after `ttl`.
+        #expect(NousRenewalLease.acquire(account: "a", in: dir, now: Date().addingTimeInterval(NousRenewalLease.ttl + 5))?.token != nil)
         // The first lease no longer owns the file: its release leaves the newer one alone.
         first.release()
         #expect(NousRenewalLease.acquire(account: "a", in: dir)?.token == nil)

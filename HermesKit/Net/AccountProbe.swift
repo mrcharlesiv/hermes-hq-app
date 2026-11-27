@@ -10,7 +10,7 @@ nonisolated final class AccountProbe: Sendable {
     private let auth: GatewayAuth
     private let transport: HTTPTransport
 
-    init(stored: StoredAccount, vault: AccountVault = .app) {
+    init(stored: StoredAccount, vault: AccountVault = .app, renewals: NousRenewals = .shared) {
         let base = URL(string: stored.url) ?? URL(string: "https://invalid.invalid")!
         account = stored.gatewayAccount ?? GatewayAccount(id: stored.url + "|" + stored.username, baseURL: base,
                                                           kind: stored.isNous ? .nous : .password, username: nil, label: stored.url)
@@ -19,7 +19,7 @@ nonisolated final class AccountProbe: Sendable {
         self.transport = transport
         // Verified: the saved session is the one this phone signed in with; a renewal it causes is written back.
         auth = GatewayAuth(stored: stored, base: base, transport: transport, vault: vault, verified: true,
-                           logContext: "another gateway")
+                           renewals: renewals, logContext: "another gateway")
     }
 
     enum Answer: Sendable, Equatable {
@@ -83,6 +83,23 @@ nonisolated final class AccountProbe: Sendable {
         return data.isEmpty ? .null : try JSONValue.parse(data)
     }
 
+    /// Renews a Nous session whose refresh token has sat untouched long enough to risk Portal's 24 h idle expiry
+    /// (e.g. a parked gateway with no cached chats, or a background refresh wake-up).
+    func keepAlive(olderThan age: TimeInterval = NousSessionKeepAlive.defaultInterval) async throws -> Answer {
+        let began = ContinuousClock.now
+        do {
+            let renewed = try await auth.keepAlive(olderThan: age)
+            if renewed { AppLog.trace("net", "probe keepalive \(AppLog.tag(account.id)): renewed in \(AppLog.ms(since: began))ms") }
+            return .session(.null)
+        } catch let failure as GatewayFailure where failure.isRejection {
+            AppLog.note("net", "probe keepalive \(AppLog.tag(account.id)): refused (\(failure.code)), \(AppLog.ms(since: began))ms")
+            return .refused
+        } catch {
+            AppLog.swallowed("net", "probe keepalive \(AppLog.tag(account.id))", error)
+            throw error
+        }
+    }
+
     /// A renewal the read started alongside finishes first (`GatewayAuth.settleRenewal`): cancelling it can lose the
     /// rotated pair and sign the account out.
     func close() {
@@ -92,5 +109,33 @@ nonisolated final class AccountProbe: Sendable {
             await auth.close()
             transport.invalidate()
         }
+    }
+}
+
+/// Keeps saved Nous sessions alive before Portal's 24 h rotating refresh token expires (during iOS `BGAppRefreshTask`
+/// wakes or while the Mac app sits in the background). Only touches accounts whose latest known pair is at least
+/// `interval` old, and never touches Keychain while locked.
+nonisolated enum NousSessionKeepAlive {
+    static let defaultInterval: TimeInterval = 4 * 3600
+
+    @discardableResult
+    static func refreshDue(vault: AccountVault = .app, renewals: NousRenewals = .shared,
+                           olderThan interval: TimeInterval = defaultInterval,
+                           now: Double = Date().timeIntervalSince1970,
+                           makeProbe: ((StoredAccount) -> AccountProbe)? = nil) async -> Int {
+        guard !vault.isLocked else { return 0 }
+        guard let saved = try? vault.load() else { return 0 }
+        var refreshed = 0
+        for stored in saved.accounts {
+            if Task.isCancelled { break }
+            guard stored.isNous, let tokens = stored.nous, tokens.canRenew else { continue }
+            let live = await renewals.latest(tokens)
+            guard live.needsKeepAlive(after: interval, now: now) else { continue }
+            guard let base = URL(string: stored.url), GatewayAddress.reachable(base) else { continue }
+            let probe = makeProbe?(stored) ?? AccountProbe(stored: stored, vault: vault, renewals: renewals)
+            if let answer = try? await probe.keepAlive(olderThan: interval), case .session = answer { refreshed += 1 }
+            probe.close()
+        }
+        return refreshed
     }
 }

@@ -30,6 +30,10 @@ actor GatewayAuth {
     private(set) var rejection: GatewayFailure?
     /// The one refresh in flight (rule 1): requests that need it await it; a renewal alongside runs it unawaited.
     private var refreshFlight: Task<Void, Error>?
+    /// Follow-up collector for `503 refresh_pending`: waits `Retry-After` and collects the rotated pair from the
+    /// gateway so an in-progress rotation is never abandoned before sleep or transport shutdown.
+    private var pendingCollector: Task<Void, Never>?
+    private var lastPendingAfter: TimeInterval?
     /// [perf-returns] Refreshes a request waited for: a dial notes whether its ticket did (the phone log's connect
     /// line, "(auth refreshed)"). [renew-alongside] A renewal alongside is not counted unless a 401 joins it.
     private(set) var refreshesRun = 0
@@ -38,6 +42,8 @@ actor GatewayAuth {
     private(set) var renewalsAlongside = 0
     private var alongsideRestsUntil: ContinuousClock.Instant?
     static let alongsideRest: Duration = .seconds(30)
+    static let refreshTimeout: TimeInterval = 30
+    static let pendingMaxAttempts = 4
     /// A Nous refresh the gateway couldn't finish (Nous slow or down: 503, a timeout, 429) may still have rotated the
     /// pair upstream, and each retry with the same refresh token risks the refusal that ends the session. So the next
     /// refresh of that pair waits a while, longer after each miss, and asks in between fail at once with the same answer
@@ -76,21 +82,34 @@ actor GatewayAuth {
     func close() {
         closed = true
         onRejected = nil
+        pendingCollector?.cancel()
+        pendingCollector = nil
     }
 
-    /// [renewal-cancel] Waits (up to `limit`) for a Nous refresh in flight before its transport is invalidated. Closing
-    /// the transport cancels the POST, and one cut off after Portal rotated the pair loses the successor while the
-    /// spent refresh token stops working 5 minutes later: the account was signed out (log 2026-11-02: the news check
-    /// for a second Hermes Cloud gateway started a renewal alongside its read, finished first and closed, cancelling
-    /// the renewal ~1 s in, six times; Portal then answered session_expired at the next use).
-    func settleRenewal(limit: Duration = .seconds(20)) async {
-        guard let flight = refreshFlight else { return }
+    /// [renewal-cancel] Waits (up to `limit`) for any Nous refresh in flight (or `refresh_pending` collection) before
+    /// its transport is invalidated. Closing the transport cancels the POST, and one cut off after Portal rotated the
+    /// pair loses the successor while the spent refresh token stops working later: the account was signed out.
+    func settleRenewal(limit: Duration = .seconds(35)) async {
+        guard refreshFlight != nil || pendingCollector != nil else { return }
         let began = ContinuousClock.now
-        await withChildTasks(of: Void.self) { group in
-            group.addTask { _ = try? await flight.value }
-            group.addTask { try? await Task.sleep(for: limit) }
-            _ = await group.next()
-            group.cancelAll()
+        let deadline = began + limit
+        while true {
+            let work: Task<Void, Never>
+            if let flight = refreshFlight {
+                work = Task { _ = try? await flight.value }
+            } else if let pending = pendingCollector {
+                work = pending
+            } else {
+                break
+            }
+            let left = ContinuousClock.now.duration(to: deadline)
+            guard left > .zero else { break }
+            await withChildTasks(of: Void.self) { group in
+                group.addTask { await work.value }
+                group.addTask { try? await Task.sleep(for: left) }
+                _ = await group.next()
+                group.cancelAll()
+            }
         }
         let what = logContext.map { ", \($0)" } ?? ""
         AppLog.note("auth", "closing\(what): waited \(ConnectSteps.ms(began.duration(to: .now))) ms for the renewal in flight")
@@ -110,6 +129,7 @@ actor GatewayAuth {
     /// `/api/` route refreshes once (single flight) and retries once. Returns any status; callers map non-2xx.
     func send(_ request: URLRequest, retryOn401: Bool = true, pool: HTTPTransport.Pool? = nil) async throws -> (Data, HTTPURLResponse) {
         try ensureUsable()
+        await adoptLatestInProcess()
         let route = route(of: request.url)
         if retryOn401 { try await renewIfDue() }
         let sentAccess = stored.nous?.accessToken
@@ -129,11 +149,23 @@ actor GatewayAuth {
         return (data, response)
     }
 
+    /// Advances `stored.nous` to the newest pair this process already rotated to in `NousRenewals`. A fresh client or
+    /// probe constructed from a cached `StoredAccount` then sees the live pair immediately instead of treating an old
+    /// launch-time pair as expired on every check.
+    private func adoptLatestInProcess() async {
+        guard kind == .nous, let tokens = stored.nous else { return }
+        let live = await renewals.latest(tokens)
+        if !live.samePair(tokens), live.userId == tokens.userId {
+            stored.nous = live
+        }
+    }
+
     /// Proactive Nous renewal before a first attempt (spec 01 §7.1). In the token's last minute (D6, `needsRenewal`)
     /// the request waits for it; past half its lifetime (`renewsAlongside`) it starts one and goes out at once with
     /// the current token, which a 401 would still recover (it joins that flight). Either way, a renewal that fails
     /// without a refusal leaves the current token in use.
     private func renewIfDue() async throws {
+        await adoptLatestInProcess()
         guard kind == .nous, let tokens = stored.nous else { return }
         if tokens.needsRenewal() {
             do { try await refresh(sentAccess: tokens.accessToken, trigger: "due") }
@@ -203,12 +235,29 @@ actor GatewayAuth {
     }
 
     /// A transfer's answer: its cookies are noted; true when the caller should send it again (a first 401 on an
-    /// /api/ route, after one single-flight refresh).
-    func finishTransfer(_ response: HTTPURLResponse, request: URLRequest, sentAccess: String?, retried: Bool) async throws -> Bool {
+    /// /api/ route written by Hermes, after one single-flight refresh).
+    func finishTransfer(_ response: HTTPURLResponse, body: Data? = nil, request: URLRequest, sentAccess: String?, retried: Bool) async throws -> Bool {
         if closed { throw GatewayFailure.connectionChanged }
         noteCookies(response)
         guard response.statusCode == 401, !retried, route(of: request.url).contains("/api/") else { return false }
+        if let body, !GatewayRefusal.isHermes(body) {
+            AppLog.note("auth", "transfer answered 401, not by Hermes: session kept")
+            return false
+        }
         try await refresh(sentAccess: sentAccess, trigger: "401 transfer")
+        return true
+    }
+
+    /// Renews a Nous session whose refresh token is approaching Portal's 24 h idle lifetime even when no chat is being
+    /// read (e.g. a parked gateway with no cached chats, or a background refresh wake-up).
+    func keepAlive(olderThan age: TimeInterval = 4 * 3600, now: Double = Date().timeIntervalSince1970) async throws -> Bool {
+        try ensureUsable()
+        await adoptLatestInProcess()
+        if let tokens = stored.nous, let kept = await rotatedElsewhere(than: tokens) {
+            stored.nous = kept
+        }
+        guard kind == .nous, let tokens = stored.nous, tokens.needsKeepAlive(after: age, now: now) else { return false }
+        try await refresh(sentAccess: tokens.accessToken, trigger: "keepalive")
         return true
     }
 
@@ -220,6 +269,7 @@ actor GatewayAuth {
     /// `trigger` says in the phone's log what asked for it (401, due, alongside, restore), never anything secret.
     func refresh(sentAccess: String?, trigger: String = "401") async throws {
         if let rejection { throw rejection }
+        await adoptLatestInProcess()
         if kind == .nous, let sentAccess, let current = stored.nous?.accessToken, current != sentAccess { return }
         if refreshFlight == nil, let rest = refreshRest, let pair = stored.nous, rest.pair.samePair(pair), ContinuousClock.now < rest.until {
             AppLog.trace("auth", "refresh (\(trigger)) waits: \(rest.misses) unfinished, \(ConnectSteps.ms(ContinuousClock.now.duration(to: rest.until))) ms left")
@@ -253,17 +303,60 @@ actor GatewayAuth {
             do {
                 try await self.performRefresh(trigger: trigger)
                 self.refreshFlight = nil
+                self.lastPendingAfter = nil
                 self.noteRefresh(nil, pair: sent)
             } catch {
                 self.refreshFlight = nil
                 let failure = GatewayFailure.from(error)
-                self.noteRefresh(failure, pair: sent, after: (error as? RetryLater)?.after)
+                let retry = error as? RetryLater
+                self.noteRefresh(failure, pair: sent, after: retry?.after)
+                if retry?.pending == true, let sent {
+                    let wait = retry?.after ?? 2
+                    self.lastPendingAfter = wait
+                    self.schedulePendingCollection(for: sent, after: wait)
+                } else {
+                    self.lastPendingAfter = nil
+                }
                 if failure.isRejection { self.reject(.sessionEnded) }
                 throw failure
             }
         }
         refreshFlight = flight
         return flight
+    }
+
+    /// Follows up on Hermes's `503 refresh_pending`: Portal is actively rotating `pair`, so collect and persist the
+    /// rotated pair once `Retry-After` elapses instead of leaving it stranded in the gateway's temporary cache.
+    private func schedulePendingCollection(for pair: NousTokens, after: TimeInterval) {
+        guard pendingCollector == nil, !closed, rejection == nil else { return }
+        pendingCollector = Task {
+            let release = await self.renewals.beginHold("Hermes HQ sign-in renewal")
+            var wait = after
+            for _ in 0..<Self.pendingMaxAttempts {
+                let delay = Duration.milliseconds(Int(min(max(wait, 1), 10) * 1000) + 50)
+                try? await Task.sleep(for: delay)
+                guard !Task.isCancelled else { break }
+                await self.adoptLatestInProcess()
+                guard !self.closed, self.rejection == nil, self.stored.nous?.samePair(pair) == true else { break }
+                if let flight = self.refreshFlight {
+                    _ = try? await flight.value
+                    break
+                }
+                self.lastPendingAfter = nil
+                do {
+                    try await self.startFlight(trigger: "pending").value
+                    break
+                } catch {
+                    if let nextWait = self.lastPendingAfter {
+                        wait = nextWait
+                        continue
+                    }
+                    break
+                }
+            }
+            self.pendingCollector = nil
+            await release()
+        }
     }
 
     private func performRefresh(trigger: String) async throws {
@@ -302,6 +395,7 @@ actor GatewayAuth {
 
     /// Rotates the Nous pair; returns how, for the log ("rotated", "adopted a saved pair", …).
     private func refreshNous() async throws -> String {
+        await adoptLatestInProcess()
         guard var tokens = stored.nous else { throw GatewayFailure.signedOut }
         // [own-login] No refresh token (a self-hosted login without offline_access): the session is over.
         guard tokens.canRenew else { throw GatewayFailure.sessionEnded }
@@ -312,7 +406,7 @@ actor GatewayAuth {
         // sends an unexpired current token while this holds; an already-expired one fails here, not as a sign-out
         // (`.keychainLocked` is not a rejection).
         if persisted, vault.isLocked { throw GatewayFailure.keychainLocked }
-        // Rule 6: a pair rotated elsewhere (another client of this account) is the live one: adopt it.
+        // Rule 6: a pair rotated elsewhere (another client or process of this account) is the live one: adopt it.
         var adopted = false
         if let kept = await rotatedElsewhere(than: tokens) {
             stored.nous = kept
@@ -347,18 +441,18 @@ actor GatewayAuth {
         // refusal ends the session as before.
         for attempt in 0..<2 {
             let url = try GatewayAddress.endpoint(base: base, path: "/auth/native/refresh")
-            let timeout = try budgetLeft().map { min(15, $0) } ?? 15
-            let transport = self.transport, vault = self.vault, key = self.key
+            // Never shorten `/auth/native/refresh` to a restore budget: `verify(budget:)` enforces its deadline with
+            // `untilDeadline` so the caller moves on while the rotation runs to completion and saves the rotated pair.
+            let timeout = Self.refreshTimeout
+            let transport = self.transport, vault = self.vault, key = self.key, persisted = self.persisted
             let outcome = await renewals.renew(key, tokens,
                 post: { sent in await GatewayAuth.postRefresh(url, sent, timeout: timeout, transport: transport) },
-                keep: { sent, renewed in vault.renewNous(key, sent: sent, renewed: renewed) })
+                keep: { sent, renewed in persisted ? vault.renewNous(key, sent: sent, renewed: renewed) : true })
             if closed { throw GatewayFailure.connectionChanged }
             switch outcome {
             case .tokens(let renewed):
                 guard renewed.userId == tokens.userId else { throw GatewayFailure.sessionEnded } // never another account's
                 stored.nous = renewed
-                // Persist before use (rule 3). `keep` already wrote it; this covers a save that raced the rotation.
-                _ = vault.renewNous(key, sent: tokens, renewed: renewed)
                 if let lifetime = renewed.lifetime { AppLog.note("auth", "nous access token lifetime \(Int(lifetime)) s (renewed)") }
                 return attempt > 0 ? "rotated the pair another process saved after a refusal"
                     : adopted ? "rotated a pair saved by another process" : "rotated"
@@ -368,12 +462,13 @@ actor GatewayAuth {
                 tokens = kept
                 AppLog.note("net", "auth refresh refused; another process saved a newer pair meanwhile: using it")
                 if !kept.needsRenewal() { return "adopted the pair another process saved after a refusal" }
-            case .unavailable(let status, let after):
+            case .unavailable(let status, let after, let pending):
                 // [kept-session] A 400/401/403 lands here only when Hermes did not write it (`NousGatewayProtocol.answer`).
                 let failure: GatewayFailure = status == 429 ? .rateLimited
                     : [400, 401, 403].contains(status) ? .blocked : .from(status: status, body: nil)
                 if failure == .blocked { AppLog.note("auth", "refresh answered \(status), not by Hermes: session kept") }
-                if let after { throw RetryLater(failure: failure, after: after) }
+                if let after { throw RetryLater(failure: failure, after: after, pending: pending) }
+                if pending { throw RetryLater(failure: failure, after: 2, pending: true) }
                 throw failure
             case .failed(let failure): throw failure
             }
@@ -384,9 +479,10 @@ actor GatewayAuth {
     /// The Keychain's pair for this account when another client or process rotated `tokens` and saved the successor
     /// (same user, not a pair this run already spent); read fresh from the Keychain each time.
     private func rotatedElsewhere(than tokens: NousTokens) async -> NousTokens? {
-        guard persisted, let kept = vault.peek(key)?.nous, !kept.samePair(tokens), kept.userId == tokens.userId,
-              await renewals.latest(kept).samePair(kept), await renewals.latest(tokens).samePair(tokens) else { return nil }
-        return kept
+        guard persisted, let kept = vault.peek(key)?.nous, !kept.samePair(tokens), kept.userId == tokens.userId else { return nil }
+        guard await !renewals.isSpent(kept) else { return nil }
+        let live = await renewals.latest(kept)
+        return live.samePair(tokens) ? nil : live
     }
 
     /// POST /auth/native/refresh for one pair (cookies off). Another account's tokens in the answer are a refusal.
@@ -403,7 +499,9 @@ actor GatewayAuth {
             case .tokens(let renewed): return renewed.userId == tokens.userId ? .tokens(renewed) : .refused
             case .refused: return .refused
             case .unavailable(let status):
-                return .unavailable(status, retryAfter: RetryLater.parse(response.value(forHTTPHeaderField: "Retry-After")))
+                let pending = NousGatewayProtocol.isRefreshPending(status: status, body: data)
+                let after = NousGatewayProtocol.retryAfter(header: response.value(forHTTPHeaderField: "Retry-After"), body: data)
+                return .unavailable(status, retryAfter: after, pending: pending)
             }
         } catch {
             return .failed(GatewayFailure.from(error))
@@ -479,6 +577,7 @@ actor GatewayAuth {
         do {
             switch kind {
             case .nous:
+                await adoptLatestInProcess()
                 if let tokens = stored.nous, tokens.needsRenewal() { try await refresh(sentAccess: tokens.accessToken, trigger: "restore") }
                 try await checkMe(retry: true, timeout: try budgetLeft() ?? 15)
             case .password:
@@ -594,6 +693,8 @@ actor GatewayAuth {
     private func reject(_ failure: GatewayFailure) {
         guard rejection == nil else { return }
         rejection = failure
+        pendingCollector?.cancel()
+        pendingCollector = nil
         AppLog.note("auth", "session refused by the gateway (\(failure.code))")
         if kind == .password { transport.clearCookies() }
         if persisted { vault.forgetSession(key) }

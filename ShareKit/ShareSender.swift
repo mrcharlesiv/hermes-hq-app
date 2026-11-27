@@ -498,14 +498,26 @@ nonisolated final class ShareSender: NSObject, URLSessionTaskDelegate, @unchecke
             return
         }
         var request = URLRequest(url: try endpoint("/auth/native/refresh"))
-        request.timeoutInterval = 15
+        request.timeoutInterval = 30
         request.httpMethod = "POST"
         request.httpShouldHandleCookies = false
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: ["refresh_token": sent.refreshToken, "provider": sent.providerName])
-        let (body, raw): (Data, URLResponse)
-        do { (body, raw) = try await session.data(for: request) } catch { throw ShareFailure.transport(error) }
-        guard let response = raw as? HTTPURLResponse else { throw ShareFailure.refused("") }
+        var body = Data(), response: HTTPURLResponse!
+        for pendingAttempt in 0..<3 {
+            let (rawBody, raw): (Data, URLResponse)
+            do { (rawBody, raw) = try await session.data(for: request) } catch { throw ShareFailure.transport(error) }
+            guard let http = raw as? HTTPURLResponse else { throw ShareFailure.refused("") }
+            body = rawBody; response = http
+            guard http.statusCode == 503, pendingAttempt < 2,
+                  let obj = (try? JSONSerialization.jsonObject(with: rawBody)) as? [String: Any],
+                  obj["error"] as? String == "refresh_pending" else { break }
+            let headerWait = http.value(forHTTPHeaderField: "Retry-After").flatMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+            let bodyWait = (obj["retry_after"] as? NSNumber)?.doubleValue
+            let wait = min(max(headerWait ?? bodyWait ?? 2, 1), 5)
+            try? await Task.sleep(nanoseconds: UInt64((wait + 0.05) * 1_000_000_000))
+            try live()
+        }
         guard let rotated = ShareNous.renewed(status: response.statusCode, body: body, userId: sent.userId, provider: sent.provider) else {
             // [reliability] B16: refused because the app spent this pair a moment earlier (outside the lease: an older
             // app, or the lease couldn't be written)? Its successor is then in the Keychain: use it, as the app does

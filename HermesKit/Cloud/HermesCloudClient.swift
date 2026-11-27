@@ -544,6 +544,9 @@ actor HermesCloudClient {
         if let id = http.value(forHTTPHeaderField: "Mcp-Session-Id"), !id.isEmpty { sessionId = id }
         switch http.statusCode {
         case 200..<300: break
+        case 401 where Self.isProxyWall(data):
+            AppLog.note("auth", "hermes cloud mcp answered 401 by a proxy wall: login kept")
+            throw PortalError.problem
         case 401 where !retried: return try await post(message, retried: true, refused: token, timeout: timeout)
         case 401: await login.signOut(); throw PortalError.signedOut
         case 404 where sessionId != nil: throw CloudSessionLost()
@@ -556,6 +559,16 @@ actor HermesCloudClient {
         if message["id"] == nil { return .null }   // a notification: 202, no body
         let type = http.value(forHTTPHeaderField: "Content-Type") ?? ""
         return try Self.answer(data, eventStream: type.contains("text/event-stream"))
+    }
+
+    /// True when a 401 body clearly came from Cloudflare or an HTML proxy/captive wall rather than Portal's MCP server.
+    static func isProxyWall(_ data: Data) -> Bool {
+        guard !data.isEmpty else { return false }
+        if let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], object["cloudflare_error"] != nil {
+            return true
+        }
+        let head = String(decoding: data.prefix(128), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return head.hasPrefix("<!doctype html") || head.hasPrefix("<html")
     }
 
     /// The JSON-RPC answer in a body: plain JSON, or the last `data:` event carrying a result or error.

@@ -89,6 +89,14 @@ nonisolated struct NousTokens: Codable, Sendable, Hashable {
         return now >= obtainedAt + lifetime / 2
     }
 
+    /// Whether this pair has sat long enough without a rotation to warrant a proactive keep-alive before Portal's
+    /// 24 h rotating refresh token expires (e.g. a parked gateway with no cached chats, or a background refresh wake-up).
+    func needsKeepAlive(after interval: TimeInterval = 4 * 3600, now: Double = Date().timeIntervalSince1970) -> Bool {
+        guard canRenew else { return false }
+        if let obtainedAt { return now - obtainedAt >= interval }
+        return expiresAt > 0 && now >= expiresAt
+    }
+
     /// The same pair (what compare-and-swap compares; `obtainedAt` is bookkeeping).
     func samePair(_ other: NousTokens) -> Bool {
         accessToken == other.accessToken && refreshToken == other.refreshToken && userId == other.userId

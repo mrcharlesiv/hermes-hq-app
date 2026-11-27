@@ -575,7 +575,7 @@ import Testing
         #expect(gateway.count("POST /auth/native/refresh") == 1)
         let refresh = try #require(gateway.event("POST /auth/native/refresh"))
         #expect(refresh.keys == ["provider", "refresh_token"])
-        #expect(refresh.text.contains("nrt_1") && refresh.headers["Authorization"] == nil && !refresh.handlesCookies && refresh.timeout == 15)
+        #expect(refresh.text.contains("nrt_1") && refresh.headers["Authorization"] == nil && !refresh.handlesCookies && refresh.timeout == 30)
         #expect(gateway.event("GET /api/auth/me")?.headers["Authorization"] == "Bearer nat_2")
         #expect(result.renewedCookies)
         // The Keychain holds the rotated pair, with when it arrived.

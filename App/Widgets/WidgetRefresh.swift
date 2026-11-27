@@ -118,10 +118,17 @@ import UIKit
     }
 
     /// Everything the widgets show, brought up to date by what this process holds. Logged with what it could do.
+    /// Also renews any saved Nous session that has sat untouched for ≥ 4 h so Portal's 24 h rotating refresh token
+    /// never lapses while the app stays in the background.
     static func refresh(reason: String) async -> Outcome {
         let state = UIApplication.shared.applicationState == .background ? "background" : "foreground"
         let window = UIApplication.shared.connectedScenes.contains { ($0 as? UIWindowScene)?.windows.isEmpty == false }
+        let keptAlive = await NousSessionKeepAlive.refreshDue(vault: .app)
         guard TileWidgetWriter.shared.accountKey != nil else {
+            if keptAlive > 0 {
+                AppLog.note("widgets", "\(reason) (\(state)): renewed \(keptAlive) Nous session(s) with no window")
+                return .unchanged
+            }
             AppLog.note("widgets", "\(reason) (\(state)): nobody signed in in this launch, nothing to refresh")
             return .failed
         }

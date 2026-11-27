@@ -1,6 +1,6 @@
 // One account's URLSessions (spec 01 §8.2, §19.1): ephemeral, no cache, its own cookie jar (never the shared
 // storage), redirects never followed, a byte ceiling on every body, and two pools over one jar: control (sign-in,
-// session checks, renewals, tickets; waits for a network path up to 15 s) and bulk (everything else; fails fast).
+// session checks, renewals, tickets; waits for a network path up to 30 s) and bulk (everything else; fails fast).
 
 import Foundation
 import Synchronization
@@ -33,7 +33,7 @@ nonisolated final class HTTPTransport: Sendable {
         }
         let controlConfig = config.copy() as! URLSessionConfiguration
         controlConfig.waitsForConnectivity = true
-        controlConfig.timeoutIntervalForResource = 15
+        controlConfig.timeoutIntervalForResource = 30
         controlConfig.httpCookieStorage = config.httpCookieStorage
         let delegate = TransportDelegate()
         let queue = OperationQueue()

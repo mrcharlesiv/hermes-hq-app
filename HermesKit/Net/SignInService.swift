@@ -113,13 +113,15 @@ import UIKit
             let candidate = StoredAccount(url: base.absoluteString, username: StoredAccount.nousUsername(userId: tokens.userId),
                                           label: Self.accountLabel(label), nous: tokens, access: access)   // [onboarding] the optional Name
             // Check the bearer (renewing first if it is already due), then save the pair the gateway now honours.
-            // `persisted: false`: a refused check must not touch a saved session of the same Nous account.
+            // `persisted: false` and an isolated `NousRenewals`: a throw-away check never shares flights with or wipes a
+            // saved session of the same Nous account.
             let check = GatewayAuth(stored: candidate, base: base, transport: transport, vault: store.vault, verified: false,
-                                    persisted: false)
+                                    persisted: false, renewals: NousRenewals())
             do { try await check.verify(budget: nil) }
             catch let failure as GatewayFailure where failure.isRejection { throw GatewayFailure.nousFailed }
             await check.close()
             try await store.saveOffMain(await check.stored)
+            await NousRenewals.shared.forgetUnsaved(candidate.key)
             NousSheetLogin.finished()
             return adopt(store.storedCurrent ?? candidate, transport: transport, verified: true)
         } catch {
@@ -226,6 +228,7 @@ import UIKit
         activeClient = nil
         client?.endClient()
         let next = try? store.signOutCurrent()
+        if let key = stored?.key { Task { await NousRenewals.shared.forgetUnsaved(key) } }
         if let leaving, let stored, leaving.kind == .password {
             let transport: HTTPTransport
             if let client { transport = client.httpTransport } else {

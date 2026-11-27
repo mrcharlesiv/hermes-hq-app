@@ -37,7 +37,7 @@ nonisolated enum GatewayTransfer {
                 AppLog.note("transfer", "upload failed: \(AppLog.scrub(String(describing: error))), \(AppLog.ms(since: began)) ms")
                 throw error
             }
-            if try await auth.finishTransfer(response, request: request, sentAccess: sentAccess, retried: retried) {
+            if try await auth.finishTransfer(response, body: data, request: request, sentAccess: sentAccess, retried: retried) {
                 retried = true
                 continue
             }
@@ -75,7 +75,7 @@ nonisolated enum GatewayTransfer {
                 AppLog.note("transfer", "download failed: \(AppLog.scrub(String(describing: error))), \(AppLog.ms(since: began)) ms")
                 throw error
             }
-            if try await auth.finishTransfer(response, request: request, sentAccess: sentAccess, retried: retried) {
+            if try await auth.finishTransfer(response, body: errorBody, request: request, sentAccess: sentAccess, retried: retried) {
                 retried = true
                 continue
             }

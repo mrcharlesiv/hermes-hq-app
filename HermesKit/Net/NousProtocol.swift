@@ -106,6 +106,21 @@ nonisolated enum NousGatewayProtocol {
 
     enum Answer: Equatable, Sendable { case tokens(NousTokens), refused(String), unavailable(Int) }
 
+    /// Whether a `/auth/native/refresh` response means Hermes is still rotating this refresh token upstream
+    /// (`503 {"error":"refresh_pending", ...}`): the caller should retry the same pair after `retryAfter`.
+    static func isRefreshPending(status: Int, body: Data) -> Bool {
+        guard status == 503, let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] else { return false }
+        return object["error"] as? String == "refresh_pending"
+    }
+
+    /// Retry wait from a `Retry-After` header, falling back to a JSON `"retry_after"` number in the body.
+    static func retryAfter(header: String?, body: Data) -> TimeInterval? {
+        if let parsed = RetryLater.parse(header) { return parsed }
+        guard let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any],
+              let seconds = (object["retry_after"] as? NSNumber)?.doubleValue, seconds > 0 else { return nil }
+        return seconds
+    }
+
     /// The `/auth/native/token` or `/auth/native/refresh` answer (spec 01 §6.1 step 10).
     /// The pair must be for `provider`, the login this account signed in with.
     static func answer(status: Int, body: Data, provider: String = nous, now: Double = Date().timeIntervalSince1970) -> Answer {
@@ -136,9 +151,14 @@ nonisolated enum NousGatewayProtocol {
 actor NousRenewals {
     static let shared = NousRenewals()
 
-    /// `unavailable`: the gateway's status, and the `Retry-After` it sent (Hermes's `refresh_pending` 503: Portal is
-    /// still rotating; the same pair is asked again after it, log study 2026-10-28).
-    enum Outcome: Sendable { case tokens(NousTokens), refused, unavailable(Int, retryAfter: TimeInterval?), failed(GatewayFailure) }
+    /// `unavailable`: the gateway's status, the `Retry-After` it sent, and whether Hermes said `refresh_pending`
+    /// (Portal is still rotating; the same pair must be collected after `retryAfter` so the rotated token isn't stranded).
+    enum Outcome: Sendable {
+        case tokens(NousTokens)
+        case refused
+        case unavailable(Int, retryAfter: TimeInterval?, pending: Bool = false)
+        case failed(GatewayFailure)
+    }
 
     private var flights: [String: Task<Outcome, Never>] = [:]
     /// Each spent refresh token's successor, for this run of the app.
@@ -161,14 +181,20 @@ actor NousRenewals {
 
     init(hold: @escaping Hold = NousRenewals.backgroundTime) { self.hold = hold }
 
-    /// The newest pair this run has seen for `tokens` (chain up to 16).
+    /// Acquires a background-time hold using this coordinator's hook (so tests stay off `UIApplication.shared`).
+    func beginHold(_ name: String) async -> @Sendable () async -> Void { await hold(name) }
+
+    /// The newest pair this run has seen for `tokens`, walking the entire rotation chain with a cycle guard.
+    /// Never cap by a small hop count: a long-lived app session easily exceeds 16 rotations in a few hours, and stopping
+    /// early returns an already-spent refresh token whose replay triggers Portal reuse detection and signs the account out.
     func latest(_ tokens: NousTokens) -> NousTokens {
-        var tokens = tokens
-        for _ in 0..<16 {
-            guard let next = successors[tokens.refreshToken] else { break }
-            tokens = next
+        var current = tokens
+        var seen: Set<String> = [current.refreshToken]
+        while let next = successors[current.refreshToken] {
+            current = next
+            guard seen.insert(current.refreshToken).inserted else { break }
         }
-        return tokens
+        return current
     }
 
     /// Whether this refresh token was already spent by a rotation in this run.
@@ -191,12 +217,19 @@ actor NousRenewals {
             guard live.needsRenewal() else { return .tokens(live) }
             tokens = live
         }
+        // Hard guard: never post a refresh token this process already spent (even if a successor cycle existed).
+        guard !isSpent(tokens) else { return .tokens(live) }
         let hold = self.hold
+        let priorUnsaved = unsaved[key]?.sent
         let task = Task<Outcome, Never> {
             let release = await hold("Hermes HQ sign-in renewal")
             let outcome = await post(tokens)
             if case .tokens(let renewed) = outcome, renewed.userId == tokens.userId {
-                self.landed(key, sent: tokens, renewed: renewed, keep: keep, saved: keep(tokens, renewed))
+                // If an earlier rotation could not reach Keychain, Keychain still holds `priorUnsaved`, not `tokens`.
+                // Compare-and-swap against `priorUnsaved` so unlocking writes the newest pair straight over it.
+                let expectedInVault = priorUnsaved ?? tokens
+                self.landed(key, sent: tokens, expectedInVault: expectedInVault, renewed: renewed, keep: keep,
+                            saved: keep(expectedInVault, renewed))
             }
             self.flightDone(key)
             await release()
@@ -206,16 +239,20 @@ actor NousRenewals {
         return await task.value
     }
 
-    private func landed(_ key: String, sent: NousTokens, renewed: NousTokens, keep: @escaping Keep, saved: Bool) {
+    private func landed(_ key: String, sent: NousTokens, expectedInVault: NousTokens, renewed: NousTokens,
+                        keep: @escaping Keep, saved: Bool) {
         successors[sent.refreshToken] = renewed
         if saved { unsaved[key] = nil; return }
         // A rotation while the device is locked (a Mac renewing in a dark wake) can't reach Keychain. The gateway
         // honours the spent token for only 5 minutes, so a relaunch after that (an update) read the spent pair back and
         // was signed out. Write it the moment the device unlocks, not only on the next trip to the background.
-        unsaved[key] = (sent, renewed, keep)
+        unsaved[key] = (expectedInVault, renewed, keep)
         AppLog.note("auth", "rotated Nous pair not saved (Keychain locked); retrying when unlocked")
         watchUnlock()
     }
+
+    /// Drops a pending unsaved rotation for `key` (after explicit sign-out or fresh sign-in replaces the saved pair).
+    func forgetUnsaved(_ key: String) { unsaved[key] = nil }
 
     private func flightDone(_ key: String) { flights[key] = nil }
 

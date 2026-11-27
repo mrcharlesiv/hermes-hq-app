@@ -457,11 +457,14 @@ nonisolated func untilDeadline<T: Sendable>(_ deadline: ContinuousClock.Instant,
     }
 }
 
-/// A 429 that named how long to wait (spec 01 §15): honoured where the client retries on its own.
+/// A 429 (or 503 `refresh_pending`) that named how long to wait (spec 01 §15): honoured where the client retries on its own.
 nonisolated struct RetryLater: Error, Sendable {
     let failure: GatewayFailure
     /// Seconds to wait before trying again.
     let after: TimeInterval
+    /// True for Hermes's `503 {"error":"refresh_pending"}`: the server is actively rotating this refresh token upstream,
+    /// so the client should collect the rotated pair after `after` instead of leaving it stranded in the server cache.
+    var pending: Bool = false
 
     /// `Retry-After` as delta-seconds or an HTTP-date; nil when absent, unreadable or not in the future.
     static func parse(_ header: String?, now: Date = Date()) -> TimeInterval? {

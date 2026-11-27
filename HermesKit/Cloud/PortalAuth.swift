@@ -6,6 +6,7 @@
 
 import Foundation
 import Security
+import UIKit
 
 nonisolated enum Portal {
     static let base = URL(string: "https://portal.nousresearch.com")!
@@ -179,12 +180,26 @@ nonisolated struct PortalAuth: Sendable {
         switch status {
         case 200..<300: return value
         case 400, 401, 403:
+            // Only an OAuth/Portal JSON refusal ends the saved Portal login: a proxy, captive portal or Cloudflare
+            // HTML challenge with 400/401/403 says nothing about the refresh token, so the login is kept.
+            guard Self.isPortalRefusal(value) else {
+                AppLog.note("auth", "portal \(path) HTTP \(status), not a Portal refusal: login kept")
+                throw PortalError.problem
+            }
             AppLog.note("auth", "portal \(path) refused \(status) \(RosterText.text(value["error"]))")
             throw PortalError(kind: .refused, message: RosterText.trimmed(value["error_description"]) ?? "Nous Portal refused the sign-in.")
         default:
             AppLog.note("auth", "portal \(path) HTTP \(status)")
             throw PortalError.problem
         }
+    }
+
+    /// True when `value` is a JSON refusal written by Portal's OAuth endpoints (never HTML, empty or Cloudflare JSON).
+    static func isPortalRefusal(_ value: JSONValue) -> Bool {
+        guard case .object = value, value["cloudflare_error"] == nil else { return false }
+        if value["error"]?.string != nil { return true }
+        if let detail = value["detail"], !detail.isNull { return true }
+        return false
     }
 
     static func fetch(_ request: URLRequest, session: URLSession) async throws(PortalError) -> (Data, Int) {
@@ -225,14 +240,17 @@ actor PortalLogin {
 
     private let keychain: PortalKeychain
     private let auth: PortalAuth
+    private let hold: NousRenewals.Hold
     private var renewal: Task<PortalCredentials, Error>?
     /// A rotated pair the Keychain refused to take (before the phone's first unlock after a restart). Portal has
     /// already spent the refresh token the Keychain still holds, so this copy is the login: it is used, and written
-    /// again on every later ask, until the Keychain takes it. Sending the spent one would end the Portal session.
+    /// again on unlock or every later ask, until the Keychain takes it. Sending the spent one would end the Portal session.
     private var unsaved: PortalCredentials?
+    private var watchingUnlock = false
 
-    init(keychain: PortalKeychain = PortalKeychain(), auth: PortalAuth = PortalAuth()) {
-        self.keychain = keychain; self.auth = auth
+    init(keychain: PortalKeychain = PortalKeychain(), auth: PortalAuth = PortalAuth(),
+         hold: @escaping NousRenewals.Hold = NousRenewals.backgroundTime) {
+        self.keychain = keychain; self.auth = auth; self.hold = hold
     }
 
     var isSignedIn: Bool { unsaved != nil || keychain.read() != nil }
@@ -259,6 +277,21 @@ actor PortalLogin {
         return unsaved
     }
 
+    private func retryUnsaved() {
+        _ = current()
+    }
+
+    private func watchUnlock() {
+        guard !watchingUnlock else { return }
+        watchingUnlock = true
+        let names = [UIApplication.protectedDataDidBecomeAvailableNotification, UIApplication.didBecomeActiveNotification]
+        for name in names {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in
+                Task { await self?.retryUnsaved() }
+            }
+        }
+    }
+
     /// A usable access token: the saved one, renewed first when it's about to lapse (or `force`d after a 401).
     /// `refused` is the token the 401 came back for: when the login has moved on since that request went out (another
     /// call renewed it meanwhile), the newer token is the answer and nothing is renewed again.
@@ -267,19 +300,29 @@ actor PortalLogin {
         if force, let refused, refused != saved.accessToken { return saved.accessToken }
         if !force && !saved.needsRenewal() { return saved.accessToken }
         if let renewal { return try await renewal.value.accessToken }
-        let auth = self.auth, keychain = self.keychain
+        let auth = self.auth, keychain = self.keychain, hold = self.hold
         let task = Task<PortalCredentials, Error> {
+            let release = await hold("Hermes HQ Portal renewal")
             do {
                 let renewed = try await auth.renew(saved)
                 // Signed out or replaced by a new sign-in meanwhile: this rotation is not the login any more.
-                guard !Task.isCancelled else { return renewed }
-                if !keychain.save(renewed) {
-                    self.unsaved = renewed
-                    AppLog.note("auth", "portal: a renewed login could not be saved yet; kept in memory")
+                if !Task.isCancelled {
+                    if keychain.save(renewed) {
+                        self.unsaved = nil
+                    } else {
+                        self.unsaved = renewed
+                        self.watchUnlock()
+                        AppLog.note("auth", "portal: a renewed login could not be saved yet; kept in memory")
+                    }
                 }
+                await release()
                 return renewed
             } catch let error as PortalError where error.kind == .signedOut {
                 if !Task.isCancelled { self.unsaved = nil; keychain.clear() }
+                await release()
+                throw error
+            } catch {
+                await release()
                 throw error
             }
         }

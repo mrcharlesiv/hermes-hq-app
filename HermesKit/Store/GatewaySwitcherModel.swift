@@ -68,13 +68,21 @@ final class GatewaySwitcherModel {
     // MARK: Schedule (`installGatewaySwitcher`)
 
     /// 4 s after launch, then every 3 minutes while the app is active (× 3 in Low Power Mode or when hot).
+    /// On the Mac, where the app often stays open behind other windows for > 24 h, inactive ticks also keep saved Nous
+    /// sessions from hitting Portal's 24 h idle refresh-token expiry.
     func start() {
         guard schedule == nil else { return }
         schedule = Task { [weak self] in
             try? await Task.sleep(for: Self.firstCheck)
             while !Task.isCancelled {
                 guard let self else { return }
-                if self.active, self.isShown { await self.check(force: false) }
+                if self.active, self.isShown {
+                    await self.check(force: false)
+                } else {
+                    #if targetEnvironment(macCatalyst)
+                    await NousSessionKeepAlive.refreshDue(vault: self.store.vault)
+                    #endif
+                }
                 await PowerPolls.wait(.seconds(Self.every), floor: .zero)   // [offline] §6.9: one rule for every poll
             }
         }
@@ -156,27 +164,45 @@ final class GatewaySwitcherModel {
             } else {
                 let chats = parkedChats(account)
                 AppLog.trace("gateways", "parked chats \(chats.count) for \(AppLog.tag(Self.host(account)))")
-                if chats.isEmpty {
+                let needsNousKeepAlive: Bool
+                if chats.isEmpty, stored.isNous, let tokens = stored.nous, tokens.canRenew {
+                    let live = await NousRenewals.shared.latest(tokens)
+                    needsNousKeepAlive = live.needsKeepAlive(now: now().timeIntervalSince1970)
+                } else {
+                    needsNousKeepAlive = false
+                }
+                if chats.isEmpty && !needsNousKeepAlive {
                     count = 0
                     unreachable.remove(account.id)
                 } else {
                     let probe = makeProbe(stored)
                     var live: [ParkedChatLive] = []
                     var refused = false, unreachable = false
-                    for chat in chats {
+                    if chats.isEmpty {
                         do {
-                            switch try await probe.read(id: chat.id, profile: chat.profile) {
-                            // Keyed by the id asked for: the gateway resolves prefixes and lineage, so its answer's
-                            // own `id` may differ (`AG/hermes_cli/web_routers/sessions.py:562-582`).
-                            case .session(let json): if let row = ParkedChatLive(json: json, id: chat.id) { live.append(row) }
-                            case .refused: refused = true
-                            case .missing: break
+                            if case .refused = try await probe.keepAlive(olderThan: NousSessionKeepAlive.defaultInterval) {
+                                refused = true
                             }
                         } catch {
-                            AppLog.swallowed("gateways", "news read", error)
+                            AppLog.swallowed("gateways", "nous keepalive", error)
                             unreachable = true
                         }
-                        if refused || unreachable { break }
+                    } else {
+                        for chat in chats {
+                            do {
+                                switch try await probe.read(id: chat.id, profile: chat.profile) {
+                                // Keyed by the id asked for: the gateway resolves prefixes and lineage, so its answer's
+                                // own `id` may differ (`AG/hermes_cli/web_routers/sessions.py:562-582`).
+                                case .session(let json): if let row = ParkedChatLive(json: json, id: chat.id) { live.append(row) }
+                                case .refused: refused = true
+                                case .missing: break
+                                }
+                            } catch {
+                                AppLog.swallowed("gateways", "news read", error)
+                                unreachable = true
+                            }
+                            if refused || unreachable { break }
+                        }
                     }
                     probe.finish()
                     if unreachable {
@@ -232,7 +258,12 @@ final class GatewaySwitcherModel {
 /// What the news check needs from a parked account's client (tests fake it).
 nonisolated protocol ParkedAccountReading: Sendable {
     func read(id: String, profile: String?) async throws -> AccountProbe.Answer
+    func keepAlive(olderThan age: TimeInterval) async throws -> AccountProbe.Answer
     func finish()
+}
+
+extension ParkedAccountReading {
+    nonisolated func keepAlive(olderThan age: TimeInterval) async throws -> AccountProbe.Answer { .missing }
 }
 
 extension AccountProbe: ParkedAccountReading {

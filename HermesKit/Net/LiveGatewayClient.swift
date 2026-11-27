@@ -217,13 +217,15 @@ nonisolated final class LiveGatewayClient: GatewayClient, GatewayTransfers, Gate
         if Thread.isMainThread { MainActor.assumeIsolated(apply) } else { Task { @MainActor in apply() } }
     }
 
-    /// A Nous renewal in flight (one started alongside a request) finishes before the transport goes: a switch to
-    /// another gateway otherwise cancels it and can lose the rotated pair (`GatewayAuth.settleRenewal`).
+    /// A Nous renewal in flight (one started alongside a request, or a `refresh_pending` collection) finishes before
+    /// the auth closes and the transport goes: a switch to another gateway otherwise cancels it and can lose the rotated
+    /// pair (`GatewayAuth.settleRenewal`).
     func shutdown() {
-        guard endClient() else { return }
+        guard endClient(closeAuth: false) else { return }
         let auth = self.auth, transport = self.transport
         Task {
             await auth.settleRenewal()
+            await auth.close()
             transport.invalidate()
         }
     }
@@ -317,7 +319,7 @@ nonisolated final class LiveGatewayClient: GatewayClient, GatewayTransfers, Gate
     }
 
     /// Ends the client without releasing its transport (a sign-out still sends `/auth/logout` with its cookies).
-    @discardableResult func endClient() -> Bool {
+    @discardableResult func endClient(closeAuth: Bool = true) -> Bool {
         let first = closed.mutate { done -> Bool in
             defer { done = true }
             return !done
@@ -326,8 +328,10 @@ nonisolated final class LiveGatewayClient: GatewayClient, GatewayTransfers, Gate
         pathWatcher?.stop()
         commands.yield(.shutdown)
         commands.finish()
-        let auth = self.auth
-        Task { await auth.close() }
+        if closeAuth {
+            let auth = self.auth
+            Task { await auth.close() }
+        }
         return true
     }
 

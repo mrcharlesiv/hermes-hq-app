@@ -7,7 +7,7 @@
 // and uses it instead of sending. No file lock is held (a lock held in a shared container while the app is suspended
 // gets the app ended by iOS): the lease is a file that says when it was taken, and one older than `ttl` is ignored.
 //
-// DECISION: `ttl` 20 s (the renewal's own timeout is 15 s); a waiting process waits for the other at most 16 s, then
+// DECISION: `ttl` 35 s (the renewal's own timeout is 30 s); a waiting process waits for the other at most 31 s, then
 // takes over. Without an App Group (the native identity, which has no Share extension) there is no one to wait for:
 // `acquire` answers a lease that does nothing.
 
@@ -15,8 +15,8 @@ import Foundation
 import CryptoKit
 
 nonisolated enum NousRenewalLease {
-    static let ttl: TimeInterval = 20
-    static let longestWait: TimeInterval = 16
+    static let ttl: TimeInterval = 35
+    static let longestWait: TimeInterval = 31
     static let poll: UInt64 = 250_000_000
 
     /// The App Group folder the lease lives in; nil without an App Group.

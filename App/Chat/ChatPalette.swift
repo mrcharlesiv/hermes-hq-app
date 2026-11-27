@@ -171,6 +171,9 @@ nonisolated enum ChatMetrics {
     /// below it, at least 36 pt.
     static func tableFooter(_ style: ChatStyle) -> CGFloat { max(36, ceil(style.codeLabel.lineHeight) + 16) }
     static let tableCellPadV: CGFloat = 6
+    /// [transcript] The widest column a table card still lays right or centred: 14 of its letters' heights, room for
+    /// any figure at any text size. A wider one is prose (`TextLayout.tableGrid`).
+    static func tableAlignedMaxWidth(_ style: ChatStyle) -> CGFloat { style.table.pointSize * 14 }
     static let ruleSpace: CGFloat = 12
     /// A code card's code area clamps at 120 pt; a 28 pt fade and a toggle cover its bottom (spec 06 §2.6).
     static let codeClamp: CGFloat = 120

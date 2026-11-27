@@ -1386,6 +1386,9 @@ nonisolated enum TextLayout {
     /// Cells laid out unbounded (one line each; `<br>` breaks lines), columns as wide as their widest cell, rows as tall
     /// as their tallest; 6 × 10 pt cell padding, top-aligned (spec 03 §9.5). A right or centred column (or a column of
     /// numbers, `MarkdownTable.alignment`) places each cell in it (the text itself is laid out leading).
+    /// A column wider than `ChatMetrics.tableAlignedMaxWidth` holds prose, not figures, and is laid leading whatever it
+    /// asked for: its short cells would sit at the far end of it, past the card's edge (owner 2026-11-26: a "rate"
+    /// column as wide as one long cell showed that cell and nothing under it, "$118" and "$155" a swipe away).
     /// `minWidth`: a narrower table's last column grows to it (the card's footer needs the room).
     static func tableGrid(_ table: MarkdownTable, style: ChatStyle, keep: Bool, minWidth: CGFloat = 0) -> (pieces: [TextPiece], grid: TableGrid) {
         let columns = table.columnCount
@@ -1416,12 +1419,13 @@ nonisolated enum TextLayout {
         for w in widths { xs.append(xs.last! + w + 2 * padH) }
         var ys: [CGFloat] = [0]
         for h in heights { ys.append(ys.last! + ceil(h)) }
+        let alignedMax = ChatMetrics.tableAlignedMaxWidth(style)
         var pieces: [TextPiece] = []
         for (r, line) in layouts.enumerated() {
             for (c, tk) in line.enumerated() {
                 guard let tk else { continue }
                 let free = widths[c] - tk.size.width
-                let align = table.alignment(c)
+                let align = widths[c] > alignedMax ? .natural : table.alignment(c)
                 let shift = align == .right ? free : align == .center ? (free / 2).rounded() : 0
                 pieces.append(TextPiece(text: tk.text, frame: CGRect(x: xs[c] + padH + shift, y: ys[r] + padV,
                                                                      width: tk.size.width, height: tk.size.height)))

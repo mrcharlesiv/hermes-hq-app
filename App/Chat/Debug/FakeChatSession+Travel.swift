@@ -2,7 +2,8 @@
 import Foundation
 
 // [travel] Demo chat (`-HQDemoTravel`): flights card with relaxed filter + segments/policies, hotels card with
-// coordinates & photo gallery, Mermaid architecture diagram, and an email draft with Cc/Bcc — stand-ins only.
+// coordinates & photo gallery, Mermaid architecture diagram, an email draft with Cc/Bcc, and hotels written as a
+// table with one wide right-aligned column — stand-ins only.
 
 extension FakeChatSession {
     static var travelMessages: [ChatMessage] {
@@ -153,6 +154,20 @@ extension FakeChatSession {
             "body": .string("Hi Dana,\n\nSharing the flight and hotel options for December 12–15. Let me know if The Harbor House works for the team.\n\nBest,\nAlex"),
         ]
 
+        // A reply that wrote its hotels as a table: the rate column is as wide as its one long cell and asks to be
+        // right-aligned, so its short rates must still sit where they can be seen (`TextLayout.tableGrid`).
+        let tableText = """
+        Rooms for **two adults, December 12–13**:
+
+        | Hotel | Rate for one night | Good for |
+        |---|---:|---|
+        | **[The Harbor House](https://example.com/hotels/harbor-house)** | **$240 flexible or 60,000 points**; other cash rates from **$190** | **Closest to the gate.** A short indoor walk from the terminal. |
+        | **[Mercer Park Inn](https://example.com/hotels/mercer-park)** | **$118** | **Lowest price.** Breakfast and a pool. |
+        | **[Canal Street Suites](https://example.com/hotels/canal-street)** | **$155** | **Most room.** A suite, with a shuttle to the airport. |
+
+        I'd pick **The Harbor House**. Nothing is booked yet.
+        """
+
         let now = Date()
         return [
             ChatMessage(id: "tr-u1", role: .user, parts: [.text("Find flights from SFO to JFK and a boutique hotel for Dec 12–15.")],
@@ -166,6 +181,10 @@ extension FakeChatSession {
             ChatMessage(id: "tr-a3", role: .assistant, parts: [
                 tool("tr-c3", DraftCards.tool, "Draft email", draftArgs),
             ], timestamp: now.addingTimeInterval(-120), rowId: 9404),
+            ChatMessage(id: "tr-u2", role: .user, parts: [.text("Which hotels are near the airport?")],
+                        timestamp: now.addingTimeInterval(-90), rowId: 9405),
+            ChatMessage(id: "tr-a4", role: .assistant, parts: [.text(tableText)],
+                        timestamp: now.addingTimeInterval(-60), rowId: 9406),
         ]
     }
 }

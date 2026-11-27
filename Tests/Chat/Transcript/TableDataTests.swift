@@ -100,6 +100,37 @@ import UIKit
         let plain = MarkdownRenderer.render("Here you go.\n\n| a | b |\n|---|---|\n| 1 | 2 |", style: style)
         #expect(plain.blocks.compactMap { if case .table(let t) = $0 { return t.caption } else { return nil } }.first == nil)
     }
+
+    /// Owner 2026-11-26: a right-aligned "rate" column as wide as one long cell showed that cell and nothing under
+    /// it; the short rates sat at the column's far end, past the card's edge. A column that wide is laid leading; a
+    /// column of figures keeps its side.
+    @Test func aWideColumnsShortCellsStartAtItsLeadingEdge() throws {
+        let style = ChatStyle.make(category: .large)
+        let markdown = """
+        | Hotel | Rate shown | Nights |
+        |---|---:|---:|
+        | Harbor Inn | $240 flexible or 60,000 points; other cash rates from $190 a night | 1 |
+        | Mill House | $118 | 12 |
+        """
+        let table = try #require(MarkdownRenderer.render(markdown, style: style).blocks.compactMap { block -> MarkdownTable? in
+            if case .table(let t) = block { return t } else { return nil }
+        }.first)
+        #expect(table.alignment(1) == .right && table.alignment(2) == .right)
+        let laid = TextLayout.tableGrid(table, style: style, keep: false)
+        let columns = laid.grid.columns
+        func piece(_ words: String) throws -> CGRect {
+            try #require(laid.pieces.first { $0.text.string == words }).frame
+        }
+        let pad = ChatMetrics.tableCellPadH
+        #expect(columns[2] - columns[1] > ChatMetrics.tableAlignedMaxWidth(style))
+        // The wide column: its header and its short rate start where its long cell does.
+        #expect(try piece("$118").minX == columns[1] + pad)
+        #expect(try piece("Rate shown").minX == columns[1] + pad)
+        // The narrow column of figures still ends at its trailing edge.
+        #expect(columns[3] - columns[2] < ChatMetrics.tableAlignedMaxWidth(style))
+        #expect(abs(try piece("1").maxX - (columns[3] - pad)) < 0.01)
+        #expect(abs(try piece("12").maxX - (columns[3] - pad)) < 0.01)
+    }
 }
 
 @Suite("Table page", .serialized)

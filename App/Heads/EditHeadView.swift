@@ -753,7 +753,7 @@ private struct StripHeadImage: View {
     }
 }
 
-private enum StripHeadImages {
+enum StripHeadImages {
     static let cache: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
         cache.countLimit = 300
@@ -764,10 +764,12 @@ private enum StripHeadImages {
         "\(head.cacheKey)|\(size)|\(scale)|\(dark)" as NSString
     }
 
-    /// The same picture `HeadImageCache` draws (idle, compact under 64 pt), made on a background thread.
+    /// Dots choices use the stage's full grid, rasterized at the thumbnail's pixel size; other heads keep their usual drawing.
     static func render(_ head: Head, size: CGFloat, scale: CGFloat, dark: Bool) async -> UIImage? {
         let image = await Task.detached(priority: .userInitiated) { () -> RenderedHead? in
-            HeadRenderer.picture(head, side: size, scale: scale, dark: dark).map(RenderedHead.init)
+            let side = head.themed?.theme == "dots" ? max(size, 64) : size
+            let renderScale = side == size ? scale : scale * size / side
+            return HeadRenderer.picture(head, side: side, scale: renderScale, dark: dark).map(RenderedHead.init)
         }.value
         return image.map { UIImage(cgImage: $0.image, scale: scale, orientation: .up) }
     }

@@ -318,14 +318,15 @@ nonisolated enum ThemeResolver {
         case .custom(let hex):
             let seed = RGBA(hex: hex)
             if dark, seed.labL < 10 {
-                // [bot-colour] Black (an ink face's chat) in dark: a plain mid grey with white text, not the brightened
-                // rule's lighter grey (owner 2026-11-11, from the Grok Bot chat: "In dark mode for a black chat bubble,
-                // I want it like this").
-                start = RGBA(hex: 0x5C5C5C)
+                // [bot-colour] Black (an ink face's chat) in dark: a deep charcoal in the skin's own hue (#363B44 in
+                // Nous dark) rather than neutral #5C5C5C, which read warm and washed out against cool dark surfaces
+                // and voice memo cards (the owner, 2026-11-26).
+                start = darkInkBubble(t)
+                t.rowAccent = start.raisingL(to: 57)
             } else {
                 start = dark ? seed.raisingL(to: 57).mix(75, .black) : seed
+                t.rowAccent = dark ? seed.raisingL(to: 57) : seed
             }
-            t.rowAccent = dark ? seed.raisingL(to: 57) : seed
         case .preset(let preset):
             guard let seed = preset.seed(dark: dark) else {
                 // On a skin whose text is soft, the text goes toward plain black or white until it reads (as the
@@ -364,6 +365,27 @@ nonisolated enum ThemeResolver {
         t.meBubble = bubble
         t.meText = .white
         t.meTime = RGBA.white.alpha(dark ? 0.88 : 0.85)
+    }
+
+    /// [bot-colour] A near-black message colour (an ink face) in dark mode: `#363B44` cool slate charcoal on Nous dark,
+    /// and a hue-matched step above the reply bubble on every other skin so it never turns warm or washes out memo cards.
+    static func darkInkBubble(_ t: ThemeTokens) -> RGBA {
+        if t.page == RGBA(hex: 0x0D1015), t.botBubble == RGBA(hex: 0x26282C) {
+            return RGBA(hex: 0x363B44)
+        }
+        let page = t.page.over(.white)
+        let reply = t.botBubble.over(page)
+        let ink = t.label.over(page)
+        let base = reply.luminance > page.luminance ? reply : page.mix(90, ink)
+        var keep = 88.0
+        var bubble = base.mix(keep, ink)
+        while keep > 50, bubble.labDistance(to: reply) < 8 {
+            keep -= 2
+            let next = base.mix(keep, ink)
+            if RGBA.white.contrast(with: next) < messageInk { break }
+            bubble = next
+        }
+        return bubble
     }
 
     /// A skin's own iOS look (`SkinOwnLook`) over what the general rule made: its surfaces, its greys, its code card.

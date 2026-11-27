@@ -1927,7 +1927,15 @@ private let allStates: [ThemeState] = SkinCatalog.all.flatMap { skin in
         let light = ThemeResolver.resolve(black).light
         #expect(light.meBubble == RGBA(hex: 0x0A0A0A) && light.meText == .white, "a black face's chat is black, with white text")
         let dark = ThemeResolver.resolve(black).dark
-        #expect(dark.meBubble == RGBA(hex: 0x5C5C5C) && dark.meText == .white, "in dark, a plain mid grey with white text")
+        #expect(dark.meBubble == RGBA(hex: 0x363B44) && dark.meText == .white, "in dark, a cool slate charcoal with white text")
+        for skin in SkinCatalog.all {
+            var skinBlack = ThemeState(skinID: skin.id)
+            skinBlack.messageColour = head.messageColour
+            let skinDark = ThemeResolver.resolve(skinBlack).dark
+            let reply = skinDark.botBubble.over(skinDark.page.over(.white))
+            #expect(RGBA.white.contrast(with: skinDark.meBubble) >= ThemeResolver.messageInk, "\(skin.id) dark ink white contrast")
+            #expect(skinDark.meBubble.labDistance(to: reply) >= 7, "\(skin.id) dark ink stands apart from reply bubble")
+        }
         head.color = .paper
         #expect(head.messageColour == .preset(.graphite))
         for name in Head.ColorName.allCases {

@@ -30,7 +30,7 @@ import Testing
         #expect(title.accessibilityLabel == "New Chat, Otto")
     }
 
-    @Test func emptyProjectChatShowsProjectSubtitleAndRevertsOnFirstMessage() async throws {
+    @Test func projectChatKeepsProjectSubtitleAfterFirstMessage() async throws {
         let session = StubProjectChatSession(title: "New Chat", botName: "Otto", messages: [])
         let vc = ChatViewController(session: session)
         vc.sessionProject = ChatProjectBadge(name: "acme-api")
@@ -42,16 +42,19 @@ import Testing
         #expect(title.subtitleHasAttachment)
         #expect(title.shownSubtitleText?.contains("acme-api") == true)
 
-        // First message arrives: header hands back to the bot's name and drops the project subtitle.
+        // First message arrives and chat is titled: header keeps showing the project instead of duplicating the bot name.
+        session.title = "Check build failure"
         session.appendUserMessage("Check the build failure")
         try await Task.sleep(for: .milliseconds(80))
 
-        #expect(title.subtitleProject == nil)
-        #expect(!title.subtitleHasAttachment)
-        #expect(title.shownSubtitleText == "Otto")
+        #expect(title.title == "Check build failure")
+        #expect(title.subtitleProject == ChatProjectBadge(name: "acme-api"))
+        #expect(title.subtitleHasAttachment)
+        #expect(title.shownSubtitleText?.contains("acme-api") == true)
+        #expect(title.shownSubtitleText != "Otto")
     }
 
-    @Test func nonEmptyProjectChatAndNonProjectChatKeepBotSubtitle() throws {
+    @Test func existingProjectChatShowsProjectSubtitleWhileNonProjectAndTaskKeepPreviousBehavior() throws {
         let existing = StubProjectChatSession(title: "Fix build", botName: "Otto", messages: [
             ChatMessage(id: "m1", role: .user, parts: [.text("Hello")], timestamp: Date(), rowId: 1),
         ])
@@ -59,7 +62,14 @@ import Testing
         existingVC.sessionProject = ChatProjectBadge(name: "acme-api")
         existingVC.loadViewIfNeeded()
         let existingTitle = try #require(existingVC.navigationItem.titleView as? ChatTitleView)
+        #expect(existingTitle.subtitleProject == ChatProjectBadge(name: "acme-api"))
+        #expect(existingTitle.subtitleHasAttachment)
+        #expect(existingTitle.shownSubtitleText?.contains("acme-api") == true)
+
+        // Clearing the project (e.g. moved out to Home) reverts to the bot's name.
+        existingVC.sessionProject = nil
         #expect(existingTitle.subtitleProject == nil)
+        #expect(!existingTitle.subtitleHasAttachment)
         #expect(existingTitle.shownSubtitleText == "Otto")
 
         let home = StubProjectChatSession(title: "New Chat", botName: "Otto", messages: [])

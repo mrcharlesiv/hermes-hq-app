@@ -386,16 +386,10 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
     private let macIOSBand = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
     private let macIOSVeil = UIView()
     private var topBandShown = false
-    /// [bot-tabs-seamless] On iPhone and iPad in Normal Theming (Liquid Glass), a single slim floating glass capsule
-    /// tucked below the nav bar's pills (Option A). Hidden in Desktop Look, where `ChatViewController.edgeStandIn`
-    /// already extends seamlessly behind the strip down to its bottom hairline.
-    private let iosGlassBar: UIVisualEffectView = {
-        let view = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
-        view.cornerConfiguration = .capsule()
-        view.isUserInteractionEnabled = false
-        view.accessibilityIdentifier = "chat.strip.glass"
-        return view
-    }()
+    /// [bot-tabs-seamless] Whether this mobile strip currently has active chats to display (even if temporarily folded
+    /// away while the software keyboard covers the chat), so `ChatViewController` keeps the unified translucent top
+    /// banner across the navigation bar and strip in both Native and Hermes looks.
+    var hasBanner: Bool { !tabs && availableHeight > 0 }
     private let scroller = UIScrollView()
     private let row = UIStackView()
     private let newChat = UIButton(configuration: .glass())
@@ -416,10 +410,6 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
         : scroller.trailingAnchor.constraint(equalTo: phoneRule.leadingAnchor, constant: -4)
     private lazy var phoneScrollerToClusterEnd = scroller.trailingAnchor.constraint(equalTo: phoneCluster.trailingAnchor)
     private lazy var phoneAllToClusterEnd = allChats.trailingAnchor.constraint(equalTo: phoneCluster.trailingAnchor)
-    private var phoneClusterLeading: NSLayoutConstraint?
-    private var phoneClusterTrailing: NSLayoutConstraint?
-    private var phoneClusterTop: NSLayoutConstraint?
-    private var phoneClusterBottom: NSLayoutConstraint?
     private var newChatHeight: NSLayoutConstraint?
     private var newChatWidth: NSLayoutConstraint?
     private var allChatsHeight: NSLayoutConstraint?
@@ -552,7 +542,7 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
     /// whenever more chats exist or the row overflows and scrolls.
     private func updatePhoneAllVisibility() {
         guard !tabs else { return }
-        let side: CGFloat = Theme.isDesktop ? 12 : 40
+        let side: CGFloat = 12
         let maxWidth = max(0, view.bounds.width - side)
         let contentWidth = row.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize).width + 12
         let needsAll = allCount > 0 && (allCount > shown.count || (maxWidth > 0 && contentWidth > maxWidth + 1))
@@ -600,15 +590,14 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
     }
     /// [compact-strip] Owner 2026-11-21 ("Entire little strip for the sessions is still too tall … taking up way too much
     /// screen space"): the iPhone's row is slim; `StripView` keeps each name a 44 pt tap.
-    /// [bot-tabs-seamless] On the Mac, a compact ~27 pt item inside a ~33 pt sub-row; on iPhone/iPad, a ~32 pt
-    /// floating Liquid Glass capsule in Normal Theming or a snug ~34 pt seamless sub-row in Desktop Look.
+    /// [bot-tabs-seamless] On the Mac, a compact ~27 pt item inside a ~33 pt sub-row; on iPhone/iPad, a snug ~34 pt
+    /// seamless sub-row living inside the unified translucent top banner in both Native and Hermes looks.
     private var pillHeight: CGFloat {
         tabs ? max(26, ceil(macFont(weight: .medium).lineHeight) + 8)
              : max(32, ceil(phoneFont(weight: .medium).lineHeight) + 14)
     }
     private var stripHeight: CGFloat {
-        if tabs { return pillHeight + 6 }
-        return Theme.isDesktop ? pillHeight + 2 : pillHeight + 8
+        tabs ? pillHeight + 6 : pillHeight + 2
     }
 
     override func loadView() {
@@ -621,8 +610,8 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
         super.viewDidLoad()
         view.accessibilityIdentifier = "chat.strip"
         view.addInteraction(UIDropInteraction(delegate: fileDropInteraction))   // [spring-drop]
-        // On the Mac, exact parity with the navigation bar's surface; on iPhone/iPad, a floating Liquid Glass capsule
-        // in Normal Theming and transparent over `ChatViewController.edgeStandIn` in Desktop Look.
+        // On the Mac, exact parity with the navigation bar's surface; on iPhone/iPad, transparent over
+        // `ChatViewController.edgeStandIn` so the strip lives inside the single translucent top banner in both looks.
         if tabs {
             macDesktopFrost.translatesAutoresizingMaskIntoConstraints = false
             macDesktopFrost.fade = .none
@@ -636,8 +625,6 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
             macIOSBand.contentView.addSubview(macIOSVeil)
             view.addSubview(macIOSBand)
         } else {
-            iosGlassBar.translatesAutoresizingMaskIntoConstraints = false
-            view.addSubview(iosGlassBar)
             phoneCluster.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(phoneCluster)
         }
@@ -749,22 +736,14 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
                 macIOSBand.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             ]
         } else {
-            let clusterLeading = phoneCluster.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 20)
-            let clusterTrailing = phoneCluster.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -20)
-            let clusterTop = phoneCluster.topAnchor.constraint(equalTo: view.topAnchor, constant: 4)
-            let clusterBottom = phoneCluster.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -4)
-            phoneClusterLeading = clusterLeading
-            phoneClusterTrailing = clusterTrailing
-            phoneClusterTop = clusterTop
-            phoneClusterBottom = clusterBottom
             let hugContent = scroller.widthAnchor.constraint(equalTo: scroller.contentLayoutGuide.widthAnchor)
             hugContent.priority = UILayoutPriority(740)   // below button compression resistance so titles scroll rather than shrink
             constraints += [
                 phoneCluster.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-                clusterLeading,
-                clusterTrailing,
-                clusterTop,
-                clusterBottom,
+                phoneCluster.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 6),
+                phoneCluster.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -6),
+                phoneCluster.topAnchor.constraint(equalTo: view.topAnchor),
+                phoneCluster.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -2),
                 scroller.leadingAnchor.constraint(equalTo: phoneCluster.leadingAnchor),
                 scroller.topAnchor.constraint(equalTo: phoneCluster.topAnchor),
                 scroller.bottomAnchor.constraint(equalTo: phoneCluster.bottomAnchor),
@@ -774,10 +753,6 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
                 phoneRule.heightAnchor.constraint(equalToConstant: 11),
                 allChats.leadingAnchor.constraint(equalTo: phoneRule.trailingAnchor, constant: 4),
                 hugContent,
-                iosGlassBar.leadingAnchor.constraint(equalTo: phoneCluster.leadingAnchor, constant: -4),
-                iosGlassBar.trailingAnchor.constraint(equalTo: phoneCluster.trailingAnchor, constant: 4),
-                iosGlassBar.topAnchor.constraint(equalTo: view.topAnchor, constant: 4),
-                iosGlassBar.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -4),
             ]
         }
         NSLayoutConstraint.activate(constraints)
@@ -849,9 +824,9 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
         if isViewLoaded { applyLook() }
     }
 
-    /// Desktop Look: exact match to `ThemeChrome.solidBar(frosted: true)` on Mac, and transparent over
-    /// `ChatViewController.edgeStandIn` on iPhone/iPad (zero seam).
-    /// iOS Look: `ChatViewController.barBand` / `barClear` on Mac; floating Liquid Glass capsule on iPhone/iPad.
+    /// Mac: exact match to `ThemeChrome.solidBar(frosted: true)` in Desktop Look, and `ChatViewController.barBand` /
+    /// `barClear` in iOS Look.
+    /// iPhone/iPad: transparent over `ChatViewController.edgeStandIn` down to its bottom hairline in both looks.
     private func applyLook() {
         let desktop = Theme.isDesktop
         let solid = HQAccessibility.reduceTransparency
@@ -868,29 +843,9 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
             rightRule.backgroundColor = Self.ruleColor
             return
         }
-        iosGlassBar.isHidden = desktop
         rule.isHidden = !desktop
         rule.backgroundColor = Self.ruleColor
         phoneRule.backgroundColor = Self.ruleColor
-        phoneClusterLeading?.constant = desktop ? 6 : 20
-        phoneClusterTrailing?.constant = desktop ? -6 : -20
-        phoneClusterTop?.constant = desktop ? 0 : 4
-        phoneClusterBottom?.constant = desktop ? -2 : -4
-        if !desktop, !Theme.solidChrome {
-            if solid {
-                iosGlassBar.effect = nil
-                iosGlassBar.backgroundColor = ChatPalette.botBubble
-                iosGlassBar.layer.borderWidth = HQShape.hairline
-                iosGlassBar.layer.borderColor = ChatPalette.strokeSecondary.resolvedColor(with: traitCollection).cgColor
-                iosGlassBar.cornerConfiguration = .capsule()
-            } else if !(iosGlassBar.effect is UIGlassEffect) {
-                iosGlassBar.effect = UIGlassEffect(style: .regular)
-                iosGlassBar.backgroundColor = nil
-                iosGlassBar.layer.borderWidth = 0
-                iosGlassBar.layer.borderColor = nil
-                iosGlassBar.cornerConfiguration = .capsule()
-            }
-        }
     }
 
     @objc private func scrolledByPerson() { personScrolled = true }

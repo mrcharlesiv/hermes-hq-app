@@ -235,7 +235,7 @@ final class JumpButton: UIView {
     override func accessibilityActivate() -> Bool { onTap?(); return true }
 }
 
-/// A chat's project identity shown in the header subtitle while a new project chat is empty.
+/// A chat's project identity shown in the header subtitle for a project chat.
 struct ChatProjectBadge: Equatable {
     var name: String
     var emoji: String? = nil
@@ -286,8 +286,8 @@ final class ChatTitleView: UIView {
             setNeedsLayout()
         }
     }
-    /// [new-chat-project] A project mark and name shown in the subtitle while a new project chat is still empty,
-    /// replacing the redundant bot name (and preceding any trailing Mac status/model suffix).
+    /// [new-chat-project] A project mark and name shown in the subtitle for a project chat, replacing the redundant
+    /// bot name (and preceding any trailing Mac status/model suffix).
     var subtitleProject: ChatProjectBadge? {
         didSet {
             guard subtitleProject != oldValue else { return }
@@ -1071,6 +1071,8 @@ final class ChatEdgeStandIn: UIView {
     private let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
     private let blurMask = CAGradientLayer()
     private let wash = CAGradientLayer()
+    private let hairline = CALayer()
+    private var blurIsThin = false
     /// [edge-fade-height] On a chat background the fade runs into a lined-up copy of the picture instead of the page
     /// colour, so the picture still reaches the top of the screen behind the bar (as it did under the system's edge).
     private let picture = BackdropView(place: .chats)
@@ -1089,6 +1091,8 @@ final class ChatEdgeStandIn: UIView {
         picture.onShowChange = { [weak self] _ in self?.updateColors() }
         layer.addSublayer(wash)
         wash.locations = [0, 0.45, 1]
+        hairline.isHidden = true
+        layer.addSublayer(hairline)
         updateColors()
         registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self, UITraitAccessibilityContrast.self]) { (view: ChatEdgeStandIn, _) in view.updateColors() }
         a11yToken = NotificationCenter.default.addObserver(forName: HQAccessibility.didChange, object: nil, queue: .main) { [weak self] _ in
@@ -1101,32 +1105,60 @@ final class ChatEdgeStandIn: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    /// [desktop-hard-edge] The Desktop Look's chat edge is the hard one: the stand-in is a frosted band cut off straight
-    /// at its foot, as the system's hard edge it hands over to.
+    /// [desktop-hard-edge] The Desktop Look's chat edge (and Native mode's extra-chats banner) is the hard one: the
+    /// stand-in is a single frosted band cut off straight at its foot.
     var hard = false {
         didSet { if hard != oldValue { updateColors() } }
     }
 
+    /// Draws a whisper bottom hairline at the foot of the hard translucent sheet (used in Native mode when the
+    /// extra-chats banner owns the header edge, including while the keyboard temporarily folds the strip away).
+    var showsHairline = false {
+        didSet { if showsHairline != oldValue { updateColors() } }
+    }
+
     private func updateColors() {
+        let solid = HQAccessibility.reduceTransparency
         if hard {
+            let nativeSheet = !Theme.isDesktop
+            if blurIsThin != nativeSheet {
+                blurIsThin = nativeSheet
+                blur.effect = UIBlurEffect(style: nativeSheet ? .systemThinMaterial : .systemUltraThinMaterial)
+            }
             picture.alpha = 0
-            blur.isHidden = HQAccessibility.reduceTransparency
+            blur.isHidden = solid
             blur.layer.mask = nil
             let page = ChatPalette.page.resolvedColor(with: traitCollection)
-            // [Mac AAA rest 2026-11-17] Kept over the system's hard edge (the iPhone's and iPad's Desktop Look), the band
-            // is the look's bar veil (`DesktopFrost.barTintAlpha`), as the Mac's bars got answering O2 ("Give them their
-            // own backing"): a dark or coloured message under the bar turned its right side grey or green.
-            let veil: CGFloat = blur.isHidden ? 1 : keeps ? DesktopFrost.barTintAlpha : 0.6
+            // [Mac AAA rest 2026-11-17] In Desktop Look the band carries `DesktopFrost.barTintAlpha`; in Native mode
+            // with the extra-chats banner this is the sole frosted sheet (no `edgeHost.topEdgeEffect` stacked behind
+            // it), so a slightly lighter page veil lets scrolled bubbles breathe through while keeping a clean sheet.
+            let veil: CGFloat
+            if solid {
+                veil = 1
+            } else if nativeSheet {
+                veil = picture.showsPicture ? 0.55 : 0.65
+            } else {
+                veil = keeps ? DesktopFrost.barTintAlpha : 0.6
+            }
             wash.colors = [page.withAlphaComponent(veil).cgColor, page.withAlphaComponent(veil).cgColor]
             wash.locations = [0, 1]
+            hairline.isHidden = !showsHairline
+            hairline.backgroundColor = DesktopFrost.whisperLine.resolvedColor(with: traitCollection).cgColor
+            #if DEBUG
+            accessibilityValue = solid ? "opaque=1" : "opaque=0"
+            #endif
             return
         }
+        if blurIsThin {
+            blurIsThin = false
+            blur.effect = UIBlurEffect(style: .systemUltraThinMaterial)
+        }
+        hairline.isHidden = true
         blur.layer.mask = blurMask
         let page = ChatPalette.page.resolvedColor(with: traitCollection)
         picture.alpha = 0   // only asked whether a picture shows; the real one is seen through the blur
         // [a11y] Reduce Transparency: a solid band of the page colour, nothing showing through (the web's chat bar takes
         // the page colour, phone-ui-chat.css:286-288). The band still ends in a short fade so no hard line is drawn.
-        let solid = HQAccessibility.reduceTransparency
         blur.isHidden = solid
         // [top-bar-soft] Owner 2026-11-17, of the kept band: "you can't even see through it. It's just solid … the whole
         // point is … a blur that fades away". Kept, it is the blur alone on a picture and a light veil of the page
@@ -1150,6 +1182,8 @@ final class ChatEdgeStandIn: UIView {
         picture.frame = bounds
         pictureMask.frame = bounds
         wash.frame = bounds
+        let pixel = HQShape.pixel(traitCollection.displayScale)
+        hairline.frame = CGRect(x: 0, y: max(0, bounds.height - pixel), width: bounds.width, height: pixel)
         placeStops()
         CATransaction.commit()
     }

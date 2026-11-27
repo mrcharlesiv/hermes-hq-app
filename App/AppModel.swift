@@ -924,7 +924,7 @@ final class AppModel: AppServices {
         screen.sessionPR = status?.drawsMark == true ? status : nil
     }
 
-    /// [new-chat-project] Resolves the open chat's project (name and look) for the empty-chat header subtitle.
+    /// [new-chat-project] Resolves the open chat's project (name and look) for the header subtitle.
     private func updateProjectBadge(_ screen: ChatViewController) {
         guard let live = screen.session as? LiveChatSession,
               !live.menus.isBotChat, !live.menus.isThread,
@@ -932,7 +932,10 @@ final class AppModel: AppServices {
             screen.sessionProject = nil
             return
         }
-        let cwd = live.menus.cwd ?? live.storedSessionId.flatMap { store.listedRow(id: $0, profile: live.profile)?.cwd }
+        let cwd = live.menus.cwd ?? live.storedSessionId.flatMap {
+            store.listedRow(id: $0, profile: live.profile)?.cwd
+                ?? store.archivedRow(id: $0, profile: live.profile)?.cwd
+        }
         let key = store.projectKeyFor(cwd: cwd, profile: live.profile)
         guard key != SessionProjects.homeKey else {
             screen.sessionProject = nil

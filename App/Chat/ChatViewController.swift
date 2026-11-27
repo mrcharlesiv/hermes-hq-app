@@ -13,8 +13,8 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     var sessionPR: SessionPRStatus? {
         didSet { if isViewLoaded, sessionPR != oldValue { updateSessionTitle() } }
     }
-    /// [new-chat-project] The project this chat belongs to (nil outside a project). Replaces the bot's name in the
-    /// header subtitle while the chat is still empty, then hands back to the bot's name once messages exist.
+    /// [new-chat-project] The project this chat belongs to (nil outside a project). Shown in the header subtitle in
+    /// place of the bot's name (which already appears in the composer's "Message <bot>").
     var sessionProject: ChatProjectBadge? {
         didSet { if isViewLoaded, sessionProject != oldValue { updateSessionTitle() } }
     }
@@ -2217,23 +2217,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         updateTopEdgeReach()
         var clear: UINavigationBarAppearance? = desktop ? ThemeChrome.solidBar() : nil
         #if !targetEnvironment(macCatalyst)
-        // [desktop-hard-edge] Owner 2026-11-15: the Desktop Look's chat top on the iPhone as on the Mac (Mac 1009,
-        // `barBlur`): the hard edge, a frosted band cut off on a straight line, instead of the soft fade. The main look
-        // keeps the soft fade ([chat-soft-edge]).
-        let edgeStyle: UIScrollEdgeEffect.Style = desktop ? .hard : .soft
-        if edgeHost.topEdgeEffect.style != edgeStyle { edgeHost.topEdgeEffect.style = edgeStyle }
-        edgeStandIn.hard = desktop
-        // [edge-fade-height] The iOS look's top fade is the stand-in, which ends where the top edge element does; the
-        // system's soft edge ran ~30 pt further down (owner 2026-11-17, "goes down too far").
-        // [Mac AAA rest 2026-11-17] In the Desktop Look it stays too, over the system's hard edge, as the bar's own
-        // backing (`DesktopFrost.barTintAlpha`): a dark or coloured message under the bar tinted it, as on the Mac.
-        edgeStandIn.keeps = true
-        if standInToBar.isActive != desktop {
-            NSLayoutConstraint.deactivate([desktop ? standInToElement : standInToBar])
-            NSLayoutConstraint.activate([desktop ? standInToBar : standInToElement])
-        }
-        if edgeHost.topEdgeEffect.isHidden != !desktop { edgeHost.topEdgeEffect.isHidden = !desktop }
-        if desktop, chatAppeared { edgeStandIn.handOver() }
+        updateMobileTopEdgeLook()
         #endif
         #if targetEnvironment(macCatalyst)
         // [mac-audit #5] Owner 2026-11-02: in the Desktop Look the chat's bar showed the list pane's band (and a
@@ -2259,6 +2243,37 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         navigationItem.compactAppearance = clear
         navigationItem.compactScrollEdgeAppearance = clear
     }
+
+    #if !targetEnvironment(macCatalyst)
+    /// [desktop-hard-edge] Owner 2026-11-15: the Desktop Look's chat top on the iPhone as on the Mac (Mac 1009,
+    /// `barBlur`): the hard edge, a frosted band cut off on a straight line, instead of the soft fade. The Native look
+    /// keeps the soft fade ([chat-soft-edge]), except when a bot chat's extra-chats strip is active at the top — then
+    /// the top banner becomes the same solid translucent sheet so the extra chats live cleanly inside it.
+    private var usesHardTopBanner: Bool {
+        Theme.isDesktop || (topAccessory as? SessionStripController)?.hasBanner == true
+    }
+
+    private func updateMobileTopEdgeLook() {
+        let desktop = Theme.isDesktop
+        let hardTop = usesHardTopBanner
+        let edgeStyle: UIScrollEdgeEffect.Style = desktop ? .hard : .soft
+        if edgeHost.topEdgeEffect.style != edgeStyle { edgeHost.topEdgeEffect.style = edgeStyle }
+        edgeStandIn.hard = hardTop
+        edgeStandIn.showsHairline = !desktop && hardTop
+        // [edge-fade-height] The iOS look's top fade is the stand-in, which ends where the top edge element does; the
+        // system's soft edge ran ~30 pt further down (owner 2026-11-17, "goes down too far").
+        // [Mac AAA rest 2026-11-17] In Desktop Look it stays over the system's hard edge (`DesktopFrost.barTintAlpha`);
+        // in Native mode with the extra-chats banner, `edgeStandIn` is the sole frosted sheet (`edgeHost.topEdgeEffect`
+        // stays hidden so there is no double-blur seam or 10 pt overhang below the hairline).
+        edgeStandIn.keeps = true
+        if standInToBar.isActive != hardTop {
+            NSLayoutConstraint.deactivate([hardTop ? standInToElement : standInToBar])
+            NSLayoutConstraint.activate([hardTop ? standInToBar : standInToElement])
+        }
+        if edgeHost.topEdgeEffect.isHidden != !desktop { edgeHost.topEdgeEffect.isHidden = !desktop }
+        if desktop, chatAppeared { edgeStandIn.handOver() }
+    }
+    #endif
 
     #if targetEnvironment(macCatalyst)
     /// [Mac AAA 2026-11-16] The iOS look's chat bar on the Mac: a light frost ending in the panes' line only while a
@@ -2758,32 +2773,20 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         if wasRunning && !session.isRunning { runningEndedAt = CACurrentMediaTime() }
     }
 
-    /// [new-chat-project] A project chat still waiting for its first message: swap the redundant bot subtitle for the
-    /// project mark and name. Never flashes while an existing uncached chat is still loading (`.opening` without
-    /// `startsNew`), and yields back to the bot's name as soon as any message exists.
+    /// [new-chat-project] A project chat shows its project mark and name in the header subtitle in place of the
+    /// redundant bot name (which already appears in the composer's "Message <bot>"), both before and after messages
+    /// exist.
     private var showsProjectSubtitle: Bool {
-        guard sessionProject != nil,
-              titleOverride == nil,
-              !(session is ChatRoomSurface),
-              (session as? ChatSessionActions)?.isBotChat != true,
-              (session as? LiveChatSession)?.menus.isThread != true,
-              rows.isEmpty,
-              session.messages.isEmpty,
-              model.builtFrom == 0,
-              model.hiddenOlder == 0 else { return false }
-        switch openPhase {
-        case .open:
-            return true
-        case .opening:
-            return (session as? LiveChatSession)?.startsNew == true
-        case .failed:
-            return false
-        }
+        sessionProject != nil
+            && titleOverride == nil
+            && !(session is ChatRoomSurface)
+            && (session as? ChatSessionActions)?.isBotChat != true
+            && (session as? LiveChatSession)?.menus.isThread != true
     }
 
     private func updateSessionTitle() {
-        // A session that isn't the bot's own chat names its bot under the title (spec 06 §4.1), except while an empty
-        // project chat shows its project there instead (the bot is already named in the intro and composer).
+        // A session that isn't the bot's own chat names its bot under the title (spec 06 §4.1), except a project chat
+        // shows its project there instead (the bot is already named in the composer and intro).
         let projectSubtitle = showsProjectSubtitle ? sessionProject : nil
         let owner = botName.trimmingCharacters(in: .whitespaces)
         var subtitle = projectSubtitle != nil ? nil
@@ -5386,6 +5389,9 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     /// transcript starts under it (a bar); false, it covers the transcript and the chat's layout stays as it is.
     func setTopAccessoryHeight(_ value: CGFloat, insets: Bool = true, animated: Bool) {
         guard let topAccessoryHeight else { return }
+        #if !targetEnvironment(macCatalyst)
+        updateMobileTopEdgeLook()
+        #endif
         let scale = max(view.window?.screen.scale ?? traitCollection.displayScale, 1)
         let target = max(0, (value * scale).rounded(.up) / scale)   // to the pixel: a fraction left a line of rows above it
         let inset = insets ? target : 0

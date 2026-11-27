@@ -304,6 +304,43 @@ final class SettingsEndToEndTests: XCTestCase {
         XCTAssertTrue(same(a.writes("profiles.set_asset").last?["clear"], true))
     }
 
+    @MainActor func testEditHeadGlyphCanBeClearedAndReplaced() throws {
+        let app = launchSignedIn()
+        openBotInfo(app, "ivy")
+        app.buttons["bot-info.edit"].tap()
+        app.buttons["edit-bot.edit-head"].tap()
+        let stage = app.descendants(matching: .any)["edit-head.stage"]
+        XCTAssertTrue(stage.waitForExistence(timeout: 5))
+        app.buttons["edit-head.theme-glyph"].tap()
+        let field = app.textFields["edit-head.glyph"]
+        for _ in 0..<8 where !(field.exists && field.isHittable && field.frame.minY >= app.buttons["edit-head.shuffle"].frame.maxY) { app.swipeUp() }
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        XCTAssertEqual(field.value as? String, "✨")
+        XCTAssertEqual(field.placeholderValue, "Emoji or letters", "the placeholder must not look like the deleted glyph")
+        XCTAssertTrue(app.staticTexts["Leaving this empty keeps the current emoji or letters."].exists)
+        field.tap()
+        field.typeText(XCUIKeyboardKey.delete.rawValue)
+        XCTAssertTrue(waitUntil(timeout: 3) { (field.value as? String ?? "").isEmpty || field.value as? String == field.placeholderValue })
+        XCTAssertEqual(headFields(stage)["glyph"], "✨", "clearing keeps the last glyph in the preview")
+        XCTAssertEqual(a.writes("profiles.configure").count, 0, "editing does not save")
+        app.buttons["edit-head.save"].tap()
+        XCTAssertTrue(app.staticTexts["Head saved. It’s on every device on this gateway."].waitForExistence(timeout: 8))
+        var head = ((a.writes("profiles.configure").last ?? [:])["ui_meta"] as? [String: Any])?["dispatch-head"] as? [String: Any] ?? [:]
+        XCTAssertEqual(head["glyph"] as? String, "✨", "saving a cleared field keeps the last glyph")
+
+        app.buttons["edit-bot.edit-head"].tap()
+        for _ in 0..<8 where !(field.exists && field.isHittable && field.frame.minY >= app.buttons["edit-head.shuffle"].frame.maxY) { app.swipeUp() }
+        XCTAssertEqual(field.value as? String, "✨", "the saved glyph reappears")
+        field.tap()
+        field.typeText(XCUIKeyboardKey.delete.rawValue)
+        field.typeText("AB")
+        XCTAssertTrue(waitUntil(timeout: 3) { self.headFields(stage)["glyph"] == "AB" }, "replacement updates the preview")
+        app.buttons["edit-head.save"].tap()
+        XCTAssertTrue(app.staticTexts["Head saved. It’s on every device on this gateway."].waitForExistence(timeout: 8))
+        head = ((a.writes("profiles.configure").last ?? [:])["ui_meta"] as? [String: Any])?["dispatch-head"] as? [String: Any] ?? [:]
+        XCTAssertEqual(head["glyph"] as? String, "AB", "replacement is saved")
+    }
+
     // MARK: - S18 Edit Head: Shuffle, Undo, idea, My Style, discard guard
 
     @MainActor func testS18_EditHeadExtrasAndDiscardGuard() throws {

@@ -521,6 +521,10 @@ struct EditHeadView: View {
                     .padding(.vertical, 12)
                     .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(uiColor: HQPalette.card)))
                     .accessibilityIdentifier("edit-head.glyph")
+                Text("Leaving this empty keeps the current emoji or letters.")
+                    .font(Font.hq(.footnote))
+                    .foregroundStyle(Color.hqLabel2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         case "shape":
             strip("Shape", HeadRecord.forms, HeadLabels.forms, \.form)
@@ -693,7 +697,7 @@ private struct GlyphField: View {
     @State private var text = ""
 
     var body: some View {
-        TextField("✨", text: $text)
+        TextField("Emoji or letters", text: $text)
             .textInputAutocapitalization(.characters)
             .autocorrectionDisabled()
             .font(Font.hq(.title3))

@@ -195,4 +195,94 @@ import UIKit
         #expect(!TravelCards.cardsUntold(["travelCards": true, "travelCardsShown": true]))
         #expect(!TravelCards.cardsUntold(["travelCards": false]))
     }
+
+    @Test func hotelsCardPolishesSubtitleCollapseWrappingAndEdgeBleed() {
+        let baseHotel: [String: JSONValue] = [
+            "name": .string("Embassy Suites by Hilton Chicago O'Hare Rosemont"),
+            "price_per_night": .number(137),
+            "currency": .string("USD"),
+            "url": .string("https://example.com/hotels/embassy"),
+        ]
+        let secondHotel: [String: JSONValue] = [
+            "name": .string("Loews Chicago O'Hare Hotel"),
+            "price_per_night": .number(159),
+            "currency": .string("USD"),
+            "url": .string("https://example.com/hotels/loews"),
+        ]
+        let noSubCall = ToolCall(
+            id: "t-h-nosub",
+            name: TravelCards.hotelsTool,
+            title: "Hotels",
+            argsText: ChatJSON.stringify(.object([
+                "location": .string("Chicago · O'Hare and downtown"),
+                "check_in": .string("Sat, Dec 26, 2026"),
+                "check_out": .string("Sun, Dec 27, 2026"),
+                "note": .string("Three more airport-area options and two downtown stays. All rates are nightly before tax."),
+                "hotels": .array([.object(baseHotel), .object(secondHotel)]),
+            ])),
+            summary: nil, state: .done, durationSeconds: nil
+        )
+        let withSubCall = ToolCall(
+            id: "t-h-sub",
+            name: TravelCards.hotelsTool,
+            title: "Hotels",
+            argsText: ChatJSON.stringify(.object([
+                "location": .string("Chicago"),
+                "hotels": .array([
+                    .object(baseHotel.merging(["rating": .number(4.4), "neighborhood": .string("Rosemont")]) { _, new in new }),
+                    .object(secondHotel),
+                ]),
+            ])),
+            summary: nil, state: .done, durationSeconds: nil
+        )
+
+        let noSub = TravelCards.hotels(noSubCall)!
+        let withSub = TravelCards.hotels(withSubCall)!
+        let noSubRow = HotelsCardRow(hotels: noSub, rowId: "r-nosub", messageId: "m1", asked: [:], expanded: false)
+        let withSubRow = HotelsCardRow(hotels: withSub, rowId: "r-sub", messageId: "m2", asked: [:], expanded: false)
+
+        let width: CGFloat = 390
+        let cardW = PromptLayout.cardWidth(for: width)
+        let type = TravelCardType(category: .large)
+        let pNoSub = HotelsCardLayout.pieces(noSubRow, width: cardW, category: .large)
+        let pWithSub = HotelsCardLayout.pieces(withSubRow, width: cardW, category: .large)
+
+        // 1. Empty subtitle collapses unused tile height instead of leaving blank padding.
+        #expect(!pNoSub.hasSubtitle)
+        #expect(pWithSub.hasSubtitle)
+        #expect(pNoSub.carousel < pWithSub.carousel)
+
+        // 2. Long hotel names get 2 lines so the property name isn't clipped after the chain name.
+        #expect(pNoSub.nameLines == 2)
+        let shortRow = HotelsCardRow(hotels: TravelCards.hotels(sampleHotelsCall())!, rowId: "r-short", messageId: "m3", asked: [:], expanded: false)
+        let pShort = HotelsCardLayout.pieces(shortRow, width: cardW, category: .large)
+        #expect(pShort.nameLines == 1)
+
+        // 3. Long meta header and multi-sentence note wrap to 2 lines instead of truncating on line 1.
+        #expect(pNoSub.meta > TravelCardType.line(type.smallStrong))
+        #expect(pNoSub.note > TravelCardType.line(type.body))
+        let metaProbe = UILabel()
+        metaProbe.font = type.smallStrong
+        metaProbe.numberOfLines = HotelsCardLayout.metaLines(type)
+        metaProbe.text = HotelsCardLayout.metaWords(noSub)
+        #expect(metaProbe.sizeThatFits(CGSize(width: cardW, height: .greatestFiniteMagnitude)).height <= pNoSub.meta)
+        let noteProbe = UILabel()
+        noteProbe.font = type.body
+        noteProbe.numberOfLines = type.noteLines
+        noteProbe.text = noSub.note
+        #expect(noteProbe.sizeThatFits(CGSize(width: cardW, height: .greatestFiniteMagnitude)).height <= pNoSub.note)
+
+        // 4. Phone-width carousel bleeds edge-to-edge; wide desktop pane stays on the inset rail.
+        #expect(HotelsCardLayout.bleedsCarousel(rowWidth: 390, cardWidth: cardW))
+        let wideCardW = PromptLayout.cardWidth(for: 1000)
+        #expect(!HotelsCardLayout.bleedsCarousel(rowWidth: 1000, cardWidth: wideCardW))
+
+        let view = HotelsCardView(frame: CGRect(x: 0, y: 0, width: width, height: 400))
+        let geo = HotelsCardGeometry(width: cardW, rowWidth: width, height: ceil(pNoSub.height), gapAbove: 8, category: .large)
+        view.configure(noSubRow, geo)
+        let scroll = view.subviews.compactMap { $0 as? UIScrollView }.first
+        #expect(scroll != nil)
+        #expect(scroll?.frame.minX == 0)
+        #expect(scroll?.frame.width == width)
+    }
 }

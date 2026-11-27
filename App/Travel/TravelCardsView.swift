@@ -20,17 +20,27 @@ nonisolated struct TravelCardType {
     var badge: UIFont { PromptFonts.font(.caption2, category, weight: .semibold, cap: 20) }
     var chip: UIFont { PromptFonts.font(.footnote, category, weight: .medium, cap: 24) }
     /// Lines a note above the cards may take.
-    var noteLines: Int { big ? 4 : 2 }
+    var noteLines: Int { big ? 4 : 3 }
     var chipHeight: CGFloat { Self.line(chip) + 14 }
 
     static func line(_ font: UIFont) -> CGFloat { ceil(font.lineHeight) }
 
+    /// Whole lines `text` takes in `font` at `width`, capped at `maxLines`.
+    static func lineCount(_ text: String, _ font: UIFont, width: CGFloat, maxLines: Int) -> Int {
+        guard !text.isEmpty, maxLines > 0 else { return 0 }
+        let p = NSMutableParagraphStyle()
+        p.lineBreakMode = .byWordWrapping
+        let measureW = max(40, width - 2)
+        let box = (text as NSString).boundingRect(with: CGSize(width: measureW, height: .greatestFiniteMagnitude),
+                                                  options: [.usesLineFragmentOrigin, .usesFontLeading],
+                                                  attributes: [.font: font, .paragraphStyle: p], context: nil)
+        let raw = Int(ceil((box.height - 0.5) / max(1, font.lineHeight)))
+        return max(1, min(maxLines, raw))
+    }
+
     /// The height of `text` in `font` at `width`: whole lines, at most `maxLines` of them.
     static func height(_ text: String, _ font: UIFont, width: CGFloat, maxLines: Int) -> CGFloat {
-        let box = (text as NSString).boundingRect(with: CGSize(width: max(40, width), height: .greatestFiniteMagnitude),
-                                                  options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font], context: nil)
-        let lines = max(1, min(maxLines, Int((box.height / max(1, font.lineHeight)).rounded())))
-        return CGFloat(lines) * line(font)
+        CGFloat(lineCount(text, font, width: width, maxLines: maxLines)) * line(font)
     }
 
     /// A row of follow-up chips that scrolls sideways.
@@ -347,6 +357,7 @@ final class FlightsCardView: UIView {
 
 nonisolated struct HotelsCardGeometry: @unchecked Sendable {
     var width: CGFloat
+    var rowWidth: CGFloat
     var height: CGFloat
     var gapAbove: CGFloat
     var category: UIContentSizeCategory
@@ -359,6 +370,8 @@ nonisolated enum HotelsCardLayout {
     /// The height of each piece of the card, top to bottom (0: not there). The view pins each piece to the same number.
     struct Pieces {
         var step: CGFloat = 0, meta: CGFloat = 0, note: CGFloat = 0, carousel: CGFloat = 0, chips: CGFloat = 0
+        var nameLines: Int = 1
+        var hasSubtitle: Bool = false
         var height: CGFloat {
             let all = [step, meta, note, carousel, chips].filter { $0 > 0 }
             return all.reduce(0, +) + CGFloat(max(0, all.count - 1)) * 8
@@ -371,17 +384,47 @@ nonisolated enum HotelsCardLayout {
             .filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
-    /// Lines a hotel's name may take on its tile.
-    static func nameLines(_ type: TravelCardType) -> Int { type.big ? 2 : 1 }
+    /// Lines the metadata header above the cards may take.
+    static func metaLines(_ type: TravelCardType) -> Int { type.big ? 4 : 2 }
 
-    /// A tile: the photo, then the name, where it is and the price.
-    static func tileHeight(_ type: TravelCardType) -> CGFloat {
+    /// Lines a hotel's name may take on its tile.
+    static func nameLines(_ type: TravelCardType) -> Int { type.big ? 3 : 2 }
+
+    /// Secondary line on a hotel tile: rating + neighborhood, else address, distance, or star class.
+    static func subtitle(_ hotel: TravelCards.Hotel) -> String {
+        let primary = [
+            hotel.rating.map { String(format: "★ %.1f", $0) },
+            hotel.neighborhood.isEmpty ? nil : hotel.neighborhood,
+        ].compactMap { $0 }.joined(separator: " · ")
+        if !primary.isEmpty { return primary }
+        if !hotel.address.isEmpty { return hotel.address }
+        if !hotel.distance.isEmpty { return hotel.distance }
+        if let stars = hotel.stars { return "\(stars)-star" }
+        return ""
+    }
+
+    /// Actual lines needed for hotel names in this strip (1 when all names fit on 1 line, up to `nameLines(type)`).
+    static func measuredNameLines(_ hotels: [TravelCards.Hotel], itemWidth: CGFloat, type: TravelCardType) -> Int {
+        let limit = nameLines(type)
+        let textW = max(40, itemWidth - 20)
+        return hotels.map { TravelCardType.lineCount($0.name, type.title, width: textW, maxLines: limit) }.max() ?? 1
+    }
+
+    /// A tile: the photo, then the name, optional subtitle, and the price.
+    static func tileHeight(_ type: TravelCardType, nameLines: Int? = nil, hasSubtitle: Bool = true) -> CGFloat {
         let line = TravelCardType.line
-        return photoHeight + 8 + line(type.title) * CGFloat(nameLines(type)) + line(type.small) + line(type.bodyStrong) + 2 * 3 + 10
+        let lines = nameLines ?? Self.nameLines(type)
+        let subH = hasSubtitle ? line(type.small) + 3 : 0
+        return photoHeight + 8 + line(type.title) * CGFloat(lines) + subH + line(type.bodyStrong) + 3 + 10
     }
 
     static func tileWidth(count: Int, width: CGFloat, type: TravelCardType) -> CGFloat {
         count == 1 ? width : min(type.big ? 300 : 224, max(180, width * (type.big ? 0.8 : 0.68)))
+    }
+
+    /// True on phone/narrow columns where the card spans the full row width so the carousel can bleed edge-to-edge.
+    static func bleedsCarousel(rowWidth: CGFloat, cardWidth: CGFloat) -> Bool {
+        rowWidth <= cardWidth + 2 * side + 1
     }
 
     static func pieces(_ card: HotelsCardRow, width: CGFloat, category: UIContentSizeCategory) -> Pieces {
@@ -390,9 +433,12 @@ nonisolated enum HotelsCardLayout {
         var p = Pieces()
         if !model.step.isEmpty { p.step = TravelCardType.line(type.smallStrong) }
         let meta = metaWords(model)
-        if !meta.isEmpty { p.meta = TravelCardType.height(meta, type.smallStrong, width: width, maxLines: type.big ? 3 : 1) }
+        if !meta.isEmpty { p.meta = TravelCardType.height(meta, type.smallStrong, width: width, maxLines: metaLines(type)) }
         if !model.note.isEmpty { p.note = TravelCardType.height(model.note, type.body, width: width, maxLines: type.noteLines) }
-        p.carousel = tileHeight(type)
+        let itemW = tileWidth(count: model.hotels.count, width: width, type: type)
+        p.nameLines = measuredNameLines(model.hotels, itemWidth: itemW, type: type)
+        p.hasSubtitle = model.hotels.contains { !subtitle($0).isEmpty }
+        p.carousel = tileHeight(type, nameLines: p.nameLines, hasSubtitle: p.hasSubtitle)
         if !model.followUps.isEmpty { p.chips = type.chipHeight }
         return p
     }
@@ -401,7 +447,7 @@ nonisolated enum HotelsCardLayout {
         let cardW = PromptLayout.cardWidth(for: width)
         let hModel = card.hotels
         let inner = ceil(pieces(card, width: cardW, category: category).height)
-        let geo = HotelsCardGeometry(width: cardW, height: inner, gapAbove: gap + 6, category: category)
+        let geo = HotelsCardGeometry(width: cardW, rowWidth: width, height: inner, gapAbove: gap + 6, category: category)
         let layout = PromptRowLayout(
             cardFrame: nil,
             texts: [],
@@ -417,79 +463,92 @@ final class HotelsCardView: UIView {
     var onOpenHotel: ((Int) -> Void)?
     var onFollowUp: ((String) -> Void)?
 
-    private let stack = UIStackView()
+    private var managedSubviews: [UIView] = []
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        stack.axis = .vertical
-        stack.spacing = 8
-        addSubview(stack)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
     func reset() {
-        for view in stack.arrangedSubviews { stack.removeArrangedSubview(view); view.removeFromSuperview() }
+        for view in managedSubviews { view.removeFromSuperview() }
+        managedSubviews.removeAll()
     }
 
     func configure(_ card: HotelsCardRow, _ g: HotelsCardGeometry) {
-        stack.frame = CGRect(x: HotelsCardLayout.side, y: g.gapAbove, width: g.width, height: g.height)
-        for view in stack.arrangedSubviews { stack.removeArrangedSubview(view); view.removeFromSuperview() }
+        reset()
 
         let model = card.hotels
         let type = TravelCardType(category: g.category)
         let p = HotelsCardLayout.pieces(card, width: g.width, category: g.category)
-        if !model.step.isEmpty {
+        let side = HotelsCardLayout.side
+        var y = g.gapAbove
+
+        func place(_ view: UIView, x: CGFloat, width: CGFloat, height: CGFloat) {
+            view.frame = CGRect(x: x, y: y, width: width, height: height)
+            addSubview(view)
+            managedSubviews.append(view)
+            y += height + 8
+        }
+
+        if p.step > 0 {
             let lbl = UILabel()
             lbl.text = model.step
             lbl.font = type.smallStrong
             lbl.textColor = ChatPalette.tintText
-            stack.addArrangedSubview(TravelCardType.pinned(lbl, p.step))
+            place(lbl, x: side, width: g.width, height: p.step)
         }
         let meta = HotelsCardLayout.metaWords(model)
-        if !meta.isEmpty {
+        if p.meta > 0 {
             let lbl = UILabel()
             lbl.text = meta
             lbl.font = type.smallStrong
             lbl.textColor = ChatPalette.label2
-            lbl.numberOfLines = type.big ? 3 : 1
-            stack.addArrangedSubview(TravelCardType.pinned(lbl, p.meta))
+            lbl.numberOfLines = HotelsCardLayout.metaLines(type)
+            lbl.lineBreakMode = .byTruncatingTail
+            place(lbl, x: side, width: g.width, height: p.meta)
         }
-        if !model.note.isEmpty {
+        if p.note > 0 {
             let lbl = UILabel()
             lbl.text = model.note
             lbl.font = type.body
             lbl.textColor = ChatPalette.label2
             lbl.numberOfLines = type.noteLines
-            stack.addArrangedSubview(TravelCardType.pinned(lbl, p.note))
+            lbl.lineBreakMode = .byTruncatingTail
+            place(lbl, x: side, width: g.width, height: p.note)
         }
 
+        let bleeds = HotelsCardLayout.bleedsCarousel(rowWidth: g.rowWidth, cardWidth: g.width)
         let carousel = UIScrollView()
         carousel.showsHorizontalScrollIndicator = false
+        carousel.alwaysBounceHorizontal = model.hotels.count > 1
         let rowStack = UIStackView()
         rowStack.axis = .horizontal
         rowStack.spacing = 10
         rowStack.translatesAutoresizingMaskIntoConstraints = false
         let itemW = HotelsCardLayout.tileWidth(count: model.hotels.count, width: g.width, type: type)
         for (idx, hotel) in model.hotels.enumerated() {
-            rowStack.addArrangedSubview(makeHotelTile(hotel, index: idx, width: itemW, asked: card.asks(hotel), type: type))
+            rowStack.addArrangedSubview(makeHotelTile(hotel, index: idx, width: itemW, nameLines: p.nameLines, asked: card.asks(hotel), type: type))
         }
         carousel.addSubview(rowStack)
+        let inset: CGFloat = bleeds ? side : 0
         NSLayoutConstraint.activate([
-            rowStack.leadingAnchor.constraint(equalTo: carousel.contentLayoutGuide.leadingAnchor),
-            rowStack.trailingAnchor.constraint(equalTo: carousel.contentLayoutGuide.trailingAnchor),
+            rowStack.leadingAnchor.constraint(equalTo: carousel.contentLayoutGuide.leadingAnchor, constant: inset),
+            rowStack.trailingAnchor.constraint(equalTo: carousel.contentLayoutGuide.trailingAnchor, constant: -inset),
             rowStack.topAnchor.constraint(equalTo: carousel.contentLayoutGuide.topAnchor),
             rowStack.bottomAnchor.constraint(equalTo: carousel.contentLayoutGuide.bottomAnchor),
             rowStack.heightAnchor.constraint(equalTo: carousel.frameLayoutGuide.heightAnchor),
         ])
-        stack.addArrangedSubview(TravelCardType.pinned(carousel, p.carousel))
+        place(carousel, x: bleeds ? 0 : side, width: bleeds ? g.rowWidth : g.width, height: p.carousel)
 
-        if !model.followUps.isEmpty {
-            stack.addArrangedSubview(TravelCardType.chips(model.followUps, type: type) { [weak self] text in self?.onFollowUp?(text) })
+        if p.chips > 0 {
+            let chips = TravelCardType.chips(model.followUps, type: type) { [weak self] text in self?.onFollowUp?(text) }
+            place(chips, x: side, width: g.width, height: p.chips)
         }
     }
 
-    private func makeHotelTile(_ hotel: TravelCards.Hotel, index: Int, width: CGFloat, asked: Set<TravelCards.Ask>, type: TravelCardType) -> UIView {
+    private func makeHotelTile(_ hotel: TravelCards.Hotel, index: Int, width: CGFloat, nameLines: Int, asked: Set<TravelCards.Ask>, type: TravelCardType) -> UIView {
         let tile = UIControl()
         tile.backgroundColor = ChatPalette.botBubble
         tile.layer.cornerRadius = ChatMetrics.insetCardRadius
@@ -521,18 +580,16 @@ final class HotelsCardView: UIView {
         nameLabel.text = hotel.name
         nameLabel.font = type.title
         nameLabel.textColor = ChatPalette.label
-        nameLabel.numberOfLines = HotelsCardLayout.nameLines(type)
+        nameLabel.numberOfLines = nameLines
         nameLabel.lineBreakMode = .byTruncatingTail
 
-        let sub = [
-            hotel.rating.map { String(format: "★ %.1f", $0) },
-            hotel.neighborhood.isEmpty ? nil : hotel.neighborhood,
-        ].compactMap { $0 }.joined(separator: " · ")
+        let subText = HotelsCardLayout.subtitle(hotel)
         let subLabel = UILabel()
-        subLabel.text = sub.isEmpty ? hotel.address : sub
+        subLabel.text = subText
         subLabel.font = type.small
         subLabel.textColor = ChatPalette.label2
         subLabel.lineBreakMode = .byTruncatingTail
+        subLabel.isHidden = subText.isEmpty
 
         let priceLabel = UILabel()
         if let nightly = hotel.pricePerNight {

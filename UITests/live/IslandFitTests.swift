@@ -8,8 +8,10 @@ import XCTest
 
 final class IslandFitTests: XCTestCase {
     static let specs = [
-        "turn:5", "turn:970", "turn:3725", "turn:43200", "job:970", "job:3725", "done:970", "done:45296", "failed:970",
-        "talk:5", "talk:970", "talk:3725", "talkended:970",
+        "turn:5", "turn:970", "turn:3725", "turn:43200",
+        "side:970", "sidedone:45296", "stale:2400",
+        "job:970", "longjob:3725", "done:970", "done:45296", "failed:970",
+        "talk:5", "talk:970", "talk:3725", "talklong:3725", "talkmuted:970", "talkpaused:970", "talkended:970",
         "twin,turn:970", "turn:970,twin", "twin,talk:970", "turn:970,talk:30",
     ]
 

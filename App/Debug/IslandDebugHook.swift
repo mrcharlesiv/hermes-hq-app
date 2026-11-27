@@ -30,22 +30,53 @@ import UIKit
         do {
             switch what {
             case "twin": break   // another app's, started by the tour itself (UITests/live/IslandFitTests.swift)
-            case "talk", "talkended":
-                let ended = what == "talkended"
-                let state = TalkActivityAttributes.ContentState(phase: ended ? "ended" : "listening", title: ended ? "Ended" : "Listening",
-                                                                muted: false, endedAt: ended ? Date() : nil)
-                _ = try Activity.request(attributes: TalkActivityAttributes(name: "Ivy", startedAt: began, link: nil),
+            case "talk", "talkended", "talklong", "talkmuted", "talkpaused":
+                let ended = what == "talkended" || what == "talkpaused"
+                let muted = what == "talkmuted"
+                let name = (what == "talklong" || what == "talkpaused") ? "Orchestrator" : "Ivy"
+                let title: String = switch what {
+                case "talkended": "Ended"
+                case "talkpaused": "Paused after 2 minutes of silence"
+                case "talklong": "Reconnecting…"
+                default: "Listening"
+                }
+                let phase = ended ? "ended" : (what == "talklong" ? "reconnecting" : "listening")
+                let state = TalkActivityAttributes.ContentState(phase: phase, title: title, muted: muted, endedAt: ended ? Date() : nil)
+                _ = try Activity.request(attributes: TalkActivityAttributes(name: name, startedAt: began, link: nil),
                                          content: ActivityContent(state: state, staleDate: nil), pushType: nil)
             default:
-                var content = LiveActivityContent(phase: what == "job" ? .running : .working, startedAt: began)
-                if what == "done" || what == "failed" {
-                    content.phase = what == "done" ? .done : .failed
+                let isJob = what == "job" || what == "longjob"
+                let isDone = what == "done" || what == "sidedone"
+                let isFailed = what == "failed"
+                let isSide = what == "side" || what == "sidedone"
+                let isStale = what == "stale"
+                var content = LiveActivityContent(phase: isJob ? .running : .working, startedAt: began)
+                if isDone || isFailed {
+                    content.phase = isDone ? .done : .failed
                     content.endedAt = Date()
                 }
-                if what != "job" { content.trail = LiveStepTrail(step: "running npm test", recent: ["reading package.json"], steps: 2) }
-                let subject = LiveActivitySubject(kind: what == "job" ? .job : .turn, id: "island-\(index)")
-                let attributes = HQLiveAttributes(subject: subject, botName: "Otto", detail: what == "job" ? "Morning brief" : nil, link: nil)
-                _ = try Activity.request(attributes: attributes, content: ActivityContent(state: content, staleDate: nil), pushType: nil)
+                if !isJob {
+                    if isSide {
+                        content.trail = LiveStepTrail(
+                            step: isDone ? nil : "running swift test --filter LiveActivityTurnRulesTests",
+                            recent: ["editing ReplyActivityWidget.swift", "reading LiveActivityContent.swift"],
+                            steps: 8
+                        )
+                    } else {
+                        content.trail = LiveStepTrail(step: "running npm test", recent: ["reading package.json"], steps: 2)
+                    }
+                }
+                let subject = LiveActivitySubject(kind: isJob ? .job : .turn, id: "island-\(index)")
+                let botName = isSide ? "Orchestrator" : (what == "longjob" ? "Deploys" : "Otto")
+                let detail: String? = switch what {
+                case "job": "Morning brief"
+                case "longjob": "Weekly production deploy health check and audit"
+                case "side", "sidedone": "Update hermes plugins and validate every scanner rule"
+                default: nil
+                }
+                let staleDate: Date? = isStale ? Date().addingTimeInterval(3) : nil
+                let attributes = HQLiveAttributes(subject: subject, botName: botName, detail: detail, link: nil)
+                _ = try Activity.request(attributes: attributes, content: ActivityContent(state: content, staleDate: staleDate), pushType: nil)
             }
         } catch {
             AppLog.note("live", "island demo \(what) refused: \(error.localizedDescription)")

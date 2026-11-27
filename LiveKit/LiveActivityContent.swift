@@ -78,6 +78,17 @@ nonisolated struct LiveActivityContent: Codable, Hashable, Sendable {
         let rest = minutes % 60
         return rest == 0 ? "\(minutes / 60)h" : "\(minutes / 60)h \(rest)m"
     }
+
+    /// [island-fit] Ultra-compact fallback when another Live Activity squeezes the Dynamic Island's trailing slot:
+    /// drops trailing minutes past an hour ("12h", "1h") so finished durations stay full-height instead of shrinking
+    /// or truncating.
+    static func tookTiny(_ seconds: TimeInterval) -> String {
+        let whole = max(0, Int(seconds.rounded()))
+        if whole < 60 { return "\(whole)s" }
+        let minutes = whole / 60
+        if minutes < 60 { return "\(minutes)m" }
+        return "\(minutes / 60)h"
+    }
 }
 
 /// [live-steps] A turn's steps as its Lock Screen card names them: the running one, the two before it, how many.
@@ -158,8 +169,12 @@ nonisolated struct LiveActivitySubject: Codable, Hashable, Sendable {
 /// appear ("59:59", "9:59:59", "99:59:59"), picked so the timer can't reach it before it is drawn again: every update
 /// redraws it, and one not heard from goes stale (and stops counting) well inside `reach`.
 nonisolated enum LiveTimerSpan {
-    /// Longer than any card goes without a redraw (`LiveActivityTiming.staleAfter`, Talk's own 10 min).
-    static let reach: TimeInterval = 40 * 60
+    /// Just past `LiveActivityTiming.staleAfter` (30 min): any unupdated reply card goes stale and stops counting
+    /// before reaching the end of its range, while staying at `"00:00"` width until 29 min instead of jumping to
+    /// `"0:00:00"` at 20 min.
+    static let reach: TimeInterval = 31 * 60
+    /// Talk renews every 4 min and goes stale at 10 min, so it keeps `"00:00"` width until 49 min.
+    static let talkReach: TimeInterval = 11 * 60
     static let limits: [TimeInterval] = [3_599, 35_999, 359_999]   // 59:59, 9:59:59, 99:59:59
 
     /// The widest thing a timer with that range can say, in digits of one width: what sizes its place in the island.

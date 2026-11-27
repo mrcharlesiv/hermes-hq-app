@@ -665,10 +665,14 @@ nonisolated private func sideChat(_ profile: String, _ session: String, title: S
     @Test func aTimerNeverReachesTheEndOfItsRangeBeforeItIsDrawnAgain() {
         // Every card is drawn again inside `reach` (an update, or going stale): wherever it is, it still counts then.
         #expect(LiveTimerSpan.reach > LiveActivityTiming.staleAfter)
+        #expect(LiveTimerSpan.talkReach > TalkActivity.staleAfter)
         for ran in stride(from: 0.0, through: 400_000, by: 37) {
             #expect(limit(ranFor: ran) > ran + LiveTimerSpan.reach, "ran \(ran)")
         }
         #expect(limit(ranFor: 3_599 - LiveTimerSpan.reach) == 35_999)   // close to the hour: already has room for it
+        // Stays at 5-char "00:00" well past 20 min (reply until 29 min, talk until 49 min).
+        #expect(LiveTimerSpan.widest(startedAt: t0, now: t0.addingTimeInterval(25 * 60)) == "00:00")
+        #expect(LiveTimerSpan.widest(startedAt: t0, now: t0.addingTimeInterval(45 * 60), reach: LiveTimerSpan.talkReach) == "00:00")
     }
 
     /// Build 948 stretched the island across the clock: a live timer takes all the room it is offered, so plain digits
@@ -695,5 +699,10 @@ nonisolated private func sideChat(_ profile: String, _ session: String, title: S
         #expect(LiveActivityContent.tookShort(3600) == "1h")
         #expect(LiveActivityContent.tookShort(45_296) == "12h 34m")
         #expect(LiveActivityContent.tookShort(-3) == "0s")
+        #expect(LiveActivityContent.tookTiny(44.6) == "45s")
+        #expect(LiveActivityContent.tookTiny(970) == "16m")
+        #expect(LiveActivityContent.tookTiny(3600) == "1h")
+        #expect(LiveActivityContent.tookTiny(45_296) == "12h")
+        #expect(LiveActivityContent.tookTiny(-3) == "0s")
     }
 }

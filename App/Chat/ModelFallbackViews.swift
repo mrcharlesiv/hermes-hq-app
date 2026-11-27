@@ -87,8 +87,19 @@ nonisolated struct ModelFallbackRow: Equatable, Hashable, Sendable {
                                   displayName: displayName, providerName: providerName)
         let category = fallback.category
         let commands = fallback.extractedCommands
-        let primaryCommand = commands.first
-        let secondaryHint = buildSecondaryHint(commands: commands, envVars: fallback.mentionedEnvVars, reason: fallback.reason)
+        let lowerReason = (fallback.reason ?? "").lowercased()
+        let isClaudeProvider = {
+            let p = (fallback.primaryProvider ?? "").lowercased()
+            return p.hasPrefix("claude-subscription") || p == "claude-code"
+        }()
+        let isInvalidClaudeBearer = category == .auth && isClaudeProvider && lowerReason.contains("invalid bearer token")
+        let primaryCommand = commands.first ?? (isInvalidClaudeBearer ? "claude auth login" : nil)
+        let primaryEnvVar = fallback.mentionedEnvVars.first ?? (isInvalidClaudeBearer ? "CLAUDE_CODE_OAUTH_TOKEN" : nil)
+        let secondaryHint: String? = if isInvalidClaudeBearer {
+            "If `CLAUDE_CODE_OAUTH_TOKEN` is set to a bad or expired value (such as a one-time login code), remove it so Hermes uses your `claude auth login` session."
+        } else {
+            buildSecondaryHint(commands: commands, envVars: fallback.mentionedEnvVars, reason: fallback.reason)
+        }
 
         let kickerBase: String = switch category {
         case .auth: "Sign-in required"
@@ -120,7 +131,7 @@ nonisolated struct ModelFallbackRow: Equatable, Hashable, Sendable {
             routeStatus: routeStatus,
             explanation: explanation,
             primaryCommand: primaryCommand,
-            primaryEnvVar: fallback.mentionedEnvVars.first,
+            primaryEnvVar: primaryEnvVar,
             secondaryHint: secondaryHint,
             rawText: fallback.rawText.isEmpty ? "\(fallback.primary) → \(fallback.fallback)" : fallback.rawText,
             isActionable: fallback.isActionable
@@ -164,6 +175,9 @@ nonisolated struct ModelFallbackRow: Equatable, Hashable, Sendable {
         let lower = (fallback.reason ?? "").lowercased()
         switch category {
         case .auth:
+            if lower.contains("invalid bearer token") && ((fallback.primaryProvider ?? "").lowercased().hasPrefix("claude-subscription") || (fallback.primaryProvider ?? "").lowercased() == "claude-code") {
+                return "Claude Code’s saved token was rejected by Anthropic, so \(active) answered this message instead."
+            }
             if lower.contains("claude code") && lower.contains("login") {
                 return "Claude Code doesn’t have an active login in Hermes’s environment, so \(active) answered this message instead."
             }
@@ -192,13 +206,16 @@ nonisolated struct ModelFallbackRow: Equatable, Hashable, Sendable {
     private static func buildSecondaryHint(commands: [String], envVars: [String], reason: String?) -> String? {
         let extraCommands = Array(commands.dropFirst())
         if let second = extraCommands.first, let env = envVars.first {
-            return "Or run `\(second)` and set `\(env)` in Hermes’s environment."
+            return "Or instead, run `\(second)` and set `\(env)` in Hermes’s environment."
         }
         if let env = envVars.first {
-            if let reason, reason.contains("setup-to") {
-                return "Or set `\(env)` (from `claude setup-token`) in Hermes’s environment."
+            if env == "CLAUDE_CODE_OAUTH_TOKEN" {
+                return "Alternative (don’t do both): paste a long-lived `sk-ant-…` token from `claude setup-token` into `CLAUDE_CODE_OAUTH_TOKEN`. Leave it unset if you use `claude auth login`."
             }
-            return "Or set `\(env)` in Hermes’s environment."
+            if let reason, reason.contains("setup-to") {
+                return "Or instead, set `\(env)` (from `claude setup-token`) in Hermes’s environment."
+            }
+            return "Or instead, set `\(env)` in Hermes’s environment."
         }
         if let second = extraCommands.first {
             return "Or run `\(second)` on \(HostWord.phrase)."
@@ -778,34 +795,57 @@ private struct ModelFallbackSheetView: View {
             }
 
             if let hintText {
+                if detail.primaryCommand != nil && onRunInTerminal != nil {
+                    Divider()
+                        .padding(.vertical, 2)
+                }
                 Text((try? AttributedString(markdown: hintText)) ?? AttributedString(hintText))
                     .font(Font.hq(.caption))
                     .foregroundStyle(Color.hqLabel2)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, detail.primaryCommand != nil && onRunInTerminal != nil ? 2 : 0)
             }
 
             if let envVar = detail.primaryEnvVar, let onSetEnvVar {
+                let isInvalidToken = detail.rawText.lowercased().contains("invalid bearer token")
+                let buttonTitle = isInvalidToken ? "Check \(envVar)" : "Set \(envVar)"
                 Button {
                     Haptics.play(.light)
                     onSetEnvVar(envVar)
                 } label: {
-                    HStack(spacing: 7) {
-                        Image(systemName: "key.fill")
-                            .font(Font.hq(envIsPrimary ? .subheadline : .footnote).weight(.semibold))
-                        Text("Set \(envVar)")
-                            .font(Font.hq(envIsPrimary ? .subheadline : .footnote).weight(.semibold))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.82)
+                    if envIsPrimary {
+                        HStack(spacing: 7) {
+                            Image(systemName: "key.fill")
+                                .font(Font.hq(.subheadline).weight(.semibold))
+                            Text(buttonTitle)
+                                .font(Font.hq(.subheadline).weight(.semibold))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.82)
+                        }
+                        .foregroundStyle(Color.hqOnTint)
+                        .frame(maxWidth: .infinity)
+                        .frame(minHeight: 44)
+                        .padding(.horizontal, 12)
+                        .background(Color.hqTint, in: Capsule())
+                    } else {
+                        HStack(spacing: 7) {
+                            Image(systemName: "key.fill")
+                                .font(Font.hq(.footnote).weight(.semibold))
+                                .foregroundStyle(Color.hqTintText)
+                            Text(buttonTitle)
+                                .font(Font.hq(.footnote).weight(.semibold))
+                                .foregroundStyle(Color.hqTintText)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.82)
+                            Spacer(minLength: 4)
+                            Image(systemName: "chevron.right")
+                                .font(Font.hq(.caption2).weight(.semibold))
+                                .foregroundStyle(Color.hqLabel3)
+                        }
+                        .padding(.horizontal, 12)
+                        .frame(maxWidth: .infinity)
+                        .frame(minHeight: 38)
+                        .background(codeSurface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
-                    .foregroundStyle(envIsPrimary ? Color.hqOnTint : Color.hqLabel)
-                    .frame(maxWidth: .infinity)
-                    .frame(minHeight: envIsPrimary ? 44 : 38)
-                    .padding(.horizontal, 12)
-                    .background(envIsPrimary ? Color.hqTint : codeSurface, in: Capsule())
-                    .overlay(
-                        Capsule().strokeBorder(envIsPrimary ? Color.clear : Color.hqStroke.opacity(0.6), lineWidth: 0.75)
-                    )
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("fallback.sheet.set-env")

@@ -532,6 +532,7 @@ struct EnvKeyEditor: View {
                 }
             } }
             Section {
+                let problem = EnvKeys.valueProblem(for: key, value: draft)
                 Group {
                     if info.isPassword {
                         SecureField(info.isSet ? "New value" : "Value", text: $draft)
@@ -542,8 +543,15 @@ struct EnvKeyEditor: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .accessibilityIdentifier("env-editor.field")
+                if let problem {
+                    Text(problem)
+                        .font(Font.hq(.footnote))
+                        .foregroundStyle(Color.hqRed)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("env-editor.validation")
+                }
                 Button(saved ? "Saved" : "Save") {
-                    let value = draft
+                    let value = draft.trimmingCharacters(in: .whitespacesAndNewlines)
                     Task {
                         if await model.save(key, value) {
                             draft = ""
@@ -552,12 +560,13 @@ struct EnvKeyEditor: View {
                         }
                     }
                 }
-                .disabled(draft.isEmpty || model.busy.contains(key))
+                .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || problem != nil || model.busy.contains(key))
                 .accessibilityIdentifier("env-editor.save")
             } header: { HQSectionLabel {
                 Text(info.isSet ? "Replace" : "Add")
             } } footer: { HQSectionFooter {
-                Text(EnvKeys.description(info.description))
+                let note = EnvKeys.description(info.description)
+                Text(note.isEmpty ? EnvKeys.fallbackDescription(for: key) : note)
             } }
             if let url = info.url.flatMap(URL.init(string:)), url.scheme == "https" {
                 Section {

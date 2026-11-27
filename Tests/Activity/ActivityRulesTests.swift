@@ -493,6 +493,22 @@ struct StepRulesTests {
         #expect(ModelFallbackRow.Detail.safeTerminalCommand("claude auth login\necho hi") == nil)
         #expect(ModelFallbackRow.Detail.safeTerminalCommand("   ") == nil)
 
+        // Invalid bearer token on Claude Code subscription -> offers both claude auth login and CLAUDE_CODE_OAUTH_TOKEN check
+        let badBearerRaw = "Model fallback: claude-opus-5-5[1m] via claude-subscription-directsdk-experimental could not respond (authentication failed: HTTP 401: Incomplete upstream response (first upstream attempt: status 401, upstream said: Invalid bearer token): Failed to authenticate. API Error: 401 Invalid bearer token); using gpt-6.1-sol via openai-codex."
+        let badBearerRow = try #require(ModelFallbackRow.parse(badBearerRaw, displayName: names))
+        #expect(badBearerRow.presentation == .card)
+        #expect(badBearerRow.detail?.primaryCommand == "claude auth login")
+        #expect(badBearerRow.detail?.primaryEnvVar == "CLAUDE_CODE_OAUTH_TOKEN")
+        #expect(badBearerRow.detail?.explanation.contains("rejected") == true)
+
+        // CLAUDE_CODE_OAUTH_TOKEN validation blocks one-time code#state callback codes from overwriting valid login
+        let fakeAuthCode = String(repeating: "a", count: 48) + "#" + String(repeating: "b", count: 43)
+        #expect(EnvKeys.valueProblem(for: "CLAUDE_CODE_OAUTH_TOKEN", value: fakeAuthCode)?.contains("code#state") == true)
+        #expect(EnvKeys.valueProblem(for: "CLAUDE_CODE_OAUTH_TOKEN", value: "not-a-token")?.contains("sk-ant-") == true)
+        #expect(EnvKeys.valueProblem(for: "CLAUDE_CODE_OAUTH_TOKEN", value: "sk-ant-oat01-example-token") == nil)
+        #expect(EnvKeys.valueProblem(for: "CLAUDE_CODE_OAUTH_TOKEN", value: "   ") == nil)
+        #expect(EnvKeys.valueProblem(for: "OPENAI_API_KEY", value: "anything#123") == nil)
+
         // Billing exhaustion -> actionable card
         let billingRaw = "⚠️ Model fallback: claude-opus-5-5 via anthropic unavailable (billing or quota exhausted); using gpt-6.1-sol via openai-codex."
         let billingRow = try #require(ModelFallbackRow.parse(billingRaw, displayName: names))

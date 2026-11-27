@@ -154,6 +154,31 @@ nonisolated enum EnvKeys {
         return out
     }
 
+    /// Plain-English warning when a pasted value is clearly the wrong kind of credential for `key` (for example,
+    /// pasting a one-time `code#state` OAuth callback code into `CLAUDE_CODE_OAUTH_TOKEN`, which overrides a valid
+    /// `claude auth login` session and causes HTTP 401 Invalid bearer token).
+    static func valueProblem(for key: String, value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if key == "CLAUDE_CODE_OAUTH_TOKEN" {
+            if !trimmed.hasPrefix("sk-ant-"), trimmed.contains("#") {
+                return "That looks like a one-time login code (code#state), not an OAuth token. Paste it into the Terminal prompt during claude auth login instead — or leave this key unset if you already signed in."
+            }
+            if !trimmed.hasPrefix("sk-ant-") {
+                return "Claude Code OAuth tokens start with sk-ant- (from claude setup-token). If you signed in with claude auth login, leave this key unset so it doesn’t override your login."
+            }
+        }
+        return nil
+    }
+
+    /// Fallback description shown in `EnvKeyEditor` when the gateway doesn't supply one for a known key.
+    static func fallbackDescription(for key: String) -> String {
+        if key == "CLAUDE_CODE_OAUTH_TOKEN" {
+            return "Only for a long-lived token from claude setup-token (starts with sk-ant-). Leave unset if you signed in with claude auth login — setting this key overrides that login."
+        }
+        return ""
+    }
+
     // MARK: Switches (`booleanEnvKey`, `envSwitchState`)
 
     /// On/off keys: the name or the "(true/false)" / "default: false" wording says so.

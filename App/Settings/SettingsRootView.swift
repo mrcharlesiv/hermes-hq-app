@@ -927,6 +927,13 @@ struct SettingsRootView: View {
                 router.push(DeviceAccessSettingsController())
             }
             .accessibilityIdentifier("settings.device-access")
+            // [proactivity-beta] Opt-in Beta proactivity add-on (off by default).
+            if model.configStore != nil {
+                NavRow(title: ProactivityBetaPage.title, systemImage: "sparkles", value: "Beta") {
+                    router.push(ProactivityBetaPage.make(router: router))
+                }
+                .accessibilityIdentifier("settings.proactivity-beta")
+            }
         }
 
         if let tasks = TasksSwitchRow() {

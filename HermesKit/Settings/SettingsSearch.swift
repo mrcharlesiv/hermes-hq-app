@@ -200,6 +200,8 @@ nonisolated enum SettingsSearch {
         // [macpass-settings2] Device Access was not found at all ("contacts", "location", "health" found nothing).
         ("device-access", "Device Access", ["device", "contacts", "calendar", "calendars", "reminders", "location", "health",
                                             "photos", "permissions", "what bots can use"]),
+        ("proactivity-beta", "Proactivity (Beta)", ["proactive", "proactivity", "beta", "open loops", "daily brief", "follow up",
+                                                    "anticipation", "calibration", "hermes-hq-proactive"]),
     ].map { SettingsSearchEntry(id: "page:\($0.0)", label: $0.1, context: "", keywords: $0.2, target: .root($0.0), isPage: true) }
         + capabilitiesPages
 

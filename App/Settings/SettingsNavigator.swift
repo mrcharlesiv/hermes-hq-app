@@ -49,7 +49,7 @@ enum SettingsNavigator {
         if id.hasPrefix("config:") || id.hasPrefix("background:") { return id.hasPrefix("config:") ? .gateway : .appearance }
         switch id {
         case "theme", "chat-bubbles", "backgrounds", "tab-order", SettingsSearch.kanbanTabTarget, "app-icon": return .appearance
-        case "notifications", "device-access": return .general
+        case "notifications", "device-access", "proactivity-beta": return .general
         case "tool-calls": return .chat
         case "attachment-limit": return DeviceWord.isMac ? .gateway : .chat   // a row of Chat Behavior on the Mac (below)
         case "sound-picker": return .sounds
@@ -84,6 +84,7 @@ enum SettingsNavigator {
             if let open = router.openGateway { open() } else { router.push(GatewayPageController(services: services, router: router)) }
         case "notifications": router.push(NotificationsSettingsController(app: services as? AppModel))
         case "device-access": router.push(DeviceAccessSettingsController())   // [macpass-settings2]
+        case "proactivity-beta": router.push(ProactivityBetaPage.make(router: router))   // [proactivity-beta]
         case "phone-calls":
             if let client = (services as? AppModel)?.client { router.push("Phone Calls (Beta)", PhoneSettingsView(accountID: client.account.id)) }
         case "providers": router.push("Providers", ProvidersPageView(router: router))

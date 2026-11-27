@@ -31,6 +31,17 @@ enum ChatSheet {
         }
         return navigation
     }
+
+    /// A sheet whose title can be long (a hotel's full name): the bar shows it on up to two lines instead of cutting
+    /// it off after one ("Embassy Suites by Hilton Chicago O'…", owner 2026-11-27). `title` stays set for VoiceOver.
+    static func wrapTitle(_ root: UIViewController) {
+        let label = SheetTitleLabel()   // the prompt sheets' two-line title (PromptSheets.swift)
+        label.text = root.title
+        label.textAlignment = .center
+        label.accessibilityTraits = .header
+        label.accessibilityIdentifier = "sheet.title"
+        root.navigationItem.titleView = label
+    }
 }
 
 /// Labelled monospace blocks on the elevated cell colour, radius 14, Footnote size (spec 06 §3.3); each copies on a

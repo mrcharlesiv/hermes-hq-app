@@ -23,6 +23,7 @@ enum FlightDetailSheet {
             }
         )))
         let sheet = ChatSheet.wrap(host, title: flight.routeLabel, detents: [.medium(), .large()])
+        ChatSheet.wrapTitle(host)
         #if targetEnvironment(macCatalyst)
         SheetStyle.macPage(sheet, width: 620, from: vc)
         #else

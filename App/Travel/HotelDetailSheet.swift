@@ -30,6 +30,7 @@ enum HotelDetailSheet {
         )))
         box.vc = host
         let sheet = ChatSheet.wrap(host, title: hotel.name, detents: [.medium(), .large()])
+        ChatSheet.wrapTitle(host)
         #if targetEnvironment(macCatalyst)
         SheetStyle.macPage(sheet, width: 660, from: vc)
         #else
@@ -85,7 +86,12 @@ private struct HotelDetailView: View {
                         // (only the "1 / 3" badge did), so the whole picture is the button.
                         HotelRemotePhoto(url: url)
                             .allowsHitTesting(false)
-                            .frame(width: hotel.images.count == 1 ? 320 : 240, height: 168)
+                            // One photo spans the sheet's card width (owner 2026-11-27: a 320 pt photo stopped short
+                            // of the cards under it); several keep the 240 pt peeking strip.
+                            .containerRelativeFrame(.horizontal) { width, _ in
+                                hotel.images.count == 1 ? width : 240
+                            }
+                            .frame(height: 168)
                             .clipShape(.rect(cornerRadius: HQShape.radius(14, .card)))
                             .contentShape(.rect)
                             .overlay(alignment: .bottomTrailing) {

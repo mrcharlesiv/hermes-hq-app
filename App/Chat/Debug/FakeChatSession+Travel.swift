@@ -110,7 +110,7 @@ extension FakeChatSession {
                     "why": .array([.string("High guest scores for quiet rooms and easy transit")]),
                 ]),
                 .object([
-                    "name": .string("Mercer Park Hotel"),
+                    "name": .string("Mercer Park Hotel and Conference Center by the River"),
                     "neighborhood": .string("Midtown"),
                     "address": .string("45 W 44th St, New York, NY 10036"),
                     "latitude": .number(40.7556),
@@ -124,7 +124,6 @@ extension FakeChatSession {
                     "url": .string("https://example.com/hotels/mercer-park"),
                     "images": .array([
                         .string("https://picsum.photos/seed/mercer1/800/600"),
-                        .string("https://picsum.photos/seed/mercer2/800/600"),
                     ]),
                     "cancellation": .string("Free cancellation until Dec 11"),
                     "amenities": .array([.string("Wi-Fi"), .string("Coffee bar"), .string("Workspace")]),

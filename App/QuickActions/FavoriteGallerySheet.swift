@@ -376,7 +376,7 @@ private struct FavoriteGalleryView: View {
         let canQuickAdd = (!spec.kind.needsBot && spec.kind != .goal && spec.kind != .groupChat && spec.kind != .chatSession)
             || (spec.kind.needsBot && liveModel.bots.first != nil)
         let cardWidth: CGFloat = spec.defaultSize == .small ? 176 : 258
-        let cardHeight: CGFloat = 152
+        let cardHeight: CGFloat = 184
 
         return VStack(alignment: .leading, spacing: 8) {
             Button { onConfigure(spec.choice) } label: {

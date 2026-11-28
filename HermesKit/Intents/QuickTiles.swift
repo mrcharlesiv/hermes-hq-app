@@ -1513,9 +1513,28 @@ nonisolated enum QuickTileLayout {
             if Self.usesCompactWideHeight(tile) {
                 return min(base, ceil(max(metrics.actionTallHeight, 134 * max(1, metrics.scale))))
             }
+            // Wide/Banner 1-row multi-item list cards (Today, Needs You, Upcoming Jobs, Active Now) need room for
+            // 3–4 two-line rows plus an optional "+N more" footer (~224pt) so content never overflows the card.
+            if Self.usesListWideHeight(tile) {
+                return max(base, ceil(224 * max(1, metrics.scale)))
+            }
             return rows * base + (rows - 1) * metrics.gap
         }
         return tile.short ? metrics.actionShortHeight : metrics.actionTallHeight
+    }
+
+    /// Multi-row 1-row Wide/Banner list live cards whose items carry two lines (title + note/schedule) plus footer.
+    static func usesListWideHeight(_ tile: QuickTile) -> Bool {
+        let size = tile.effectiveSize
+        guard size.isWideSpan, size.rowSpan == 1, let kind = tile.known else { return false }
+        switch kind {
+        case .tasks, .needsYou, .activeRuns:
+            return true
+        case .jobCard:
+            return (tile.job ?? "").isEmpty
+        default:
+            return false
+        }
     }
 
     /// Single-control 1-row Wide/Banner live cards (Inline Ask, Browser & Screen) that look best at ~108pt.

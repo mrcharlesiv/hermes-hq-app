@@ -251,8 +251,26 @@ import Testing
         let hGw = layout.placements[3].frame.height
         #expect(hBot == 134, "compact Wide cards sit tightly at 134pt instead of 179pt square")
         #expect(hAsk == 108, "tight single-control Wide cards (Inline Ask / Live Peek) sit at 108pt with zero dead space")
-        #expect(hToday > hBot + 30, "multi-row Wide list cards keep full 4-row height")
-        #expect(hGw > hBot + 30, "Small 1x1 square widgets stay square")
+        #expect(QuickTileLayout.usesListWideHeight(today) && QuickTileLayout.usesListWideHeight(upcomingJobs))
+        #expect(!QuickTileLayout.usesListWideHeight(singleJob) && !QuickTileLayout.usesListWideHeight(bot))
+        #expect(hToday == 224, "multi-row Wide list cards get 224pt so 2-line rows + footer never overflow")
+        #expect(hGw > hBot + 30 && hGw < hToday, "Small 1x1 square widgets stay square")
+    }
+
+    @Test @MainActor func tasksCardPacksRowsToFitHeightBudgetWithoutOverflowOrVoid() {
+        // 1-line tasks pack 5 rows + "+N more" inside a Wide 224pt card (no empty bottom void).
+        #expect(FavoriteTasksCard.visibleRowCount(hasNotes: Array(repeating: false, count: 10), total: 22, size: .wide) == 5)
+        // 2-line tasks with overflow pack 3 rows + "+N more" so the footer stays cleanly inside the card.
+        #expect(FavoriteTasksCard.visibleRowCount(hasNotes: Array(repeating: true, count: 10), total: 17, size: .wide) == 3)
+        // Exactly 4 two-line tasks fit all 4 rows cleanly when no "+N more" footer is needed.
+        #expect(FavoriteTasksCard.visibleRowCount(hasNotes: Array(repeating: true, count: 4), total: 4, size: .wide) == 4)
+        // Mixed 1-line and 2-line rows adapt dynamically.
+        #expect(FavoriteTasksCard.visibleRowCount(hasNotes: [false, true, false, true, true], total: 12, size: .wide) == 4)
+        // Small cards stay compact at 2 rows beneath the headline count.
+        #expect(FavoriteTasksCard.visibleRowCount(hasNotes: Array(repeating: true, count: 6), total: 6, size: .small) == 2)
+        // Large 2-row cards expand to 7 two-line or 10 one-line rows.
+        #expect(FavoriteTasksCard.visibleRowCount(hasNotes: Array(repeating: true, count: 12), total: 17, size: .large) == 7)
+        #expect(FavoriteTasksCard.visibleRowCount(hasNotes: Array(repeating: false, count: 15), total: 22, size: .large) == 10)
     }
 
     @Test func responsiveColumnCountsScaleAcrossDevices() {

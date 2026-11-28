@@ -170,18 +170,35 @@ struct FavoriteTasksCard: View {
     var model: FavoritesLiveModel
     var size: QuickTileSize
     var dimmed: Bool
+    var siblingNeedsYouSize: QuickTileSize? = nil
     var onOpenTask: (String) -> Void
     var onAddTask: () -> Void
 
     private var viewKey: String { tile.taskView?.nilIfEmpty ?? "today" }
 
-    private var maxRows: Int {
+    /// Packs as many task rows as cleanly fit inside the card's vertical budget, accounting for 1-line vs 2-line (note)
+    /// rows and the optional "+N more" footer so 1-line lists fill the card while 2-line lists never overflow.
+    static func visibleRowCount(hasNotes: [Bool], total: Int, size: QuickTileSize) -> Int {
+        guard !hasNotes.isEmpty else { return 0 }
         switch size {
-        case .small: 3
-        case .wide, .banner: 4
-        case .tallCard: 7
-        case .large, .extraLarge: 9
-        case .mini: 1
+        case .mini: return 1
+        case .small: return min(hasNotes.count, 2)
+        case .wide, .banner, .tallCard, .large, .extraLarge:
+            let budget = size.rowSpan > 1 ? 300 : 158
+            var best = 1
+            var used = 0
+            for (index, hasNote) in hasNotes.enumerated() {
+                let rowH = hasNote ? 34 : 22
+                used += (index == 0 ? 0 : 6) + rowH
+                let count = index + 1
+                let footerH = total > count ? 24 : 0
+                if used + footerH <= budget {
+                    best = count
+                } else {
+                    break
+                }
+            }
+            return best
         }
     }
 
@@ -191,6 +208,15 @@ struct FavoriteTasksCard: View {
         let title = tile.name.isEmpty ? (snapshot?.name ?? "Today") : tile.name
         let tint = Color(uiColor: QuickTileLook.color(tile.tint))
         let symbol = snapshot.map { TasksNavigationLayout.symbol(for: $0.view, sections: TasksHub.current?.sections ?? []) } ?? "checklist"
+        let excludedTaskIds: Set<String> = {
+            guard let nySize = siblingNeedsYouSize else { return [] }
+            let attention = model.attentionItems(hasTodayTasksCard: viewKey == "today")
+            let nyLimit = FavoriteNeedsYouCard.visibleLimit(for: attention.count, size: nySize)
+            return Set(attention.prefix(nyLimit).compactMap { item -> String? in
+                if case .taskWaiting(let taskId) = item.kind { return taskId }
+                return nil
+            })
+        }()
 
         VStack(alignment: .leading, spacing: 8) {
             LiveCardHeader(symbol: symbol, tint: tint, title: title) {
@@ -228,7 +254,9 @@ struct FavoriteTasksCard: View {
             }
 
             if let frame = snapshot?.frame {
-                let rows = frame.sections.flatMap(\.rows)
+                let allRows = frame.sections.flatMap(\.rows)
+                let preferred = excludedTaskIds.isEmpty ? allRows : allRows.filter { !excludedTaskIds.contains($0.id) }
+                let rows = preferred.isEmpty ? allRows : preferred
                 if rows.isEmpty {
                     Spacer(minLength: 0)
                     VStack(alignment: .leading, spacing: 3) {
@@ -253,25 +281,36 @@ struct FavoriteTasksCard: View {
                             .font(Font.hq(.caption))
                             .foregroundStyle(headline.waiting ? Color.hqOrange : Color.hqLabel2)
                     }
+                    let limit = Self.visibleRowCount(
+                        hasNotes: rows.map { !($0.note ?? "").isEmpty },
+                        total: frame.total,
+                        size: size
+                    )
                     VStack(alignment: .leading, spacing: 5) {
-                        ForEach(Array(rows.prefix(maxRows))) { row in
+                        ForEach(Array(rows.prefix(limit))) { row in
                             taskRow(row, compact: true)
                         }
                     }
                     Spacer(minLength: 0)
                 } else {
+                    let limit = Self.visibleRowCount(
+                        hasNotes: rows.map { !($0.note ?? "").isEmpty },
+                        total: frame.total,
+                        size: size
+                    )
                     VStack(alignment: .leading, spacing: 6) {
-                        ForEach(Array(rows.prefix(maxRows))) { row in
+                        ForEach(Array(rows.prefix(limit))) { row in
                             taskRow(row, compact: false)
                         }
                     }
-                    Spacer(minLength: 0)
-                    let overflow = max(0, frame.total - min(rows.count, maxRows))
+                    let overflow = max(0, frame.total - min(rows.count, limit))
                     if overflow > 0 {
                         Text("+\(overflow) more")
                             .font(Font.hq(.caption))
                             .foregroundStyle(Color.hqLabel2)
+                            .padding(.top, 2)
                     }
+                    Spacer(minLength: 0)
                 }
             } else {
                 Spacer(minLength: 0)
@@ -294,6 +333,7 @@ struct FavoriteTasksCard: View {
                 Image(systemName: row.done ? "checkmark.circle.fill" : "circle")
                     .font(Font.hq(compact ? .footnote : .callout))
                     .foregroundStyle(row.done ? Color.hqTint : (row.late ? Color.hqRed : Color.hqLabel3))
+                    .frame(width: compact ? nil : HQFont.scaled(22), height: compact ? nil : HQFont.scaled(22))
                     .contentShape(Rectangle().inset(by: -8))
             }
             .buttonStyle(.plain)
@@ -303,7 +343,7 @@ struct FavoriteTasksCard: View {
                 HStack(spacing: 6) {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(row.title)
-                            .font(Font.hq(compact ? .caption : .subheadline))
+                            .font(Font.hq(compact ? .caption : .footnote).weight(.semibold))
                             .foregroundStyle(row.done ? Color.hqLabel2 : Color.hqLabel)
                             .strikethrough(row.done, color: Color.hqLabel3)
                             .lineLimit(1)
@@ -427,10 +467,10 @@ struct FavoriteNeedsYouCard: View {
     var onSelect: (FavoritesLiveModel.AttentionItem) -> Void
     var onRetryJob: ((String, String) -> Void)? = nil
 
-    private var maxItems: Int {
+    static func visibleLimit(for total: Int, size: QuickTileSize) -> Int {
         switch size {
         case .small: 2
-        case .wide, .banner: 4
+        case .wide, .banner: total == 4 ? 4 : 3
         case .tallCard: 6
         case .large, .extraLarge: 7
         case .mini: 1
@@ -440,6 +480,7 @@ struct FavoriteNeedsYouCard: View {
     var body: some View {
         let _ = Theme.touch()
         let items = model.attentionItems(hasTodayTasksCard: hasTodayTasksCard)
+        let shownLimit = Self.visibleLimit(for: items.count, size: size)
         let urgentCount = items.count(where: \.urgent)
         let title = tile.name.isEmpty ? "Needs You" : tile.name
 
@@ -451,7 +492,7 @@ struct FavoriteNeedsYouCard: View {
             ) {
                 if !items.isEmpty {
                     Text("\(items.count)")
-                        .font(Font.hq(.caption).weight(.bold))
+                        .font(Font.hq(.caption).weight(.semibold))
                         .monospacedDigit()
                         .foregroundStyle(urgentCount > 0 ? Color.hqOrange : Color.hqLabel2)
                         .padding(.horizontal, 7)
@@ -478,13 +519,14 @@ struct FavoriteNeedsYouCard: View {
                 Spacer(minLength: 0)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Array(items.prefix(maxItems))) { item in
+                    ForEach(Array(items.prefix(shownLimit))) { item in
                         HStack(spacing: 8) {
                             if case .taskWaiting(let taskId) = item.kind {
                                 Button { model.toggleTaskDone(taskId) } label: {
                                     Image(systemName: model.tickingTasks.contains(taskId) ? "checkmark.circle.fill" : "circle")
                                         .font(Font.hq(.callout))
                                         .foregroundStyle(model.tickingTasks.contains(taskId) ? Color.hqTint : Color.hqLabel3)
+                                        .frame(width: HQFont.scaled(22), height: HQFont.scaled(22))
                                         .contentShape(Rectangle().inset(by: -6))
                                 }
                                 .buttonStyle(.plain)
@@ -535,12 +577,13 @@ struct FavoriteNeedsYouCard: View {
                         }
                     }
                 }
-                Spacer(minLength: 0)
-                if items.count > maxItems {
-                    Text("+\(items.count - maxItems) more")
+                if items.count > shownLimit {
+                    Text("+\(items.count - shownLimit) more")
                         .font(Font.hq(.caption))
                         .foregroundStyle(Color.hqLabel2)
+                        .padding(.top, 2)
                 }
+                Spacer(minLength: 0)
             }
         }
         .padding(14)
@@ -812,14 +855,15 @@ struct FavoriteJobCard: View {
                     Circle().fill(dotColor).frame(width: 9, height: 9)
                 }
             }
+            let compactLines = (size.isWideSpan && size.rowSpan == 1) ? 1 : 2
             Text(statusText)
                 .font(Font.hq(.footnote).weight(.medium))
                 .foregroundStyle(failed ? Color.hqRed : Color.hqLabel)
-                .lineLimit(2)
+                .lineLimit(compactLines)
             Text(scheduleLine)
                 .font(Font.hq(.caption))
                 .foregroundStyle(Color.hqLabel2)
-                .lineLimit(2)
+                .lineLimit(compactLines)
             Spacer(minLength: 0)
             if !dimmed {
                 Button { onRunNow(jobKey, title) } label: {
@@ -859,7 +903,7 @@ struct FavoriteJobCard: View {
                     .foregroundStyle(Color.hqLabel2)
                 Spacer(minLength: 0)
             } else {
-                VStack(alignment: .leading, spacing: 7) {
+                VStack(alignment: .leading, spacing: 6) {
                     ForEach(items, id: \.job.key) { entry in
                         let dot: Color = entry.running ? Color.hqTint : entry.failed ? Color.hqRed : entry.overdue ? Color.hqOrange : Color.hqGreen
                         let schedule = JobWords.rowSubtitle(entry.job, running: false)
@@ -1036,7 +1080,7 @@ struct FavoriteGatewayStatusCard: View {
                 }
 
                 HStack(spacing: 12) {
-                    statChip(label: "Sessions", value: status.sessionsWords)
+                    statChip(label: "Active", value: status.sessionsWords)
                     if let subs = model.activeSubagents {
                         statChip(label: "Helpers", value: "\(subs)")
                     }
@@ -1061,6 +1105,14 @@ struct FavoriteGatewayStatusCard: View {
                             .background(Capsule().fill(Color.hqFill3))
                         }
                     }
+                } else if let version = status.version, !version.isEmpty {
+                    Text(status.versionWords)
+                        .font(Font.hq(.caption2))
+                        .foregroundStyle(Color.hqLabel2)
+                        .lineLimit(1)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(Color.hqFill3))
                 }
             } else {
                 Spacer(minLength: 0)
@@ -1116,7 +1168,8 @@ struct FavoriteUsageCard: View {
             }
 
             if let report {
-                HStack(alignment: .firstTextBaseline, spacing: 14) {
+                let hasCost = (report.cost ?? 0) > 0.004
+                HStack(alignment: .firstTextBaseline, spacing: size == .small ? 10 : 14) {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(UsageFormat.compact(report.tokens))
                             .font(Font.hq(.title3).weight(.bold))
@@ -1128,26 +1181,28 @@ struct FavoriteUsageCard: View {
                             .font(Font.hq(.caption2))
                             .foregroundStyle(Color.hqLabel2)
                     }
-                    if let cost = report.cost {
+                    if hasCost, let cost = report.cost {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(UsageFormat.cost(cost))
                                 .font(Font.hq(.subheadline).weight(.semibold))
                                 .monospacedDigit()
                                 .foregroundStyle(Color.hqLabel)
                                 .lineLimit(1)
+                                .minimumScaleFactor(0.75)
                             Text("est. cost")
                                 .font(Font.hq(.caption2))
                                 .foregroundStyle(Color.hqLabel2)
                         }
                     }
-                    if size != .small, let sessions = report.sessions {
+                    if (!hasCost || size != .small), let sessions = report.sessions, sessions > 0 {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(UsageFormat.compact(sessions))
                                 .font(Font.hq(.subheadline).weight(.semibold))
                                 .monospacedDigit()
                                 .foregroundStyle(Color.hqLabel)
                                 .lineLimit(1)
-                            Text("sessions")
+                                .minimumScaleFactor(0.75)
+                            Text("chats")
                                 .font(Font.hq(.caption2))
                                 .foregroundStyle(Color.hqLabel2)
                         }
@@ -1343,7 +1398,7 @@ struct FavoriteActiveRunsCard: View {
                 }
                 Spacer(minLength: 0)
             } else {
-                VStack(alignment: .leading, spacing: 7) {
+                VStack(alignment: .leading, spacing: 6) {
                     ForEach(Array(runs.prefix(maxItems))) { run in
                         Button { onOpenBot(run.profile) } label: {
                             HStack(spacing: 8) {

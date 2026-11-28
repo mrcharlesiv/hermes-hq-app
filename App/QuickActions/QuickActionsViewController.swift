@@ -877,7 +877,7 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
             frames.map { NSCollectionLayoutGroupCustomItem(frame: $0) }
         }
         let section = NSCollectionLayoutSection(group: group)
-        section.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: side, bottom: 24, trailing: side)
+        section.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: side, bottom: 36, trailing: side)
         return ScrollBarLane.keep(section)
     }
 
@@ -1002,11 +1002,14 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
     private func configureLiveCard(_ cell: QuickTileCell, _ tile: QuickTile, kind: QuickTileKind, missing: Bool) {
         let size = tile.effectiveSize
         let model = liveModel
-        let hasTodayTasksCard = displayedTiles().contains { $0.known == .tasks && ($0.taskView ?? "today") == "today" }
+        let visibleTiles = displayedTiles()
+        let hasTodayTasksCard = visibleTiles.contains { $0.known == .tasks && ($0.taskView ?? "today") == "today" }
+        let siblingNeedsYouSize = visibleTiles.first { $0.known == .needsYou }?.effectiveSize
         cell.contentConfiguration = UIHostingConfiguration {
             switch kind {
             case .tasks:
                 FavoriteTasksCard(tile: tile, model: model, size: size, dimmed: missing,
+                                  siblingNeedsYouSize: siblingNeedsYouSize,
                                   onOpenTask: { [weak self] taskId in self?.openTaskFromCard(taskId) },
                                   onAddTask: { [weak self] in self?.openNewTaskFromCard() })
             case .goal:
@@ -1642,6 +1645,9 @@ final class QuickTileCell: UICollectionViewCell {
             }
         }
         backgroundConfiguration = background
+        contentView.clipsToBounds = !bare
+        contentView.layer.cornerRadius = bare ? 0 : Self.radius
+        contentView.layer.cornerCurve = .continuous
         dash.isHidden = !dashed
         dash.strokeColor = HQPalette.tint.resolvedColor(with: traitCollection).cgColor
         bringSubviewToFront(badge)

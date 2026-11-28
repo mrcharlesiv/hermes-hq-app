@@ -770,8 +770,11 @@ struct QuickActionSetupView: View {
         let size = draft.tileSize
         let width: CGFloat? = (size.isWideSpan || typeSize >= .accessibility3) ? nil : HQFont.scaled(186)
         let height: CGFloat = size.rowSpan > 1
-            ? HQFont.scaled(220)
-            : (QuickTileLayout.usesCompactWideHeight(draft.tile) ? HQFont.scaled(134) : HQFont.scaled(160))
+            ? HQFont.scaled(240)
+            : (QuickTileLayout.usesTightWideHeight(draft.tile) ? HQFont.scaled(108)
+               : QuickTileLayout.usesCompactWideHeight(draft.tile) ? HQFont.scaled(134)
+               : QuickTileLayout.usesListWideHeight(draft.tile) ? HQFont.scaled(224)
+               : HQFont.scaled(176))
         return HStack {
             Spacer(minLength: 0)
             Group {
@@ -795,6 +798,7 @@ struct QuickActionSetupView: View {
             }
             .frame(maxWidth: width ?? .infinity)
             .frame(height: height)
+            .clipShape(RoundedRectangle(cornerRadius: QuickTileCell.radius, style: .continuous))
             .background(RoundedRectangle(cornerRadius: QuickTileCell.radius, style: .continuous)
                 .fill(Color(uiColor: HQPalette.sheetCard)))
             .overlay {

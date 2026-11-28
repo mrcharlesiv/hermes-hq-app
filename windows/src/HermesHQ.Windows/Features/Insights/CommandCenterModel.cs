@@ -1,6 +1,8 @@
 using Hermes.Core;
 using Hermes.Core.Insights;
 using Hermes.Core.Rpc;
+using HermesHQ.Features.Bots;
+using HermesHQ.Features.Jobs;
 using HermesHQ.Pages;
 using HermesHQ.Services;
 using HermesHQ.Shell;
@@ -9,8 +11,8 @@ using Microsoft.UI.Dispatching;
 namespace HermesHQ.Features.Insights;
 
 /// Status & Maintenance's model (App/Pages/More/CommandCenter/CommandCenter.swift, CommandCenterModel): the gateway's
-/// status and update check, Restart Gateway, the maintenance actions, and whether the gateway is connected. Lives on the
-/// UI thread; `Changed` redraws the page.
+/// status and update check, Restart Gateway, the maintenance actions, and whether the gateway is connected or read-only.
+/// Lives on the UI thread; `Changed` redraws the page.
 public sealed class CommandCenterModel
 {
     public abstract record Load
@@ -21,6 +23,7 @@ public sealed class CommandCenterModel
     }
 
     private readonly DispatcherQueue _ui;
+    private readonly Func<bool>? _readOnlyOverride;
     public HermesClient Client { get; }
     public CommandCenterApi Api { get; }
     public bool Online { get; private set; }
@@ -35,10 +38,11 @@ public sealed class CommandCenterModel
     public event Action? Changed;
     private bool _appeared;
 
-    public CommandCenterModel(HermesClient client, DispatcherQueue ui)
+    public CommandCenterModel(HermesClient client, DispatcherQueue ui, Func<bool>? readOnlyOverride = null)
     {
         Client = client;
         _ui = ui;
+        _readOnlyOverride = readOnlyOverride;
         Api = new CommandCenterApi(client.Session);
         Online = client.Rpc.State == ConnectionState.Open;
         Restart = new GatewayActionRun(Api.Actions);
@@ -51,8 +55,39 @@ public sealed class CommandCenterModel
     private void OnUi(Action a) { if (_ui.HasThreadAccess) a(); else _ui.TryEnqueue(() => a()); }
     private void Notify() => OnUi(() => Changed?.Invoke());
 
-    /// No read-only gateways on Windows yet (the Mac's `pages.readOnlyGateway`).
-    public bool ReadOnly => false;
+    /// Reads the live gateway's read-only status (matching Mac `MorePages.Context.readOnly` / `pages.readOnlyGateway`):
+    /// gateway.ready payload flags, store read-only state, and debug read-only switches (`HQPagesReadOnly` / `HQW_READ_ONLY`).
+    public static bool IsReadOnlyGateway(HermesClient? client)
+    {
+        if (IsTruthyEnv("HQPagesReadOnly") || IsTruthyEnv("HQW_READ_ONLY")) return true;
+        if (client?.Rpc.ReadyPayload is { } ready)
+        {
+            if (ready.Bool("read_only") == true
+                || ready.Bool("readOnly") == true
+                || ready.Bool("read_only_gateway") == true
+                || ready.Obj("permissions")?.Bool("read_only") == true
+                || ready.Obj("capabilities")?.Bool("read_only") == true)
+            {
+                return true;
+            }
+        }
+        if (ListsHub.Current is { } hub && (client == null || hub.Client == client) && (hub.Sessions.ReadOnly || hub.Bots.ReadOnly))
+            return true;
+        if ((client == null || ReferenceEquals(AppState.Client, client)) && JobsServices.Store?.ReadOnlyGateway == true)
+            return true;
+        return false;
+    }
+
+    private static bool IsTruthyEnv(string name)
+    {
+        var value = Environment.GetEnvironmentVariable(name)?.Trim();
+        return !string.IsNullOrEmpty(value)
+            && (value == "1"
+                || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase));
+    }
+
+    public bool ReadOnly => _readOnlyOverride?.Invoke() ?? IsReadOnlyGateway(Client);
     public string AccountKey => Client.AccountId;
     /// This gateway's update in the Update sheet, while it runs or until its ending is seen.
     public HermesUpdate? UpdateRun => HermesUpdateCenter.Shared.Run(AccountKey);
@@ -67,6 +102,7 @@ public sealed class CommandCenterModel
     public void Appear()
     {
         Client.Rpc.StateChanged += OnState;
+        Client.Rpc.Reconnected += OnReconnected;
         HermesUpdateCenter.Shared.Changed += OnUpdateCenter;
         if (_appeared) return;
         _appeared = true;
@@ -78,8 +114,11 @@ public sealed class CommandCenterModel
     public void Disappear()
     {
         Client.Rpc.StateChanged -= OnState;
+        Client.Rpc.Reconnected -= OnReconnected;
         HermesUpdateCenter.Shared.Changed -= OnUpdateCenter;
     }
+
+    private void OnReconnected(bool _) => Notify();
 
     private HermesUpdateEnd? _seenEnd;
     private void OnUpdateCenter(string key)

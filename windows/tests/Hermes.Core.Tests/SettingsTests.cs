@@ -69,12 +69,14 @@ public class ThemeTests
     [Fact]
     public void FourteenSkinsInTheMacsOrderAndWords()
     {
-        Assert.Equal(["nous", "paper", "github", "catppuccin", "everforest", "solarized", "rose-pine", "nous-alt", "midnight", "ember",
-            "mono", "slate", "cyberpunk", "ios"], SkinCatalog.All.Select(s => s.Id));
+        Assert.Equal(["nous", "paper", "github", "catppuccin", "everforest", "solarized", "rose-pine", "nous-alt",
+            "codex", "notion", "vercel", "midnight", "ember", "mono", "slate", "cyberpunk", "night-owl", "lobster", "ios"],
+            SkinCatalog.All.Select(s => s.Id));
         Assert.Equal("Deep blue-violet with cool accents", SkinCatalog.Find("midnight")!.Description);
         Assert.Equal("Apple System", SkinCatalog.Find("ios")!.Label);
         Assert.Equal("Courier New", SkinCatalog.Find("cyberpunk")!.SansFamily);
-        Assert.Equal(["midnight", "ember", "mono", "slate", "cyberpunk"], SkinCatalog.All.Where(s => s.HasOneLook).Select(s => s.Id));
+        Assert.Equal(["midnight", "ember", "mono", "slate", "cyberpunk", "night-owl", "lobster"],
+            SkinCatalog.All.Where(s => s.HasOneLook).Select(s => s.Id));
         Assert.Equal("Dark Only", SkinCatalog.Find("midnight")!.OnlyModeTag);
         Assert.Null(SkinCatalog.Find("nous")!.OnlyModeTag);
         Assert.Equal(Rgba.Hex(0x0053FD), SkinCatalog.Find("nous")!.Light.Midground);
@@ -527,9 +529,10 @@ public class SettingsTests
     [Fact]
     public void CategoriesInTheMacsOrderAndNames()
     {
-        Assert.Equal(["General", "Appearance", "Chat", "Sounds", "Hermes", "About"], SettingsCategories.All.Select(c => c.Title()));
+        Assert.Equal(["General", "Appearance", "Chat", "Hermes", "Accounts & Keys", "Bots & Tools", "About"], SettingsCategories.All.Select(c => c.Title()));
         Assert.Equal(SettingsCategory.Chat, SettingsCategories.Parse("chat"));
-        Assert.Null(SettingsCategories.Parse("tools"));
+        Assert.Equal(SettingsCategory.Tools, SettingsCategories.Parse("tools"));
+        Assert.Null(SettingsCategories.Parse("unknown-category"));
     }
 
     [Fact]

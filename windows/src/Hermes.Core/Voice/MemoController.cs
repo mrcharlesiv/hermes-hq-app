@@ -100,6 +100,10 @@ public sealed class MemoController : IDisposable
     private MemoGestureState _last = MemoGestureState.Idle, _previous = MemoGestureState.Idle;
     // The take's target when its end was asked for: a reset meanwhile still delivers it there.
     private MemoTarget? _endingTarget;
+    // M17: Live words listener & captured words preserved across native/focus interruptions until the draft/save consumes them.
+    private ILiveWordsListening? _wordsListener;
+    private string _capturedWords = "";
+    private Task<string>? _finishingWords;
 
     public MemoController(IMemoCapturing capture, MemoAccountStores stores, IPreferences prefs, MemoPlayer? player = null,
         Func<double>? nowMs = null)
@@ -121,7 +125,14 @@ public sealed class MemoController : IDisposable
         MemoSessionNotice.Posted += SessionNotice;
     }
 
-    public void Dispose() => MemoSessionNotice.Posted -= SessionNotice;
+    /// Optional factory producing a live-words listener per take (M17).
+    public Func<ILiveWordsListening?>? MakeWords { get; set; }
+
+    public void Dispose()
+    {
+        CancelWords();
+        MemoSessionNotice.Posted -= SessionNotice;
+    }
 
     /// Raised when a chat's notices change (the scope).
     public event Action<string>? NoticesChanged;
@@ -166,6 +177,8 @@ public sealed class MemoController : IDisposable
         File = null;
         Words = "";
         _reviewHeard = null;
+        _capturedWords = "";
+        _finishingWords = null;
         _levels.Clear();
         _levelSamples = 0;
         Level = 0;
@@ -248,6 +261,7 @@ public sealed class MemoController : IDisposable
                 target?.Host?.MemoShowTip(tip.Value);
                 break;
             case MemoEffect.Failed failed:
+                CancelWords();
                 if (target != null) Announce(MemoNotice.Failure(failed.Code, failed.Message), Scope(target));
                 break;
             case MemoEffect.Haptic haptic:
@@ -281,6 +295,7 @@ public sealed class MemoController : IDisposable
             // A memo owns the audio: playback stops first.
             owner._player?.Stop();
             owner._capture.AccountKey = owner.Target?.AccountKey;
+            owner.StartWords();
             owner._link.Begin();
         }
 
@@ -288,6 +303,8 @@ public sealed class MemoController : IDisposable
         {
             owner.Lesson(action, owner._previous);
             owner._endingTarget = owner.Target;
+            if (action == MemoEndAction.Cancel) owner.CancelWords();
+            else owner.BeginFinishingWords();
             owner._link.End(action);
         }
     }
@@ -297,41 +314,61 @@ public sealed class MemoController : IDisposable
     private void Saved(MemoEndAction action, MemoFile file)
     {
         var target = _endingTarget ?? Target;
-        _stores.Shapes?.Remember(file.Path, file.Peaks, file.Seconds);
+        var resolved = ApplyCapturedWords(file, out var pendingWords);
+        _stores.Shapes?.Remember(resolved.Path, resolved.Peaks, resolved.Seconds);
         if (action == MemoEndAction.Review)
         {
-            Words = file.Words ?? "";
-            _reviewHeard = file.Words;
-            File = file;
+            Words = resolved.Words ?? "";
+            _reviewHeard = resolved.Words;
+            File = resolved;
+            if (pendingWords != null) _ = CompleteReviewWordsAsync(pendingWords, resolved);
             return;
         }
         if (target == null) return;
-        if (action == MemoEndAction.Send) DeliverOrKeep(file, target);
-        else if (action == MemoEndAction.Draft) DeliverDraft(file, target);
+        if (action == MemoEndAction.Send)
+        {
+            if (pendingWords != null) _ = CompleteSendWordsAsync(pendingWords, resolved, target);
+            else DeliverOrKeep(resolved, target);
+        }
+        else if (action == MemoEndAction.Draft)
+        {
+            DeliverDraft(resolved, target);
+            if (pendingWords != null) _ = CompleteDraftWordsAsync(pendingWords, resolved, target);
+        }
     }
 
     private void SaveFailed(MemoEndAction action, string reason)
     {
+        CancelWords();
         if (action == MemoEndAction.Cancel || (_endingTarget ?? Target) is not { } target) return;
         Announce(MemoNotice.CouldNotSave(reason), Scope(target));
     }
 
     private void Stopped(MemoCaptureEvent.Stopped stopped)
     {
-        if (Target is not { } target) return;
+        if (Target is not { } target)
+        {
+            CancelWords();
+            return;
+        }
         switch (stopped.Disposition)
         {
             case MemoStopDisposition.Failed failed:
-                DropWords();
+                CancelWords();
                 Announce(MemoNotice.StoppedUnsaved(stopped.Reason, stopped.Seconds, failed.Words), Scope(target));
                 break;
             case MemoStopDisposition.Draft draft:
-                _stores.Shapes?.Remember(draft.Memo.Path, draft.Memo.Peaks, draft.Memo.Seconds);
-                DeliverDraft(draft.Memo, target);
+                // M17: preserve live transcription words across native/focus interruptions — never cancel the listener
+                // before finishing and saving the captured words onto the draft.
+                BeginFinishingWords();
+                var preserved = ApplyCapturedWords(draft.Memo, out var pendingWords);
+                _stores.Shapes?.Remember(preserved.Path, preserved.Peaks, preserved.Seconds);
+                DeliverDraft(preserved, target);
+                if (pendingWords != null) _ = CompleteDraftWordsAsync(pendingWords, preserved, target);
                 Announce(MemoNotice.StoppedAsDraft(stopped.Reason, stopped.Seconds), Scope(target));
                 break;
             default:
-                DropWords();
+                CancelWords();
                 break;
         }
     }
@@ -373,7 +410,125 @@ public sealed class MemoController : IDisposable
         else _stores.Paths.Remove(file.Path);
     }
 
-    // MARK: Words (what review carries; Live Words is not in Core)
+    // MARK: Words (Live Words + review revisions; M17 preserves captured words across interruptions)
+
+    /// Updates live words during an active take (also populated automatically by `MakeWords` listeners).
+    public void UpdateLiveWords(string text)
+    {
+        if (State.Phase is MemoPhase.Idle or MemoPhase.Review) return;
+        Words = text;
+        if (!string.IsNullOrWhiteSpace(text)) _capturedWords = text.Trim();
+        Target?.Host?.MemoWordsChanged();
+    }
+
+    /// Feeds PCM samples to the active live-words listener when one was created via `MakeWords`.
+    public void FeedLivePcm(ReadOnlySpan<short> pcm, int sampleRate) => _wordsListener?.FeedPcm(pcm, sampleRate);
+
+    private void StartWords()
+    {
+        CancelWords();
+        if (MakeWords?.Invoke() is not { } listener) return;
+        _wordsListener = listener;
+        listener.Changed += OnWordsChanged;
+        _ = StartWordsQuietlyAsync(listener);
+    }
+
+    private static async Task StartWordsQuietlyAsync(ILiveWordsListening listener)
+    {
+        try { await listener.StartAsync(); }
+        catch (Exception) { }
+    }
+
+    private void OnWordsChanged(LiveWordsText text)
+    {
+        var combined = text.Text;
+        Words = combined;
+        if (!string.IsNullOrWhiteSpace(combined)) _capturedWords = combined.Trim();
+        Target?.Host?.MemoWordsChanged();
+    }
+
+    /// Finishes the active live-words listener without cancelling it so captured words survive into draft/review/send.
+    private void BeginFinishingWords()
+    {
+        if (_wordsListener is not { } listener) return;
+        _wordsListener = null;
+        listener.Changed -= OnWordsChanged;
+        try { _finishingWords = listener.FinishAsync(); }
+        catch (Exception) { _finishingWords = null; }
+    }
+
+    private void CancelWords()
+    {
+        if (_wordsListener is { } listener)
+        {
+            _wordsListener = null;
+            listener.Changed -= OnWordsChanged;
+            try { listener.Cancel(); } catch (Exception) { }
+        }
+        _finishingWords = null;
+        _capturedWords = "";
+        DropWords();
+    }
+
+    private MemoFile ApplyCapturedWords(MemoFile file, out Task<string>? pendingWords)
+    {
+        pendingWords = null;
+        var finishing = _finishingWords;
+        var captured = _capturedWords;
+        _finishingWords = null;
+        _capturedWords = "";
+
+        if (!string.IsNullOrWhiteSpace(file.Words)) return file;
+
+        if (finishing != null)
+        {
+            if (finishing.IsCompletedSuccessfully)
+            {
+                var settled = finishing.Result.Trim();
+                if (settled.Length > 0) return file with { Words = settled };
+            }
+            else if (!finishing.IsCompleted)
+            {
+                pendingWords = finishing;
+            }
+        }
+
+        var trimmed = captured.Trim();
+        return trimmed.Length > 0 ? file with { Words = trimmed } : file;
+    }
+
+    private async Task CompleteDraftWordsAsync(Task<string> pending, MemoFile file, MemoTarget target)
+    {
+        string heard;
+        try { heard = (await pending).Trim(); }
+        catch (Exception) { return; }
+        if (heard.Length == 0 || string.Equals(file.Words, heard, StringComparison.Ordinal)) return;
+        var scope = Scope(target);
+        if (_stores.Drafts?.Draft(scope) is { } current && current.Path == file.Path)
+            DeliverDraft(current with { Words = heard }, target);
+    }
+
+    private async Task CompleteReviewWordsAsync(Task<string> pending, MemoFile file)
+    {
+        string heard;
+        try { heard = (await pending).Trim(); }
+        catch (Exception) { return; }
+        if (heard.Length == 0 || State.Phase != MemoPhase.Review || File?.Path != file.Path) return;
+        if (!string.IsNullOrWhiteSpace(Words)) return;
+        File = File with { Words = heard };
+        Words = heard;
+        _reviewHeard = heard;
+        Target?.Host?.MemoWordsChanged();
+    }
+
+    private async Task CompleteSendWordsAsync(Task<string> pending, MemoFile file, MemoTarget target)
+    {
+        string heard = "";
+        try { heard = (await pending).Trim(); }
+        catch (Exception) { }
+        var finalFile = heard.Length > 0 && string.IsNullOrWhiteSpace(file.Words) ? file with { Words = heard } : file;
+        DeliverOrKeep(finalFile, target);
+    }
 
     private void DropWords()
     {
@@ -462,7 +617,7 @@ public sealed class MemoController : IDisposable
     public void Reset()
     {
         _link.Reset();
-        DropWords();
+        CancelWords();
         if (File is { } file)
         {
             if (_player?.IsCurrent(file.Path) == true) _player.Stop();

@@ -1,3 +1,4 @@
+using Hermes.Core.Chat;
 using Hermes.Core.Questions;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Text;
@@ -19,24 +20,33 @@ internal enum DockSending { None, Send, Skip }
 /// itself after 0.22 s. Enter is Next / Send, Escape leaves a field, then skips (Mac polish #7).
 internal sealed class QuestionDock
 {
+    public const string ExplainFirstAnswer = "Please explain the context and options in chat first before asking me to choose.";
+    /// Cap dock height to 62% of the chat viewport (Mac: ChatViewController.swift `0.62`), leaving transcript context readable.
+    public const double MaxViewportFraction = 0.62;
+    private const double FallbackMaxScrollHeight = 420;
+    private const double MinScrollHeight = 120;
+
     private readonly ContentControl _page = new() { IsTabStop = false, HorizontalContentAlignment = HorizontalAlignment.Stretch };
+    private readonly ScrollViewer _scroll;
     private readonly TextBlock _step = new() { FontSize = 12.5, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
     private readonly StackPanel _bars = new() { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
     private readonly Button _skip;
     private readonly Button _minimize;
     private readonly Button _back;
+    private readonly Button _explain;
     private readonly Button _primary;
     private readonly Grid _foot;
     private readonly DispatcherQueue _ui;
     private DispatcherQueueTimer? _advance;
     private TextBox? _field;
     private DockSending _sending;
+    private double _viewportHeight;
 
     public ClarifyPrompt Prompt { get; }
     public ClarifyDraft Draft { get; private set; }
     public Border View { get; }
 
-    public Action<QuestionDock>? OnSend, OnSkip, OnMinimize, OnDraftChanged;
+    public Action<QuestionDock>? OnSend, OnSkip, OnMinimize, OnExplain, OnDraftChanged;
 
     /// [questions] Answer Now's dock (a settled card's unanswered questions, or a live one kept after it ended unsent):
     /// its Skip reads Cancel, and Send puts the answers in the chat (QuestionsChat.SendLater).
@@ -84,12 +94,25 @@ internal sealed class QuestionDock
         {
             Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent), BorderThickness = new Thickness(0),
             Foreground = Brush("AccentTextFillColorPrimaryBrush"), Padding = new Thickness(0, 6, 12, 6),
+            HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center,
         };
         var backContent = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
         backContent.Children.Add(new FontIcon { Glyph = "", FontSize = 12 });
         backContent.Children.Add(new TextBlock { Text = "Back" });
         _back.Content = backContent;
         _back.Click += (_, _) => Go(-1);
+        _explain = new Button
+        {
+            Content = "Explain first",
+            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent), BorderThickness = new Thickness(0),
+            Foreground = Brush("AccentTextFillColorPrimaryBrush"), Padding = new Thickness(0, 6, 12, 6),
+            FontSize = 14, FontWeight = FontWeights.Medium,
+            HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center,
+        };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(_explain, "question.explain");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(_explain, "Explain first");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetHelpText(_explain, "Asks for the context in chat before choosing.");
+        _explain.Click += (_, _) => OnExplain?.Invoke(this);
         _primary = new Button
         {
             Style = Res<Style>("AccentButtonStyle"), CornerRadius = new CornerRadius(18), MinWidth = 96, MinHeight = 36,
@@ -100,16 +123,18 @@ internal sealed class QuestionDock
         _foot.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         _foot.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         _foot.Children.Add(_back);
+        _foot.Children.Add(_explain);
         Grid.SetColumn(_primary, 1);
         _foot.Children.Add(_primary);
 
+        _scroll = new ScrollViewer
+        {
+            Content = _page, MaxHeight = FallbackMaxScrollHeight, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        };
         var stack = new StackPanel();
         stack.Children.Add(head);
-        stack.Children.Add(new ScrollViewer
-        {
-            Content = _page, MaxHeight = 420, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-        });
+        stack.Children.Add(_scroll);
         stack.Children.Add(_foot);
         View = new Border
         {
@@ -140,6 +165,62 @@ internal sealed class QuestionDock
         Prompt.Questions.Select(q => (q.Qid, ClarifyStaging.StagedAnswer(q, Stage(q.Qid)))).ToList();
 
     public int AnsweredCount => Answers.Count(a => a.Answer != null);
+
+    /// Updates the inner ScrollViewer cap from the chat viewport height (62% total dock cap, fallback 420).
+    public void SetViewportHeight(double viewportHeight)
+    {
+        _viewportHeight = double.IsFinite(viewportHeight) && viewportHeight > 0 ? viewportHeight : 0;
+        UpdateScrollCap();
+    }
+
+    /// Stages a plain-language request for context on the first question so Send locks and records it cleanly
+    /// (Mac: QuestionDockView.stageExplainFirst).
+    public void StageExplainFirst()
+    {
+        if (Prompt.Questions.Count == 0) return;
+        CancelAdvance();
+        var first = Prompt.Questions[0];
+        var stage = new ClarifyStage([], ExplainFirstAnswer, Other: true);
+        Draft = Draft with
+        {
+            Page = 0,
+            Stages = new Dictionary<string, ClarifyStage> { [first.Qid] = stage },
+        };
+        RenderPage();
+    }
+
+    /// Whether "Explain first" shows on page 1 (Mac: QuestionDockView.showsExplain).
+    public bool ShowsExplain
+    {
+        get
+        {
+            if (Later || Draft.Page != 0 || FootHidden || Prompt.Questions.Count == 0) return false;
+            var first = Prompt.Questions[0];
+            if (first.Choices is not { Count: > 0 } || VerificationCodePrompt.AsksForCode(first.Question)) return false;
+            return Prompt.Questions.Count == 1 || AnsweredCount == 0;
+        }
+    }
+
+    /// A pick-one page that a tap answers and leaves: it has choices, takes one, and is not the last.
+    private bool AdvancesOnPick(int index)
+    {
+        if (index < 0 || index >= Prompt.Questions.Count - 1) return false;
+        var q = Prompt.Questions[index];
+        return !q.MultiSelect && q.Choices is { Count: > 0 };
+    }
+
+    /// The first page has no foot only when a tap auto-advances to a later page (Mac: QuestionDockView.footHidden).
+    /// Single-question choice prompts (`count == 1`) keep the footer visible with "Explain first" and "Send".
+    public bool FootHidden
+    {
+        get
+        {
+            if (Draft.Page != 0 || !AdvancesOnPick(0)) return false;
+            var q = Prompt.Questions[0];
+            var stage = Stage(q.Qid);
+            return !stage.Other && ClarifyStaging.StagedAnswer(q, stage) == null;
+        }
+    }
 
     public void SetMinimized(bool minimized)
     {
@@ -197,6 +278,7 @@ internal sealed class QuestionDock
             page.Children.Add(hint);
         }
         _field = null;
+        var asksCode = VerificationCodePrompt.AsksForCode(q.Question);
         if (q.Choices is { Count: > 0 } choices)
         {
             var list = new StackPanel { Margin = new Thickness(0, 10, 0, 0) };
@@ -208,7 +290,7 @@ internal sealed class QuestionDock
             list.Children.Add(Hairline());
             if (stage.Other)
             {
-                var field = Field("Something else", stage.Draft, locked);
+                var field = Field(asksCode ? "Verification code" : "Type an answer or ask a question…", stage.Draft, locked, asksCode);
                 field.Margin = new Thickness(0, 8, 0, 0);
                 field.TextChanged += (_, _) => SetStage(q.Qid, Stage(q.Qid) with { Draft = field.Text }, rerender: false);
                 list.Children.Add(field);
@@ -234,7 +316,7 @@ internal sealed class QuestionDock
         }
         else
         {
-            var field = Field("Type your answer…", stage.Draft, locked);
+            var field = Field(asksCode ? "Verification code" : "Type your answer…", stage.Draft, locked, asksCode);
             field.Margin = new Thickness(0, 14, 0, 0);
             field.MinHeight = 44;
             field.MaxHeight = 132;
@@ -266,8 +348,6 @@ internal sealed class QuestionDock
 
     private void UpdateFoot()
     {
-        var q = Current;
-        var stage = Stage(q.Qid);
         var locked = _sending != DockSending.None;
         _back.Visibility = Draft.Page > 0 ? Visibility.Visible : Visibility.Collapsed;
         _back.IsEnabled = !locked;
@@ -281,10 +361,22 @@ internal sealed class QuestionDock
             _primary.Content = "Next";
             _primary.IsEnabled = !locked;
         }
-        // [question-tidy] The first page has no foot while it is pick-one, unanswered and "Something else…" is closed.
-        var tapAnswers = q.Choices is { Count: > 0 } && !q.MultiSelect && !stage.Other
-            && ClarifyStaging.StagedAnswer(q, stage) == null;
-        _foot.Visibility = Draft.Page == 0 && tapAnswers ? Visibility.Collapsed : Visibility.Visible;
+        _foot.Visibility = FootHidden ? Visibility.Collapsed : Visibility.Visible;
+        _explain.Visibility = ShowsExplain ? Visibility.Visible : Visibility.Collapsed;
+        _explain.IsEnabled = !locked;
+        UpdateScrollCap();
+    }
+
+    private void UpdateScrollCap()
+    {
+        if (_viewportHeight <= 0)
+        {
+            _scroll.MaxHeight = FallbackMaxScrollHeight;
+            return;
+        }
+        var chrome = _foot.Visibility == Visibility.Visible ? 112.0 : 60.0;
+        var maxDock = Math.Round(_viewportHeight * MaxViewportFraction);
+        _scroll.MaxHeight = Math.Max(MinScrollHeight, maxDock - chrome);
     }
 
     private FrameworkElement ChoiceRow(ClarifyQuestion q, string choice, bool picked, bool locked)
@@ -340,13 +432,20 @@ internal sealed class QuestionDock
 
     private static Border Hairline() => new() { Height = 1, Background = Brush("DividerStrokeColorDefaultBrush") };
 
-    private TextBox Field(string placeholder, string text, bool locked)
+    private TextBox Field(string placeholder, string text, bool locked, bool oneTimeCode)
     {
         var field = new TextBox
         {
-            PlaceholderText = placeholder, Text = text, TextWrapping = TextWrapping.Wrap, AcceptsReturn = false,
-            IsEnabled = !locked, IsSpellCheckEnabled = true,
+            PlaceholderText = placeholder, Text = text,
+            TextWrapping = oneTimeCode ? TextWrapping.NoWrap : TextWrapping.Wrap, AcceptsReturn = false,
+            IsEnabled = !locked, IsSpellCheckEnabled = !oneTimeCode, IsTextPredictionEnabled = !oneTimeCode,
         };
+        if (oneTimeCode)
+        {
+            var scope = new InputScope();
+            scope.Names.Add(new InputScopeName(InputScopeNameValue.NumericPin));
+            field.InputScope = scope;
+        }
         field.KeyDown += (_, e) =>
         {
             if (e.Key != VirtualKey.Enter) return;

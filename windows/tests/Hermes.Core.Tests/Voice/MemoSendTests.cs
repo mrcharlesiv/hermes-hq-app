@@ -169,8 +169,12 @@ public sealed partial class MemoSendTests : IDisposable
             }
             if (path == "/api/auth/ws-ticket" && RefuseTickets)
             {
-                // [WIN-OWNER-WAIT] The account signed out elsewhere: the next dial's ticket is refused (a sign-out).
+                // [WIN-OWNER-WAIT] The account signed out elsewhere: Hermes refuses the ticket with a JSON detail body.
+                var refuse = Encoding.UTF8.GetBytes("""{"detail":"Not authenticated"}""");
                 ctx.Response.StatusCode = 401;
+                ctx.Response.ContentType = "application/json";
+                ctx.Response.ContentLength64 = refuse.Length;
+                await ctx.Response.OutputStream.WriteAsync(refuse);
                 ctx.Response.Close();
                 return;
             }

@@ -41,10 +41,20 @@ public static class GatewaySwitchWords
 }
 
 /// Reads one parked chat with a parked account's own session (HermesKit `AccountProbe.session`).
-public interface IParkedReader : IDisposable
+public interface IParkedReader : IDisposable, IAsyncDisposable
 {
     /// `GET /api/sessions/<id>[?profile=]`, 8 s. Throws GatewayException only when the gateway can't be reached.
     Task<ParkedAnswer> ReadAsync(string id, string? profile, CancellationToken ct);
+
+    /// Proactive Nous keep-alive when a parked or idle account has no chats to read (HermesKit `AccountProbe.keepAlive`).
+    Task<ParkedAnswer> KeepAliveAsync(TimeSpan olderThan, CancellationToken ct) =>
+        Task.FromResult<ParkedAnswer>(new ParkedAnswer.Missing());
+
+    ValueTask IAsyncDisposable.DisposeAsync()
+    {
+        Dispose();
+        return ValueTask.CompletedTask;
+    }
 }
 
 public abstract record ParkedAnswer
@@ -110,6 +120,7 @@ public sealed class GatewayHub
 
     private readonly ITokenStore _store;
     private readonly IParkedRosters _parked;
+    private readonly NousRenewals _renewals;
     private readonly Dictionary<string, int> _counts = [];
     private readonly HashSet<string> _expired = [];
     private readonly HashSet<string> _unreachable = [];
@@ -123,6 +134,8 @@ public sealed class GatewayHub
     /// Makes the reader for a parked account (tests replace it).
     public Func<StoredAccount, IParkedReader?> MakeReader { get; set; }
     public Func<DateTimeOffset> Now { get; set; } = () => DateTimeOffset.UtcNow;
+    /// How old a Nous token pair may sit before a proactive keep-alive rotates it (HermesKit `NousSessionKeepAlive`).
+    public TimeSpan KeepAliveInterval { get; set; } = NousSessionKeepAlive.DefaultInterval;
     public DateTimeOffset? LastCheckEnded { get; private set; }
     /// The account in use (its own sidebar shows its news).
     public string? CurrentKey { get; set; }
@@ -131,11 +144,13 @@ public sealed class GatewayHub
     /// Raised after rows, counts or the switch state change.
     public event Action? Changed;
 
-    public GatewayHub(ITokenStore store, IParkedRosters parked, Func<StoredAccount, IParkedReader?>? makeReader = null)
+    public GatewayHub(ITokenStore store, IParkedRosters parked, Func<StoredAccount, IParkedReader?>? makeReader = null,
+        NousRenewals? renewals = null)
     {
         _store = store;
         _parked = parked;
-        MakeReader = makeReader ?? (a => SessionParkedReader.For(a, store));
+        _renewals = renewals ?? NousRenewals.Shared;
+        MakeReader = makeReader ?? (a => SessionParkedReader.For(a, store, _renewals, () => Now()));
     }
 
     private SavedAccounts? _cached;
@@ -250,9 +265,9 @@ public sealed class GatewayHub
         Changed?.Invoke();
         try
         {
-            if (account.IsSignedIn && SessionParkedReader.Open(account, _store) is { } s)
+            if (account.IsSignedIn && SessionParkedReader.Open(account, _store, _renewals) is { } s)
             {
-                using (s) await s.LogoutAsync(TimeSpan.FromSeconds(6));
+                await using (s) await s.LogoutAsync(TimeSpan.FromSeconds(6));
             }
             var saved = Saved();
             saved.Remove(key);
@@ -290,23 +305,70 @@ public sealed class GatewayHub
     public static TimeSpan Backoff(int misses) =>
         TimeSpan.FromSeconds(Math.Min(UnreachableCap.TotalSeconds, Every.TotalSeconds * Math.Pow(2, Math.Max(1, misses))));
 
+    private bool HasSignedInNousAccount() =>
+        Saved().Accounts.Any(a => a.IsNous && a.Nous is { } t && t.CanRenew());
+
     /// On return to the app and when the menu opens: a check unless the last one ended under 30 s ago. The menu
-    /// (`force`) also asks the gateways waiting out a backoff.
+    /// (`force`) also asks the gateways waiting out a backoff. Runs for single-gateway Nous setups too so idle
+    /// refresh tokens never hit Portal's 24 h expiry.
     public void CheckSoon(bool force = true)
     {
-        if (_newsStopped || !IsShown) return;
+        if (_newsStopped) return;
+        if (!IsShown && !HasSignedInNousAccount()) return;
         if (LastCheckEnded is { } ended && Now() - ended <= RecheckAfter) return;
         _ = CheckAsync(force);
     }
 
     /// One gateway at a time, one check at a time. A gateway that can't be reached keeps its last count; one whose
-    /// session was refused (or that has none) shows none.
+    /// session was refused (or that has none) shows none. Also sweeps all signed-in Nous accounts due for keep-alive.
     public Task CheckAsync(bool force = true)
     {
         if (_newsStopped) return Task.CompletedTask;
         if (_checking is { IsCompleted: false } running) return running;
         _checking = PerformCheckAsync(force);
         return _checking;
+    }
+
+    /// Proactively refreshes all signed-in Nous accounts whose latest known pair is at least `olderThan` (default 4 h)
+    /// old, including accounts with zero parked chats or when only one gateway is saved (HermesKit
+    /// `NousSessionKeepAlive.refreshDue` / `GatewaySwitcherModel`).
+    public async Task<int> KeepAliveNousAsync(TimeSpan? olderThan = null, CancellationToken ct = default)
+    {
+        if (_newsStopped) return 0;
+        var interval = olderThan ?? KeepAliveInterval;
+        var refreshed = 0;
+        foreach (var account in Saved().Accounts.ToList())
+        {
+            if (_newsStopped || ct.IsCancellationRequested) break;
+            if (!account.IsNous || account.Nous is not { } tokens || !tokens.CanRenew()) continue;
+            var live = _renewals.Latest(tokens);
+            if (!NousSessionKeepAlive.RefreshDue(live, interval, Now())) continue;
+            await using var reader = MakeReader(account);
+            if (reader == null) continue;
+            using var t = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            t.CancelAfter(GatewaySession.RefreshTimeout);
+            _newsRead = t;
+            try
+            {
+                var answer = await reader.KeepAliveAsync(interval, t.Token);
+                if (_newsStopped) break;
+                if (answer is ParkedAnswer.Session)
+                {
+                    refreshed++;
+                    if (account.Key != CurrentKey && _expired.Remove(account.Key)) Changed?.Invoke();
+                }
+                else if (answer is ParkedAnswer.Refused && account.Key != CurrentKey)
+                {
+                    if (_expired.Add(account.Key)) Changed?.Invoke();
+                }
+            }
+            catch (Exception e) when (e is GatewayException or OperationCanceledException or HttpRequestException)
+            {
+                if (_newsStopped) break;
+            }
+            finally { _newsRead = null; }
+        }
+        return refreshed;
     }
 
     /// GatewaySwitcherModel.stop: cancel the current read, then let its reader dispose. The quit plan bounds
@@ -332,66 +394,118 @@ public sealed class GatewayHub
                 count = 0;
                 SetUnreachable(key, false);
             }
-            else if (_parked.Read(key) is not { Count: > 0 } chats)
-            {
-                count = 0;
-                SetUnreachable(key, false);
-            }
             else
             {
-                var live = new List<ParkedChatLive>();
-                bool refused = false, unreachable = false;
-                using (var reader = MakeReader(account))
+                var chats = _parked.Read(key);
+                var hasChats = chats is { Count: > 0 };
+                var needsNousKeepAlive = !hasChats
+                    && account.IsNous
+                    && account.Nous is { } tokens
+                    && tokens.CanRenew()
+                    && NousSessionKeepAlive.RefreshDue(_renewals.Latest(tokens), KeepAliveInterval, Now());
+
+                if (!hasChats && !needsNousKeepAlive)
                 {
-                    if (reader == null) unreachable = true;
-                    else foreach (var chat in chats)
-                    {
-                        if (_newsStopped) return;
-                        if (!GatewayNews.SessionIdPattern().IsMatch(chat.Id)) continue;
-                        using var t = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-                        _newsRead = t;
-                        try
-                        {
-                            var answer = await reader.ReadAsync(chat.Id, chat.Profile, t.Token);
-                            if (_newsStopped) return;
-                            switch (answer)
-                            {
-                                case ParkedAnswer.Session s:
-                                    if (ParkedChatLive.From(s.Json, chat.Id) is { } row) live.Add(row);
-                                    break;
-                                case ParkedAnswer.Refused: refused = true; break;
-                            }
-                        }
-                        catch (Exception e) when (e is GatewayException or OperationCanceledException or HttpRequestException)
-                        {
-                            if (_newsStopped) return;
-                            unreachable = true;
-                        }
-                        finally { _newsRead = null; }
-                        if (refused || unreachable) break;
-                    }
-                }
-                if (unreachable)
-                {
-                    var missed = _misses.GetValueOrDefault(key) + 1;
-                    _misses[key] = missed;
-                    _nextTry[key] = Now() + Backoff(missed);
+                    count = 0;
+                    SetUnreachable(key, false);
                 }
                 else
                 {
-                    _misses.Remove(key);
-                    _nextTry.Remove(key);
-                }
-                SetUnreachable(key, unreachable);
-                if (refused)
-                {
-                    count = 0;
-                    if (_expired.Add(key)) Changed?.Invoke();
-                }
-                else if (!unreachable)
-                {
-                    count = GatewayNews.UnreadCount(chats, live);
-                    if (_expired.Remove(key)) Changed?.Invoke();
+                    var live = new List<ParkedChatLive>();
+                    bool refused = false, unreachable = false;
+                    await using (var reader = MakeReader(account))
+                    {
+                        if (reader == null) unreachable = true;
+                        else if (!hasChats)
+                        {
+                            using var t = new CancellationTokenSource(GatewaySession.RefreshTimeout);
+                            _newsRead = t;
+                            try
+                            {
+                                var answer = await reader.KeepAliveAsync(KeepAliveInterval, t.Token);
+                                if (_newsStopped) return;
+                                if (answer is ParkedAnswer.Refused) refused = true;
+                            }
+                            catch (Exception e) when (e is GatewayException or OperationCanceledException or HttpRequestException)
+                            {
+                                if (_newsStopped) return;
+                                unreachable = true;
+                            }
+                            finally { _newsRead = null; }
+                        }
+                        else
+                        {
+                            foreach (var chat in chats!)
+                            {
+                                if (_newsStopped) return;
+                                if (!GatewayNews.SessionIdPattern().IsMatch(chat.Id)) continue;
+                                using var t = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                                _newsRead = t;
+                                try
+                                {
+                                    var answer = await reader.ReadAsync(chat.Id, chat.Profile, t.Token);
+                                    if (_newsStopped) return;
+                                    switch (answer)
+                                    {
+                                        case ParkedAnswer.Session s:
+                                            if (ParkedChatLive.From(s.Json, chat.Id) is { } row) live.Add(row);
+                                            break;
+                                        case ParkedAnswer.Refused: refused = true; break;
+                                    }
+                                }
+                                catch (Exception e) when (e is GatewayException or OperationCanceledException or HttpRequestException)
+                                {
+                                    if (_newsStopped) return;
+                                    unreachable = true;
+                                }
+                                finally { _newsRead = null; }
+                                if (refused || unreachable) break;
+                            }
+                            if (!refused && !unreachable && !_newsStopped
+                                && account.IsNous && account.Nous is { } nt && nt.CanRenew()
+                                && NousSessionKeepAlive.RefreshDue(_renewals.Latest(nt), KeepAliveInterval, Now()))
+                            {
+                                using var t = new CancellationTokenSource(GatewaySession.RefreshTimeout);
+                                _newsRead = t;
+                                try
+                                {
+                                    var ka = await reader.KeepAliveAsync(KeepAliveInterval, t.Token);
+                                    if (_newsStopped) return;
+                                    if (ka is ParkedAnswer.Refused) refused = true;
+                                }
+                                catch (Exception e) when (e is GatewayException or OperationCanceledException or HttpRequestException)
+                                {
+                                    if (_newsStopped) return;
+                                    unreachable = true;
+                                }
+                                finally { _newsRead = null; }
+                            }
+                        }
+                    }
+                    // H9: if the user switched to this gateway while the parked reader was in flight, drop its stale result.
+                    if (_newsStopped || CurrentKey == key) continue;
+                    if (unreachable)
+                    {
+                        var missed = _misses.GetValueOrDefault(key) + 1;
+                        _misses[key] = missed;
+                        _nextTry[key] = Now() + Backoff(missed);
+                    }
+                    else
+                    {
+                        _misses.Remove(key);
+                        _nextTry.Remove(key);
+                    }
+                    SetUnreachable(key, unreachable);
+                    if (refused)
+                    {
+                        count = 0;
+                        if (_expired.Add(key)) Changed?.Invoke();
+                    }
+                    else if (!unreachable)
+                    {
+                        count = hasChats ? GatewayNews.UnreadCount(chats!, live) : 0;
+                        if (_expired.Remove(key)) Changed?.Invoke();
+                    }
                 }
             }
             if (_newsStopped) return;
@@ -402,6 +516,28 @@ public sealed class GatewayHub
                 Changed?.Invoke();
             }
         }
+
+        // Also keep the active/only saved Nous account alive when its pair has sat untouched for >= KeepAliveInterval
+        // (e.g. a single saved Nous gateway or an idle window kept open past Portal's 24 h refresh-token lifetime).
+        if (!_newsStopped && CurrentKey is { } currentKey
+            && Saved().Find(currentKey) is { IsNous: true, Nous: { } curTokens } curAccount
+            && curTokens.CanRenew()
+            && NousSessionKeepAlive.RefreshDue(_renewals.Latest(curTokens), KeepAliveInterval, Now()))
+        {
+            await using var reader = MakeReader(curAccount);
+            if (reader != null)
+            {
+                using var t = new CancellationTokenSource(GatewaySession.RefreshTimeout);
+                _newsRead = t;
+                try { await reader.KeepAliveAsync(KeepAliveInterval, t.Token); }
+                catch (Exception e) when (e is GatewayException or OperationCanceledException or HttpRequestException)
+                {
+                    if (_newsStopped) return;
+                }
+                finally { _newsRead = null; }
+            }
+        }
+
         if (_newsStopped) return;
         LastCheckEnded = Now();
         Changed?.Invoke();
@@ -416,23 +552,55 @@ public sealed class GatewayHub
 /// The news check's reader over a parked account's own session (a GatewaySession, no socket).
 public sealed class SessionParkedReader(GatewaySession session) : IParkedReader
 {
-    public static GatewaySession? Open(StoredAccount account, ITokenStore store)
+    public static GatewaySession? Open(StoredAccount account, ITokenStore store, NousRenewals? renewals = null,
+        Func<DateTimeOffset>? now = null)
     {
         if (!account.IsSignedIn) return null;
-        try { return new GatewaySession(GatewayAddress.Validated(account.Url), account, store); }
+        try { return new GatewaySession(GatewayAddress.Validated(account.Url), account, store, renewals: renewals, now: now); }
         catch (GatewayException) { return null; }
     }
 
-    public static IParkedReader? For(StoredAccount account, ITokenStore store) =>
-        Open(account, store) is { } s ? new SessionParkedReader(s) : null;
+    public static IParkedReader? For(StoredAccount account, ITokenStore store, NousRenewals? renewals = null,
+        Func<DateTimeOffset>? now = null) =>
+        Open(account, store, renewals, now) is { } s ? new SessionParkedReader(s) : null;
 
     public async Task<ParkedAnswer> ReadAsync(string id, string? profile, CancellationToken ct)
     {
         var query = profile is { } p && p != "default" ? new[] { new KeyValuePair<string, string>("profile", p) } : null;
         var a = await session.SendAsync(HttpMethod.Get, "/api/sessions/" + id, query, timeout: TimeSpan.FromSeconds(8), ct: ct);
         if (a.Ok) return a.Json is { } j ? new ParkedAnswer.Session(j) : new ParkedAnswer.Missing();
-        if (a.Status is 401 or 403) return new ParkedAnswer.Refused();
+        if (a.Status is 401 or 403)
+        {
+            // [kept-session] Only Hermes's own JSON refusal marks the session ended; a proxy/Cloudflare wall does not.
+            if (GatewayRefusal.IsHermes(a.Body)) return new ParkedAnswer.Refused();
+            throw new GatewayException("blocked",
+                "Something in front of Hermes turned this PC away, such as a proxy or a firewall. You’re still signed in, and Hermes HQ keeps trying.",
+                a.Status);
+        }
         return new ParkedAnswer.Missing();
+    }
+
+    public async Task<ParkedAnswer> KeepAliveAsync(TimeSpan olderThan, CancellationToken ct)
+    {
+        try
+        {
+            var renewed = await session.KeepAliveAsync(olderThan, ct: ct);
+            return renewed
+                ? new ParkedAnswer.Session(new System.Text.Json.Nodes.JsonObject())
+                : new ParkedAnswer.Missing();
+        }
+        catch (GatewayException e) when (e.Code == "session-ended")
+        {
+            return new ParkedAnswer.Refused();
+        }
+    }
+
+    /// Awaits any in-flight Nous renewal (or `503 refresh_pending` collection) before closing the HTTP transport
+    /// (HermesKit `AccountProbe.close`).
+    public async ValueTask DisposeAsync()
+    {
+        await session.SettleRenewalAsync().ConfigureAwait(false);
+        session.Dispose();
     }
 
     public void Dispose() => session.Dispose();

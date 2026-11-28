@@ -103,6 +103,8 @@ public sealed record SessionSummary
     public string? Owner { get; init; }
     /// [WIN-LOST-SEND-MARKER] The row's pending line (§9.4): a send that may not have arrived, else a draft.
     public SessionPending? Pending { get; init; }
+    /// Lead pull request / branch status when known (`SessionSummary.pullRequest` in HermesKit).
+    public Coding.SessionPRStatus? PullRequest { get; init; }
 
     public string Key => SessionListPipeline.Key(this);
 }

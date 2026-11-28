@@ -61,6 +61,20 @@ public sealed class AttachmentCenter : IDisposable
         lock (Centers) return Centers.GetValueOrDefault(accountId);
     }
 
+    internal static void RegisterForTests(AttachmentCenter center)
+    {
+        lock (Centers) Centers[center.Client.AccountId] = center;
+    }
+
+    internal static void UnregisterForTests(string accountId, AttachmentCenter? expected = null)
+    {
+        lock (Centers)
+        {
+            if (expected is null || (Centers.TryGetValue(accountId, out var current) && ReferenceEquals(current, expected)))
+                Centers.Remove(accountId);
+        }
+    }
+
     /// Sign-out (spec §6.6): uploads stop; the account's copies, drafts and media cache go.
     public static void SignedOut(string accountId)
     {
@@ -411,6 +425,25 @@ public sealed class AttachmentCenter : IDisposable
         return taken;
     }
 
+    /// Moves a draft's text and attachments from `fromScope` to `toScope`, merging ahead of any items already at
+    /// `toScope` (HermesKit/Attachments/AttachmentCenter.swift `moveDraft`, 363ae6c33).
+    public void MoveDraft(string fromScope, string toScope, bool keepTargetText = false)
+    {
+        if (fromScope == toScope) return;
+        lock (_gate)
+        {
+            if (!_drafts.Remove(fromScope, out var moving)) return;
+            var target = DraftFor(toScope);
+            target.Ids = [.. moving.Ids, .. target.Ids.Where(id => !moving.Ids.Contains(id))];
+            if (moving.Text.Length > 0 && !(keepTargetText && target.Text.Length > 0)) target.Text = moving.Text;
+            if (moving.Profile.Length > 0) target.Profile = moving.Profile;
+            target.UpdatedAt = Math.Max(target.UpdatedAt, moving.UpdatedAt);
+        }
+        DraftChanged?.Invoke(fromScope);
+        DraftChanged?.Invoke(toScope);
+        Save();
+    }
+
     /// A refused or stopped send hands its attachments back (spec §6.4 step 8): in front of whatever the tray holds now
     /// (deduplicated), with their upload state (an uploaded one stays uploaded). `text` goes in only when the draft has
     /// none and setTextIfEmpty.
@@ -425,7 +458,8 @@ public sealed class AttachmentCenter : IDisposable
             foreach (var a in attachments)
             {
                 var b = _items.GetValueOrDefault(a.Id) ?? a;
-                if (b.Upload is UploadState.Uploading) b = b with { Upload = UploadState.Ready };
+                // L6: do not reset an item that is actively being uploaded right now (`_current`).
+                if (b.Upload is UploadState.Uploading && _current?.Id != a.Id) b = b with { Upload = UploadState.Ready };
                 _items[a.Id] = b;
                 _profiles[a.Id] = profile;
                 if (b.Upload is UploadState.Waiting && !b.DefersUpload && !_queue.Contains(b.Id)) _queue.Add(b.Id);

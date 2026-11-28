@@ -70,11 +70,11 @@ internal static partial class ProofWalks
     private static async Task SettingsFileStepsAsync(Func<string, Task> shot, Hermes.Core.HermesClient client, string url, string folder,
         Func<(string Name, byte[] Data)?> saved, Action<string> pick)
     {
-        // Settings › About, the category page (not the About page under it).
+        // Settings › Hermes (Backup & Reset in the 7-category layout, e27566897).
         Navigator.Open("settings");
         var page = await Until(() => SettingsPage.Current is { IsLoaded: true } p ? p : null, "Settings");
-        AppLog.Note("automation", "walk settings-file: the About category shown as its row's pick does");
-        page.ShowCategory(SettingsCategory.About);
+        AppLog.Note("automation", "walk settings-file: the Hermes category shown as its row's pick does");
+        page.ShowCategory(SettingsCategory.Gateway);
         var export = await Until(() => Find("settings.export"), SettingsFileWords.Export);
         var import = Need("settings.import");
         var clearModels = Need("settings.clear-models");
@@ -189,7 +189,7 @@ internal static partial class ProofWalks
         // Cancel reads and writes nothing. "backup" → Export Settings…, Enter on the results: the file offered again.
         var search = (TextBox)await Until(() => Find("settings.search"), "Search Settings");
         var resetHit = await SearchResultAsync(search, "factory", "search.action:reset");
-        if (AutomationProperties.GetName(resetHit) != SettingsFileWords.Reset + ", About")
+        if (AutomationProperties.GetName(resetHit) != SettingsFileWords.Reset + ", Hermes")
             throw new InvalidOperationException($"the result reads {AutomationProperties.GetName(resetHit)}");
         await shot("settings-file-search");
         mark = await StandInMarkAsync(url);
@@ -197,24 +197,24 @@ internal static partial class ProofWalks
         var fromSearch = await DialogAsync(SettingsFileWalkProof.ResetTitle);
         if (SettingsFileWalkProof.ResetConfirmReads(fromSearch.Title as string, DialogText(fromSearch), fromSearch.PrimaryButtonText, fromSearch.CloseButtonText) is { } searchWords)
             throw new InvalidOperationException(searchWords);
-        if (Find("settings.reset") == null) throw new InvalidOperationException("About's buttons aren't on show under the confirmation");
+        if (Find("settings.reset") == null) throw new InvalidOperationException("Hermes's buttons aren't on show under the confirmation");
         await DialogButtonAsync(fromSearch, "CloseButton");
         await Task.Delay(1000);
         var searchCancelled = await StandIn(url, "/__settings/state");
         if ((SettingsFileWalkProof.NothingWritten(searchCancelled, mark, "Cancel from search") ?? SettingsFileWalkProof.NoDefaultsRead(searchCancelled, mark, "Cancel from search")) is { } onSearchCancel)
             throw new InvalidOperationException(onSearchCancel);
-        // [WIN-06d] "unstar" → Clear Model Favorites…, About (SettingsSearch.swift:215); its result asks as the button
+        // [WIN-06d] "unstar" → Clear Model Favorites…, Chat (SettingsSearch.swift e27566897); its result asks as the button
         // does (SettingsNavigator.swift:38), never Reset's confirmation; Cancel keeps the one synthetic star, no gateway call.
         models.SetFavorites(["nous::fixture-walk-model-a"]);
         var clearHit = await SearchResultAsync(search, "unstar", "search.action:clear-models");
-        if (AutomationProperties.GetName(clearHit) != SettingsFileWords.ClearModels + ", About")
+        if (AutomationProperties.GetName(clearHit) != SettingsFileWords.ClearModels + ", Chat")
             throw new InvalidOperationException($"the result reads {AutomationProperties.GetName(clearHit)}");
         mark = await StandInMarkAsync(url);
         Invoke(clearHit);
         var clearFromSearch = await DialogAsync(SettingsFileWalkProof.ClearModelsTitle);
         if (SettingsFileWalkProof.ClearModelsConfirmReads(clearFromSearch.Title as string, DialogText(clearFromSearch), clearFromSearch.PrimaryButtonText, clearFromSearch.CloseButtonText, 1, 0) is { } clearSearchWords)
             throw new InvalidOperationException(clearSearchWords);
-        if (Find("settings.clear-models") == null) throw new InvalidOperationException("About's buttons aren't on show under the confirmation");
+        if (Find("settings.clear-models") == null) throw new InvalidOperationException("Chat's Clear Model Favorites button isn't on show under the confirmation");
         await shot("settings-file-search-clear-models");
         await DialogButtonAsync(clearFromSearch, "CloseButton");
         await Task.Delay(500);

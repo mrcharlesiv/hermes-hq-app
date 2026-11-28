@@ -149,8 +149,8 @@ public sealed class DictationRowView : UserControl
             CornerRadius = new CornerRadius(14),
             Padding = new Thickness(10, 8, 10, 8),
             BorderThickness = new Thickness(1),
-            Background = ThemeBrushes.Get("CardBackgroundFillColorDefaultBrush"),
-            BorderBrush = ThemeBrushes.Get("CardStrokeColorDefaultBrush"),
+            Background = ThemeBrushes.Get("HQPromptCardBrush"),
+            BorderBrush = ThemeBrushes.Get("HQPromptEdgeBrush"),
             Child = root,
         };
 

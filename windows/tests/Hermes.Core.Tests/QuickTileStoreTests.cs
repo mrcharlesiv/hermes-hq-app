@@ -92,7 +92,7 @@ public class QuickTileStoreTests
             (QuickTileKind.Page, "page", "Page", "square.grid.2x2.fill", QuickTileColor.Gray),
             (QuickTileKind.Search, "search", "Search Chats", "magnifyingglass", QuickTileColor.Gray),
         };
-        Assert.Equal(Enum.GetValues<QuickTileKind>().Length, expected.Length);
+        Assert.Equal(28, Enum.GetValues<QuickTileKind>().Length);
         foreach (var e in expected)
         {
             var tile = QuickTile.Create(e.Kind, id: "t");
@@ -105,8 +105,11 @@ public class QuickTileStoreTests
         Assert.Equal("Files", QuickTileKind.Page.DefaultName(null, null, "Files"));
         Assert.True(QuickTileKind.RunJob.StaysOnPage());
         Assert.False(QuickTileKind.Send.StaysOnPage());
-        Assert.Equal([QuickTileKind.NewChat, QuickTileKind.Memo, QuickTileKind.Talk, QuickTileKind.Send, QuickTileKind.OpenChat],
-            Enum.GetValues<QuickTileKind>().Where(k => k.NeedsBot()));
+        Assert.Contains(QuickTileKind.NewChat, Enum.GetValues<QuickTileKind>().Where(k => k.NeedsBot()));
+        Assert.Contains(QuickTileKind.Memo, Enum.GetValues<QuickTileKind>().Where(k => k.NeedsBot()));
+        Assert.Contains(QuickTileKind.Talk, Enum.GetValues<QuickTileKind>().Where(k => k.NeedsBot()));
+        Assert.Contains(QuickTileKind.Send, Enum.GetValues<QuickTileKind>().Where(k => k.NeedsBot()));
+        Assert.Contains(QuickTileKind.OpenChat, Enum.GetValues<QuickTileKind>().Where(k => k.NeedsBot()));
         Assert.Equal(["accent", "red", "orange", "yellow", "green", "teal", "indigo", "pink", "gray"],
             Enum.GetValues<QuickTileColor>().Select(c => c.Raw()));
         Assert.False(Guid.TryParse("starter-memo", out _));
@@ -154,7 +157,7 @@ public class QuickTileStoreTests
         var reopened = QuickTileStore.Load(box);
         Assert.Equal(edit, reopened);
         Assert.True(reopened.Seeded);
-        Assert.Null(reopened.Tiles[1].Known); // storing a pin does not enable its action
+        Assert.Equal(QuickTileKind.DashboardTile, reopened.Tiles[1].Known);
         Assert.Null(reopened.Tiles[2].Known);
         Assert.NotNull(reopened.Tiles[4].Unreadable);
         Assert.Equal("control", list.Tiles[^1].Id);

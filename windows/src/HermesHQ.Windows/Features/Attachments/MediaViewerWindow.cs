@@ -27,7 +27,7 @@ internal sealed partial class MediaViewerWindow : Window
         Foreground = new SolidColorBrush(Colors.White), FontWeight = FontWeights.SemiBold, HorizontalAlignment = HorizontalAlignment.Center,
         VerticalAlignment = VerticalAlignment.Center,
     };
-    private readonly Button _save, _share, _done;
+    private readonly Button _save, _share, _markup, _done;
     private readonly Dictionary<int, string> _originals = [];
 
     private static Button BarButton(string glyph, string text, string id)
@@ -64,9 +64,11 @@ internal sealed partial class MediaViewerWindow : Window
         }
         _done = BarButton("", "Done", "viewer.close");
         _share = BarButton("", "Share", "viewer.share");
+        _markup = BarButton("\uEE56", "Mark Up", "viewer.markup");
         _save = BarButton("", "Save", "viewer.save");
         _done.Click += (_, _) => Close();
         _share.Click += async (_, _) => await ShareAsync();
+        _markup.Click += async (_, _) => await MarkupAsync();
         _save.Click += async (_, _) => await SaveAsync();
 
         var top = new Grid { Height = 48, Padding = new Thickness(12, 6, 12, 6), Background = new SolidColorBrush(Colors.Black) };
@@ -79,8 +81,10 @@ internal sealed partial class MediaViewerWindow : Window
 
         var bottom = new Grid { Height = 56, Padding = new Thickness(12, 8, 12, 8), Background = new SolidColorBrush(Colors.Black) };
         _share.HorizontalAlignment = HorizontalAlignment.Left;
+        _markup.HorizontalAlignment = HorizontalAlignment.Center;
         _save.HorizontalAlignment = HorizontalAlignment.Right;
         bottom.Children.Add(_share);
+        bottom.Children.Add(_markup);
         bottom.Children.Add(_save);
 
         foreach (var (item, i) in items.Select((x, i) => (x, i))) _pages.Items.Add(Page(item, i));
@@ -213,6 +217,35 @@ internal sealed partial class MediaViewerWindow : Window
         {
             AppLog.Error("attachments", e);
             await MediaActions.FailureAsync(Root, "Couldn’t Share", e.Message, ShareAsync);
+        }
+    }
+
+    /// [image-markup] Opens the interactive markup editor on the current photo (App/Chat/Viewer/MediaViewerController.swift
+    /// `openMarkup`): Send to Chat attaches the flattened PNG and populates the edit prompt in the open chat.
+    private async Task MarkupAsync()
+    {
+        if (Root is not { } root) return;
+        if (await CurrentOriginal() is not { } original)
+        {
+            await MediaActions.FailureAsync(Root, "Couldn’t Open Mark Up", "Couldn’t reach your gateway. Try again.", MarkupAsync);
+            return;
+        }
+        var (path, name) = original;
+        var canSend = ChatAttachments.Current != null;
+        var result = await ImageMarkupDialog.ShowAsync(root, path, name, this, canSendToChat: canSend);
+        if (result == null) return;
+        try
+        {
+            if (result.Prompt.Length > 0 && MediaContext.Current is { } mc)
+                mc.Center.SetText(mc.Session.DraftScope, mc.Profile, result.Prompt);
+            if (ChatAttachments.Current is { } chat)
+                await chat.AddPickedFilesAsync([new PickedItem(result.FlattenedPath, result.FileName, PickSource.Photo)]);
+            Close();
+        }
+        catch (Exception e)
+        {
+            AppLog.Error("attachments", e);
+            await MediaActions.FailureAsync(Root, "Couldn’t Attach Markup", e.Message, MarkupAsync);
         }
     }
 }

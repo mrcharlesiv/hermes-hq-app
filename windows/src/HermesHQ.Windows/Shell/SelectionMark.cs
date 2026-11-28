@@ -1,3 +1,4 @@
+using Hermes.Core.Settings;
 using Hermes.Core.Shell;
 using HermesHQ.Features.Settings;
 using Microsoft.UI.Xaml;
@@ -64,10 +65,11 @@ public static class SelectionMark
         Paint();
     }
 
-    /// The row's box: the look's corner, 2 over and under it (its side room is the sidebar's own 8 padding).
+    /// The row's box: role-scaled control corner (`ThemeState.ShapeRadius(ShapeRole.Control, 6)`), 2 over and under it
+    /// (its side room is the sidebar's own 8 padding).
     public static void Shape(ListViewItem row)
     {
-        row.CornerRadius = new CornerRadius(DesktopLook.MarkRadius(ThemeService.State.DesktopLook));
+        row.CornerRadius = new CornerRadius(ThemeService.State.ShapeRadius(ShapeRole.Control, 6));
         row.Margin = new Thickness(0, DesktopLook.MarkInsetTop, 0, DesktopLook.MarkInsetBottom);
     }
 

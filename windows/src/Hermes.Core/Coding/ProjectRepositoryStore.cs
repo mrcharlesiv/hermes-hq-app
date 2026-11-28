@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using Hermes.Core.Composer;
 using Hermes.Core.Kanban;
 using Hermes.Core.Net;
+using Hermes.Core.Sessions;
 
 namespace Hermes.Core.Coding;
 
@@ -47,8 +48,14 @@ public enum SessionPRReposState
     Idle,
     Loading,
     Ready,
+    Unsupported,
     Failed,
 }
+
+/// Folder choices offered by ProjectRepositoryPage (`SessionStore+PRManage.swift` `repositoryFolderChoices`).
+public sealed record RepositoryFolderChoiceSet(
+    IReadOnlyList<string> Here,
+    IReadOnlyList<string> Elsewhere);
 
 public enum SessionPRRepoErrorKind
 {
@@ -171,7 +178,9 @@ public static partial class RepoPathHelpers
         if (string.IsNullOrWhiteSpace(input)) return null;
         var s = input.Trim();
 
-        if (s.StartsWith("git@github.com:", StringComparison.OrdinalIgnoreCase))
+        if (s.StartsWith("ssh://git@github.com/", StringComparison.OrdinalIgnoreCase))
+            s = s["ssh://git@github.com/".Length..];
+        else if (s.StartsWith("git@github.com:", StringComparison.OrdinalIgnoreCase))
             s = s["git@github.com:".Length..];
         else if (s.StartsWith("https://github.com/", StringComparison.OrdinalIgnoreCase))
             s = s["https://github.com/".Length..];
@@ -199,6 +208,47 @@ public static partial class RepoPathHelpers
         var clean = path.Trim();
         while (clean.Length > 1 && (clean.EndsWith('/') || clean.EndsWith('\\')))
             clean = clean[..^1];
+        return clean;
+    }
+
+    /// True for Unix (`/Users/...`) or Windows (`C:\...`, `C:/...`) absolute folder paths.
+    public static bool IsAbsoluteFolderPath(string? path)
+    {
+        var clean = NormalizeFolderPath(path);
+        if (clean.Length == 0) return false;
+        if (clean.StartsWith('/')) return true;
+        return clean.Length >= 3 && char.IsLetter(clean[0]) && clean[1] == ':' && (clean[2] == '\\' || clean[2] == '/');
+    }
+
+    /// A folder's own leaf name (`"app"` for `/Users/me/Projects/app`, matching `SessionStore.folderName`).
+    public static string FolderName(string path)
+    {
+        var clean = NormalizeFolderPath(path);
+        if (clean.Length == 0) return path;
+        var sep = Math.Max(clean.LastIndexOf('/'), clean.LastIndexOf('\\'));
+        if (sep < 0 || sep == clean.Length - 1) return clean;
+        return clean[(sep + 1)..];
+    }
+
+    /// The parent folder of `path`, or empty string when at root.
+    public static string ParentFolder(string path)
+    {
+        var clean = NormalizeFolderPath(path);
+        var sep = Math.Max(clean.LastIndexOf('/'), clean.LastIndexOf('\\'));
+        return sep > 0 ? clean[..sep] : "";
+    }
+
+    /// Shortens `/Users/<name>/...` and `/home/<name>/...` to `~/...` (`ProjectPageHeader.shortFolder`).
+    public static string ShortFolder(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || path.StartsWith("id:", StringComparison.Ordinal)) return "";
+        var clean = NormalizeFolderPath(path);
+        if (clean.StartsWith("/Users/", StringComparison.Ordinal) || clean.StartsWith("/home/", StringComparison.Ordinal))
+        {
+            var parts = clean.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 2)
+                return parts.Length == 2 ? "~" : "~/" + string.Join('/', parts.Skip(2));
+        }
         return clean;
     }
 }
@@ -324,21 +374,46 @@ public sealed class CodingStore(CodingApi? api, IKeyValueStore? prefs = null)
     private readonly Dictionary<string, DateTimeOffset> _refreshedAt = new(StringComparer.Ordinal);
     private readonly Dictionary<string, SessionPRRepo> _repos = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ProjectSettings> _settings = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _prAutoLinkFailed = new(StringComparer.Ordinal);
 
     public CodingApi? Api { get; } = api;
     public SessionPRReposState ReposState { get; private set; } = SessionPRReposState.Idle;
     public string? ReposError { get; private set; }
+    public bool IsManageAvailable => ReposState is SessionPRReposState.Ready or SessionPRReposState.Failed || _repos.Count > 0;
+    public bool IsPRRouteUnsupported => ReposState == SessionPRReposState.Unsupported;
 
     public event Action? Changed;
 
     public IReadOnlyDictionary<string, SessionPRStatus> Statuses => _statuses;
     public IReadOnlyDictionary<string, SessionPRRepo> Repos => _repos;
+    /// Projects whose automatic own-folder link returned `not_a_repository` (`SessionStore.prAutoLinkFailed`).
+    public IReadOnlySet<string> PrAutoLinkFailed => _prAutoLinkFailed;
 
-    public SessionPRStatus? StatusFor(string sessionKey) =>
-        _statuses.TryGetValue(sessionKey, out var status) ? status : null;
+    public bool HasAutoLinkFailed(string projectKey) => _prAutoLinkFailed.Contains(projectKey);
 
-    public DateTimeOffset? RefreshedAt(string sessionKey) =>
-        _refreshedAt.TryGetValue(sessionKey, out var at) ? at : null;
+    public SessionPRStatus? StatusFor(string sessionKey)
+    {
+        if (_statuses.TryGetValue(sessionKey, out var status)) return status;
+        var alt = AlternateSessionKey(sessionKey);
+        return alt != null && _statuses.TryGetValue(alt, out status) ? status : null;
+    }
+
+    public SessionPRStatus? StatusFor(string profile, string sessionId) =>
+        StatusFor($"{profile}:{sessionId}") ?? StatusFor($"{profile}\u001F{sessionId}");
+
+    public DateTimeOffset? RefreshedAt(string sessionKey)
+    {
+        if (_refreshedAt.TryGetValue(sessionKey, out var at)) return at;
+        var alt = AlternateSessionKey(sessionKey);
+        return alt != null && _refreshedAt.TryGetValue(alt, out at) ? at : null;
+    }
+
+    private static string? AlternateSessionKey(string sessionKey)
+    {
+        if (sessionKey.Contains('\u001F')) return sessionKey.Replace('\u001F', ':');
+        var idx = sessionKey.IndexOf(':');
+        return idx > 0 ? string.Concat(sessionKey.AsSpan(0, idx), "\u001F", sessionKey.AsSpan(idx + 1)) : null;
+    }
 
     public SessionPRRepo? RepoFor(string projectKey) =>
         _repos.TryGetValue(projectKey, out var repo) ? repo : null;
@@ -415,7 +490,7 @@ public sealed class CodingStore(CodingApi? api, IKeyValueStore? prefs = null)
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
-            ReposState = SessionPRReposState.Failed;
+            ReposState = KanbanRest.IsUnknownRoute(e) ? SessionPRReposState.Unsupported : SessionPRReposState.Failed;
             ReposError = KanbanRest.Reason(e);
         }
         Changed?.Invoke();
@@ -426,6 +501,7 @@ public sealed class CodingStore(CodingApi? api, IKeyValueStore? prefs = null)
         var saved = Api != null ? await Api.SaveRepoAsync(repo, ct) : repo;
         _repos[saved.Project] = saved;
         ReposState = SessionPRReposState.Ready;
+        _prAutoLinkFailed.Remove(saved.Project);
         var current = SettingsFor(saved.Project);
         if (!current.CodingProject) SaveSettings(current with { CodingProject = true });
         else Changed?.Invoke();
@@ -436,7 +512,127 @@ public sealed class CodingStore(CodingApi? api, IKeyValueStore? prefs = null)
     {
         if (Api != null) await Api.DeleteRepoAsync(projectKey, ct);
         _repos.Remove(projectKey);
+        _prAutoLinkFailed.Remove(projectKey);
         Changed?.Invoke();
+    }
+
+    /// Offers repository folder choices for `projectKey` (`SessionStore+PRManage.swift` `repositoryFolderChoices`):
+    /// `Here` holds repositories discovered in this project (starting with any linked folder, or the project's own
+    /// folder if none); `Elsewhere` holds every other known repository across projects and linked gateway repos,
+    /// sorted by folder name.
+    public RepositoryFolderChoiceSet RepositoryFolderChoices(
+        string projectKey,
+        IReadOnlyDictionary<string, List<SessionProject>>? projectsByProfile = null,
+        string? fallbackRootFolder = null)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        string? Fresh(string? path)
+        {
+            var tidy = RepoPathHelpers.NormalizeFolderPath(path);
+            return RepoPathHelpers.IsAbsoluteFolderPath(tidy) && seen.Add(tidy) ? tidy : null;
+        }
+
+        var here = new List<string>();
+        var elsewhere = new List<string>();
+
+        if (projectsByProfile != null)
+        {
+            foreach (var (profile, projects) in projectsByProfile.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+            {
+                foreach (var project in projects)
+                {
+                    if (!string.Equals(SessionProjects.KeyOf(project, profile), projectKey, StringComparison.Ordinal))
+                        continue;
+                    foreach (var p in project.Paths)
+                        if (Fresh(p) is { } hit) here.Add(hit);
+                    if (Fresh(project.Root) is { } rootHit) here.Add(rootHit);
+                }
+            }
+        }
+
+        if (RepoFor(projectKey)?.Path is { } linked && Fresh(linked) is { } linkedPath)
+            here.Insert(0, linkedPath);
+        if (here.Count == 0 && Fresh(projectKey) is { } own)
+            here.Add(own);
+        if (here.Count == 0 && Fresh(fallbackRootFolder) is { } fallback)
+            here.Add(fallback);
+
+        if (projectsByProfile != null)
+        {
+            foreach (var (_, projects) in projectsByProfile.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+            {
+                foreach (var project in projects)
+                {
+                    foreach (var p in project.Paths)
+                        if (Fresh(p) is { } hit) elsewhere.Add(hit);
+                    if (Fresh(project.Root) is { } rootHit) elsewhere.Add(rootHit);
+                }
+            }
+        }
+
+        foreach (var repo in _repos.Values)
+            if (Fresh(repo.Path) is { } hit) elsewhere.Add(hit);
+
+        elsewhere.Sort((a, b) =>
+        {
+            var cmp = NumericComparer.Instance.Compare(RepoPathHelpers.FolderName(a), RepoPathHelpers.FolderName(b));
+            return cmp != 0 ? cmp : StringComparer.Ordinal.Compare(a, b);
+        });
+
+        return new RepositoryFolderChoiceSet(here, elsewhere);
+    }
+
+    /// Suggested `owner/repo` choices from already linked repos and observed PR statuses (`SessionStore+PRManage.swift`).
+    public IReadOnlyList<string> PublicRepoChoices()
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var outList = new List<string>();
+        void Collect(string? raw)
+        {
+            if (RepoPathHelpers.NormalizePublicRepo(raw) is { } slug && seen.Add(slug))
+                outList.Add(slug);
+        }
+
+        foreach (var repo in _repos.Values) Collect(repo.PublicRepo);
+        foreach (var status in _statuses.Values)
+        {
+            Collect(status.Repo);
+            foreach (var item in status.AllItems) Collect(item.Repo);
+        }
+
+        outList.Sort(NumericComparer.Instance);
+        return outList;
+    }
+
+    /// Turning Coding Project on for a folder-backed project (`SessionStore+PRManage.swift` `linkOwnFolderIfUnlinked`):
+    /// awaits `RefreshReposAsync` when needed, then tries linking the project's own folder. Records `PrAutoLinkFailed`
+    /// only when the gateway answers `not_a_repository`, leaving transient failures unflagged.
+    public async Task<bool> LinkOwnFolderIfUnlinkedAsync(string projectKey, string? folderPath = null, CancellationToken ct = default)
+    {
+        var candidate = RepoPathHelpers.NormalizeFolderPath(folderPath ?? projectKey);
+        if (!RepoPathHelpers.IsAbsoluteFolderPath(candidate) || ReposState == SessionPRReposState.Unsupported || Api == null)
+            return false;
+
+        if (ReposState is SessionPRReposState.Idle or SessionPRReposState.Failed)
+            await RefreshReposAsync(ct);
+
+        if (ReposState != SessionPRReposState.Ready) return false;
+        if (!SettingsFor(projectKey).CodingProject || RepoFor(projectKey) != null) return false;
+
+        try
+        {
+            await LinkRepoAsync(new SessionPRRepo(projectKey, candidate), ct);
+            return true;
+        }
+        catch (SessionPRRepoException ex) when (ex.Kind == SessionPRRepoErrorKind.NotARepository)
+        {
+            if (_prAutoLinkFailed.Add(projectKey)) Changed?.Invoke();
+            return false;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return false;
+        }
     }
 
     public async Task<bool> MarkClosedAsync(string profile, string sessionId, bool closed, CancellationToken ct = default)

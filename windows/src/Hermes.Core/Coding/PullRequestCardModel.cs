@@ -18,6 +18,7 @@ public enum PullRequestQuickAction
     OpenInBrowser,
     AskBotToFixCI,
     AskBotToFixReview,
+    AskBotToOpenPR,
     Checkout,
     MarkClosed,
     Reopen,
@@ -105,6 +106,20 @@ public sealed record PullRequestCardModel
     public IReadOnlyList<PullRequestActionItem> Actions { get; init; } = [];
     public IReadOnlyList<PullRequestSiblingRow> Others { get; init; } = [];
     public string? RefreshedText { get; init; }
+    public string BotName { get; init; } = "Hermes";
+    public bool ChatWorking { get; init; }
+    public PullRequestActionItem? PinnedPrimaryAction { get; init; }
+
+    public string SheetTitle => Number == null ? "Branch" : "Pull Request";
+    public string StateWords => Manual
+        ? "Closed, marked by you"
+        : State == SessionPRState.Unknown ? "Status Unknown" : BadgeLabel;
+    public string FixSingleCheckLabel => FixSingleCheckTitle(BotName);
+    public string MergeConfirmTitle(bool? chatWorking = null) =>
+        MergeConfirmTitle(State, Number, RawChecks, BotName, chatWorking ?? ChatWorking);
+    public string PromptForFailingCheck(SessionPRCheckRun run) => FixSingleCheckPrompt(Number, run);
+
+    internal SessionPRChecks? RawChecks { get; init; }
 
     public string BranchRoute => !string.IsNullOrWhiteSpace(Branch) && !string.IsNullOrWhiteSpace(Base)
         ? $"{Branch} \u2192 {Base}"
@@ -116,7 +131,9 @@ public sealed record PullRequestCardModel
         PullRequestCardFocus? focus = null,
         IReadOnlyDictionary<string, int>? fileCommentCounts = null,
         DateTimeOffset? refreshedAt = null,
-        DateTimeOffset? now = null)
+        DateTimeOffset? now = null,
+        string? botName = null,
+        bool? chatWorking = null)
     {
         focus ??= new PullRequestCardFocus.Lead();
         SessionPRItem? focusedItem = null;
@@ -143,6 +160,11 @@ public sealed record PullRequestCardModel
         var comments = focusedItem?.CommentsCount ?? status.CommentsCount;
         var title = focusedItem?.Title ?? status.Title ?? session.Title;
         var files = focusedItem?.Files ?? status.AllFiles;
+
+        var resolvedBot = CleanBot(string.IsNullOrWhiteSpace(botName)
+            ? SessionRules.OwnerName(session.Profile, new Dictionary<string, string>())
+            : botName);
+        var resolvedWorking = chatWorking ?? (session.IsRunning || session.Status == SessionStatus.Working);
 
         var checksRow = checks != null ? BuildChecksRow(checks) : null;
         var fileRows = files.Select(f => BuildFileRow(f, fileCommentCounts)).ToList();
@@ -172,7 +194,8 @@ public sealed record PullRequestCardModel
         }
 
         var badge = number is { } n ? $"#{n} · {state.LabelWord()}" : state.LabelWord();
-        var actions = BuildActions(state, number, repo, branch, url, checks, review, status.Manual);
+        var actions = BuildActions(state, number, repo, branch, baseBranch, url, checks, review, status.Manual, resolvedBot, resolvedWorking);
+        var pinnedPrimary = SelectPinnedPrimary(actions);
 
         return new PullRequestCardModel
         {
@@ -201,7 +224,51 @@ public sealed record PullRequestCardModel
             Actions = actions,
             Others = others,
             RefreshedText = RefreshedWords(refreshedAt, now ?? DateTimeOffset.Now),
+            BotName = resolvedBot,
+            ChatWorking = resolvedWorking,
+            PinnedPrimaryAction = pinnedPrimary,
+            RawChecks = checks,
         };
+    }
+
+    public static string OpenPRTitle(string botName) => $"Ask {CleanBot(botName)} to Open PR";
+
+    public static string OpenPRPrompt(string? branch, string? baseBranch = null)
+    {
+        var cleanBranch = branch?.Trim();
+        var cleanBase = baseBranch?.Trim();
+        if (!string.IsNullOrEmpty(cleanBranch) && !string.IsNullOrEmpty(cleanBase))
+            return $"Open a pull request for branch `{cleanBranch}` into `{cleanBase}`.";
+        if (!string.IsNullOrEmpty(cleanBranch))
+            return $"Open a pull request for branch `{cleanBranch}`.";
+        return "Open a pull request for this branch.";
+    }
+
+    /// Confirmation title matching `PullRequestCard.mergeConfirmTitle(chatWorking:)` in `HermesKit/Model/PullRequestCard.swift`.
+    public static string MergeConfirmTitle(
+        SessionPRState state,
+        int? number,
+        SessionPRChecks? checks,
+        string botName,
+        bool chatWorking = false)
+    {
+        var bot = CleanBot(botName);
+        if (checks?.State == SessionPRCheckState.Failed)
+            return "Checks Are Failing — Merge Anyway?";
+        if (state == SessionPRState.Draft)
+            return number == null ? "Merge Unopened Branch?" : "Merge Draft Pull Request?";
+        if (chatWorking)
+            return $"{bot} Is Still Working — Merge?";
+        return $"Ask {bot} to Merge";
+    }
+
+    public static string FixSingleCheckTitle(string botName) => $"Ask {CleanBot(botName)} to Fix";
+
+    public static string FixSingleCheckPrompt(int? number, SessionPRCheckRun run)
+    {
+        var prRef = number is { } n ? $"pull request #{n}" : "this branch";
+        var summary = string.IsNullOrWhiteSpace(run.Summary) ? "" : $" ({run.Summary.Trim()})";
+        return $"The check \"{run.Name}\" on {prRef} is failing{summary}. Investigate and fix it.";
     }
 
     public static string MergeWords(int? number, SessionPRChecks? checks, PRReviewVerdict review)
@@ -211,21 +278,47 @@ public sealed record PullRequestCardModel
         return number is { } n ? $"Merge #{n}" : "Merge PR";
     }
 
-    public static (string Title, string Message) MergeConfirm(int? number, SessionPRChecks? checks, PRReviewVerdict review)
+    public static (string Title, string Message) MergeConfirm(int? number, SessionPRChecks? checks, PRReviewVerdict review) =>
+        MergeConfirm(number, checks, review, botName: null, chatWorking: false, state: SessionPRState.Open);
+
+    public static (string Title, string Message) MergeConfirm(
+        int? number,
+        SessionPRChecks? checks,
+        PRReviewVerdict review,
+        string? botName,
+        bool chatWorking,
+        SessionPRState state = SessionPRState.Open)
     {
         var label = number is { } n ? $"PR #{n}" : "this pull request";
+        var bot = CleanBot(botName);
         if (checks?.State == SessionPRCheckState.Failed)
         {
             var count = Math.Max(1, checks.Failed);
             var noun = count == 1 ? "1 check is" : $"{count} checks are";
-            return ($"Merge {label} with Failing Checks?", $"{noun} currently failing. Ask your bot to merge {label} anyway?");
+            return ($"Merge {label} with Failing Checks?", $"{noun} currently failing. Ask {bot} to merge {label} anyway?");
         }
+        if (state == SessionPRState.Draft)
+        {
+            return number == null
+                ? ("Merge Unopened Branch?", $"This branch doesn’t have a pull request yet. Ask {bot} to merge it anyway?")
+                : ("Merge Draft Pull Request?", $"{label} is still a draft. Ask {bot} to merge it anyway?");
+        }
+        if (chatWorking)
+            return ($"{bot} Is Still Working — Merge?", $"{bot} is still working in this chat. Ask {bot} to merge {label} anyway?");
         if (checks?.State == SessionPRCheckState.Running)
-            return ($"Merge {label} While Checks Run?", $"Checks are still running on {label}. Ask your bot to merge once ready or immediately?");
+            return ($"Merge {label} While Checks Run?", $"Checks are still running on {label}. Ask {bot} to merge once ready or immediately?");
         if (review == PRReviewVerdict.ChangesRequested)
             return ($"Merge {label} with Changes Requested?", $"A reviewer requested changes on {label}. Merge anyway?");
-        return ($"Merge {label}?", $"Ask your bot to merge {label} into its base branch.");
+        return ($"Merge {label}?", $"Ask {bot} to merge {label} into its base branch.");
     }
+
+    private static string CleanBot(string? botName) =>
+        string.IsNullOrWhiteSpace(botName) ? "Hermes" : botName.Trim();
+
+    private static PullRequestActionItem? SelectPinnedPrimary(IReadOnlyList<PullRequestActionItem> actions) =>
+        actions.FirstOrDefault(a => a.Kind == PullRequestQuickAction.AskBotToFixCI)
+        ?? actions.FirstOrDefault(a => a.Kind == PullRequestQuickAction.AskBotToOpenPR)
+        ?? actions.FirstOrDefault(a => a.Kind == PullRequestQuickAction.Merge);
 
     public static string FixChecksPrompt(int? number, SessionPRChecks checks)
     {
@@ -295,36 +388,68 @@ public sealed record PullRequestCardModel
         int? number,
         string? repo,
         string? branch,
+        string? baseBranch,
         string? url,
         SessionPRChecks? checks,
         PRReviewVerdict review,
-        bool manual)
+        bool manual,
+        string botName,
+        bool chatWorking)
     {
         var actions = new List<PullRequestActionItem>();
         var prRef = number is { } n ? $"PR #{n}" : "this pull request";
         var repoSuffix = !string.IsNullOrWhiteSpace(repo) ? $" in {repo}" : "";
+        var bareBranch = number == null && !manual && state is SessionPRState.Draft or SessionPRState.Open;
 
-        if (state == SessionPRState.Open)
+        if (bareBranch)
         {
             if (checks?.State == SessionPRCheckState.Failed)
             {
+                var fixPrompt = FixChecksPrompt(number, checks);
+                actions.Add(new PullRequestActionItem(
+                    PullRequestQuickAction.AskBotToFixCI,
+                    $"Ask {botName} to Fix Checks…",
+                    Primary: true,
+                    ConfirmationTitle: $"Ask {botName} to Fix Checks",
+                    ConfirmationMessage: fixPrompt,
+                    BotPrompt: fixPrompt));
+            }
+            var openPrompt = OpenPRPrompt(branch, baseBranch);
+            actions.Add(new PullRequestActionItem(
+                PullRequestQuickAction.AskBotToOpenPR,
+                OpenPRTitle(botName),
+                Primary: checks?.State != SessionPRCheckState.Failed,
+                ConfirmationTitle: OpenPRTitle(botName),
+                ConfirmationMessage: openPrompt,
+                BotPrompt: openPrompt));
+        }
+        else if (state == SessionPRState.Open && !manual)
+        {
+            if (checks?.State == SessionPRCheckState.Failed)
+            {
+                var fixPrompt = FixChecksPrompt(number, checks);
                 actions.Add(new PullRequestActionItem(
                     PullRequestQuickAction.AskBotToFixCI,
                     "Ask Bot to Fix CI",
                     Primary: true,
-                    BotPrompt: FixChecksPrompt(number, checks)));
+                    ConfirmationTitle: $"Ask {botName} to Fix Checks",
+                    ConfirmationMessage: fixPrompt,
+                    BotPrompt: fixPrompt));
             }
             if (review == PRReviewVerdict.ChangesRequested)
             {
+                var reviewPrompt = FixReviewPrompt(number);
                 actions.Add(new PullRequestActionItem(
                     PullRequestQuickAction.AskBotToFixReview,
                     "Ask Bot to Fix Review",
                     Primary: checks?.State != SessionPRCheckState.Failed,
-                    BotPrompt: FixReviewPrompt(number)));
+                    ConfirmationTitle: $"Ask {botName} to Fix Review",
+                    ConfirmationMessage: reviewPrompt,
+                    BotPrompt: reviewPrompt));
             }
 
-            var (confirmTitle, confirmMsg) = MergeConfirm(number, checks, review);
-            var cleanMerge = checks?.State != SessionPRCheckState.Failed && review != PRReviewVerdict.ChangesRequested;
+            var (confirmTitle, confirmMsg) = MergeConfirm(number, checks, review, botName, chatWorking, state);
+            var cleanMerge = checks?.State != SessionPRCheckState.Failed && review != PRReviewVerdict.ChangesRequested && !chatWorking;
             actions.Add(new PullRequestActionItem(
                 PullRequestQuickAction.Merge,
                 MergeWords(number, checks, review),
@@ -344,13 +469,28 @@ public sealed record PullRequestCardModel
                 "Request Changes",
                 BotPrompt: $"Request changes on {prRef}{repoSuffix} with the inline review notes."));
         }
-        else if (state == SessionPRState.Draft && checks?.State == SessionPRCheckState.Failed)
+        else if (state == SessionPRState.Draft && !manual)
         {
+            if (checks?.State == SessionPRCheckState.Failed)
+            {
+                var fixPrompt = FixChecksPrompt(number, checks);
+                actions.Add(new PullRequestActionItem(
+                    PullRequestQuickAction.AskBotToFixCI,
+                    "Ask Bot to Fix CI",
+                    Primary: true,
+                    ConfirmationTitle: $"Ask {botName} to Fix Checks",
+                    ConfirmationMessage: fixPrompt,
+                    BotPrompt: fixPrompt));
+            }
+            var (confirmTitle, confirmMsg) = MergeConfirm(number, checks, review, botName, chatWorking, state);
             actions.Add(new PullRequestActionItem(
-                PullRequestQuickAction.AskBotToFixCI,
-                "Ask Bot to Fix CI",
-                Primary: true,
-                BotPrompt: FixChecksPrompt(number, checks)));
+                PullRequestQuickAction.Merge,
+                MergeWords(number, checks, review),
+                Primary: checks?.State != SessionPRCheckState.Failed,
+                Destructive: true,
+                ConfirmationTitle: confirmTitle,
+                ConfirmationMessage: confirmMsg,
+                BotPrompt: $"Merge {prRef}{repoSuffix}."));
         }
 
         if (!string.IsNullOrWhiteSpace(branch) || number != null)

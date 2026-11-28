@@ -43,7 +43,42 @@ public static class MathText
         if (!MayHaveMath(text)) return out_;
         var i = 0;
         var end = text.Length;
-        int Find(string needle, int from) => text.IndexOf(needle, from, StringComparison.Ordinal);
+        // Closer caches (-2 = unknown, -1 = none left, >= 0 = earliest index found).
+        // Prevents O(N^2) rescans on runs of unclosed `\(`, `\[`, `\begin{...}`, or `$$` (H4).
+        var parenClose = -2;
+        var bracketClose = -2;
+        var doubleDollarClose = -2;
+        var doubleNewline = -2;
+        Dictionary<string, int>? envClosers = null;
+
+        int FindCached(string needle, int from, ref int cache)
+        {
+            if (cache == -1) return -1;
+            if (cache >= from) return cache;
+            var found = text.IndexOf(needle, from, StringComparison.Ordinal);
+            cache = found;
+            return found;
+        }
+
+        int FindEnvClose(string name, string endTag, int from)
+        {
+            envClosers ??= new Dictionary<string, int>(StringComparer.Ordinal);
+            if (envClosers.TryGetValue(name, out var cached))
+            {
+                if (cached == -1) return -1;
+                if (cached >= from) return cached;
+            }
+            var found = text.IndexOf(endTag, from, StringComparison.Ordinal);
+            envClosers[name] = found;
+            return found;
+        }
+
+        bool HasDoubleNewline(int from, int stop)
+        {
+            var found = FindCached("\n\n", from, ref doubleNewline);
+            return found >= 0 && found + 2 <= stop;
+        }
+
         while (i < end)
         {
             var c = text[i];
@@ -55,13 +90,15 @@ public static class MathText
                 {
                     var block = text[next] == '[';
                     var open = next + 1;
-                    var close = Find(block ? "\\]" : "\\)", open);
-                    if (close >= 0)
+                    var close = block
+                        ? FindCached("\\]", open, ref bracketClose)
+                        : FindCached("\\)", open, ref parenClose);
+                    if (close >= 0 && (block || !HasDoubleNewline(open, close)))
                     {
-                        var source = text[open..close];
-                        if (source.Trim().Length > 0 && (block || !source.Contains("\n\n", StringComparison.Ordinal)))
+                        var source = text[open..close].Trim();
+                        if (source.Length > 0)
                         {
-                            out_.Add(new MathSpan(i, close + 2 - i, source.Trim(), block));
+                            out_.Add(new MathSpan(i, close + 2 - i, source, block));
                             i = close + 2;
                             continue;
                         }
@@ -71,13 +108,13 @@ public static class MathText
                 if (text[next] == 'b' && BareEnvironment(text, i) is { } name)
                 {
                     var endTag = "\\end{" + name + "}";
-                    var close = Find(endTag, next);
+                    var close = FindEnvClose(name, endTag, next);
                     if (close >= 0)
                     {
                         var stop = close + endTag.Length;
-                        var source = text[i..stop];
-                        if (source.Length <= MaxLength)
+                        if (stop - i <= MaxLength)
                         {
+                            var source = text[i..stop];
                             out_.Add(new MathSpan(i, stop - i, source, true));
                             i = stop;
                             continue;
@@ -94,7 +131,7 @@ public static class MathText
                 if (next < end && text[next] == '$')
                 {
                     var open = next + 1;
-                    if (open < end && !PriceTier(text, open) && Find("$$", open) is var close and >= 0)
+                    if (open < end && !PriceTier(text, open) && FindCached("$$", open, ref doubleDollarClose) is var close and >= 0)
                     {
                         var source = text[open..close].Trim();
                         if (source.Length > 0)
@@ -128,10 +165,13 @@ public static class MathText
 
     private static string? BareEnvironment(string text, int at)
     {
-        if (string.CompareOrdinal(text, at, "\\begin{", 0, 7) != 0) return null;
-        var close = text.IndexOf('}', at);
+        if (at + 7 > text.Length || string.CompareOrdinal(text, at, "\\begin{", 0, 7) != 0) return null;
+        var nameStart = at + 7;
+        // Every bare math environment name is <= 10 chars; cap the search so unclosed `\begin{` runs in O(1) (H4).
+        var limit = Math.Min(text.Length, nameStart + 16);
+        var close = text.IndexOf('}', nameStart, limit - nameStart);
         if (close < 0) return null;
-        var name = text[(at + 7)..close];
+        var name = text[nameStart..close];
         return BareEnvironments.Contains(name) ? name : null;
     }
 
@@ -181,12 +221,28 @@ public static class MathText
     /// Markdown would eat a formula's `_`, `*` and `\(`, so the renderer takes each formula out first and puts a token in
     /// its place: `InlineOpen` + index + `Close`, or `BlockOpen` + index + `Close` for a display formula. Private-use
     /// characters, so no Markdown rule and no reply text can make or break one. Code is left as it is.
-    public const char InlineOpen = '';
-    public const char BlockOpen = '';
-    public const char Close = '';
+    public const char InlineOpen = '\uE000';
+    public const char BlockOpen = '\uE002';
+    public const char Close = '\uE001';
+
+    private static readonly char[] PlaceholderTokens = [InlineOpen, Close, BlockOpen, LimitBelowOpen, LimitAboveOpen, LimitClose];
+    private static readonly char[] LimitMarkers = [LimitBelowOpen, LimitAboveOpen, LimitClose];
+
+    private static string StripChars(string text, char[] chars)
+    {
+        if (text.IndexOfAny(chars) < 0) return text;
+        var sb = new StringBuilder(text.Length);
+        foreach (var c in text)
+        {
+            if (Array.IndexOf(chars, c) < 0) sb.Append(c);
+        }
+        return sb.ToString();
+    }
 
     public static MathExtracted Extract(string text)
     {
+        // Strip untrusted private-use placeholder/limit chars from incoming text before extracting formulas (C10).
+        text = StripChars(text, PlaceholderTokens);
         if (!MayHaveMath(text)) return new MathExtracted(text, []);
         var formulas = new List<TakenFormula>();
         var out_ = new StringBuilder();
@@ -252,6 +308,7 @@ public static class MathText
             out_.Append(p[cursor..]);
             plain.Clear();
         }
+        HashSet<int>? noCloseTicks = null;
         var i = 0;
         while (i < prose.Length)
         {
@@ -260,15 +317,19 @@ public static class MathText
                 // A code span: the same run of backticks closes it (CommonMark); unclosed, the backticks are text.
                 var j = i;
                 while (j < prose.Length && prose[j] == '`') j++;
+                var tickLen = j - i;
                 var ticks = prose[i..j];
-                var endAt = prose.IndexOf(ticks, j, StringComparison.Ordinal);
+                var endAt = noCloseTicks is not null && noCloseTicks.Contains(tickLen)
+                    ? -1
+                    : prose.IndexOf(ticks, j, StringComparison.Ordinal);
                 if (endAt >= 0)
                 {
                     FlushPlain();
-                    out_.Append(prose[i..(endAt + ticks.Length)]);
-                    i = endAt + ticks.Length;
+                    out_.Append(prose[i..(endAt + tickLen)]);
+                    i = endAt + tickLen;
                     continue;
                 }
+                (noCloseTicks ??= []).Add(tickLen);
                 plain.Append(ticks);
                 i = j;
                 continue;
@@ -317,7 +378,7 @@ public static class MathText
     public static string Restore(string text, IReadOnlyList<TakenFormula> formulas)
     {
         if (formulas.Count == 0) return text;
-        return string.Concat(Pieces(text).Select(p => p.Text ?? (p.Formula is { } i && i < formulas.Count ? formulas[i].Written : "")));
+        return string.Concat(Pieces(text).Select(p => p.Text ?? (p.Formula is { } i && i >= 0 && i < formulas.Count ? formulas[i].Written : "")));
     }
 
     /// Screen readers: each formula reads "Formula: " + its source (spec §1.1).
@@ -391,9 +452,9 @@ public static class MathText
     /// `\sum`, `\prod`, `\int`, `\lim`, … take a limit below (and often above). Their argument is wrapped in
     /// `LimitBelowOpen`/`LimitAboveOpen` … `LimitClose`, for the drawing to set at a reduced size with a real baseline offset.
     public static readonly IReadOnlyList<string> LimitBaseOperators = ["∑", "∏", "∫", "lim", "max", "min", "gcd"];
-    public const char LimitBelowOpen = '';
-    public const char LimitAboveOpen = '';
-    public const char LimitClose = '';
+    public const char LimitBelowOpen = '\uE003';
+    public const char LimitAboveOpen = '\uE004';
+    public const char LimitClose = '\uE005';
 
     /// The formula as readable text; null when it uses anything outside the subset (the caller then shows the source).
     /// Bounded: at most 2,000 characters and a few milliseconds.
@@ -413,6 +474,8 @@ public static class MathText
         ArgumentNullException.ThrowIfNull(clock);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(budget);
         if (source.Length > MaxLength) return null;
+        // Strip untrusted private-use limit markers from incoming TeX source (C10).
+        source = StripChars(source, LimitMarkers);
         var start = clock();
         // A deadline past long.MaxValue counts as already spent, never as no limit.
         var deadline = start > long.MaxValue - budget ? long.MinValue : start + budget;
@@ -523,22 +586,46 @@ public static class MathText
             return (sub ? "_" : "^") + plain;
         }
 
-        /// `out` ends with a big operator, or with that operator and its other limit (`\sum_{i=1}^{n}`).
+        /// `out` ends with a big operator, or with that operator and its other limit (`\sum_{i=1}^{n}`), matching
+        /// balanced nested limit markers so `\sum_{\sum_{i=1}^{n}}^{m}` stays balanced (C10).
         private static bool EndsWithLimitOperator(string out_)
         {
-            var s = out_;
+            var s = out_.AsSpan();
             if (s.Length > 0 && s[^1] == LimitClose)
             {
-                var open = s.LastIndexOfAny([LimitBelowOpen, LimitAboveOpen]);
-                if (open >= 0) s = s[..open];
+                var depth = 0;
+                var i = s.Length - 1;
+                while (true)
+                {
+                    var c = s[i];
+                    if (c == LimitClose) depth++;
+                    else if (c is LimitBelowOpen or LimitAboveOpen)
+                    {
+                        depth--;
+                        if (depth == 0)
+                        {
+                            s = s[..i];
+                            break;
+                        }
+                    }
+                    if (i == 0) break;
+                    i--;
+                }
             }
-            return LimitBaseOperators.Any(op => s.EndsWith(op, StringComparison.Ordinal));
+            foreach (var op in LimitBaseOperators)
+                if (s.EndsWith(op.AsSpan(), StringComparison.Ordinal)) return true;
+            return false;
         }
 
         /// A big operator's limit: its argument, wrapped for drawing at a reduced size with a real baseline offset.
+        /// Guarded by `_depth` so unbraced nested limits cannot recurse unboundedly (C10).
         private string? LimitScript(bool sub)
         {
-            if (Argument() is not { Length: > 0 } arg) return null;
+            _depth++;
+            if (_depth > 24) return null;
+            var arg = Argument();
+            _depth--;
+            if (arg is not { Length: > 0 }) return null;
             return (sub ? LimitBelowOpen : LimitAboveOpen) + arg + LimitClose;
         }
 

@@ -21,8 +21,32 @@ public sealed class CapabilitiesApi(GatewaySession session, RpcConnection rpc)
     public bool ReadOnly { get; set; }
     /// Install / uninstall / setup polling cadence (`POLL_MS`).
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromMilliseconds(1200);
+    /// Disk cache for per-bot `plugins.manage list` reads (6-hour TTL).
+    public PluginListCache PluginLists { get; set; } = PluginListCache.Shared;
+    /// Clock used for timeout-backoff tracking (overridable in unit tests).
+    public Func<DateTimeOffset> PluginListNow { get; set; } = () => DateTimeOffset.UtcNow;
+    /// Optional RPC override for deterministic unit tests.
+    internal Func<string, JsonObject, TimeSpan, CancellationToken, Task<JsonNode>>? RpcOverride { get; set; }
+
+    /// How long automatic background plugin sweeps back off after a `plugins.manage list` timeout.
+    public static readonly TimeSpan PluginListTimeoutBackoff = TimeSpan.FromMinutes(15);
+
+    private sealed class PluginListFlight(long id, int generation, CancellationTokenSource cts)
+    {
+        public long Id { get; } = id;
+        public int Generation { get; } = generation;
+        public CancellationTokenSource Cts { get; } = cts;
+        public HashSet<Guid> Waiters { get; } = [];
+        public Task<List<PluginInfo>> Task { get; set; } = null!;
+    }
 
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _tails = new();
+    private readonly object _pluginListGate = new();
+    private readonly Dictionary<string, PluginListFlight> _pluginListFlights = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _pluginListGeneration = new(StringComparer.Ordinal);
+    private long _nextPluginListFlightId;
+    private Task _pluginListTail = Task.CompletedTask;
+    private DateTimeOffset? _pluginListTimedOutAt;
 
     private static KeyValuePair<string, string>[] Q(string profile, params (string, string)[] extra) =>
         [.. extra.Select(e => KeyValuePair.Create(e.Item1, e.Item2)), KeyValuePair.Create("profile", profile)];
@@ -55,7 +79,10 @@ public sealed class CapabilitiesApi(GatewaySession session, RpcConnection rpc)
     }
 
     private Task<JsonNode> Call(string method, JsonObject p, int seconds = 30, CancellationToken ct = default) =>
-        Rpc.RequestAsync(method, p, TimeSpan.FromSeconds(seconds), ct);
+        Call(method, p, TimeSpan.FromSeconds(seconds), ct);
+
+    private Task<JsonNode> Call(string method, JsonObject p, TimeSpan timeout, CancellationToken ct = default) =>
+        RpcOverride != null ? RpcOverride(method, p, timeout, ct) : Rpc.RequestAsync(method, p, timeout, ct);
 
     // ---------------------------------------------------------------- Skills
 
@@ -213,6 +240,21 @@ public sealed class CapabilitiesApi(GatewaySession session, RpcConnection rpc)
         });
     }
 
+    /// The stored value, or null when this bot has none (`POST /api/env/reveal`). Hermes allows 5 of these per 30 s (429).
+    public async Task<string?> RevealEnvAsync(string key, string? profile = null, CancellationToken ct = default)
+    {
+        var query = string.IsNullOrWhiteSpace(profile)
+            ? Array.Empty<KeyValuePair<string, string>>()
+            : [KeyValuePair.Create("profile", profile)];
+        var answer = await Session.SendAsync(HttpMethod.Post, "/api/env/reveal", query, new JsonObject { ["key"] = key }, ct: ct)
+            .ConfigureAwait(false);
+        if (answer.Status == 404) return null;
+        if (!answer.Ok) throw GatewaySession.HttpError(answer);
+        if (answer.Body.Trim().Length == 0) return null;
+        var json = answer.Json ?? throw new GatewayException("not-hermes", "The gateway sent something that isn't JSON.", answer.Status);
+        return json.Text("value");
+    }
+
     // ---------------------------------------------------------------- Connectors (§5)
 
     public async Task<List<McpServer>> McpServersAsync(string profile, CancellationToken ct = default)
@@ -304,9 +346,41 @@ public sealed class CapabilitiesApi(GatewaySession session, RpcConnection rpc)
         return map.Get(name) is JsonObject entry ? entry.DeepClone() : null;
     }
 
+    /// Whether the add-on on this computer enforces connector asking levels (`toolPermissions` in its status,
+    /// hermes-hq-push 0.9.86+) and whether Hermes can ask interactively (`toolPermissionsAsk`).
+    public async Task<(bool Enforced, bool Asks)> AddOnToolLevelsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var answer = await Session.SendAsync(HttpMethod.Get, Notifications.PushPolicy.PluginRoute + "/status",
+                timeout: TimeSpan.FromSeconds(15), ct: ct).ConfigureAwait(false);
+            if (!answer.Ok || answer.Json is not JsonObject body) return (false, true);
+            return (Notifications.PushPolicy.ToolPermissions(body), Notifications.PushPolicy.ToolPermissionsAsk(body));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return (false, true);
+        }
+    }
+
+    public async Task<bool> AddOnEnforcesToolLevelsAsync(CancellationToken ct = default) =>
+        (await AddOnToolLevelsAsync(ct).ConfigureAwait(false)).Enforced;
+
     /// §5.5-b: read the entry fresh, apply the rules, remove, add; one rollback when the add fails. All inside the bot's
     /// serial queue so no other write of this app lands in between.
-    public Task<ToolRulesOutcome> SaveToolRulesAsync(string name, IReadOnlyList<string> disabled, IReadOnlyList<string> discovered, string profile)
+    public Task<ToolRulesOutcome> SaveToolRulesAsync(string name, IReadOnlyList<string> disabled, IReadOnlyList<string> discovered, string profile) =>
+        SaveToolEntryAsync(name, profile, old => McpToolFilter.SetDisabled(old, disabled, discovered));
+
+    /// Saves granular per-tool connector permissions (Always allow / Auto-review / Needs approval / Blocked) atomically.
+    public Task<ToolRulesOutcome> SaveToolPoliciesAsync(string name, IReadOnlyDictionary<string, McpToolPermission> permissions,
+        IReadOnlyList<string> discovered, string profile) =>
+        SaveToolEntryAsync(name, profile, old => McpToolFilter.SetPermissions(old, permissions, discovered));
+
+    private Task<ToolRulesOutcome> SaveToolEntryAsync(string name, string profile, Func<JsonNode, JsonNode> transform)
     {
         Refuse("Couldn’t Save");
         return Serial<ToolRulesOutcome>(profile, async () =>
@@ -314,7 +388,7 @@ public sealed class CapabilitiesApi(GatewaySession session, RpcConnection rpc)
             if (await McpEntryAsync(name, profile) is not { } old) return new ToolRulesOutcome.Gone();
             if (McpToolFilter.LooksRedacted(old))
                 throw new CapabilityException("Couldn’t Save", $"This connector’s tool list can be changed on {HostWord.Phrase}.");
-            var next = McpToolFilter.SetDisabled(old, disabled, discovered);
+            var next = transform(old);
             if (JsonNode.DeepEquals(next, old)) return new ToolRulesOutcome.Unchanged();
             await Call("mcp.servers.remove", new JsonObject { ["profile"] = profile, ["name"] = name });
             try
@@ -409,15 +483,152 @@ public sealed class CapabilitiesApi(GatewaySession session, RpcConnection rpc)
 
     // ---------------------------------------------------------------- Plugins (§9)
 
-    public async Task<List<PluginInfo>> PluginsAsync(string profile, CancellationToken ct = default)
+    /// True when `error` indicates a gateway timeout (used for plugin-list backoff and sweep early-stop).
+    public static bool IsTimeout(Exception error) =>
+        error is TimeoutException
+        || error is GatewayException { Code: "timeout" }
+        || error is GatewayException { IsNotConnected: true, NotSentBecause: "timeout" };
+
+    /// True if a `plugins.manage list` call timed out within `window` (default 15 minutes).
+    public bool PluginListTimedOutRecently(TimeSpan? window = null)
     {
-        var v = await Call("plugins.manage", new JsonObject { ["action"] = "list", ["profile"] = profile }, 30, ct);
-        return [.. (v.Arr("plugins") ?? []).Select(PluginInfo.Read).OfType<PluginInfo>()];
+        lock (_pluginListGate)
+        {
+            if (_pluginListTimedOutAt is not { } at) return false;
+            var age = PluginListNow() - at;
+            var limit = window ?? PluginListTimeoutBackoff;
+            return age >= TimeSpan.Zero && age < limit;
+        }
     }
 
-    public Task<PluginResult> PluginAsync(PluginAction action, string profile)
+    /// Marks any in-flight `plugins.manage list` for `profile` stale so its late answer cannot overwrite fresh state.
+    public void InvalidatePluginListFlight(string profile)
+    {
+        lock (_pluginListGate)
+        {
+            _pluginListGeneration[profile] = _pluginListGeneration.GetValueOrDefault(profile) + 1;
+            _pluginListFlights.Remove(profile);
+        }
+    }
+
+    /// Reads one bot's plugin list: concurrent callers for the same profile join one in-flight RPC; distinct profiles
+    /// chain one at a time so slow gateways are not saturated. Successful reads update `PluginLists` and
+    /// `PluginUpdateReminder`; timeouts record `PluginListTimeoutBackoff`.
+    public async Task<List<PluginInfo>> PluginsAsync(string profile, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        PluginListFlight flight;
+        var waiterId = Guid.NewGuid();
+        lock (_pluginListGate)
+        {
+            if (_pluginListFlights.TryGetValue(profile, out var existing))
+            {
+                flight = existing;
+            }
+            else
+            {
+                var id = ++_nextPluginListFlightId;
+                var generation = _pluginListGeneration.GetValueOrDefault(profile);
+                var flightCts = new CancellationTokenSource();
+                var previous = _pluginListTail;
+                var created = new PluginListFlight(id, generation, flightCts);
+                created.Task = RunPluginListFlightAsync(profile, id, generation, previous, flightCts.Token);
+                _pluginListTail = AwaitQuietlyAsync(created.Task);
+                _pluginListFlights[profile] = created;
+                flight = created;
+            }
+            flight.Waiters.Add(waiterId);
+        }
+
+        try
+        {
+            return await flight.Task.WaitAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            DetachPluginListWaiter(profile, flight, waiterId);
+        }
+    }
+
+    private void DetachPluginListWaiter(string profile, PluginListFlight flight, Guid waiterId)
+    {
+        var shouldCancel = false;
+        lock (_pluginListGate)
+        {
+            if (flight.Waiters.Remove(waiterId) && flight.Waiters.Count == 0)
+            {
+                if (_pluginListFlights.TryGetValue(profile, out var cur) && cur.Id == flight.Id)
+                    _pluginListFlights.Remove(profile);
+                shouldCancel = !flight.Task.IsCompleted;
+            }
+        }
+        if (shouldCancel)
+        {
+            try { flight.Cts.Cancel(); } catch (ObjectDisposedException) { }
+        }
+    }
+
+    private async Task<List<PluginInfo>> RunPluginListFlightAsync(string profile, long id, int generation, Task previous, CancellationToken flightCt)
+    {
+        try
+        {
+            await previous.ConfigureAwait(false);
+            flightCt.ThrowIfCancellationRequested();
+            var v = await Call("plugins.manage", new JsonObject { ["action"] = "list", ["profile"] = profile }, TimeSpan.FromSeconds(30), flightCt)
+                .ConfigureAwait(false);
+            var arr = v.Arr("plugins");
+            var list = (arr ?? []).Select(PluginInfo.Read).OfType<PluginInfo>().ToList();
+            bool sameGeneration;
+            lock (_pluginListGate)
+            {
+                _pluginListTimedOutAt = null;
+                sameGeneration = arr != null && _pluginListGeneration.GetValueOrDefault(profile) == generation;
+            }
+            if (sameGeneration)
+            {
+                var account = Session.Account.Key;
+                PluginLists.Store(list, account, profile);
+                PluginUpdateReminder.Report(account, profile, ReadOnly ? Array.Empty<PluginInfo>() : list);
+            }
+            return list;
+        }
+        catch (Exception ex)
+        {
+            if (IsTimeout(ex))
+            {
+                lock (_pluginListGate) _pluginListTimedOutAt = PluginListNow();
+            }
+            throw;
+        }
+        finally
+        {
+            lock (_pluginListGate)
+            {
+                if (_pluginListFlights.TryGetValue(profile, out var cur) && cur.Id == id)
+                    _pluginListFlights.Remove(profile);
+            }
+        }
+    }
+
+    private static async Task AwaitQuietlyAsync(Task task)
+    {
+        try { await task.ConfigureAwait(false); } catch (Exception) { }
+    }
+
+    public async Task<PluginResult> PluginAsync(PluginAction action, string profile)
     {
         Refuse("");
-        return Serial(profile, async () => PluginResult.Read(await Rpc.RequestAsync("plugins.manage", action.Params(profile), action.Timeout)));
+        InvalidatePluginListFlight(profile);
+        try
+        {
+            return await Serial(profile, async () =>
+                PluginResult.Read(await Call("plugins.manage", action.Params(profile), action.Timeout).ConfigureAwait(false)))
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            InvalidatePluginListFlight(profile);
+            PluginLists.Forget(Session.Account.Key, profile);
+        }
     }
 }

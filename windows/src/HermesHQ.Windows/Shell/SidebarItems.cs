@@ -1,5 +1,6 @@
 using Hermes.Core.Bots;
 using Hermes.Core.Groups;
+using Hermes.Core.Model;
 using Hermes.Core.Sessions;
 using WorkingRing = Hermes.Core.Settings.WorkingRing;
 using Tokens = Hermes.Core.Settings.ChatVisualTokens;
@@ -8,6 +9,8 @@ using ThemeService = HermesHQ.Features.Settings.ThemeService;
 using HermesHQ.Controls;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
@@ -55,18 +58,23 @@ public sealed class SidebarRoom(GroupRowModel room, BotBlock block, string? sect
 }
 
 /// [chats-under] One of a bot's own chats under its row.
-public sealed class SidebarChat(SessionSummary chat, string bot, bool last) : SidebarItem
+public sealed class SidebarChat(SessionSummary chat, string bot, bool last, bool first = false, bool showsPin = false, Bot? botModel = null) : SidebarItem
 {
     public SessionSummary Chat { get; } = chat;
     public string Bot { get; } = bot;
     public bool Last { get; } = last;
+    public bool First { get; } = first;
+    public bool ShowsPin { get; } = showsPin;
+    public Bot? BotModel { get; } = botModel;
 }
 
 /// "N more ›": the rest of the bot's chats, in Sessions with its chip picked.
-public sealed class SidebarMore(string bot, int count) : SidebarItem
+public sealed class SidebarMore(string bot, int count, bool first = false, Bot? botModel = null) : SidebarItem
 {
     public string Bot { get; } = bot;
     public int Count { get; } = count;
+    public bool First { get; } = first;
+    public Bot? BotModel { get; } = botModel;
 }
 
 public sealed class SidebarPlace(Place place, bool isTool) : SidebarItem
@@ -156,8 +164,8 @@ public static class SidebarRowView
         SidebarHeader h => Header(h),
         SidebarBot b => BotRowView(b, row),
         SidebarRoom r => RoomRowView(r, row),
-        SidebarChat c => ChatRow(c),
-        SidebarMore m => MoreRow(m),
+        SidebarChat c => ChatRow(c, row),
+        SidebarMore m => MoreRow(m, row),
         SidebarPlace p => PlaceRow(p, row),
         SidebarAction a => ActionRow(a.Title, a.Glyph),
         _ => new Rectangle { Height = 1, Margin = new Thickness(4, 6, 4, 6), Fill = Res("DividerStrokeColorDefaultBrush") },
@@ -406,22 +414,58 @@ public static class SidebarRowView
         return ring;
     }
 
-    /// A chat under its bot: a thin tree line, its title, its time (or "Working…"), its unread dot.
-    private static UIElement ChatRow(SidebarChat c)
+    /// A chat under its bot: vector branch connector (`BotChatsLineView`), optional solo-aware pin glyph
+    /// (`BotChatsUnder.ShowsPin`), its title, its time (or "Working…"), and its unread dot.
+    private static UIElement ChatRow(SidebarChat c, ListViewItem row)
     {
         var z = Sizes;
-        var g = new Grid { ColumnSpacing = 8, Margin = new Thickness(12, 0, 0, 0) };
-        g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(14) });
+        var style = BotChatsStylePrefs.Current;
+        var g = new Grid { ColumnSpacing = 6, Margin = new Thickness(10, 0, 0, 0) };
+        g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(18) });
         g.ColumnDefinitions.Add(new ColumnDefinition());
         g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        g.Children.Add(TreeLine(c.Last));
+
+        var tint = BotChatsLineView.BotTintColor(c.BotModel, c.Bot);
+        var line = new BotChatsLineView(
+            first: c.First,
+            last: c.Last,
+            more: false,
+            style: style,
+            status: BotChatsLineView.StatusOf(c.Chat),
+            tint: tint,
+            lineX: 5,
+            reach: 10.5);
+        BindConnectorEmphasis(row, line);
+        g.Children.Add(line);
+
         var title = new TextBlock
         {
             Text = c.Chat.Title, FontSize = z.ChatTitle, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center,
             FontWeight = c.Chat.Unread ? FontWeights.SemiBold : FontWeights.Normal,
         };
-        Grid.SetColumn(title, 1);
-        g.Children.Add(title);
+        if (c.ShowsPin)
+        {
+            var titleHost = new Grid { ColumnSpacing = 5, VerticalAlignment = VerticalAlignment.Center };
+            titleHost.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            titleHost.ColumnDefinitions.Add(new ColumnDefinition());
+            var pin = new FontIcon
+            {
+                Glyph = "\uE718", FontSize = 10, Foreground = Res("TextFillColorTertiaryBrush"),
+                VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false,
+            };
+            AutomationProperties.SetAccessibilityView(pin, AccessibilityView.Raw);
+            titleHost.Children.Add(pin);
+            Grid.SetColumn(title, 1);
+            titleHost.Children.Add(title);
+            Grid.SetColumn(titleHost, 1);
+            g.Children.Add(titleHost);
+        }
+        else
+        {
+            Grid.SetColumn(title, 1);
+            g.Children.Add(title);
+        }
+
         var status = SessionRowWords.StatusWords(c.Chat.Status, c.Chat.Step);
         var trail = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
         trail.Children.Add(new TextBlock
@@ -432,16 +476,40 @@ public static class SidebarRowView
         if (c.Chat.Unread) trail.Children.Add(new Ellipse { Width = 7, Height = 7, Fill = Res("AccentFillColorDefaultBrush") });
         Grid.SetColumn(trail, 2);
         g.Children.Add(trail);
+
+        if (style == BotChatsStyleKind.Dividers && !c.Last)
+        {
+            var sep = new Rectangle
+            {
+                Height = 1, VerticalAlignment = VerticalAlignment.Bottom, IsHitTestVisible = false,
+                Fill = Res("DividerStrokeColorDefaultBrush"), Opacity = 0.5,
+            };
+            Grid.SetColumn(sep, 1);
+            Grid.SetColumnSpan(sep, 2);
+            g.Children.Add(sep);
+        }
+
         // [working-ring] A working chat's ring (Working Ring on); its "Working…" stays either way.
         return WorkingRingView.Wrap(g, WorkingRing.ShowsChatRing(c.Chat, WorkingRing.IsOn), new Thickness(2, 1, 6, 1));
     }
 
-    private static UIElement MoreRow(SidebarMore m)
+    private static UIElement MoreRow(SidebarMore m, ListViewItem row)
     {
-        var g = new Grid { ColumnSpacing = 8, Margin = new Thickness(12, 0, 0, 0) };
-        g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(14) });
+        var g = new Grid { ColumnSpacing = 6, Margin = new Thickness(10, 0, 0, 0) };
+        g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(18) });
         g.ColumnDefinitions.Add(new ColumnDefinition());
-        g.Children.Add(TreeLine(true));
+        var tint = BotChatsLineView.BotTintColor(m.BotModel, m.Bot);
+        var line = new BotChatsLineView(
+            first: m.First,
+            last: true,
+            more: true,
+            style: BotChatsStylePrefs.Current,
+            status: BotChatNodeStatus.Quiet,
+            tint: tint,
+            lineX: 5,
+            reach: 10.5);
+        BindConnectorEmphasis(row, line);
+        g.Children.Add(line);
         var words = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
         words.Children.Add(new TextBlock { Text = $"{m.Count} more", FontSize = Tokens.SidebarMore, FontWeight = FontWeights.Medium, Foreground = Res("AccentTextFillColorPrimaryBrush") });
         words.Children.Add(new FontIcon { Glyph = "", FontSize = 9, Foreground = Res("AccentTextFillColorPrimaryBrush") });
@@ -450,22 +518,28 @@ public static class SidebarRowView
         return g;
     }
 
-    private static UIElement TreeLine(bool last)
+    private static void BindConnectorEmphasis(ListViewItem row, BotChatsLineView line)
     {
-        var line = new Grid();
-        var down = new Rectangle
+        var hovered = false;
+        void Sync() => line.SetEmphasized(hovered || row.IsSelected);
+        void Enter(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e) { hovered = true; Sync(); }
+        void Exit(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e) { hovered = false; Sync(); }
+
+        long? token = null;
+        line.Loaded += (_, _) =>
         {
-            Width = 1, HorizontalAlignment = HorizontalAlignment.Left, Fill = Res("AccentFillColorDefaultBrush"), Opacity = 0.6,
-            VerticalAlignment = last ? VerticalAlignment.Top : VerticalAlignment.Stretch,
+            row.PointerEntered += Enter;
+            row.PointerExited += Exit;
+            token ??= row.RegisterPropertyChangedCallback(ListViewItem.IsSelectedProperty, (_, _) => Sync());
+            Sync();
         };
-        if (last) down.Height = 12;
-        line.Children.Add(down);
-        line.Children.Add(new Rectangle
+        line.Unloaded += (_, _) =>
         {
-            Height = 1, Width = 10, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center,
-            Fill = Res("AccentFillColorDefaultBrush"), Opacity = 0.6,
-        });
-        return line;
+            row.PointerEntered -= Enter;
+            row.PointerExited -= Exit;
+            if (token is { } t) row.UnregisterPropertyChangedCallback(ListViewItem.IsSelectedProperty, t);
+            token = null;
+        };
     }
 
     // Only the name changes weight when chosen, not its status, time or count. Drop the native

@@ -21,6 +21,10 @@ public sealed class QuestionCenter : IDisposable
         public TimeSpan StaleDrop { get; init; } = TimeSpan.FromSeconds(15);
         /// A running clarify tool with no question this long after its tool.start is probed (§3.5).
         public TimeSpan UndeliveredAfter { get; init; } = TimeSpan.FromSeconds(4);
+        /// How soon after a tool starts to check approval.pending for queue-only approvals (#530).
+        public TimeSpan ApprovalPollDelay { get; init; } = TimeSpan.FromSeconds(1);
+        public TimeSpan ApprovalPollInterval { get; init; } = TimeSpan.FromSeconds(3);
+        public int ApprovalPollLimit { get; init; } = 8;
         /// An answered approval card fades out this long before it goes (§4.2).
         public TimeSpan Leaving { get; init; } = TimeSpan.FromMilliseconds(200);
         public TimeSpan ApprovalRespondTimeout { get; init; } = TimeSpan.FromSeconds(330);
@@ -96,6 +100,7 @@ public sealed class QuestionCenter : IDisposable
     private readonly Dictionary<string, CancellationTokenSource> _probeTasks = [];
     private readonly HashSet<string> _probing = [];
     private readonly Dictionary<string, CancellationTokenSource> _clarifyWatch = [];
+    private readonly Dictionary<string, CancellationTokenSource> _approvalWatch = [];
     private readonly Dictionary<string, (TimeSpan Value, DateTimeOffset At)> _timeouts = [];
     private readonly List<ChatQuestions> _links = [];
     private readonly HashSet<string> _dirty = [];
@@ -164,6 +169,7 @@ public sealed class QuestionCenter : IDisposable
             EvictRuntimes();
             if (previous != null && previous != runtime)
             {
+                CancelApprovalWatch(previous);
                 var old = _entries.Where(e => e.SessionId == previous).ToList();
                 if (old.Count > 0)
                 {
@@ -294,6 +300,7 @@ public sealed class QuestionCenter : IDisposable
                 case "request.cancel": Withdrawn(ev); break;
                 case "clarify.request": PromptAsked(ev); break;
                 case "clarify.settled": PromptSettled(ev); break;
+                case "approval.request": ReplayApprovals(session); break;
                 case "approval.cancelled": ApprovalsCancelled(ev); break;
                 case "message.start":
                     _liveTurns.Add(session);
@@ -305,13 +312,16 @@ public sealed class QuestionCenter : IDisposable
                 case "tool.start":
                     _liveTurns.Add(session);
                     if (name == "clarify") WatchClarify(session);
+                    else WatchApproval(session);
                     break;
                 case "tool.complete":
+                    CancelApprovalWatch(session);
                     if (name == "clarify") ClarifySettled(session);
                     AgentMovedOn(session);
                     break;
                 case "message.complete" or "error":
                     if (session.Length == 0) break;
+                    CancelApprovalWatch(session);
                     if (ev.Type == "message.complete") DropSharedPrompts(session);
                     TurnEnded(session);
                     ClarifySettled(session);
@@ -402,6 +412,7 @@ public sealed class QuestionCenter : IDisposable
             };
             if (kind == PromptKind.Approval)
             {
+                CancelApprovalWatch(session);
                 entry.FirstSeen = SeenAt(ClockKey(entry));
                 _stackSize[session] = _stackSize.GetValueOrDefault(session) + 1;
                 BumpApprovals(session);
@@ -553,6 +564,7 @@ public sealed class QuestionCenter : IDisposable
             QueueRequestId = request, DeliveredSeq = _seq, FirstSeen = SeenAt(request),
         };
         _entries.Add(entry);
+        CancelApprovalWatch(session);
         _stackSize[session] = _stackSize.GetValueOrDefault(session) + 1;
         BumpApprovals(session);
         _arrived.Add((id, PromptKind.Approval, session, _runtimes.GetValueOrDefault(session)?.Profile));
@@ -659,6 +671,11 @@ public sealed class QuestionCenter : IDisposable
         if (_clarifyWatch.Remove(session, out var cts)) cts.Cancel();
     }
 
+    private void CancelApprovalWatch(string session)
+    {
+        if (_approvalWatch.Remove(session, out var cts)) cts.Cancel();
+    }
+
     // ------------------------------------------------------------------ probe (§2.4, §3.5)
 
     /// session.events.since with the highest last_seen: no events, the authoritative open_requests (pruned by rule 2
@@ -717,6 +734,57 @@ public sealed class QuestionCenter : IDisposable
     }
 
     // ------------------------------------------------------------------ approval.pending (rule 3)
+
+    /// Polls approval.pending while a tool call stays open so queue-only dangerous-command approvals appear live
+    /// without leaving and re-entering the chat (HermesKit/Chat/ServerRequests.swift watchApproval, #530).
+    private void WatchApproval(string session)
+    {
+        if (session.Length == 0 || _shutDown) return;
+        CancelApprovalWatch(session);
+        var limit = _timing.ApprovalPollLimit;
+        if (limit <= 0) return;
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(_life.Token);
+        _approvalWatch[session] = cts;
+        var ct = cts.Token;
+        var firstWait = _timing.ApprovalPollDelay;
+        var interval = _timing.ApprovalPollInterval;
+        _ = WatchApprovalLoopAsync(session, cts, ct, firstWait, interval, limit);
+    }
+
+    private async Task WatchApprovalLoopAsync(string session, CancellationTokenSource cts, CancellationToken ct,
+        TimeSpan firstWait, TimeSpan interval, int limit)
+    {
+        try
+        {
+            if (firstWait > TimeSpan.Zero) await Task.Delay(firstWait, ct);
+            for (var i = 0; i < limit; i++)
+            {
+                lock (_gate)
+                {
+                    if (ct.IsCancellationRequested || _shutDown
+                        || !ReferenceEquals(_approvalWatch.GetValueOrDefault(session), cts))
+                        return;
+                    if (_entries.Any(e => e.SessionId == session && e.Kind == PromptKind.Approval))
+                    {
+                        _approvalWatch.Remove(session);
+                        return;
+                    }
+                }
+                ReplayApprovals(session);
+                if (i + 1 < limit && interval > TimeSpan.Zero) await Task.Delay(interval, ct);
+            }
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            lock (_gate)
+            {
+                if (ReferenceEquals(_approvalWatch.GetValueOrDefault(session), cts))
+                    _approvalWatch.Remove(session);
+            }
+            cts.Dispose();
+        }
+    }
 
     public void ReplayApprovals(string session)
     {
@@ -1256,6 +1324,14 @@ public sealed class QuestionCenter : IDisposable
         {
             if (_shutDown) return;
             _shutDown = true;
+            foreach (var cts in _approvalWatch.Values) cts.Cancel();
+            _approvalWatch.Clear();
+            foreach (var cts in _clarifyWatch.Values) cts.Cancel();
+            _clarifyWatch.Clear();
+            foreach (var cts in _probeTasks.Values) cts.Cancel();
+            _probeTasks.Clear();
+            _staleTask?.Cancel();
+            _staleTask = null;
             _life.Cancel();
             var sessions = _entries.Select(e => e.SessionId).Concat(_sent.Keys).Concat(_undelivered).Distinct().ToList();
             _entries.Clear();

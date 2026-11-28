@@ -279,8 +279,10 @@ public sealed partial class SettingsPage : Page
         SettingsCategory.General => "",
         SettingsCategory.Appearance => "",
         SettingsCategory.Chat => "",
-        SettingsCategory.Sounds => "",
         SettingsCategory.Gateway => "",
+        SettingsCategory.Accounts => "\uE8D7",
+        SettingsCategory.Tools => "\uE90F",
+        SettingsCategory.Sounds => "",
         _ => "",
     };
 
@@ -442,11 +444,26 @@ public sealed partial class SettingsPage : Page
         // The category index and detail both say About. Keep the index beneath the detail for Back, as on the Mac.
         if (SettingsAboutRoute.Pages(target) is { } aboutPages) { OpenAbout(aboutPages, SettingsAboutRoute.Reveal(target)); return; }
         if (SettingsSearch.Category(target) is { } c && (c != _category || _stack.Count > 1 || _gatewayMarked)) ShowCategory(c);
-        // SettingsNavigator.open `.action(id)`: About shows (the buttons are its), then the action runs as its button would.
+        // SettingsNavigator.open `.action(id)`: Backup & Reset lives under Hermes (Gateway), Clear Model Favorites under Chat.
         if (SettingsSearch.ActionId(target) != null)
         {
             if (!Searching && _paneQuery.Length > 0) Rebuild();
             RunFileAction(target);
+            return;
+        }
+        // Bots & Tools rows that open sidebar places (SettingsNavigator.swift `more:*` & `capabilities`).
+        if (target == "capabilities") { Navigator.Open("capabilities"); return; }
+        if (target.StartsWith("more:", StringComparison.Ordinal)) { Navigator.Open(target["more:".Length..]); return; }
+        if (target == "row:reply-bubbles")
+        {
+            if (SettingsPanes.PageFor(this, ChatBubbles.Target) is { } bubbles) Push(bubbles.Title, bubbles.Make);
+            FlashOnLayout(target);
+            return;
+        }
+        if (target == "discord")
+        {
+            if (!Searching && _paneQuery.Length > 0) Rebuild();
+            FlashOnLayout("row:discord");
             return;
         }
         if (target.StartsWith("row:", StringComparison.Ordinal))
@@ -454,15 +471,20 @@ public sealed partial class SettingsPage : Page
             // A row on the current category doesn't push a page. Restore its actual form before the first layout
             // can consume the reveal; the clear's queued TextChanged must not replace that form afterwards.
             if (!Searching && _paneQuery.Length > 0) Rebuild();
-            void Land(object? s, object e)
-            {
-                _scroll.LayoutUpdated -= Land;
-                if (Kit.Find(_scroll, target) is { } row) Kit.Flash(row);
-            }
-            _scroll.LayoutUpdated += Land;
+            FlashOnLayout(target);
             return;
         }
         if (SettingsPanes.PageFor(this, target) is { } page) Push(page.Title, page.Make);
+    }
+
+    private void FlashOnLayout(string target)
+    {
+        void Land(object? s, object e)
+        {
+            _scroll.LayoutUpdated -= Land;
+            if (Kit.Find(_scroll, target) is { } row) Kit.Flash(row);
+        }
+        _scroll.LayoutUpdated += Land;
     }
 
     /// About's pages for a route (`SettingsAboutRoute.Pages`), bottom first, the About category marked; `reveal` is the

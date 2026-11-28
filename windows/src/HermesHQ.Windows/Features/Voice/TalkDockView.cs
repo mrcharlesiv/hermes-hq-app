@@ -288,8 +288,8 @@ public sealed class TalkDockView : UserControl
             CornerRadius = new CornerRadius(14),
             Padding = new Thickness(14, 10, 14, 10),
             BorderThickness = new Thickness(1),
-            Background = ThemeBrushes.Get("CardBackgroundFillColorDefaultBrush"),
-            BorderBrush = ThemeBrushes.Get("CardStrokeColorDefaultBrush"),
+            Background = ThemeBrushes.Get("HQPromptCardBrush"),
+            BorderBrush = ThemeBrushes.Get("HQPromptEdgeBrush"),
             Child = host,
         };
     }

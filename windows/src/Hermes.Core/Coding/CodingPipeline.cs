@@ -2,6 +2,160 @@ using Hermes.Core.Sessions;
 
 namespace Hermes.Core.Coding;
 
+/// The four decision-first buckets on a coding project page (`HermesKit/Model/CodingPipeline.swift`, `3e7f6374a`/`997919566`).
+public enum CodingPipelineBucket
+{
+    /// Open pull requests ready to review and merge (not working, checks not failing or running).
+    Ready,
+    /// Chats needing the owner's attention: waiting for input, failing CI checks, or unread replies.
+    NeedsYou,
+    /// Active work in progress: running bots, drafts, branches without PRs, checks running, or plain project chats.
+    InFlight,
+    /// Completed work: merged/closed PRs (quiet) and archived/auto-done chats. Collapsed by default.
+    Shipped,
+}
+
+public static class CodingPipelineBucketExtensions
+{
+    public static string Label(this CodingPipelineBucket bucket) => bucket switch
+    {
+        CodingPipelineBucket.Ready => "Ready",
+        CodingPipelineBucket.NeedsYou => "Needs You",
+        CodingPipelineBucket.InFlight => "Active",
+        CodingPipelineBucket.Shipped => "Shipped",
+        _ => "Active",
+    };
+
+    public static string SectionTitle(this CodingPipelineBucket bucket) => bucket switch
+    {
+        CodingPipelineBucket.Ready => "Ready to Ship",
+        CodingPipelineBucket.NeedsYou => "Needs You",
+        CodingPipelineBucket.InFlight => "Active",
+        CodingPipelineBucket.Shipped => "Shipped",
+        _ => "Active",
+    };
+
+    public static string SectionId(this CodingPipelineBucket bucket) => bucket switch
+    {
+        CodingPipelineBucket.Ready => SessionListPipeline.PipelineReady,
+        CodingPipelineBucket.NeedsYou => SessionListPipeline.PipelineNeeds,
+        CodingPipelineBucket.InFlight => SessionListPipeline.PipelineInFlight,
+        CodingPipelineBucket.Shipped => SessionListPipeline.PipelineShipped,
+        _ => SessionListPipeline.PipelineInFlight,
+    };
+
+    public static bool CollapsedByDefault(this CodingPipelineBucket bucket) =>
+        bucket == CodingPipelineBucket.Shipped;
+}
+
+/// Pure 4-bucket classifier matching `HermesKit/Model/CodingPipeline.swift` 1-to-1 so header counts and list sections align.
+public static class CodingPipeline
+{
+    public static readonly IReadOnlyList<CodingPipelineBucket> AllBuckets =
+    [
+        CodingPipelineBucket.Ready,
+        CodingPipelineBucket.NeedsYou,
+        CodingPipelineBucket.InFlight,
+        CodingPipelineBucket.Shipped,
+    ];
+
+    public static CodingPipelineBucket BucketFor(SessionSummary session, SessionPRStatus? prOverride = null, bool isDone = false)
+    {
+        var working = session.IsRunning || session.Status == SessionStatus.Working;
+        var needsInput = session.Status == SessionStatus.NeedsInput;
+        var pr = prOverride ?? session.PullRequest;
+
+        if (needsInput) return CodingPipelineBucket.NeedsYou;
+        if (isDone || (session.Archived && !working)) return CodingPipelineBucket.Shipped;
+        if (pr != null && pr.State is SessionPRState.Open or SessionPRState.Draft && pr.Checks?.State == SessionPRCheckState.Failed)
+            return CodingPipelineBucket.NeedsYou;
+        if (pr != null && pr.State == SessionPRState.Open && !working && pr.Checks?.State != SessionPRCheckState.Running)
+            return CodingPipelineBucket.Ready;
+        if (session.Unread && !working) return CodingPipelineBucket.NeedsYou;
+        if (pr != null && pr.State is SessionPRState.Merged or SessionPRState.Closed && !working)
+            return CodingPipelineBucket.Shipped;
+        return CodingPipelineBucket.InFlight;
+    }
+
+    public static Dictionary<CodingPipelineBucket, int> Counts(
+        IEnumerable<SessionSummary> rows,
+        IReadOnlyDictionary<string, SessionPRStatus>? prBySessionKey = null,
+        Func<SessionSummary, bool>? isDone = null)
+    {
+        var counts = new Dictionary<CodingPipelineBucket, int>
+        {
+            [CodingPipelineBucket.Ready] = 0,
+            [CodingPipelineBucket.NeedsYou] = 0,
+            [CodingPipelineBucket.InFlight] = 0,
+            [CodingPipelineBucket.Shipped] = 0,
+        };
+        foreach (var row in rows)
+        {
+            var pr = CodingPipelineEngine.ResolvePR(row, prBySessionKey);
+            var done = isDone != null && isDone(row);
+            counts[BucketFor(row, pr, done)]++;
+        }
+        return counts;
+    }
+
+    public static bool IsReadyToMerge(SessionSummary session, SessionPRStatus? prOverride = null)
+    {
+        var pr = prOverride ?? session.PullRequest;
+        return BucketFor(session, pr) == CodingPipelineBucket.Ready && pr?.State == SessionPRState.Open;
+    }
+
+    public static bool HasFailingChecks(SessionSummary session, SessionPRStatus? prOverride = null)
+    {
+        var pr = prOverride ?? session.PullRequest;
+        if (pr == null || session.Archived) return false;
+        return pr.State is SessionPRState.Open or SessionPRState.Draft && pr.Checks?.State == SessionPRCheckState.Failed;
+    }
+
+    /// Sort priority within a bucket: pinned first, then most urgent sub-state, then recency (`CodingPipeline.swift`).
+    public static int SubRank(SessionSummary session, CodingPipelineBucket bucket, SessionPRStatus? prOverride = null)
+    {
+        var pr = prOverride ?? session.PullRequest;
+        var pinBonus = (session.Pinned || session.ProjectPinned) ? 0 : 10;
+        return bucket switch
+        {
+            CodingPipelineBucket.Ready => pinBonus + (pr?.Checks?.State == SessionPRCheckState.Passed ? 0 : 1),
+            CodingPipelineBucket.NeedsYou => session.Status == SessionStatus.NeedsInput
+                ? pinBonus
+                : HasFailingChecks(session, pr) ? pinBonus + 1 : pinBonus + 2,
+            CodingPipelineBucket.InFlight => (session.IsRunning || session.Status == SessionStatus.Working)
+                ? pinBonus
+                : pr?.Checks?.State == SessionPRCheckState.Running
+                    ? pinBonus + 1
+                    : pr?.State is SessionPRState.Draft or SessionPRState.Open
+                        ? pinBonus + 2
+                        : pinBonus + 3,
+            CodingPipelineBucket.Shipped => pinBonus,
+            _ => pinBonus,
+        };
+    }
+}
+
+/// One row in the 4-bucket calm shipping pipeline view.
+public sealed record CodingBucketRow(
+    SessionSummary Session,
+    SessionPRStatus? PrStatus,
+    CodingPipelineBucket Bucket,
+    PRVerdict? Verdict,
+    string? Branch,
+    DateTimeOffset SortMoment)
+{
+    public bool IsReadyToMerge => Bucket == CodingPipelineBucket.Ready && PrStatus?.State == SessionPRState.Open;
+    public bool HasFailingChecks => CodingPipeline.HasFailingChecks(Session, PrStatus);
+}
+
+/// One visual section in the 4-bucket calm shipping pipeline (`Ready to Ship`, `Needs You`, `Active`, `Shipped`).
+public sealed record CodingBucketSection(
+    string Id,
+    string Title,
+    CodingPipelineBucket? Bucket,
+    IReadOnlyList<CodingBucketRow> Rows,
+    bool CollapsedByDefault = false);
+
 /// The calm shipping pipeline stages for a coding project (Mac 1277 `ProjectPage` + shipping pipeline).
 public enum CodingPipelineStage
 {
@@ -31,6 +185,7 @@ public sealed record CodingPipelineFilter
     public string? FilterByBot { get; init; }
     public SessionPRState? SelectedPRState { get; init; }
     public SessionStatusChip? StatusChip { get; init; }
+    public CodingPipelineBucket? SelectedBucket { get; init; }
     public string SearchQuery { get; init; } = "";
 }
 
@@ -150,6 +305,116 @@ public static class CodingPipelineEngine
         _ => "Needs Me First",
     };
 
+    /// Resolves a session's PR status from the lookup dictionary (handling both `\u001F` and `:` keys) or inline `SessionSummary.PullRequest`.
+    public static SessionPRStatus? ResolvePR(SessionSummary session, IReadOnlyDictionary<string, SessionPRStatus>? prBySessionKey)
+    {
+        if (prBySessionKey != null)
+        {
+            if (prBySessionKey.TryGetValue(session.Key, out var byKey)) return byKey;
+            if (prBySessionKey.TryGetValue($"{session.Profile}:{session.Id}", out var byColon)) return byColon;
+        }
+        return session.PullRequest;
+    }
+
+    /// Builds filtered and sorted 4-bucket shipping pipeline sections (`Ready to Ship`, `Needs You`, `Active`, `Shipped`
+    /// collapsed by default), honoring `SelectedBucket` across `NeedsMeFirst`, `ByStatus`, and `Newest` sorts (`1f3a49712`).
+    public static IReadOnlyList<CodingBucketSection> BuildBucketSections(
+        IEnumerable<SessionSummary> sessions,
+        IReadOnlyDictionary<string, SessionPRStatus>? prBySessionKey,
+        ProjectPageSort sort,
+        CodingPipelineFilter filter,
+        Func<SessionSummary, bool>? isDone = null)
+    {
+        var rows = new List<CodingBucketRow>();
+        var query = filter.SearchQuery.Trim();
+
+        foreach (var session in sessions)
+        {
+            if (!string.IsNullOrWhiteSpace(filter.FilterByBot)
+                && !string.Equals(session.Profile, filter.FilterByBot, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var pr = ResolvePR(session, prBySessionKey);
+            if (filter.SelectedPRState is { } pickedState && (pr == null || !pr.CountedStates.Contains(pickedState)))
+                continue;
+
+            var done = isDone != null && isDone(session);
+            var bucket = CodingPipeline.BucketFor(session, pr, done);
+            if (filter.SelectedBucket is { } pickedBucket && bucket != pickedBucket)
+                continue;
+
+            if (query.Length > 0 && !MatchesSearch(session, pr, query))
+                continue;
+
+            var verdict = PRVerdict.ForActiveRow(pr);
+            var branch = pr?.Branch ?? session.Branch;
+            var moment = session.LastActive ?? session.StartedAt ?? DateTimeOffset.MinValue;
+            rows.Add(new CodingBucketRow(session, pr, bucket, verdict, branch, moment));
+        }
+
+        if (rows.Count == 0) return [];
+
+        if (sort == ProjectPageSort.Newest)
+        {
+            var ordered = rows
+                .OrderByDescending(r => r.Session.ProjectPinned || r.Session.Pinned)
+                .ThenByDescending(r => r.SortMoment)
+                .ThenBy(r => r.Session.Id, StringComparer.Ordinal)
+                .ToList();
+            return [new CodingBucketSection("newest", filter.SelectedBucket?.SectionTitle() ?? "Newest", filter.SelectedBucket, ordered)];
+        }
+
+        // NeedsMeFirst and ByStatus both present the 4 calm decision-first buckets (matching `SessionListPipeline.swift` `1f3a49712`).
+        var sections = new List<CodingBucketSection>();
+        foreach (var bucket in CodingPipeline.AllBuckets)
+        {
+            var group = rows
+                .Where(r => r.Bucket == bucket)
+                .OrderBy(r => CodingPipeline.SubRank(r.Session, bucket, r.PrStatus))
+                .ThenByDescending(r => r.SortMoment)
+                .ThenBy(r => r.Session.Id, StringComparer.Ordinal)
+                .ToList();
+            if (group.Count == 0) continue;
+            sections.Add(new CodingBucketSection(
+                Id: bucket.SectionId(),
+                Title: bucket.SectionTitle(),
+                Bucket: bucket,
+                Rows: group,
+                CollapsedByDefault: bucket.CollapsedByDefault() && filter.SelectedBucket == null));
+        }
+        return sections;
+    }
+
+    /// Computes 4-bucket header counts matching `BuildBucketSections` 1-to-1 (respecting bot & search filters).
+    public static Dictionary<CodingPipelineBucket, int> ComputeBucketCounts(
+        IEnumerable<SessionSummary> sessions,
+        IReadOnlyDictionary<string, SessionPRStatus>? prBySessionKey,
+        string? filterByBot = null,
+        string? searchQuery = null,
+        Func<SessionSummary, bool>? isDone = null)
+    {
+        var counts = new Dictionary<CodingPipelineBucket, int>
+        {
+            [CodingPipelineBucket.Ready] = 0,
+            [CodingPipelineBucket.NeedsYou] = 0,
+            [CodingPipelineBucket.InFlight] = 0,
+            [CodingPipelineBucket.Shipped] = 0,
+        };
+        var query = (searchQuery ?? "").Trim();
+        foreach (var session in sessions)
+        {
+            if (!string.IsNullOrWhiteSpace(filterByBot)
+                && !string.Equals(session.Profile, filterByBot, StringComparison.OrdinalIgnoreCase))
+                continue;
+            var pr = ResolvePR(session, prBySessionKey);
+            if (query.Length > 0 && !MatchesSearch(session, pr, query))
+                continue;
+            var done = isDone != null && isDone(session);
+            counts[CodingPipeline.BucketFor(session, pr, done)]++;
+        }
+        return counts;
+    }
+
     /// Builds filtered and sorted pipeline sections honoring every header toggle.
     public static IReadOnlyList<CodingPipelineSection> BuildSections(
         IEnumerable<SessionSummary> sessions,
@@ -160,7 +425,7 @@ public static class CodingPipelineEngine
         var rows = new List<CodingSessionRow>();
         foreach (var session in sessions)
         {
-            prBySessionKey.TryGetValue(session.Key, out var pr);
+            var pr = ResolvePR(session, prBySessionKey);
             var stage = ClassifyStage(session, pr);
             if (!MatchesFilter(session, pr, stage, filter)) continue;
             var verdict = pr != null ? PRVerdict.From(pr) : null;
@@ -240,7 +505,7 @@ public static class CodingPipelineEngine
                 continue;
 
             total++;
-            prBySessionKey.TryGetValue(session.Key, out var pr);
+            var pr = ResolvePR(session, prBySessionKey);
             var stage = ClassifyStage(session, pr);
             switch (stage)
             {
@@ -262,17 +527,50 @@ public static class CodingPipelineEngine
     }
 
     /// Computes the calm project coding health banner (`ProjectPage.swift` `codingHealth`).
-    public static CodingHealthBanner? Health(bool codingProject, SessionPRRepo? repo, SessionPRReposState reposState)
+    public static CodingHealthBanner? Health(bool codingProject, SessionPRRepo? repo, SessionPRReposState reposState) =>
+        Health(codingProject, repo, reposState, prAutoLinkFailed: false, prUnsupported: false, rowStatuses: null);
+
+    /// Full project coding health diagnostic matching `ProjectPage.swift` `projectCodingHealth`.
+    public static CodingHealthBanner? Health(
+        bool codingProject,
+        SessionPRRepo? repo,
+        SessionPRReposState reposState,
+        bool prAutoLinkFailed,
+        bool prUnsupported = false,
+        IReadOnlyList<SessionPRStatus?>? rowStatuses = null)
     {
         if (!codingProject) return null;
+        if (prUnsupported || reposState == SessionPRReposState.Unsupported)
+            return new CodingHealthBanner("unsupported", "Pull request tracking needs the Hermes HQ add-on.", "");
         if (reposState == SessionPRReposState.Loading && repo == null)
             return new CodingHealthBanner("checking", "Checking repository…", "Looking up pull request status for this project.");
         if (reposState == SessionPRReposState.Failed && repo == null)
-            return new CodingHealthBanner("failed", "Couldn’t check repository", "Reconnect or open Repository Settings to verify this folder.", "Repository…");
+            return new CodingHealthBanner("unavailable", "Couldn’t check repository link.", "Reconnect or open Repository settings to verify this folder.", "Retry");
+        if (repo == null && prAutoLinkFailed)
+            return new CodingHealthBanner("needsRepo", "Link a git repository to track pull requests.", "This project folder isn’t a git repository on the gateway.", "Link…");
         if (repo == null)
-            return new CodingHealthBanner("unlinked", "Link a Git repository", "Connect this project’s folder and GitHub repo to track checks, reviews, and merge readiness.", "Link Repository…");
+            return new CodingHealthBanner("unlinked", "Link a git repository to track pull requests.", "Connect this project’s folder and GitHub repo to track checks, reviews, and merge readiness.", "Link…");
+
+        if (rowStatuses is { Count: > 0 })
+        {
+            var unavailable = rowStatuses.Count(s => s?.State == SessionPRState.Unknown && s.UnknownReason == SessionPRUnknownReason.Unavailable);
+            var unmatched = rowStatuses.Count(s => s?.State == SessionPRState.Unknown && s.UnknownReason == SessionPRUnknownReason.Unmatched);
+            var matched = rowStatuses.Count(s => s != null && s.State != SessionPRState.Unknown);
+            if (unavailable > 0 && unavailable == rowStatuses.Count)
+                return new CodingHealthBanner("unavailable", "Couldn’t reach the gateway for pull request status.", "Retry once the gateway is reachable.", "Retry");
+            if (matched == 0 && unmatched > 0)
+                return new CodingHealthBanner("unmatched", $"No chats matched {RepoPathHelpers.FolderName(repo.Path)}.", "Check the linked folder in Repository settings.", "Repository…");
+        }
         return null;
     }
+
+    private static bool MatchesSearch(SessionSummary session, SessionPRStatus? pr, string query) =>
+        session.Title.Contains(query, StringComparison.OrdinalIgnoreCase)
+        || (session.Branch?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
+        || (pr?.Title?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
+        || (pr?.Branch?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
+        || (pr?.Repo?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
+        || (pr?.Number is { } num && $"#{num}".Contains(query, StringComparison.OrdinalIgnoreCase));
 
     private static bool MatchesFilter(
         SessionSummary session,
@@ -284,11 +582,14 @@ public static class CodingPipelineEngine
             && !string.Equals(session.Profile, filter.FilterByBot, StringComparison.OrdinalIgnoreCase))
             return false;
 
+        if (filter.SelectedBucket is { } pickedBucket && CodingPipeline.BucketFor(session, pr) != pickedBucket)
+            return false;
+
         if (filter.SelectedPRState is { } pickedState)
         {
             if (pr == null || !pr.CountedStates.Contains(pickedState)) return false;
         }
-        else
+        else if (filter.SelectedBucket == null)
         {
             if (stage == CodingPipelineStage.Merged && !filter.ShowMerged) return false;
             if (stage == CodingPipelineStage.Closed && !filter.ShowClosed) return false;
@@ -305,16 +606,8 @@ public static class CodingPipelineEngine
         }
 
         var query = filter.SearchQuery.Trim();
-        if (query.Length > 0)
-        {
-            var hit = session.Title.Contains(query, StringComparison.OrdinalIgnoreCase)
-                || (session.Branch?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
-                || (pr?.Title?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
-                || (pr?.Branch?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
-                || (pr?.Repo?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
-                || (pr?.Number is { } num && $"#{num}".Contains(query, StringComparison.OrdinalIgnoreCase));
-            if (!hit) return false;
-        }
+        if (query.Length > 0 && !MatchesSearch(session, pr, query))
+            return false;
 
         return true;
     }

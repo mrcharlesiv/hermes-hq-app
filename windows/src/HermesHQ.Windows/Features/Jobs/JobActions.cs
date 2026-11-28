@@ -206,6 +206,7 @@ internal sealed class JobActions(JobsStore store, Func<XamlRoot?> root, Action<s
         menu.Items.Add(run);
         menu.Items.Add(toggle);
         menu.Items.Add(edit);
+        menu.Items.Add(QuickActions.FavoritesPinAction.ForJob(job.Key, store.Title(job), added => hud(added ? "Added to Favorites" : "Removed from Favorites")));
         menu.Items.Add(new MenuFlyoutSeparator());
         menu.Items.Add(delete);
         return menu;

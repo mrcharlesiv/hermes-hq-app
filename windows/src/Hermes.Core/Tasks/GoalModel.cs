@@ -3,34 +3,37 @@ using System.Text.Json.Nodes;
 
 namespace Hermes.Core.Tasks;
 
-// [goals] What your tasks are for (docs/goals.md; HermesKit/Pages/Goals/GoalModel.swift at 93f984bb1). The hermes-hq-push
-// add-on keeps goals beside the list (0.9.65's `goals` in `GET /tasks`); the app draws them. Read leniently, as a task
-// is: an unknown status or colour, or a field missing, never loses the goal, and one bad goal never loses the list.
-// This slice reads step 1 and 2's fields; a goal's bots (0.9.66) are kept in Raw and not drawn yet.
+// [goals] What your tasks are for (docs/goals.md; HermesKit/Pages/Goals/GoalModel.swift). The hermes-hq-push
+// add-on keeps goals beside the list (0.9.65's `goals` in `GET /tasks`, 0.9.66's bots on goals); the app draws them.
+// Read leniently, as a task is: an unknown status or colour, or a field missing, never loses the goal, and one bad
+// goal never loses the list.
 
 /// Where a goal stands. An unknown status (a later add-on's) reads as active, so the goal still shows.
 public enum GoalState { Active, Paused, Achieved, LetGo }
 
-/// Where a goal's number reading comes from (`GoalSource`).
-public sealed record GoalSource(string Kind, string? Ref = null, string? Label = null)
+/// [goals step 3] Who reads the goal's number (hermes-hq-push 0.9.66): you, or one bot and what it reads
+/// ("TestFlight public testers"). On the wire `"you"` or `{bot, what}`; anything else reads as you.
+public sealed record GoalSource(string? Bot = null, string What = "")
 {
-    public static GoalSource? From(JsonNode? n)
+    public static readonly GoalSource You = new(null, "");
+    public bool IsYou => string.IsNullOrEmpty(Bot);
+
+    public static GoalSource BotSource(string bot, string what = "") =>
+        string.IsNullOrWhiteSpace(bot) ? You : new GoalSource(bot.Trim(), what ?? "");
+
+    public static GoalSource From(JsonNode? n)
     {
-        if (n is not JsonObject) return null;
-        var kind = n.Text("kind");
-        return kind == null ? null : new GoalSource(kind, n.Text("ref"), n.Text("label"));
+        if (n is JsonObject o && o.Text("bot") is { } bot)
+            return new GoalSource(bot, o.Str("what") ?? "");
+        return You;
     }
 
-    public JsonObject Wire()
-    {
-        var o = new JsonObject { ["kind"] = Kind };
-        if (Ref != null) o["ref"] = Ref;
-        if (Label != null) o["label"] = Label;
-        return o;
-    }
+    /// Wire form (`GoalSource.json`): `"you"` or `{"bot": ..., "what": ...}`.
+    public JsonNode Wire() =>
+        IsYou ? JsonValue.Create("you")! : new JsonObject { ["bot"] = Bot, ["what"] = What };
 }
 
-/// One historical reading on a goal's measure.
+/// One historical reading on a goal's measure (`GoalReading` in `GoalModel.swift`).
 public sealed record GoalReading(double Value, string At, string? Note = null, string? By = null)
 {
     public static GoalReading? From(JsonNode? n)
@@ -48,54 +51,120 @@ public sealed record GoalReading(double Value, string At, string? Note = null, s
     }
 }
 
-/// Periodic review schedule for a goal's bots (`GoalReview`).
-public sealed record GoalReview(string Every, string? At = null, string? NextAt = null)
+/// [goals step 4] The weekly check-in's slot: a weekday (0 = Monday … 6 = Sunday) and a time ("08:00"),
+/// in the gateway's own time (`GoalReview` in `GoalModel.swift`).
+public sealed record GoalReview(int Day = 0, string Time = "08:00")
 {
     public static GoalReview? From(JsonNode? n)
     {
         if (n is not JsonObject) return null;
-        var every = n.Text("every");
-        return every == null ? null : new GoalReview(every, n.Text("at"), n.Text("next_at"));
+        if (n.Int("day") is not { } rawDay || rawDay is < 0 or > 6) return null;
+        if (n.Str("time") is not { } time || !IsValidTime(time)) return null;
+        return new GoalReview((int)rawDay, time);
+    }
+
+    private static bool IsValidTime(string raw)
+    {
+        var colon = raw.IndexOf(':');
+        if (colon is not (1 or 2) || raw.Length != colon + 3) return false;
+        for (var i = 0; i < raw.Length; i++)
+            if (i != colon && !char.IsAsciiDigit(raw[i])) return false;
+        return true;
+    }
+
+    public JsonObject Wire() => new() { ["day"] = Day, ["time"] = Time };
+}
+
+/// [goals step 3] The lead's "where it stands": its words and what is next (`GoalStands` in `GoalModel.swift`).
+public sealed record GoalStands(string Text, string Next = "", string? At = null, string By = "default")
+{
+    /// Backwards-compatible alias for existing UI callers (Wave 5 updates GoalDetailPane).
+    public string Summary => Text;
+
+    public static GoalStands? From(JsonNode? n)
+    {
+        if (n is not JsonObject) return null;
+        return new GoalStands(
+            Text: n.Str("text") ?? n.Str("summary") ?? "",
+            Next: n.Str("next") ?? "",
+            At: n.Text("at"),
+            By: n.Text("by") ?? "default");
     }
 
     public JsonObject Wire()
     {
-        var o = new JsonObject { ["every"] = Every };
+        var o = new JsonObject { ["by"] = By, ["text"] = Text, ["next"] = Next };
         if (At != null) o["at"] = At;
-        if (NextAt != null) o["next_at"] = NextAt;
         return o;
     }
 }
 
-/// Where the goal currently stands, written by its bot (`GoalStands`).
-public sealed record GoalStands(string Summary, string? Next = null, string? At = null, string? By = null)
+/// [goals step 4] The last check-in: when, its offer, and what became of it (`GoalCheckin` in `GoalModel.swift`).
+public sealed record GoalCheckin(string? At = null, string? Offer = null, string State = "offered")
 {
-    public static GoalStands? From(JsonNode? n)
-    {
-        if (n is not JsonObject) return null;
-        var summary = n.Text("summary");
-        return summary == null ? null : new GoalStands(summary, n.Text("next"), n.Text("at"), n.Text("by"));
-    }
-}
+    /// Backwards-compatible properties for legacy UI callers (Wave 5 updates GoalDetailPane).
+    public string Summary { get; init; } = "";
+    public string? By { get; init; }
 
-/// Latest periodic check-in summary from the goal's lead bot (`GoalCheckin`).
-public sealed record GoalCheckin(string Summary, string? At = null, string? By = null, bool Seen = false)
-{
     public static GoalCheckin? From(JsonNode? n)
     {
         if (n is not JsonObject) return null;
-        var summary = n.Text("summary");
-        return summary == null ? null : new GoalCheckin(summary, n.Text("at"), n.Text("by"), n.Bool("seen") ?? false);
+        return new GoalCheckin(
+            At: n.Text("at"),
+            Offer: n.Text("offer"),
+            State: n.Text("state") ?? "none")
+        {
+            Summary = n.Str("summary") ?? "",
+            By = n.Text("by"),
+        };
+    }
+
+    public JsonObject Wire()
+    {
+        var o = new JsonObject { ["state"] = State };
+        if (At != null) o["at"] = At;
+        if (Offer != null) o["offer"] = Offer;
+        return o;
     }
 }
 
-/// Bot suggestion that a goal looks achieved (`GoalDoneOffer`).
-public sealed record GoalDoneOffer(string By, string Text, string? At = null, bool Kept = false)
+/// [goals step 4] The lead says a milestone, or the goal, looks done (`goals_update looks_done`).
+/// You answer Mark Done or Not Yet (`PATCH offer_answer`); after Not Yet it stays on the goal with `kept`.
+public sealed record GoalDoneOffer(
+    string What,
+    string By,
+    string Text,
+    string? At = null,
+    bool Kept = false,
+    string Kind = "done",
+    string? KeptAt = null)
 {
     public static GoalDoneOffer? From(JsonNode? n)
     {
-        if (n is not JsonObject) return null;
-        return new GoalDoneOffer(n.Text("by") ?? "default", n.Str("text") ?? "", n.Text("at"), n.Bool("kept") ?? false);
+        if (n is not JsonObject || n.Text("what") is not { } what) return null;
+        return new GoalDoneOffer(
+            What: what,
+            By: n.Text("by") ?? "default",
+            Text: n.Str("text") ?? "",
+            At: n.Text("at"),
+            Kept: n.Bool("kept") ?? false,
+            Kind: n.Text("kind") ?? "done",
+            KeptAt: n.Text("kept_at"));
+    }
+
+    public JsonObject Wire()
+    {
+        var o = new JsonObject
+        {
+            ["kind"] = Kind,
+            ["what"] = What,
+            ["by"] = By,
+            ["text"] = Text,
+            ["kept"] = Kept,
+        };
+        if (At != null) o["at"] = At;
+        if (KeptAt != null) o["kept_at"] = KeptAt;
+        return o;
     }
 }
 
@@ -103,9 +172,11 @@ public sealed record GoalDoneOffer(string By, string Text, string? At = null, bo
 public sealed record GoalMeasure(string Unit, double Start, double Target, double Now)
 {
     public string? At { get; init; }
-    public GoalSource? Source { get; init; }
+    public GoalSource? Source { get; init; } = GoalSource.You;
     public string? CheckedAt { get; init; }
     public IReadOnlyList<GoalReading> History { get; init; } = [];
+
+    public GoalSource EffectiveSource => Source ?? GoalSource.You;
 
     public static GoalMeasure? From(JsonNode? n)
     {
@@ -150,17 +221,17 @@ public sealed record GoalMilestone(string Id, string Title, string? Due = null, 
     {
         var o = new JsonObject
         {
-            ["id"] = string.IsNullOrEmpty(Id) ? TodoIds.Make() : Id,
             ["title"] = Title,
+            ["due"] = Due,
             ["done"] = Done,
         };
-        if (Due != null) o["due"] = Due;
+        if (!string.IsNullOrEmpty(Id) && !TodoIds.IsLocal(Id)) o["id"] = Id;
         if (DoneAt != null) o["done_at"] = DoneAt;
         return o;
     }
 }
 
-/// One goal, as the routes send it.
+/// One goal, as the routes send it (`Goal` in `GoalModel.swift`).
 public sealed record Goal(string Id)
 {
     public int Rev { get; init; }
@@ -184,7 +255,8 @@ public sealed record Goal(string Id)
     /// "ask" | "auto"
     public string Adds { get; init; } = "ask";
     public GoalReview? Review { get; init; }
-    public bool KnownToAll { get; init; }
+    /// Tell My Other Bots: every bot knows its name and why (defaults to true per GoalModel.swift).
+    public bool KnownToAll { get; init; } = true;
     public GoalStands? Stands { get; init; }
     public GoalCheckin? Checkin { get; init; }
     public TodoChat? Chat { get; init; }
@@ -198,6 +270,7 @@ public sealed record Goal(string Id)
     public static Goal? From(JsonNode? n)
     {
         if (n is not JsonObject o || n.Str("id") is not { Length: > 0 } id) return null;
+        var lead = n.Text("lead");
         return new Goal(id)
         {
             Rev = (int)(n.Int("rev") ?? 0),
@@ -209,14 +282,14 @@ public sealed record Goal(string Id)
             Due = n.Str("due") is { Length: > 0 } d ? d : null,
             Position = n.Num("position") ?? 0,
             Measure = GoalMeasure.From(n.Get("measure")),
-            Milestones = [.. (n.Arr("milestones") ?? []).Where(m => m is JsonObject).Select(GoalMilestone.From)],
+            Milestones = [.. (n.Arr("milestones") ?? []).Where(m => m is JsonObject).Select(GoalMilestone.From).Where(m => m.Id.Length > 0)],
             CreatedAt = n.Str("created_at"),
             UpdatedAt = n.Str("updated_at"),
-            Lead = n.Text("lead"),
-            Helpers = [.. (n.Arr("helpers") ?? []).Select(J.AsString).OfType<string>().Select(s => s.Trim()).Where(s => s.Length > 0).Distinct(StringComparer.Ordinal)],
-            Adds = n.Text("adds") ?? "ask",
+            Lead = lead,
+            Helpers = [.. (n.Arr("helpers") ?? []).Select(J.AsString).OfType<string>().Select(s => s.Trim()).Where(s => s.Length > 0 && s != lead).Distinct(StringComparer.Ordinal)],
+            Adds = n.Text("adds") == "auto" ? "auto" : "ask",
             Review = GoalReview.From(n.Get("review")),
-            KnownToAll = n.Bool("known_to_all") ?? false,
+            KnownToAll = n.Bool("known_to_all") ?? true,
             Stands = GoalStands.From(n.Get("stands")),
             Checkin = GoalCheckin.From(n.Get("checkin")),
             Chat = TodoChat.From(n.Get("chat")),
@@ -300,27 +373,115 @@ internal static class GoalNumbers
     public static readonly CultureInfo En = CultureInfo.GetCultureInfo("en-US");
 }
 
-/// Wire helpers and optimistic 409 conflict resolution for `PATCH /goals/{id}` (`GoalWire` in `GoalModel.swift`).
+/// Wire helpers and optimistic 409 conflict resolution for `POST/PATCH /goals` (`GoalWire` in `GoalModel.swift`).
 public static class GoalWire
 {
+    /// [goals steps 3-5] All team fields on a goal.
+    public static readonly IReadOnlySet<string> TeamKeys =
+        new HashSet<string>(["lead", "helpers", "adds", "review", "known_to_all", "chat"], StringComparer.Ordinal);
+
+    /// [goals set-up] Team fields accepted directly on `POST /goals` (one write, one "Added" log entry).
+    public static readonly IReadOnlySet<string> CreateTeamKeys =
+        new HashSet<string>(["lead", "helpers", "adds", "review"], StringComparer.Ordinal);
+
+    /// What `AddGoalAsync` sends in `POST /goals`: everything except team fields the create route does not take.
+    public static JsonObject CreateBody(JsonObject fields)
+    {
+        var body = new JsonObject();
+        foreach (var (key, value) in fields)
+            if (!TeamKeys.Contains(key) || CreateTeamKeys.Contains(key))
+                body[key] = value?.DeepClone();
+        return body;
+    }
+
+    /// The team fields still to PATCH once the goal is made: ones POST never takes (`known_to_all`, `chat`),
+    /// and any POST was sent that `made` doesn't carry (an older add-on ignores them). Empty when POST took them all.
+    public static JsonObject TeamLeft(JsonObject fields, Goal made)
+    {
+        var left = new JsonObject();
+        foreach (var (key, value) in fields)
+        {
+            if (!TeamKeys.Contains(key)) continue;
+            switch (key)
+            {
+                case "lead":
+                    var sentLead = J.AsString(value)?.Trim() is { Length: > 0 } sl ? sl : null;
+                    if (!string.Equals(made.Lead, sentLead, StringComparison.Ordinal)) left[key] = value?.DeepClone();
+                    break;
+                case "helpers":
+                    var leadName = fields.Text("lead") ?? made.Lead;
+                    var sentHelpers = (value as JsonArray ?? [])
+                        .Select(J.AsString).OfType<string>()
+                        .Select(s => s.Trim())
+                        .Where(s => s.Length > 0 && !string.Equals(s, leadName, StringComparison.Ordinal))
+                        .ToList();
+                    if (!made.Helpers.SequenceEqual(sentHelpers, StringComparer.Ordinal)) left[key] = value?.DeepClone();
+                    break;
+                case "adds":
+                    var sentAdds = J.AsString(value);
+                    if (!string.Equals(made.Adds, sentAdds, StringComparison.Ordinal)) left[key] = value?.DeepClone();
+                    break;
+                case "review":
+                    var sentReview = GoalReview.From(value);
+                    if (made.Review != sentReview) left[key] = value?.DeepClone();
+                    break;
+                default:
+                    // known_to_all, chat: POST never takes them.
+                    left[key] = value?.DeepClone();
+                    break;
+            }
+        }
+        // A lead given again brings its helpers with it (the PATCH that sets a lead keeps them as sent).
+        if (left.ContainsKey("lead") && fields.TryGetPropertyValue("helpers", out var helpersVal))
+            left["helpers"] = helpersVal?.DeepClone();
+        return left;
+    }
+
+    /// `measure`: unit, start, target, and now (`GoalWire.measure`).
+    public static JsonObject Measure(GoalMeasure measure) => new()
+    {
+        ["unit"] = measure.Unit,
+        ["start"] = measure.Start,
+        ["target"] = measure.Target,
+        ["now"] = measure.Now,
+    };
+
     public static JsonArray Milestones(IEnumerable<GoalMilestone> milestones) =>
         [.. milestones.Select(m => (JsonNode)m.Wire())];
 
-    public static JsonObject CreateBody(string title, string why = "", string? due = null, GoalMeasure? measure = null,
-        string? lead = null, IEnumerable<string>? helpers = null)
+    public static JsonObject CreateBody(
+        string title,
+        string why = "",
+        string? due = null,
+        GoalMeasure? measure = null,
+        string? lead = null,
+        IEnumerable<string>? helpers = null,
+        string? adds = null,
+        GoalReview? review = null,
+        bool? knownToAll = null,
+        string? color = null,
+        IEnumerable<GoalMilestone>? milestones = null)
     {
         var o = new JsonObject { ["title"] = title.Trim() };
         if (why.Trim() is { Length: > 0 } reason) o["why"] = reason;
         if (due is { Length: > 0 }) o["due"] = due;
-        if (measure != null) o["measure"] = measure.Wire();
-        if (lead is { Length: > 0 }) o["lead"] = lead;
-        if (helpers?.Where(h => !string.IsNullOrWhiteSpace(h)).Distinct(StringComparer.Ordinal).ToList() is { Count: > 0 } list)
+        if (color is { Length: > 0 }) o["color"] = color;
+        if (measure != null) o["measure"] = Measure(measure);
+        var msList = milestones?.ToList();
+        if (msList is { Count: > 0 }) o["milestones"] = Milestones(msList);
+        var cleanLead = lead?.Trim() is { Length: > 0 } l ? l : null;
+        if (cleanLead != null) o["lead"] = cleanLead;
+        if (helpers?.Select(h => h.Trim()).Where(h => h.Length > 0 && h != cleanLead).Distinct(StringComparer.Ordinal).ToList() is { Count: > 0 } list)
             o["helpers"] = new JsonArray([.. list.Select(h => (JsonNode)h)]);
+        if (adds is "ask" or "auto") o["adds"] = adds;
+        if (review != null) o["review"] = review.Wire();
+        if (knownToAll is { } k) o["known_to_all"] = k;
         return o;
     }
 
-    public static Goal? Applying(JsonObject fields, Goal goal)
+    public static Goal? Applying(JsonObject fields, Goal goal, DateTimeOffset? now = null)
     {
+        var stamp = TodoDates.Now(now);
         var o = (JsonObject)goal.Raw.DeepClone();
         if (o.Count == 0)
         {
@@ -329,12 +490,64 @@ public static class GoalWire
             o["title"] = goal.Title;
             o["why"] = goal.Why;
             o["status"] = goal.Status;
+            if (goal.Offer != null) o["offer"] = goal.Offer.Wire();
+            if (goal.Measure != null) o["measure"] = goal.Measure.Wire();
+            if (goal.Milestones.Count > 0) o["milestones"] = Milestones(goal.Milestones);
         }
-        foreach (var (key, value) in fields) o[key] = value?.DeepClone();
+        foreach (var (key, value) in fields)
+        {
+            switch (key)
+            {
+                case "keep":
+                    if (J.Bool(fields, "keep") == true) o["kept_at"] = stamp;
+                    break;
+                case "offer_answer":
+                    if (J.AsString(value) is { } ans && goal.Offer is { Kept: false } offer)
+                    {
+                        if (ans == "keep")
+                        {
+                            o["offer"] = (offer with { Kept = true, KeptAt = stamp }).Wire();
+                        }
+                        else if (ans == "done")
+                        {
+                            if (offer.What == "goal")
+                            {
+                                o["status"] = "achieved";
+                                o["status_at"] = stamp;
+                            }
+                            else
+                            {
+                                var updated = goal.Milestones.Select(m => m.Id == offer.What && !m.Done ? m with { Done = true, DoneAt = stamp } : m);
+                                o["milestones"] = Milestones(updated);
+                            }
+                            o["offer"] = null;
+                        }
+                    }
+                    break;
+                case "measure_now":
+                    if (fields.Num("measure_now") is { } num && goal.Measure is { } m)
+                    {
+                        var next = num != m.Now
+                            ? m with { Now = num, At = stamp, History = [.. m.History.Append(new GoalReading(num, stamp)).TakeLast(60)] }
+                            : m;
+                        o["measure"] = next.Wire();
+                    }
+                    break;
+                default:
+                    o[key] = value?.DeepClone();
+                    break;
+            }
+        }
+        o["updated_at"] = stamp;
         return Goal.From(TodoEdits.Reparse(o));
     }
 
-    public static string ValueOf(string key, Goal goal) => goal.Raw.Get(key)?.ToJsonString() ?? "null";
+    public static string ValueOf(string key, Goal goal)
+    {
+        if (key == "measure_now") return goal.Measure != null ? JsonValue.Create(goal.Measure.Now)!.ToJsonString() : "null";
+        if (key is "keep" or "offer_answer") return "null";
+        return goal.Raw.Get(key)?.ToJsonString() ?? "null";
+    }
 
     /// Returns `current.Rev` to safely resend when the other edit touched disjoint fields; null when conflicting.
     public static int? Resolve(Goal @base, Goal current, JsonObject fields)

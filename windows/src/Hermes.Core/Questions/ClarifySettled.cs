@@ -177,12 +177,111 @@ public static class ClarifyLate
         }).ToList();
         return (output, later);
     }
+
+    /// [calm-chat] A normal human turn (typed message, voice memo, attachment) — not a bot/cron delivery, internal
+    /// notification, or synthetic card-tap marker message (HermesKit/Chat/PromptLogic.swift `isUserTurn` +
+    /// DraftCards.isNormalHumanTurn).
+    public static bool IsNormalHumanTurn(ChatMessage message)
+    {
+        if (message.Role != Role.User || message.Sender != null) return false;
+        var text = string.Join("\n", message.Parts.OfType<TextPart>().Select(p => p.Text)).Trim();
+        if (text.StartsWith("[Hermes HQ draft ", StringComparison.Ordinal)
+            || text.StartsWith("[Hermes HQ ask ", StringComparison.Ordinal)
+            || text.StartsWith(MarkLead, StringComparison.Ordinal)
+            || text.StartsWith("[Hermes HQ order ", StringComparison.Ordinal)
+            || text.StartsWith("[Hermes HQ travel ", StringComparison.Ordinal)
+            || text.StartsWith("Message from 🤖 ", StringComparison.Ordinal)
+            || text.Contains("[INTERNAL NOTIFICATION", StringComparison.Ordinal)
+            || text.StartsWith("[Cronjob \"", StringComparison.Ordinal))
+            return false;
+        return true;
+    }
+
+    /// [calm-chat] Whether `messages[index]` is a late clarify answer immediately following the assistant message
+    /// containing that settled clarify card (the card right above already fills in the answer).
+    public static bool IsAdjacentAnswerEcho(IReadOnlyList<ChatMessage> messages, int index, string key)
+    {
+        if (index <= 0 || index >= messages.Count) return false;
+        for (var scan = index - 1; scan >= 0; scan--)
+        {
+            var prev = messages[scan];
+            if (prev.Role == Role.System) continue;
+            if (prev.Role != Role.Assistant) return false;
+            return prev.Tools.Any(c => c.Name == "clarify" && c.State != ToolState.Running
+                && ClarifySettled.Parse(c.ResultText) is { Count: > 0 } rows
+                && Key(rows.Select(r => r.Question)) == key);
+        }
+        return false;
+    }
+
+    /// [calm-chat] True when at least one later normal human turn or later clarify call follows `messageId`, so an
+    /// unanswered clarify card stops displaying a bright live "Answer Now" pill in scrollback.
+    public static bool HasLaterHumanTurn(string messageId, IReadOnlyList<ChatMessage> messages)
+    {
+        var at = -1;
+        for (var i = messages.Count - 1; i >= 0; i--) if (messages[i].Id == messageId) { at = i; break; }
+        if (at < 0 || at + 1 >= messages.Count) return false;
+        for (var i = at + 1; i < messages.Count; i++)
+        {
+            var m = messages[i];
+            if (IsNormalHumanTurn(m)) return true;
+            if (m.Role == Role.Assistant && m.Tools.Any(c => c.Name == "clarify")) return true;
+        }
+        return false;
+    }
+
+    /// [calm-chat] True once the user sends a new normal message after `messageId` (and after any late answer
+    /// `answeredAt` filling this card). Answered clarify cards stay open throughout their own turn and fold only once
+    /// the user moves on with a new turn.
+    public static bool HasMovedPastTurn(string messageId, IReadOnlyList<ChatMessage> messages, int? answeredAt = null)
+    {
+        if (answeredAt == int.MaxValue) return false;
+        var at = -1;
+        for (var i = messages.Count - 1; i >= 0; i--) if (messages[i].Id == messageId) { at = i; break; }
+        if (at < 0) return false;
+        var anchor = Math.Max(at, answeredAt ?? at);
+        if (anchor + 1 >= messages.Count) return false;
+        for (var i = anchor + 1; i < messages.Count; i++)
+            if (IsNormalHumanTurn(messages[i])) return true;
+        return false;
+    }
+
+    /// [calm-chat] Lookback when a later human turn, clarify call, or late answer arrives so earlier settled clarify
+    /// cards fold or drop Answer Now live (HermesKit/Chat/PromptLogic.swift `ClarifyLate.reach`).
+    public static int Reach(int from, int floor, IReadOnlyList<ChatMessage> messages)
+    {
+        if (from <= floor || from >= messages.Count) return from;
+        var triggers = false;
+        for (var i = from; i < messages.Count; i++)
+        {
+            var m = messages[i];
+            if (IsNormalHumanTurn(m)) { triggers = true; break; }
+            if (m.Role == Role.User && m.Parts.OfType<TextPart>().Any(p => Answer(p.Text) != null)) { triggers = true; break; }
+            if (m.Role == Role.Assistant && m.Tools.Any(c => c.Name == "clarify")) { triggers = true; break; }
+        }
+        if (!triggers) return from;
+        var scanFloor = Math.Max(floor, from - 120);
+        var lowest = from;
+        for (var i = from - 1; i >= scanFloor; i--)
+        {
+            if (messages[i].Role == Role.Assistant && messages[i].Tools.Any(c => c.Name == "clarify" && c.State != ToolState.Running))
+                lowest = i;
+        }
+        return lowest;
+    }
 }
 
-/// A clarify call's settled card: its questions and answers (answers given later in the chat filled in), and whether a
-/// question still waits for one (Answer Now).
-public sealed record SettledClarifyCard(IReadOnlyList<ClarifyQA> Rows, string Key, string MessageId,
-    IReadOnlySet<string> Multi, bool Answerable, bool AnsweredLater);
+/// A clarify call's settled card: its questions and answers (answers given later in the chat filled in), whether a
+/// question still waits for one (Answer Now), and calm-chat readability fold state.
+public sealed record SettledClarifyCard(
+    IReadOnlyList<ClarifyQA> Rows,
+    string Key,
+    string MessageId,
+    IReadOnlySet<string> Multi,
+    bool Answerable,
+    bool AnsweredLater,
+    bool Folded = false,
+    bool StaleUnanswered = false);
 
 /// What Answer Now's Send does: Close the later dock (or keep it: nothing typed), and the message to put in the chat
 /// (null: nothing to send) for the card in `MessageId`.
@@ -195,7 +294,7 @@ public static class SettledClarify
 
     /// The card for a clarify call whose result has `responses`, else null (running: the note; otherwise a step line).
     /// Answers you gave later in the chat (after this message) fill its blanks; a blank left over offers Answer Now
-    /// (not in a room, whose sends go to its members).
+    /// until later human turns move past it (not in a room, whose sends go to its members).
     public static SettledClarifyCard? Card(ToolCall call, ChatMessage message, IReadOnlyList<ChatMessage> messages,
         IEnumerable<string>? queued = null, bool room = false)
     {
@@ -211,7 +310,11 @@ public static class SettledClarify
         }
         var (shown, later) = ClarifyLate.Filled(rows, found);
         var blank = shown.Any(r => r.Answer.Trim().Length == 0);
-        return new SettledClarifyCard(shown, key, message.Id, MultiSelect(call.ArgsJson), blank && !room, later);
+        var staleUnanswered = blank && ClarifyLate.HasLaterHumanTurn(message.Id, messages);
+        var movedPastTurn = !blank && ClarifyLate.HasMovedPastTurn(message.Id, messages, found?.Index);
+        var folded = staleUnanswered || movedPastTurn;
+        return new SettledClarifyCard(shown, key, message.Id, MultiSelect(call.ArgsJson),
+            blank && !room && !staleUnanswered, later, Folded: folded, StaleUnanswered: staleUnanswered);
     }
 
     /// The questions (on one line) the call asked as multi-select.

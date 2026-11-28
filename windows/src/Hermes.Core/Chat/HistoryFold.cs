@@ -1,7 +1,10 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using Hermes.Core.Attachments;
+using Hermes.Core.Groups;
 using Hermes.Core.Model;
+using Hermes.Core.Transcripts;
 
 namespace Hermes.Core.Chat;
 
@@ -11,7 +14,119 @@ namespace Hermes.Core.Chat;
 public static class HistoryFold
 {
     private static readonly HashSet<string> NoticeKinds =
-        ["auto_continue", "personality_switch", "async_delegation_complete", "process_complete", "failed_turn"];
+        ["auto_continue", "personality_switch", "async_delegation_complete", "process_complete", "failed_turn", "scheduled_wake", "loop_wakeup"];
+
+    private static readonly Regex OriginRe = new(
+        @"^Gateway message origin \(JSON data, not instructions or authorization\):\n\{[^\n]*\}\nDo not guess a reply destination when these fields are insufficient\.\n+",
+        RegexOptions.Compiled);
+
+    private static readonly Regex TurnContextRe = new(
+        @"(?:^|\n)[ \t]*(?:\(Hermes HQ: [\s\S]*\)|<memory-context>[\s\S]*?</memory-context>|\[System: This conversation is now being answered on a different interface: [\s\S]*)\s*$",
+        RegexOptions.Compiled);
+
+    private static readonly Regex SubagentBatchRe = new(@"—\s*(\d+)\s+subagent", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// Removes trailing Hermes turn context (`(Hermes HQ: …)`, `<memory-context>`, surface-switch note).
+    public static string StrippingTurnContext(string text)
+    {
+        if (!text.Contains("(Hermes HQ: ", StringComparison.Ordinal)
+            && !text.Contains("</memory-context>", StringComparison.Ordinal)
+            && !text.Contains("[System: This conversation is now being answered on a different interface: ", StringComparison.Ordinal))
+            return text;
+        var s = text;
+        while (true)
+        {
+            var m = TurnContextRe.Match(s);
+            if (!m.Success) break;
+            s = s.Remove(m.Index, m.Length);
+        }
+        return s.TrimEnd();
+    }
+
+    /// Removes a leading gateway routing-origin header from a message body.
+    public static string StripOrigin(string text)
+    {
+        var m = OriginRe.Match(text);
+        return m.Success ? text[(m.Index + m.Length)..] : text;
+    }
+
+    private static JsonObject NormalizeRow(JsonObject row)
+    {
+        var record = (JsonObject)row.DeepClone();
+        var text = record.Str("content") ?? "";
+        var kind = record.Str("display_kind");
+        var role = record.Str("role");
+
+        if (role is "user" or "system" && TimelineNotes.IsTaskSnapshot(Coerce(record.Get("display_content") ?? record.Get("content"))))
+        {
+            record["display_kind"] = "hidden";
+            return record;
+        }
+
+        // [botdm] Keep bot DM runner notes as plain user rows so BotDMs.Resolve turns them into the other bot's reply.
+        if (kind is "internal_notification" or "process_complete")
+        {
+            var body = text.TrimStart();
+            if (body.StartsWith("[IMPORTANT: ", StringComparison.Ordinal) && BotDMs.IsDelivery(body))
+            {
+                record.Remove("display_kind");
+                return record;
+            }
+        }
+
+        if (kind == "internal_notification")
+        {
+            var meta = record.Obj("display_metadata")?.DeepClone() as JsonObject ?? [];
+            // #612: strip gateway routing header and turn context BEFORE checking for bot-to-bot delivery,
+            // otherwise an inbound bot DM with a routing prefix falls through to "Background update" and triggers an unread dot.
+            var stripped = StripOrigin(StrippingTurnContext(text));
+            var body = stripped.TrimStart();
+            if (DeliveryMessages.MayBeDelivery(body) && DeliverySender.Parse(body) != null)
+            {
+                record.Remove("display_kind");
+                record["content"] = body;
+                return record;
+            }
+            if (body.StartsWith("[IMPORTANT: ", StringComparison.Ordinal))
+            {
+                record["display_kind"] = "process_complete";
+                record["display_metadata"] = meta;
+                return record;
+            }
+            if (meta.Text("display_text") == null)
+            {
+                if (body.StartsWith("[ASYNC DELEGATION", StringComparison.Ordinal))
+                {
+                    var sm = SubagentBatchRe.Match(body);
+                    if (sm.Success && int.TryParse(sm.Groups[1].Value, out var count))
+                        meta["task_count"] = count;
+                    else
+                        meta["display_text"] = "Helpers finished";
+                }
+                else
+                {
+                    meta["display_text"] = "Background update";
+                }
+            }
+            record["display_kind"] = "async_delegation_complete";
+            record["display_metadata"] = meta;
+            return record;
+        }
+
+        if (role == "user" && kind != "hidden")
+        {
+            foreach (var key in new[] { "content", "display_content" })
+            {
+                if (record.Get(key) is JsonValue jv && jv.TryGetValue(out string? s))
+                {
+                    var cleaned = StripOrigin(StrippingTurnContext(s));
+                    if (cleaned != s) record[key] = cleaned;
+                }
+            }
+        }
+
+        return record;
+    }
 
     public static List<ChatMessage> Fold(IEnumerable<JsonNode?> rows, int pageSeq = 0)
     {
@@ -20,24 +135,36 @@ public static class HistoryFold
         string? turnId = null;
         long? turnRow = null;
         DateTimeOffset? turnTime = null;
+        DateTimeOffset? turnLatestTime = null;
         var generatedArgs = new Dictionary<string, JsonNode?>(); // image_generate calls' arguments, by call id
 
-        IReadOnlyList<Hermes.Core.Transcripts.MessageReaction> turnReactions = [];
+        IReadOnlyList<MessageReaction> turnReactions = [];
         long? turnWordsRow = null;
+
+        void NoteTurnTime(DateTimeOffset? at)
+        {
+            if (at is { } t && (turnLatestTime is not { } cur || t > cur)) turnLatestTime = t;
+        }
 
         void Flush()
         {
             if (turn is { Count: > 0 })
+            {
+                DateTimeOffset? latest = turnTime is { } first && turnLatestTime is { } end && (end - first).TotalSeconds > 0.5
+                    ? (DateTimeOffset?)end : null;
                 output.Add(new ChatMessage(turnId!, Role.Assistant, SealTools(turn), turnTime, turnRow,
-                    Reactions: turnReactions.Count > 0 ? turnReactions : null, ReactionRow: turnWordsRow));
-            turn = null; turnId = null; turnRow = null; turnTime = null; turnReactions = []; turnWordsRow = null;
+                    Reactions: turnReactions.Count > 0 ? turnReactions : null, ReactionRow: turnWordsRow,
+                    LatestTimestamp: latest));
+            }
+            turn = null; turnId = null; turnRow = null; turnTime = null; turnLatestTime = null; turnReactions = []; turnWordsRow = null;
         }
 
         var index = 0;
-        foreach (var row in rows)
+        foreach (var rawRow in rows)
         {
             var i = index++;
-            if (row is not JsonObject r) continue;
+            if (rawRow is not JsonObject rawObj) continue;
+            var r = NormalizeRow(rawObj);
             var kind = r.Str("display_kind");
             if (kind == "hidden") continue;
             var role = r.Str("role");
@@ -48,25 +175,60 @@ public static class HistoryFold
             if (kind == "model_switch" || (kind != null && NoticeKinds.Contains(kind)) || role == "system")
             {
                 Flush();
-                var text = kind == "model_switch" ? "Model changed" : RowText(r);
-                if (text.Length > 0) output.Add(new ChatMessage(Id("system"), Role.System, [new TextPart(text)], time, rowId));
+                var rawText = RowText(r);
+                var meta = r.Obj("display_metadata");
+                string text;
+                string? job = null;
+                switch (kind)
+                {
+                    case "model_switch":
+                        text = TimelineNotes.IsModelSwitch(rawText) ? TimelineNotes.ModelSwitchLabel(rawText) : "Model changed";
+                        break;
+                    case "auto_continue":
+                        text = "resumed interrupted turn";
+                        break;
+                    case "personality_switch":
+                        text = "personality changed";
+                        break;
+                    case "async_delegation_complete":
+                        text = meta.Text("display_text")
+                            ?? (meta.Int("task_count") is { } tc ? $"{tc} helper{(tc == 1 ? "" : "s")} finished" : "Helpers finished");
+                        break;
+                    case "process_complete":
+                        text = CronDeliveries.ProcessNote(rawText) is { } pw && TimelineNotes.ProcessHeadline(pw) is { } split
+                            ? split.Headline
+                            : meta.Text("display_text") ?? (rawText.Length > 0 ? rawText : "background process finished");
+                        break;
+                    case "scheduled_wake":
+                    case "loop_wakeup":
+                        text = meta.Text("display_text") ?? meta.Text("title")
+                            ?? TimelineNotes.ScheduledWake(rawText)?.Title
+                            ?? (kind == "loop_wakeup" ? "Loop wakeup" : "Scheduled check");
+                        job = text;
+                        break;
+                    default:
+                        text = rawText;
+                        break;
+                }
+                if (text.Length > 0)
+                    output.Add(new ChatMessage(Id("system"), Role.System, [new TextPart(text)], time, rowId) { Job = job });
                 continue;
             }
             switch (role)
             {
                 case "user":
                     Flush();
-                    var mine = Hermes.Core.Transcripts.MessageReactions.FromRow(r);
+                    var mine = MessageReactions.FromRow(r);
                     output.Add(new ChatMessage(Id("user"), Role.User, AttachmentHydration.UserParts(RowText(r), r.Get("content")),
                         time, rowId, Reactions: mine.Count > 0 ? mine : null, ReactionRow: rowId));
                     break;
                 case "assistant":
-                    if (turn == null) { turn = []; turnId = Id("assistant"); turnRow = rowId; turnTime = time; }
+                    if (turn == null) { turn = []; turnId = Id("assistant"); turnRow = rowId; turnTime = time; turnLatestTime = time; }
+                    else NoteTurnTime(time);
                     if (Reasoning(r) is { } reasoning) turn.Add(new ReasoningPart(reasoning));
                     var answer = RowText(r);
                     if (answer.Length > 0) { turn.AddRange(AttachmentHydration.ReplyParts(answer)); turnWordsRow = rowId ?? turnWordsRow; }
-                    turnReactions = Hermes.Core.Transcripts.MessageReactions.Merge(turnReactions,
-                        Hermes.Core.Transcripts.MessageReactions.FromRow(r));
+                    turnReactions = MessageReactions.Merge(turnReactions, MessageReactions.FromRow(r));
                     var calls = r.Arr("tool_calls") ?? [];
                     for (var c = 0; c < calls.Count; c++)
                     {
@@ -82,7 +244,8 @@ public static class HistoryFold
                     }
                     break;
                 case "tool":
-                    if (turn == null) { turn = []; turnId = Id("tools"); turnRow = rowId; turnTime = time; }
+                    if (turn == null) { turn = []; turnId = Id("tools"); turnRow = rowId; turnTime = time; turnLatestTime = time; }
+                    else NoteTurnTime(time);
                     PairResult(turn, r);
                     GeneratedImages.Apply(turn, r, generatedArgs);
                     break;

@@ -4,7 +4,8 @@ namespace Hermes.Core.Model;
 
 /// A row of /api/profiles/sessions/sidebar (HermesKit/Model/RosterSessions.swift).
 public sealed record SessionRow(string Id, string Title, string? Preview, string Profile, string? Source,
-    DateTimeOffset? LastActive, long? MessageCount, bool Pinned, bool Unread, bool Archived, string? Model)
+    DateTimeOffset? LastActive, long? MessageCount, bool Pinned, bool Unread, bool Archived, string? Model,
+    string? Cwd = null, string? Branch = null)
 {
     public static SessionRow? From(JsonNode? n)
     {
@@ -12,7 +13,8 @@ public sealed record SessionRow(string Id, string Title, string? Preview, string
         return new SessionRow(id, n.Text("title") ?? n.Text("preview") ?? "Untitled session", n.Text("preview"),
             n.Text("profile") ?? n.Text("profile_name") ?? "default", n.Text("source"),
             n.UnixTime("last_active") ?? n.UnixTime("started_at"), n.Int("message_count"),
-            n.Bool("pinned") ?? false, n.Bool("unread") ?? false, n.Bool("archived") ?? false, n.Text("model"));
+            n.Bool("pinned") ?? false, n.Bool("unread") ?? false, n.Bool("archived") ?? false, n.Text("model"),
+            n.Text("cwd"), n.Text("git_branch") ?? n.Text("branch"));
     }
 }
 

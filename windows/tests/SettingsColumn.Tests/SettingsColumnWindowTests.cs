@@ -69,8 +69,8 @@ public sealed class SettingsColumnWindowTests : IDisposable
         Assert.Equal(target.Title(), Page.PageTitle); Assert.Equal(Page.PageTitle, Page.MarkedCategory);
         Assert.Same(Item(target), List.FocusedItem); Assert.Same(shown, Form.Child);
         Assert.Equal(target == SettingsCategory.About ? 0 : 1, SettingsPanes.CategoriesBuilt - before);
-        List.FocusArrow(Index(SettingsCategory.Sounds));
-        Assert.Same(Item(SettingsCategory.Sounds), List.FocusedItem); Assert.Equal(target.Title(), Page.MarkedCategory);
+        List.FocusArrow(Index(SettingsCategory.Gateway));
+        Assert.Same(Item(SettingsCategory.Gateway), List.FocusedItem); Assert.Equal(target.Title(), Page.MarkedCategory);
     }
 
     [Theory]
@@ -79,8 +79,8 @@ public sealed class SettingsColumnWindowTests : IDisposable
     public void LateSelectionRepairDoesNotUndoANewerFocusMove(SettingsCategory target, bool outsideList)
     {
         Page.ShowCategory(SettingsCategory.About); Secondary(target);
-        Control next = outsideList ? Search : Item(SettingsCategory.Sounds);
-        if (outsideList) Search.Focus(FocusState.Keyboard); else List.FocusArrow(Index(SettingsCategory.Sounds));
+        Control next = outsideList ? Search : Item(SettingsCategory.Gateway);
+        if (outsideList) Search.Focus(FocusState.Keyboard); else List.FocusArrow(Index(SettingsCategory.Gateway));
         Page.DispatcherQueue.Drain();
         Assert.Equal(FocusState.Keyboard, next.FocusState);
         Assert.Equal(target.Title(), Page.MarkedCategory); Assert.Equal(target.Title(), Page.PageTitle);
@@ -95,7 +95,7 @@ public sealed class SettingsColumnWindowTests : IDisposable
         {
             case "search": Search.Text = "theme"; break;
             case "gateway": Gateway.InertClick(); break;
-            case "other category": List.SelectedIndex = Index(SettingsCategory.Sounds); break;
+            case "other category": List.SelectedIndex = Index(SettingsCategory.Gateway); break;
             case "detail": Page.Open("licenses"); break;
         }
         var first = Form.Child;
@@ -103,7 +103,7 @@ public sealed class SettingsColumnWindowTests : IDisposable
         var (title, mark) = next switch
         {
             "search" => ("Search Results", null), "gateway" => ("Gateway", null),
-            "detail" => (LicenseNotices.PageTitle, "About"), _ => ("Sounds", "Sounds"),
+            "detail" => (LicenseNotices.PageTitle, "About"), _ => ("Hermes", "Hermes"),
         };
         Assert.Equal(title, Page.PageTitle); Assert.Equal(mark, Page.MarkedCategory); Assert.Same(first, Form.Child);
     }
@@ -170,7 +170,7 @@ public sealed class SettingsColumnWindowTests : IDisposable
     {
         ThemeService.Dark = dark; ThemeService.Set(ThemeState.Default, false);
         Page.ShowCategory(SettingsCategory.About); if (gatewayMarked) Gateway.InertClick();
-        List.FocusArrow(Index(SettingsCategory.Sounds));
+        List.FocusArrow(Index(SettingsCategory.Gateway));
         var focused = List.FocusedItem; var form = Form.Child;
         var theme = Assert.IsType<ThemeSettings>(ThemeSettings.Last); var colours = Assert.IsType<UISettings>(UISettings.Last);
         Assert.Equal(Window.AppWindow.Id, theme.WindowId); Assert.Equal(1, theme.Listeners); Assert.Equal(1, colours.Listeners);
@@ -189,7 +189,7 @@ public sealed class SettingsColumnWindowTests : IDisposable
                 var address = (Grid)((StackPanel)row.Children[1]).Children[1];
                 Assert.Equal(Ink("HQLabel2Brush", "HighlightText"), ((TextBlock)address.Children[0]).Foreground?.Key);
             }
-            var other = (Grid)Item(SettingsCategory.Sounds).Content!;
+            var other = (Grid)Item(SettingsCategory.Gateway).Content!;
             Assert.Null(other.Background); Assert.Equal(hc ? null : Ink("HQLabelBrush", ""), ((TextBlock)other.Children[1]).Foreground?.Key);
             Assert.Equal(Ink("HQSettingsPaneLineBrush", "WindowText"), Divider.Background?.Key);
             Assert.Equal(Ink("HQSettingsFieldBrush", "Window"), Search.Background?.Key); Assert.Equal(hc ? 1 : 0, Search.BorderThickness.Left);
@@ -252,7 +252,7 @@ public sealed class SettingsColumnWindowTests : IDisposable
             List.SelectedIndex = List.SelectedIndex == Index(target) ? -1 : Index(target);
             Assert.Null(Page.MarkedCategory);
             var shown = Form.Child;
-            Control nextFocus = pointer ? Search : Item(SettingsCategory.Sounds);
+            Control nextFocus = pointer ? Search : Item(SettingsCategory.Gateway);
             nextFocus.Focus(FocusState.Keyboard); // a newer Tab or arrow before the repair
             Page.DispatcherQueue.Drain();
 
@@ -292,7 +292,7 @@ public sealed class SettingsColumnWindowTests : IDisposable
     {
         Page.Open("licenses"); Search.DispatcherQueue = Page.DispatcherQueue; Search.QueueEvents = true;
         Search.Text = "theme"; Search.Drain(); Assert.True(Search.Key(VirtualKey.Escape));
-        Control focus = outsideList ? Search : Item(SettingsCategory.Sounds);
+        Control focus = outsideList ? Search : Item(SettingsCategory.Gateway);
         focus.Focus(FocusState.Keyboard); Search.Drain();
         var detail = Form.Child;
         Assert.Equal("licenses", Assert.IsType<Border>(detail).Tag); Assert.True(Page.CanGoBack);
@@ -328,14 +328,14 @@ public sealed class SettingsColumnWindowTests : IDisposable
         var form = Form.Child;
         WithMainSettings(other =>
         {
-            other.ShowCategory(SettingsCategory.Sounds); Assert.Equal("sounds", SavedCategory);
+            other.ShowCategory(SettingsCategory.Gateway); Assert.Equal("gateway", SavedCategory);
             if (secondary) Secondary(shown);
             else { List.Pick(Item(shown).Content!); List.SelectedIndex = Index(shown); }
             Assert.Equal(shown.Key(), SavedCategory); // at activation, not when a repair runs or the window closes
             List.FocusArrow(Index(SettingsCategory.Chat)); Page.DispatcherQueue.Drain();
             Assert.Same(Item(SettingsCategory.Chat), List.FocusedItem); Assert.Same(form, Form.Child);
             Assert.Equal(shown.Title(), Page.MarkedCategory); Assert.False(Page.CanGoBack);
-            Assert.Equal("Sounds", other.MarkedCategory);
+            Assert.Equal("Hermes", other.MarkedCategory);
         });
         AssertReopensOn(shown);
     }
@@ -347,11 +347,11 @@ public sealed class SettingsColumnWindowTests : IDisposable
         const SettingsCategory shown = SettingsCategory.About;
         Page.ShowCategory(shown);
         var form = Form.Child;
-        var expected = selectBeforeRepair ? shown : SettingsCategory.Sounds;
+        var expected = selectBeforeRepair ? shown : SettingsCategory.Gateway;
         WithMainSettings(other =>
         {
             Secondary(shown); Assert.Null(Page.MarkedCategory); // a repair is pending
-            other.ShowCategory(SettingsCategory.Sounds);
+            other.ShowCategory(SettingsCategory.Gateway);
             if (selectBeforeRepair) List.SelectedIndex = Index(shown); // selection peer; no ItemClick
             Assert.Equal(expected.Key(), SavedCategory);
             if (mainChoosesAgain) { expected = SettingsCategory.Chat; other.ShowCategory(expected); }
@@ -371,9 +371,9 @@ public sealed class SettingsColumnWindowTests : IDisposable
         Secondary(SettingsCategory.About); Window.Close(); // Closed before Unloaded or the repair
         try
         {
-            Open(); Page.ShowCategory(SettingsCategory.Sounds);
+            Open(); Page.ShowCategory(SettingsCategory.Gateway);
             list.Pick(about.Content!); list.SelectedIndex = Index(SettingsCategory.About); closed.DispatcherQueue.Drain();
-            Assert.Equal("sounds", SavedCategory); Assert.Equal("Sounds", Page.MarkedCategory);
+            Assert.Equal("gateway", SavedCategory); Assert.Equal("Hermes", Page.MarkedCategory);
         }
         finally { column.Unload(); closed.Unload(); }
     }
@@ -381,7 +381,7 @@ public sealed class SettingsColumnWindowTests : IDisposable
     [Fact]
     public void ExplicitNavigationStillLetsTheSelectorFocusItsNewCategory()
     {
-        Page.ShowCategory(SettingsCategory.About); List.FocusArrow(Index(SettingsCategory.Sounds));
+        Page.ShowCategory(SettingsCategory.About); List.FocusArrow(Index(SettingsCategory.Gateway));
         Page.ShowAsAsked("theme", backToIndex: true);
         Assert.Equal("Theme", Page.PageTitle); Assert.Equal("Appearance", Page.MarkedCategory);
         Assert.Same(Item(SettingsCategory.Appearance), List.FocusedItem);
@@ -429,9 +429,9 @@ public sealed class SettingsColumnWindowTests : IDisposable
         Assert.True(field.Key(VirtualKey.Escape)); Window.Close(); // before either Unloaded or TextChanged
         try
         {
-            if (reopen) { Open(); Page.ShowCategory(SettingsCategory.Sounds); }
+            if (reopen) { Open(); Page.ShowCategory(SettingsCategory.Gateway); }
             field.Drain(); Assert.Same(results, form.Child); Assert.Null(page.MarkedCategory);
-            if (reopen) Assert.Equal("Sounds", Page.MarkedCategory);
+            if (reopen) Assert.Equal("Hermes", Page.MarkedCategory);
         }
         finally { column.Unload(); page.Unload(); }
     }

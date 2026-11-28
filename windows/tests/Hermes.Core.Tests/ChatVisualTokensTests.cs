@@ -109,7 +109,9 @@ public class ChatVisualTokensTests
         Assert.True(plain.AppliedPlainReplies);
         Assert.True(ChatBubbles.Notify(ThemeState.Default, plain));
         Assert.True((ThemeState.Default with { DesktopLook = true }).AppliedPlainReplies);
-        Assert.False((plain with { DesktopLook = true, HighContrast = true }).AppliedPlainReplies);
+        // 1a1f7200d: Reply Bubbles toggle lets High Contrast Hermes Look respect PlainReplies (off by default, on when enabled).
+        Assert.False((ThemeState.Default with { DesktopLook = true, HighContrast = true }).AppliedPlainReplies);
+        Assert.True((plain with { DesktopLook = true, HighContrast = true }).AppliedPlainReplies);
     }
 
     private static ChatMessage Msg(int seconds, Role role = Role.Assistant) =>

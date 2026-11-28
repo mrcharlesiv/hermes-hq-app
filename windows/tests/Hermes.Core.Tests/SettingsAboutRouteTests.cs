@@ -81,8 +81,8 @@ public class SettingsAboutRouteTests
     [Fact]
     public void FileActionsStillGoToTheAboutCategorysOwnPage()
     {
-        // Export / Import / Reset are buttons of the About category's page, not About's: they keep that route.
-        Assert.Equal(SettingsCategory.About, SettingsSearch.Category("action:import"));
+        // Export / Import / Reset moved to the Hermes (Gateway) category under Backup & Reset (e27566897).
+        Assert.Equal(SettingsCategory.Gateway, SettingsSearch.Category("action:import"));
         Assert.Equal("About", SettingsAboutRoute.Title(SettingsAboutRoute.CategoryKey(SettingsCategory.About)));
     }
 

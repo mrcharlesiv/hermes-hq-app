@@ -94,6 +94,17 @@ public static class RosterBuilder
         return merged;
     }
 
+    /// Strips/skips scheduled wake lines and saved `[Voice chat transcript` headers from a bot's latest-message preview
+    /// so automated wake boilerplate and voice transcripts never leak into the Bots list preview.
+    public static string CleanLatestPreview(string? raw, bool holdsMessages = false)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "";
+        var trimmed = raw.Trim();
+        if (Transcripts.TimelineNotes.IsScheduledWake(trimmed) || Transcripts.UpdateGroups.IsVoiceTranscript(trimmed))
+            return holdsMessages ? BotSaidRules.NothingShown : "";
+        return raw;
+    }
+
     public static RosterLayout Build(Input input)
     {
         var profiles = input.Profiles;
@@ -124,8 +135,11 @@ public static class RosterBuilder
             var name = names[i];
             var role = RosterRules.RoleLine(profile, meta, name);
             var source = RosterRules.RosterPreviewOf(profile);
-            var text = RosterPreview.SourcePreview(profile, source.Preview);
-            var handle = RosterPreview.DeliveryHandle(source.Preview);
+            var rawSource = RosterPreview.SourcePreview(profile, source.Preview);
+            var holds = RosterRules.HoldsMessages(profile.CanonicalSession);
+            var text = CleanLatestPreview(rawSource, holds);
+            var ignored = text == BotSaidRules.NothingShown || (text.Length == 0 && rawSource.Length > 0);
+            var handle = ignored ? null : RosterPreview.DeliveryHandle(source.Preview);
             var fromBot = handle == null ? null : nameByHandle.TryGetValue(handle, out var n) ? n : handle;
             var parts = RosterPreview.BotPreview(text, fromBot, false, role);
             if (input.Lost.TryGetValue(profile.Name, out var lost))

@@ -43,7 +43,9 @@ public static partial class GatewaysFeature
         if (AppShutdown.Stopping) return;
         timer.Interval = GatewayHub.Every;
         timer.Start();
-        if (AppState.Client != null && AppState.Gateways.IsShown) _ = AppState.Gateways.CheckAsync(force: false);
+        // Run on every tick even when only one gateway is saved (`!IsShown`) so idle Nous sessions stay alive past
+        // Portal's 24 h rotating refresh-token expiry (GatewaySwitcherModel.swift `start`).
+        if (AppState.Client != null) _ = AppState.Gateways.CheckAsync(force: false);
     }
 
     private static void Activated(object sender, WindowActivatedEventArgs args)

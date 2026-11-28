@@ -145,8 +145,8 @@ public sealed class BrowserChatCard : UserControl, IDisposable
         }
         else
         {
-            _frame.Background = Kit.Brush("CardBackgroundFillColorDefaultBrush");
-            _frame.BorderBrush = Kit.Brush("CardStrokeColorDefaultBrush");
+            _frame.Background = Kit.Brush("HQPromptCardBrush");
+            _frame.BorderBrush = Kit.Brush("HQPromptEdgeBrush");
             _icon.Foreground = Kit.Accent;
         }
     }

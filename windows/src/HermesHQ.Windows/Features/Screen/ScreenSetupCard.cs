@@ -50,7 +50,9 @@ internal sealed class ScreenSetupCard : Grid
     {
         State = state;
         CornerRadius = new CornerRadius(22);
-        Background = Kit.Brush("CardBackgroundFillColorDefaultBrush");
+        Background = Kit.Brush("HQPromptCardBrush");
+        BorderBrush = Kit.Brush("HQPromptEdgeBrush");
+        BorderThickness = new Thickness(1);
         Padding = new Thickness(16, 4, 16, 8);
         AutomationProperties.SetAutomationId(this, state.Look.AutomationId);
         _update.Text = ScreenSetupCopy.Update;

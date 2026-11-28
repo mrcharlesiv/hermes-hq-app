@@ -246,6 +246,24 @@ public static partial class KanbanModel
             Upper.Contains(word) ? word.ToUpperInvariant() : word == "saas" ? "SaaS" : char.ToUpperInvariant(word[0]) + word[1..]));
     }
 
+    public const string DefaultBoardSlug = "default";
+    public const string DefaultBoardKept = "The default board can’t be deleted. You can rename it.";
+
+    /// The default board can be renamed, never deleted.
+    public static bool CanDeleteBoard(string slug) => !string.IsNullOrEmpty(slug) && slug != DefaultBoardSlug;
+
+    /// What deleting a board says in its confirmation dialog.
+    public static string DeleteBoardMessage(string title, int? total)
+    {
+        var tasks = total switch
+        {
+            null or <= 0 => "It has no tasks.",
+            1 => "Its 1 task goes with it.",
+            var n => $"Its {n} tasks go with it.",
+        };
+        return $"“{title}” leaves Kanban on every device. {tasks} Hermes keeps an archived copy on your gateway computer.";
+    }
+
     // ------------------------------------------------------------------ activity words
 
     private static JsonObject PayloadObject(JsonNode? payload, out string? raw)

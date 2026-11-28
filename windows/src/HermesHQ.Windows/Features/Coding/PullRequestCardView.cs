@@ -12,9 +12,10 @@ using static HermesHQ.Features.Kanban.PageKit;
 
 namespace HermesHQ.Features.Coding;
 
-/// Interactive Pull Request card (`PullRequestCardView.swift` + `PullRequestCardPages.swift` + `PRVerdictView.swift` port).
-/// Supports switching between sibling PRs, drilling into check runs, opening files in `InteractiveDiffView` with inline
-/// line comments, and executing quick PR actions (merge, approve, request changes, fix CI/review, checkout, browser, mark closed).
+/// Interactive Pull Request card (`App/Sessions/PullRequestCardView.swift` + `PullRequestCardPages.swift` + `PRVerdictView.swift`):
+/// single calm pinned bottom primary action bar (including `"Ask <Bot> to Open PR"` for bare branches),
+/// `chatWorking` warning on merge confirm, per-failing-check `"Ask <Bot> to Fix"` in the Checks subpage,
+/// interactive diff viewer, and sibling PR switching.
 public sealed class PullRequestCardView : UserControl
 {
     private readonly SessionSummary _session;
@@ -23,13 +24,17 @@ public sealed class PullRequestCardView : UserControl
     private readonly DiffCommentStore _comments;
     private readonly Action<PullRequestActionItem> _onAction;
     private readonly Action? _onClose;
+    private readonly string _botName;
+    private readonly bool _chatWorking;
+    private readonly Action? _onRepository;
 
-    private PullRequestCardFocus _focus = new PullRequestCardFocus.Lead();
+    private PullRequestCardFocus _focus;
     private bool _showingChecks;
     private PullRequestFileRow? _openDiffFile;
     private readonly StackPanel _body = new() { Spacing = 10, Padding = new Thickness(16, 8, 16, 20) };
     private readonly TextBlock _headerTitle = Text("Pull Request", 14, bold: true, wrap: false);
     private readonly Button _backButton;
+    private readonly Border _pinnedBar;
 
     public PullRequestCardView(
         SessionSummary session,
@@ -37,7 +42,11 @@ public sealed class PullRequestCardView : UserControl
         CodingStore store,
         DiffCommentStore comments,
         Action<PullRequestActionItem> onAction,
-        Action? onClose = null)
+        Action? onClose = null,
+        PullRequestCardFocus? initialFocus = null,
+        string? botName = null,
+        bool? chatWorking = null,
+        Action? onRepository = null)
     {
         _session = session;
         _status = status;
@@ -45,6 +54,10 @@ public sealed class PullRequestCardView : UserControl
         _comments = comments;
         _onAction = onAction;
         _onClose = onClose;
+        _focus = initialFocus ?? new PullRequestCardFocus.Lead();
+        _botName = string.IsNullOrWhiteSpace(botName) ? BotName(session.Profile) : botName.Trim();
+        _chatWorking = chatWorking ?? (session.IsRunning || session.Status == SessionStatus.Working);
+        _onRepository = onRepository;
 
         AutomationProperties.SetAutomationId(this, "coding.pr-card");
 
@@ -64,6 +77,7 @@ public sealed class PullRequestCardView : UserControl
 
         var refreshBtn = new Button { Content = new FontIcon { Glyph = "\uE72C", FontSize = 13 }, Style = Style("QuietButtonStyle") };
         AutomationProperties.SetName(refreshBtn, "Refresh Pull Request");
+        AutomationProperties.SetAutomationId(refreshBtn, "prcard.refresh");
         refreshBtn.Click += (_, _) => _ = RefreshStatusAsync();
 
         var bar = new Grid { Padding = new Thickness(10, 8, 10, 6), ColumnSpacing = 8 };
@@ -87,14 +101,27 @@ public sealed class PullRequestCardView : UserControl
         Grid.SetColumn(trailing, 2);
         bar.Children.Add(trailing);
 
+        _pinnedBar = new Border
+        {
+            Padding = new Thickness(16, 10, 16, 12),
+            BorderThickness = new Thickness(0, 1, 0, 0),
+            BorderBrush = Brush("DividerStrokeColorDefaultBrush"),
+            Background = Brush("LayerFillColorDefaultBrush"),
+            Visibility = Visibility.Collapsed,
+        };
+        AutomationProperties.SetAutomationId(_pinnedBar, "prcard.pinnedBar");
+
         var root = new Grid();
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.Children.Add(bar);
 
         var scroller = new ScrollViewer { Content = _body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollMode = ScrollMode.Disabled };
         Grid.SetRow(scroller, 1);
         root.Children.Add(scroller);
+        Grid.SetRow(_pinnedBar, 2);
+        root.Children.Add(_pinnedBar);
         Content = root;
 
         _comments.Changed += OnCommentsChanged;
@@ -107,7 +134,7 @@ public sealed class PullRequestCardView : UserControl
     private async Task RefreshStatusAsync()
     {
         await _store.RefreshPRStatusAsync([(_session.Profile, _session.Id)], fresh: true, detail: true);
-        if (_store.StatusFor(_session.Key) is { } freshStatus) _status = freshStatus;
+        if (_store.StatusFor(_session.Profile, _session.Id) is { } freshStatus) _status = freshStatus;
         Render();
     }
 
@@ -120,12 +147,17 @@ public sealed class PullRequestCardView : UserControl
     public void Render()
     {
         _body.Children.Clear();
+        _pinnedBar.Child = null;
+        _pinnedBar.Visibility = Visibility.Collapsed;
+
         var model = PullRequestCardModel.Build(
             _session,
             _status,
             _focus,
             _comments.CountsByFile(openOnly: true),
-            _store.RefreshedAt(_session.Key));
+            _store.RefreshedAt(_session.Key),
+            botName: _botName,
+            chatWorking: _chatWorking);
 
         if (_openDiffFile != null)
         {
@@ -135,7 +167,12 @@ public sealed class PullRequestCardView : UserControl
                 _openDiffFile.Binary, _openDiffFile.Patch, _openDiffFile.PatchCut);
             var diffView = new InteractiveDiffView(file, _comments, model.BadgeLabel, reviewMessage =>
             {
-                _onAction(new PullRequestActionItem(PullRequestQuickAction.RequestChanges, "Send Review", BotPrompt: reviewMessage));
+                _onAction(new PullRequestActionItem(
+                    PullRequestQuickAction.RequestChanges,
+                    $"Send Review to {model.BotName}",
+                    ConfirmationTitle: $"Send Review to {model.BotName}",
+                    ConfirmationMessage: reviewMessage,
+                    BotPrompt: reviewMessage));
             });
             _body.Children.Add(diffView);
             return;
@@ -145,17 +182,17 @@ public sealed class PullRequestCardView : UserControl
         {
             _backButton.Visibility = Visibility.Visible;
             _headerTitle.Text = "Checks";
-            RenderChecksSubpage(model.Checks);
+            RenderChecksSubpage(model, model.Checks);
             return;
         }
 
         _backButton.Visibility = Visibility.Collapsed;
-        _headerTitle.Text = model.Number is { } n ? $"PR #{n}" : "Pull Request";
+        _headerTitle.Text = model.Number is { } n ? $"PR #{n}" : model.SheetTitle;
 
         // Title + State Badge + Verdict
         var topStack = new StackPanel { Spacing = 6 };
         var badgeRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        badgeRow.Children.Add(CodingPipelinePage.BadgePill(model.BadgeLabel, StateColor(model.State)));
+        badgeRow.Children.Add(CodingPipelinePage.BadgePill(model.StateWords, StateColor(model.State)));
         if (model.Verdict != null) badgeRow.Children.Add(CodingPipelinePage.VerdictPill(model.Verdict));
         if (model.ReviewVerdict != PRReviewVerdict.None)
             badgeRow.Children.Add(CodingPipelinePage.BadgePill(model.ReviewVerdict.LabelWord(), ReviewColor(model.ReviewVerdict)));
@@ -173,41 +210,14 @@ public sealed class PullRequestCardView : UserControl
 
         if (model.UnknownExplanation != null)
         {
-            var warn = new StackPanel { Spacing = 6 };
+            var warn = new StackPanel { Spacing = 8 };
             warn.Children.Add(Text(model.UnknownExplanation, 13, color: Secondary));
-            warn.Children.Add(Push("Retry Check", () => _ = RefreshStatusAsync()));
+            var warnButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            warnButtons.Children.Add(Push("Try Again", () => _ = RefreshStatusAsync()));
+            if (model.UnknownReason == SessionPRUnknownReason.Unmatched && _onRepository != null)
+                warnButtons.Children.Add(Push("Link Repository…", () => _onRepository()));
+            warn.Children.Add(warnButtons);
             _body.Children.Add(Card(warn, 10));
-        }
-
-        // Quick Actions
-        if (model.Actions.Count > 0)
-        {
-            _body.Children.Add(Header("Actions"));
-            var actionsPanel = new StackPanel { Spacing = 6 };
-            var primaryRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-            var secondaryRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-            foreach (var action in model.Actions)
-            {
-                var a = action;
-                var btn = Push(a.Label, () => _onAction(a), accent: a.Primary);
-                if (a.Destructive && !a.Primary) btn.Foreground = Critical;
-                if (a.Primary || a.Kind is PullRequestQuickAction.Merge or PullRequestQuickAction.Approve or PullRequestQuickAction.RequestChanges)
-                    primaryRow.Children.Add(btn);
-                else
-                    secondaryRow.Children.Add(btn);
-            }
-            if (primaryRow.Children.Count > 0) actionsPanel.Children.Add(primaryRow);
-            if (secondaryRow.Children.Count > 0)
-            {
-                actionsPanel.Children.Add(new ScrollViewer
-                {
-                    Content = secondaryRow,
-                    HorizontalScrollMode = ScrollMode.Auto,
-                    HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden,
-                    VerticalScrollMode = ScrollMode.Disabled,
-                });
-            }
-            _body.Children.Add(actionsPanel);
         }
 
         // Checks section
@@ -219,7 +229,7 @@ public sealed class PullRequestCardView : UserControl
             rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             rowGrid.Children.Add(Dot(CheckColor(checks.State), 10));
-            var summary = Text(checks.Summary, 13, bold: true);
+            var summary = Text(checks.Summary, 13, bold: true, color: checks.State == SessionPRCheckState.Failed ? Critical : null);
             Grid.SetColumn(summary, 1);
             rowGrid.Children.Add(summary);
             if (checks.CanDrillIn)
@@ -228,7 +238,9 @@ public sealed class PullRequestCardView : UserControl
                 Grid.SetColumn(open, 2);
                 rowGrid.Children.Add(open);
             }
-            _body.Children.Add(Card(rowGrid, 10));
+            var checksCard = Card(rowGrid, 10);
+            if (checks.CanDrillIn) checksCard.Tapped += (_, _) => { _showingChecks = true; Render(); };
+            _body.Children.Add(checksCard);
         }
 
         // Changed files section
@@ -250,14 +262,41 @@ public sealed class PullRequestCardView : UserControl
             reviewBox.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             reviewBox.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             reviewBox.Children.Add(Text($"{_comments.OpenCount} inline review {(_comments.OpenCount == 1 ? "comment" : "comments")} ready", 13, bold: true));
-            var sendBtn = Push("Send Review to Bot", () =>
+            var sendBtn = Push($"Send Review to {model.BotName}", () =>
             {
                 var msg = _comments.FormatReviewMessage(model.BadgeLabel);
-                _onAction(new PullRequestActionItem(PullRequestQuickAction.RequestChanges, "Send Review to Bot", BotPrompt: msg));
+                _onAction(new PullRequestActionItem(
+                    PullRequestQuickAction.RequestChanges,
+                    $"Send Review to {model.BotName}",
+                    ConfirmationTitle: $"Send Review to {model.BotName}",
+                    ConfirmationMessage: msg,
+                    BotPrompt: msg));
             }, accent: true);
             Grid.SetColumn(sendBtn, 1);
             reviewBox.Children.Add(sendBtn);
             _body.Children.Add(Card(reviewBox, 10));
+        }
+
+        // Secondary actions (excluding the action already pinned to the calm bottom bar).
+        var pinned = model.PinnedPrimaryAction;
+        var listActions = model.Actions.Where(a =>
+            (pinned == null || a.Kind != pinned.Kind)
+            && (pinned == null || a.Kind != PullRequestQuickAction.OpenChat)).ToList();
+
+        if (listActions.Count > 0)
+        {
+            _body.Children.Add(Header("Actions"));
+            var actionsStack = new StackPanel { Spacing = 6 };
+            foreach (var action in listActions)
+            {
+                var a = action;
+                var btn = Push(a.Label, () => TriggerAction(model, a));
+                btn.HorizontalAlignment = HorizontalAlignment.Stretch;
+                btn.HorizontalContentAlignment = HorizontalAlignment.Left;
+                if (a.Destructive) btn.Foreground = Critical;
+                actionsStack.Children.Add(btn);
+            }
+            _body.Children.Add(actionsStack);
         }
 
         // Also in this chat
@@ -279,6 +318,91 @@ public sealed class PullRequestCardView : UserControl
                 _body.Children.Add(box);
             }
         }
+
+        // Calm pinned bottom primary action bar (`PullRequestCardView.swift` `pinnedActionBar`).
+        if (pinned != null)
+            RenderPinnedActionBar(model, pinned);
+    }
+
+    private void RenderPinnedActionBar(PullRequestCardModel model, PullRequestActionItem primary)
+    {
+        var barGrid = new Grid { ColumnSpacing = 10 };
+        barGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        barGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var label = primary.Kind switch
+        {
+            PullRequestQuickAction.AskBotToFixCI => $"Ask {model.BotName} to Fix Checks…",
+            PullRequestQuickAction.AskBotToOpenPR => PullRequestCardModel.OpenPRTitle(model.BotName),
+            PullRequestQuickAction.Merge => $"Ask {model.BotName} to Merge…",
+            _ => primary.Label,
+        };
+
+        var primaryBtn = new Button
+        {
+            Content = Text(label, 13, bold: true, color: Solid(Microsoft.UI.Colors.White), wrap: false),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            Padding = new Thickness(12, 10, 12, 10),
+            CornerRadius = new CornerRadius(8),
+        };
+
+        if (primary.Kind == PullRequestQuickAction.AskBotToFixCI)
+        {
+            primaryBtn.Background = Solid(Red);
+            AutomationProperties.SetAutomationId(primaryBtn, "prcard.askToFixChecks");
+        }
+        else if (primary.Kind == PullRequestQuickAction.AskBotToOpenPR)
+        {
+            primaryBtn.Style = Style("AccentButtonStyle");
+            primaryBtn.Content = label;
+            AutomationProperties.SetAutomationId(primaryBtn, "prcard.askToOpenPR");
+        }
+        else if (primary.Kind == PullRequestQuickAction.Merge)
+        {
+            var isCleanReady = model.State == SessionPRState.Open
+                && model.Checks?.State is not (SessionPRCheckState.Failed or SessionPRCheckState.Running)
+                && !model.ChatWorking;
+            if (isCleanReady)
+            {
+                primaryBtn.Background = Solid(Green);
+            }
+            else
+            {
+                primaryBtn.Style = Style("AccentButtonStyle");
+                primaryBtn.Content = label;
+            }
+            AutomationProperties.SetAutomationId(primaryBtn, "prcard.askToMerge");
+        }
+        else
+        {
+            primaryBtn.Style = Style("AccentButtonStyle");
+            primaryBtn.Content = label;
+        }
+
+        primaryBtn.Click += (_, _) => TriggerAction(model, primary);
+        barGrid.Children.Add(primaryBtn);
+
+        var openChatBtn = Push("Open Chat", () => _onAction(new PullRequestActionItem(PullRequestQuickAction.OpenChat, "Open Chat")));
+        openChatBtn.Padding = new Thickness(14, 10, 14, 10);
+        AutomationProperties.SetAutomationId(openChatBtn, "prcard.openChat");
+        Grid.SetColumn(openChatBtn, 1);
+        barGrid.Children.Add(openChatBtn);
+
+        _pinnedBar.Child = barGrid;
+        _pinnedBar.Visibility = Visibility.Visible;
+    }
+
+    private void TriggerAction(PullRequestCardModel model, PullRequestActionItem action)
+    {
+        if (action.Kind == PullRequestQuickAction.Merge)
+        {
+            // Ensure merge confirmation always carries the exact `chatWorking` / draft / failing-checks warning title.
+            var mergeTitle = model.MergeConfirmTitle(_chatWorking);
+            _onAction(action with { ConfirmationTitle = mergeTitle });
+            return;
+        }
+        _onAction(action);
     }
 
     private FrameworkElement FileRowControl(PullRequestFileRow file)
@@ -316,27 +440,55 @@ public sealed class PullRequestCardView : UserControl
         return card;
     }
 
-    private void RenderChecksSubpage(PullRequestChecksRow checks)
+    private void RenderChecksSubpage(PullRequestCardModel model, PullRequestChecksRow checks)
     {
-        _body.Children.Add(Text(checks.Summary, 15, bold: true));
-        foreach (var run in checks.Runs)
+        _body.Children.Add(Text(checks.Summary, 15, bold: true, color: checks.State == SessionPRCheckState.Failed ? Critical : null));
+        for (var i = 0; i < checks.Runs.Count; i++)
         {
+            var run = checks.Runs[i];
             var grid = new Grid { ColumnSpacing = 8 };
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             grid.Children.Add(Dot(CheckColor(run.State), 8));
+
             var info = new StackPanel { Spacing = 2 };
             info.Children.Add(Text(run.Name, 13, bold: true));
-            if (!string.IsNullOrWhiteSpace(run.Summary)) info.Children.Add(Text(run.Summary!, 12, color: Secondary));
+            if (!string.IsNullOrWhiteSpace(run.Summary))
+                info.Children.Add(Text(run.Summary!, 12, color: run.State == SessionPRCheckState.Failed ? Critical : Secondary));
             Grid.SetColumn(info, 1);
             grid.Children.Add(info);
-            if (run.Url is { Length: > 0 } runUrl && Uri.TryCreate(runUrl, UriKind.Absolute, out var uri))
+
+            var trailing = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
+            if (run.State == SessionPRCheckState.Failed)
+            {
+                var captured = run;
+                var fixBtn = Push(model.FixSingleCheckLabel, () =>
+                {
+                    var prompt = model.PromptForFailingCheck(captured);
+                    _onAction(new PullRequestActionItem(
+                        PullRequestQuickAction.AskBotToFixCI,
+                        model.FixSingleCheckLabel,
+                        ConfirmationTitle: model.FixSingleCheckLabel,
+                        ConfirmationMessage: prompt,
+                        BotPrompt: prompt));
+                });
+                fixBtn.Foreground = Critical;
+                AutomationProperties.SetAutomationId(fixBtn, $"prcard.run.{i}.fix");
+                trailing.Children.Add(fixBtn);
+            }
+            if (PRFacts.ValidCheckRunUrl(run.Url) is { } validUrl && Uri.TryCreate(validUrl, UriKind.Absolute, out var uri))
             {
                 var open = Quiet("Open", () => _ = Launcher.LaunchUriAsync(uri));
-                Grid.SetColumn(open, 2);
-                grid.Children.Add(open);
+                AutomationProperties.SetAutomationId(open, $"prcard.run.{i}.open");
+                trailing.Children.Add(open);
             }
+            if (trailing.Children.Count > 0)
+            {
+                Grid.SetColumn(trailing, 2);
+                grid.Children.Add(trailing);
+            }
+
             _body.Children.Add(Card(grid, 8));
         }
     }

@@ -1,8 +1,13 @@
+using System.Globalization;
+using System.Text.Json.Nodes;
 using Hermes.Core.Composer;
 using Hermes.Core.Gateways;
 using Hermes.Core.Kanban;
 using Hermes.Core.Tasks;
+using HermesHQ.Features.Kanban;
+using HermesHQ.Features.QuickActions;
 using HermesHQ.Services;
+using HermesHQ.Shell;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
@@ -10,25 +15,27 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
+using Windows.System;
 using Windows.UI;
 using static HermesHQ.Features.Kanban.PageKit;
 
 namespace HermesHQ.Features.Tasks;
 
-/// [WIN-42] Tasks › Goals (docs/goals.md "The Goals view" and "The shelf"; TasksViewController.swift's [goals] parts,
-/// App/Pages/Goals/GoalsListViews.swift and GoalShelfViews.swift at 93f984bb1). The rules are Hermes.Core.Tasks'
-/// GoalViews and GoalShelf; this file only draws:
-/// - the Goals view: Active cards in your order, then Someday's quieter ones, then Achieved and Let Go folded to their
-///   headings ("goals.fold.<key>": Show / Hide), then "+ New Goal"; with no goals, what a goal is, with New Goal;
-/// - Today's Goals shelf over Today's rows: "Goals" (a tap folds it; "Goals 3" folded, kept on this device) with
-///   "All 3 ›" at its end, then the active goals' small cards side by side.
-/// A card's circle ticks its next task, as a task row's does. New Goal here takes a name and why (POST /goals); the
-/// Mac sheet's date chips, Number and Who's helping?, and a goal's own page, are later slices.
+/// [WIN-42] + Wave 5A Tasks › Goals (`App/Pages/Goals/NewGoalSheet.swift`, `GoalsListViews.swift`, `GoalShelfViews.swift`):
+/// - Goals view: Active cards with team faces, waiting indicator, context menu (incl. Add to Favorites), Someday, folded
+///   Achieved and Let Go headings, and "+ New Goal";
+/// - Today's Goals shelf over Today's rows with Favorites context menu;
+/// - Full New Goal dialog: NL date parsing via `TodoQuickParse(..., goal: true)`, Date & Number chips (using flyouts
+///   rather than nested dialogs), `Who's helping?` bot chips remembered across uses, and auto-opening the goal chat
+///   with a plan request when a lead bot is selected.
 public sealed partial class TasksPage
 {
+    private const string LastGoalTeamKey = "HQGoalLastTeam";
+
     /// Achieved and Let Go opened from their fold (the page's own, as the Mac's `goalFoldsOpen`: never saved).
     private readonly HashSet<GoalGroupKey> _goalFoldsOpen = [];
-    private static readonly GoalShelfFold ShelfFold = new(new JsonFileStore(System.IO.Path.Combine(AppPaths.Root, "tasks-goals.json")));
+    private static readonly IKeyValueStore GoalsPrefs = new JsonFileStore(System.IO.Path.Combine(AppPaths.Root, "tasks-goals.json"));
+    private static readonly GoalShelfFold ShelfFold = new(GoalsPrefs);
 
     /// The Goals view, in place of a view's task groups.
     private void RenderGoals(TasksStore store, DateTimeOffset now)
@@ -36,7 +43,6 @@ public sealed partial class TasksPage
         var groups = GoalViews.Groups(store.Goals);
         if (groups.IsEmpty)
         {
-            // GoalsEmptyRow: what a goal is, in two lines, with New Goal under it.
             var empty = new StackPanel { Spacing = 12, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(24, 48, 24, 24), MaxWidth = 460 };
             var words = Text(GoalViews.EmptyText, 14, color: Secondary);
             words.TextAlignment = TextAlignment.Center;
@@ -105,16 +111,41 @@ public sealed partial class TasksPage
         return ring;
     }
 
-    /// One goal as a card (GoalCard): the ring, the name, one grey line with the pace after it, and under a hairline
-    /// the goal's next task with its circle.
+    /// One goal as a card (GoalCard): the ring, the name, team avatars + waiting dot, one grey line with the pace after
+    /// it, and under a hairline the goal's next task with its circle.
     private FrameworkElement GoalCardView(GoalCardModel card, TasksStore store)
     {
+        var goal = store.FindGoal(card.Id);
         var grid = new Grid { ColumnSpacing = 12 };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.Children.Add(Ring(card.Fraction, card.GreyRing ? Rgb(0x8E, 0x8E, 0x93) : Tint(card.Color), 34));
+
         var words = new StackPanel { Spacing = 2 };
-        words.Children.Add(Text(card.Title, 16, bold: true, color: card.Quiet ? Secondary : null, wrap: false));
+        var titleRow = new Grid { ColumnSpacing = 8 };
+        titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        titleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        titleRow.Children.Add(Text(card.Title, 16, bold: true, color: card.Quiet ? Secondary : null, wrap: false));
+
+        if (goal != null)
+        {
+            var badges = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
+            if (GoalBots.WaitsForYou(goal, store.Offers))
+            {
+                var dot = new Ellipse { Width = 8, Height = 8, Fill = Solid(Orange), VerticalAlignment = VerticalAlignment.Center };
+                ToolTipService.SetToolTip(dot, "Needs your attention");
+                badges.Children.Add(dot);
+            }
+            foreach (var member in goal.Team.Take(3))
+                badges.Children.Add(Face(member, 18));
+            if (badges.Children.Count > 0)
+            {
+                Grid.SetColumn(badges, 1);
+                titleRow.Children.Add(badges);
+            }
+        }
+        words.Children.Add(titleRow);
+
         var line = new TextBlock { FontSize = 13, TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis };
         line.Inlines.Add(new Run { Text = card.Line, Foreground = Secondary });
         if (card.Pace is { } pace)
@@ -149,8 +180,44 @@ public sealed partial class TasksPage
         AutomationProperties.SetName(box, card.Spoken);
         AutomationProperties.SetItemStatus(box, card.RingWords);
         AutomationProperties.SetAutomationId(box, card.AutomationId);
+        if (goal != null) box.ContextFlyout = GoalContextMenu(store, goal);
         box.Tapped += (_, _) => OpenGoal(card.Id);
         return box;
+    }
+
+    private MenuFlyout GoalContextMenu(TasksStore store, Goal goal)
+    {
+        var menu = new MenuFlyout();
+        menu.Items.Add(Item("Open Goal", "\uE8A7", () => OpenGoal(goal.Id)));
+        menu.Items.Add(FavoritesPinAction.ForGoal(goal.Id, goal.Shown));
+        if (!store.ReadOnlyGateway)
+        {
+            menu.Items.Add(new MenuFlyoutSeparator());
+            if (goal.State == GoalState.Active)
+                menu.Items.Add(Item("Pause", "\uE769", () => _ = store.PatchGoalAsync(goal.Id, new JsonObject { ["status"] = "paused", ["status_at"] = TodoDates.Now() })));
+            else if (goal.State == GoalState.Paused)
+                menu.Items.Add(Item("Resume", "\uE768", () => _ = store.PatchGoalAsync(goal.Id, new JsonObject { ["status"] = "active", ["status_at"] = TodoDates.Now() })));
+            else
+                menu.Items.Add(Item("Make Active Again", "\uE7A7", () => _ = store.PatchGoalAsync(goal.Id, new JsonObject { ["status"] = "active", ["status_at"] = TodoDates.Now() })));
+
+            if (goal.State != GoalState.Achieved)
+                menu.Items.Add(Item("Mark Achieved", "\uE73E", () => _ = store.PatchGoalAsync(goal.Id, new JsonObject { ["status"] = "achieved", ["status_at"] = TodoDates.Now() })));
+            if (goal.State != GoalState.LetGo)
+                menu.Items.Add(Item("Let It Go", "\uE711", () => _ = store.PatchGoalAsync(goal.Id, new JsonObject { ["status"] = "let_go", ["status_at"] = TodoDates.Now() })));
+
+            menu.Items.Add(new MenuFlyoutSeparator());
+            var delete = Item("Delete Goal…", "\uE74D", () => _ = ConfirmDeleteGoalCardAsync(store, goal));
+            delete.Foreground = Critical;
+            menu.Items.Add(delete);
+        }
+        return menu;
+    }
+
+    private async Task ConfirmDeleteGoalCardAsync(TasksStore store, Goal goal)
+    {
+        if (!await ConfirmAsync(XamlRoot, $"Delete “{goal.Shown}”?", "Its tasks are kept, with no goal.", "Delete Goal")) return;
+        if (_selectedGoal == goal.Id) CloseTask();
+        await store.DeleteGoalAsync(goal.Id);
     }
 
     // ------------------------------------------------------------------ [WIN-47] follow-ups
@@ -180,8 +247,6 @@ public sealed partial class TasksPage
         return state;
     }
 
-    /// The Mac offers the add-on's update here (PushSetupOffer) and then reads the whole list again; Windows has no
-    /// update offer yet, so this reads the list again (the pill turns into Goals once the add-on keeps them).
     private async Task UpdateGoalsAddOnAsync(TasksStore store)
     {
         if (_goalsUpdateAsked) return;
@@ -205,8 +270,7 @@ public sealed partial class TasksPage
         return mark;
     }
 
-    /// [WIN-47] "Add to Goal" on a row's menu, beside Move To (GoalShared.swift `GoalChoices.menu`): each active goal
-    /// (with milestones, a submenu), then No Goal and Open Goal for a task in one. null with nothing to choose.
+    /// [WIN-47] "Add to Goal" on a row's menu, beside Move To (GoalShared.swift `GoalChoices.menu`).
     private MenuFlyoutSubItem? AddToGoalMenu(TasksStore store, TodoTask task)
     {
         if (GoalChoices.Menu(task, store.Goals, store.GoalsSupported) is not { } choices) return null;
@@ -281,7 +345,7 @@ public sealed partial class TasksPage
         top.Children.Add(heading);
         var all = new HyperlinkButton { Content = GoalShelf.AllWords(cards.Count) + " ›", VerticalAlignment = VerticalAlignment.Center };
         AutomationProperties.SetName(all, "All Goals");
-        AutomationProperties.SetItemStatus(all, cards.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        AutomationProperties.SetItemStatus(all, cards.Count.ToString(CultureInfo.InvariantCulture));
         AutomationProperties.SetHelpText(all, "Opens the Goals view");
         AutomationProperties.SetAutomationId(all, GoalShelf.AllId);
         all.Click += (_, _) => { _view = TodoView.Goals; Render(); };
@@ -295,6 +359,7 @@ public sealed partial class TasksPage
         {
             var c = card;
             var view = ShelfCardView(c);
+            if (store.FindGoal(c.Id) is { } goal) view.ContextFlyout = GoalContextMenu(store, goal);
             view.Tapped += (_, _) => OpenGoal(c.Id);
             row.Children.Add(view);
         }
@@ -334,8 +399,34 @@ public sealed partial class TasksPage
         return box;
     }
 
-    /// New Goal: a name and why (NewGoalSheet's two lines: "New goal", "Why it matters"), then Add. It closes on Add and
-    /// the Goals view shows the new card.
+    // ------------------------------------------------------------------ Full New Goal dialog (`NewGoalSheet.swift`)
+
+    private static List<string> LoadRememberedGoalTeam(IReadOnlyList<string> availableBots)
+    {
+        var raw = GoalsPrefs.Get(LastGoalTeamKey);
+        if (raw == null)
+        {
+            // First time: root bot leads (or first bot available), matching GoalPlanWith.start.
+            var root = availableBots.FirstOrDefault(b => b == "default") ?? availableBots.FirstOrDefault();
+            return root != null ? [root] : [];
+        }
+        if (raw.Length == 0) return [];
+        var known = availableBots.ToHashSet(StringComparer.Ordinal);
+        return [.. raw.Split(',', StringSplitOptions.RemoveEmptyEntries).Where(known.Contains).Distinct(StringComparer.Ordinal)];
+    }
+
+    private static void SaveRememberedGoalTeam(IReadOnlyList<string> team) =>
+        GoalsPrefs.Set(LastGoalTeamKey, string.Join(",", team));
+
+    private static string GoalTeamNote(IReadOnlyList<string> team, Func<string?, string> botName)
+    {
+        if (team.Count == 0) return "Just you on this goal. You can add bots later.";
+        var lead = botName(team[0]);
+        if (team.Count == 1) return $"{lead} will lead this goal and draft a setup plan with you.";
+        var helpers = string.Join(", ", team.Skip(1).Select(b => botName(b)));
+        return $"{lead} leads and drafts the plan; {helpers} helps.";
+    }
+
     private void NewGoal()
     {
         if (_store is not { } store) return;
@@ -345,31 +436,305 @@ public sealed partial class TasksPage
 
     private async Task NewGoalAsync(TasksStore store)
     {
-        var title = new TextBox { PlaceholderText = "New goal" };
+        var bots = PageKit.Bots.ToList();
+        var offersPlan = store.GoalBotsSupported && bots.Count > 0;
+        var team = offersPlan ? LoadRememberedGoalTeam([.. bots.Select(b => b.Name)]) : new List<string>();
+        var manualDue = false;
+        var keepLiteral = false;
+        DateTimeOffset? manualDate = null;
+        GoalMeasure? measure = null;
+        Goal? createdGoal = null;
+        string? createdLead = null;
+
+        var title = new TextBox { PlaceholderText = "What's your goal? Like “Run a 5K”" };
         AutomationProperties.SetAutomationId(title, "goals.new.title");
         AutomationProperties.SetName(title, "New goal");
-        var why = new TextBox { PlaceholderText = "Why it matters", TextWrapping = TextWrapping.Wrap, AcceptsReturn = false };
+
+        var parseRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Visibility = Visibility.Collapsed };
+        var parseText = Text("", 12, color: Secondary);
+        parseText.VerticalAlignment = VerticalAlignment.Center;
+        AutomationProperties.SetAutomationId(parseText, "goals.new.read");
+        var keepBtn = new HyperlinkButton { Content = "Keep literal", Padding = new Thickness(4, 0, 4, 0), FontSize = 12 };
+        parseRow.Children.Add(parseText);
+        parseRow.Children.Add(keepBtn);
+
+        var why = new TextBox { AcceptsReturn = false, Text = "", PlaceholderText = "Why it matters to you (optional)", TextWrapping = TextWrapping.Wrap };
         AutomationProperties.SetAutomationId(why, "goals.new.why");
         AutomationProperties.SetName(why, "Why it matters");
+
+        // Who's helping? section
+        var whoSection = new StackPanel { Spacing = 6, Visibility = offersPlan ? Visibility.Visible : Visibility.Collapsed };
+        var whoHeader = Text("Who's helping?", 12, bold: true, color: Secondary);
+        AutomationProperties.SetAutomationId(whoHeader, "goals.new.who");
+        var whoChips = new TaskWrapPanel { HorizontalSpacing = 6, VerticalSpacing = 6 };
+        var whoNote = Text("", 12, color: Secondary);
+        AutomationProperties.SetAutomationId(whoNote, "goals.new.who.note");
+        whoSection.Children.Add(whoHeader);
+        whoSection.Children.Add(whoChips);
+        whoSection.Children.Add(whoNote);
+
+        // Date & Number chips row (uses Flyouts, never nested ContentDialogs)
+        var chipsRow = new TaskWrapPanel { HorizontalSpacing = 8, VerticalSpacing = 6 };
+        var dateBtn = new DropDownButton { Content = "Date" };
+        AutomationProperties.SetAutomationId(dateBtn, "goals.new.due");
+        var numberBtn = new Button { Content = "Number" };
+        AutomationProperties.SetAutomationId(numberBtn, "goals.new.number");
+        chipsRow.Children.Add(dateBtn);
+        chipsRow.Children.Add(numberBtn);
+
         var failure = Text("", 13, color: Critical);
         failure.Visibility = Visibility.Collapsed;
-        var body = new StackPanel { Spacing = 10, MinWidth = 360 };
+
+        var body = new StackPanel { Spacing = 10, MinWidth = 400 };
         body.Children.Add(title);
+        body.Children.Add(parseRow);
         body.Children.Add(why);
+        body.Children.Add(whoSection);
+        body.Children.Add(chipsRow);
         body.Children.Add(failure);
+
         var dialog = new ContentDialog
         {
-            Title = GoalsCopy.NewGoal, Content = body, PrimaryButtonText = "Add", CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Primary, IsPrimaryButtonEnabled = false,
+            Title = GoalsCopy.NewGoal,
+            Content = new ScrollViewer { Content = body, MaxHeight = 520, VerticalScrollBarVisibility = ScrollBarVisibility.Auto },
+            PrimaryButtonText = "Add",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            IsPrimaryButtonEnabled = false,
         };
-        title.TextChanged += (_, _) => dialog.IsPrimaryButtonEnabled = title.Text.Trim().Length > 0;
+
+        TodoQuickRead CurrentRead() =>
+            TodoQuickParse.Read(title.Text, DateTimeOffset.Now, Zone, dates: !manualDue, goal: true, keepLiteral: keepLiteral);
+
+        DateTimeOffset? EffectiveDue() => manualDue ? manualDate : CurrentRead().Due;
+
+        string EffectiveName()
+        {
+            var r = CurrentRead();
+            var cleaned = r.Title.Trim();
+            return cleaned.Length > 0 ? cleaned : title.Text.Trim();
+        }
+
+        void RefreshUi()
+        {
+            var now = DateTimeOffset.Now;
+            var read = CurrentRead();
+            var effDue = EffectiveDue();
+            var effName = EffectiveName();
+
+            dialog.IsPrimaryButtonEnabled = effName.Length > 0;
+            dialog.PrimaryButtonText = offersPlan && team.Count > 0 ? $"Plan With {BotName(team[0])}" : "Add";
+
+            if (!manualDue && read.Due is { } parsedDue && !string.Equals(read.Title.Trim(), title.Text.Trim(), StringComparison.Ordinal))
+            {
+                parseText.Text = $"“{read.Title.Trim()}” · By {TodoWords.MonthDay(parsedDue, now, Zone)}";
+                keepBtn.Content = "Keep literal";
+                parseRow.Visibility = Visibility.Visible;
+            }
+            else if (keepLiteral && !manualDue && TodoQuickParse.Read(title.Text, now, Zone, dates: true, goal: true, keepLiteral: false).Due != null)
+            {
+                parseText.Text = "Keeping title literal";
+                keepBtn.Content = "Read date";
+                parseRow.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                parseRow.Visibility = Visibility.Collapsed;
+            }
+
+            dateBtn.Content = effDue is { } d ? "By " + TodoWords.MonthDay(d, now, Zone) : "Date";
+            if (measure is { } m)
+            {
+                var unitSuffix = m.Unit.Length == 0 || m.Unit == "$" ? "" : " " + m.Unit;
+                numberBtn.Content = $"{GoalViews.Number(m.Start, m.Unit)} → {GoalViews.Number(m.Target, m.Unit)}{unitSuffix}";
+            }
+            else
+            {
+                numberBtn.Content = "Number";
+            }
+
+            if (offersPlan)
+            {
+                whoChips.Children.Clear();
+                foreach (var b in bots)
+                {
+                    var botId = b.Name;
+                    var on = team.Contains(botId);
+                    var leads = team.Count > 0 && team[0] == botId;
+                    var faceRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
+                    faceRow.Children.Add(Face(botId, 20));
+                    var labelStack = new StackPanel { Spacing = 0 };
+                    labelStack.Children.Add(Text(b.DisplayName, 12.5, bold: on, wrap: false));
+                    if (leads) labelStack.Children.Add(Text("Leads", 10.5, color: on ? Brush("TextOnAccentFillColorSecondaryBrush") : Secondary, wrap: false));
+                    faceRow.Children.Add(labelStack);
+
+                    var chip = new Button
+                    {
+                        Content = faceRow,
+                        Padding = new Thickness(8, 4, 10, 4),
+                        CornerRadius = new CornerRadius(16),
+                        Style = on ? Style("AccentButtonStyle") : null,
+                    };
+                    AutomationProperties.SetName(chip, leads ? $"{b.DisplayName}, Leads" : on ? $"{b.DisplayName}, Helps" : b.DisplayName);
+                    AutomationProperties.SetAutomationId(chip, "goals.new.who." + botId);
+                    chip.Click += (_, _) =>
+                    {
+                        if (!team.Remove(botId)) team.Add(botId);
+                        SaveRememberedGoalTeam(team);
+                        RefreshUi();
+                    };
+                    if (on && !leads)
+                    {
+                        var ctx = new MenuFlyout();
+                        ctx.Items.Add(Item("Make Lead", "\uE734", () =>
+                        {
+                            team.Remove(botId);
+                            team.Insert(0, botId);
+                            SaveRememberedGoalTeam(team);
+                            RefreshUi();
+                        }));
+                        ctx.Items.Add(Item("Take Off", "\uE738", () =>
+                        {
+                            team.Remove(botId);
+                            SaveRememberedGoalTeam(team);
+                            RefreshUi();
+                        }));
+                        chip.ContextFlyout = ctx;
+                    }
+                    whoChips.Children.Add(chip);
+                }
+
+                var justMeOn = team.Count == 0;
+                var justMe = new Button
+                {
+                    Content = "Just Me",
+                    Padding = new Thickness(12, 6, 12, 6),
+                    CornerRadius = new CornerRadius(16),
+                    Style = justMeOn ? Style("AccentButtonStyle") : null,
+                };
+                AutomationProperties.SetName(justMe, "Just Me");
+                AutomationProperties.SetAutomationId(justMe, "goals.new.who.just-me");
+                justMe.Click += (_, _) =>
+                {
+                    team.Clear();
+                    SaveRememberedGoalTeam(team);
+                    RefreshUi();
+                };
+                whoChips.Children.Add(justMe);
+                whoNote.Text = GoalTeamNote(team, BotName);
+            }
+        }
+
+        keepBtn.Click += (_, _) => { keepLiteral = !keepLiteral; RefreshUi(); };
+        title.TextChanged += (_, _) => RefreshUi();
+        title.KeyDown += (_, e) => { if (e.Key == VirtualKey.Enter) { e.Handled = true; why.Focus(FocusState.Programmatic); } };
+
+        // Date menu + CalendarDatePicker Flyout (avoids nested ContentDialog)
+        var dateMenu = new MenuFlyout();
+        dateMenu.Opening += (_, _) =>
+        {
+            dateMenu.Items.Clear();
+            var now = DateTimeOffset.Now;
+            var today = TodoDates.LocalDay(now, Zone);
+            void Pick(DateTimeOffset? picked)
+            {
+                manualDue = true;
+                manualDate = picked;
+                RefreshUi();
+            }
+            dateMenu.Items.Add(Item("In a Month", "\uE787", () => Pick(new DateTimeOffset(today.AddMonths(1), Zone.GetUtcOffset(today.AddMonths(1))))));
+            dateMenu.Items.Add(Item("In 3 Months", "\uE787", () => Pick(new DateTimeOffset(today.AddMonths(3), Zone.GetUtcOffset(today.AddMonths(3))))));
+            var eoy = new DateTime(today.Year, 12, 31);
+            dateMenu.Items.Add(Item("End of the Year", "\uE787", () => Pick(new DateTimeOffset(eoy, Zone.GetUtcOffset(eoy)))));
+            dateMenu.Items.Add(Item("Choose Date…", "\uE787", () =>
+            {
+                var flyout = new Flyout();
+                var picker = new CalendarDatePicker
+                {
+                    Date = EffectiveDue() ?? DateTimeOffset.Now.AddMonths(1),
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    Header = "Target Date",
+                };
+                var setBtn = Push("Set Date", () =>
+                {
+                    if (picker.Date is { } d) Pick(d);
+                    flyout.Hide();
+                }, accent: true);
+                var stack = new StackPanel { Spacing = 8, MinWidth = 240 };
+                stack.Children.Add(picker);
+                stack.Children.Add(setBtn);
+                flyout.Content = stack;
+                flyout.ShowAt(dateBtn);
+            }));
+            if (EffectiveDue() != null)
+            {
+                dateMenu.Items.Add(new MenuFlyoutSeparator());
+                var clear = Item("No Date", "\uE711", () => Pick(null));
+                clear.Foreground = Critical;
+                dateMenu.Items.Add(clear);
+            }
+        };
+        dateBtn.Flyout = dateMenu;
+
+        // Number Flyout (avoids nested ContentDialog)
+        numberBtn.Click += (_, _) =>
+        {
+            var flyout = new Flyout();
+            var startBox = new TextBox { Header = "Start", Text = measure != null ? measure.Start.ToString(CultureInfo.InvariantCulture) : "0" };
+            var targetBox = new TextBox { Header = "Target", Text = measure != null ? measure.Target.ToString(CultureInfo.InvariantCulture) : "" };
+            var unitBox = new TextBox { Header = "Unit (optional, e.g. km, $)", Text = measure?.Unit ?? "" };
+            var err = Text("", 12, color: Critical);
+            err.Visibility = Visibility.Collapsed;
+            var btns = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            btns.Children.Add(Push("Set", () =>
+            {
+                if (!double.TryParse(targetBox.Text.Trim(), CultureInfo.InvariantCulture, out var targetVal))
+                {
+                    err.Text = "Enter a target number.";
+                    err.Visibility = Visibility.Visible;
+                    return;
+                }
+                if (!double.TryParse(startBox.Text.Trim(), CultureInfo.InvariantCulture, out var startVal)) startVal = 0;
+                measure = new GoalMeasure(unitBox.Text.Trim(), startVal, targetVal, startVal);
+                flyout.Hide();
+                RefreshUi();
+            }, accent: true));
+            if (measure != null)
+            {
+                var clear = Quiet("No Number", () => { measure = null; flyout.Hide(); RefreshUi(); });
+                clear.Foreground = Critical;
+                btns.Children.Add(clear);
+            }
+            var panel = new StackPanel { Spacing = 8, MinWidth = 260 };
+            panel.Children.Add(startBox);
+            panel.Children.Add(targetBox);
+            panel.Children.Add(unitBox);
+            panel.Children.Add(err);
+            panel.Children.Add(btns);
+            flyout.Content = panel;
+            flyout.ShowAt(numberBtn);
+        };
+
+        RefreshUi();
+
         dialog.PrimaryButtonClick += async (_, e) =>
         {
             var wait = e.GetDeferral();
             try
             {
-                if (await store.AddGoalAsync(title.Text, why.Text) is { } made)
+                var finalName = EffectiveName();
+                if (finalName.Length > 200) finalName = finalName[..200];
+                var finalWhy = why.Text.Trim();
+                if (finalWhy.Length > 300) finalWhy = finalWhy[..300];
+                var dueKey = EffectiveDue() is { } d ? TodoViews.DayKey(TodoDates.LocalDay(d, Zone)) : null;
+                var lead = offersPlan && team.Count > 0 ? team[0] : null;
+                var helpers = offersPlan && team.Count > 1 ? team.Skip(1).ToList() : null;
+                var review = lead != null ? new GoalReview(0, "08:00") : null;
+
+                if (await store.AddGoalAsync(finalName, finalWhy, due: dueKey, measure: measure, lead: lead, helpers: helpers, review: review) is { } made)
                 {
+                    createdGoal = made;
+                    createdLead = lead;
                     _view = TodoView.Goals;
                     AppLog.Note("tasks", "goal added");
                     return;
@@ -387,7 +752,32 @@ public sealed partial class TasksPage
             }
             finally { wait.Complete(); }
         };
+
         await ShowAsync(XamlRoot, dialog);
         Render();
+
+        if (createdGoal != null)
+        {
+            if (createdLead != null)
+                OpenGoalChatForPlan(createdGoal, createdLead);
+            else
+                OpenGoal(createdGoal.Id);
+        }
+    }
+
+    private static void OpenGoalChatForPlan(Goal goal, string leadId)
+    {
+        var prompt = GoalBots.PlanRequest(goal);
+        if (goal.Chat is { } chat)
+        {
+            Navigator.Go(new ChatDestination(chat.Profile, chat.SessionId, TaskChatLinks.GoalSessionTitle(goal), prompt));
+            return;
+        }
+        var bot = PageKit.Bots.FirstOrDefault(b => b.Name == leadId) ?? PageKit.Bots.FirstOrDefault();
+        if (bot == null) return;
+        if (bot.Canonical?.OpenId is { Length: > 0 } cid)
+            Navigator.Go(new ChatDestination(bot.Name, cid, TaskChatLinks.GoalSessionTitle(goal), prompt));
+        else
+            Navigator.Go(new BotChatDestination(bot));
     }
 }

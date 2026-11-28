@@ -11,7 +11,7 @@
             <RowDefinition Height="40" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
-        <Grid x:Name="TitleBar" Padding="14,0,0,0" ColumnSpacing="10">
+        <Grid x:Name="TitleBar" Background="Transparent" Padding="14,0,0,0" ColumnSpacing="10">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />

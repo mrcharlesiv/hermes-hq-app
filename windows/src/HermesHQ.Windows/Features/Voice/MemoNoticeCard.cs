@@ -137,8 +137,8 @@ public sealed class MemoNoticeCardView : UserControl
             CornerRadius = new CornerRadius(12),
             Padding = new Thickness(12, 10, 10, 10),
             BorderThickness = new Thickness(1),
-            Background = ThemeBrushes.Get("CardBackgroundFillColorDefaultBrush"),
-            BorderBrush = ThemeBrushes.Get("CardStrokeColorDefaultBrush"),
+            Background = ThemeBrushes.Get("HQPromptCardBrush"),
+            BorderBrush = ThemeBrushes.Get("HQPromptEdgeBrush"),
             Child = grid,
         };
     }

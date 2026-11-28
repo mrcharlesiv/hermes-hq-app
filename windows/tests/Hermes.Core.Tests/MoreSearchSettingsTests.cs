@@ -59,7 +59,7 @@ public class MoreSearchSettingsTests
     /// The file actions are About's buttons, not Open Quickly rows (MoreSearchUI.swift:243 drops `.action`).
     [Theory]
     [InlineData("export", new string[0])]
-    [InlineData("import", new string[0])]
+    [InlineData("import", new[] { "more:import-sessions" })]
     [InlineData("factory", new string[0])]
     [InlineData("backup", new string[0])]
     [InlineData("reset", new[] { "app:sound" })]   // Sound's "preset", as the Mac's substring match finds it

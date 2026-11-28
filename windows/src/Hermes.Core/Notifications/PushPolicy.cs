@@ -68,6 +68,20 @@ public static class PushPolicy
     public static bool Goals(JsonObject? body) => body != null && body.Int("goal_pages") != null;
     public static bool Terminal(JsonObject? body) => body?.Bool("terminal") == true;
     public static bool TaskFields(JsonObject? body) => body?.Bool("task_fields") == true;
+    public static bool TravelCards(JsonObject? body) => body?.Bool("travelCards") == true;
+    public static bool TravelCardsShown(JsonObject? body) => body?.Bool("travelCardsShown") == true;
+    public static bool TravelCardsKnown(JsonObject? body) => body?.Bool("travelCards") != null;
+    public static bool ShoppingCards(JsonObject? body) => body?.Bool("shoppingCards") == true;
+    public static bool ShoppingCardsShown(JsonObject? body) => body?.Bool("shoppingCardsShown") == true;
+    public static bool ShoppingCardsKnown(JsonObject? body) => body?.Bool("shoppingCards") != null;
+    public static bool DraftCards(JsonObject? body) => body?.Bool("draftCards") == true;
+    public static bool DraftCardsShown(JsonObject? body) => body?.Bool("draftCardsShown") == true;
+    public static bool DraftCardsKnown(JsonObject? body) => body?.Bool("draftCards") != null;
+    public static bool ActCards(JsonObject? body) => body?.Bool("actCards") == true;
+    public static bool ActCardsShown(JsonObject? body) => body?.Bool("actCardsShown") == true;
+    public static bool ActCardsKnown(JsonObject? body) => body?.Bool("actCards") != null;
+    public static bool ToolPermissions(JsonObject? body) => body?.Bool("toolPermissions") == true;
+    public static bool ToolPermissionsAsk(JsonObject? body) => body?.Bool("toolPermissionsAsk") != false;
     public static string? PluginVersion(JsonObject? body) => body?.Str("pluginVersion");
 
     public static bool VersionAtLeast(string? version, string minimum)
@@ -104,7 +118,17 @@ public static class PushPolicy
                 Tasks: Tasks(node),
                 Goals: Goals(node),
                 Kinds: [.. Kinds(node).OrderBy(x => x, StringComparer.Ordinal)],
-                Error: null);
+                Error: null,
+                TravelCards: TravelCards(node),
+                TravelCardsShown: TravelCardsShown(node),
+                ShoppingCards: ShoppingCards(node),
+                ShoppingCardsShown: ShoppingCardsShown(node),
+                DraftCards: DraftCards(node),
+                DraftCardsShown: DraftCardsShown(node),
+                ActCards: ActCards(node),
+                ActCardsShown: ActCardsShown(node),
+                ToolPermissions: ToolPermissions(node),
+                ToolPermissionsAsk: ToolPermissionsAsk(node));
         }
         catch (GatewayException ex) when (ex.Status == 404)
         {
@@ -113,6 +137,51 @@ public static class PushPolicy
         catch (Exception ex) when (ex is GatewayException or HttpRequestException or OperationCanceledException)
         {
             return new(Installed: false, Version: null, Seals: false, Tasks: false, Goals: false, Kinds: [], Error: ex.Message);
+        }
+    }
+
+    /// Tells the push add-on this app renders flight & hotel cards (`PUT /api/plugins/hermes-hq-push/travel/cards`).
+    public static Task<bool> EnableTravelCardsAsync(GatewaySession session, CancellationToken ct = default) =>
+        PutCapabilityAsync(session, "/travel/cards", ct);
+
+    /// Tells the push add-on this app renders product & order cards (`PUT /api/plugins/hermes-hq-push/shopping/cards`).
+    public static Task<bool> EnableShoppingCardsAsync(GatewaySession session, CancellationToken ct = default) =>
+        PutCapabilityAsync(session, "/shopping/cards", ct);
+
+    /// Tells the push add-on this app renders draft cards (`PUT /api/plugins/hermes-hq-push/drafts/cards`).
+    public static Task<bool> EnableDraftCardsAsync(GatewaySession session, CancellationToken ct = default) =>
+        PutCapabilityAsync(session, "/drafts/cards", ct);
+
+    /// Tells the push add-on this app renders ask-to-act cards (`PUT /api/plugins/hermes-hq-push/asks/cards`).
+    public static Task<bool> EnableAskCardsAsync(GatewaySession session, CancellationToken ct = default) =>
+        PutCapabilityAsync(session, "/asks/cards", ct);
+
+    /// Performs capability handshakes for any card family the add-on supports but has not yet been told this app draws
+    /// (App/Notifications/PushRegistrar.swift `probe`).
+    public static async Task SyncCardCapabilitiesAsync(GatewaySession session, PushAddonStatus status, CancellationToken ct = default)
+    {
+        if (!status.Installed) return;
+        if (status.DraftCards && !status.DraftCardsShown)
+            await EnableDraftCardsAsync(session, ct).ConfigureAwait(false);
+        if (status.ShoppingCards && !status.ShoppingCardsShown)
+            await EnableShoppingCardsAsync(session, ct).ConfigureAwait(false);
+        if (status.TravelCards && !status.TravelCardsShown)
+            await EnableTravelCardsAsync(session, ct).ConfigureAwait(false);
+        if (status.ActCards && !status.ActCardsShown)
+            await EnableAskCardsAsync(session, ct).ConfigureAwait(false);
+    }
+
+    private static async Task<bool> PutCapabilityAsync(GatewaySession session, string subPath, CancellationToken ct)
+    {
+        try
+        {
+            var answer = await session.SendAsync(HttpMethod.Put, PluginRoute + subPath, timeout: TimeSpan.FromSeconds(10), ct: ct)
+                .ConfigureAwait(false);
+            return answer.Ok;
+        }
+        catch (Exception ex) when (ex is GatewayException or HttpRequestException or OperationCanceledException)
+        {
+            return false;
         }
     }
 }
@@ -124,4 +193,14 @@ public sealed record PushAddonStatus(
     bool Tasks,
     bool Goals,
     IReadOnlyList<string> Kinds,
-    string? Error);
+    string? Error,
+    bool TravelCards = false,
+    bool TravelCardsShown = false,
+    bool ShoppingCards = false,
+    bool ShoppingCardsShown = false,
+    bool DraftCards = false,
+    bool DraftCardsShown = false,
+    bool ActCards = false,
+    bool ActCardsShown = false,
+    bool ToolPermissions = false,
+    bool ToolPermissionsAsk = true);

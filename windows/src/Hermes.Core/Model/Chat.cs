@@ -35,7 +35,7 @@ public sealed record ToolCall(string Id, string Name, string? ArgsText, string? 
 public sealed record ChatMessage(string Id, Role Role, IReadOnlyList<ChatPart> Parts, DateTimeOffset? Timestamp = null,
     long? RowId = null, bool IsStreaming = false, bool IsPending = false, bool Interrupted = false,
     string? Error = null, int Revision = 0, IReadOnlyList<Hermes.Core.Transcripts.MessageReaction>? Reactions = null,
-    long? ReactionRow = null)
+    long? ReactionRow = null, DateTimeOffset? LatestTimestamp = null)
 {
     // Reactions: Tapbacks from every row folded in (HermesKit ChatMessage.reactions); ReactionRow: the row holding the
     // words, where a new reaction goes (reactionRow / reactionTarget).
@@ -43,6 +43,10 @@ public sealed record ChatMessage(string Id, Role Role, IReadOnlyList<ChatPart> P
     /// [groups] Another bot's or a room member's name and face on this bubble (ChatMessage.sender; rooms and
     /// deliveries, docs/spec/3x-groups.md §3.4). Null: you, or the chat's own bot.
     public Hermes.Core.Groups.ChatSender? Sender { get; init; }
+    /// [groups] True when an incoming delivery or DM exchange is the other bot's reply to a DM this bot sent (#601).
+    public bool ReplyToOurDM { get; init; }
+    /// Scheduled job or automated wake label carried on a cron delivery or wake row (`scheduled_wake` / `loop_wakeup`).
+    public string? Job { get; init; }
     public IEnumerable<ToolCall> Tools => Parts.OfType<ToolPart>().Select(p => p.Call);
     public IEnumerable<MessageAttachment> Attachments => Parts.OfType<AttachmentPart>().Select(p => p.Attachment);
 }

@@ -13,7 +13,7 @@ public sealed record HistoryPage(IReadOnlyList<ChatMessage> Messages, long NextO
     DateTimeOffset? NewestStoredAt = null, long? NewestRowId = null);
 
 /// Everything for one signed-in account: REST, the socket, bots, sessions, history.
-public sealed class HermesClient : IAsyncDisposable
+public sealed class HermesClient : IAsyncDisposable, IDisposable
 {
     private readonly SemaphoreSlim _rosterGate = new(1, 1);
     private int _pageSeq;
@@ -153,7 +153,27 @@ public sealed class HermesClient : IAsyncDisposable
     {
         Questions.Dispose();
         await Rpc.DisposeAsync();
+        await Session.SettleRenewalAsync();
         Session.Dispose();
+    }
+
+    /// Synchronous teardown for non-async callers: settles any in-flight Nous renewal before disposing the HTTP
+    /// transport so a rotated refresh token is never lost mid-flight (LiveGatewayClient.swift `shutdown`).
+    public void Dispose()
+    {
+        Questions.Dispose();
+        _ = DisposeBackgroundAsync();
+    }
+
+    private async Task DisposeBackgroundAsync()
+    {
+        try
+        {
+            await Rpc.DisposeAsync().ConfigureAwait(false);
+            await Session.SettleRenewalAsync().ConfigureAwait(false);
+        }
+        catch (Exception) { }
+        finally { Session.Dispose(); }
     }
 }
 

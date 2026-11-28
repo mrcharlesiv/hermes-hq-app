@@ -2,11 +2,14 @@ using Hermes.Core.Capabilities;
 using HermesHQ.Shell;
 using DensitySizes = Hermes.Core.Settings.DensitySizes;
 using ThemeService = HermesHQ.Features.Settings.ThemeService;
+using Microsoft.UI;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.UI.Xaml.Navigation;
 
 namespace HermesHQ.Features.Capabilities;
@@ -35,14 +38,14 @@ public sealed partial class MarketplacePage : Page
     }
 }
 
-/// The Hermes Marketplace (App/Capabilities/Marketplace.swift), laid out as the Mac's store front: a side list
-/// (Discover, Plugins and Skills with their kinds, Install To) and the cards: the featured pick and the shelves on
-/// Discover, else the Official · Certified · Community chips, Sort By and the results. Plugins come from plugins.json,
-/// skills from the Marketplace page; everything installs for the bot in Install To.
+/// The Hermes Marketplace (App/Capabilities/Marketplace.swift), laid out as the Mac's store front:
+/// split hero + 3 vertical side picks with banner images, horizontal carousel with Previous/Next arrow buttons,
+/// whole-row column alignment, narrow stacked Sort header (< 420 px), and pointer hover feedback.
 internal sealed class MarketplaceScreen : Screen
 {
     private readonly CapabilitiesModel _m;
     private readonly MarketplaceState _state;
+    private int _layoutBucket = -1;
 
     public MarketplaceScreen(CapabilitiesModel model, MarketplaceKind kind, string query = "")
     {
@@ -73,6 +76,8 @@ internal sealed class MarketplaceScreen : Screen
     {
         _m.RootSource = () => Root;
         _m.Changed += Render;
+        Host.SizeChanged += OnHostSizeChanged;
+        _layoutBucket = LayoutBucket(Host.ActualWidth);
         var loads = new List<Task> { CapabilitiesServices.PluginCatalog.LoadAsync(), CapabilitiesServices.SkillCatalog.LoadAsync() };
         if (_m.Plugins == null) loads.Add(_m.ReloadPlugins());
         if (_m.Skills == null) loads.Add(_m.ReloadSkills());
@@ -81,7 +86,27 @@ internal sealed class MarketplaceScreen : Screen
         Render();
     }
 
-    public override void Hidden() => _m.Changed -= Render;
+    public override void Hidden()
+    {
+        _m.Changed -= Render;
+        Host.SizeChanged -= OnHostSizeChanged;
+    }
+
+    private void OnHostSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        var bucket = LayoutBucket(e.NewSize.Width);
+        if (bucket == _layoutBucket) return;
+        _layoutBucket = bucket;
+        Render();
+    }
+
+    private static int LayoutBucket(double width) => width switch
+    {
+        >= 900 => 3,
+        >= 640 => 2,
+        >= 420 => 1,
+        _ => 0,
+    };
 
     private IReadOnlyList<PluginCatalogEntry> Plugins => CapabilitiesServices.PluginCatalog.Entries ?? [];
     private IReadOnlyList<MarketSkill> Skills => CapabilitiesServices.SkillCatalog.Entries ?? [];
@@ -95,10 +120,33 @@ internal sealed class MarketplaceScreen : Screen
         Render();
     }
 
+    /// Drops trailing partial-row items when wide so shelf grids align to whole rows (Marketplace.swift `wholeRows`).
+    internal static List<T> WholeRows<T>(IReadOnlyList<T> items, double contentWidth, double cardWidth = 250, bool wide = true)
+    {
+        if (!wide || contentWidth <= 0) return [.. items];
+        var columns = Math.Max(1, (int)((contentWidth + 12) / (cardWidth + 12)));
+        return items.Count > columns
+            ? [.. items.Take(items.Count - items.Count % columns)]
+            : [.. items];
+    }
+
+    /// Subtle pointer hover background feedback for cards, side picks, and sidebar rows.
+    private static void AttachHover(Button button, Brush rest, Brush hover)
+    {
+        button.Background = rest;
+        button.PointerEntered += (_, _) => button.Background = hover;
+        button.PointerExited += (_, _) => button.Background = rest;
+    }
+
     public override void Build(StackPanel page)
     {
         _state.Query = Query;
-        var wide = Host.ActualWidth >= 900;
+        var hostWidth = Host.ActualWidth;
+        var wide = hostWidth >= 900;
+        var contentWidth = wide
+            ? Math.Max(300, Math.Min(712, hostWidth - 48) - 224)
+            : Math.Max(260, hostWidth > 0 ? Math.Min(712, hostWidth - 48) : 680);
+
         var main = new StackPanel();
         if (wide)
         {
@@ -112,11 +160,11 @@ internal sealed class MarketplaceScreen : Screen
         }
         else
         {
-            // Mac 1270 ordinary pane (~767 px): All / Plugins / Skills segments above full-width content instead of a 200 px sidebar.
             page.Children.Add(CompactBar());
             page.Children.Add(main);
         }
-        if (_state.Browsing) Discover(main); else Results(main);
+        if (_state.Browsing) Discover(main, wide, contentWidth);
+        else Results(main, contentWidth);
     }
 
     private UIElement CompactBar()
@@ -170,6 +218,10 @@ internal sealed class MarketplaceScreen : Screen
     private UIElement Side()
     {
         var side = new StackPanel { Spacing = 2 };
+        var transparent = new SolidColorBrush(Colors.Transparent);
+        var subtle = Kit.Brush("SubtleFillColorSecondaryBrush");
+        var hover = Kit.Brush("SubtleFillColorTertiaryBrush");
+
         UIElement Row(string title, string glyph, int? count, bool on, Action pick)
         {
             var g = new Grid { ColumnSpacing = 8 };
@@ -184,10 +236,10 @@ internal sealed class MarketplaceScreen : Screen
             var b = new Button
             {
                 Content = g, HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch,
-                Padding = new Thickness(8, 5, 8, 5), BorderThickness = new Thickness(0),
-                Background = on ? Kit.Brush("SubtleFillColorSecondaryBrush") : new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Transparent),
+                Padding = new Thickness(8, 5, 8, 5), BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(6),
             };
-            AutomationProperties.SetName(b, title);
+            AttachHover(b, on ? subtle : transparent, on ? subtle : hover);
+            AutomationProperties.SetName(b, count is { } cnt ? $"{title}, {cnt}" : title);
             b.Click += (_, _) => pick();
             return b;
         }
@@ -227,43 +279,40 @@ internal sealed class MarketplaceScreen : Screen
 
     // ---------------------------------------------------------------- Discover
 
-    private void Discover(StackPanel main)
+    private void Discover(StackPanel main, bool wide, double contentWidth)
     {
         var plugins = CapabilitiesServices.PluginCatalog;
         var skills = CapabilitiesServices.SkillCatalog;
         if (plugins.Entries is { } entries)
         {
             var featured = MarketplaceFeatured.Picks(entries);
-            if (featured.Count == 1) main.Children.Add(Hero(featured[0]));
+            if (featured.Count == 1)
+            {
+                main.Children.Add(HeroCard(featured[0], showSideBanner: contentWidth >= 480));
+            }
             else if (featured.Count > 1)
             {
-                // Mac 1270: horizontal scrollable row exposing all ranked featured picks (not just featured[0]).
-                var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12, Padding = new Thickness(0, 0, 12, 8) };
-                foreach (var pick in featured)
-                {
-                    var card = Hero(pick);
-                    if (card is FrameworkElement fe) fe.Width = 340;
-                    row.Children.Add(card);
-                }
-                main.Children.Add(new ScrollViewer
-                {
-                    Content = row, HorizontalScrollMode = ScrollMode.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-                    VerticalScrollMode = ScrollMode.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                    Margin = new Thickness(0, 0, 0, 14),
-                });
+                if (contentWidth >= 600)
+                    main.Children.Add(SplitStoreHero(featured));
+                else
+                    main.Children.Add(FeaturedCarousel(featured));
             }
-            var quality = MarketplaceFeatured.QualityOfLife(entries);
+
+            var quality = WholeRows(MarketplaceFeatured.QualityOfLife(entries), contentWidth, wide: wide);
             if (quality.Count > 0)
                 main.Children.Add(Shelf("Quality of Life Improvements", MarketplaceWords.QualityBlurb, quality.Select(PluginCard),
                     ("See All", () => Choose(MarketplaceKind.Plugins, PluginCatalogCategory.Tools.Raw()))));
             if (MarketplaceFeatured.Spotlight(entries) is var (maker, picks))
+            {
+                var aligned = WholeRows(picks, contentWidth, wide: wide);
                 main.Children.Add(Shelf($"Spotlight: {maker}", $"{picks.Count} picks from the community maintainer with the most plugins in the catalog.",
-                    picks.Select(PluginCard), ("See All", () => { _state.Choose(MarketplaceKind.Plugins); Query = maker; Host.Render(this); })));
+                    aligned.Select(PluginCard), ("See All", () => { _state.Choose(MarketplaceKind.Plugins); Query = maker; Host.Render(this); })));
+            }
         }
         else Loading(main, "plugins", plugins.Error, () => plugins.LoadAsync(force: true));
         if (skills.Entries is { } skillEntries)
         {
-            var nous = skillEntries.Where(s => s.IsOfficial).Take(6).ToList();
+            var nous = WholeRows(skillEntries.Where(s => s.IsOfficial).Take(6).ToList(), contentWidth, wide: wide);
             if (nous.Count > 0)
                 main.Children.Add(Shelf("Skills from Nous", MarketplaceWords.SkillsBlurb, nous.Select(SkillCard),
                     ($"See All {skillEntries.Count:N0} Skills", () => Choose(MarketplaceKind.Skills))));
@@ -290,20 +339,254 @@ internal sealed class MarketplaceScreen : Screen
         else main.Children.Add(Kit.Section(null, [Kit.Busy($"Loading {what}…")]));
     }
 
-    private UIElement Hero(PluginCatalogEntry e)
+    /// Split `storeHero`: lead featured card on the left + up to 3 vertical side picks with banner thumbnails on the right.
+    private UIElement SplitStoreHero(IReadOnlyList<PluginCatalogEntry> picks)
     {
-        var s = new StackPanel { Spacing = 8 };
-        s.Children.Add(Kit.Text("FEATURED THIS WEEK", 11, bold: true, color: Kit.Accent));
-        s.Children.Add(Kit.Text(e.Title, 22, bold: true));
-        s.Children.Add(Kit.Text(string.Join(" · ", new[] { e.TierWord ?? "", e.Maintainer.Length > 0 ? $"by {e.Maintainer}" : "" }.Where(x => x.Length > 0)), 13, secondary: true));
-        s.Children.Add(Kit.Text(e.Summary, 14));
-        var line = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        if (_m.InstalledPlugin(e) != null) line.Children.Add(Kit.Text("✓ Installed", 13, bold: true, color: Kit.Success));
+        var grid = new Grid { ColumnSpacing = 12, Margin = new Thickness(0, 0, 0, 18) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(3, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star), MinWidth = 220, MaxWidth = 340 });
+
+        var lead = HeroCard(picks[0], showSideBanner: false, bottomMargin: 0);
+        grid.Children.Add(lead);
+
+        var sideStack = new StackPanel { Spacing = 8 };
+        foreach (var pick in picks.Skip(1).Take(3))
+            sideStack.Children.Add(SidePickCard(pick));
+        Grid.SetColumn(sideStack, 1);
+        grid.Children.Add(sideStack);
+        return grid;
+    }
+
+    /// Compact side pick card (banner thumbnail + title + 2-line summary + maintainer) with pointer hover polish.
+    private UIElement SidePickCard(PluginCatalogEntry e)
+    {
+        var g = new Grid { ColumnSpacing = 10 };
+        g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        g.Children.Add(BannerVisual(e.Image, e.Title, Kit.Puzzle, 84, 68, 8));
+
+        var words = new StackPanel { Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
+        words.Children.Add(Kit.Text(e.Title, 13, bold: true, wrap: false));
+        words.Children.Add(Kit.Text(e.Summary, 11, secondary: true).Also(t =>
+        {
+            t.MaxLines = 2;
+            t.TextTrimming = TextTrimming.CharacterEllipsis;
+        }));
+        if (e.Maintainer.Length > 0)
+            words.Children.Add(Kit.Text($"by {e.Maintainer}", 11, secondary: true, wrap: false));
+        Grid.SetColumn(words, 1);
+        g.Children.Add(words);
+
+        var card = new Button
+        {
+            Content = g,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Padding = new Thickness(10, 8, 10, 8),
+            BorderBrush = Kit.Brush("CardStrokeColorDefaultBrush"),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(10),
+        };
+        AttachHover(card, Kit.Brush("CardBackgroundFillColorDefaultBrush"), Kit.Brush("CardBackgroundFillColorSecondaryBrush"));
+        AutomationProperties.SetName(card, $"Featured pick: {e.Title}, by {e.Maintainer}");
+        card.Click += (_, _) => Push(new PluginCatalogEntryScreen(_m, e));
+        return card;
+    }
+
+    /// Horizontal featured carousel with Previous / Next arrow buttons stepping one card at a time.
+    private UIElement FeaturedCarousel(IReadOnlyList<PluginCatalogEntry> picks)
+    {
+        const double cardWidth = 310;
+        const double cardSpacing = 12;
+        const double stepWidth = cardWidth + cardSpacing;
+
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = cardSpacing, Padding = new Thickness(0, 0, 12, 4) };
+        foreach (var pick in picks)
+            row.Children.Add(CarouselBannerCard(pick, cardWidth));
+
+        var scroll = new ScrollViewer
+        {
+            Content = row,
+            HorizontalScrollMode = ScrollMode.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden,
+            VerticalScrollMode = ScrollMode.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        };
+
+        Button MakeArrow(string glyph, string label)
+        {
+            var btn = new Button
+            {
+                Content = Kit.Glyph(glyph, 13, Kit.Primary),
+                Width = 34,
+                Height = 34,
+                Padding = new Thickness(0),
+                CornerRadius = new CornerRadius(17),
+                BorderBrush = Kit.Brush("CardStrokeColorDefaultBrush"),
+                BorderThickness = new Thickness(1),
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            AttachHover(btn, Kit.Brush("CardBackgroundFillColorDefaultBrush"), Kit.Brush("CardBackgroundFillColorSecondaryBrush"));
+            AutomationProperties.SetName(btn, label);
+            ToolTipService.SetToolTip(btn, label);
+            return btn;
+        }
+
+        var prev = MakeArrow("\uE76B", "Previous");
+        prev.HorizontalAlignment = HorizontalAlignment.Left;
+        prev.Margin = new Thickness(6, 0, 0, 0);
+        var next = MakeArrow("\uE76C", "Next");
+        next.HorizontalAlignment = HorizontalAlignment.Right;
+        next.Margin = new Thickness(0, 0, 6, 0);
+
+        void SyncArrows()
+        {
+            var canPrev = scroll.HorizontalOffset > 2;
+            var canNext = scroll.ScrollableWidth > 2 && scroll.HorizontalOffset < scroll.ScrollableWidth - 2;
+            prev.IsEnabled = canPrev;
+            prev.Opacity = canPrev ? 1 : 0;
+            next.IsEnabled = canNext;
+            next.Opacity = canNext ? 1 : 0;
+        }
+
+        prev.Click += (_, _) => scroll.ChangeView(Math.Max(0, scroll.HorizontalOffset - stepWidth), null, null);
+        next.Click += (_, _) => scroll.ChangeView(Math.Min(scroll.ScrollableWidth, scroll.HorizontalOffset + stepWidth), null, null);
+        scroll.ViewChanged += (_, _) => SyncArrows();
+        scroll.Loaded += (_, _) => SyncArrows();
+        scroll.SizeChanged += (_, _) => SyncArrows();
+
+        var container = new Grid { Margin = new Thickness(0, 0, 0, 18) };
+        container.Children.Add(scroll);
+        container.Children.Add(prev);
+        container.Children.Add(next);
+        return container;
+    }
+
+    private UIElement CarouselBannerCard(PluginCatalogEntry e, double width)
+    {
+        var stack = new StackPanel { Spacing = 0 };
+        stack.Children.Add(BannerVisual(e.Image, e.Title, Kit.Puzzle, width - 2, 132, 0));
+
+        var info = new StackPanel { Spacing = 6, Padding = new Thickness(14, 12, 14, 12) };
+        var meta = new FlowWrapPanel { HorizontalSpacing = 6, VerticalSpacing = 4 };
+        if (e.TierWord is { } tier) meta.Children.Add(Kit.Badge(tier, e.IsVerified ? ConnectorTone.Good : ConnectorTone.Quiet));
+        if (e.Maintainer.Length > 0) meta.Children.Add(Kit.Text($"by {e.Maintainer}", 12, secondary: true, wrap: false));
+        if (meta.Children.Count > 0) info.Children.Add(meta);
+        info.Children.Add(Kit.Text(e.Title, 16, bold: true, wrap: false));
+        info.Children.Add(Kit.Text(e.Summary, 12, secondary: true).Also(t =>
+        {
+            t.MaxLines = 2;
+            t.TextTrimming = TextTrimming.CharacterEllipsis;
+        }));
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 4, 0, 0) };
+        if (_m.InstalledPlugin(e) != null)
+            actions.Children.Add(Kit.Text("✓ Installed", 12, bold: true, color: Kit.Success).Also(t => t.VerticalAlignment = VerticalAlignment.Center));
+        else
+            actions.Children.Add(Kit.Button("Install", () => AskPlugin(e), accent: true, name: $"Install {e.Title}"));
+        actions.Children.Add(Kit.Button("Details", () => Push(new PluginCatalogEntryScreen(_m, e))));
+        info.Children.Add(actions);
+        stack.Children.Add(info);
+
+        return new Border
+        {
+            Width = width,
+            Child = stack,
+            CornerRadius = new CornerRadius(10),
+            Background = Kit.Brush("CardBackgroundFillColorDefaultBrush"),
+            BorderBrush = Kit.Brush("CardStrokeColorDefaultBrush"),
+            BorderThickness = new Thickness(1),
+        };
+    }
+
+    private UIElement HeroCard(PluginCatalogEntry e, bool showSideBanner = true, double bottomMargin = 18)
+    {
+        var words = new StackPanel { Spacing = 8 };
+        words.Children.Add(Kit.Text("FEATURED THIS WEEK", 11, bold: true, color: Kit.Accent));
+        words.Children.Add(Kit.Text(e.Title, 20, bold: true));
+        var byRow = new FlowWrapPanel { HorizontalSpacing = 6, VerticalSpacing = 4 };
+        if (e.TierWord is { } tier) byRow.Children.Add(Kit.Badge(tier, e.IsVerified ? ConnectorTone.Good : ConnectorTone.Quiet));
+        if (e.Maintainer.Length > 0) byRow.Children.Add(Kit.Text($"by {e.Maintainer}", 13, secondary: true, wrap: false));
+        if (byRow.Children.Count > 0) words.Children.Add(byRow);
+        words.Children.Add(Kit.Text(e.Summary, 13, secondary: true).Also(t =>
+        {
+            t.MaxLines = 3;
+            t.TextTrimming = TextTrimming.CharacterEllipsis;
+        }));
+        var line = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 4, 0, 0) };
+        if (_m.InstalledPlugin(e) != null) line.Children.Add(Kit.Text("✓ Installed", 13, bold: true, color: Kit.Success).Also(t => t.VerticalAlignment = VerticalAlignment.Center));
         else line.Children.Add(Kit.Button("Install", () => AskPlugin(e), accent: true, name: $"Install {e.Title}"));
         line.Children.Add(Kit.Button("Details", () => Push(new PluginCatalogEntryScreen(_m, e))));
-        s.Children.Add(line);
-        AutomationProperties.SetName(s, $"Featured: {e.Title}, by {e.Maintainer}");
-        return Kit.Section(null, [Kit.Pad(s, 16)]);
+        words.Children.Add(line);
+
+        UIElement inner;
+        if (showSideBanner && e.Image != null)
+        {
+            var g = new Grid { ColumnSpacing = 16 };
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(3, GridUnitType.Star) });
+            g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(2, GridUnitType.Star) });
+            g.Children.Add(words);
+            var banner = BannerVisual(e.Image, e.Title, Kit.Puzzle, 200, 148, 8);
+            banner.VerticalAlignment = VerticalAlignment.Center;
+            Grid.SetColumn(banner, 1);
+            g.Children.Add(banner);
+            inner = g;
+        }
+        else if (e.Image != null)
+        {
+            var stack = new StackPanel { Spacing = 12 };
+            stack.Children.Add(BannerVisual(e.Image, e.Title, Kit.Puzzle, double.NaN, 128, 8));
+            stack.Children.Add(words);
+            inner = stack;
+        }
+        else
+        {
+            inner = words;
+        }
+
+        AutomationProperties.SetName(words, $"Featured: {e.Title}, by {e.Maintainer}");
+        return new Border
+        {
+            Child = inner,
+            Padding = new Thickness(16),
+            CornerRadius = new CornerRadius(10),
+            Background = Kit.Brush("CardBackgroundFillColorDefaultBrush"),
+            BorderBrush = Kit.Brush("CardStrokeColorDefaultBrush"),
+            BorderThickness = new Thickness(1),
+            Margin = new Thickness(0, 0, 0, bottomMargin),
+        };
+    }
+
+    private static FrameworkElement BannerVisual(Uri? url, string title, string fallbackGlyph, double width, double height, double radius)
+    {
+        var grid = new Grid { Height = height, Background = Kit.Brush("SubtleFillColorSecondaryBrush") };
+        if (!double.IsNaN(width)) grid.Width = width;
+        var glyph = Kit.Glyph(fallbackGlyph, Math.Min(32, height * 0.36), Kit.Secondary);
+        glyph.HorizontalAlignment = HorizontalAlignment.Center;
+        glyph.VerticalAlignment = VerticalAlignment.Center;
+        grid.Children.Add(glyph);
+
+        if (url != null && url.Scheme == "https")
+        {
+            var bmp = new BitmapImage(url);
+            if (!double.IsNaN(width) && width > 0) bmp.DecodePixelWidth = (int)(width * 2);
+            var img = new Image
+            {
+                Source = bmp,
+                Stretch = Stretch.UniformToFill,
+                Opacity = 0,
+            };
+            AutomationProperties.SetName(img, title);
+            bmp.ImageOpened += (_, _) => img.Opacity = 1;
+            bmp.ImageFailed += (_, _) => grid.Children.Remove(img);
+            grid.Children.Add(img);
+        }
+
+        return new Border
+        {
+            Child = grid,
+            CornerRadius = new CornerRadius(radius),
+            HorizontalAlignment = double.IsNaN(width) ? HorizontalAlignment.Stretch : HorizontalAlignment.Left,
+        };
     }
 
     private UIElement Shelf(string title, string about, IEnumerable<UIElement> cards, (string Title, Action Run)? seeAll)
@@ -342,9 +625,10 @@ internal sealed class MarketplaceScreen : Screen
         var b = new Button
         {
             Content = g, Width = 240, Height = 112, Padding = new Thickness(12, 10, 12, 10), HorizontalContentAlignment = HorizontalAlignment.Stretch,
-            VerticalContentAlignment = VerticalAlignment.Stretch, Background = Kit.Brush("CardBackgroundFillColorDefaultBrush"),
+            VerticalContentAlignment = VerticalAlignment.Stretch,
             BorderBrush = Kit.Brush("CardStrokeColorDefaultBrush"), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8),
         };
+        AttachHover(b, Kit.Brush("CardBackgroundFillColorDefaultBrush"), Kit.Brush("CardBackgroundFillColorSecondaryBrush"));
         AutomationProperties.SetName(b, title);
         b.Click += (_, _) => open();
         return b;
@@ -378,7 +662,7 @@ internal sealed class MarketplaceScreen : Screen
 
     // ---------------------------------------------------------------- Results
 
-    private void Results(StackPanel main)
+    private void Results(StackPanel main, double contentWidth)
     {
         var items = _state.Scoped(Plugins, Skills);
         var category = _state.Categories.Count == 1 ? _state.Categories.First() : null;
@@ -389,24 +673,82 @@ internal sealed class MarketplaceScreen : Screen
             : _state.Kind == MarketplaceKind.Plugins ? "All Plugins" : _state.Kind == MarketplaceKind.Skills ? "All Skills" : "Plugins and Skills";
         var blurb = _state.Trimmed.Length == 0 ? plugin is { } p2 && _state.Kind == MarketplaceKind.Plugins ? p2.Blurb()
             : category == null && _state.Kind == MarketplaceKind.Skills ? MarketplaceWords.SkillsBlurb : null : null;
-        main.Children.Add(Kit.Text(title, 20, bold: true));
-        if (blurb != null) main.Children.Add(Kit.Text(blurb, 13, secondary: true));
 
-        // Official · Certified · Community.
+        var titleStack = new StackPanel { Spacing = 3 };
+        titleStack.Children.Add(Kit.Text(title, 20, bold: true));
+        if (blurb != null) titleStack.Children.Add(Kit.Text(blurb, 13, secondary: true));
+
+        var sortFlyout = new MenuFlyout();
+        foreach (var s in Enum.GetValues<MarketplaceSort>())
+        {
+            var captured = s;
+            sortFlyout.Items.Add(Kit.CheckItem(captured.Title(), _state.Sort == captured, () =>
+            {
+                _state.Sort = captured;
+                _state.Limit = MarketplaceState.PageSize;
+                Render();
+            }));
+        }
+        var sortFace = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
+        sortFace.Children.Add(Kit.Text("Sort", 12, secondary: true, wrap: false));
+        sortFace.Children.Add(Kit.Text(_state.Sort.Title(), 12, bold: true, wrap: false));
+        sortFace.Children.Add(Kit.Glyph("\uE70D", 9, Kit.Secondary));
+        var sortButton = new Button
+        {
+            Content = sortFace,
+            Padding = new Thickness(10, 5, 10, 5),
+            CornerRadius = new CornerRadius(6),
+            BorderBrush = Kit.Brush("ControlStrokeColorDefaultBrush"),
+            BorderThickness = new Thickness(1),
+            Flyout = sortFlyout,
+        };
+        AttachHover(sortButton, Kit.Brush("CardBackgroundFillColorDefaultBrush"), Kit.Brush("CardBackgroundFillColorSecondaryBrush"));
+        AutomationProperties.SetName(sortButton, $"Sort by {_state.Sort.Title()}");
+
+        // Narrow panes (< 420 px) stack Sort underneath the title so headings never squeeze or hyphenate.
+        var stackedHeader = contentWidth > 0 && contentWidth < 420;
+        if (stackedHeader)
+        {
+            var stacked = new StackPanel { Spacing = 8, Margin = new Thickness(0, 0, 0, 10) };
+            stacked.Children.Add(titleStack);
+            sortButton.HorizontalAlignment = HorizontalAlignment.Left;
+            stacked.Children.Add(sortButton);
+            main.Children.Add(stacked);
+        }
+        else
+        {
+            var head = new Grid { ColumnSpacing = 12, Margin = new Thickness(0, 0, 0, 10) };
+            head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            head.Children.Add(titleStack);
+            sortButton.VerticalAlignment = VerticalAlignment.Bottom;
+            Grid.SetColumn(sortButton, 1);
+            head.Children.Add(sortButton);
+            main.Children.Add(head);
+        }
+
+        // Official · Certified · Community wrapping chips.
         var tiers = _state.TierRows(items);
         if (tiers.Count > 0)
         {
-            var chips = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Margin = new Thickness(0, 10, 0, 0) };
+            var chips = new FlowWrapPanel { HorizontalSpacing = 6, VerticalSpacing = 6, Margin = new Thickness(0, 0, 0, 10) };
             foreach (var (tier, count) in tiers)
             {
-                var on = _state.Tiers.Contains(tier);
-                var chip = new ToggleButton { Content = $"{tier.Title()} {count}", IsChecked = on, CornerRadius = new CornerRadius(12), Padding = new Thickness(10, 3, 10, 4) };
-                chip.Click += (_, _) => { if (!_state.Tiers.Remove(tier)) _state.Tiers.Add(tier); _state.Limit = MarketplaceState.PageSize; Render(); };
+                var captured = tier;
+                var on = _state.Tiers.Contains(captured);
+                var chip = new ToggleButton
+                {
+                    Content = $"{captured.Title()} {count}",
+                    IsChecked = on,
+                    CornerRadius = new CornerRadius(12),
+                    Padding = new Thickness(10, 3, 10, 4),
+                };
+                AutomationProperties.SetName(chip, $"{captured.Title()}, {count}");
+                chip.Click += (_, _) => { if (!_state.Tiers.Remove(captured)) _state.Tiers.Add(captured); _state.Limit = MarketplaceState.PageSize; Render(); };
                 chips.Children.Add(chip);
             }
             main.Children.Add(chips);
         }
-        main.Children.Add(Kit.Text($"Sort: {_state.Sort.Title()}", 12, secondary: true).Also(t => t.Margin = new Thickness(0, 8, 0, 8)));
 
         var plugins = CapabilitiesServices.PluginCatalog;
         var skills = CapabilitiesServices.SkillCatalog;

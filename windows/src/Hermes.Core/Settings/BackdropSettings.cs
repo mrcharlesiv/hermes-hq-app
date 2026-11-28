@@ -9,6 +9,86 @@ public enum BackdropPlace { App, Chats }
 /// Groups in the Backgrounds picker (App/Theme/BackdropPresets.swift `BackdropPreset.Group`).
 public enum BackdropGroup { Classic, Solids, Photographic, Illustrated, Painted, Doodles }
 
+public static class BackdropGroups
+{
+    public static readonly BackdropGroup[] All =
+        [BackdropGroup.Classic, BackdropGroup.Solids, BackdropGroup.Photographic, BackdropGroup.Illustrated, BackdropGroup.Painted, BackdropGroup.Doodles];
+
+    public static string Title(this BackdropGroup g) => g switch
+    {
+        BackdropGroup.Classic => "Classic",
+        BackdropGroup.Solids => "Solids",
+        BackdropGroup.Photographic => "Photographic",
+        BackdropGroup.Illustrated => "Illustrated",
+        BackdropGroup.Painted => "Painted",
+        BackdropGroup.Doodles => "Doodles",
+        _ => "Classic",
+    };
+
+    /// Compact chip label in the Backgrounds category strip (BackgroundSettingsView.swift `shortTitle`).
+    public static string ShortTitle(this BackdropGroup g) => g switch
+    {
+        BackdropGroup.Classic => "Classic",
+        BackdropGroup.Solids => "Solids",
+        BackdropGroup.Photographic => "Photo",
+        BackdropGroup.Illustrated => "Illustrated",
+        BackdropGroup.Painted => "Painted",
+        BackdropGroup.Doodles => "Doodles",
+        _ => "Classic",
+    };
+}
+
+/// Unified 4-way Soft Cards mode for App Background (BackgroundSettingsView.swift `CardChoice` + SoftCard.swift `SoftCardStyle`).
+public enum CardStyle { Off, Tinted, Glass, Solid }
+
+public static class CardStyles
+{
+    public const string Key = "hqn.appBackground.cardStyle";
+    public const string Label = "Cards";
+    public const string Note = "Cards lay a theme-matched backing behind each list so text stays readable. With Reduce Transparency on, Glass cards are solid.";
+
+    public static readonly CardStyle[] All = [CardStyle.Off, CardStyle.Tinted, CardStyle.Glass, CardStyle.Solid];
+
+    public static string Raw(this CardStyle s) => s switch
+    {
+        CardStyle.Off => "off",
+        CardStyle.Glass => "glass",
+        CardStyle.Solid => "solid",
+        _ => "tinted",
+    };
+
+    public static string Title(this CardStyle s) => s switch
+    {
+        CardStyle.Off => "Off",
+        CardStyle.Tinted => "Tinted",
+        CardStyle.Glass => "Glass",
+        CardStyle.Solid => "Solid",
+        _ => "Tinted",
+    };
+
+    public static string Caption(this CardStyle s) => s switch
+    {
+        CardStyle.Off => "Text straight on wallpaper",
+        CardStyle.Tinted => "Soft theme-tinted blur",
+        CardStyle.Glass => "Frosted glass cards",
+        CardStyle.Solid => "Opaque theme cards",
+        _ => "Soft theme-tinted blur",
+    };
+
+    public static CardStyle? Parse(string? raw) => raw switch
+    {
+        "off" => CardStyle.Off,
+        "tinted" => CardStyle.Tinted,
+        "glass" => CardStyle.Glass,
+        "solid" => CardStyle.Solid,
+        _ => null,
+    };
+
+    /// Under Reduce Transparency, Glass cards draw as Solid (SoftCard.swift `shown(reduceTransparency:)`).
+    public static CardStyle Effective(this CardStyle s, bool reduceTransparency) =>
+        s == CardStyle.Glass && reduceTransparency ? CardStyle.Solid : s;
+}
+
 /// Built-in background presets, including Studio Matte solid-color pigments and dynamic Theme Tint.
 public sealed record BackdropPresetInfo(string Id, string Label, BackdropGroup Group, uint LightHex, uint DarkHex, uint LightAccent = 0, uint DarkAccent = 0)
 {
@@ -58,10 +138,97 @@ public static class BackdropCatalog
         new("glow", "Theme Glow", BackdropGroup.Classic, 0xD5E2FA, 0x18253E, 0xE6EEFD, 0x223659),
     ];
 
-    public static readonly IReadOnlyList<BackdropPresetInfo> All = [.. Classic, .. Solids];
+    public static readonly IReadOnlyList<BackdropPresetInfo> Photographic =
+    [
+        new("photoLake", "Alpine Lake", BackdropGroup.Photographic, 0xB8D4E8, 0x12263A, 0x7BA3C2, 0x1C3B54),
+        new("photoOcean", "Golden Sea", BackdropGroup.Photographic, 0xF3D4A8, 0x2A1F1D, 0x99BED4, 0x162C3D),
+        new("photoClouds", "Cloud Deck", BackdropGroup.Photographic, 0xD6E4F2, 0x1B2538, 0xECEEF2, 0x2E3B52),
+        new("photoDunes", "Sand Ridges", BackdropGroup.Photographic, 0xF0D2A4, 0x35251A, 0xCE9C64, 0x1F1612),
+        new("photoCanyon", "Red Canyon", BackdropGroup.Photographic, 0xE6AD8E, 0x3A1E1A, 0xB86A50, 0x221210),
+        new("photoForest", "Fog Valley", BackdropGroup.Photographic, 0xC8D8CE, 0x16241D, 0x8EA89A, 0x24382F),
+        new("photoAurora", "Polar Light", BackdropGroup.Photographic, 0xA8E0D4, 0x0B1E28, 0x8AAEE6, 0x1C2444),
+        new("photoAlpenglow", "Alpenglow", BackdropGroup.Photographic, 0xF2C2CB, 0x2A1B2E, 0xA6BFE0, 0x1B2642),
+    ];
 
-    public static BackdropPresetInfo? Find(string? id) =>
-        string.IsNullOrEmpty(id) ? null : All.FirstOrDefault(p => p.Id == id);
+    public static readonly IReadOnlyList<BackdropPresetInfo> Illustrated =
+    [
+        new("posterLake", "Emerald Lake", BackdropGroup.Illustrated, 0x9CD4C6, 0x102A28, 0x56A096, 0x1E4542),
+        new("posterOcean", "Cumulus Coast", BackdropGroup.Illustrated, 0x9ED6F0, 0x10263C, 0xF2D4A6, 0x243A52),
+        new("posterClouds", "Summit at Dusk", BackdropGroup.Illustrated, 0xD8B4D8, 0x221A34, 0xF0B298, 0x36243E),
+        new("posterMesa", "Mesa", BackdropGroup.Illustrated, 0xF0BE96, 0x381E18, 0xD48060, 0x241414),
+        new("northernLights", "Northern Lights", BackdropGroup.Illustrated, 0x96DFC8, 0x0D1E2C, 0x9A96E4, 0x1E1C44),
+        new("snowyVillage", "Snowy Village", BackdropGroup.Illustrated, 0xDCE8F4, 0x182438, 0xB8CDE2, 0x283850),
+        new("cityDusk", "City at Dusk", BackdropGroup.Illustrated, 0xC4B6DE, 0x1C1830, 0xECA694, 0x322238),
+        new("rollingHills", "Rolling Hills", BackdropGroup.Illustrated, 0xB6DA9E, 0x182C1C, 0xE6D89C, 0x283C26),
+    ];
+
+    public static readonly IReadOnlyList<BackdropPresetInfo> Painted =
+    [
+        new("paintLake", "Still Water", BackdropGroup.Painted, 0xBDD6E6, 0x142434, 0x98B8CE, 0x22384C),
+        new("paintOcean", "Evening Sea", BackdropGroup.Painted, 0xA8C8DC, 0x122232, 0xE6BFA0, 0x28263A),
+        new("paintClouds", "Billows", BackdropGroup.Painted, 0xDAE4EE, 0x202836, 0xF0E6DC, 0x323A4A),
+        new("paintHills", "Green Valley", BackdropGroup.Painted, 0xC2DCAC, 0x1A2C1E, 0xE6D8A4, 0x2A3E2A),
+        new("paintForest", "Birch Wood", BackdropGroup.Painted, 0xDCE0CC, 0x1E261E, 0xB4C4A2, 0x2E382C),
+        new("paintDesert", "Painted Desert", BackdropGroup.Painted, 0xEED0A8, 0x36241C, 0xD69C80, 0x261816),
+        new("paintPeaks", "Golden Peaks", BackdropGroup.Painted, 0xF0D8A6, 0x282032, 0xB6C4DC, 0x3A2C3C),
+        new("paintHarbor", "Harbor", BackdropGroup.Painted, 0xBCD2E0, 0x162430, 0xE4C6A8, 0x28323E),
+    ];
+
+    public static readonly IReadOnlyList<BackdropPresetInfo> Doodles =
+    [
+        new("doodleForest", "Forest", BackdropGroup.Doodles, 0xCCE2CE, 0x182A1E, 0xAED0B4, 0x223A2A),
+        new("doodlePeaks", "Peaks", BackdropGroup.Doodles, 0xCEDCE8, 0x1A2432, 0xB2C8DC, 0x263448),
+        new("doodleGaming", "Gaming", BackdropGroup.Doodles, 0xD2CCF0, 0x1E1A36, 0xB6C4EE, 0x2C244C),
+        new("doodleSports", "Sports", BackdropGroup.Doodles, 0xD0E4C8, 0x1A2A1C, 0xE6D6A6, 0x283A26),
+        new("doodleRose", "Rose", BackdropGroup.Doodles, 0xF4D4DE, 0x361C28, 0xF0C6B8, 0x462634),
+        new("doodleLilac", "Lilac", BackdropGroup.Doodles, 0xE2D4F2, 0x261C38, 0xD0C8F0, 0x34284A),
+        new("doodleTravel", "Travel", BackdropGroup.Doodles, 0xCBE2EA, 0x162834, 0xE8D8B2, 0x243844),
+        new("doodleCafe", "Café", BackdropGroup.Doodles, 0xEFE0C8, 0x30241A, 0xDEC4A2, 0x403022),
+    ];
+
+    public static readonly IReadOnlyList<BackdropPresetInfo> All =
+        [.. Classic, .. Solids, .. Photographic, .. Illustrated, .. Painted, .. Doodles];
+
+    public static IReadOnlyList<BackdropPresetInfo> ByGroup(BackdropGroup group) => group switch
+    {
+        BackdropGroup.Classic => Classic,
+        BackdropGroup.Solids => Solids,
+        BackdropGroup.Photographic => Photographic,
+        BackdropGroup.Illustrated => Illustrated,
+        BackdropGroup.Painted => Painted,
+        BackdropGroup.Doodles => Doodles,
+        _ => Classic,
+    };
+
+    /// Resolves a stored preset id, including legacy aliases from App/Theme/BackdropPresets.swift (`init(stored:)`).
+    public static string? ResolveId(string? id) => id switch
+    {
+        null or "" => null,
+        "doodleMint" => "doodleForest",
+        "doodleSky" or "doodleTeal" => "doodleTravel",
+        "doodleSand" or "doodleLemon" => "doodleCafe",
+        "doodlePeach" => "doodleRose",
+        "clouds" or "seaOfClouds" => "photoClouds",
+        "retroSun" or "waveTiles" or "oceanSunset" => "photoOcean",
+        "terrazzo" => "rollingHills",
+        "cityLights" => "cityDusk",
+        "snowfall" => "snowyVillage",
+        "alpine" or "alpenglow" => "photoAlpenglow",
+        "mistyRidges" or "mistyForest" => "photoForest",
+        "pinePeaks" => "posterLake",
+        "mountainLake" => "photoLake",
+        "canyon" => "photoCanyon",
+        "lonePeak" => "posterClouds",
+        "starlitPeaks" => "paintPeaks",
+        "desert" => "photoDunes",
+        _ => id,
+    };
+
+    public static BackdropPresetInfo? Find(string? id)
+    {
+        var resolved = ResolveId(id);
+        return string.IsNullOrEmpty(resolved) ? null : All.FirstOrDefault(p => p.Id == resolved);
+    }
 
     /// Studio Matte pigment for a solid preset, or OKLab-adapted pigment for Theme Tint / Custom color.
     public static Rgba ResolveSolidBase(BackdropSource source, bool dark, Rgba themeTint) => source switch
@@ -149,7 +316,7 @@ public static class OkLabSolidAdapt
 }
 
 /// Stored state for App Background or Chat Background (`hqn.appBackground.*` / `hqn.chatBackground.*`).
-public sealed record BackdropState(BackdropPlace Place, BackdropSource? Source, int Dim, bool Blur, bool SameAsApp, bool Cards)
+public sealed record BackdropState(BackdropPlace Place, BackdropSource? Source, int Dim, bool Blur, bool SameAsApp, bool Cards, CardStyle CardStyle = CardStyle.Off)
 {
     public static int DefaultDim(BackdropPlace place) => place == BackdropPlace.App ? 45 : 30;
     public const int MinDim = 0, MaxDim = 80;
@@ -183,6 +350,11 @@ public sealed class BackdropPrefs(IPreferences prefs)
 {
     public const string Target = "backgrounds";
     public const string Title = "Backgrounds";
+    public const string WashLabel = "Wash";
+    public const string SameAsAppNote = "Chats show the app’s picture, with their own Wash and Blur.";
+    public const string DesktopNote = "The Hermes Look is on, so it shows once you switch back to Native.";
+    public static string AppNote => $"Behind Sessions, Bots, Jobs, More, Settings and the pages they open. Wash blends the page color over it so rows stay readable. {Gateways.DeviceWord.OnlyHere}";
+    public static string ChatNote => $"Behind every chat. Wash blends the page color over it so text and dividers stay readable. {Gateways.DeviceWord.OnlyHere}";
 
     public static event Action? Changed;
 
@@ -216,15 +388,21 @@ public sealed class BackdropPrefs(IPreferences prefs)
         var preset = prefs.Get(p + ".preset");
         var color = ParseHex(prefs.Get(p + ".color"));
         BackdropSource? source = !string.IsNullOrEmpty(photo) ? new BackdropSource.Photo(photo)
-            : BackdropCatalog.Find(preset) != null ? new BackdropSource.Preset(preset!)
+            : BackdropCatalog.Find(preset) is { } foundPreset ? new BackdropSource.Preset(foundPreset.Id)
             : color is { } hex ? new BackdropSource.CustomColor(hex)
             : null;
         var dim = ClampedDim(prefs.Get(p + ".dim"), place);
         var blur = prefs.Get(p + ".blur") == "true";
-        var cards = place == BackdropPlace.App && prefs.Get(p + ".cards") == "true";
+        var rawCardStyle = CardStyles.Parse(prefs.Get(p + ".cardStyle"));
+        var cardsFlag = prefs.Get(p + ".cards");
+        var cards = place == BackdropPlace.App && (cardsFlag == "true"
+            || (cardsFlag == null && rawCardStyle is CardStyle.Tinted or CardStyle.Glass or CardStyle.Solid));
+        var cardStyle = !cards
+            ? CardStyle.Off
+            : (rawCardStyle is null or CardStyle.Off ? CardStyle.Tinted : rawCardStyle.Value);
         var storedSame = prefs.Get(p + ".sameAsApp");
         var sameAsApp = place == BackdropPlace.Chats && (storedSame == null ? source == null : storedSame == "true");
-        return new(place, source, dim, blur, sameAsApp, cards);
+        return new(place, source, dim, blur, sameAsApp, cards, cardStyle);
     }
 
     public void SetPreset(BackdropPlace place, string presetId)
@@ -288,7 +466,26 @@ public sealed class BackdropPrefs(IPreferences prefs)
 
     public void SetCards(bool on)
     {
-        prefs.Set(Prefix(BackdropPlace.App) + ".cards", on ? "true" : null);
+        var p = Prefix(BackdropPlace.App);
+        prefs.Set(p + ".cards", on ? "true" : null);
+        if (!on) prefs.Set(p + ".cardStyle", null);
+        Changed?.Invoke();
+    }
+
+    /// Unified 4-way Cards picker for App Background (Off | Tinted | Glass | Solid; key `hqn.appBackground.cardStyle`).
+    public void SetCardStyle(CardStyle style)
+    {
+        var p = Prefix(BackdropPlace.App);
+        if (style == CardStyle.Off)
+        {
+            prefs.Set(p + ".cards", null);
+            prefs.Set(p + ".cardStyle", null);
+        }
+        else
+        {
+            prefs.Set(p + ".cards", "true");
+            prefs.Set(p + ".cardStyle", style == CardStyle.Tinted ? null : style.Raw());
+        }
         Changed?.Invoke();
     }
 

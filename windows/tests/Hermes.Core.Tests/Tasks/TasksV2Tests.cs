@@ -20,7 +20,8 @@ public class TasksV2Tests
             ["lists"] = true,
             ["pages"] = true,
             ["goal_bots"] = true,
-            ["ideas_count"] = 2,
+            ["custom_repeat"] = true,
+            ["ideas"] = 2,
             ["tasks"] = new JsonArray(new JsonObject
             {
                 ["id"] = "t1",
@@ -29,7 +30,7 @@ public class TasksV2Tests
                 ["who"] = "together",
                 ["bot"] = "ivy",
                 ["status"] = "needs_you",
-                ["chat"] = new JsonObject { ["profile"] = "ivy", ["session"] = "chat-99" },
+                ["chat"] = new JsonObject { ["profile"] = "ivy", ["session_id"] = "chat-99" },
                 ["page_at"] = "2026-11-13T09:00:00Z",
                 ["page"] = new JsonObject { ["summary"] = "Found two slots.", ["next"] = "Pick 10 AM or 2 PM." },
                 ["from"] = new JsonObject { ["app"] = "email", ["who"] = "Clinic", ["at"] = "2026-11-12T14:00:00Z" },
@@ -39,10 +40,12 @@ public class TasksV2Tests
             ["offers"] = new JsonArray(new JsonObject
             {
                 ["id"] = "o1",
-                ["kind"] = "list",
-                ["by"] = "ivy",
+                ["bot"] = "ivy",
+                ["list"] = "Home",
                 ["section"] = "home",
-                ["summary"] = "From your morning check-in",
+                ["new"] = false,
+                ["state"] = "new",
+                ["why"] = "From your morning check-in",
                 ["tasks"] = new JsonArray(new JsonObject { ["title"] = "Order filters" }),
             }),
         };
@@ -51,6 +54,7 @@ public class TasksV2Tests
         Assert.True(answer.Files);
         Assert.True(answer.Pages);
         Assert.True(answer.GoalBots);
+        Assert.True(answer.CustomRepeat);
         Assert.Equal(2, answer.IdeasCount);
         var task = Assert.Single(answer.Tasks!);
         Assert.Equal("chat-99", task.Chat!.SessionId);
@@ -59,7 +63,10 @@ public class TasksV2Tests
         Assert.Contains("Email · Clinic", task.SourceFrom!.Line(Now, Utc));
         Assert.True(task.Made[0].IsYours);
         Assert.Equal("https://example.com/portal", task.Made[0].LinkUrl);
-        Assert.Single(answer.Offers!);
+        var offer = Assert.Single(answer.Offers!);
+        Assert.Equal("ivy", offer.Bot);
+        Assert.Equal("list", offer.Kind);
+        Assert.True(offer.IsWaiting);
     }
 
     [Fact]
@@ -94,7 +101,15 @@ public class TasksV2Tests
 
         var overdue = new TodoTask("ov") { Title = "Overdue", Due = "2026-11-10" };
         var dueToday = new TodoTask("td") { Title = "Today", Due = "2026-11-13", Offer = new TodoCloseOffer("ivy", "Done?", null, false) };
-        var offer = new TodoOffer("o1", "list", "ivy", "", "Suggested", SectionId: "work", Tasks: [new TodoOfferTask("Prep deck")]);
+        var offer = new TodoOffer("o1")
+        {
+            Kind = "list",
+            Bot = "ivy",
+            List = "Work",
+            IsNew = true,
+            Summary = "Suggested",
+            Tasks = [new TodoOfferTask("Prep deck")],
+        };
         var summary = TodayCheckIn.Compute([overdue, dueToday], [offer], Now, Utc);
         Assert.Equal(1, summary.Overdue);
         Assert.Equal(1, summary.DueToday);
@@ -153,28 +168,39 @@ public class TasksV2Tests
 
             var answered = await store.AnswerOfferAsync("o1", TodoOfferAction.Accept);
             Assert.NotNull(answered);
-            Assert.Empty(store.Offers);
+            Assert.Equal("accepted", answered!.Offer!.State);
+            Assert.Equal("accepted", store.Offers.Single().State);
+            Assert.True(store.Offers.Single().Undoable);
         });
     }
 
     private sealed class FakeTasksV2Rest : IPagesRest
     {
         private readonly List<JsonObject> _made = [];
+        private bool _ideaAdded;
+        private string _offerState = "new";
 
         public Task<JsonNode?> JsonAsync(HttpMethod method, string path, IEnumerable<KeyValuePair<string, string>>? query = null,
             JsonNode? body = null, TimeSpan? timeout = null, CancellationToken ct = default)
         {
             if (path.EndsWith("/tasks/ideas", StringComparison.Ordinal))
             {
+                var arr = new JsonArray();
+                if (!_ideaAdded)
+                    arr.Add(new JsonObject { ["id"] = "i1", ["title"] = "Renew domain", ["why"] = "Expires next week", ["who"] = "together", ["bot"] = "ivy" });
                 return Task.FromResult<JsonNode?>(new JsonObject
                 {
                     ["on"] = true,
                     ["bot"] = "ivy",
-                    ["ideas"] = new JsonArray(new JsonObject { ["id"] = "i1", ["title"] = "Renew domain", ["why"] = "Expires next week" }),
+                    ["looking"] = false,
+                    ["ideas"] = arr,
                 });
             }
             if (path.EndsWith("/ideas/i1/add", StringComparison.Ordinal))
+            {
+                _ideaAdded = true;
                 return Task.FromResult<JsonNode?>(new JsonObject { ["id"] = "t-from-idea", ["title"] = "Renew domain", ["status"] = "open" });
+            }
             if (path.Contains("/ideas/i1/", StringComparison.Ordinal))
                 return Task.FromResult<JsonNode?>(new JsonObject { ["ok"] = true });
 
@@ -195,9 +221,13 @@ public class TasksV2Tests
             }
             if (path.EndsWith("/tasks/offers/o1", StringComparison.Ordinal))
             {
+                _offerState = body.Str("action") == "accept" ? "accepted" : "declined";
                 return Task.FromResult<JsonNode?>(new JsonObject
                 {
-                    ["tasks"] = new JsonArray(new JsonObject { ["id"] = "t-offer", ["title"] = "Prep deck", ["status"] = "open" }),
+                    ["rev"] = 6,
+                    ["offer"] = OfferJson(),
+                    ["sections"] = new JsonArray(),
+                    ["goals"] = new JsonArray(),
                 });
             }
 
@@ -211,9 +241,20 @@ public class TasksV2Tests
                 ["tasks"] = new JsonArray(TaskJson()),
                 ["sections"] = new JsonArray(),
                 ["goals"] = new JsonArray(),
-                ["offers"] = new JsonArray(new JsonObject { ["id"] = "o1", ["kind"] = "tasks", ["by"] = "ivy", ["summary"] = "Add prep deck" }),
+                ["offers"] = new JsonArray(OfferJson()),
             });
         }
+
+        private JsonObject OfferJson() => new()
+        {
+            ["id"] = "o1",
+            ["kind"] = "tasks",
+            ["bot"] = "ivy",
+            ["goal"] = "g1",
+            ["title"] = "Ship docs",
+            ["state"] = _offerState,
+            ["tasks"] = new JsonArray(new JsonObject { ["title"] = "Prep deck" }),
+        };
 
         private JsonObject TaskJson() => new()
         {

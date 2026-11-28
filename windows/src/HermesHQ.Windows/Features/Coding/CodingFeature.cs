@@ -30,6 +30,7 @@ public static class CodingFeature
     private static string? _storeAccount;
     private static CodingStore? _store;
     private static readonly Dictionary<string, DiffCommentStore> CommentStores = new(StringComparer.Ordinal);
+    private static readonly List<ChatContext> OpenChats = [];
 
     /// Registers the Coding Pipeline and Project Repository places and hooks chat PR actions.
     public static void Register()
@@ -85,36 +86,75 @@ public static class CodingFeature
         CodingStore? store = null,
         DiffCommentStore? comments = null,
         Action<PullRequestActionItem>? onAction = null,
-        Action? onClose = null)
+        Action? onClose = null,
+        PullRequestCardFocus? initialFocus = null,
+        string? botName = null,
+        bool? chatWorking = null,
+        Action? onRepository = null)
     {
         var activeStore = store ?? GetStore();
         var activeComments = comments ?? GetCommentStore(session.Key);
+        var resolvedBot = botName ?? PageKit.BotName(session.Profile);
+        var resolvedWorking = chatWorking ?? IsChatWorking(session);
         return new PullRequestCardView(
             session,
             status,
             activeStore,
             activeComments,
             onAction ?? (action => ExecuteDefaultAction(session, status, action, activeStore, activeComments)),
-            onClose);
+            onClose,
+            initialFocus,
+            resolvedBot,
+            resolvedWorking,
+            onRepository);
     }
 
-    /// Opens a PR Card inside a modal `ContentDialog`.
+    /// Opens a PR Card inside a modal `ContentDialog` with confirm-and-deliver directly to the bot session.
     public static async Task OpenPullRequestCardAsync(
         XamlRoot? root,
         SessionSummary session,
         SessionPRStatus status,
         CodingStore? store = null,
         DiffCommentStore? comments = null,
-        Action<PullRequestActionItem>? onAction = null)
+        Action<PullRequestActionItem>? onAction = null,
+        PullRequestCardFocus? initialFocus = null,
+        Action? openChat = null,
+        Action? onRepository = null)
     {
         var activeStore = store ?? GetStore();
         var activeComments = comments ?? GetCommentStore(session.Key);
-        var card = BuildPullRequestCard(session, status, activeStore, activeComments, onAction);
+        ContentDialog? dialog = null;
+
+        Action<PullRequestActionItem> handler = onAction ?? (action =>
+        {
+            _ = ExecuteActionAsync(
+                root,
+                session,
+                activeStore.StatusFor(session.Profile, session.Id) ?? status,
+                action,
+                activeStore,
+                activeComments,
+                closeCard: () => dialog?.Hide(),
+                openChat: openChat);
+        });
+
+        var card = BuildPullRequestCard(
+            session,
+            status,
+            activeStore,
+            activeComments,
+            handler,
+            onClose: () => dialog?.Hide(),
+            initialFocus: initialFocus,
+            botName: PageKit.BotName(session.Profile),
+            chatWorking: IsChatWorking(session),
+            onRepository: onRepository == null ? null : () => { dialog?.Hide(); onRepository(); });
         card.MinWidth = 520;
         card.MaxHeight = 640;
-        var dialog = new ContentDialog
+
+        dialog = new ContentDialog
         {
-            Title = status.Number is { } n ? $"Pull Request #{n}" : "Pull Request",
+            Title = status.Number is { } n ? $"Pull Request #{n}" : "Branch",
             Content = card,
             CloseButtonText = "Done",
             DefaultButton = ContentDialogButton.Close,
@@ -122,7 +162,7 @@ public static class CodingFeature
         await PageKit.ShowAsync(root, dialog);
     }
 
-    /// Opens the Project Repository page or dialog for linking/updating a project's Git repo.
+    /// Opens the Project Repository page for linking/updating a project's Git repo.
     public static void OpenProjectRepository(CodingProjectContext project) =>
         Navigator.Open(RepositoryPlaceId, project);
 
@@ -156,6 +196,123 @@ public static class CodingFeature
         await PageKit.ShowAsync(root, dialog);
     }
 
+    /// Confirms PR card or row quick actions and delivers the words directly to the bot session (`PullRequestCardSheet.deliver`).
+    public static async Task<bool> ExecuteActionAsync(
+        XamlRoot? root,
+        SessionSummary session,
+        SessionPRStatus status,
+        PullRequestActionItem action,
+        CodingStore store,
+        DiffCommentStore comments,
+        Action? closeCard = null,
+        Action? openChat = null)
+    {
+        switch (action.Kind)
+        {
+            case PullRequestQuickAction.OpenInBrowser:
+                if (PRFacts.ValidGitHubPullUrl(status.Url) is { } validUrl && Uri.TryCreate(validUrl, UriKind.Absolute, out var uri))
+                    _ = Launcher.LaunchUriAsync(uri);
+                return true;
+
+            case PullRequestQuickAction.OpenChat:
+                closeCard?.Invoke();
+                if (openChat != null) openChat();
+                else Navigator.Go(new ChatDestination(session.Profile, session.Id, session.Title));
+                return true;
+
+            case PullRequestQuickAction.MarkClosed:
+                await store.MarkClosedAsync(session.Profile, session.Id, closed: true);
+                return true;
+
+            case PullRequestQuickAction.Reopen:
+                await store.MarkClosedAsync(session.Profile, session.Id, closed: false);
+                return true;
+
+            default:
+            {
+                var words = action.Kind == PullRequestQuickAction.RequestChanges
+                    ? comments.FormatReviewMessage(status.Label, action.BotPrompt)
+                    : action.BotPrompt ?? "";
+                if (string.IsNullOrWhiteSpace(words)) words = action.BotPrompt ?? "";
+                words = words.Trim();
+                if (words.Length == 0) return false;
+
+                var confirmTitle = (action.ConfirmationTitle ?? action.Label).Replace("…", "").Trim();
+                var confirmBody = !string.IsNullOrWhiteSpace(action.ConfirmationMessage) && action.ConfirmationMessage != words
+                    ? $"{action.ConfirmationMessage}\n\n{words}"
+                    : words;
+
+                if (root != null)
+                {
+                    // Close any host dialog and let WinUI finish dismissing it before presenting confirmation.
+                    if (closeCard != null)
+                    {
+                        closeCard();
+                        await Task.Delay(50);
+                    }
+                    var confirmed = await PageKit.ConfirmAsync(root, confirmTitle, confirmBody, "Send");
+                    if (!confirmed) return false;
+                }
+                else
+                {
+                    closeCard?.Invoke();
+                }
+
+                return await DeliverToChatAsync(root, session, words, openChat);
+            }
+        }
+    }
+
+    /// Posts `words` directly to the bot session, opening it first when not already on screen (`PullRequestCardSheet.deliver`).
+    /// Never fails silently: if the chat does not open in time, shows an explicit alert with Copy Message.
+    public static async Task<bool> DeliverToChatAsync(
+        XamlRoot? root,
+        SessionSummary session,
+        string words,
+        Action? openChat = null)
+    {
+        words = words.Trim();
+        if (words.Length == 0) return false;
+
+        var ctx = FindOpenChat(session.Profile, session.Id);
+        if (ctx == null)
+        {
+            if (openChat != null) openChat();
+            else Navigator.Go(new ChatDestination(session.Profile, session.Id, session.Title));
+
+            for (var attempt = 0; attempt < 40; attempt++)
+            {
+                await Task.Delay(50);
+                ctx = FindOpenChat(session.Profile, session.Id);
+                if (ctx != null) break;
+            }
+        }
+
+        if (ctx != null)
+        {
+            if (!(ctx.Session.Busy && ctx.SendHandler != null && ctx.SendHandler(words)))
+                _ = ctx.Session.SendAsync(words, queued: ctx.Session.Busy);
+            AppLog.Note("coding", $"pr card: delivered prompt ({words.Length} chars)");
+            return true;
+        }
+
+        AppLog.Note("coding", $"pr card: chat did not open in time ({words.Length} chars)");
+        if (root != null)
+        {
+            var copyDialog = new ContentDialog
+            {
+                Title = "Couldn’t Send Message",
+                Content = PageKit.Text($"The chat didn’t open in time, so nothing was sent:\n\n{words}"),
+                PrimaryButtonText = "Copy Message",
+                CloseButtonText = "OK",
+                DefaultButton = ContentDialogButton.Primary,
+            };
+            if (await PageKit.ShowAsync(root, copyDialog) == ContentDialogResult.Primary)
+                PageKit.Copy(words);
+        }
+        return false;
+    }
+
     internal static void ExecuteDefaultAction(
         SessionSummary session,
         SessionPRStatus status,
@@ -184,19 +341,38 @@ public static class CodingFeature
 
             case PullRequestQuickAction.RequestChanges:
                 var reviewText = comments.FormatReviewMessage(status.Label, action.BotPrompt);
-                Navigator.Go(new ChatDestination(session.Profile, session.Id, session.Title,
-                    string.IsNullOrWhiteSpace(reviewText) ? (action.BotPrompt ?? "") : reviewText));
+                _ = DeliverToChatAsync(null, session, string.IsNullOrWhiteSpace(reviewText) ? (action.BotPrompt ?? "") : reviewText);
                 break;
 
             default:
                 if (!string.IsNullOrWhiteSpace(action.BotPrompt))
-                    Navigator.Go(new ChatDestination(session.Profile, session.Id, session.Title, action.BotPrompt));
+                    _ = DeliverToChatAsync(null, session, action.BotPrompt);
                 break;
         }
     }
 
+    private static bool IsChatWorking(SessionSummary session) =>
+        session.IsRunning
+        || session.Status == SessionStatus.Working
+        || FindOpenChat(session.Profile, session.Id)?.Session.Busy == true;
+
+    private static ChatContext? FindOpenChat(string profile, string storedId)
+    {
+        for (var i = OpenChats.Count - 1; i >= 0; i--)
+        {
+            var c = OpenChats[i];
+            if (string.Equals(c.Session.Profile, profile, StringComparison.Ordinal)
+                && string.Equals(c.Session.StoredId, storedId, StringComparison.Ordinal))
+                return c;
+        }
+        return null;
+    }
+
     private static void AttachToChat(ChatContext ctx)
     {
+        OpenChats.Add(ctx);
+        ctx.Closed += () => OpenChats.Remove(ctx);
+
         var menuItem = new MenuFlyoutItem
         {
             Text = "Pull Request Details…",
@@ -211,30 +387,13 @@ public static class CodingFeature
                 Profile = ctx.Session.Profile,
                 Title = ctx.Session.Title,
                 Cwd = ctx.Session.Cwd,
+                IsRunning = ctx.Session.Busy,
+                Status = ctx.Session.Busy ? SessionStatus.Working : SessionStatus.Idle,
             };
             await store.RefreshPRStatusAsync([(session.Profile, session.Id)], fresh: true, detail: true);
-            var status = store.StatusFor(session.Key) ?? new SessionPRStatus(SessionPRState.Unknown, SessionPRUnknownReason.Unmatched);
-            await OpenPullRequestCardAsync(ctx.Page.XamlRoot, session, status, store, GetCommentStore(session.Key), action =>
-            {
-                if (action.Kind is PullRequestQuickAction.Merge or PullRequestQuickAction.Approve or PullRequestQuickAction.AskBotToFixCI
-                    or PullRequestQuickAction.AskBotToFixReview or PullRequestQuickAction.Checkout)
-                {
-                    if (!string.IsNullOrWhiteSpace(action.BotPrompt))
-                    {
-                        ctx.Composer.Text = action.BotPrompt;
-                        ctx.RefreshComposer();
-                    }
-                    return;
-                }
-                if (action.Kind == PullRequestQuickAction.RequestChanges)
-                {
-                    var draft = GetCommentStore(session.Key).FormatReviewMessage(status.Label, action.BotPrompt);
-                    ctx.Composer.Text = string.IsNullOrWhiteSpace(draft) ? (action.BotPrompt ?? "") : draft;
-                    ctx.RefreshComposer();
-                    return;
-                }
-                ExecuteDefaultAction(session, status, action, store, GetCommentStore(session.Key));
-            });
+            var status = store.StatusFor(session.Profile, session.Id)
+                ?? new SessionPRStatus(SessionPRState.Unknown, SessionPRUnknownReason.Unmatched);
+            await OpenPullRequestCardAsync(ctx.Page.XamlRoot, session, status, store, GetCommentStore(session.Key));
         };
         ctx.MoreMenu.Items.Add(menuItem);
     }

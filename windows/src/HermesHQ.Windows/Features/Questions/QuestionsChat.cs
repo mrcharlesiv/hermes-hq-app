@@ -99,6 +99,7 @@ internal sealed class QuestionsChat
             if (_dock is not { Draft.Minimized: true } dock) return;
             dock.SetMinimized(false);
             ShowDock(dock);
+            UpdateNote();
         };
 
         var chipContent = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
@@ -130,6 +131,7 @@ internal sealed class QuestionsChat
         _link.Changed += QueueRefresh;
         _center.ApprovalTimedOut += OnTimedOut;
         ctx.Transcript.Loaded += (_, _) => HookScroller();
+        ctx.Page.SizeChanged += OnPageSizeChanged;
         HookScroller();
         ctx.Closed += Close;
         if (ctx.Session.RuntimeId is { } runtime) OnBound(runtime);
@@ -167,9 +169,9 @@ internal sealed class QuestionsChat
         }
         else _ticker.Stop();
         var atEnd = AtEnd();
-        UpdateNote();
         UpdateCard();
         UpdateDock();
+        UpdateNote();
         UpdateSheets();
         if (atEnd) _ui.TryEnqueue(DispatcherQueuePriority.Low, ScrollToEnd);
         _ui.TryEnqueue(DispatcherQueuePriority.Low, UpdateJump);
@@ -292,16 +294,25 @@ internal sealed class QuestionsChat
 
     // ------------------------------------------------------------------ the question note
 
+    /// True while the live QuestionDock is expanded on screen (Mac: PromptRowsInput.clarifyDockExpanded): suppresses
+    /// the duplicate "A question for you" transcript card above the dock while still marking the turn as waiting.
+    private bool IsClarifyDockExpanded =>
+        _prompts.Clarify is { } clarify && _dock is { Later: false } dock
+        && dock.Prompt.Id == clarify.Id && !dock.Draft.Minimized;
+
     private void UpdateNote()
     {
         var p = _prompts;
-        var key = $"{p.Clarify?.Id}|{p.Clarify?.Questions.Count}|{p.ClarifyUndelivered}|{p.SentClarify?.RequestId}";
+        var dockExpanded = IsClarifyDockExpanded;
+        var key = $"{p.Clarify?.Id}|{p.Clarify?.Questions.Count}|{dockExpanded}|{p.ClarifyUndelivered}|{p.SentClarify?.RequestId}";
         if (key == _noteKey) return;
         _noteKey = key;
-        _noteHost.Content = ClarifyNote.Build(p);
+        _noteHost.Content = ClarifyNote.Build(p, clarifyDockExpanded: dockExpanded);
     }
 
     // ------------------------------------------------------------------ the dock
+
+    private void OnPageSizeChanged(object sender, SizeChangedEventArgs e) => _dock?.SetViewportHeight(e.NewSize.Height);
 
     private void UpdateDock()
     {
@@ -320,8 +331,10 @@ internal sealed class QuestionsChat
             var fresh = new QuestionDock(clarify, draft, _ui)
             {
                 OnSend = DockSend, OnSkip = d => _ = DockSkip(d), OnMinimize = DockMinimize,
+                OnExplain = DockExplain,
                 OnDraftChanged = d => _link.SaveClarifyDraft(d.Prompt.Id, d.Draft),
             };
+            fresh.SetViewportHeight(_ctx.Page.ActualHeight);
             _link.SaveClarifyDraft(clarify.Id, draft);
             _dock = fresh;
             ShowDock(fresh);
@@ -347,6 +360,7 @@ internal sealed class QuestionsChat
         {
             OnSend = SendLater, OnSkip = _ => CloseLater(), OnMinimize = DockMinimize,
         };
+        view.SetViewportHeight(_ctx.Page.ActualHeight);
         _dock = view;
         AppLog.Note("questions", "clarify ended unsent with answers typed: kept as Answer Now");
         ShowDock(view);
@@ -383,6 +397,7 @@ internal sealed class QuestionsChat
         {
             OnSend = SendLater, OnSkip = _ => CloseLater(), OnMinimize = DockMinimize,
         };
+        view.SetViewportHeight(_ctx.Page.ActualHeight);
         _dock = view;
         ShowDock(view);
     }
@@ -454,6 +469,7 @@ internal sealed class QuestionsChat
         }
         else
         {
+            dock.SetViewportHeight(_ctx.Page.ActualHeight);
             SetDock(dock.View);
             dock.TakeKeys();
         }
@@ -473,6 +489,14 @@ internal sealed class QuestionsChat
         if (_dock != dock || dock.Sending != DockSending.None || dock.Draft.Minimized) return;
         dock.SetMinimized(true);
         ShowDock(dock);
+        UpdateNote();
+    }
+
+    private void DockExplain(QuestionDock dock)
+    {
+        if (_dock != dock || dock.Sending != DockSending.None || dock.Later) return;
+        dock.StageExplainFirst();
+        DockSend(dock);
     }
 
     private void DockSend(QuestionDock dock)
@@ -663,6 +687,7 @@ internal sealed class QuestionsChat
         _noticeTimer?.Stop();
         _ctx.Session.RuntimeBound -= OnBound;
         _ctx.Session.Changed -= QueueLateCheck;
+        _ctx.Page.SizeChanged -= OnPageSizeChanged;
         OpenChats.Remove(this);
         _link.Changed -= QueueRefresh;
         _center.ApprovalTimedOut -= OnTimedOut;

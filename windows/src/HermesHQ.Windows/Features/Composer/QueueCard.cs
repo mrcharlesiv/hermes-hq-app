@@ -47,8 +47,8 @@ internal sealed class QueueCard
             Child = body,
             Padding = new Thickness(12, 8, 6, 8),
             CornerRadius = new CornerRadius(12),
-            Background = Ui.Res<Brush>("CardBackgroundFillColorDefaultBrush"),
-            BorderBrush = Ui.Res<Brush>("CardStrokeColorDefaultBrush"),
+            Background = Ui.Res<Brush>("HQPromptCardBrush"),
+            BorderBrush = Ui.Res<Brush>("HQPromptEdgeBrush"),
             BorderThickness = new Thickness(1),
             Visibility = Visibility.Collapsed,
         };

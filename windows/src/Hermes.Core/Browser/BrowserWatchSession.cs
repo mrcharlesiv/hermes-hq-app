@@ -459,9 +459,12 @@ public sealed class BrowserWatchSession
     {
         try
         {
+            // Never pass `?profile=` on `/sessions/{id}/watch`: the watch stream routes through the launch
+            // profile's in-process browser plugin (just like `/activity`), whereas a secondary `?profile=` triggers
+            // Hermes's plugin host socket refusal (HTTP 501). (HermesKit/Browser/BrowserWatchSession.swift)
             var socket = await Service.Gateway.PluginSocketAsync(
                 path,
-                [new KeyValuePair<string, string>("profile", Profile)],
+                [],
                 BrowserWire.MaxMessage,
                 cts.Token).ConfigureAwait(false);
             if (!IsDial(dial)) { socket.Close(); return; }

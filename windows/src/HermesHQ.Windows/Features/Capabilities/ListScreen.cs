@@ -57,7 +57,11 @@ internal sealed class ListScreen : Screen
                 break;
             case CapabilitiesTab.Plugins:
                 yield return Kit.Item("Marketplace", Kit.Bag, () => Push(new MarketplaceScreen(m, MarketplaceKind.Plugins)));
-                if (!m.ReadOnly && !m.PluginsUnavailable) yield return Kit.Item("Install from Git…", Kit.Add, () => Push(new PluginInstallScreen(m)));
+                if (!m.ReadOnly && !m.PluginsUnavailable)
+                {
+                    yield return Kit.Item("Check for Updates", "\uE896", () => _ = PluginUpdateFlow.CheckAndUpdateAllAsync(Root, m));
+                    yield return Kit.Item("Install from Git…", Kit.Add, () => Push(new PluginInstallScreen(m)));
+                }
                 break;
         }
     }

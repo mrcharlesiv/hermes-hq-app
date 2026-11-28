@@ -3,8 +3,81 @@ using System.Text.RegularExpressions;
 
 namespace Hermes.Core.Capabilities;
 
+/// How far a bot may go with one tool of an MCP connector (`tools.permissions[tool]` in the connector's entry;
+/// port of HermesKit/Store/McpToolFilter.swift `McpToolPermission`).
+/// Hermes itself only knows on and off (`tools.include` / `tools.exclude`, which `Blocked` is written as);
+/// the two asking levels are enforced by `hermes-hq-push` 0.9.86+ (`toolPermissions`).
+public enum McpToolPermission
+{
+    AlwaysAllow,
+    AutoReview,
+    NeedsApproval,
+    Blocked,
+}
+
+public static class McpToolPermissions
+{
+    public static readonly McpToolPermission[] All =
+    [
+        McpToolPermission.AlwaysAllow,
+        McpToolPermission.AutoReview,
+        McpToolPermission.NeedsApproval,
+        McpToolPermission.Blocked,
+    ];
+
+    public static string Raw(this McpToolPermission level) => level switch
+    {
+        McpToolPermission.AlwaysAllow => "always_allow",
+        McpToolPermission.AutoReview => "auto_review",
+        McpToolPermission.NeedsApproval => "needs_approval",
+        _ => "blocked",
+    };
+
+    public static McpToolPermission? Parse(string? raw) => raw switch
+    {
+        "always_allow" => McpToolPermission.AlwaysAllow,
+        "auto_review" => McpToolPermission.AutoReview,
+        "needs_approval" => McpToolPermission.NeedsApproval,
+        "blocked" => McpToolPermission.Blocked,
+        _ => null,
+    };
+
+    public static string Title(this McpToolPermission level) => level switch
+    {
+        McpToolPermission.AlwaysAllow => "Always allow",
+        McpToolPermission.AutoReview => "Auto-review",
+        McpToolPermission.NeedsApproval => "Needs approval",
+        _ => "Blocked",
+    };
+
+    public static string ShortTitle(this McpToolPermission level) => level switch
+    {
+        McpToolPermission.AlwaysAllow => "Always",
+        McpToolPermission.AutoReview => "Auto",
+        McpToolPermission.NeedsApproval => "Approve",
+        _ => "Blocked",
+    };
+
+    public static string Subtitle(this McpToolPermission level) => level switch
+    {
+        McpToolPermission.AlwaysAllow => "Runs without asking",
+        McpToolPermission.AutoReview => "Asks before a call that changes something",
+        McpToolPermission.NeedsApproval => "Asks you every time",
+        _ => "Hidden from this bot",
+    };
+
+    public static string Glyph(this McpToolPermission level) => level switch
+    {
+        McpToolPermission.AlwaysAllow => "\uE83D",
+        McpToolPermission.AutoReview => "\uE945",
+        McpToolPermission.NeedsApproval => "\uE7BA",
+        _ => "\uE711",
+    };
+}
+
 /// Port of HermesKit/Store/McpToolFilter.swift (the web's mcp-tool-filter.ts, spec 3x §5.5): a server's optional
-/// `tools.include` (whitelist) / `tools.exclude` (denylist) decide which discovered tools the agent registers.
+/// `tools.include` (whitelist) / `tools.exclude` (denylist) decide which discovered tools the agent registers, and
+/// `tools.permissions` holds per-tool asking levels enforced by the add-on.
 public static class McpToolFilter
 {
     private static List<string>? Names(JsonNode? v) => v is JsonArray a ? [.. a.Select(J.AsString).OfType<string>()] : null;
@@ -13,6 +86,97 @@ public static class McpToolFilter
     {
         var tools = server.Obj("tools");
         return (Names(tools.Get("include")), Names(tools.Get("exclude")));
+    }
+
+    /// Reads the stored `tools.permissions` map (tool name → permission).
+    public static Dictionary<string, McpToolPermission> ReadPermissions(JsonNode? server)
+    {
+        var outMap = new Dictionary<string, McpToolPermission>(StringComparer.Ordinal);
+        var map = server.Obj("tools").Obj("permissions");
+        if (map == null) return outMap;
+        foreach (var (k, v) in map)
+        {
+            if (v is JsonValue jv && jv.TryGetValue(out string? raw) && McpToolPermissions.Parse(raw) is { } perm)
+                outMap[k] = perm;
+        }
+        return outMap;
+    }
+
+    /// The level stored for `name`, whether or not the tool is on: what it comes back as when unblocked.
+    /// Nothing stored (or stored `blocked`) maps to `AlwaysAllow`.
+    public static McpToolPermission StoredLevel(JsonNode? server, string name)
+    {
+        var level = ReadPermissions(server).GetValueOrDefault(name, McpToolPermission.AlwaysAllow);
+        return level == McpToolPermission.Blocked ? McpToolPermission.AlwaysAllow : level;
+    }
+
+    /// Effective permission for `name` on `server`: a tool that is off is `Blocked`, whatever is stored for it.
+    public static McpToolPermission PermissionFor(JsonNode? server, string name) =>
+        !IsEnabled(server, name) ? McpToolPermission.Blocked : StoredLevel(server, name);
+
+    /// Effective permissions for all `discovered` tools.
+    public static Dictionary<string, McpToolPermission> Permissions(JsonNode? server, IEnumerable<string> discovered)
+    {
+        var outMap = new Dictionary<string, McpToolPermission>(StringComparer.Ordinal);
+        foreach (var name in discovered) outMap[name] = PermissionFor(server, name);
+        return outMap;
+    }
+
+    /// Writes the levels: blocked tools through `tools.include` / `tools.exclude` (`SetDisabled`), the two asking
+    /// levels into `tools.permissions`. Preserves entries for undiscovered tools and preserves a blocked tool's
+    /// stored asking level so unblocking a tool never silently drops its approval requirement.
+    public static JsonNode SetPermissions(JsonNode server, IReadOnlyDictionary<string, McpToolPermission> permissions, IReadOnlyList<string> discovered)
+    {
+        var blocked = discovered.Where(n => permissions.TryGetValue(n, out var level) && level == McpToolPermission.Blocked).ToList();
+        var updated = SetDisabled(server, blocked, discovered);
+        if (updated is not JsonObject next) return updated;
+
+        var tools = next.Obj("tools") is { } t ? (JsonObject)t.DeepClone() : new JsonObject();
+        var permMap = new JsonObject();
+        // Only well-formed asking levels are preserved; junk values left in the wrong shape are cleaned up.
+        foreach (var (name, level) in ReadPermissions(updated))
+        {
+            if (level is McpToolPermission.AutoReview or McpToolPermission.NeedsApproval)
+                permMap[name] = level.Raw();
+        }
+        foreach (var name in discovered)
+        {
+            if (!permissions.TryGetValue(name, out var level)) continue;
+            switch (level)
+            {
+                case McpToolPermission.AutoReview:
+                    permMap[name] = McpToolPermission.AutoReview.Raw();
+                    break;
+                case McpToolPermission.NeedsApproval:
+                    permMap[name] = McpToolPermission.NeedsApproval.Raw();
+                    break;
+                case McpToolPermission.AlwaysAllow:
+                    permMap.Remove(name);
+                    break;
+                case McpToolPermission.Blocked:
+                    break; // preserves what was stored
+            }
+        }
+        if (permMap.Count == 0) tools.Remove("permissions");
+        else tools["permissions"] = permMap;
+
+        if (tools.Count == 0) next.Remove("tools");
+        else next["tools"] = tools;
+        return next;
+    }
+
+    /// Bottom-bar summary text for pending tool edits (`ConnectorPageModel.draftSummary`).
+    public static string DraftSummary(bool levels, int changedCount, int blockedCount, int backOnCount, int autoReviewCount, int needsApprovalCount)
+    {
+        if (!levels)
+            return $"{CapabilitiesWords.Plural(blockedCount, "tool", "tools")} off, {(backOnCount == 0 ? "none" : backOnCount.ToString())} back on";
+
+        var parts = new List<string>(3);
+        if (needsApprovalCount > 0) parts.Add($"{needsApprovalCount} {(needsApprovalCount == 1 ? "asks" : "ask")} every time");
+        if (autoReviewCount > 0) parts.Add($"{autoReviewCount} auto-review");
+        if (blockedCount > 0) parts.Add($"{blockedCount} blocked");
+        if (parts.Count == 0) parts.Add("all run without asking");
+        return $"{CapabilitiesWords.Plural(changedCount, "change", "changes")} · {string.Join(", ", parts)}";
     }
 
     /// An explicit `include` (even []) is a whitelist: the runtime registers nothing for `[]`.

@@ -362,7 +362,7 @@ public static class TranscriptFeature
     private static Border Card(UIElement child) => new()
     {
         Child = child, Padding = new Thickness(12, 8, 12, 8), CornerRadius = new CornerRadius(10),
-        Background = ThemeBrushes.Get("CardBackgroundFillColorDefaultBrush"),
-        BorderBrush = ThemeBrushes.Get("CardStrokeColorDefaultBrush"), BorderThickness = new Thickness(1),
+        Background = ThemeBrushes.Get("HQPromptCardBrush"),
+        BorderBrush = ThemeBrushes.Get("HQPromptEdgeBrush"), BorderThickness = new Thickness(1),
     };
 }

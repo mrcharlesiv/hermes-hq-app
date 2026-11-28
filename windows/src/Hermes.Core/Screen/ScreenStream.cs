@@ -379,6 +379,8 @@ public sealed class ScreenStream
         public int Serial;
         public double DecodeTime;
         public bool Handshaken;
+        /// H25: latches `out_.Resized` across frames with 0 updates so the next request asks `incremental: false`.
+        public bool PendingResized;
     }
 
     /// `owner` is asked for the stream each time something arrives, so a stream nobody holds any more is not kept
@@ -455,7 +457,10 @@ public sealed class ScreenStream
             int w = decoded.Width, h = decoded.Height;
             await stream._onMain(() => onReady(w, h));
         }
+        loop.PendingResized = loop.PendingResized || out_.Resized;
         if (out_.Updates == 0) return true;
+        var resized = loop.PendingResized;
+        loop.PendingResized = false;
         loop.DecodeTime = 0;
         loop.Serial += 1;
         if (decoded.Image is { } image)
@@ -471,7 +476,7 @@ public sealed class ScreenStream
             stream._shared.Live = true;
         }
         // Only now that the frame is on the UI thread: ask for the next one (the whole picture after a resize).
-        stream.Send(RfbMessage.UpdateRequest(incremental: !out_.Resized, width: decoded.Width, height: decoded.Height));
+        stream.Send(RfbMessage.UpdateRequest(incremental: !resized, width: decoded.Width, height: decoded.Height));
         return true;
     }
 

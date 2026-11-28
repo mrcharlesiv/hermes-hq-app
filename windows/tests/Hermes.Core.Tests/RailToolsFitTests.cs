@@ -105,9 +105,10 @@ public class RailToolsFitTests
                      "pill.wrapLines(within: view.bounds.width - 32)",
                      "return (split.detail, pane, (split.detail.topViewController as? ChatViewController)?.composer)" })
             Assert.Contains(s, pill);
-        var rail = File.ReadAllText(Path.Combine(root, "App", "Mac", "MacBotsRail.swift"));
-        Assert.Contains("UIImage.SymbolConfiguration(pointSize: 13 * MacSidebar.chrome, weight: .medium)", rail);
-        Assert.Contains("UIImage.SymbolConfiguration(pointSize: (folded ? 13 : 15) * MacSidebar.chrome, weight: .medium)", rail);
+        var header = File.ReadAllText(Path.Combine(root, "App", "Mac", "MacSidebarHeader.swift"));
+        Assert.Contains("UIImage.SymbolConfiguration(pointSize: 13.5, weight: .medium)", header);
+        Assert.Contains("id: \"mac-sidebar.search\"", header);
+        Assert.Contains("id: \"mac-sidebar.compose\"", header);
         var sidebar = File.ReadAllText(Path.Combine(root, "App", "Mac", "MacSidebar.swift"));
         Assert.Contains("static var chrome: CGFloat { CGFloat(ThemeTable.current.state.uiScalePercent) / 100 }", sidebar);
     }

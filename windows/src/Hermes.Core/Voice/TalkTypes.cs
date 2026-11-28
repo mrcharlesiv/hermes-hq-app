@@ -380,7 +380,8 @@ public sealed record VoiceChatRecord(
     double DurationSeconds,
     int Turns,
     TalkEnd EndReason,
-    string? Summary = null)
+    string? Summary = null,
+    string? TranscriptMessage = null)
 {
     public static string EndedCaption(double durationSeconds) =>
         durationSeconds >= 1 ? $"Voice chat ended · {TalkClock.Total(durationSeconds)}" : "Voice chat ended";

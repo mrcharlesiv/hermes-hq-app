@@ -14,17 +14,21 @@ internal static class ClarifyNote
     public const string UndeliveredText =
         "This question didn’t reach the app, so it can’t be answered here. Press Stop to end the turn, then reply in chat.";
 
-    /// The note for what the chat shows now, or null for none.
-    public static Border? Build(ChatPrompts p)
+    /// The note for what the chat shows now, or null for none. When `clarifyDockExpanded` is true, the live
+    /// "A question for you" card is suppressed so it does not duplicate the expanded dock (Mac: PromptRows.swift).
+    public static Border? Build(ChatPrompts p, bool clarifyDockExpanded = false)
     {
         if (p.Clarify is { } c)
         {
+            if (clarifyDockExpanded) return null;
             var count = c.Questions.Count;
             var title = count > 1 ? $"{count} questions for you" : "A question for you";
-            var first = Text(c.Questions.FirstOrDefault()?.Question ?? "", 13.5);
-            first.MaxLines = 2;
-            first.TextTrimming = TextTrimming.CharacterEllipsis;
-            return Note(title, "", first); // Help (a question mark)
+            var full = c.Questions.Select(q => q.Question.Trim()).Where(q => q.Length > 0).ToList();
+            var detail = full.Count > 0 ? string.Join("\n\n", full) : (c.Questions.FirstOrDefault()?.Question ?? "");
+            var body = Text(detail, 13.5);
+            body.MaxLines = 8;
+            body.TextTrimming = TextTrimming.CharacterEllipsis;
+            return Note(title, "", body); // Help (a question mark)
         }
         if (p.ClarifyUndelivered)
             return Note("A question for you", "", Text(UndeliveredText, 13.5, "TextFillColorSecondaryBrush")); // Warning

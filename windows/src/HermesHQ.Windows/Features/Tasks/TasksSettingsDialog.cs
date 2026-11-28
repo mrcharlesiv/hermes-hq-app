@@ -1,6 +1,5 @@
 using Hermes.Core.Tasks;
 using HermesHQ.Features.Kanban;
-using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
@@ -8,21 +7,31 @@ using static HermesHQ.Features.Kanban.PageKit;
 
 namespace HermesHQ.Features.Tasks;
 
-/// Tasks Settings (App/Pages/Tasks/TodoSettingsSheet.swift; the page's ⋯ › Tasks Settings…): Catch Tasks in Chats (Ask
-/// First / Automatic / Off), Getting Tasks Ready (Times a Day, Quiet From, Quiet Until), and Ideas on an add-on that keeps
-/// it (Suggest Tasks, Who Looks, Each Day At, Ideas a Day). Each change saves at once with the whole settings
-/// (`PUT /tasks/settings`); a refused save puts the control back and the page's notice says why. The Mac's Import from
-/// Reminders has no Windows counterpart.
+/// Tasks Settings (`App/Pages/Tasks/TodoSettingsSheet.swift`, commit f3a9b867a): Catch Tasks in Chats, Getting Tasks
+/// Ready, and Ideas (Suggest Tasks, Who Looks, Where to Look ›, Each Day At, Ideas a Day).
 internal static class TasksSettingsDialog
 {
-    public static async Task PresentAsync(XamlRoot? root, TasksStore store)
+    public static async Task PresentAsync(XamlRoot? root, TasksStore store, TaskIdeasStore? ideasStore = null)
+    {
+        while (true)
+        {
+            var openSources = await PresentOnceAsync(root, store, ideasStore);
+            if (!openSources) return;
+            await IdeasSourcesDialog.PresentAsync(root, store, ideasStore);
+        }
+    }
+
+    private static async Task<bool> PresentOnceAsync(XamlRoot? root, TasksStore store, TaskIdeasStore? ideasStore)
     {
         var bots = PageKit.Bots.Select(b => (b.Name, BotName(b.Name))).ToList();
         var model = new TodoSettingsModel(store, bots);
         var ui = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
-        var body = new StackPanel { Spacing = 6, MinWidth = 380 };
+        var body = new StackPanel { Spacing = 6, MinWidth = 400 };
         var scroll = new ScrollViewer { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, MaxHeight = 560 };
         AutomationProperties.SetAutomationId(scroll, "tasks.settings");
+
+        var openSourcesAfterClose = false;
+        ContentDialog? dialog = null;
 
         void Header(string text)
         {
@@ -46,7 +55,6 @@ internal static class TasksSettingsDialog
             body.Children.Add(grid);
             return grid;
         }
-        // A Stepper: the value's words, then − and + (greyed at the ends).
         FrameworkElement Stepper(string label, string id, int value, int min, int max, Func<int, string> words, Func<int, Task<bool>> set)
         {
             var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
@@ -114,31 +122,69 @@ internal static class TasksSettingsDialog
                 {
                     if (model.ShowsWhoLooks)
                     {
-                        var who = new ComboBox { MinWidth = 160 };
-                        foreach (var (id, name) in model.Bots) who.Items.Add(new ComboBoxItem { Content = name, Tag = id });
-                        who.SelectedIndex = Math.Max(0, model.Bots.ToList().FindIndex(b => b.Id == model.Looker));
-                        AutomationProperties.SetName(who, TodoSettingsCopy.WhoLooks);
-                        AutomationProperties.SetAutomationId(who, "tasks.settings.ideas-bot");
-                        who.SelectionChanged += (_, _) =>
+                        var activeBots = draft.ActiveIdeasBots;
+                        if (draft.IdeasSources != null || activeBots.Count > 1)
                         {
-                            if (who.SelectedItem is ComboBoxItem { Tag: string id } && id != model.Looker) _ = model.SetIdeasBot(id);
-                        };
-                        Row(TodoSettingsCopy.WhoLooks, who);
+                            var label = TaskIdeasSummary.ActiveBotsLabel(activeBots, bots);
+                            var btn = Quiet(label + " ›", () =>
+                            {
+                                openSourcesAfterClose = true;
+                                dialog?.Hide();
+                            });
+                            AutomationProperties.SetAutomationId(btn, "tasks.settings.ideas-bots");
+                            Row(TodoSettingsCopy.WhoLooks, btn);
+                        }
+                        else
+                        {
+                            var who = new ComboBox { MinWidth = 160 };
+                            foreach (var (id, name) in model.Bots) who.Items.Add(new ComboBoxItem { Content = name, Tag = id });
+                            who.SelectedIndex = Math.Max(0, model.Bots.ToList().FindIndex(b => b.Id == model.Looker));
+                            AutomationProperties.SetName(who, TodoSettingsCopy.WhoLooks);
+                            AutomationProperties.SetAutomationId(who, "tasks.settings.ideas-bot");
+                            who.SelectionChanged += (_, _) =>
+                            {
+                                if (who.SelectedItem is ComboBoxItem { Tag: string id } && id != model.Looker) _ = model.SetIdeasBot(id);
+                            };
+                            Row(TodoSettingsCopy.WhoLooks, who);
+                        }
                     }
+
+                    // "Where to Look" row (0.9.86+ sources UI)
+                    if (draft.IdeasSources != null || ideasStore != null)
+                    {
+                        var sources = draft.IdeasSources ?? ideasStore?.Page.Sources ?? new TodoIdeasSources();
+                        var connectors = ideasStore?.Page.AvailableSources?.Connectors ?? [];
+                        var summary = TaskIdeasSummary.ActiveSourcesLabel(sources, connectors);
+                        var whereBtn = Quiet(summary + " ›", () =>
+                        {
+                            openSourcesAfterClose = true;
+                            dialog?.Hide();
+                        });
+                        AutomationProperties.SetName(whereBtn, "Where to Look: " + summary);
+                        AutomationProperties.SetAutomationId(whereBtn, "tasks.settings.ideas-sources");
+                        Row("Where to Look", whereBtn);
+                    }
+
                     Time(TodoSettingsCopy.EachDayAt, "tasks.settings.ideas-at", draft.IdeasAt ?? TodoSettingsCopy.DefaultIdeasAt, model.SetIdeasAt);
                     Stepper(TodoSettingsCopy.IdeasADay, "tasks.settings.ideas-max", draft.IdeasMax ?? TodoSettingsCopy.DefaultIdeasMax,
                         TodoSettingsCopy.IdeasMin, TodoSettingsCopy.IdeasMax, TodoSettingsCopy.UpTo, model.SetIdeasMax);
                 }
-                Footer(TodoSettingsCopy.IdeasFooter(model.BotName(model.Looker)));
+                var botsSummary = TaskIdeasSummary.ActiveBotsLabel(draft.ActiveIdeasBots, bots);
+                Footer(TodoSettingsCopy.IdeasFooter(botsSummary));
             }
         }
 
         model.Changed += () => ui.TryEnqueue(Build);
+        model.IdeasChanged += () => { if (ideasStore != null) _ = ideasStore.RefreshAsync(force: true); };
         Build();
-        var dialog = new ContentDialog
+        dialog = new ContentDialog
         {
-            Title = TodoSettingsCopy.Title, Content = scroll, CloseButtonText = TodoSettingsCopy.Done, DefaultButton = ContentDialogButton.Close,
+            Title = TodoSettingsCopy.Title,
+            Content = scroll,
+            CloseButtonText = TodoSettingsCopy.Done,
+            DefaultButton = ContentDialogButton.Close,
         };
         await PageKit.ShowAsync(root, dialog);
+        return openSourcesAfterClose;
     }
 }

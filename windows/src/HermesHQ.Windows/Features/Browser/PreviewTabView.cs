@@ -39,6 +39,12 @@ public sealed class PreviewTabWindow : Window
 
     public Uri CurrentUrl => _currentUrl;
 
+    /// C6: only http and https URLs may be launched externally (matches App/Browser/PreviewTab.swift).
+    public static bool AllowsExternalLaunch(Uri? url) =>
+        url is { IsAbsoluteUri: true }
+        && (url.Scheme.Equals("http", StringComparison.OrdinalIgnoreCase)
+            || url.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase));
+
     private PreviewTabWindow(Uri initialUrl)
     {
         _currentUrl = initialUrl;
@@ -84,7 +90,11 @@ public sealed class PreviewTabWindow : Window
         };
 
         _copyButton = NavButton("\uE8C8", "Copy Link", "preview.copy", () => Kit.Copy(_currentUrl.AbsoluteUri));
-        _openOutsideButton = NavButton("\uE8A7", "Open in Browser", "preview.openOutside", () => _ = Launcher.LaunchUriAsync(_currentUrl));
+        _openOutsideButton = NavButton("\uE8A7", "Open in Browser", "preview.openOutside", () =>
+        {
+            if (AllowsExternalLaunch(_currentUrl)) _ = Launcher.LaunchUriAsync(_currentUrl);
+        });
+        _openOutsideButton.IsEnabled = AllowsExternalLaunch(_currentUrl);
         _closeButton = NavButton("\uE711", "Close", "preview.close", Close);
 
         Grid.SetColumn(_backButton, 0); bar.Children.Add(_backButton);
@@ -203,6 +213,7 @@ public sealed class PreviewTabWindow : Window
         }
         _backButton.IsEnabled = _webView.CanGoBack;
         _forwardButton.IsEnabled = _webView.CanGoForward;
+        _openOutsideButton.IsEnabled = AllowsExternalLaunch(_currentUrl);
     }
 
     private void FollowTheme()

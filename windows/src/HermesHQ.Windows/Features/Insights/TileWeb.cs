@@ -1,55 +1,58 @@
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Hermes.Core;
 using Hermes.Core.Insights;
-using Microsoft.UI.Xaml;
+using HermesHQ.Features.Settings;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.Web.WebView2.Core;
 
 namespace HermesHQ.Features.Insights;
 
-/// A tile's page in a WebView2 (App/Chat/Viewer/HTMLPageSheet.swift `prelude`, App/Pages/Artifacts/LiveTiles.swift
-/// `tileScript`): the app's colours as CSS variables a page may use, a viewport, `window.hermes.send` and
-/// `data-hermes-send` buttons that ask the tile's bot, and in a tile a click on nothing pressable opens it.
-/// Messages come back through `chrome.webview.postMessage`: `{id, prompt}` from a button, `{open:true}` or
-/// `{refresh:true}` from the tile script.
+/// A tile's page in a WebView2 (App/Chat/Viewer/HTMLPageSheet.swift `prelude` / `__hqApplyTheme`,
+/// App/Pages/Artifacts/LiveTiles.swift `tileScript`): the app's resolved theme colours as CSS variables,
+/// in-place theme switching via `window.__hqApplyTheme(css, isDark, ground)` + `themeKey`, `window.__hqLegible`
+/// legibility pass, `window.hermes.send` and `data-hermes-send` buttons, and PNG snapshot capture.
 public static class TileWeb
 {
-    public static string Prelude(bool dark, bool talks, bool inTile)
+    private sealed class WebThemeState
     {
-        var fg = dark ? "rgba(255,255,255,1.000)" : "rgba(0,0,0,1.000)";
-        var muted = dark ? "rgba(235,235,245,0.600)" : "rgba(60,60,67,0.600)";
-        var accent = dark ? "rgba(10,132,255,1.000)" : "rgba(0,122,255,1.000)";
-        var border = dark ? "rgba(84,84,88,0.650)" : "rgba(60,60,67,0.290)";
-        var card = dark ? "rgba(44,44,46,1.000)" : "rgba(255,255,255,1.000)";
-        var style = $":root{{--foreground:{fg};--muted-foreground:{muted};--accent:{accent};--border:{border};--card:{card};"
-            + $"--hq-radius:16px;color-scheme:{(dark ? "dark" : "light")};color:var(--foreground);"
-            + "font-family:'Segoe UI Variable','Segoe UI',system-ui,sans-serif;-webkit-text-size-adjust:100%}"
-            + ":where(html,body){margin:0;padding:0;background:transparent}:where(body){padding:12px 16px;box-sizing:border-box}"
-            + ":where(img,svg,canvas,video){max-width:100%}:where(svg[viewBox]){height:auto}";
-        var send = talks
-            ? "var n=0,w={};window.__hermesAck=function(id,r){var f=w[id];delete w[id];if(f)f(r)};"
-              + "window.hermes={send:function(p){return new Promise(function(res){var id=++n;w[id]=res;"
-              + "try{window.chrome.webview.postMessage({id:id,prompt:String(p)})}catch(e){delete w[id];res({ok:false,error:'undelivered'})}})}};"
-              + "document.addEventListener('click',function(e){var t=e.target&&e.target.closest&&e.target.closest('[data-hermes-send]');"
-              + "if(t){e.preventDefault();window.hermes.send(t.getAttribute('data-hermes-send'))}},true);"
-            : "window.hermes={send:function(){return Promise.resolve({ok:false,error:'undelivered'})}};";
-        var script = "(function(){var m=document.querySelector('meta[name=viewport]');if(!m){m=document.createElement('meta');m.name='viewport';"
-            + "m.content='width=device-width,initial-scale=1';(document.head||document.documentElement).appendChild(m)}"
-            + "var s=document.createElement('style');s.textContent=" + JsonSerializer.Serialize(style) + ";"
-            + "(document.head||document.documentElement).prepend(s);" + send + "})();";
-        if (inTile)
-            script += "(function(){var s=document.createElement('style');"
-                + "s.textContent=':where(html,body){user-select:none;overflow:hidden}';"
-                + "(document.head||document.documentElement).appendChild(s);"
-                + "function post(m){try{window.chrome.webview.postMessage(m)}catch(e){}}"
-                + "window.hermes=window.hermes||{};window.hermes.refresh=function(){post({refresh:true})};"
-                + "function pressable(t){for(var e=t;e&&e.nodeType===1;e=e.parentElement){"
-                + "if(e.matches('a[href],button,input,select,textarea,label,summary,details,[data-hermes-send],[onclick],[role=button],[data-hq-tap]'))return true;"
-                + "if(getComputedStyle(e).cursor==='pointer')return true}return false}"
-                + "document.addEventListener('click',function(e){if(e.defaultPrevented||pressable(e.target))return;post({open:true})},false);})();";
-        return script;
+        public string? ScriptId;
+        public string? ThemeKey;
+        public bool Talks;
+        public bool InTile;
     }
+
+    private static readonly ConditionalWeakTable<WebView2, WebThemeState> States = new();
+
+    /// Resolves the app's current visual palette for `dark` mode from `ThemeService`.
+    public static TileThemePalette CurrentPalette(bool dark)
+    {
+        try
+        {
+            var tokens = ThemeService.Set.Tokens(dark);
+            var desktop = ThemeService.State.DesktopLook;
+            var radius = desktop ? (int)Math.Round(ThemeService.State.DesktopRadius, MidpointRounding.AwayFromZero) : 16;
+            return new TileThemePalette(
+                Label: tokens.Label,
+                Label2: tokens.Label2,
+                Tint: tokens.Tint,
+                Separator: tokens.Separator,
+                Card: tokens.GroupedCard,
+                Page: tokens.Page,
+                Dark: dark,
+                Radius: radius);
+        }
+        catch (Exception)
+        {
+            return TileWebTheme.DefaultPalette(dark);
+        }
+    }
+
+    public static string ThemeKey(bool dark) => TileWebTheme.ThemeKey(CurrentPalette(dark));
+
+    public static string Prelude(bool dark, bool talks, bool inTile) =>
+        TileWebTheme.PreludeScript(CurrentPalette(dark), talks, inTile);
 
     /// What a page posted: a button's ask, open, or refresh.
     public sealed record Message(int? Id, string? Prompt, bool Open, bool Refresh);
@@ -69,8 +72,8 @@ public static class TileWeb
         _ = web.CoreWebView2?.ExecuteScriptAsync($"window.__hermesAck && window.__hermesAck({id}, {result})");
     }
 
-    /// A web view set up for a tile's page: no menus, no zoom, no dev tools, the prelude before every load, links
-    /// leaving the page opened in the browser.
+    /// A web view set up for a tile's page: no menus, no zoom, no dev tools, the theme prelude before every load,
+    /// links leaving the page opened in the browser.
     public static async Task<bool> PrepareAsync(WebView2 web, bool dark, bool talks, bool inTile)
     {
         try
@@ -88,7 +91,15 @@ public static class TileWeb
         core.Settings.IsZoomControlEnabled = false;
         core.Settings.IsStatusBarEnabled = false;
         core.Settings.AreBrowserAcceleratorKeysEnabled = false;
-        await core.AddScriptToExecuteOnDocumentCreatedAsync(Prelude(dark, talks, inTile));
+        SetPreferredColorScheme(core, dark);
+
+        var palette = CurrentPalette(dark);
+        var state = States.GetOrCreateValue(web);
+        state.Talks = talks;
+        state.InTile = inTile;
+        state.ThemeKey = TileWebTheme.ThemeKey(palette);
+        state.ScriptId = await core.AddScriptToExecuteOnDocumentCreatedAsync(TileWebTheme.PreludeScript(palette, talks, inTile));
+
         core.NavigationStarting += (sender, a) =>
         {
             // The page itself (NavigateToString's about:blank / data) loads; a link leaving it opens in the browser.
@@ -105,6 +116,64 @@ public static class TileWeb
         };
         web.DefaultBackgroundColor = Microsoft.UI.Colors.Transparent;
         return true;
+    }
+
+    /// [28b14acf7] Updates an already-loaded WebView2's CSS variables & ground in place via `window.__hqApplyTheme`
+    /// without destroying/recreating the WebView2 control. Returns true only when the page requires a reload
+    /// (e.g., canvas/script reading theme colors, or prelude not yet evaluated).
+    public static async Task<bool> ApplyThemeAsync(WebView2 web, bool dark)
+    {
+        if (web.CoreWebView2 is not { } core) return false;
+        var palette = CurrentPalette(dark);
+        var key = TileWebTheme.ThemeKey(palette);
+        var state = States.GetOrCreateValue(web);
+        if (state.ThemeKey == key) return false;
+        state.ThemeKey = key;
+
+        SetPreferredColorScheme(core, dark);
+        try
+        {
+            if (!string.IsNullOrEmpty(state.ScriptId))
+                core.RemoveScriptToExecuteOnDocumentCreated(state.ScriptId);
+            state.ScriptId = await core.AddScriptToExecuteOnDocumentCreatedAsync(
+                TileWebTheme.PreludeScript(palette, state.Talks, state.InTile));
+            var result = await core.ExecuteScriptAsync(TileWebTheme.ApplyThemeScript(palette));
+            return TileWebTheme.NeedsReloadAfterThemeApply(result);
+        }
+        catch (Exception e) when (e is System.Runtime.InteropServices.COMException or InvalidOperationException or ObjectDisposedException)
+        {
+            return false;
+        }
+    }
+
+    private static void SetPreferredColorScheme(CoreWebView2 core, bool dark)
+    {
+        try
+        {
+            if (core.Profile is { } profile)
+                profile.PreferredColorScheme = dark ? CoreWebView2PreferredColorScheme.Dark : CoreWebView2PreferredColorScheme.Light;
+        }
+        catch (Exception) { }
+    }
+
+    /// Captures a PNG image snapshot of a rendered tile WebView2 (`Share as Image…`).
+    public static async Task<byte[]?> CapturePngAsync(WebView2 web)
+    {
+        if (web.CoreWebView2 is not { } core) return null;
+        try
+        {
+            using var stream = new Windows.Storage.Streams.InMemoryRandomAccessStream();
+            await core.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png, stream);
+            stream.Seek(0);
+            using var read = stream.AsStreamForRead();
+            using var ms = new MemoryStream();
+            await read.CopyToAsync(ms);
+            return ms.Length > 0 ? ms.ToArray() : null;
+        }
+        catch (Exception e) when (e is System.Runtime.InteropServices.COMException or InvalidOperationException or ObjectDisposedException)
+        {
+            return null;
+        }
     }
 
     /// Loads a page's text (with a viewport when it has none).

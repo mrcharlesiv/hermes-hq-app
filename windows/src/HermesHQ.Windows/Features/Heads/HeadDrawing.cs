@@ -39,6 +39,122 @@ public static class HeadDrawing
         return new Viewbox { Width = side, Height = side, Stretch = Stretch.Uniform, Child = canvas };
     }
 
+    /// Layered head elements for smooth 60fps transform-driven animation (`AnimatedHeadFace`), avoiding per-frame
+    /// visual tree rebuilds.
+    internal sealed class LayeredHead
+    {
+        public required UIElement Root { get; init; }
+        public required CompositeTransform BodyTransform { get; init; }
+        public CompositeTransform? EyesTransform { get; init; }
+        public Image? MatrixImage { get; init; }
+        public CompositeTransform? GlintTransform { get; init; }
+        public FrameworkElement? GlintOverlay { get; init; }
+    }
+
+    internal static LayeredHead DrawLayered(Head head, double side, double scale, bool? dark)
+    {
+        var rootCanvas = new Canvas { Width = 1024, Height = 1024 };
+        var bodyTransform = new CompositeTransform();
+        var mover = new Canvas
+        {
+            Width = 1024,
+            Height = 1024,
+            RenderTransformOrigin = new Point(0.5, 0.94),
+            RenderTransform = bodyTransform,
+        };
+        CompositeTransform? eyesTransform = null;
+        Image? matrixImage = null;
+        CompositeTransform? glintTransform = null;
+        FrameworkElement? glintOverlay = null;
+
+        var picture = HeadPicture.For(head, side, dark);
+        switch (picture)
+        {
+            case HeadPicture.Shapes s:
+                var layout = s.Layout;
+                if (layout.Board is { } board)
+                {
+                    rootCanvas.Children.Add(new Path { Data = Geometry(HeadGeometry.Frame), Fill = Brush(board.Frame) });
+                    rootCanvas.Children.Add(new Path { Data = Geometry(HeadGeometry.PanelPath), Fill = Brush(board.Panel) });
+                }
+                var placed = new Canvas { Width = 1024, Height = 1024 };
+                if (layout.Placement is { } p)
+                    placed.RenderTransform = new MatrixTransform { Matrix = new Matrix(p.K, 0, 0, p.K, p.Tx, p.Ty) };
+                var outline = new Path { Data = Outline(layout), Fill = Brush(layout.Fill) };
+                if (layout.Rim is { } rim)
+                {
+                    outline.Stroke = Brush(rim);
+                    outline.StrokeThickness = 14;
+                }
+                placed.Children.Add(outline);
+                foreach (var mark in layout.Under) placed.Children.Add(Mark(mark));
+                eyesTransform = new CompositeTransform();
+                var eyes = new Canvas
+                {
+                    Width = 1024,
+                    Height = 1024,
+                    RenderTransformOrigin = new Point(Math.Clamp(layout.FaceCentre.X / 1024.0, 0.1, 0.9),
+                        Math.Clamp(layout.FaceCentre.Y / 1024.0, 0.1, 0.9)),
+                    RenderTransform = eyesTransform,
+                };
+                foreach (var mark in layout.Face) eyes.Children.Add(Mark(mark));
+                placed.Children.Add(eyes);
+                mover.Children.Add(placed);
+                break;
+
+            case HeadPicture.Svg svg:
+                var pixels = Math.Max(16, (int)Math.Ceiling(side * scale));
+                var image = new Image
+                {
+                    Width = 1024,
+                    Height = 1024,
+                    Stretch = Stretch.Fill,
+                    Source = SvgSource(svg.Markup, pixels),
+                };
+                mover.Children.Add(image);
+                if (svg.Label is { } label) mover.Children.Add(Label(label));
+                if (head.Theme == HeadTheme.Matrix)
+                {
+                    matrixImage = image;
+                    glintTransform = new CompositeTransform();
+                    var peakAlpha = (byte)(dark == true ? 92 : 62);
+                    var sheenBrush = new LinearGradientBrush
+                    {
+                        StartPoint = new Point(0, 0),
+                        EndPoint = new Point(1, 1),
+                        GradientStops =
+                        {
+                            new GradientStop { Color = Color.FromArgb(0, 255, 255, 255), Offset = 0.0 },
+                            new GradientStop { Color = Color.FromArgb(peakAlpha, 255, 255, 255), Offset = 0.45 },
+                            new GradientStop { Color = Color.FromArgb(0, 255, 255, 255), Offset = 1.0 },
+                        },
+                    };
+                    glintOverlay = new Ellipse
+                    {
+                        Width = 560,
+                        Height = 560,
+                        Fill = sheenBrush,
+                        Opacity = 0,
+                        IsHitTestVisible = false,
+                        RenderTransform = glintTransform,
+                    };
+                    mover.Children.Add(glintOverlay);
+                }
+                break;
+        }
+
+        rootCanvas.Children.Add(mover);
+        return new LayeredHead
+        {
+            Root = new Viewbox { Width = side, Height = side, Stretch = Stretch.Uniform, Child = rootCanvas },
+            BodyTransform = bodyTransform,
+            EyesTransform = eyesTransform,
+            MatrixImage = matrixImage,
+            GlintTransform = glintTransform,
+            GlintOverlay = glintOverlay,
+        };
+    }
+
     // MARK: Shapes heads (HeadRenderer.draw)
 
     static void DrawShapes(Canvas canvas, ShapeHeadLayout layout)
@@ -170,7 +286,7 @@ public static class HeadDrawing
     static readonly Dictionary<string, SvgImageSource> Sources = [];
 
     /// One SvgImageSource per markup and pixel size, kept for the session (a list scrolls without remaking pictures).
-    static SvgImageSource SvgSource(string markup, int pixels)
+    internal static SvgImageSource SvgSource(string markup, int pixels)
     {
         var key = $"{pixels}|{markup.GetHashCode()}|{markup.Length}";
         if (Sources.TryGetValue(key, out var hit)) return hit;

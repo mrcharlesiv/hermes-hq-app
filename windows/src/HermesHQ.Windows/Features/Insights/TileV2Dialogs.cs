@@ -1,5 +1,8 @@
+using Hermes.Core.Composer;
 using Hermes.Core.Insights;
 using Hermes.Core.Model;
+using Hermes.Core.Net;
+using Hermes.Core.Settings;
 using HermesHQ.Controls;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
@@ -358,10 +361,38 @@ internal static class NewTileDialog
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
         };
 
-        var result = await show(dialog);
-        if (result != ContentDialogResult.Primary || selectedBot == null || string.IsNullOrWhiteSpace(whatBox.Text))
-            return null;
-        return new NewTileRequest(selectedBot, whatBox.Text.Trim(), selectedSize, selectedSchedule, selectedPageId);
+        while (true)
+        {
+            var result = await show(dialog);
+            if (result == ContentDialogResult.Primary)
+            {
+                if (selectedBot == null || string.IsNullOrWhiteSpace(whatBox.Text)) return null;
+                return new NewTileRequest(selectedBot, whatBox.Text.Trim(), selectedSize, selectedSchedule, selectedPageId);
+            }
+            var typed = whatBox.Text.Trim();
+            var hasChanges = typed.Length > 0 && !TileIdeaMatcher.Catalog.Any(c => c.Words == typed);
+            if (!hasChanges) return null;
+            if (await ConfirmDiscardAsync(root, show)) return null;
+        }
+    }
+
+    internal static async Task<bool> ConfirmDiscardAsync(XamlRoot root, Func<ContentDialog, Task<ContentDialogResult>> show)
+    {
+        var confirm = new ContentDialog
+        {
+            Title = "Discard Changes?",
+            Content = new TextBlock
+            {
+                Text = "Your typed prompt hasn’t been sent yet.",
+                TextWrapping = TextWrapping.Wrap,
+            },
+            XamlRoot = root,
+            PrimaryButtonText = "Keep Editing",
+            CloseButtonText = "Discard",
+            DefaultButton = ContentDialogButton.Primary,
+        };
+        AutomationProperties.SetAutomationId(confirm, "tile.discard.confirm");
+        return await show(confirm) != ContentDialogResult.Primary;
     }
 
     internal static StackPanel SectionBlock(string heading, UIElement content, string? footer)
@@ -487,24 +518,293 @@ internal static class ChangeTileDialog
         form.Children.Add(NewTileDialog.SectionBlock("Quick Changes", chips, footer));
 
         dialog.Content = new ScrollViewer { Content = form, MaxHeight = 520, HorizontalScrollMode = ScrollMode.Disabled };
-        return await show(dialog) == ContentDialogResult.Primary && !string.IsNullOrWhiteSpace(field.Text)
-            ? field.Text.Trim()
-            : null;
+        var initialTrimmed = initialWhat.Trim();
+        while (true)
+        {
+            var result = await show(dialog);
+            if (result == ContentDialogResult.Primary)
+                return string.IsNullOrWhiteSpace(field.Text) ? null : field.Text.Trim();
+            var typed = field.Text.Trim();
+            var hasChanges = typed.Length > 0 && typed != initialTrimmed;
+            if (!hasChanges) return null;
+            if (await NewTileDialog.ConfirmDiscardAsync(root, show)) return null;
+        }
     }
 }
 
-/// One in-flight tile creation/change tracked on TilesPage and displayed in Tile Activity.
+/// One in-flight tile creation/change tracked on TilesPage, persisted via `TilePendingStore`, and rendered as an
+/// inline `TileMakingCard` + in Tile Activity.
 internal sealed class ActiveTileMaker
 {
     public required string Id { get; init; }
+    public required string AccountId { get; init; }
     public required Bot Bot { get; init; }
     public required string What { get; init; }
     public required string SessionId { get; init; }
     public string? PinId { get; init; }
     public string? PinName { get; init; }
+    public string Path { get; init; } = "";
+    public string DashboardPage { get; init; } = TilePage.MainId;
+    public TileSize? DesiredSize { get; init; }
+    public bool Acting { get; init; }
+    public DateTimeOffset AskedAt { get; init; } = DateTimeOffset.UtcNow;
+    public bool Watching { get; set; } = true;
     public string Status { get; set; } = "Working…";
     public Action? CancelAction { get; set; }
-    public string DisplayTitle => PinName != null ? $"{PinName}: {What}" : What;
+    public bool IsChange => PinId != null && !Acting;
+    public string DisplayTitle => Acting && PinName != null ? $"Updating {PinName}: {What}" : PinName != null ? $"{PinName}: {What}" : What;
+    public string TileWords => Acting ? "Updating…" : $"{Bot.DisplayName} is changing it…";
+
+    public PendingTileMaker ToPending() => new()
+    {
+        Id = Id,
+        AccountId = AccountId,
+        SessionId = SessionId,
+        BotId = Bot.Name,
+        PinId = PinId,
+        PinName = PinName,
+        Path = Path,
+        What = What,
+        DashboardPage = DashboardPage,
+        DesiredSize = DesiredSize,
+        Acting = Acting,
+        AskedAt = AskedAt.ToUnixTimeMilliseconds() / 1000.0,
+    };
+}
+
+/// [tiles-v2] Inline `TileMakingCell` card shown at the top of the Tiles page while a tile is being made or changed
+/// (`NewTile.swift` `TileMakingCell`): sparkles/wand icon, title, live step words, spinner, Stop button, chevron, tap opens chat.
+internal static class TileMakingCard
+{
+    public static Border Create(ActiveTileMaker maker, Action openChat, Action stop)
+    {
+        var icon = new FontIcon
+        {
+            Glyph = maker.PinId != null ? "\uE70F" : "\uE734",
+            FontSize = 18,
+            Foreground = Kit.Brush("AccentTextFillColorPrimaryBrush"),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var title = new TextBlock
+        {
+            Text = maker.DisplayTitle,
+            FontSize = 13.5,
+            FontWeight = FontWeights.SemiBold,
+            MaxLines = 2,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = Kit.Brush("TextFillColorPrimaryBrush"),
+        };
+        var detail = new TextBlock
+        {
+            Text = $"{maker.Bot.DisplayName} · {maker.Status}",
+            FontSize = 12,
+            MaxLines = 1,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Foreground = Kit.Brush("TextFillColorSecondaryBrush"),
+        };
+        var words = new StackPanel { Spacing = 2, VerticalAlignment = VerticalAlignment.Center, Children = { title, detail } };
+        var spinner = new ProgressRing { Width = 16, Height = 16, IsActive = true, VerticalAlignment = VerticalAlignment.Center };
+        var stopBtn = new Button
+        {
+            Content = new FontIcon { Glyph = "\uE71A", FontSize = 13 },
+            Padding = new Thickness(7, 5, 7, 5),
+            CornerRadius = new CornerRadius(14),
+            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+            BorderThickness = new Thickness(0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        ToolTipService.SetToolTip(stopBtn, "Stop");
+        AutomationProperties.SetName(stopBtn, "Stop");
+        AutomationProperties.SetAutomationId(stopBtn, "tile.making.stop");
+        stopBtn.Click += (_, _) => stop();
+
+        var chevron = new FontIcon
+        {
+            Glyph = "\uE76C",
+            FontSize = 11,
+            Foreground = Kit.Brush("TextFillColorTertiaryBrush"),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        var row = new Grid { ColumnSpacing = 10, Padding = new Thickness(14, 10, 14, 10) };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.Children.Add(icon);
+        Grid.SetColumn(words, 1); row.Children.Add(words);
+        Grid.SetColumn(spinner, 2); row.Children.Add(spinner);
+        Grid.SetColumn(stopBtn, 3); row.Children.Add(stopBtn);
+        Grid.SetColumn(chevron, 4); row.Children.Add(chevron);
+
+        var card = new Border
+        {
+            Child = row,
+            CornerRadius = new CornerRadius(12),
+            Background = Kit.Brush("CardBackgroundFillColorDefaultBrush"),
+            BorderBrush = Kit.Brush("CardStrokeColorDefaultBrush"),
+            BorderThickness = new Thickness(1),
+        };
+        AutomationProperties.SetAutomationId(card, "tile.making");
+        AutomationProperties.SetName(card, (maker.PinId != null ? "Changing a tile: " : "Making a tile: ") + maker.DisplayTitle);
+        card.Tapped += (_, e) =>
+        {
+            if (e.OriginalSource is DependencyObject src && IsInside(src, stopBtn)) return;
+            e.Handled = true;
+            openChat();
+        };
+        return card;
+    }
+
+    private static bool IsInside(DependencyObject node, DependencyObject ancestor)
+    {
+        for (var cur = node; cur != null; cur = VisualTreeHelper.GetParent(cur))
+            if (ReferenceEquals(cur, ancestor)) return true;
+        return false;
+    }
+}
+
+/// [tiles-v2] Failure recovery dialog (`TileMaker.offerChat`): `<Bot> Needs You` / `Couldn’t Make the Tile` /
+/// `Couldn’t Change <Name>` with Not Now, Open Chat, and optional Try Again.
+internal static class TileMakerFailureDialog
+{
+    public static async Task ShowAsync(
+        XamlRoot? root,
+        string title,
+        string message,
+        Action openChat,
+        Action? retry,
+        Func<ContentDialog, Task<ContentDialogResult>> show)
+    {
+        if (root == null) return;
+        var dialog = new ContentDialog
+        {
+            Title = title,
+            Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
+            XamlRoot = root,
+            PrimaryButtonText = "Open Chat",
+            CloseButtonText = "Not Now",
+            DefaultButton = ContentDialogButton.Primary,
+        };
+        if (retry != null) dialog.SecondaryButtonText = "Try Again";
+        AutomationProperties.SetAutomationId(dialog, "tile.maker.failure");
+        var result = await show(dialog);
+        if (result == ContentDialogResult.Primary) openChat();
+        else if (result == ContentDialogResult.Secondary) retry?.Invoke();
+    }
+}
+
+/// [tile-models] Full model catalog chooser for a single tile (`Updates › Model › Other Model…`).
+internal static class TileModelChooserDialog
+{
+    public static async Task<TileModelPick?> ShowAsync(
+        XamlRoot? root,
+        GatewaySession session,
+        string profile,
+        string botName,
+        TileModelPick? current,
+        Func<ContentDialog, Task<ContentDialogResult>> show)
+    {
+        if (root == null) return null;
+        TileModelPick? picked = null;
+        var dialog = new ContentDialog
+        {
+            Title = "Tile Model",
+            XamlRoot = root,
+            CloseButtonText = TileWords.Cancel,
+            DefaultButton = ContentDialogButton.Close,
+        };
+        AutomationProperties.SetAutomationId(dialog, "tile.model.chooser");
+
+        var search = new TextBox { PlaceholderText = "Search models…" };
+        var list = new StackPanel { Spacing = 6 };
+        var status = Kit.Text("Loading models…", 12.5, secondary: true);
+        var ring = new ProgressRing { IsActive = true, Width = 20, Height = 20 };
+        var body = new StackPanel
+        {
+            Spacing = 10,
+            MinWidth = 420,
+            MaxWidth = 500,
+            Children =
+            {
+                Kit.Text($"This tile alone. {botName} keeps its own model for everything else.", 12, secondary: true),
+                search,
+                new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { ring, status } },
+                new ScrollViewer { Content = list, MaxHeight = 360, HorizontalScrollMode = ScrollMode.Disabled },
+            },
+        };
+        dialog.Content = body;
+
+        IReadOnlyList<ModelProviderOption> providers = [];
+        void RenderList()
+        {
+            list.Children.Clear();
+            var q = search.Text.Trim();
+            foreach (var prov in providers.Where(p => p.IsReady && p.Models.Count > 0))
+            {
+                var matches = prov.Models.Where(m =>
+                    q.Length == 0
+                    || m.Contains(q, StringComparison.OrdinalIgnoreCase)
+                    || ModelNames.DisplayModelName(m).Contains(q, StringComparison.OrdinalIgnoreCase)
+                    || prov.Name.Contains(q, StringComparison.OrdinalIgnoreCase)).ToList();
+                if (matches.Count == 0) continue;
+                list.Children.Add(Kit.Text(ModelNames.PlainProviderName(prov.Name), 11.5, secondary: true, bold: true));
+                foreach (var modelId in matches)
+                {
+                    var pick = new TileModelPick(prov.Slug, modelId);
+                    var selected = current != null && current.Same(pick);
+                    var btn = new Button
+                    {
+                        HorizontalAlignment = HorizontalAlignment.Stretch,
+                        HorizontalContentAlignment = HorizontalAlignment.Left,
+                        Padding = new Thickness(10, 6, 10, 6),
+                        CornerRadius = new CornerRadius(8),
+                        Background = selected ? Kit.Brush("SubtleFillColorSecondaryBrush") : Kit.Brush("CardBackgroundFillColorDefaultBrush"),
+                        BorderBrush = selected ? Kit.Brush("AccentFillColorDefaultBrush") : Kit.Brush("CardStrokeColorDefaultBrush"),
+                        BorderThickness = new Thickness(1),
+                        Content = new StackPanel
+                        {
+                            Spacing = 1,
+                            Children =
+                            {
+                                Kit.Text(TileModels.Name(pick), 13, bold: selected),
+                                Kit.Text(modelId, 11, secondary: true),
+                            },
+                        },
+                    };
+                    btn.Click += (_, _) => { picked = pick; dialog.Hide(); };
+                    list.Children.Add(btn);
+                }
+            }
+            if (list.Children.Count == 0 && !ring.IsActive)
+                list.Children.Add(Kit.Text("No matching models.", 12.5, secondary: true));
+        }
+
+        search.TextChanged += (_, _) => RenderList();
+        dialog.Loaded += async (_, _) =>
+        {
+            try
+            {
+                var api = new ModelSettingsApi(session, profile == "default" ? null : profile);
+                providers = await api.GetModelOptionsAsync();
+                ring.IsActive = false;
+                ring.Visibility = Visibility.Collapsed;
+                status.Visibility = Visibility.Collapsed;
+                RenderList();
+            }
+            catch (Exception)
+            {
+                ring.IsActive = false;
+                ring.Visibility = Visibility.Collapsed;
+                status.Text = "Couldn’t load models from your gateway.";
+            }
+        };
+        await show(dialog);
+        ring.IsActive = false;
+        return picked;
+    }
 }
 
 /// One scheduled tile entry shown inside the Tile Activity dialog.

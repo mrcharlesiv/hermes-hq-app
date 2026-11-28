@@ -20,14 +20,18 @@ public sealed record PhoneSetupCheckReads
 {
     public IReadOnlyList<samplehostNumber>? Numbers { get; init; }
     public samplehostCallControlApp? Connection { get; init; }
+    /// True when `GET /v2/call_control_applications/{id}` returned HTTP 404 (TeXML / SIP / missing app, H6).
+    public bool ConnectionNotFound { get; init; }
     public samplehostVoiceProfile? VoiceProfile { get; init; }
     public samplehostAssistantDetail? Assistant { get; init; }
+    /// True when `GET /v2/ai/assistants/{id}` returned HTTP 404 (H6).
+    public bool AssistantNotFound { get; init; }
     public samplehostBalance? Balance { get; init; }
     public string? KeyError { get; init; }
     public string? DestinationNumber { get; init; }
 }
 
-/// 8-point samplehost calling diagnostic checklist (`App/PhoneCalls/PhoneSetupCheck.swift` port).
+/// samplehost calling diagnostic checklist (`App/PhoneCalls/PhoneSetupCheck.swift` port, H6/H14 hardened).
 public static class PhoneSetupCheck
 {
     public const decimal MinRecommendedBalance = 1.00m;
@@ -49,24 +53,48 @@ public static class PhoneSetupCheck
         }
         rows.Add(new("key", "samplehost API Key", PhoneSetupCheckState.Pass, "Connected to samplehost."));
 
-        // 2. From Number
+        // 2. From Number (H14: checks status == "active" and connection_id == setup.ConnectionId)
         if (!PhoneFormatting.IsE164(setup.FromNumber))
         {
             rows.Add(new("from", "From Number", PhoneSetupCheckState.Fail, "No outbound phone number selected.", "Choose one of your samplehost numbers."));
         }
-        else if (reads.Numbers != null && !reads.Numbers.Any(n => string.Equals(n.PhoneNumber, setup.FromNumber, StringComparison.Ordinal)))
+        else if (reads.Numbers == null)
+        {
+            rows.Add(new("from", "From Number", PhoneSetupCheckState.Unknown, "Couldn’t check your From number right now."));
+        }
+        else if (reads.Numbers.FirstOrDefault(n => string.Equals(n.PhoneNumber, setup.FromNumber, StringComparison.Ordinal)) is not { } matchedNumber)
         {
             rows.Add(new("from", "From Number", PhoneSetupCheckState.Fail, $"{PhoneFormatting.FormatShown(setup.FromNumber)} wasn’t found on this account.", "Pick an active number from your samplehost account."));
         }
+        else if (matchedNumber.Status != null && !string.Equals(matchedNumber.Status, "active", StringComparison.OrdinalIgnoreCase))
+        {
+            rows.Add(new("from", "From Number", PhoneSetupCheckState.Fail,
+                $"{PhoneFormatting.FormatShown(setup.FromNumber)} isn’t active ({matchedNumber.Status}).",
+                "Wait until samplehost shows it as active, or choose another number."));
+        }
+        else if (!string.IsNullOrWhiteSpace(setup.ConnectionId)
+            && !string.Equals(matchedNumber.ConnectionId, setup.ConnectionId, StringComparison.Ordinal))
+        {
+            rows.Add(new("from", "From Number", PhoneSetupCheckState.Fail,
+                $"{PhoneFormatting.FormatShown(setup.FromNumber)} isn’t on the voice connection you chose.",
+                "Click Fix Voice Connection in Phone Settings, or assign the number to this Voice API connection in the samplehost portal."));
+        }
         else
         {
-            rows.Add(new("from", "From Number", PhoneSetupCheckState.Pass, PhoneFormatting.FormatShown(setup.FromNumber)));
+            rows.Add(new("from", "From Number", PhoneSetupCheckState.Pass,
+                $"{PhoneFormatting.FormatShown(setup.FromNumber)} is active and on your voice connection."));
         }
 
-        // 3. Voice Connection (Call Control App)
+        // 3. Voice Connection (Call Control App; H6 404 -> TeXML/SIP fail; H14 invalid/nil webhook -> fail)
         if (string.IsNullOrWhiteSpace(setup.ConnectionId))
         {
-            rows.Add(new("connection", "Voice Connection", PhoneSetupCheckState.Fail, "No Call Control application selected.", "Assign your number to a Call Control application in samplehost."));
+            rows.Add(new("connection", "Voice Connection", PhoneSetupCheckState.Fail, "No Voice API (Call Control) application selected.", "Click Create Voice Connection in Phone Settings."));
+        }
+        else if (reads.ConnectionNotFound)
+        {
+            rows.Add(new("connection", "Voice Connection", PhoneSetupCheckState.Fail,
+                "The voice connection isn’t a Voice API (Call Control) application — TeXML and SIP connections can’t place calls here.",
+                "Click Fix Voice Connection or choose a Voice API application in Phone Settings."));
         }
         else if (reads.Connection == null)
         {
@@ -74,17 +102,23 @@ public static class PhoneSetupCheck
         }
         else if (!reads.Connection.Active)
         {
-            rows.Add(new("connection", "Voice Connection", PhoneSetupCheckState.Fail, $"{reads.Connection.Name} is inactive.", "Enable the Call Control application in samplehost."));
+            rows.Add(new("connection", "Voice Connection", PhoneSetupCheckState.Fail, $"{reads.Connection.Name} is inactive.", "Click Fix Voice Connection or enable the Call Control application in samplehost."));
+        }
+        else if (!samplehostApi.HasValidWebhookUrl(reads.Connection.WebhookEventUrl))
+        {
+            rows.Add(new("connection", "Voice Connection", PhoneSetupCheckState.Fail,
+                "The voice connection has no valid https:// webhook URL, so samplehost won’t place calls on it.",
+                "Click Fix Voice Connection or set an https:// webhook URL in the samplehost portal (Voice › Programmable Voice › Voice API)."));
         }
         else
         {
-            rows.Add(new("connection", "Voice Connection", PhoneSetupCheckState.Pass, reads.Connection.Name));
+            rows.Add(new("connection", "Voice Connection", PhoneSetupCheckState.Pass, $"{reads.Connection.Name} is an active Call Control application."));
         }
 
         // 4. Outbound Voice Profile & Allowed Country
         if (reads.Connection != null && string.IsNullOrWhiteSpace(reads.Connection.OutboundVoiceProfileId))
         {
-            rows.Add(new("profile", "Outbound Voice Profile", PhoneSetupCheckState.Fail, "No outbound voice profile attached.", "Attach an Outbound Voice Profile to your Call Control app in samplehost."));
+            rows.Add(new("profile", "Outbound Voice Profile", PhoneSetupCheckState.Fail, "No outbound voice profile attached.", "Click Fix Voice Connection or attach an Outbound Voice Profile to your Call Control app in samplehost."));
         }
         else if (reads.VoiceProfile == null)
         {
@@ -111,14 +145,18 @@ public static class PhoneSetupCheck
             }
         }
 
-        // 5. AI Assistant Telephony
+        // 5. AI Assistant Telephony (H6 404 -> fail)
         if (string.IsNullOrWhiteSpace(setup.AssistantId))
         {
             rows.Add(new("assistant", "AI Assistant", PhoneSetupCheckState.Fail, "No AI Assistant selected.", "Pick or create a phone assistant in Phone Settings."));
         }
+        else if (reads.AssistantNotFound)
+        {
+            rows.Add(new("assistant", "AI Assistant", PhoneSetupCheckState.Fail, "The chosen assistant isn’t on this samplehost account.", "Pick or create an AI Assistant in Phone Settings."));
+        }
         else if (reads.Assistant == null)
         {
-            rows.Add(new("assistant", "AI Assistant", PhoneSetupCheckState.Fail, "Selected AI Assistant wasn’t found.", "Pick or recreate an AI Assistant."));
+            rows.Add(new("assistant", "AI Assistant", PhoneSetupCheckState.Unknown, "Couldn’t inspect the selected AI Assistant right now."));
         }
         else if (!reads.Assistant.TelephonyEnabled)
         {
@@ -133,6 +171,7 @@ public static class PhoneSetupCheck
         if (reads.Assistant?.Model is { Length: > 0 } model)
         {
             var isLiveWarn = model.Contains("realtime", StringComparison.OrdinalIgnoreCase)
+                || model.Contains("gpt-live", StringComparison.OrdinalIgnoreCase)
                 || model.Contains("gpt-4o-mini-realtime", StringComparison.OrdinalIgnoreCase);
             rows.Add(new("model", "Assistant Model",
                 isLiveWarn ? PhoneSetupCheckState.Warn : PhoneSetupCheckState.Pass,
@@ -151,7 +190,15 @@ public static class PhoneSetupCheck
                     : "Assistant recording setting differs; Hermes syncs it automatically when dialing."));
         }
 
-        // 8. Balance check
+        // 8. Assistant call quality tuning (H14)
+        if (reads.Assistant?.CallQualityIssues is { Count: > 0 } qualityIssues)
+        {
+            rows.Add(new("voice", "Assistant Call Quality", PhoneSetupCheckState.Warn,
+                $"Assistant call settings can be tuned for smoother conversations ({string.Join("; ", qualityIssues)}).",
+                "Click Optimize assistant for calls in Phone Settings."));
+        }
+
+        // 9. Balance check
         if (reads.Balance == null)
         {
             rows.Add(new("balance", "Account Balance", PhoneSetupCheckState.Unknown, "Couldn’t read account balance."));
@@ -183,8 +230,10 @@ public static class PhoneSetupCheck
 
         IReadOnlyList<samplehostNumber>? numbers = null;
         samplehostCallControlApp? app = null;
+        var connectionNotFound = false;
         samplehostVoiceProfile? profile = null;
         samplehostAssistantDetail? assistant = null;
+        var assistantNotFound = false;
         samplehostBalance? balance = null;
 
         try
@@ -202,7 +251,9 @@ public static class PhoneSetupCheck
 
         if (!string.IsNullOrWhiteSpace(setup.ConnectionId))
         {
-            try { app = await api.CallControlAppAsync(apiKey, setup.ConnectionId, ct); } catch (Exception) { }
+            try { app = await api.CallControlAppAsync(apiKey, setup.ConnectionId, ct); }
+            catch (samplehostException ex) when (ex.IsNotFound) { connectionNotFound = true; }
+            catch (Exception) { }
         }
         if (!string.IsNullOrWhiteSpace(app?.OutboundVoiceProfileId))
         {
@@ -210,7 +261,9 @@ public static class PhoneSetupCheck
         }
         if (!string.IsNullOrWhiteSpace(setup.AssistantId))
         {
-            try { assistant = await api.AssistantAsync(apiKey, setup.AssistantId, ct); } catch (Exception) { }
+            try { assistant = await api.AssistantAsync(apiKey, setup.AssistantId, ct); }
+            catch (samplehostException ex) when (ex.IsNotFound) { assistantNotFound = true; }
+            catch (Exception) { }
         }
         try { balance = await api.BalanceAsync(apiKey, ct); } catch (Exception) { }
 
@@ -218,8 +271,10 @@ public static class PhoneSetupCheck
         {
             Numbers = numbers,
             Connection = app,
+            ConnectionNotFound = connectionNotFound,
             VoiceProfile = profile,
             Assistant = assistant,
+            AssistantNotFound = assistantNotFound,
             Balance = balance,
             DestinationNumber = destinationNumber,
         });

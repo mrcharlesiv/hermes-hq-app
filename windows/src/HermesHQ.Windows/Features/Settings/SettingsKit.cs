@@ -1,3 +1,4 @@
+using Hermes.Core.Settings;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
@@ -12,6 +13,11 @@ namespace HermesHQ.Features.Settings;
 /// result scroll to its row and mark it.
 internal static class Kit
 {
+    /// Maximum width for trailing dropdown pickers and model chooser buttons so long model names truncate cleanly
+    /// inside their card instead of overflowing (App/Settings/Config/MacForm.swift, #616).
+    public const double DefaultPickerMaxWidth = 240;
+    public const double DefaultChooserMaxWidth = 260;
+
     public static Brush B(string key) => ThemeService.BrushFor(key);
 
     /// Room between cards. SettingsPage owns the horizontal insets once, outside nested and asynchronously built forms.
@@ -43,7 +49,8 @@ internal static class Kit
         Foreground = B("TextFillColorSecondaryBrush"), IsTextSelectionEnabled = false,
     };
 
-    /// Rows in one card, a hairline between each.
+    /// Rows in one card, a hairline between each. Follows `ThemeState.ShapeRadius(ShapeRole.Card, 10)` so Hermes Look
+    /// Corners morph every settings card live.
     public static Border Card(params UIElement?[] rows)
     {
         var stack = new StackPanel();
@@ -58,8 +65,11 @@ internal static class Kit
         }
         return new Border
         {
-            Child = stack, CornerRadius = new CornerRadius(ThemeService.State.DesktopLook ? 4 : 10), BorderThickness = new Thickness(1),
-            Background = B("CardBackgroundFillColorDefaultBrush"), BorderBrush = B("CardStrokeColorDefaultBrush"),
+            Child = stack,
+            CornerRadius = new CornerRadius(ThemeService.State.ShapeRadius(ShapeRole.Card, 10)),
+            BorderThickness = new Thickness(1),
+            Background = B("CardBackgroundFillColorDefaultBrush"),
+            BorderBrush = B("CardStrokeColorDefaultBrush"),
         };
     }
 
@@ -98,27 +108,98 @@ internal static class Kit
         return Row(glyph, title, note, toggle, id);
     }
 
-    /// A pop-up row (the Mac's MacPopUp at the row's end).
+    /// A pop-up row (the Mac's MacPopUp at the row's end), width-capped so long labels truncate cleanly inside their
+    /// card instead of overflowing (`#616`).
     public static Grid Picker<T>(string? glyph, string title, string? note, IReadOnlyList<(string Title, T Value)> options, T selected,
-        Action<T> set, string? id = null)
+        Action<T> set, string? id = null, double maxWidth = DefaultPickerMaxWidth, bool enabled = true)
     {
-        var box = new ComboBox { MinWidth = 140 };
+        var box = new ComboBox
+        {
+            MinWidth = 140,
+            MaxWidth = maxWidth,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            IsEnabled = enabled,
+            CornerRadius = new CornerRadius(ThemeService.State.ShapeRadius(ShapeRole.Control, 6)),
+        };
         foreach (var (t, _) in options) box.Items.Add(t);
-        box.SelectedIndex = Math.Max(0, options.ToList().FindIndex(o => EqualityComparer<T>.Default.Equals(o.Value, selected)));
+        var idx = Math.Max(0, options.ToList().FindIndex(o => EqualityComparer<T>.Default.Equals(o.Value, selected)));
+        if (options.Count > 0)
+        {
+            box.SelectedIndex = idx;
+            ToolTipService.SetToolTip(box, options[idx].Title);
+        }
         AutomationProperties.SetName(box, title);
         if (id != null) AutomationProperties.SetAutomationId(box, id);
         box.SelectionChanged += (_, _) =>
         {
-            if (box.SelectedIndex >= 0) set(options[box.SelectedIndex].Value);
+            if (box.SelectedIndex >= 0 && box.SelectedIndex < options.Count)
+            {
+                ToolTipService.SetToolTip(box, options[box.SelectedIndex].Title);
+                set(options[box.SelectedIndex].Value);
+            }
         };
         return Row(glyph, title, note, box, id);
+    }
+
+    /// A trailing chooser button drawn as a bordered pop-up face (MacForm.swift `MacChooserButton` / `MacPopUpFace`, #616):
+    /// single-line ellipsis truncation inside `maxWidth` so long model names never overflow their card.
+    public static Grid ChooserButton(string? glyph, string title, string? note, string value, Action click,
+        string? id = null, bool enabled = true, double maxWidth = DefaultChooserMaxWidth)
+    {
+        var face = new Grid { ColumnSpacing = 8 };
+        face.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        face.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var label = new TextBlock
+        {
+            Text = value,
+            MaxLines = 1,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = B(enabled ? "TextFillColorPrimaryBrush" : "TextFillColorSecondaryBrush"),
+        };
+        var chevrons = new FontIcon
+        {
+            Glyph = "\uE70D",
+            FontSize = 10,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = B("TextFillColorSecondaryBrush"),
+        };
+        face.Children.Add(label);
+        Grid.SetColumn(chevrons, 1);
+        face.Children.Add(chevrons);
+
+        var button = new Button
+        {
+            Content = face,
+            MinWidth = 120,
+            MaxWidth = maxWidth,
+            IsEnabled = enabled,
+            Padding = new Thickness(12, 5, 10, 5),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            CornerRadius = new CornerRadius(ThemeService.State.ShapeRadius(ShapeRole.Control, 6)),
+        };
+        AutomationProperties.SetName(button, $"{title}, {value}");
+        if (id != null) AutomationProperties.SetAutomationId(button, id);
+        ToolTipService.SetToolTip(button, value);
+        button.Click += (_, _) => click();
+        return Row(glyph, title, note, button, id);
     }
 
     /// A row that opens a page: its value, then a chevron.
     public static Button Nav(string? glyph, string title, string? value, Action open, string? id = null)
     {
         var trailing = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-        if (value != null) trailing.Children.Add(new TextBlock { Text = value, Foreground = B("TextFillColorSecondaryBrush"), VerticalAlignment = VerticalAlignment.Center });
+        if (value != null)
+            trailing.Children.Add(new TextBlock
+            {
+                Text = value,
+                MaxWidth = DefaultPickerMaxWidth,
+                MaxLines = 1,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                Foreground = B("TextFillColorSecondaryBrush"),
+                VerticalAlignment = VerticalAlignment.Center,
+            });
         trailing.Children.Add(new FontIcon { Glyph = "", FontSize = 11, Foreground = B("TextFillColorTertiaryBrush"), VerticalAlignment = VerticalAlignment.Center });
         var row = Row(glyph, title, null, trailing, id);
         var button = new Button
@@ -136,7 +217,11 @@ internal static class Kit
     /// A push button the Mac draws at a row's end or under a paragraph.
     public static Button Push(string title, Action click, bool destructive = false)
     {
-        var b = new Button { Content = title };
+        var b = new Button
+        {
+            Content = title,
+            CornerRadius = new CornerRadius(ThemeService.State.ShapeRadius(ShapeRole.Control, 6)),
+        };
         if (destructive) b.Foreground = B("SystemFillColorCriticalBrush");
         b.Click += (_, _) => click();
         return b;

@@ -1,20 +1,24 @@
 using Hermes.Core.Bots;
+using Hermes.Core.Coding;
 using Hermes.Core.Sessions;
 using WorkingRing = Hermes.Core.Settings.WorkingRing;
 using DensitySizes = Hermes.Core.Settings.DensitySizes;
 using ThemeService = HermesHQ.Features.Settings.ThemeService;
 using HermesHQ.Controls;
 using HermesHQ.Features.Bots;
+using HermesHQ.Features.Coding;
 using HermesHQ.Features.Sessions;
 using HermesHQ.Shell;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Navigation;
 using Microsoft.UI.Xaml.Shapes;
+using Windows.UI;
 
 namespace HermesHQ.Pages;
 
@@ -26,6 +30,7 @@ public sealed partial class SessionsPage : Page, IKeyRefreshing
 {
     private ListsHub? _hub;
     private SessionActions? _actions;
+    private CodingStore? _codingStore;
     private string? _openId;
     private string _query = "";
 
@@ -49,6 +54,8 @@ public sealed partial class SessionsPage : Page, IKeyRefreshing
         _hub = ListsHub.Current;
         if (_hub == null) return;
         _actions = new SessionActions(_hub, () => XamlRoot, PillHost);
+        _codingStore = CodingFeature.GetStore();
+        _codingStore.Changed += OnCodingChanged;
         _hub.Changed += Rebuild;
         WorkingRing.Changed += OnWorkingRing;
         DensitySizes.Changed += OnDensity;
@@ -66,8 +73,14 @@ public sealed partial class SessionsPage : Page, IKeyRefreshing
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
+        HermesHQ.Services.UiTree.DeactivateProgressRings(SessionList);
         CloseEmbeddedChat();
         ListLoading.IsActive = false;
+        if (_codingStore != null)
+        {
+            _codingStore.Changed -= OnCodingChanged;
+            _codingStore = null;
+        }
         if (_hub == null) return;
         _hub.Changed -= Rebuild;
         WorkingRing.Changed -= OnWorkingRing;
@@ -76,6 +89,8 @@ public sealed partial class SessionsPage : Page, IKeyRefreshing
         // Chats read here keep their New rank until the page is left.
         _hub.Sessions.KeepNew.Clear();
     }
+
+    private void OnCodingChanged() => DispatcherQueue.TryEnqueue(Rebuild);
 
     private void CloseEmbeddedChat()
     {
@@ -143,6 +158,7 @@ public sealed partial class SessionsPage : Page, IKeyRefreshing
             rows.AddRange(g.Sessions.Select(s => new ChatRow(s, recentRows, yesterday)));
             if (g.More > 0 || g.Expanded) rows.Add(new MoreRow(g));
         }
+        HermesHQ.Services.UiTree.DeactivateProgressRings(SessionList);
         var items = rows.Select(r => Make(r, store)).ToList();
         SessionList.ItemsSource = items;
         var openItem = _openId != null ? items.FirstOrDefault(i => i.Tag is ChatRow c && c.Chat.Profile + "/" + c.Chat.Id == _openId) : null;
@@ -331,13 +347,29 @@ public sealed partial class SessionsPage : Page, IKeyRefreshing
         if (row is ChatRow chat)
         {
             var menu = new MenuFlyout();
-            menu.Opening += (_, _) => _actions?.FillRowMenu(menu.Items, chat.Chat);
+            menu.Opening += (_, _) =>
+            {
+                _actions?.FillRowMenu(menu.Items, chat.Chat);
+                AppendPRQuickActions(menu.Items, chat.Chat, store);
+                if (menu.Items.Count > 0) menu.Items.Add(new MenuFlyoutSeparator());
+                menu.Items.Add(Features.QuickActions.FavoritesPinAction.ForSession(
+                    chat.Chat.Profile,
+                    chat.Chat.Id,
+                    chat.Chat.Title,
+                    SessionRules.OwnerName(chat.Chat.Profile, store.BotNames)));
+            };
             item.ContextFlyout = menu;
             var detail = store.Prefs.ShownDetail;
             var timeText = chat.YesterdayGroup ? ListTime.FormatClock(chat.Chat.LastActive) : ListTime.Format(chat.Chat.LastActive);
-            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(item, SessionRowWords.AccessibilityLabel(chat.Chat.Title, chat.Chat,
+            var a11y = SessionRowWords.AccessibilityLabel(chat.Chat.Title, chat.Chat,
                 SessionRules.OwnerName(chat.Chat.Profile, store.BotNames), detail, timeText,
-                _hub?.Bots.MuteOf(chat.Chat.Profile, DateTimeOffset.UtcNow) != null));
+                _hub?.Bots.MuteOf(chat.Chat.Profile, DateTimeOffset.UtcNow) != null);
+            if (ResolvePR(chat.Chat) is { DrawsMark: true } pr)
+            {
+                a11y += ". Pull request: " + pr.Summary;
+                if (PRVerdict.ForActiveRow(pr) is { } verdict) a11y += ". " + verdict.Spoken;
+            }
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(item, a11y);
         }
         return item;
     }
@@ -391,14 +423,72 @@ public sealed partial class SessionsPage : Page, IKeyRefreshing
         return grid;
     }
 
-    /// A chat: its bot's face (Show › Bot Faces), title (bold while unread), Row Detail's trailing words and the unread
-    /// dot; the second line is its live state or (Row Detail › Preview) the preview.
-    private static UIElement ChatView(ChatRow row, SessionStore store)
+    private SessionPRStatus? ResolvePR(SessionSummary s) =>
+        s.PullRequest ?? (_codingStore ?? CodingFeature.GetStore()).StatusFor(s.Profile, s.Id);
+
+    private void AppendPRQuickActions(IList<MenuFlyoutItemBase> items, SessionSummary s, SessionStore store)
+    {
+        var pr = ResolvePR(s);
+        if (pr is not { DrawsMark: true } || (pr.State == SessionPRState.Unknown && pr.UnknownReason == SessionPRUnknownReason.Unmatched))
+            return;
+
+        var botName = SessionRules.OwnerName(s.Profile, store.BotNames);
+        var chatWorking = s.IsRunning || s.Status == SessionStatus.Working;
+        var card = PullRequestCardModel.Build(s, pr, botName: botName, chatWorking: chatWorking);
+        var codingStore = _codingStore ?? CodingFeature.GetStore();
+        var comments = CodingFeature.GetCommentStore(s.Key);
+
+        var prItems = new List<MenuFlyoutItemBase>();
+
+        if (CodingPipeline.IsReadyToMerge(s, pr)
+            && card.Actions.FirstOrDefault(a => a.Kind == PullRequestQuickAction.Merge) is { BotPrompt: { Length: > 0 } } mergeAction)
+        {
+            var merge = new MenuFlyoutItem { Text = "Merge PR…", Icon = new FontIcon { Glyph = "\uE73E" } };
+            merge.Click += (_, _) => _ = CodingFeature.ExecuteActionAsync(
+                XamlRoot, s, pr, mergeAction with { ConfirmationTitle = card.MergeConfirmTitle(chatWorking) },
+                codingStore, comments, openChat: () => Open(s));
+            prItems.Add(merge);
+        }
+
+        if (CodingPipeline.HasFailingChecks(s, pr)
+            && card.Actions.FirstOrDefault(a => a.Kind == PullRequestQuickAction.AskBotToFixCI) is { BotPrompt: { Length: > 0 } } fixAction)
+        {
+            var fix = new MenuFlyoutItem { Text = "Fix Failing Checks…", Icon = new FontIcon { Glyph = "\uE90F" } };
+            fix.Click += (_, _) => _ = CodingFeature.ExecuteActionAsync(
+                XamlRoot, s, pr, fixAction with { ConfirmationTitle = $"Ask {botName} to Fix Checks" },
+                codingStore, comments, openChat: () => Open(s));
+            prItems.Add(fix);
+        }
+        else if (card.Actions.FirstOrDefault(a => a.Kind == PullRequestQuickAction.AskBotToOpenPR) is { BotPrompt: { Length: > 0 } } openPrAction)
+        {
+            var openPr = new MenuFlyoutItem { Text = openPrAction.Label + "…", Icon = new FontIcon { Glyph = "\uE943" } };
+            openPr.Click += (_, _) => _ = CodingFeature.ExecuteActionAsync(
+                XamlRoot, s, pr, openPrAction, codingStore, comments, openChat: () => Open(s));
+            prItems.Add(openPr);
+        }
+
+        var details = new MenuFlyoutItem { Text = "Pull Request Details…", Icon = new FontIcon { Glyph = "\uE943" } };
+        details.Click += (_, _) => _ = CodingFeature.OpenPullRequestCardAsync(
+            XamlRoot, s, pr, codingStore, comments, openChat: () => Open(s));
+        prItems.Add(details);
+
+        if (prItems.Count == 0) return;
+        for (var i = 0; i < prItems.Count; i++)
+            items.Insert(i, prItems[i]);
+        items.Insert(prItems.Count, new MenuFlyoutSeparator());
+    }
+
+    /// A chat: its bot's face (Show › Bot Faces), title (bold while unread), PR badge + compact PR verdict when known,
+    /// Row Detail's trailing words and the unread dot; the second line is its live state or (Row Detail › Preview) the preview.
+    private UIElement ChatView(ChatRow row, SessionStore store)
     {
         var s = row.Chat;
         var prefs = store.Prefs;
         var detail = prefs.ShownDetail;
         var owner = SessionRules.OwnerName(s.Profile, store.BotNames);
+        var pr = ResolvePR(s);
+        var showPRMark = pr is { DrawsMark: true } && !(pr.State == SessionPRState.Unknown && pr.UnknownReason == SessionPRUnknownReason.Unmatched);
+        var verdict = showPRMark ? PRVerdict.ForActiveRow(pr) : null;
         // [density] macTight: Compact's shorter row and smaller face.
         var z = DensitySizes.Sessions(ThemeService.State.Compact);
         var grid = new Grid { ColumnSpacing = 10, Padding = new Thickness(0, z.Pad, 0, z.Pad) };
@@ -416,6 +506,7 @@ public sealed partial class SessionsPage : Page, IKeyRefreshing
         var status = SessionRowWords.StatusWords(s.Status, s.Step);
         var second = status
             ?? (row.Recent && !detail.Contains(SessionRowDetail.Preview) ? null : SessionRowWords.DetailText(s, detail));
+        UIElement? secondLineEl = null;
         if (status == null && s.Pending is { } pending && second != null)
         {
             // [WIN-LOST-SEND-MARKER] The pending line: its lead semibold, "Not Delivered:" red (SessionRowViews `secondLine`).
@@ -427,18 +518,46 @@ public sealed partial class SessionsPage : Page, IKeyRefreshing
                 Foreground = Res(pending.Failed ? "SystemFillColorCriticalBrush" : "TextFillColorPrimaryBrush"),
             });
             line.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = " " + pending.Text });
-            lines.Children.Add(line);
+            secondLineEl = line;
         }
         else if (second != null)
-            lines.Children.Add(new TextBlock
+        {
+            secondLineEl = new TextBlock
             {
                 Text = row.Recent ? second : $"{owner} · {second}", FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis,
                 Foreground = Res(s.Status is SessionStatus.NeedsInput ? "SystemFillColorCautionBrush"
                     : s.Status is SessionStatus.Working ? "AccentTextFillColorPrimaryBrush" : "TextFillColorSecondaryBrush"),
-            });
+            };
+        }
+
+        if (verdict != null)
+        {
+            var verdictEl = BuildPRVerdictLine(verdict);
+            if (secondLineEl != null)
+            {
+                var subGrid = new Grid { ColumnSpacing = 8 };
+                subGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                subGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                subGrid.Children.Add(secondLineEl);
+                Grid.SetColumn(verdictEl, 1);
+                subGrid.Children.Add(verdictEl);
+                lines.Children.Add(subGrid);
+            }
+            else
+            {
+                lines.Children.Add(verdictEl);
+            }
+        }
+        else if (secondLineEl != null)
+        {
+            lines.Children.Add(secondLineEl);
+        }
+
         Grid.SetColumn(lines, 1);
         grid.Children.Add(lines);
         var trail = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
+        if (showPRMark && pr != null)
+            trail.Children.Add(BuildPRBadge(s, pr));
         if (s.Pinned && !prefs.RecentRows) trail.Children.Add(new FontIcon { Glyph = "", FontSize = 10, Foreground = Res("TextFillColorTertiaryBrush") });
         if (s.Archived) trail.Children.Add(new FontIcon { Glyph = "", FontSize = 10, Foreground = Res("TextFillColorTertiaryBrush") });
         var timeLabel = row.YesterdayGroup ? ListTime.FormatClock(s.LastActive) : ListTime.Format(s.LastActive);
@@ -452,6 +571,90 @@ public sealed partial class SessionsPage : Page, IKeyRefreshing
         // (`WorkingArc.rowCorner`): the line seen at a working row's right edge is this ring's travelling spike.
         return WorkingRingView.Wrap(grid, WorkingRing.ShowsChatRing(s, WorkingRing.IsOn), new Thickness(RowInset, 1, RowInset, 1),
             WorkingRing.RowCorner(ThemeService.State.DesktopLook));
+    }
+
+    private UIElement BuildPRBadge(SessionSummary s, SessionPRStatus pr)
+    {
+        var ready = CodingPipeline.IsReadyToMerge(s, pr);
+        var failing = CodingPipeline.HasFailingChecks(s, pr);
+        string text;
+        Color tint;
+        if (ready)
+        {
+            text = pr.Number is { } n ? $"\u2713 #{n}" : "\u2713 Open";
+            tint = Color.FromArgb(255, 0x30, 0xB9, 0x4D);
+        }
+        else if (failing)
+        {
+            var failed = Math.Max(1, pr.Checks?.Failed ?? 1);
+            text = pr.Number is { } n ? $"\u2715 #{n}" : $"\u2715 {failed}";
+            tint = Color.FromArgb(255, 0xFF, 0x3B, 0x30);
+        }
+        else
+        {
+            text = pr.Number is { } n ? $"#{n}" : pr.Label;
+            tint = pr.State switch
+            {
+                SessionPRState.Open => Color.FromArgb(255, 0x30, 0xB9, 0x4D),
+                SessionPRState.Merged => Color.FromArgb(255, 0xAF, 0x52, 0xDE),
+                SessionPRState.Closed => Color.FromArgb(255, 0xFF, 0x3B, 0x30),
+                _ => Color.FromArgb(255, 0x8E, 0x8E, 0x93),
+            };
+        }
+
+        var pill = new Border
+        {
+            CornerRadius = new CornerRadius(7),
+            Padding = new Thickness(5, 1, 5, 1),
+            Background = new SolidColorBrush(Color.FromArgb(28, tint.R, tint.G, tint.B)),
+            Child = new TextBlock
+            {
+                Text = text,
+                FontSize = 11,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(tint),
+            },
+        };
+        var btn = new Button
+        {
+            Content = pill,
+            Padding = new Thickness(0),
+            MinWidth = 0,
+            MinHeight = 0,
+            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+            BorderThickness = new Thickness(0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        ToolTipService.SetToolTip(btn, pr.Summary);
+        AutomationProperties.SetName(btn, pr.Summary);
+        AutomationProperties.SetAutomationId(btn, "session-row.pr." + s.Id);
+        btn.Click += (_, _) => _ = CodingFeature.OpenPullRequestCardAsync(
+            XamlRoot, s, pr, _codingStore ?? CodingFeature.GetStore(), openChat: () => Open(s));
+        return btn;
+    }
+
+    private static FrameworkElement BuildPRVerdictLine(PRVerdict verdict)
+    {
+        if (verdict is PRVerdict.Running)
+        {
+            var running = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center };
+            running.Children.Add(new ProgressRing { IsActive = true, Width = 10, Height = 10, VerticalAlignment = VerticalAlignment.Center });
+            running.Children.Add(new TextBlock
+            {
+                Text = verdict.DisplayText,
+                FontSize = 11.5,
+                Foreground = Res("TextFillColorSecondaryBrush"),
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+            return running;
+        }
+        return new TextBlock
+        {
+            Text = verdict.DisplayText,
+            FontSize = 11.5,
+            Foreground = Res(verdict is PRVerdict.Failing ? "SystemFillColorCriticalBrush" : "TextFillColorSecondaryBrush"),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
     }
 
     // ------------------------------------------------------------------ picks

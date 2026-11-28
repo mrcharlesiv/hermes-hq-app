@@ -128,8 +128,8 @@ public sealed class MemoDraftChip : UserControl
             CornerRadius = new CornerRadius(14),
             Padding = new Thickness(10, 6, 6, 6),
             BorderThickness = new Thickness(1),
-            Background = ThemeBrushes.Get("CardBackgroundFillColorDefaultBrush"),
-            BorderBrush = ThemeBrushes.Get("CardStrokeColorDefaultBrush"),
+            Background = ThemeBrushes.Get("HQPromptCardBrush"),
+            BorderBrush = ThemeBrushes.Get("HQPromptEdgeBrush"),
             Child = row,
         };
     }

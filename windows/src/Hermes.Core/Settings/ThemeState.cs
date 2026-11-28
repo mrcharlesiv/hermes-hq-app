@@ -3,27 +3,33 @@ using Hermes.Core.Transcripts;
 
 namespace Hermes.Core.Settings;
 
+/// Surface role for Hermes Look border-radius scaling (App/Theme/ThemeShapes.swift `HQShape.Role`).
+public enum ShapeRole { Inline, Control, Tile, Card, Bubble, Field, Capsule, Group, Sheet }
+
 /// What the person chose (HermesKit/Theme/ThemeState.swift; spec 3x-desktoplook §4.4, §5.6, §6, §7). Kept on this PC
-/// only, never sent anywhere. The Windows app keeps the Look, Text Size, Theme and Chat Bubbles choices (`ChatBubbles`); the
-/// Mac's backgrounds (Backgrounds) are not on Windows yet.
+/// only, never sent anywhere.
 public sealed record ThemeState
 {
     /// The stored skin id resolved against the catalog.
     public string SkinId { get; init; } = SkinCatalog.DefaultId;
     public bool DesktopLook { get; init; }
-    /// The stored choice; it only draws while the Desktop Look is on.
+    /// The stored choice; it only draws while the Hermes Look is on.
     public bool HighContrast { get; init; }
     /// The stored choice (percent), in both looks.
     public int UiScalePercent { get; init; } = 100;
-    /// The iOS look's bubble corner (points); the Desktop Look has `DesktopCorners`.
+    /// Native Look bubble corner (points); Hermes Look has `DesktopCorners` (following `DesktopRadius` unless overridden).
     public int BubbleCorners { get; init; } = DefaultBubbleCorners;
     public int DesktopCorners { get; init; } = DefaultDesktopCorners;
+    /// True when Chat Bubbles › Corners was explicitly overridden for Hermes Look instead of following `DesktopRadius`.
+    public bool DesktopCornersOverridden { get; init; }
+    /// [desktop-radius] Base corner radius (points, 0..20) for surfaces in Hermes Look (4 pt default).
+    public double DesktopRadius { get; init; } = DefaultDesktopRadius;
     public bool PlainReplies { get; init; }
-    /// [density] Standard, or Compact's smaller faces and shorter rows; only with the Desktop Look off (`compact`).
+    /// [density] Standard, or Compact's smaller faces and shorter rows; only with Hermes Look off (`Compact`).
     public ListDensity Density { get; init; } = ListDensity.Standard;
     /// [top-edge] Hard unless Soft was picked (the default since build 734). Kept, not drawn: see `TopEdgeRow.Offered`.
     public TopEdge TopEdge { get; init; } = TopEdge.Hard;
-    /// [glass-bubbles] [tinted-bubbles] Chat Bubbles › Style, the stored choice; only with the Desktop Look off. Solid
+    /// [glass-bubbles] [tinted-bubbles] Chat Bubbles › Style, the stored choice; only with Hermes Look off. Solid
     /// unless another was picked.
     public BubbleStyle BubbleStyle { get; init; } = BubbleStyle.Solid;
 
@@ -32,18 +38,48 @@ public sealed record ThemeState
     public const int DefaultBubbleCorners = ChatVisualTokens.DefaultCorners;
     public const int DefaultDesktopCorners = ChatVisualTokens.DesktopCorners;
     public const int MinCorners = 0, MaxCorners = 24;
+    /// [desktop-radius] Hermes Look's default base border radius, range, and slider preset ticks (`a78139597`).
+    public const double DefaultDesktopRadius = 4;
+    public const double MinDesktopRadius = 0, MaxDesktopRadius = 20;
+    public static readonly double[] DesktopRadiusTicks = [0, 4, 8, 12, 16, 20];
 
     public Skin Skin => SkinCatalog.Resolved(SkinId);
     public bool ContrastApplies => DesktopLook && HighContrast;
-    /// [density] Compact draws only in the iOS look.
+    /// [density] Compact draws only in Native Look.
     public bool Compact => !DesktopLook && Density == ListDensity.Compact;
     public double Scale => UiScalePercent / 100.0;
+    /// [desktop-radius] Hermes Look's base border radius in effect (4 pt while the look is off).
+    public double AppliedDesktopRadius => DesktopLook ? DesktopRadius : DefaultDesktopRadius;
+    /// [desktop-corners] Chat bubble & text-box corner in Hermes Look: follows `DesktopRadius` unless overridden.
+    public int AppliedDesktopCorners =>
+        (DesktopCornersOverridden || DesktopCorners != DefaultDesktopCorners)
+            ? DesktopCorners
+            : (int)Math.Round(DesktopRadius, MidpointRounding.AwayFromZero);
     /// The corner bubbles are drawn with: the look in use's own.
-    public int AppliedBubbleCorners => DesktopLook ? DesktopCorners : BubbleCorners;
-    /// Desktop Look draws plain replies unless its contrast mode boxes them. Otherwise follow the stored choice.
-    public bool AppliedPlainReplies => DesktopLook ? !ContrastApplies : PlainReplies;
-    /// [glass-bubbles] The Desktop Look keeps its own boxes (`appliedBubbleStyle`).
+    public int AppliedBubbleCorners => DesktopLook ? AppliedDesktopCorners : BubbleCorners;
+    /// [plain-replies] Replies drawn with no bubble: in Hermes Look unless High Contrast boxes them while Reply
+    /// Bubbles is on, and in Native Look when Reply Bubbles is off (`1a1f7200d`).
+    public bool AppliedPlainReplies => DesktopLook ? (!ContrastApplies || PlainReplies) : PlainReplies;
+    /// [glass-bubbles] Hermes Look keeps its own boxes (`appliedBubbleStyle`).
     public BubbleStyle AppliedBubbleStyle => DesktopLook ? BubbleStyle.Solid : BubbleStyle;
+
+    /// Role-scaled Hermes Look corner radius from `baseRadius` (App/Theme/ThemeShapes.swift `HQShape.desktopRadius`).
+    public static double DesktopShapeRadius(ShapeRole role, double baseRadius)
+    {
+        var r = Math.Max(0, baseRadius);
+        return role switch
+        {
+            ShapeRole.Inline => Math.Round(r * 0.5, MidpointRounding.AwayFromZero),
+            ShapeRole.Control or ShapeRole.Tile => Math.Round(r * 0.75, MidpointRounding.AwayFromZero),
+            ShapeRole.Card or ShapeRole.Bubble or ShapeRole.Field or ShapeRole.Capsule or ShapeRole.Group => r,
+            ShapeRole.Sheet => r == 0 ? 0 : (r <= 4 ? r * 2 : Math.Min(28, r + 4)),
+            _ => r,
+        };
+    }
+
+    /// Returns `nativeBase` when Native Look is active, else role-scaled `DesktopRadius` matching `HQShape.desktopRadius`.
+    public double ShapeRadius(ShapeRole role, double nativeBase) =>
+        DesktopLook ? DesktopShapeRadius(role, DesktopRadius) : nativeBase;
 }
 
 /// Reads and writes the `hqn.theme.*` keys (the Mac's names) in this PC's preferences file. A value that isn't one this
@@ -60,6 +96,8 @@ public sealed class ThemeStore(IPreferences prefs)
         public const string UiScale = "hqn.theme.uiScale";
         public const string BubbleCorners = "hqn.theme.bubbleCorners";
         public const string DesktopCorners = "hqn.theme.desktopCorners";
+        /// [desktop-radius] Hermes Look's base corner radius (points), stored only when not 4 pt (`a78139597`).
+        public const string DesktopRadius = "hqn.theme.desktopRadius";
         /// [top-edge] `TopEdge`'s raw value, stored only when it isn't Hard.
         public const string TopEdge = "hqn.theme.topEdge";
         /// [density] `ListDensity`'s raw value, stored only when it isn't Standard.
@@ -77,7 +115,7 @@ public sealed class ThemeStore(IPreferences prefs)
         public const string PlainReplies = "hqn.theme.plainReplies";
         /// The Mac's `Key.all`, in its order.
         public static readonly string[] All = [Skin, Chosen, DesktopLook, SkinBeforeLook, HighContrast, UiScale, BubbleCorners, GlassBubbles, BubbleStyle, TopEdge,
-            DesktopCorners, DesktopComposer, Density, MessageColour, PlainReplies];
+            DesktopCorners, DesktopRadius, DesktopComposer, Density, MessageColour, PlainReplies];
     }
 
     public const int DefaultScale = 100;
@@ -92,29 +130,49 @@ public sealed class ThemeStore(IPreferences prefs)
         return (int)Math.Round(percent, MidpointRounding.AwayFromZero);
     }
 
-    /// Outside 0…24 or not a number is the standard (12 pt, or the Desktop Look's 4).
-    public static int ClampedCorners(string? value, int standard)
+    /// Valid bubble corner inside 0…24, or null when missing / out of range.
+    public static int? ValidCorners(string? value)
     {
-        if (value == null || !double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var points)) return standard;
+        if (value == null || !double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var points)) return null;
         points = Math.Round(points, MidpointRounding.AwayFromZero);
-        if (!double.IsFinite(points) || points < ThemeState.MinCorners || points > ThemeState.MaxCorners) return standard;
+        if (!double.IsFinite(points) || points < ThemeState.MinCorners || points > ThemeState.MaxCorners) return null;
         return (int)points;
     }
 
-    public ThemeState Load() => new()
+    /// Outside 0…24 or not a number is the standard (12 pt, or Hermes Look's 4).
+    public static int ClampedCorners(string? value, int standard) => ValidCorners(value) ?? standard;
+
+    /// Outside 0…20 or not a number is Hermes Look's default (4 pt).
+    public static double ClampedDesktopRadius(string? value)
     {
-        SkinId = SkinCatalog.Resolved(prefs.Get(Key.Skin)).Id,
-        DesktopLook = Flag(Key.DesktopLook),
-        HighContrast = Flag(Key.HighContrast),
-        UiScalePercent = ClampedScale(prefs.Get(Key.UiScale)),
-        BubbleCorners = ClampedCorners(prefs.Get(Key.BubbleCorners), ThemeState.DefaultBubbleCorners),
-        DesktopCorners = ClampedCorners(prefs.Get(Key.DesktopCorners), ThemeState.DefaultDesktopCorners),
-        PlainReplies = Flag(Key.PlainReplies),
-        Density = ListDensities.Parse(prefs.Get(Key.Density)) ?? ListDensity.Standard,
-        TopEdge = TopEdges.Parse(prefs.Get(Key.TopEdge)) ?? TopEdge.Hard,
-        // [tinted-bubbles] A style stored as anything but a known name is Solid.
-        BubbleStyle = BubbleStyles.Parse(prefs.Get(Key.BubbleStyle)) ?? BubbleStyle.Solid,
-    };
+        if (value == null || !double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var points))
+            return ThemeState.DefaultDesktopRadius;
+        points = Math.Round(points, MidpointRounding.AwayFromZero);
+        if (!double.IsFinite(points) || points < ThemeState.MinDesktopRadius || points > ThemeState.MaxDesktopRadius)
+            return ThemeState.DefaultDesktopRadius;
+        return points;
+    }
+
+    public ThemeState Load()
+    {
+        var customDesktopCorners = ValidCorners(prefs.Get(Key.DesktopCorners));
+        return new()
+        {
+            SkinId = SkinCatalog.Resolved(prefs.Get(Key.Skin)).Id,
+            DesktopLook = Flag(Key.DesktopLook),
+            HighContrast = Flag(Key.HighContrast),
+            UiScalePercent = ClampedScale(prefs.Get(Key.UiScale)),
+            BubbleCorners = ClampedCorners(prefs.Get(Key.BubbleCorners), ThemeState.DefaultBubbleCorners),
+            DesktopRadius = ClampedDesktopRadius(prefs.Get(Key.DesktopRadius)),
+            DesktopCorners = customDesktopCorners ?? ThemeState.DefaultDesktopCorners,
+            DesktopCornersOverridden = customDesktopCorners.HasValue,
+            PlainReplies = Flag(Key.PlainReplies),
+            Density = ListDensities.Parse(prefs.Get(Key.Density)) ?? ListDensity.Standard,
+            TopEdge = TopEdges.Parse(prefs.Get(Key.TopEdge)) ?? TopEdge.Hard,
+            // [tinted-bubbles] A style stored as anything but a known name is Solid.
+            BubbleStyle = BubbleStyles.Parse(prefs.Get(Key.BubbleStyle)) ?? BubbleStyle.Solid,
+        };
+    }
 
     /// [tinted-bubbles] Solid is stored as nothing, the others as their name. The Glass switch stays off except for Glass.
     public void SetBubbleStyle(BubbleStyle style)
@@ -177,18 +235,50 @@ public sealed class ThemeStore(IPreferences prefs)
     public void SetUiScale(int percent) =>
         prefs.Set(Key.UiScale, percent == DefaultScale ? null : percent.ToString(CultureInfo.InvariantCulture));
 
-    /// Stored only when it is not the standard 12 pt (or, `desktop`, the Desktop Look's 4 pt).
+    /// Stored only when it is not the standard 12 pt (or, `desktop`, when it differs from `DesktopRadius`).
     public void SetBubbleCorners(int points, bool desktop = false)
     {
         points = Math.Clamp(points, ThemeState.MinCorners, ThemeState.MaxCorners);
         var key = desktop ? Key.DesktopCorners : Key.BubbleCorners;
-        var standard = desktop ? ThemeState.DefaultDesktopCorners : ThemeState.DefaultBubbleCorners;
+        var standard = desktop
+            ? (int)Math.Round(ClampedDesktopRadius(prefs.Get(Key.DesktopRadius)), MidpointRounding.AwayFromZero)
+            : ThemeState.DefaultBubbleCorners;
         prefs.Set(key, points == standard ? null : points.ToString(CultureInfo.InvariantCulture));
     }
+
+    /// [desktop-radius] Stored only when it is not Hermes Look's 4 pt default (`a78139597`).
+    public void SetDesktopRadius(double radius)
+    {
+        var clamped = Math.Round(Math.Clamp(radius, ThemeState.MinDesktopRadius, ThemeState.MaxDesktopRadius), MidpointRounding.AwayFromZero);
+        prefs.Set(Key.DesktopRadius, Math.Abs(clamped - ThemeState.DefaultDesktopRadius) < 0.001
+            ? null
+            : clamped.ToString(CultureInfo.InvariantCulture));
+    }
+
+    /// [desktop-radius] Resets Hermes Look's base border radius back to the 4 pt default.
+    public void ResetDesktopRadius() => prefs.Set(Key.DesktopRadius, null);
+
+    /// [plain-replies] Reply Bubbles off (`true`) stored as `"true"`; on (`false`, default) stored as nothing.
+    public void SetPlainReplies(bool plain) => prefs.Set(Key.PlainReplies, plain ? "true" : null);
 
     public void Reset()
     {
         foreach (var k in Key.All) prefs.Set(k, null);
+    }
+
+    /// Resets every on-device appearance setting (theme, look, radius, scale, bubbles, backgrounds, working ring,
+    /// window transparency, light/dark) back to shipped defaults (App/Theme/Theme.swift `resetAppearance`).
+    public void ResetAppearance()
+    {
+        Reset();
+        Appearance.Write(prefs, AppearanceSetting.System);
+        var backdrops = new BackdropPrefs(prefs);
+        backdrops.Reset(BackdropPlace.App);
+        backdrops.Reset(BackdropPlace.Chats);
+        prefs.Set(WorkingRing.Key, null);
+        WindowTransparency.Write(prefs, true);
+        prefs.Set(ThinkingBarRow.Key, null);
+        prefs.Set(ChatsUnderBotsRow.Key, null);
     }
 
     /// The View menu's text size steps (App/Mac/MacWindow.swift `stepScale`): the presets in order; 0 is 100 %. Null

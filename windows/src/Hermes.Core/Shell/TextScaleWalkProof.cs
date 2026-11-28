@@ -142,6 +142,8 @@ public static class HighContrastWalkProof
         ("HQMeTimeBrush", ContrastTheme.For(ContrastTheme.Surface.UserBubble).Ink),
         ("HQMeBorderBrush", ContrastTheme.For(ContrastTheme.Surface.UserBubble).Edge),
         ("HQCodeFillBrush", "Window"), ("HQCodeTextBrush", "WindowText"), ("HQEditorBrush", "Window"),
+        ("HQWhisperLineBrush", "WindowText"), ("HQFrostedBarBrush", "Window"),
+        ("HQGlassVeilBrush", "Window"), ("HQGlassCanvasSurfaceBrush", "Window"), ("HQGlassCanvasBorderBrush", "WindowText"),
         ("HQRedBrush", "WindowText"), ("HQGreenBrush", "WindowText"), ("HQOrangeBrush", "WindowText"),
     ];
 

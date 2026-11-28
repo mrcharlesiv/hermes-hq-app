@@ -88,6 +88,97 @@ public sealed record ChatThread(
     public IReadOnlyList<ChatMessage> Spoken => [.. Messages.Where(m => m.Role != Role.System)];
 }
 
+/// Short-title placeholder detection (port of HermesKit/Chat/ShortTitle.swift).
+public static class ShortTitle
+{
+    public static readonly IReadOnlySet<string> GenericTitles = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "", "new chat", "untitled", "untitled chat", "new session", "new conversation", "chat",
+    };
+
+    public const int ExcerptCharacters = 40;
+
+    private static readonly string[] AttachmentLinePrefixes =
+        ["[The user attached", "[Image attached", "[Examine it with", "@image:", "@file:", "@folder:"];
+
+    private static readonly Regex CutMarkerRx = new(@"(?:…|\.{3})[\s""'“”‘’`*.。!?:;,]*$", RegexOptions.Compiled);
+
+    /// A name that is a file's line and no words at all: a voice memo's `MEDIA:"..."` path or an attachment wrapper.
+    public static bool IsFileLine(string? title)
+    {
+        var cleaned = CleanName(title ?? "");
+        return cleaned.StartsWith("MEDIA:", StringComparison.Ordinal)
+            || AttachmentLinePrefixes.Any(p => cleaned.StartsWith(p, StringComparison.Ordinal));
+    }
+
+    /// Empty/generic names and visibly cut or overlong opening excerpts are provisional.
+    public static bool IsPlaceholder(string? title, string firstMessage)
+    {
+        var raw = title ?? "";
+        var cleaned = CleanName(raw);
+        if (cleaned.StartsWith("MEDIA:", StringComparison.Ordinal)) return true;
+        if (AttachmentLinePrefixes.Any(p => cleaned.StartsWith(p, StringComparison.Ordinal))) return true;
+        var shown = Normalized(cleaned);
+        if (GenericTitles.Contains(shown)) return true;
+        var cut = CutMarkerRx.IsMatch(cleaned);
+        var message = Normalized(CleanName(firstMessage ?? ""));
+        if (message.Length == 0) return cut;
+        if (!message.StartsWith(shown, StringComparison.Ordinal)
+            && !Normalized(firstMessage ?? "").StartsWith(Normalized(raw), StringComparison.Ordinal))
+            return false;
+        return cut || string.Join(" ", Words(cleaned)).Length > ExcerptCharacters;
+    }
+
+    public static string Normalized(string text)
+    {
+        var s = string.Join(" ", Words(text.ToLowerInvariant()));
+        return s.TrimEnd('…', '.', ',', ';', ':', '!', '?', '-', '—', ' ');
+    }
+
+    public static string[] Words(string text) =>
+        text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+
+    public static string CleanName(string raw)
+    {
+        var title = raw.Trim();
+        while (true)
+        {
+            if (title.StartsWith("title:", StringComparison.OrdinalIgnoreCase))
+            {
+                title = title[6..].Trim();
+                continue;
+            }
+            if (title.Length == 0) break;
+            var closing = title[0] switch
+            {
+                '"' => '"',
+                '\'' => '\'',
+                '“' => '”',
+                '‘' => '’',
+                '`' => '`',
+                '*' => '*',
+                _ => '\0',
+            };
+            if (closing == '\0') break;
+            var candidate = title;
+            while (candidate.Length > 0 && ".,。!?:;".Contains(candidate[^1]))
+                candidate = candidate[..^1].Trim();
+            if (candidate.Length <= 1 || candidate[^1] != closing) break;
+            title = candidate[1..^1].Trim();
+        }
+        return title;
+    }
+}
+
+/// What the chat screen hands `ThreadStore` when a send cannot go into the main chat now (HermesKit BusyThreadPayload).
+public sealed record BusyThreadPayload(
+    string Text,
+    string? Display = null,
+    IReadOnlyList<ChatPart>? Attachments = null,
+    string? LocalId = null,
+    OwnerWait? Reason = null,
+    bool Proactive = false);
+
 /// Calm routing banner shown over the composer when a busy chat auto-routes sends into a thread.
 public sealed record ThreadBusyBanner(string Title, string Note, string? ThreadKey = null);
 
@@ -103,9 +194,18 @@ public static class ThreadRules
 
     private static readonly Regex InheritedBotChatPattern = new(@"^bot chat(?:\s+#\d+)?$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    /// Where the composer's thread button hangs a new thread: under the newest finished message (yours or the bot's),
+    /// skipping any reply still streaming.
+    public static ChatMessage? ComposerAnchor(IReadOnlyList<ChatMessage> messages, bool running) =>
+        messages.LastOrDefault(m => m.Role != Role.System && !m.IsStreaming)
+        ?? messages.LastOrDefault(m => m.Role != Role.System);
+
     public static ChatMessage? BusyAnchor(IReadOnlyList<ChatMessage> messages, string? leavingOutLocalId) =>
         messages.LastOrDefault(m => m.Id != leavingOutLocalId && m.Role != Role.System && !m.IsStreaming)
         ?? messages.LastOrDefault(m => m.Id != leavingOutLocalId && m.Role != Role.System);
+
+    public static bool TakesNextBusySend(int? heldAt, int accepted, bool live, bool problem) =>
+        TakesNextBusySend(heldAt, accepted, live, problem, false, DateTimeOffset.MinValue, DateTimeOffset.MinValue, BusyThreadTtl);
 
     public static bool TakesNextBusySend(int? heldAt, int accepted, bool reachable, bool problem,
         bool mainIdleSinceHold, DateTimeOffset lastActivity, DateTimeOffset now, TimeSpan? ttl = null)
@@ -118,6 +218,20 @@ public static class ThreadRules
     {
         var who = botName?.Trim();
         return $"{(string.IsNullOrEmpty(who) ? "The bot" : who)} is back in the main chat.";
+    }
+
+    /// True when a transcript refresh brought in a newer finished assistant reply than was shown before.
+    public static bool HasNewFinishedReply(IReadOnlyList<ChatMessage> before, IReadOnlyList<ChatMessage> after)
+    {
+        static ChatMessage? LatestFinished(IReadOnlyList<ChatMessage> list) =>
+            list.LastOrDefault(m => m.Role == Role.Assistant && !m.IsStreaming && m.Error == null && !string.IsNullOrWhiteSpace(m.Text));
+
+        var now = LatestFinished(after);
+        if (now == null) return false;
+        var prev = LatestFinished(before);
+        if (prev == null) return true;
+        if (now.RowId is { } nowRow && prev.RowId is { } prevRow) return nowRow > prevRow;
+        return now.Id != prev.Id && after.Count > before.Count;
     }
 
     public static ThreadBusyBanner ProactiveBanner(string? activeTitle, string? threadKey, BusyReasonKind reason = BusyReasonKind.RunningReply, string? messagingApp = null)
@@ -133,6 +247,26 @@ public static class ThreadRules
             _ => "Busy in the main chat",
         };
         return new("Sending to Thread", note, threadKey);
+    }
+
+    public static ThreadBusyBanner ProactiveBanner(string? botName, string? activeTitle, string? threadKey, OwnerWait? reason)
+    {
+        _ = botName;
+        var kind = reason?.Kind switch
+        {
+            OwnerWaitKind.BackgroundTask => BusyReasonKind.BackgroundTask,
+            OwnerWaitKind.MessagingTurn => BusyReasonKind.MessagingTurn,
+            OwnerWaitKind.OtherWindow => BusyReasonKind.OtherWindow,
+            _ => BusyReasonKind.RunningReply,
+        };
+        return ProactiveBanner(activeTitle, threadKey, kind, reason?.App);
+    }
+
+    /// Threads that belong to an empty chat (no non-system messages to hang under yet): shown at the foot.
+    public static List<ChatThread> Unanchored(IEnumerable<ChatThread> threads, IReadOnlyList<ChatMessage> messages)
+    {
+        if (messages.Any(m => m.Role != Role.System)) return [];
+        return [.. threads.Where(t => t.AnchorMessageId == null && t.AnchorRow == null).OrderBy(t => t.StartedAt)];
     }
 
     public static int? AnchorIndex(ChatThread thread, IReadOnlyList<ChatMessage> messages)
@@ -193,10 +327,15 @@ public static class ThreadRules
     {
         var title = thread.Title?.Trim();
         if (string.IsNullOrEmpty(title) || title == DefaultTitle || IsInheritedBotChatTitle(title)) return DefaultTitle;
-        return title;
+        var first = thread.Spoken.FirstOrDefault(m => m.Role == Role.User)?.Text ?? "";
+        return ShortTitle.IsPlaceholder(title, first) ? DefaultTitle : title;
     }
 
     public static string CountWords(int count) => count == 1 ? "1 message" : $"{count} messages";
+
+    /// The folded line's words after the name: "4 messages", or null when empty.
+    public static string? FoldedTail(ChatThread thread) =>
+        thread.Spoken.Count > 0 ? CountWords(thread.Spoken.Count) : null;
 
     public static (string Name, string? Tail) Header(ChatThread thread)
     {
@@ -214,6 +353,53 @@ public static class ThreadRules
             list.Add(thread);
         }
         return map;
+    }
+}
+
+/// A thread read from the gateway without opening it (HermesKit/Chat/Threads/ChatThread.swift `ThreadFetch`).
+public static class ThreadFetch
+{
+    public sealed record Result(IReadOnlyList<ChatMessage> Messages, int? AnchorRow);
+
+    /// From stored rows: the hidden seed gives the anchor and is left out of the messages. Also heals legacy
+    /// threads whose gateway stripped `display_kind: "hidden"` via `_seed_branch_row` by detecting the closing-note
+    /// boundary row and trimming the leaked seed prefix.
+    public static Result Read(IEnumerable<JsonNode?> rows)
+    {
+        int? anchor = null;
+        var sawHidden = false;
+        var visible = new List<JsonNode?>();
+        foreach (var row in rows)
+        {
+            if (row.Str("display_kind") == "hidden")
+            {
+                sawHidden = true;
+                if (row.Str("content") is { } text && ThreadSeed.AnchorRow(text) is { } found) anchor = found;
+                continue;
+            }
+            visible.Add(row);
+        }
+        if (!sawHidden)
+        {
+            var seedEnd = -1;
+            for (var i = visible.Count - 1; i >= 0; i--)
+            {
+                if (visible[i].Str("role") == "assistant"
+                    && visible[i].Str("content") is { } text
+                    && ThreadSeed.IsClosingNote(text))
+                {
+                    seedEnd = i;
+                    break;
+                }
+            }
+            if (seedEnd >= 0)
+            {
+                if (visible[seedEnd].Str("content") is { } text && ThreadSeed.AnchorRow(text) is { } found)
+                    anchor = found;
+                visible = visible.Skip(seedEnd + 1).ToList();
+            }
+        }
+        return new Result(HistoryFold.Fold(visible), anchor);
     }
 }
 

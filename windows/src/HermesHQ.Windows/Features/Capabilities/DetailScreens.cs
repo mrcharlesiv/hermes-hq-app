@@ -437,8 +437,58 @@ internal static class SecretDialog
     }
 }
 
+/// A lightweight wrapping horizontal flow panel for variable-width chips and header badges (conservative WinUI 3 Panel).
+internal sealed class FlowWrapPanel : Panel
+{
+    public double HorizontalSpacing { get; set; } = 8;
+    public double VerticalSpacing { get; set; } = 8;
+
+    protected override Windows.Foundation.Size MeasureOverride(Windows.Foundation.Size availableSize)
+    {
+        var maxWidth = double.IsInfinity(availableSize.Width) ? double.MaxValue : availableSize.Width;
+        double x = 0, y = 0, lineHeight = 0, totalWidth = 0;
+        foreach (var child in Children)
+        {
+            child.Measure(new Windows.Foundation.Size(maxWidth, double.PositiveInfinity));
+            var desired = child.DesiredSize;
+            if (x > 0 && x + desired.Width > maxWidth)
+            {
+                totalWidth = Math.Max(totalWidth, x - HorizontalSpacing);
+                x = 0;
+                y += lineHeight + VerticalSpacing;
+                lineHeight = 0;
+            }
+            x += desired.Width + HorizontalSpacing;
+            lineHeight = Math.Max(lineHeight, desired.Height);
+        }
+        if (x > 0) totalWidth = Math.Max(totalWidth, x - HorizontalSpacing);
+        var totalHeight = Children.Count == 0 ? 0 : y + lineHeight;
+        return new Windows.Foundation.Size(Math.Min(totalWidth, maxWidth), totalHeight);
+    }
+
+    protected override Windows.Foundation.Size ArrangeOverride(Windows.Foundation.Size finalSize)
+    {
+        var maxWidth = finalSize.Width;
+        double x = 0, y = 0, lineHeight = 0;
+        foreach (var child in Children)
+        {
+            var desired = child.DesiredSize;
+            if (x > 0 && x + desired.Width > maxWidth)
+            {
+                x = 0;
+                y += lineHeight + VerticalSpacing;
+                lineHeight = 0;
+            }
+            child.Arrange(new Windows.Foundation.Rect(x, y, Math.Min(desired.Width, Math.Max(0, maxWidth - x)), desired.Height));
+            x += desired.Width + HorizontalSpacing;
+            lineHeight = Math.Max(lineHeight, desired.Height);
+        }
+        return finalSize;
+    }
+}
+
 /// A connector's page (ConnectorPageController.swift): its state and why, Sign In / Try Again, its switch, its tools
-/// with a switch each (saved together, remove-then-add), Advanced.
+/// with per-tool permission levels + switches (saved together, remove-then-add), Advanced.
 internal sealed class ConnectorScreen(CapabilitiesModel model, McpServer server) : Screen
 {
     private enum ToolsState { Idle, Reading, Failed, Loaded }
@@ -447,9 +497,13 @@ internal sealed class ConnectorScreen(CapabilitiesModel model, McpServer server)
     private List<McpTool> _list = [];
     public JsonNode? Entry { get; private set; }
     public JsonNode? LostEntry { get; private set; }
-    private bool _redacted, _saving, _checking, _signingIn, _needsAuthProbe;
+    private bool _redacted, _saving, _checking, _signingIn, _needsAuthProbe, _levels, _levelsCanAsk = true;
     private string? _probeError;
     private HashSet<string> _savedOff = [], _draftOff = [];
+    private Dictionary<string, McpToolPermission> _savedPermissions = new(StringComparer.Ordinal);
+    private Dictionary<string, McpToolPermission> _draftPermissions = new(StringComparer.Ordinal);
+    private Dictionary<string, McpToolPermission> _lastEnabledPermission = new(StringComparer.Ordinal);
+    private McpToolPermission? _permissionFilter;
     private string _search = "";
     private CancellationTokenSource? _signIn;
 
@@ -460,7 +514,10 @@ internal sealed class ConnectorScreen(CapabilitiesModel model, McpServer server)
     public McpServer? Server => model.Profile == _profile ? model.Servers?.FirstOrDefault(s => s.Name == server.Name) : null;
     public bool IsPlugin => Server?.Source == "plugin";
     private bool CanEditTools => !IsPlugin && !model.ReadOnly && !_redacted && Entry != null;
-    private bool Dirty => !_draftOff.SetEquals(_savedOff);
+    private bool Dirty => !_draftOff.SetEquals(_savedOff) || !PermissionsEqual(_draftPermissions, _savedPermissions);
+
+    private static bool PermissionsEqual(Dictionary<string, McpToolPermission> a, Dictionary<string, McpToolPermission> b) =>
+        a.Count == b.Count && a.All(p => b.TryGetValue(p.Key, out var v) && v == p.Value);
 
     private enum Status { Ok, Probing, Off, NeedsAuth, Error, Unknown }
 
@@ -498,11 +555,25 @@ internal sealed class ConnectorScreen(CapabilitiesModel model, McpServer server)
     public override async void Shown()
     {
         model.Changed += Render;
+        await ReadLevels();
         await ReadEntry();
         if (_tools == ToolsState.Idle) await ReadTools();
     }
 
     public override void Hidden() { model.Changed -= Render; _signIn?.Cancel(); }
+
+    private async Task ReadLevels()
+    {
+        if (model.Api is not { } api || IsPlugin) return;
+        try
+        {
+            var (enforced, asks) = await api.AddOnToolLevelsAsync();
+            _levels = enforced;
+            _levelsCanAsk = asks;
+            if (!enforced) _permissionFilter = null;
+        }
+        catch (Exception) { }
+    }
 
     public override async Task<bool> LeaveAsync()
     {
@@ -514,7 +585,7 @@ internal sealed class ConnectorScreen(CapabilitiesModel model, McpServer server)
             PrimaryButtonText = "Discard Changes", CloseButtonText = "Keep Editing", DefaultButton = ContentDialogButton.Close,
         };
         if (await Kit.Show(Root, d) != ContentDialogResult.Primary) return false;
-        _draftOff = [.. _savedOff];
+        DiscardDraft();
         return true;
     }
 
@@ -533,10 +604,94 @@ internal sealed class ConnectorScreen(CapabilitiesModel model, McpServer server)
 
     private void ApplyRules()
     {
-        var off = _list.Select(t => t.Name).Where(n => !McpToolFilter.IsEnabled(Entry, n)).ToHashSet();
+        var names = _list.Select(t => t.Name).ToList();
+        var perms = McpToolFilter.Permissions(Entry, names);
+        var off = names.Where(n => perms[n] == McpToolPermission.Blocked).ToHashSet();
         var wasDirty = Dirty;
         _savedOff = off;
-        if (!wasDirty) _draftOff = [.. off];
+        _savedPermissions = perms;
+        if (!wasDirty)
+        {
+            _draftOff = [.. off];
+            _draftPermissions = new Dictionary<string, McpToolPermission>(perms, StringComparer.Ordinal);
+        }
+    }
+
+    private McpToolPermission PermissionFor(string tool)
+    {
+        if (_draftPermissions.TryGetValue(tool, out var draft)) return draft;
+        if (_draftOff.Contains(tool)) return McpToolPermission.Blocked;
+        return McpToolFilter.PermissionFor(Entry, tool);
+    }
+
+    private int CountFor(McpToolPermission level) => _list.Count(t => PermissionFor(t.Name) == level);
+
+    private int ChangedCount() => _list.Count(t =>
+    {
+        var saved = _savedPermissions.TryGetValue(t.Name, out var s)
+            ? s
+            : (_savedOff.Contains(t.Name) ? McpToolPermission.Blocked : McpToolPermission.AlwaysAllow);
+        return PermissionFor(t.Name) != saved;
+    });
+
+    private McpToolPermission RestoredLevel(string tool)
+    {
+        var level = _lastEnabledPermission.TryGetValue(tool, out var prev)
+            ? prev
+            : McpToolFilter.StoredLevel(Entry, tool);
+        return level == McpToolPermission.Blocked ? McpToolPermission.AlwaysAllow : level;
+    }
+
+    private void PutPermission(McpToolPermission level, string tool)
+    {
+        var current = PermissionFor(tool);
+        if (level == McpToolPermission.Blocked)
+        {
+            if (current != McpToolPermission.Blocked) _lastEnabledPermission[tool] = current;
+            _draftOff.Add(tool);
+        }
+        else
+        {
+            _lastEnabledPermission[tool] = level;
+            _draftOff.Remove(tool);
+        }
+        _draftPermissions[tool] = level;
+    }
+
+    private void SetPermission(McpToolPermission level, string tool)
+    {
+        if (_saving) return;
+        PutPermission(level, tool);
+        Render();
+    }
+
+    private void SetAllPermissions(McpToolPermission level)
+    {
+        if (_saving) return;
+        foreach (var t in _list) PutPermission(level, t.Name);
+        Render();
+    }
+
+    private void SetTool(string tool, bool on) =>
+        SetPermission(on ? RestoredLevel(tool) : McpToolPermission.Blocked, tool);
+
+    /// All Tools switch: turning on restores only blocked tools to their stored/prior levels without wiping other tools.
+    private void SetAllTools(bool on)
+    {
+        if (_saving) return;
+        foreach (var t in _list)
+        {
+            if (!on) PutPermission(McpToolPermission.Blocked, t.Name);
+            else if (PermissionFor(t.Name) == McpToolPermission.Blocked) PutPermission(RestoredLevel(t.Name), t.Name);
+        }
+        Render();
+    }
+
+    private void DiscardDraft()
+    {
+        _draftOff = [.. _savedOff];
+        _draftPermissions = new Dictionary<string, McpToolPermission>(_savedPermissions, StringComparer.Ordinal);
+        _lastEnabledPermission.Clear();
     }
 
     private async Task ReadTools()
@@ -615,15 +770,17 @@ internal sealed class ConnectorScreen(CapabilitiesModel model, McpServer server)
     {
         if (model.Api is not { } api || !Dirty || _saving || !CanEditTools) return;
         _saving = true; Render();
-        var disabled = _list.Select(t => t.Name).Where(_draftOff.Contains).ToList();
         var discovered = _list.Select(t => t.Name).ToList();
+        var policies = discovered.ToDictionary(n => n, PermissionFor, StringComparer.Ordinal);
         var before = Entry;
         try
         {
-            switch (await api.SaveToolRulesAsync(Name, disabled, discovered, _profile))
+            switch (await api.SaveToolPoliciesAsync(Name, policies, discovered, _profile))
             {
                 case ToolRulesOutcome.Saved or ToolRulesOutcome.Unchanged:
                     _savedOff = [.. _draftOff];
+                    _savedPermissions = new Dictionary<string, McpToolPermission>(_draftPermissions, StringComparer.Ordinal);
+                    _lastEnabledPermission.Clear();
                     await ReadEntry();
                     await model.ReloadServers();
                     break;
@@ -680,10 +837,15 @@ internal sealed class ConnectorScreen(CapabilitiesModel model, McpServer server)
             g.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             g.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            var back = _savedOff.Except(_draftOff).Count();
-            g.Children.Add(Kit.Text($"{CapabilitiesWords.Plural(_draftOff.Count, "tool", "tools")} off, {(back == 0 ? "none" : back.ToString())} back on", 12)
-                .Also(t => t.VerticalAlignment = VerticalAlignment.Center));
-            var discard = Kit.Button("Discard", () => { _draftOff = [.. _savedOff]; Render(); }, enabled: !_saving);
+            var summary = McpToolFilter.DraftSummary(
+                _levels,
+                ChangedCount(),
+                _draftOff.Count,
+                _savedOff.Except(_draftOff).Count(),
+                CountFor(McpToolPermission.AutoReview),
+                CountFor(McpToolPermission.NeedsApproval));
+            g.Children.Add(Kit.Text(summary, 12).Also(t => t.VerticalAlignment = VerticalAlignment.Center));
+            var discard = Kit.Button("Discard", () => { DiscardDraft(); Render(); }, enabled: !_saving);
             Grid.SetColumn(discard, 1);
             g.Children.Add(discard);
             var save = Kit.Button(_saving ? "Saving…" : "Save", Save, accent: true, enabled: !_saving);
@@ -702,6 +864,65 @@ internal sealed class ConnectorScreen(CapabilitiesModel model, McpServer server)
         Status.Error => ("Couldn’t connect", ConnectorTone.Bad),
         _ => ("Starts when needed", ConnectorTone.Busy),
     };
+
+    private static Microsoft.UI.Xaml.Media.Brush PermissionTint(McpToolPermission level) => level switch
+    {
+        McpToolPermission.AlwaysAllow => Kit.Secondary,
+        McpToolPermission.AutoReview => Kit.Accent,
+        McpToolPermission.NeedsApproval => Kit.Caution,
+        _ => Kit.Critical,
+    };
+
+    private UIElement PermissionBadge(McpToolPermission level, bool interactive, string? toolName = null)
+    {
+        var tint = PermissionTint(level);
+        var face = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5, VerticalAlignment = VerticalAlignment.Center };
+        face.Children.Add(Kit.Glyph(level.Glyph(), 11, tint));
+        face.Children.Add(Kit.Text(level.Title(), 11, bold: true, wrap: false, color: tint));
+        if (interactive) face.Children.Add(Kit.Glyph("\uE70D", 9, tint));
+
+        if (!interactive || toolName == null)
+        {
+            return new Border
+            {
+                Child = face,
+                Padding = new Thickness(8, 2, 8, 2),
+                CornerRadius = new CornerRadius(10),
+                Background = Kit.Brush("SubtleFillColorSecondaryBrush"),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Margin = new Thickness(0, 3, 0, 0),
+            };
+        }
+
+        var flyout = new MenuFlyout();
+        foreach (var option in McpToolPermissions.All)
+        {
+            var captured = option;
+            var item = Kit.Item(
+                $"{captured.Title()} — {captured.Subtitle()}",
+                captured == level ? Kit.Check : captured.Glyph(),
+                () => SetPermission(captured, toolName),
+                enabled: !_saving);
+            flyout.Items.Add(item);
+        }
+
+        var btn = new Button
+        {
+            Content = face,
+            Padding = new Thickness(8, 2, 8, 2),
+            MinHeight = 24,
+            CornerRadius = new CornerRadius(10),
+            Background = Kit.Brush("SubtleFillColorSecondaryBrush"),
+            BorderThickness = new Thickness(0),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 3, 0, 0),
+            IsEnabled = !_saving,
+            Flyout = flyout,
+        };
+        AutomationProperties.SetName(btn, $"{toolName}, {level.Title()}");
+        ToolTipService.SetToolTip(btn, level.Subtitle());
+        return btn;
+    }
 
     public override void Build(StackPanel page)
     {
@@ -745,38 +966,143 @@ internal sealed class ConnectorScreen(CapabilitiesModel model, McpServer server)
         else switch (_tools)
         {
             case ToolsState.Idle or ToolsState.Reading: rows.Add(Kit.Busy("Reading the tool list")); break;
-            case ToolsState.Failed: rows.Add(Kit.Plain("Tool list unavailable.")); break;
+            case ToolsState.Failed:
+                var failedPanel = new StackPanel { Spacing = 8 };
+                failedPanel.Children.Add(Kit.Text("Tool list unavailable.", 14, secondary: true));
+                failedPanel.Children.Add(Kit.Button("Try Again", Check).Also(b => b.HorizontalAlignment = HorizontalAlignment.Left));
+                rows.Add(Kit.Pad(failedPanel, 10));
+                break;
             default:
                 var editable = CanEditTools;
                 var toolRowsHost = new StackPanel();
                 void FillToolRows()
                 {
                     toolRowsHost.Children.Clear();
-                    if (editable && _search.Length == 0 && _list.Count > 0)
-                        toolRowsHost.Children.Add(Kit.SwitchRow("All Tools", _draftOff.Count == 0, on => { _draftOff = on ? [] : [.. _list.Select(t => t.Name)]; Render(); }, !_saving, bold: true));
+                    if (editable && _search.Length == 0 && _permissionFilter == null && _list.Count > 0)
+                    {
+                        if (_levels)
+                        {
+                            var setAllFlyout = new MenuFlyout();
+                            foreach (var level in McpToolPermissions.All)
+                            {
+                                var captured = level;
+                                setAllFlyout.Items.Add(Kit.Item(captured.Title(), captured.Glyph(), () => SetAllPermissions(captured), !_saving));
+                            }
+                            var setAllFace = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+                            setAllFace.Children.Add(Kit.Text("Set All", 12, bold: true, wrap: false, color: Kit.Accent));
+                            setAllFace.Children.Add(Kit.Glyph("\uE70D", 9, Kit.Accent));
+                            var setAllBtn = new Button
+                            {
+                                Content = setAllFace,
+                                Padding = new Thickness(10, 4, 10, 4),
+                                CornerRadius = new CornerRadius(12),
+                                Background = Kit.Brush("SubtleFillColorSecondaryBrush"),
+                                BorderThickness = new Thickness(0),
+                                IsEnabled = !_saving,
+                                Flyout = setAllFlyout,
+                            };
+                            AutomationProperties.SetName(setAllBtn, "Set permission for all tools");
+
+                            var trailing = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, VerticalAlignment = VerticalAlignment.Center };
+                            trailing.Children.Add(setAllBtn);
+                            trailing.Children.Add(Kit.Switch(_draftOff.Count == 0, "All Tools", SetAllTools, !_saving));
+                            toolRowsHost.Children.Add(Kit.Row("All Tools", trailing: trailing, boldTitle: true));
+                        }
+                        else
+                        {
+                            toolRowsHost.Children.Add(Kit.SwitchRow("All Tools", _draftOff.Count == 0, SetAllTools, !_saving, bold: true));
+                        }
+                    }
+
                     var q = _search.Trim();
-                    var shown = q.Length == 0 ? _list : _list.Where(t => t.Name.Contains(q, StringComparison.OrdinalIgnoreCase) || t.Description.Contains(q, StringComparison.OrdinalIgnoreCase)).ToList();
-                    if (shown.Count == 0) toolRowsHost.Children.Add(Kit.Plain(_list.Count == 0 ? "This connector brings no tools." : "No tool matches these filters."));
+                    var shown = _list.Where(t =>
+                        (_permissionFilter == null || PermissionFor(t.Name) == _permissionFilter)
+                        && (q.Length == 0 || t.Name.Contains(q, StringComparison.OrdinalIgnoreCase) || t.Description.Contains(q, StringComparison.OrdinalIgnoreCase)))
+                        .ToList();
+                    if (shown.Count == 0)
+                        toolRowsHost.Children.Add(Kit.Plain(_list.Count == 0 ? "This connector brings no tools." : "No tool matches these filters."));
+
                     foreach (var t in shown)
                     {
+                        var current = PermissionFor(t.Name);
+                        var sub = new StackPanel { Spacing = 3 };
+                        if (!string.IsNullOrEmpty(t.Description))
+                        {
+                            var desc = Kit.Text(t.Description, 12, secondary: true);
+                            desc.MaxLines = 2;
+                            desc.TextTrimming = TextTrimming.CharacterEllipsis;
+                            sub.Children.Add(desc);
+                        }
+                        if (_levels) sub.Children.Add(PermissionBadge(current, editable, t.Name));
+
                         UIElement? end = editable
-                            ? Kit.Switch(!_draftOff.Contains(t.Name), t.Name, on => { if (on) _draftOff.Remove(t.Name); else _draftOff.Add(t.Name); Render(); }, !_saving)
-                            : !McpToolFilter.IsEnabled(Entry, t.Name) ? Kit.Text("Off", 13, secondary: true) : null;
-                        toolRowsHost.Children.Add(Kit.Row(t.Name, t.Description, trailing: end, mono: true));
+                            ? Kit.Switch(current != McpToolPermission.Blocked, t.Name, on => SetTool(t.Name, on), !_saving)
+                            : !_levels && current == McpToolPermission.Blocked ? Kit.Text("Off", 13, secondary: true) : null;
+
+                        var row = Kit.Row(
+                            t.Name,
+                            subtitleElement: sub.Children.Count > 0 ? sub : null,
+                            trailing: end,
+                            mono: true);
+                        toolRowsHost.Children.Add(row);
                     }
                 }
+
                 if (_list.Count > 8)
                 {
                     var box = new TextBox { PlaceholderText = $"Search {_list.Count} tools", Text = _search };
+                    AutomationProperties.SetName(box, $"Search {_list.Count} tools");
                     box.TextChanged += (_, _) => { if (_search != box.Text) { _search = box.Text; FillToolRows(); } };
                     rows.Add(Kit.Pad(box, 8));
                 }
+
+                if (_levels && (_list.Count > 3 || _list.Any(t => PermissionFor(t.Name) != McpToolPermission.AlwaysAllow)))
+                {
+                    var chips = new FlowWrapPanel { HorizontalSpacing = 6, VerticalSpacing = 6 };
+                    void AddChip(string label, bool active, Action click)
+                    {
+                        var chip = new Button
+                        {
+                            Content = Kit.Text(label, 12, bold: true, wrap: false,
+                                color: active ? Kit.Brush("TextOnAccentFillColorPrimaryBrush") : Kit.Secondary),
+                            Padding = new Thickness(10, 4, 10, 4),
+                            CornerRadius = new CornerRadius(12),
+                            BorderThickness = new Thickness(0),
+                            Background = active ? Kit.Accent : Kit.Brush("SubtleFillColorSecondaryBrush"),
+                        };
+                        AutomationProperties.SetName(chip, label);
+                        chip.Click += (_, _) => click();
+                        chips.Children.Add(chip);
+                    }
+
+                    AddChip($"All ({_list.Count})", _permissionFilter == null, () => { _permissionFilter = null; Render(); });
+                    foreach (var level in McpToolPermissions.All)
+                    {
+                        var captured = level;
+                        AddChip($"{captured.ShortTitle()} ({CountFor(captured)})", _permissionFilter == captured, () =>
+                        {
+                            _permissionFilter = _permissionFilter == captured ? null : captured;
+                            Render();
+                        });
+                    }
+                    rows.Add(Kit.Pad(chips, 8));
+                }
+
                 FillToolRows();
                 rows.Add(toolRowsHost);
                 break;
         }
+
+        string? footer = null;
+        if (_redacted)
+            footer = $"This connector’s tool list can be changed on {HostWord.Phrase}.";
+        else if (_levels && CanEditTools && _tools == ToolsState.Loaded && s.Enabled && _list.Count > 0)
+            footer = _levelsCanAsk
+                ? $"Auto-review asks before a call that changes something. Needs approval asks every time. {model.BotName} waits for your answer."
+                : $"Hermes on {HostWord.Phrase} is too old to ask you. Until it is updated, a tool set to Auto-review or Needs approval is refused when it would have asked.";
+
         var header = _tools == ToolsState.Loaded && s.Enabled ? CapabilitiesWords.Plural(_list.Count, "Tool", "Tools") : "Tools";
-        page.Children.Add(Kit.Section(header, rows, _redacted ? $"This connector’s tool list can be changed on {HostWord.Phrase}." : null));
+        page.Children.Add(Kit.Section(header, rows, footer));
     }
 }
 

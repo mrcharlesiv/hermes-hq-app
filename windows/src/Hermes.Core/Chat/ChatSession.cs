@@ -19,10 +19,40 @@ public sealed partial class ChatSession : IAsyncDisposable
     private long _nextOffset;
     private bool _hasOlder = true;
     private bool _stopPending;
+    // H17: generation counter & active LoadOlder CTS so RefreshAsync / ReplaceWithHistory cancels stale older-page loads.
+    private int _historyGeneration;
+    private CancellationTokenSource? _olderCts;
+    // M20: per-turn generation & isolated stop-terminal waiters so timed-out/concurrent stops never hang or clobber new turns.
+    private int _turnGeneration;
+    private bool _stopTerminalPending;
+    private readonly List<TaskCompletionSource<bool>> _stopTerminalWaiters = [];
 
     public string Profile { get; }
     public string StoredId { get; private set; }
     public string Title { get; private set; }
+
+    /// 363ae6c33 (#613): newly started listed chat keeps a deterministic PendingScope until its first send.
+    public bool StartsNew { get; set; }
+    public bool ListsWhenStarted { get; set; }
+    public string? PendingScope { get; set; }
+    public bool HasQueuedMessages { get; set; }
+
+    /// Deterministic unsent-draft key for a newly started chat (App/AppModel.swift `pendingScope`, #613):
+    /// `"new"` or `"new|<cleanFolder>"`.
+    public static string MakePendingScope(string? folder)
+    {
+        var clean = (folder ?? "").Trim();
+        return clean.Length == 0 ? "new" : $"new|{clean}";
+    }
+
+    /// True while a LoadOlderAsync request is currently in flight (H17).
+    public bool IsLoadingOlder { get; private set; }
+    /// How long `session.interrupt` waits for a gateway answer (M20; tests shorten it).
+    public TimeSpan InterruptTimeout { get; set; } = TimeSpan.FromSeconds(40);
+    /// Default wait window for `WaitForStopTerminalAsync` (M20).
+    public TimeSpan StopHoldWindow { get; set; } = TimeSpan.FromSeconds(6);
+    /// True after StopAsync ran for a live runtime until the stopped turn's terminal event arrives (M20).
+    public bool StopTerminalPending { get { lock (_lock) return _stopTerminalPending; } }
 
     public event Action? Changed;
     /// [questions] Raised (on a background thread) each time session.resume binds a runtime id.
@@ -167,8 +197,10 @@ public sealed partial class ChatSession : IAsyncDisposable
     public async Task OpenAsync(CancellationToken ct = default)
     {
         var fresh = StartedChats.Take(Profile, StoredId);
+        if (fresh) StartsNew = true;
         if (_client.Cache?.Read(_client.AccountId, Profile, StoredId) is { Count: > 0 } cached)
         {
+            CancelOlderHistory();
             // [WIN-SENT-TITLES] a titled request shows its title from the first paint (the cache holds the stored prompt)
             lock (_lock) _t.ReplaceWithHistory(SentTitles.Applied(cached));
             RestoreLostSends();   // [WIN-LOST-SEND-RESTORE] the saved copy shows a lost send too (keepSavedCopy)
@@ -176,6 +208,7 @@ public sealed partial class ChatSession : IAsyncDisposable
         }
         if (fresh && Messages.Count == 0)
         {
+            CancelOlderHistory();
             _hasOlder = false;   // nothing stored above an empty new chat to page back to
             Changed?.Invoke();
             try { await ResumeAsync(ct); } catch (GatewayException) { /* the first send resumes again */ }
@@ -190,13 +223,39 @@ public sealed partial class ChatSession : IAsyncDisposable
         OpenSettled();   // [WIN-EXTERNAL-TURN] another process's turn here? (`checkExternalWork("open")`)
     }
 
+    /// Bumps the history generation and cancels any in-flight LoadOlderAsync so stale older pages cannot overwrite
+    /// `_nextOffset` / `_hasOlder` or prepend out-of-date rows (H17).
+    private void CancelOlderHistory()
+    {
+        CancellationTokenSource? cts;
+        bool wasLoading;
+        lock (_lock)
+        {
+            _historyGeneration++;
+            cts = _olderCts;
+            _olderCts = null;
+            wasLoading = IsLoadingOlder;
+            IsLoadingOlder = false;
+        }
+        if (cts != null)
+        {
+            try { cts.Cancel(); } catch (ObjectDisposedException) { }
+        }
+        if (wasLoading) Changed?.Invoke();
+    }
+
     /// Re-reads the newest page (REST is the transcript authority).
     public async Task RefreshAsync(CancellationToken ct = default)
     {
+        CancelOlderHistory();
         var page = await _client.HistoryAsync(Profile, StoredId, 24, 0, ct);
-        _nextOffset = page.NextOffset;
-        _hasOlder = page.PossiblyTruncated;
-        lock (_lock) _t.ReplaceWithHistory(SentTitles.Applied(page.Messages));   // [WIN-SENT-TITLES] keeps its title
+        CancelOlderHistory();
+        lock (_lock)
+        {
+            _nextOffset = page.NextOffset;
+            _hasOlder = page.PossiblyTruncated;
+            _t.ReplaceWithHistory(SentTitles.Applied(page.Messages));   // [WIN-SENT-TITLES] keeps its title
+        }
         _client.Cache?.Write(_client.AccountId, Profile, StoredId, page.Messages);
         // [WIN-LOST-SEND-MARKER/RESTORE] a marked send the page now holds did arrive and goes (`settleLostSends`); every
         // other one this screen does not show comes back where it was said (`restoreLostSends`, as applyFirstPage)
@@ -207,13 +266,62 @@ public sealed partial class ChatSession : IAsyncDisposable
 
     public async Task LoadOlderAsync(CancellationToken ct = default)
     {
-        if (!_hasOlder) return;
+        int generation;
+        long offset;
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        CancellationTokenSource? previous;
+        lock (_lock)
+        {
+            if (!_hasOlder || IsLoadingOlder) return;
+            generation = _historyGeneration;
+            offset = _nextOffset;
+            previous = _olderCts;
+            _olderCts = linked;
+            IsLoadingOlder = true;
+        }
+        if (previous != null)
+        {
+            try { previous.Cancel(); } catch (ObjectDisposedException) { }
+        }
         HistoryPage page;
-        try { page = await _client.HistoryAsync(Profile, StoredId, 60, _nextOffset, ct); OlderFailed = false; }
-        catch (GatewayException) { OlderFailed = true; Changed?.Invoke(); throw; }
-        _nextOffset = page.NextOffset;
-        _hasOlder = page.PossiblyTruncated && page.Messages.Count > 0;
-        lock (_lock) _t.PrependHistory(SentTitles.Applied(page.Messages));   // [WIN-SENT-TITLES] older rows too
+        try
+        {
+            page = await _client.HistoryAsync(Profile, StoredId, 60, offset, linked.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // Superseded by RefreshAsync / ReplaceWithHistory (H17): discard silently.
+            return;
+        }
+        catch (GatewayException)
+        {
+            lock (_lock)
+            {
+                if (generation != _historyGeneration) return;
+                OlderFailed = true;
+            }
+            Changed?.Invoke();
+            throw;
+        }
+        finally
+        {
+            lock (_lock)
+            {
+                if (ReferenceEquals(_olderCts, linked))
+                {
+                    _olderCts = null;
+                    IsLoadingOlder = false;
+                }
+            }
+        }
+        lock (_lock)
+        {
+            if (generation != _historyGeneration) return;
+            OlderFailed = false;
+            _nextOffset = page.NextOffset;
+            _hasOlder = page.PossiblyTruncated && page.Messages.Count > 0;
+            _t.PrependHistory(SentTitles.Applied(page.Messages));   // [WIN-SENT-TITLES] older rows too
+        }
         Changed?.Invoke();
     }
 
@@ -239,8 +347,10 @@ public sealed partial class ChatSession : IAsyncDisposable
             _runtimeId = res.Text("session_id") ?? throw new GatewayException("rpc", "The gateway didn't open the chat.");
             if ((res.Text("session_key") ?? res.Text("resumed")) is { } resolved && resolved != StoredId)
             {
+                var draftScopeBefore = DraftScope;
                 var from = StoredId;
                 StoredId = resolved;
+                MigrateDraftScope(draftScopeBefore);
                 StoredIdResolved?.Invoke(from, resolved);   // [WIN-OWN-TURN-ROWS]
             }
             // [WIN-INFLIGHT-GRAFT] running, the inflight and queued prompts, a lost send that arrived after all
@@ -286,10 +396,17 @@ public sealed partial class ChatSession : IAsyncDisposable
         }
         // §6.2, §6.3: a fresh send answers the card about the last one (`sendAfterOpen`); a queue drain doesn't.
         if (!queued) { SendFailure = null; ClearProblemForSend(); }
+        var draftScopeBefore = DraftScope;
         ChatMessage local;
-        lock (_lock) local = _t.AddLocalUser(display?.Trim() is { Length: > 0 } shown ? shown : text);
+        lock (_lock)
+        {
+            _turnGeneration++;
+            local = _t.AddLocalUser(display?.Trim() is { Length: > 0 } shown ? shown : text);
+            _stopPending = false;
+        }
+        MigrateDraftScope(draftScopeBefore);
+        StopTerminalReached();
         AnchorTurn(local.Id, text);   // [WIN-INFLIGHT-GRAFT] the turn's prompt, by the words that went out
-        _stopPending = false;
         TurnInterrupted = false;
         _turnStarted = DateTimeOffset.Now;
         _turnPrompt = text;
@@ -433,47 +550,121 @@ public sealed partial class ChatSession : IAsyncDisposable
         }
     }
 
-    /// Stop: local first, then session.interrupt (40 s). If it doesn't land, interrupt again on the next message.start.
+    /// Waits until the stopped turn reaches a terminal event or `limit` expires. Each waiter owns its own timeout so an
+    /// earlier waiter's cancelled timer can never wake or clobber a subsequent waiter (M20).
+    public async Task<bool> WaitForStopTerminalAsync(TimeSpan? limit = null, CancellationToken ct = default)
+    {
+        TaskCompletionSource<bool> waiter;
+        lock (_lock)
+        {
+            if (!_stopTerminalPending) return true;
+            waiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _stopTerminalWaiters.Add(waiter);
+        }
+        var timeout = limit ?? StopHoldWindow;
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        if (timeout >= TimeSpan.Zero && timeout != Timeout.InfiniteTimeSpan) cts.CancelAfter(timeout);
+        using var reg = cts.Token.Register(() =>
+        {
+            lock (_lock) _stopTerminalWaiters.Remove(waiter);
+            waiter.TrySetResult(false);
+        });
+        return await waiter.Task;
+    }
+
+    /// Marks the stopped turn's terminal event reached and wakes all waiting callers (M20).
+    public void StopTerminalReached()
+    {
+        List<TaskCompletionSource<bool>> waiters;
+        lock (_lock)
+        {
+            _stopTerminalPending = false;
+            _stopPending = false;
+            if (_stopTerminalWaiters.Count == 0) return;
+            waiters = [.. _stopTerminalWaiters];
+            _stopTerminalWaiters.Clear();
+        }
+        foreach (var w in waiters) w.TrySetResult(true);
+    }
+
+    /// Stop: local first, then session.interrupt (InterruptTimeout, default 40 s). If it doesn't land, interrupt again
+    /// on the next message.start — unless a newer turn or newer Stop has already superseded it (M20).
     public async Task StopAsync()
     {
         // [WIN-MEMO-SEND-HOST] A memo still staging comes back as the draft; nothing reached the gateway (ChatSession+Memo.cs).
         if (MemoStopWhileStaging()) return;
-        StopAttachmentSends(); // a send still uploading or attaching withdraws (ChatSession+Attachments.cs)
-        lock (_lock) _t.Stop();
+        StopAttachmentSends(); // increments _stopEpoch and withdraws a send still uploading or attaching (ChatSession+Attachments.cs)
+        var stopEpoch = Volatile.Read(ref _stopEpoch);
+        int turnGen;
+        string? runtime;
+        lock (_lock)
+        {
+            turnGen = _turnGeneration;
+            _t.Stop();
+            runtime = _runtimeId;
+            if (runtime != null) _stopTerminalPending = true;
+        }
         TurnInterrupted = true;
         Changed?.Invoke();
         Stopped?.Invoke();
-        if (_runtimeId is not { } runtime) return;
+        if (runtime == null)
+        {
+            StopTerminalReached();
+            return;
+        }
         try
         {
             await _client.Rpc.RequestAsync("session.interrupt",
-                new JsonObject { ["session_id"] = runtime, ["profile"] = Profile }, TimeSpan.FromSeconds(40));
+                new JsonObject { ["session_id"] = runtime, ["profile"] = Profile }, InterruptTimeout);
         }
-        catch (GatewayException e) when (e.RpcCode is 4001 or 4007) { _runtimeId = null; }
-        catch (GatewayException) { _stopPending = true; }
+        catch (GatewayException e) when (e.RpcCode is 4001 or 4007)
+        {
+            lock (_lock)
+            {
+                if (_runtimeId == runtime && _turnGeneration == turnGen) _runtimeId = null;
+            }
+            if (Volatile.Read(ref _stopEpoch) == stopEpoch) StopTerminalReached();
+        }
+        catch (GatewayException)
+        {
+            lock (_lock)
+            {
+                if (_turnGeneration == turnGen && Volatile.Read(ref _stopEpoch) == stopEpoch)
+                    _stopPending = true;
+            }
+        }
     }
 
     private void OnEvent(RpcEvent e)
     {
-        if (e.Type == "session.reclaimed" && e.Payload.Text("session_id") == _runtimeId) { _runtimeId = null; return; }
+        if (e.Type == "session.reclaimed" && e.Payload.Text("session_id") == _runtimeId) { _runtimeId = null; StopTerminalReached(); return; }
         if (e.SessionId.Length == 0 || e.SessionId != _runtimeId)
         {
             if (e.Type == "hq.replay_truncated" && e.SessionId == _runtimeId) _ = RefreshQuietly();
             return;
         }
-        if (_stopPending && e.Type == "message.start" && _runtimeId is { } r)
+        string? pendingInterruptRuntime = null;
+        lock (_lock)
         {
-            _stopPending = false;
-            _ = _client.Rpc.RequestAsync("session.interrupt",
-                new JsonObject { ["session_id"] = r, ["profile"] = Profile }, TimeSpan.FromSeconds(40));
+            if (_stopPending && e.Type == "message.start" && _runtimeId is { } r)
+            {
+                _stopPending = false;
+                pendingInterruptRuntime = r;
+            }
         }
-        if (e.Type == "session.resume_progress" && e.Payload.Str("status") == "failed") { _runtimeId = null; return; }
+        if (pendingInterruptRuntime != null)
+        {
+            _ = _client.Rpc.RequestAsync("session.interrupt",
+                new JsonObject { ["session_id"] = pendingInterruptRuntime, ["profile"] = Profile }, InterruptTimeout);
+        }
+        if (e.Type == "session.resume_progress" && e.Payload.Str("status") == "failed") { _runtimeId = null; StopTerminalReached(); return; }
         if (e.Type == "session.info" && e.Payload is JsonObject info) { Cwd = info.Str("cwd") ?? Cwd; InfoChanged?.Invoke(info); }
         Transcript.Outcome outcome;
         lock (_lock) outcome = _t.Apply(e);
         EventApplied?.Invoke(e);
         if (outcome == Transcript.Outcome.Problem)
         {
+            StopTerminalReached();
             string? words;
             lock (_lock) words = _t.ProblemText;
             RaiseProblem(words ?? "");
@@ -481,6 +672,8 @@ public sealed partial class ChatSession : IAsyncDisposable
         }
         if (outcome == Transcript.Outcome.None)
         {
+            if (e.Type is "message.complete" or "error" || (e.Type == "session.info" && e.Payload.Bool("running") == false && !Busy))
+                StopTerminalReached();
             if (e.Type == "session.info" && e.Payload.Bool("running") == false && !Busy) TurnEnded?.Invoke(true);
             return;
         }
@@ -490,6 +683,7 @@ public sealed partial class ChatSession : IAsyncDisposable
         if (outcome == Transcript.Outcome.TurnEnded)
         {
             TurnInterrupted = false; // the stopped turn's end arrived: later turns get their cards
+            StopTerminalReached();
             TurnEnded?.Invoke(e.Type == "session.info");
             _ = RefreshQuietly();
         }
@@ -608,15 +802,19 @@ public sealed partial class ChatSession : IAsyncDisposable
     }
 
     /// `session.redirect {session_id, text[, profile]}` for a steer begun with BeginSteer (resumes a stale runtime and
-    /// retries once). `Unsupported`: the gateway can't redirect (4010, -32601).
+    /// retries once). Respects `_stopEpoch` / `TurnInterrupted` so a steer stopped mid-flight never fires (M20).
+    /// `Unsupported`: the gateway can't redirect (4010, -32601).
     public async Task<(Composer.SteerOutcome Outcome, bool Unsupported)> RedirectAsync(string localId, string text)
     {
+        var epoch = Volatile.Read(ref _stopEpoch);
         GatewayException? failure = null;
         for (var attempt = 0; attempt < 2; attempt++)
         {
+            if (TurnInterrupted || Volatile.Read(ref _stopEpoch) != epoch) break;
             string runtime;
             try { runtime = await ResumeAsync(CancellationToken.None); }
             catch (GatewayException) { break; }
+            if (TurnInterrupted || Volatile.Read(ref _stopEpoch) != epoch) break;
             try
             {
                 var res = await _client.Rpc.RequestAsync("session.redirect",
@@ -703,6 +901,15 @@ public sealed partial class ChatSession : IAsyncDisposable
     public ValueTask DisposeAsync()
     {
         _closed = true;
+        CancelOlderHistory();
+        List<TaskCompletionSource<bool>> waiters;
+        lock (_lock)
+        {
+            _stopTerminalPending = false;
+            waiters = [.. _stopTerminalWaiters];
+            _stopTerminalWaiters.Clear();
+        }
+        foreach (var w in waiters) w.TrySetResult(false);
         EndExternalWork("screen off");   // [WIN-EXTERNAL-TURN] off screen nothing reads the rows
         _client.Rpc.Event -= OnEvent;
         _client.Rpc.Reconnected -= OnReconnected;

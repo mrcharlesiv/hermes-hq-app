@@ -64,6 +64,58 @@ public sealed class FileTranscriptCache(string root) : ITranscriptCache
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
 
+    /// Re-keys cached transcripts when a bot profile is renamed across all accounts in this store (H16).
+    public void RenameProfile(string oldProfile, string newProfile)
+    {
+        var fromSafe = Safe(oldProfile);
+        var toSafe = Safe(newProfile);
+        if (fromSafe == toSafe) return;
+        try
+        {
+            lock (_lock)
+            {
+                if (!Directory.Exists(root)) return;
+                foreach (var accountDir in Directory.EnumerateDirectories(root))
+                    RenameProfileInAccountDir(accountDir, fromSafe, toSafe);
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    }
+
+    /// Re-keys cached transcripts for one account when a bot profile is renamed (H16).
+    public void RenameProfile(string account, string oldProfile, string newProfile)
+    {
+        var fromSafe = Safe(oldProfile);
+        var toSafe = Safe(newProfile);
+        if (fromSafe == toSafe) return;
+        try
+        {
+            lock (_lock)
+                RenameProfileInAccountDir(Path.Combine(root, AccountDir(account)), fromSafe, toSafe);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    }
+
+    private static void RenameProfileInAccountDir(string accountDir, string fromSafe, string toSafe)
+    {
+        var oldDir = Path.Combine(accountDir, fromSafe);
+        if (!Directory.Exists(oldDir)) return;
+        var newDir = Path.Combine(accountDir, toSafe);
+        if (!Directory.Exists(newDir))
+        {
+            Directory.Move(oldDir, newDir);
+            return;
+        }
+        foreach (var file in Directory.EnumerateFiles(oldDir))
+        {
+            var dest = Path.Combine(newDir, Path.GetFileName(file));
+            if (!File.Exists(dest)) File.Move(file, dest);
+            else File.Delete(file);
+        }
+        try { Directory.Delete(oldDir, recursive: true); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    }
+
     private void Trim()
     {
         var files = new DirectoryInfo(root).EnumerateFiles("*.json", SearchOption.AllDirectories)
@@ -77,8 +129,18 @@ public sealed class FileTranscriptCache(string root) : ITranscriptCache
     private static string AccountDir(string account) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(account)))[..16].ToLowerInvariant();
 
-    private static string Safe(string s) =>
-        string.Concat(s.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.' ? c : '_')).TrimStart('.');
+    /// Safe single path segment; never returns empty, ".", or ".." so ".json" or traversal names are impossible (H16).
+    internal static string Safe(string s)
+    {
+        var trimmed = (s ?? "").Trim();
+        if (trimmed.Length == 0) return "_";
+        var cleaned = string.Concat(trimmed.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.' ? c : '_'))
+            .TrimStart('.')
+            .TrimEnd('.');
+        if (cleaned.Length == 0 || cleaned is "." or "..")
+            return "_" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(trimmed)))[..8].ToLowerInvariant();
+        return cleaned;
+    }
 
     private static Dto ToDto(ChatMessage m) => new(m.Id, m.Role, [.. m.Parts.Select(p => p switch
     {

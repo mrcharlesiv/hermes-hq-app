@@ -17,9 +17,18 @@ public sealed class MediaStore(GatewaySession session, string root)
     public const long FileCeiling = 512L << 20;
     public const long MaxTotalBytes = 256L << 20;
 
+    private sealed class Flight(CancellationTokenSource cts, Lazy<Task<string>> work)
+    {
+        public CancellationTokenSource Cts { get; } = cts;
+        public Lazy<Task<string>> Work { get; } = work;
+    }
+
     private readonly SemaphoreSlim _slots = new(3, 3);
-    private readonly ConcurrentDictionary<string, Lazy<Task<string>>> _flights = new();
+    private readonly ConcurrentDictionary<string, Flight> _flights = new();
+    private int _purgeGeneration;
     private string AccountKey => session.Account.Key;
+
+    internal int InFlightCount => _flights.Count;
 
     public string Root => root;
 
@@ -102,7 +111,7 @@ public sealed class MediaStore(GatewaySession session, string root)
         var key = GatewayKey(profile, path);
         var target = OriginalPath(key, path);
         if (File.Exists(target)) { Touch(target); return Task.FromResult(target); }
-        return Join(key, () => DownloadAsync(path, profile, storedSessionId, target, AttachmentLimit.Bytes, null, ct));
+        return Join(key, ct, flightCt => DownloadAsync(path, profile, storedSessionId, target, AttachmentLimit.Bytes, null, flightCt));
     }
 
     /// A file behind a gateway path, downloaded (512 MB ceiling) for a preview or share; progress (received, expected).
@@ -115,12 +124,12 @@ public sealed class MediaStore(GatewaySession session, string root)
         var target = FilePath(key, KeptName(name, path));
         if (fresh && CachedFile(profile, path, name) is { } kept)
         {
-            try { return await Join("f|" + key, () => DownloadAsync(path, profile, storedSessionId, target, FileCeiling, progress, ct)); }
+            try { return await Join("f|" + key, ct, flightCt => DownloadAsync(path, profile, storedSessionId, target, FileCeiling, progress, flightCt)); }
             catch (OperationCanceledException) { throw; }
             catch (MediaLoadException) when (keptOnFailure) { return kept; }   // the download left the kept copy whole
         }
         if (CachedFile(profile, path, name) is { } hit) { Touch(hit); return hit; }
-        return await Join("f|" + key, () => DownloadAsync(path, profile, storedSessionId, target, FileCeiling, progress, ct));
+        return await Join("f|" + key, ct, flightCt => DownloadAsync(path, profile, storedSessionId, target, FileCeiling, progress, flightCt));
     }
 
     /// The kept copy of a gateway file (a picture's original serves too), or null; no download.
@@ -141,14 +150,34 @@ public sealed class MediaStore(GatewaySession session, string root)
         catch (MediaLoadException) { return CachedFile(profile, path, name); }
     }
 
-    private Task<string> Join(string key, Func<Task<string>> make)
+    private async Task<string> Join(string key, CancellationToken callerCt, Func<CancellationToken, Task<string>> make)
     {
-        var flight = _flights.GetOrAdd(key, _ => new Lazy<Task<string>>(async () =>
+        var purgeGen = Volatile.Read(ref _purgeGeneration);
+        var flight = _flights.GetOrAdd(key, _ =>
         {
-            try { return await make(); }
-            finally { _flights.TryRemove(key, out Lazy<Task<string>>? _); }
-        }));
-        return flight.Value;
+            var flightCts = new CancellationTokenSource();
+            Flight? self = null;
+            self = new Flight(flightCts, new Lazy<Task<string>>(async () =>
+            {
+                try
+                {
+                    var result = await make(flightCts.Token);
+                    if (flightCts.IsCancellationRequested || Volatile.Read(ref _purgeGeneration) != purgeGen)
+                    {
+                        TryDeleteFile(result);
+                        throw new OperationCanceledException(flightCts.Token);
+                    }
+                    return result;
+                }
+                finally
+                {
+                    _flights.TryRemove(new KeyValuePair<string, Flight>(key, self!));
+                    flightCts.Dispose();
+                }
+            }));
+            return self;
+        });
+        return await flight.Work.Value.WaitAsync(callerCt);
     }
 
     private async Task<string> DownloadAsync(string path, string profile, string? sessionId, string target, long ceiling,
@@ -158,9 +187,11 @@ public sealed class MediaStore(GatewaySession session, string root)
         try
         {
             await session.DownloadToFileAsync("/api/fs/download", DownloadQuery(path, profile, sessionId), target, ceiling, progress, ct);
+            ct.ThrowIfCancellationRequested();
             Trim();
             return target;
         }
+        catch (GatewayException) when (ct.IsCancellationRequested) { throw new OperationCanceledException(ct); }
         catch (GatewayException e) { throw Map(e); }
         finally { _slots.Release(); }
     }
@@ -191,9 +222,24 @@ public sealed class MediaStore(GatewaySession session, string root)
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
 
+    /// Cancels all tracked in-flight downloads and removes all cached media on disk (H21).
     public void Purge()
     {
+        Interlocked.Increment(ref _purgeGeneration);
+        foreach (var kv in _flights.ToArray())
+        {
+            if (_flights.TryRemove(kv))
+            {
+                try { kv.Value.Cts.Cancel(); } catch (ObjectDisposedException) { }
+            }
+        }
         try { Directory.Delete(root, recursive: true); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
 
@@ -234,15 +280,15 @@ public sealed class MediaStore(GatewaySession session, string root)
         var key = "r|" + url.AbsoluteUri;
         var target = OriginalPath(key, url.AbsolutePath);
         if (File.Exists(target)) return target;
-        return await Join(key, async () =>
+        return await Join(key, ct, async flightCt =>
         {
             var current = url;
             for (var hop = 0; hop <= 5; hop++)
             {
-                if (!await IsPublicAsync(current, ct)) throw new MediaLoadException(MediaLoadException.Kinds.Forbidden);
+                if (!await IsPublicAsync(current, flightCt)) throw new MediaLoadException(MediaLoadException.Kinds.Forbidden);
                 using var req = new HttpRequestMessage(HttpMethod.Get, current);
                 req.Headers.Accept.ParseAdd("image/*");
-                using var res = await Public.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+                using var res = await Public.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, flightCt);
                 if ((int)res.StatusCode is >= 300 and < 400 && res.Headers.Location is { } next)
                 {
                     current = next.IsAbsoluteUri ? next : new Uri(current, next);
@@ -254,21 +300,30 @@ public sealed class MediaStore(GatewaySession session, string root)
                 if (res.Content.Headers.ContentLength > InlineMediaStore.MaxBytes) throw new MediaLoadException(MediaLoadException.Kinds.TooLarge);
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                 var partial = target + ".partial";
-                await using (var input = await res.Content.ReadAsStreamAsync(ct))
-                await using (var output = File.Create(partial))
+                try
                 {
-                    var buffer = new byte[64 * 1024];
-                    long got = 0;
-                    int n;
-                    while ((n = await input.ReadAsync(buffer, ct)) > 0)
+                    await using (var input = await res.Content.ReadAsStreamAsync(flightCt))
+                    await using (var output = File.Create(partial))
                     {
-                        got += n;
-                        if (got > InlineMediaStore.MaxBytes) throw new MediaLoadException(MediaLoadException.Kinds.TooLarge);
-                        await output.WriteAsync(buffer.AsMemory(0, n), ct);
+                        var buffer = new byte[64 * 1024];
+                        long got = 0;
+                        int n;
+                        while ((n = await input.ReadAsync(buffer, flightCt)) > 0)
+                        {
+                            got += n;
+                            if (got > InlineMediaStore.MaxBytes) throw new MediaLoadException(MediaLoadException.Kinds.TooLarge);
+                            await output.WriteAsync(buffer.AsMemory(0, n), flightCt);
+                        }
                     }
+                    flightCt.ThrowIfCancellationRequested();
+                    File.Move(partial, target, overwrite: true);
+                    return target;
                 }
-                File.Move(partial, target, overwrite: true);
-                return target;
+                catch
+                {
+                    TryDeleteFile(partial);
+                    throw;
+                }
             }
             throw new MediaLoadException(MediaLoadException.Kinds.Unreachable);
         });

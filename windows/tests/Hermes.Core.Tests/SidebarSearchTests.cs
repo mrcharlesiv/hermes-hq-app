@@ -85,21 +85,16 @@ public class SidebarSearchTests
     {
         var root = RepoRoot();
         if (!Directory.Exists(Path.Combine(root, "App"))) return;
-        var rail = File.ReadAllText(Path.Combine(root, "App", "Mac", "MacBotsRail.swift"));
-        foreach (var s in new[] { "search.accessibilityIdentifier = \"mac-sidebar.search\"", "search.accessibilityLabel = \"Search\"",
-                     "search.toolTip = \"Search or jump to\u2026 (\u2318K)\"", "compose.toolTip = \"New Chat (\u2318N)\"",
-                     "KeyCommands.openQuickly", "word.text = \"Search\"", "shortcut.text = \"\u2318K\"",
-                     "let side = ((folded ? 24 : 34) * MacSidebar.chrome).rounded()", "find.background.cornerRadius = 9",
-                     "compose.leadingAnchor.constraint(equalTo: search.trailingAnchor, constant: 6)",
-                     "search.trailingAnchor.constraint(equalTo: centerXAnchor, constant: -1)",
-                     "rule.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 7)",
-                     "rule.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)",
-                     "shortcut.trailingAnchor.constraint(equalTo: search.trailingAnchor, constant: -10)",
-                     "UIColor(white: 1, alpha: 0.08) : UIColor(white: 0, alpha: 0.06)",
-                     "UIColor(white: 1, alpha: 0.13) : UIColor(white: 0, alpha: 0.1)",
-                     "UIColor(white: 1, alpha: 0.14) : UIColor(white: 0, alpha: 0.12)",
-                     "button.isHighlighted ? 0.5 : 1" })
-            Assert.Contains(s, rail);
+        var header = File.ReadAllText(Path.Combine(root, "App", "Mac", "MacSidebarHeader.swift"));
+        foreach (var s in new[] { "accessibilityIdentifier = \"mac-sidebar.tools\"",
+                     "label: \"Search\", tip: \"Search or jump to\u2026 (\u2318K)\", id: \"mac-sidebar.search\"",
+                     "label: \"New Chat\", tip: \"New Chat (\u2318N)\", id: \"mac-sidebar.compose\"",
+                     "KeyCommands.openQuickly", "KeyCommands.newChat",
+                     "UIColor(white: 1, alpha: 0.14) : UIColor(white: 0, alpha: 0.09)",
+                     "UIColor(white: 1, alpha: 0.08) : UIColor(white: 0, alpha: 0.055)" })
+            Assert.Contains(s, header);
+        var workspaceBar = File.ReadAllText(Path.Combine(root, "App", "Mac", "MacWorkspaceBar.swift"));
+        Assert.Contains("searchButton.accessibilityIdentifier = \"mac-sidebar.search\"", workspaceBar);
         var type = File.ReadAllText(Path.Combine(root, "App", "Mac", "SidebarType.swift"));
         Assert.Contains("search: 17, shortcut: 14.5,", type);
         Assert.Contains("static let shipping = current", type);

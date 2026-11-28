@@ -1,10 +1,30 @@
 namespace Hermes.Core.Insights;
 
-/// One Hermes update of a gateway (App/Pages/More/CommandCenter/HermesUpdate.swift, `HermesUpdate`): it names what it
-/// updates ("Update Hermes on Studio", where it is, 0.22.5 → 0.23.0, What's New) and asks first. Its steps tick off from
-/// the update's own log (Check → Wait for Bots → Install → Restart → Confirm) and it ends in words that are true:
-/// "Updated to 0.23.0" only once /api/status reads the new version. A Nous agent's update (the Mac's cloud kind) is not
-/// on Windows: Windows has no Nous agents page yet.
+/// Local gateway update vs Nous Hermes Cloud agent `update_image` flow (`HermesUpdate.Kind`).
+public enum HermesUpdateKind { Gateway, Cloud }
+
+/// The four steps of a Nous Hermes Cloud agent `update_image` flow (`HermesUpdateStepID.cloud`).
+public enum CloudUpdateStepId { Ask, Reinstall, Answer, Version }
+
+/// Signals fed into a `HermesUpdateKind.Cloud` run by the cloud settle loop (`CloudUpdateSignal`).
+public abstract record CloudUpdateSignal
+{
+    /// `update_image` accepted by Nous; Nous is now reinstalling/restarting the agent.
+    public sealed record Asked : CloudUpdateSignal;
+    /// Progress text reported by Nous while the agent settles.
+    public sealed record Settling(string Words) : CloudUpdateSignal;
+    /// Nous reports the agent is ready; confirm its Hermes version.
+    public sealed record Ready : CloudUpdateSignal;
+    /// Update failed with reason.
+    public sealed record Failed(string Reason) : CloudUpdateSignal;
+}
+
+/// One Hermes update of a gateway or a Nous Hermes Cloud agent (App/Pages/More/CommandCenter/HermesUpdate.swift,
+/// `HermesUpdate`): it names what it updates ("Update Hermes on Studio" / "Update Research Bot", where it is,
+/// 0.22.5 → 0.23.0, What's New) and asks first. Gateway steps tick off from the update's own log
+/// (Check → Wait for Bots → Install → Restart → Confirm); cloud updates tick off Ask Nous → Nous Reinstalls →
+/// Hermes Answers → Confirm Version. It ends in words that are true: "Updated to 0.23.0" only once the new version
+/// is read back.
 public sealed class HermesUpdate
 {
     public enum PhaseKind { Checking, Asking, Working, Ended }
@@ -17,10 +37,19 @@ public sealed class HermesUpdate
         public DateTimeOffset? Finished { get; set; }
     }
 
+    public sealed record CloudStep(CloudUpdateStepId Id, string Title)
+    {
+        public HermesUpdateStepState State { get; set; } = HermesUpdateStepState.Waiting;
+        public string? Detail { get; set; }
+        public DateTimeOffset? Started { get; set; }
+        public DateTimeOffset? Finished { get; set; }
+    }
+
     public string Key { get; }
-    /// "Studio".
+    public HermesUpdateKind Kind { get; }
+    /// "Studio", "Research Bot".
     public string Name { get; }
-    /// "Gateway in use · studio.local:9119".
+    /// "Gateway in use · studio.local:9119", "Nous Hermes Cloud agent".
     public string Place { get; }
     public string? From { get; set; }
     public string? To { get; private set; }
@@ -28,6 +57,7 @@ public sealed class HermesUpdate
     public PhaseKind Phase { get; private set; } = PhaseKind.Checking;
     public HermesUpdateEnd? End { get; private set; }
     public List<Step> Steps { get; private set; } = [];
+    public List<CloudStep> CloudSteps { get; private set; } = [];
     public string? Note { get; private set; }
     public GatewayActionRun? Action { get; private set; }
     public HermesUpdateProgress Progress { get; private set; } = new();
@@ -35,6 +65,8 @@ public sealed class HermesUpdate
 
     private readonly HermesUpdateApi? _api;
     private readonly Func<string, string> _botName;
+    private readonly Func<Task<string?>>? _cloudRead;
+    private readonly Action<HermesUpdate>? _cloudGo;
     private HermesUpdateRefusal? _refusal;
     private CancellationTokenSource? _ticker;
     private bool _abandoned;
@@ -55,31 +87,65 @@ public sealed class HermesUpdate
 
     public HermesUpdate(string key, string name, string place, HermesUpdateApi? api, Func<string, string>? botName = null)
     {
-        Key = key; Name = name; Place = place; _api = api;
+        Key = key; Kind = HermesUpdateKind.Gateway; Name = name; Place = place; _api = api;
         _botName = botName ?? (p => p);
     }
+
+    private HermesUpdate(string key, string name, string place, Func<Task<string?>> readVersion, Action<HermesUpdate> startUpdate)
+    {
+        Key = key; Kind = HermesUpdateKind.Cloud; Name = name; Place = place;
+        _botName = p => p;
+        _cloudRead = readVersion;
+        _cloudGo = startUpdate;
+    }
+
+    /// Creates a Nous Hermes Cloud agent `update_image` update flow (`HermesUpdate.Kind.cloud`).
+    public static HermesUpdate ForCloud(string key, string name, Func<Task<string?>> readVersion,
+        Action<HermesUpdate> startUpdate, string place = CloudAgentPlace) =>
+        new(key, name, place, readVersion, startUpdate);
 
     public static string PlaceWords(bool inUse, string host) => inUse ? $"Gateway in use · {host}" : $"Saved gateway, not in use · {host}";
 
     public bool IsRunning => Phase is PhaseKind.Checking or PhaseKind.Working;
     /// The check before the question failed: nothing was started on the gateway.
-    public bool CheckFailed => Action == null && End is HermesUpdateEnd.Failed;
+    public bool CheckFailed => Kind == HermesUpdateKind.Gateway && Action == null && End is HermesUpdateEnd.Failed;
     /// Under way, or ended and not closed yet.
     public bool Busy => IsRunning || End != null || SheetOpen;
 
     private void Notify() => Changed?.Invoke();
 
-    // ------------------------------------------------------------------ the gateway's update
+    // ------------------------------------------------------------------ the gateway's & cloud's update
 
     /// The check before the question.
     public void Check()
     {
         Phase = PhaseKind.Checking;
         End = null;
+        if (Kind == HermesUpdateKind.Cloud)
+        {
+            Steps = [];
+            CloudSteps = [.. CloudFlow.Select(id => new CloudStep(id, CloudTitle(id)) { Detail = CloudPlan(id, Name) })];
+            Notify();
+            _ = CheckCloudAsync();
+            return;
+        }
+        CloudSteps = [];
         Steps = [new Step(HermesUpdateStepId.Check, Title(HermesUpdateStepId.Check)) { State = HermesUpdateStepState.Active, Started = DateTimeOffset.Now }];
         Notify();
         if (_api == null) return;
         _ = CheckAsync(_api);
+    }
+
+    private async Task CheckCloudAsync()
+    {
+        if (_cloudRead != null)
+        {
+            try { From = await _cloudRead().ConfigureAwait(false); }
+            catch (Exception) { From = null; }
+        }
+        if (Phase != PhaseKind.Checking) return;
+        Phase = PhaseKind.Asking;
+        Notify();
     }
 
     private async Task CheckAsync(HermesUpdateApi api)
@@ -112,10 +178,23 @@ public sealed class HermesUpdate
     public static readonly HermesUpdateStepId[] Gateway =
         [HermesUpdateStepId.Check, HermesUpdateStepId.Drain, HermesUpdateStepId.Install, HermesUpdateStepId.Restart, HermesUpdateStepId.Confirm];
 
+    public static readonly CloudUpdateStepId[] CloudFlow =
+        [CloudUpdateStepId.Ask, CloudUpdateStepId.Reinstall, CloudUpdateStepId.Answer, CloudUpdateStepId.Version];
+
     /// The sheet's Update.
     public void Confirm()
     {
-        if (Phase != PhaseKind.Asking || _api is not { } api) return;
+        if (Phase != PhaseKind.Asking) return;
+        if (Kind == HermesUpdateKind.Cloud)
+        {
+            Phase = PhaseKind.Working;
+            WorkStarted = DateTimeOffset.Now;
+            SetCloudStep(CloudUpdateStepId.Ask, HermesUpdateStepState.Active);
+            Notify();
+            _cloudGo?.Invoke(this);
+            return;
+        }
+        if (_api is not { } api) return;
         Phase = PhaseKind.Working;
         WorkStarted = DateTimeOffset.Now;
         Begin(async () =>
@@ -123,6 +202,64 @@ public sealed class HermesUpdate
             try { return await api.StartAsync(); }
             catch (HermesUpdateRefusal r) { _refusal = r; throw; }
         });
+    }
+
+    /// What Nous reports while a `HermesUpdateKind.Cloud` update runs (`HermesUpdate.cloud(_:)`).
+    public void Cloud(CloudUpdateSignal signal)
+    {
+        if (Phase != PhaseKind.Working || Kind != HermesUpdateKind.Cloud) return;
+        switch (signal)
+        {
+            case CloudUpdateSignal.Asked:
+                SetCloudStep(CloudUpdateStepId.Ask, HermesUpdateStepState.Done);
+                SetCloudStep(CloudUpdateStepId.Reinstall, HermesUpdateStepState.Active, CloudUpdatingDetail);
+                Notify();
+                break;
+            case CloudUpdateSignal.Settling s:
+                if (CloudSteps.FirstOrDefault(st => st.Id == CloudUpdateStepId.Reinstall)?.State == HermesUpdateStepState.Active)
+                {
+                    SetCloudStep(CloudUpdateStepId.Reinstall, HermesUpdateStepState.Active, s.Words);
+                    Notify();
+                }
+                break;
+            case CloudUpdateSignal.Failed f:
+                Finish(new HermesUpdateEnd.Failed(f.Reason));
+                break;
+            case CloudUpdateSignal.Ready:
+                SetCloudStep(CloudUpdateStepId.Ask, HermesUpdateStepState.Done);
+                SetCloudStep(CloudUpdateStepId.Reinstall, HermesUpdateStepState.Done);
+                SetCloudStep(CloudUpdateStepId.Answer, HermesUpdateStepState.Active, Reading(Name));
+                Notify();
+                var before = From;
+                _ = Task.Run(async () =>
+                {
+                    string? after = null;
+                    for (var i = 0; i < 12; i++)
+                    {
+                        if (_cloudRead != null)
+                        {
+                            try { after = await _cloudRead().ConfigureAwait(false); }
+                            catch (Exception) { after = null; }
+                        }
+                        if (after != null) break;
+                        await Task.Delay(VersionReadDelay).ConfigureAwait(false);
+                    }
+                    SetCloudStep(CloudUpdateStepId.Answer, after != null ? HermesUpdateStepState.Done : HermesUpdateStepState.Skipped);
+                    SetCloudStep(CloudUpdateStepId.Version, HermesUpdateStepState.Active);
+                    Notify();
+                    Finish(CloudEnd(before, after));
+                });
+                break;
+        }
+    }
+
+    /// How a Nous Hermes Cloud update ended (`HermesUpdateEnd.cloud(before:after:)`).
+    public static HermesUpdateEnd CloudEnd(string? before, string? after)
+    {
+        if (string.IsNullOrWhiteSpace(after)) return new HermesUpdateEnd.Unconfirmed();
+        if (before != null && HermesUpdateEnd.VersionsMatch(before, after)) return new HermesUpdateEnd.Unchanged(after);
+        if (before == null) return new HermesUpdateEnd.Unconfirmed();
+        return new HermesUpdateEnd.Updated(after);
     }
 
     /// An update already running on the gateway: its steps from its log.
@@ -258,6 +395,19 @@ public sealed class HermesUpdate
         if (state is HermesUpdateStepState.Done or HermesUpdateStepState.Skipped && was != state) step.Finished = DateTimeOffset.Now;
     }
 
+    private void SetCloudStep(CloudUpdateStepId id, HermesUpdateStepState state, string? detail = null)
+    {
+        var step = CloudSteps.FirstOrDefault(s => s.Id == id);
+        if (step == null) return;
+        var was = step.State;
+        if (was == state && step.Detail == detail) return;
+        step.State = state;
+        step.Detail = state == HermesUpdateStepState.Done ? null : detail;
+        if (state == HermesUpdateStepState.Active && was != HermesUpdateStepState.Active) step.Started = DateTimeOffset.Now;
+        if (state == HermesUpdateStepState.Active && Phase == PhaseKind.Working && WorkStarted == null) WorkStarted = DateTimeOffset.Now;
+        if (state is HermesUpdateStepState.Done or HermesUpdateStepState.Skipped && was != state) step.Finished = DateTimeOffset.Now;
+    }
+
     private void Finish(HermesUpdateEnd end)
     {
         _ticker?.Cancel();
@@ -269,6 +419,22 @@ public sealed class HermesUpdate
                 {
                     case HermesUpdateEnd.Updated or HermesUpdateEnd.Unchanged:
                         step.State = HermesUpdateStepState.Done; step.Finished = DateTimeOffset.Now; break;
+                    case HermesUpdateEnd.Failed:
+                        step.State = HermesUpdateStepState.Failed; step.Finished = DateTimeOffset.Now; step.Detail = null; break;
+                    default:
+                        step.State = HermesUpdateStepState.Waiting; break;
+                }
+            }
+            if (step.State == HermesUpdateStepState.Waiting) step.Detail = null;
+        }
+        foreach (var step in CloudSteps)
+        {
+            if (step.State == HermesUpdateStepState.Active)
+            {
+                switch (end)
+                {
+                    case HermesUpdateEnd.Updated or HermesUpdateEnd.Unchanged:
+                        step.State = HermesUpdateStepState.Done; step.Finished = DateTimeOffset.Now; step.Detail = null; break;
                     case HermesUpdateEnd.Failed:
                         step.State = HermesUpdateStepState.Failed; step.Finished = DateTimeOffset.Now; step.Detail = null; break;
                     default:
@@ -301,7 +467,7 @@ public sealed class HermesUpdate
     /// Copy Details: what happened, never a token.
     public string Details()
     {
-        var lines = new List<string> { $"Update Hermes on {Name}", Headline };
+        var lines = new List<string> { Kind == HermesUpdateKind.Cloud ? $"Update {Name}" : $"Update Hermes on {Name}", Headline };
         if (Line is { } l) lines.Add(l);
         lines.AddRange(Action?.Lines ?? []);
         return InsightsWire.Scrubbed(string.Join("\n", lines));
@@ -310,6 +476,10 @@ public sealed class HermesUpdate
     public string? CommandToCopy => End is HermesUpdateEnd.CantUpdateHere { Command: { } c } ? c : null;
 
     // ------------------------------------------------------------------ words
+
+    public const string CloudAgentPlace = "Nous Hermes Cloud agent";
+    public const string CloudAskingLine = "Nous moves it to the newest Hermes and restarts it. This can take a few minutes. Chats, files and settings are kept.";
+    public const string CloudUpdatingDetail = "Updating Hermes…";
 
     public static string Title(HermesUpdateStepId id) => id switch
     {
@@ -320,6 +490,14 @@ public sealed class HermesUpdate
         _ => "Confirm",
     };
 
+    public static string CloudTitle(CloudUpdateStepId id) => id switch
+    {
+        CloudUpdateStepId.Ask => "Ask Nous",
+        CloudUpdateStepId.Reinstall => "Nous Reinstalls",
+        CloudUpdateStepId.Answer => "Hermes Answers",
+        _ => "Confirm Version",
+    };
+
     /// Before the tap: what each step will do.
     public static string? Plan(HermesUpdateStepId id) => id switch
     {
@@ -327,6 +505,12 @@ public sealed class HermesUpdate
         HermesUpdateStepId.Restart => "Replies pause for a minute or two.",
         _ => null,
     };
+
+    public static string? CloudPlan(CloudUpdateStepId id, string name) =>
+        id == CloudUpdateStepId.Reinstall ? $"Nous moves {name} to its newest Hermes and restarts it." : null;
+
+    public static string CloudUnchanged(string name, string? version) =>
+        $"Nous restarted {name} on {(version != null ? HermesUpdateEnd.Normalized(version) : "the same Hermes")}. Nous hasn’t released a newer Hermes yet.";
 
     public static string? SkippedWords(HermesUpdateStepId id) => id == HermesUpdateStepId.Drain ? "No bots were busy" : "Not needed";
 
@@ -349,6 +533,12 @@ public sealed class HermesUpdate
             {
                 case PhaseKind.Ended: return Headline;
                 case PhaseKind.Working:
+                    if (Kind == HermesUpdateKind.Cloud)
+                    {
+                        var cs = CloudSteps.FirstOrDefault(s => s.State == HermesUpdateStepState.Active);
+                        if (cs == null) return null;
+                        return cs.Detail is { } cd ? $"{cs.Title}: {cd}" : cs.Title;
+                    }
                     var step = Steps.FirstOrDefault(s => s.State == HermesUpdateStepState.Active);
                     if (step == null) return null;
                     return step.Detail is { } d ? $"{step.Title}: {d}" : step.Title;
@@ -360,9 +550,11 @@ public sealed class HermesUpdate
     public string Headline => Phase switch
     {
         PhaseKind.Checking => $"Checking {Name}…",
-        PhaseKind.Asking => $"Update Hermes on {Name}",
-        PhaseKind.Working => Steps.FirstOrDefault(s => s.State == HermesUpdateStepState.Active)?.Id == HermesUpdateStepId.Drain
-            ? "Waiting for Bots…" : $"Updating Hermes on {Name}…",
+        PhaseKind.Asking => Kind == HermesUpdateKind.Cloud ? $"Update {Name}" : $"Update Hermes on {Name}",
+        PhaseKind.Working => Kind == HermesUpdateKind.Cloud
+            ? $"Updating {Name}…"
+            : Steps.FirstOrDefault(s => s.State == HermesUpdateStepState.Active)?.Id == HermesUpdateStepId.Drain
+                ? "Waiting for Bots…" : $"Updating Hermes on {Name}…",
         _ => End switch
         {
             HermesUpdateEnd.Updated u => $"Updated to {HermesUpdateEnd.Normalized(u.To)}",
@@ -387,16 +579,22 @@ public sealed class HermesUpdate
     public string? Line => Phase switch
     {
         PhaseKind.Checking => null,
-        PhaseKind.Asking => AskingLine,
+        PhaseKind.Asking => Kind == HermesUpdateKind.Cloud ? CloudAskingLine : AskingLine,
         PhaseKind.Working => KeepsGoing,
         _ => End switch
         {
-            HermesUpdateEnd.Updated => Note ?? $"{Name} is back and running the new Hermes.",
+            HermesUpdateEnd.Updated => Note ?? (Kind == HermesUpdateKind.Cloud
+                ? $"{Name} answers on its new Hermes."
+                : $"{Name} is back and running the new Hermes."),
             HermesUpdateEnd.UpToDate => $"{Name} runs the newest Hermes. Nothing to do.",
             HermesUpdateEnd.CantUpdateHere c => c.Command == null
                 ? $"{c.Method}, so it’s updated wherever it’s run from, not from here." : $"{c.Method}. Run this on {Name} to update it:",
-            HermesUpdateEnd.Unchanged => Note ?? $"The update finished, but {Name} still reports the same version.",
-            HermesUpdateEnd.Unconfirmed => $"The update finished, but {Name} didn’t answer with its version. Check Status & Maintenance in a minute.",
+            HermesUpdateEnd.Unchanged c => Kind == HermesUpdateKind.Cloud
+                ? CloudUnchanged(Name, c.Version)
+                : Note ?? $"The update finished, but {Name} still reports the same version.",
+            HermesUpdateEnd.Unconfirmed => Kind == HermesUpdateKind.Cloud
+                ? $"Nous restarted {Name}, but HQ couldn’t read its Hermes version, so it can’t say whether it changed."
+                : $"The update finished, but {Name} didn’t answer with its version. Check Status & Maintenance in a minute.",
             HermesUpdateEnd.Failed f => f.Reason,
             _ => null,
         },
@@ -405,12 +603,14 @@ public sealed class HermesUpdate
     public bool ShowsSteps => Phase switch
     {
         PhaseKind.Checking => false,
-        PhaseKind.Asking or PhaseKind.Working => Steps.Count > 1,
+        PhaseKind.Asking or PhaseKind.Working => Kind == HermesUpdateKind.Cloud ? CloudSteps.Count > 1 : Steps.Count > 1,
         _ => End switch
         {
             HermesUpdateEnd.UpToDate or HermesUpdateEnd.CantUpdateHere => false,
-            HermesUpdateEnd.Failed => Steps.Any(s => s.Id != HermesUpdateStepId.Check && s.State == HermesUpdateStepState.Done) || Action != null,
-            _ => Steps.Count > 1,
+            HermesUpdateEnd.Failed => Kind == HermesUpdateKind.Cloud
+                ? CloudSteps.Any(s => s.State is HermesUpdateStepState.Done or HermesUpdateStepState.Failed)
+                : Steps.Any(s => s.Id != HermesUpdateStepId.Check && s.State == HermesUpdateStepState.Done) || Action != null,
+            _ => Kind == HermesUpdateKind.Cloud ? CloudSteps.Count > 1 : Steps.Count > 1,
         },
     };
 
@@ -440,10 +640,17 @@ public sealed class HermesUpdate
         _ => step.Detail,
     };
 
+    public static string? CloudStepDetail(CloudStep step) => step.State switch
+    {
+        HermesUpdateStepState.Done => step.Started is { } s && step.Finished is { } f ? HermesUpdateWords.Elapsed((int)Math.Max(0, (f - s).TotalSeconds)) : null,
+        HermesUpdateStepState.Skipped => "Not needed",
+        _ => step.Detail,
+    };
+
     public bool HasOutput => Action?.Lines.Count > 0;
 }
 
-/// Every Hermes update this app run knows of, by gateway account key, and the last update check per gateway.
+/// Every Hermes update this app run knows of, by gateway account key (or `"cloud:<agent id>"`), and the last update check per gateway.
 public sealed class HermesUpdateCenter
 {
     public static HermesUpdateCenter Shared { get; } = new();
@@ -490,6 +697,14 @@ public sealed class HermesUpdateCenter
         run.Check();
         Changed?.Invoke(key);
         return run;
+    }
+
+    /// Starts or returns a Nous Hermes Cloud agent `update_image` update run (`HermesUpdateCenter.updateCloud`).
+    public HermesUpdate UpdateCloud(string id, string name, Func<Task<string?>> readVersion,
+        Action<HermesUpdate> startUpdate, string place = HermesUpdate.CloudAgentPlace)
+    {
+        var key = "cloud:" + id;
+        return Update(key, () => HermesUpdate.ForCloud(key, name, readVersion, startUpdate, place));
     }
 
     /// An update that was already running when Status & Maintenance opened: follow it without asking.

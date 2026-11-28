@@ -33,7 +33,7 @@ public sealed class ThinkingWalkProofTests
         Assert.Equal("cd /Users/me/app && npm test", Proof.StepCode());
         Assert.Equal("1 step", Proof.StepCount);
         Assert.Equal("Steps", Proof.StepsTab);
-        Assert.Equal(["Info", "Steps", "Files", "Helpers"], Proof.Tabs);
+        Assert.Equal(["Info", "Steps", "Files", "Helpers", "Chats"], Proof.Tabs);
         Assert.Equal("Hi! I'm Ivy.", Proof.Reply);
     }
 
@@ -112,12 +112,12 @@ public sealed class ThinkingWalkProofTests
     [Fact]
     public void TheClickOpensTheInspectorOnStepsWithTheHeldStep()
     {
-        var tabs = new[] { ("Info", false), ("Steps", true), ("Files", false), ("Helpers", false) };
+        var tabs = new[] { ("Info", false), ("Steps", true), ("Files", false), ("Helpers", false), ("Chats", false) };
         var step = Proof.StepRowWords();
         Assert.Null(Proof.StepsOpen(true, tabs, ["1 step", step, Proof.StepCode()], [step]));
         Assert.Contains("command", Proof.StepsOpen(true, tabs, ["1 step", step], [step]));
         Assert.Contains("closed", Proof.StepsOpen(false, tabs, ["1 step"], [step]));
-        Assert.Contains("Info", Proof.StepsOpen(true, [("Info", true), ("Steps", false), ("Files", false), ("Helpers", false)], ["1 step"], [step]));
+        Assert.Contains("Info", Proof.StepsOpen(true, [("Info", true), ("Steps", false), ("Files", false), ("Helpers", false), ("Chats", false)], ["1 step"], [step]));
         Assert.Contains("tabs", Proof.StepsOpen(true, [("Steps", true)], ["1 step"], [step]));
         Assert.Contains("1 step", Proof.StepsOpen(true, tabs, ["No Steps"], []));
         Assert.Contains("step row", Proof.StepsOpen(true, tabs, ["1 step", Proof.StepCode()], ["Read package.json"]));
@@ -128,14 +128,14 @@ public sealed class ThinkingWalkProofTests
     {
         // [WIN-STEPS-AFTER-REPLY] Once the turn-end read lands: the stored turn's step, finished, with its command.
         Assert.Equal("Ran a command", Proof.StepDoneWords());
-        var tabs = new[] { ("Info", false), ("Steps", true), ("Files", false), ("Helpers", false) };
+        var tabs = new[] { ("Info", false), ("Steps", true), ("Files", false), ("Helpers", false), ("Chats", false) };
         var done = Proof.StepDoneWords();
         Assert.Null(Proof.StepsKept(tabs, ["1 step", done, Proof.StepCode()!], [done]));
         // Run 45171524778's 230-chat-thinking: the panel's empty words after the reply.
         Assert.Contains("lost", Proof.StepsKept(tabs, [Hermes.Core.Transcripts.LatestSteps.EmptyTitle, Hermes.Core.Transcripts.LatestSteps.EmptyHint], []));
         Assert.Contains("finished step row", Proof.StepsKept(tabs, ["1 step", Proof.StepCode()!], [Proof.StepRowWords()]));
         Assert.Contains("command", Proof.StepsKept(tabs, ["1 step", done], [done]));
-        Assert.Contains("Info", Proof.StepsKept([("Info", true), ("Steps", false), ("Files", false), ("Helpers", false)], ["1 step", done], [done]));
+        Assert.Contains("Info", Proof.StepsKept([("Info", true), ("Steps", false), ("Files", false), ("Helpers", false), ("Chats", false)], ["1 step", done], [done]));
     }
 
     [Fact]
@@ -213,7 +213,7 @@ public sealed class ThinkingWalkProofTests
     {
         var inspector = Read("src", "HermesHQ.Windows", "Features", "Transcript", "ChatInspector.cs");
         Assert.Contains($"private const string TabKey = \"{Proof.InspectorTabKey}\";", inspector);
-        Assert.Contains("private static readonly string[] Titles = [\"Info\", \"Steps\", \"Files\", \"Helpers\"];", inspector);
+        Assert.Contains("private static readonly string[] Titles = [\"Info\", \"Steps\", \"Files\", \"Helpers\", \"Chats\"];", inspector);
         Assert.Contains("Text = steps.Count == 1 ? \"1 step\"", inspector);
     }
 

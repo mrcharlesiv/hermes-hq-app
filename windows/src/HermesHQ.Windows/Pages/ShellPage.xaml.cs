@@ -3,12 +3,15 @@ using Hermes.Core.Bots;
 using Hermes.Core.Net;
 using Hermes.Core.Rpc;
 using Hermes.Core.Sessions;
+using Hermes.Core.Settings;
 using WorkingRing = Hermes.Core.Settings.WorkingRing;
 using DensitySizes = Hermes.Core.Settings.DensitySizes;
 using Hermes.Core.Shell;
 using HermesHQ.Features.Bots;
 using HermesHQ.Features.OpenQuickly;
+using HermesHQ.Features.Settings;
 using HermesHQ.Features.Shortcuts;
+using HermesHQ.Features.Transcript;
 using HermesHQ.Services;
 using HermesHQ.Shell;
 using Microsoft.UI.Xaml;
@@ -44,15 +47,34 @@ public sealed partial class ShellPage : Page
     private bool _gripping;
     private double _gripStartX, _gripStartWidth;
     private bool _detached;
+    // Top open-chats-only workspace bar, tabs, navigation history, and Hide/Show List toggle (App/Mac/MacWorkspaceBar.swift).
+    private readonly WorkspaceBar _workspaceBar = new();
+    private WorkspaceTabList _tabList = new();
+    private readonly WorkspaceHistory _history = new();
+    private string? _closingTabId;
+    private bool _navigatingHistory;
+    private bool _listHidden;
     private MenuFlyoutItem? _updateMenuItem;
     private Action? _onUpdateChanged;
 
     public ShellPage()
     {
         InitializeComponent();
+        BotChatsStylePrefs.Store ??= FilePreferences.Shared;
         Unloaded += (_, _) => DetachShell();
         _layout = SidebarLayout.Load(_disk);
         SidebarColumn.Width = new GridLength(_layout.Collapsed ? _layout.RailWidth : SidebarLayout.ClampOpen(_layout.OpenWidth));
+        // Top workspace bar above the floating rounded canvas card.
+        _workspaceBar.BackClicked += GoWorkspaceBack;
+        _workspaceBar.ForwardClicked += GoWorkspaceForward;
+        _workspaceBar.ToggleListClicked += () => ToggleList();
+        _workspaceBar.NewChatClicked += () => NewChat_Click(this, new RoutedEventArgs());
+        _workspaceBar.TabSelected += ActivateWorkspaceBarTab;
+        _workspaceBar.TabCloseRequested += CloseWorkspaceTab;
+        _workspaceBar.CloseOthersRequested += CloseOtherWorkspaceTabs;
+        _workspaceBar.CloseToRightRequested += CloseWorkspaceTabsToRight;
+        _workspaceBar.CloseAllRequested += CloseAllWorkspaceTabs;
+        WorkspaceBarHost.Children.Add(_workspaceBar);
         // [WIN-49] The Mac's selection mark on the sidebar (MacSelection): the accent while a click last landed here and
         // the window is in front, grey otherwise.
         SelectionMark.Install(Sidebar, SidebarPane, ContentFrame.Parent as UIElement ?? ContentFrame);
@@ -94,6 +116,11 @@ public sealed partial class ShellPage : Page
         AddShortcut(ShellKeys.NextChat, () => Walk(forward: true));
         AddShortcut(ShellKeys.PreviousChat, () => Walk(forward: false));
         AddShortcut(ShellKeys.HideSidebar, ToggleFold);
+        AddShortcut(ShellKeys.HideList, ToggleList);
+        AddShortcut(ShellKeys.NextTab, () => CycleWorkspaceTabs(+1));
+        AddShortcut(ShellKeys.PreviousTab, () => CycleWorkspaceTabs(-1));
+        AddShortcut(ShellKeys.NextTabBracket, () => CycleWorkspaceTabs(+1));
+        AddShortcut(ShellKeys.PreviousTabBracket, () => CycleWorkspaceTabs(-1));
         AddShortcut(ShellKeys.KeyboardShortcuts, ShowShortcuts);   // Help › Keyboard Shortcuts, the Mac's ⌘/
         // Ctrl+1…9: the places in the Mac's numbered order (PlaceKeys: Bots, the places, the Tools; Ctrl+9 the last).
         for (var i = 1; i <= 9; i++)
@@ -160,7 +187,12 @@ public sealed partial class ShellPage : Page
     /// `run` answers whether the key acted; a key that can't act now (its Mac item dimmed) passes on, unhandled.
     private void AddShortcut(KeyChord chord, Func<bool> run)
     {
-        var a = ShortcutKeys.Accelerator(chord);
+        var a = chord.Key switch
+        {
+            "[" => new KeyboardAccelerator { Key = (VirtualKey)219, Modifiers = ModifiersOf(chord) }, // VK_OEM_4
+            "]" => new KeyboardAccelerator { Key = (VirtualKey)221, Modifiers = ModifiersOf(chord) }, // VK_OEM_6
+            _ => ShortcutKeys.Accelerator(chord),
+        };
         a.Invoked += (_, e) =>
         {
             // AltGr is Ctrl+Alt: with the right Alt key down a Ctrl+Alt chord is a typed letter, left to the field.
@@ -169,6 +201,15 @@ public sealed partial class ShellPage : Page
         };
         KeyboardAcceleratorPlacementMode = KeyboardAcceleratorPlacementMode.Hidden;
         KeyboardAccelerators.Add(a);
+    }
+
+    private static VirtualKeyModifiers ModifiersOf(KeyChord chord)
+    {
+        var mods = VirtualKeyModifiers.None;
+        if (chord.Ctrl) mods |= VirtualKeyModifiers.Control;
+        if (chord.Shift) mods |= VirtualKeyModifiers.Shift;
+        if (chord.Alt) mods |= VirtualKeyModifiers.Menu;
+        return mods;
     }
 
     private static bool RightAltDown() =>
@@ -219,9 +260,19 @@ public sealed partial class ShellPage : Page
         WorkingRing.Changed += OnWorkingRing;
         DensitySizes.Changed += OnDensity;
         SidebarLayout.Changed += OnSidebarChanged;
+        BotChatsStylePrefs.Changed += OnBotChatsStyleChanged;
+        ThemeService.Changed += OnShellSurfaceChanged;
+        WindowTransparency.Changed += OnShellSurfaceChanged;
+        BackdropPrefs.Changed += OnShellSurfaceChanged;
         Navigator.Requested += Show;
+        _history.Clear();
+        _closingTabId = null;
+        _tabList = Automation.Enabled
+            ? new WorkspaceTabList()
+            : WorkspaceTabList.Load(_client.AccountId, FilePreferences.Shared);
         OnConnection(_client.Rpc.State);
         ApplyWidth();
+        RestyleShellSurface();
         Rebuild();
     }
 
@@ -244,6 +295,10 @@ public sealed partial class ShellPage : Page
         WorkingRing.Changed -= OnWorkingRing;
         DensitySizes.Changed -= OnDensity;
         SidebarLayout.Changed -= OnSidebarChanged;
+        BotChatsStylePrefs.Changed -= OnBotChatsStyleChanged;
+        ThemeService.Changed -= OnShellSurfaceChanged;
+        WindowTransparency.Changed -= OnShellSurfaceChanged;
+        BackdropPrefs.Changed -= OnShellSurfaceChanged;
         if (_onUpdateChanged != null)
         {
             WindowsUpdateService.Changed -= _onUpdateChanged;
@@ -330,8 +385,16 @@ public sealed partial class ShellPage : Page
                 if (rail || bot.Hidden) continue;
                 var choice = BotChatsChoice.Parse(store.Device.ChatsUnder.GetValueOrDefault(bot.Id)) ?? allChoice;
                 var (shown, more) = BotChatsUnder.Pick(sessions, bot.Id, choice);
-                for (var i = 0; i < shown.Count; i++) items.Add(new SidebarChat(shown[i], bot.Id, i == shown.Count - 1 && more == 0));
-                if (shown.Count > 0 && more > 0) items.Add(new SidebarMore(bot.Id, more));
+                for (var i = 0; i < shown.Count; i++)
+                    items.Add(new SidebarChat(
+                        shown[i],
+                        bot.Id,
+                        last: i == shown.Count - 1 && more == 0,
+                        first: i == 0,
+                        showsPin: BotChatsUnder.ShowsPin(shown[i], shown),
+                        botModel: bot.Model));
+                if (shown.Count > 0 && more > 0)
+                    items.Add(new SidebarMore(bot.Id, more, first: shown.Count == 0, botModel: bot.Model));
             }
         }
         items.Add(new SidebarAction("New Bot", "", () => _ = _actions?.NewBotAsync()));
@@ -368,6 +431,36 @@ public sealed partial class ShellPage : Page
     private void OnWorkingRing() => Rebuild();
     /// [density] Theme › Density: the rows again at the new sizes.
     private void OnDensity() => Rebuild();
+    /// Settings › Appearance › Chats Under Bots connector style changed: redraw sidebar connectors immediately.
+    private void OnBotChatsStyleChanged()
+    {
+        if (_detached || AppShutdown.Stopping) return;
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (!_detached && !AppShutdown.Stopping) Rebuild();
+        });
+    }
+    /// Theme, Window Transparency, or App Background changed: restyle the floating canvas, sidebar veil, and top bar.
+    private void OnShellSurfaceChanged()
+    {
+        if (_detached || AppShutdown.Stopping) return;
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            if (!_detached && !AppShutdown.Stopping) RestyleShellSurface();
+        });
+    }
+
+    private void RestyleShellSurface()
+    {
+        if (_detached || AppShutdown.Stopping) return;
+        var appBackdrop = BackdropPainter.CreateBrush(BackdropPlace.App);
+        GlassShell.StyleCanvas(CanvasBorder, appBackdrop, CanvasShadowReceiver);
+        GlassShell.StyleSidebar(SidebarPane);
+        if (Sidebar.ItemsSource is List<ListViewItem> rows)
+            foreach (var row in rows)
+                if (row.Tag is not SidebarDivider) SelectionMark.Shape(row);
+        _workspaceBar.Recolor();
+    }
     /// [taborder] Settings › Appearance › Sidebar saved a change (or this page did): the places again from disk, as the
     /// Mac's sidebar follows `TabOrder.didChange`. Width and fold are saved as they change, so nothing is lost.
     private void OnSidebarChanged()
@@ -404,6 +497,7 @@ public sealed partial class ShellPage : Page
         Sidebar.SelectedItem = containers.FirstOrDefault(c => KeyOf((SidebarItem)c.Tag) is { } k && k == SelectedKey());
         if (sidebarFocused) Sidebar.Focus(FocusState.Programmatic);
         ListLoading.IsActive = !_hub.Bots.HasRoster;
+        SyncWorkspaceBar();
         // At launch the first bot's chat opens, once.
         if (!_autoOpened && _hub.Bots.HasRoster && _openKey == null && _hub.Bots.Layout.Flat.FirstOrDefault() is { } first)
         {
@@ -762,14 +856,37 @@ public sealed partial class ShellPage : Page
     /// opens for now without saving.
     private void ToggleFold()
     {
+        if (_listHidden) { _listHidden = false; ApplyWidth(); SyncWorkspaceBar(); return; }
         if (_narrow && !_layout.Collapsed) _openedWhileNarrow = !_openedWhileNarrow;
         else { _layout.Collapsed = !_layout.Collapsed; _layout.Save(_disk); }
         ApplyWidth();
         Rebuild();
     }
 
+    private bool CanToggleList => _openChat != null || _listHidden;
+
+    /// View › Hide List / Show List (Ctrl+Shift+L, App/Root/KeyCommands.swift `toggleList`): hides or restores the
+    /// sidebar list column beside an open chat for full-width reading.
+    private bool ToggleList()
+    {
+        if (!CanToggleList) return false;
+        _listHidden = !_listHidden;
+        ApplyWidth();
+        SyncWorkspaceBar();
+        return true;
+    }
+
     private void ApplyWidth()
     {
+        if (_listHidden)
+        {
+            SidebarColumn.Width = new GridLength(0);
+            SidebarPane.Visibility = Visibility.Collapsed;
+            Grip.Visibility = Visibility.Collapsed;
+            return;
+        }
+        SidebarPane.Visibility = Visibility.Visible;
+        Grip.Visibility = Visibility.Visible;
         var rail = Rail;
         SidebarColumn.Width = new GridLength(rail ? _layout.RailWidth : SidebarLayout.ClampOpen(_layout.OpenWidth, ActualWidth));
         if (_toolsRail != rail)
@@ -888,6 +1005,9 @@ public sealed partial class ShellPage : Page
                         // The chat already on screen opens no page, so nothing else would end the wait.
                         if (!OpenChat(new ChatDestination(bot.Name, id, bot.DisplayName), botChat: true)) bots.NoteBotOpening(bot.Name, false);
                         bots.MarkRead(bot.Name);
+                        RecordWorkspaceOpen(
+                            new WorkspaceTabRecord(WorkspaceTabKind.Bot, bot.Name, bot.Name, bot.DisplayName),
+                            new WorkspaceBotNav(bot.Name));
                     }
                     catch (Exception x) when (x is GatewayException or BotWriteException)
                     {
@@ -909,6 +1029,15 @@ public sealed partial class ShellPage : Page
                     _hub.Sessions.Selected = (chat.Profile, chat.StoredId);
                     OpenChat(chat);
                     _ = _hub.Sessions.OpenedAsync(chat.Profile, chat.StoredId);
+                    var sessionTitle = _hub.Sessions.LiveSummaries()
+                        .FirstOrDefault(s => s.Profile == chat.Profile && s.Id == chat.StoredId)?.Title;
+                    RecordWorkspaceOpen(
+                        new WorkspaceTabRecord(
+                            WorkspaceTabKind.Session,
+                            chat.Profile,
+                            chat.StoredId,
+                            !string.IsNullOrWhiteSpace(sessionTitle) ? sessionTitle : !string.IsNullOrWhiteSpace(chat.Title) ? chat.Title : "Chat"),
+                        new WorkspaceSessionNav(chat.Profile, chat.StoredId));
                     break;
                 case RoomDestination { Key: var roomKey }:
                     // [groups] A group chat (Pages/GroupRoomPage.cs): its row marked, no bot's or session's chat selected.
@@ -921,10 +1050,17 @@ public sealed partial class ShellPage : Page
                     _hub.Sessions.Selected = null;
                     _openChat = null;
                     ContentPlaceholder.Visibility = Visibility.Collapsed;
-                    if (_openKey == marked && GroupRoomPage.Current?.RoomKey == roomKey) break;
+                    if (_openKey == marked && GroupRoomPage.Current?.RoomKey == roomKey)
+                    {
+                        if (!_navigatingHistory) _history.Record(new WorkspaceRoomNav(roomKey));
+                        SyncWorkspaceBar();
+                        break;
+                    }
                     _openKey = marked;
                     ContentFrame.Navigate(typeof(GroupRoomPage), new GroupRoomPage.Args(roomKey), new SuppressNavigationTransitionInfo());
                     ContentFrame.BackStack.Clear();
+                    if (!_navigatingHistory) _history.Record(new WorkspaceRoomNav(roomKey));
+                    SyncWorkspaceBar();
                     break;
                 case PlaceDestination { PlaceId: var id, Argument: var arg }:
                     var place = Places.Get(id);
@@ -941,6 +1077,8 @@ public sealed partial class ShellPage : Page
                         ContentFrame.Navigate(typeof(PlaceholderPage), new PlaceArgs(place, e), new SuppressNavigationTransitionInfo());
                     }
                     ContentFrame.BackStack.Clear();
+                    if (!_navigatingHistory) _history.Record(new WorkspacePlaceNav(id, arg as string));
+                    SyncWorkspaceBar();
                     break;
             }
         }
@@ -1094,12 +1232,29 @@ public sealed partial class ShellPage : Page
     /// The sidebar foot's menu (the account button's), for the CI's walks (Services/ProofWalks.Windows.cs).
     internal MenuFlyout AccountMenuFlyout => AccountMenu;
 
-    /// Ctrl+W, the Mac's ⌘W (`hqCloseChat`): the chat leaves the pane, no question first, and the sidebar has the
-    /// keyboard. Nothing open, or a place: nothing (the Mac's ⌘W would close the window; here that quits the app).
+    /// Ctrl+W, the Mac's ⌘W (`hqCloseChat` / `MacWorkspaceBar.closeActiveTab`): closes the active workspace tab,
+    /// selecting its neighbor (right → left) when another tab is open, or emptying the pane to "No Chat Open" with
+    /// focus in the sidebar when the last tab closes. During automation walks (`chat-keys`, `new-chat-here`), empties
+    /// the pane directly so existing proof checks observe `PaneEmpty`.
     internal void CloseChat()
     {
         if (!ChatKeys.CanCloseChat(KeyState())) return;
         AppLog.Note("keys", "close chat");
+        var activeId = ActiveWorkspaceTabId();
+        if (activeId != null)
+        {
+            var (removed, next) = _tabList.Close(activeId, activeId);
+            if (removed)
+            {
+                PersistWorkspaceTabs();
+                _closingTabId = activeId;
+                if (!Automation.Enabled && next != null)
+                {
+                    ActivateWorkspaceTab(next);
+                    return;
+                }
+            }
+        }
         ClosePane();
     }
 
@@ -1112,6 +1267,11 @@ public sealed partial class ShellPage : Page
         _botsChat = null;
         _openIsBotChat = false;
         _openKey = null;
+        if (_listHidden)
+        {
+            _listHidden = false;
+            ApplyWidth();
+        }
         if (_hub != null)
         {
             _hub.Bots.VisibleBot = null;
@@ -1124,6 +1284,7 @@ public sealed partial class ShellPage : Page
         PlaceholderTitle.Text = "No Chat Open";
         PlaceholderText.Text = "Choose a bot to open its chat.";
         ContentPlaceholder.Visibility = Visibility.Visible;
+        SyncWorkspaceBar();
         Sidebar.Focus(FocusState.Keyboard);
         App.Window?.DismissToolTips();
     }
@@ -1159,6 +1320,8 @@ public sealed partial class ShellPage : Page
         try { done = await Prompts.RunAsync(XamlRoot, ChatKeys.FailureTitle(step), () => store.SetArchivedAsync(s, archived)); }
         finally { _archiving = false; }
         if (!done || !archived) return;
+        var archivedTabId = $"session:{chat.Profile}:{chat.StoredId}";
+        if (_tabList.Close(archivedTabId, ActiveWorkspaceTabId()).Removed) PersistWorkspaceTabs();
         if (_openChat?.StoredId == chat.StoredId && _openChat.Profile == chat.Profile) ClosePane();
         UndoPill.Show(PillHost, ChatKeys.ArchivedLabel(title), SessionStore.ArchivedWayBack,
             HermesHQ.Features.Sessions.ArchiveUndoRoute.For(() => XamlRoot, store, s));   // [WIN-ARCHIVE-UNDO]
@@ -1238,6 +1401,235 @@ public sealed partial class ShellPage : Page
             App.Window?.ShowSignIn();
         }
         catch (Exception ex) { AppLog.Error("shell", ex); }
+    }
+
+    // ------------------------------------------------------------------ Workspace tab bar & navigation history
+
+    private string? ActiveWorkspaceTabId()
+    {
+        if (_openChat is not { } chat) return null;
+        return _openIsBotChat ? $"bot:{chat.Profile}" : $"session:{chat.Profile}:{chat.StoredId}";
+    }
+
+    private void PersistWorkspaceTabs()
+    {
+        if (Automation.Enabled || _client == null) return;
+        _tabList.Save(_client.AccountId, FilePreferences.Shared);
+    }
+
+    private void RecordWorkspaceOpen(WorkspaceTabRecord record, WorkspaceNavDestination nav)
+    {
+        if (record.TabId != _closingTabId)
+        {
+            _closingTabId = null;
+            if (_tabList.Open(record)) PersistWorkspaceTabs();
+        }
+        if (!_navigatingHistory) _history.Record(nav);
+        SyncWorkspaceBar();
+    }
+
+    private void SyncWorkspaceBar()
+    {
+        if (_detached || AppShutdown.Stopping) return;
+        var activeId = ActiveWorkspaceTabId();
+        var sessions = _hub?.Sessions.LiveSummaries();
+        var tabsChanged = false;
+        var items = new List<WorkspaceBarTab>(_tabList.Tabs.Count);
+
+        foreach (var record in _tabList.Tabs)
+        {
+            var title = record.Title;
+            var working = false;
+            var unread = false;
+            if (record.Kind == WorkspaceTabKind.Session)
+            {
+                var summary = sessions?.FirstOrDefault(s => s.Id == record.Id && s.Profile == record.Profile)
+                    ?? sessions?.FirstOrDefault(s => s.Id == record.Id);
+                if (summary != null)
+                {
+                    if (!string.IsNullOrWhiteSpace(summary.Title))
+                    {
+                        title = summary.Title;
+                        if (_tabList.UpdateTitle(record.TabId, title)) tabsChanged = true;
+                    }
+                    working = summary.IsRunning || summary.Status == SessionStatus.Working;
+                    unread = summary.Unread;
+                }
+            }
+            else if (_hub?.Bots.Bot(record.Id) is { } bot)
+            {
+                if (!string.IsNullOrWhiteSpace(bot.Name))
+                {
+                    title = bot.Name;
+                    if (_tabList.UpdateTitle(record.TabId, title)) tabsChanged = true;
+                }
+                working = bot.IsWorking;
+                unread = BotList.ShowsUnread(bot);
+            }
+
+            items.Add(new WorkspaceBarTab(
+                record.TabId,
+                record.Kind,
+                record.Profile,
+                record.Id,
+                string.IsNullOrWhiteSpace(title) ? "Chat" : title,
+                IsActive: string.Equals(activeId, record.TabId, StringComparison.Ordinal),
+                IsWorking: working,
+                IsUnread: unread));
+        }
+
+        if (tabsChanged) PersistWorkspaceTabs();
+        _workspaceBar.Update(items, _history.CanGoBack, _history.CanGoForward, CanToggleList, _listHidden);
+    }
+
+    /// Window › Show Next Tab / Show Previous Tab (`Ctrl+Tab`, `Ctrl+Shift+Tab`, `Ctrl+Shift+[`, `Ctrl+Shift+]`,
+    /// `f451f7fd4`): cycles open workspace tabs, yielding to Terminal when Terminal is active.
+    private bool CycleWorkspaceTabs(int step)
+    {
+        if (_openKey == "place:terminal" || ContentFrame.Content is HermesHQ.Features.Workspace.TerminalPage)
+            return false;
+        var tabs = _tabList.Tabs;
+        var activeId = ActiveWorkspaceTabId();
+        int? activeIdx = null;
+        if (activeId != null)
+        {
+            for (var i = 0; i < tabs.Count; i++)
+            {
+                if (tabs[i].TabId == activeId) { activeIdx = i; break; }
+            }
+        }
+        if (WorkspaceTabList.CycledIndex(tabs.Count, activeIdx, step) is not { } nextIdx)
+            return false;
+        ActivateWorkspaceTab(tabs[nextIdx]);
+        return true;
+    }
+
+    private void ActivateWorkspaceBarTab(WorkspaceBarTab tab) =>
+        ActivateWorkspaceTab(new WorkspaceTabRecord(tab.Kind, tab.Profile, tab.Id, tab.Title));
+
+    private void ActivateWorkspaceTab(WorkspaceTabRecord record)
+    {
+        if (record.Kind == WorkspaceTabKind.Bot)
+        {
+            if (_hub?.Bots.Bot(record.Id) is { } bot)
+            {
+                Navigator.Go(new BotChatDestination(bot.Model));
+                return;
+            }
+            var fallback = _hub?.Bots.Layout.Flat.FirstOrDefault(b => b.Id == record.Id)?.Model;
+            if (fallback != null) { Navigator.Go(new BotChatDestination(fallback)); return; }
+        }
+        Navigator.Go(new ChatDestination(record.Profile, record.Id, record.Title));
+    }
+
+    private void CloseWorkspaceTab(string tabId)
+    {
+        var activeId = ActiveWorkspaceTabId();
+        var (removed, next) = _tabList.Close(tabId, activeId);
+        if (!removed) return;
+        PersistWorkspaceTabs();
+        if (WorkspaceTabList.ClosingGuardId(new HashSet<string>(StringComparer.Ordinal) { tabId }, activeId) is { } guard)
+        {
+            _closingTabId = guard;
+            if (next != null) { ActivateWorkspaceTab(next); return; }
+            ClosePane();
+            return;
+        }
+        SyncWorkspaceBar();
+    }
+
+    private void CloseOtherWorkspaceTabs(string keepingTabId)
+    {
+        var activeId = ActiveWorkspaceTabId();
+        var beforeIds = _tabList.Tabs.Select(t => t.TabId).ToHashSet(StringComparer.Ordinal);
+        if (!_tabList.CloseOthers(keepingTabId)) return;
+        PersistWorkspaceTabs();
+        beforeIds.ExceptWith(_tabList.Tabs.Select(t => t.TabId));
+        if (WorkspaceTabList.ClosingGuardId(beforeIds, activeId) is { } guard)
+            _closingTabId = guard;
+        if (activeId != keepingTabId && _tabList.Tabs.FirstOrDefault(t => t.TabId == keepingTabId) is { } kept)
+        {
+            ActivateWorkspaceTab(kept);
+            return;
+        }
+        SyncWorkspaceBar();
+    }
+
+    private void CloseWorkspaceTabsToRight(string tabId)
+    {
+        var activeId = ActiveWorkspaceTabId();
+        var beforeIds = _tabList.Tabs.Select(t => t.TabId).ToHashSet(StringComparer.Ordinal);
+        if (!_tabList.CloseToRight(tabId)) return;
+        PersistWorkspaceTabs();
+        beforeIds.ExceptWith(_tabList.Tabs.Select(t => t.TabId));
+        if (WorkspaceTabList.ClosingGuardId(beforeIds, activeId) is { } guard)
+        {
+            _closingTabId = guard;
+            if (_tabList.Tabs.FirstOrDefault(t => t.TabId == tabId) is { } anchor)
+            {
+                ActivateWorkspaceTab(anchor);
+                return;
+            }
+        }
+        SyncWorkspaceBar();
+    }
+
+    private void CloseAllWorkspaceTabs()
+    {
+        var activeId = ActiveWorkspaceTabId();
+        var beforeIds = _tabList.Tabs.Select(t => t.TabId).ToHashSet(StringComparer.Ordinal);
+        if (!_tabList.CloseAll()) return;
+        PersistWorkspaceTabs();
+        if (WorkspaceTabList.ClosingGuardId(beforeIds, activeId) is { } guard)
+        {
+            _closingTabId = guard;
+            ClosePane();
+            return;
+        }
+        SyncWorkspaceBar();
+    }
+
+    private void GoWorkspaceBack()
+    {
+        if (_history.GoBack() is not { } target) return;
+        NavigateHistoryTo(target);
+    }
+
+    private void GoWorkspaceForward()
+    {
+        if (_history.GoForward() is not { } target) return;
+        NavigateHistoryTo(target);
+    }
+
+    private void NavigateHistoryTo(WorkspaceNavDestination target)
+    {
+        _navigatingHistory = true;
+        try
+        {
+            switch (target)
+            {
+                case WorkspaceBotNav bot:
+                    if (_hub?.Bots.Bot(bot.BotId) is { } found) Navigator.Go(new BotChatDestination(found.Model));
+                    break;
+                case WorkspaceSessionNav session:
+                    var title = _tabList.Tabs.FirstOrDefault(t => t.TabId == session.TabId)?.Title
+                        ?? _hub?.Sessions.LiveSummaries().FirstOrDefault(s => s.Id == session.SessionId)?.Title
+                        ?? "Chat";
+                    Navigator.Go(new ChatDestination(session.Profile, session.SessionId, title));
+                    break;
+                case WorkspaceRoomNav room:
+                    Navigator.Go(new RoomDestination(room.RoomKey));
+                    break;
+                case WorkspacePlaceNav place:
+                    Navigator.Open(place.PlaceId, place.Argument);
+                    break;
+            }
+        }
+        finally
+        {
+            _navigatingHistory = false;
+            SyncWorkspaceBar();
+        }
     }
 
     // ------------------------------------------------------------------ Open Quickly (Ctrl+K and the sidebar's Search)

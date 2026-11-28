@@ -130,11 +130,11 @@ public class ChatBubblesTests
         Assert.Equal("17 points", ChatBubbles.CornersSpoken(17));
         Assert.Equal("Tinted", ChatBubbles.TintedLabel);
         Assert.Equal("theme.tintedBubbles", ChatBubbles.TintedId);
-        Assert.Equal("How round the corners of messages in chats are, and whether they’re Tinted with the colors of your Chat Background. 12 pt is the standard. With Reduce Transparency on, messages stay solid. The Desktop Look has its own Corners, here once it is on. Set on this PC only.",
+        Assert.Equal("How round the corners of messages in chats are, and whether they’re Tinted with the colors of your Chat Background. 12 pt is the standard. With Reduce Transparency on, messages stay solid. The Hermes Look has its own Corners, here once it is on. Set on this PC only.",
             ChatBubbles.Note);
         Assert.Equal("Tinted takes its colors from your Chat Background. Choose one in Appearance › Backgrounds; until then, messages are solid.",
             ChatBubbles.TintedNeedsBackground);
-        Assert.Equal("How round your messages and the message box are. 4 pt is the desktop app’s. The iOS look has its own Corners, Style and Color, here once the Desktop Look is off.",
+        Assert.Equal("How round your messages and the text box are. Follows Hermes Look’s Corners (4 pt) unless changed here. Native Look has its own Corners, Style and Color, here once Hermes Look is off.",
             ChatBubbles.DesktopNote);
         // The footer: the note, then Tinted's when it is picked with no Chat Background (there is none on this PC yet).
         Assert.Equal([ChatBubbles.Note], ChatBubbles.Footer(ios, hasChatBackground: false));
@@ -222,7 +222,7 @@ public class ChatBubblesTests
         Assert.Contains("ChatBubbles.Target => (ChatBubbles.Label, () => ChatBubblesPage())", panes);
         var page = Body(panes, "private static FrameworkElement ChatBubblesPage()");
         Assert.Contains("ChatBubbles.ShowsStyle(state)", page);
-        Assert.Contains("ChatBubbles.Footer(state, hasChatBackground: false)", page);
+        Assert.Contains("ChatBubbles.Footer(state, hasChatBackground", page);
         Assert.Contains("ChatBubbles.TintedLabel", page);
         Assert.Contains("ThemeService.SetBubbleStyle(", page);
         Assert.Contains("ChatBubbles.PageId", page);

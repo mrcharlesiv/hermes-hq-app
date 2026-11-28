@@ -259,6 +259,7 @@ public sealed class JobsStore : IDisposable
         {
             try { await Task.Delay(wait, token).ConfigureAwait(false); } catch (OperationCanceledException) { return; }
             lock (_lock) _throttle = null;
+            ForgetList();
             await RefreshAsync().ConfigureAwait(false);
         });
         Notify();

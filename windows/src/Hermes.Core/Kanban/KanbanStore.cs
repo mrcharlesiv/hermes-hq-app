@@ -222,6 +222,91 @@ public sealed class KanbanStore
         _ = ReadBoardAsync();
     }
 
+    private string ResolvedSlug(string slug) => string.IsNullOrEmpty(slug) ? BoardKey : slug;
+
+    /// Renames a board optimistically; rolls back on gateway error and returns the gateway's reason (null on success).
+    public async Task<string?> RenameBoardAsync(string slug, string name, CancellationToken ct = default)
+    {
+        var target = ResolvedSlug(slug);
+        var title = name.Trim();
+        if (target.Length == 0 || title.Length == 0) return null;
+        if (ReadOnlyGateway) return KanbanRest.ReadOnlyNotice;
+        var before = Boards;
+        if (Boards is { } current)
+        {
+            Boards = current with { Boards = [.. current.Boards.Select(b => b.Slug == target ? b with { Name = title } : b)] };
+            Raise();
+        }
+        try
+        {
+            await Api.RenameBoardAsync(target, title, ct);
+            await ReadBoardsAsync();
+            return null;
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            Boards = before;
+            Raise();
+            await ReadBoardsAsync();
+            return KanbanRest.Reason(e);
+        }
+    }
+
+    /// Deletes a non-default board optimistically; rolls back on gateway error and returns the reason (null on success).
+    /// If the deleted board is currently shown, switches away to "default" (or the first remaining board).
+    public async Task<string?> DeleteBoardAsync(string slug, CancellationToken ct = default)
+    {
+        var target = ResolvedSlug(slug);
+        if (target.Length == 0) return null;
+        if (!KanbanModel.CanDeleteBoard(target)) return KanbanModel.DefaultBoardKept;
+        if (ReadOnlyGateway) return KanbanRest.ReadOnlyNotice;
+        var before = Boards;
+        var wasShown = BoardKey == target;
+        var wasImplicit = Slug.Length == 0;
+        if (Boards is { } current)
+        {
+            var remaining = current.Boards.Where(b => b.Slug != target).ToList();
+            var nextCurrent = current.Current == target
+                ? (remaining.Any(b => b.Slug == KanbanModel.DefaultBoardSlug)
+                    ? KanbanModel.DefaultBoardSlug
+                    : remaining.FirstOrDefault()?.Slug ?? "")
+                : current.Current;
+            Boards = current with { Current = nextCurrent, Boards = remaining };
+            Raise();
+        }
+        try
+        {
+            await Api.DeleteBoardAsync(target, ct);
+            await ReadBoardsAsync();
+            if (wasShown)
+            {
+                var fallback = Boards?.Boards.Any(b => b.Slug == KanbanModel.DefaultBoardSlug) == true
+                    ? KanbanModel.DefaultBoardSlug
+                    : Boards?.Boards.FirstOrDefault()?.Slug ?? "";
+                if (fallback != BoardKey)
+                {
+                    Select(fallback);
+                }
+                else if (wasImplicit)
+                {
+                    _boardGeneration++;
+                    BoardError = null;
+                    Board = null;
+                    Raise();
+                    await ReadBoardAsync();
+                }
+            }
+            return null;
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            Boards = before;
+            Raise();
+            await ReadBoardsAsync();
+            return KanbanRest.Reason(e);
+        }
+    }
+
     // ------------------------------------------------------------------ writes (optimistic, §4.5)
 
     private bool Refused()

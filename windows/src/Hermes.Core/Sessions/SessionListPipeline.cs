@@ -1,7 +1,9 @@
+using Hermes.Core.Coding;
+using Hermes.Core.Insights;
+
 namespace Hermes.Core.Sessions;
 
-/// The pipeline's input (HermesKit's SessionListInput, without the parts not ported yet: other apps' folders, manual
-/// order, project pins, kept projects, quiet-to-Done and pull requests).
+/// The pipeline's input (HermesKit's SessionListInput).
 public sealed class SessionListInput
 {
     /// The listed chats: no bots' own chats, no hidden runs, no rows on their way out.
@@ -23,6 +25,16 @@ public sealed class SessionListInput
     public IReadOnlySet<string> KeepNew { get; init; } = new HashSet<string>();
     public IReadOnlyDictionary<string, string> BotNames { get; init; } = new Dictionary<string, string>();
     public SessionStatusChip? StatusChip { get; init; }
+    /// Projects with Coding Project enabled: their project page uses the 4-bucket shipping pipeline (`3e7f6374a`).
+    public IReadOnlySet<string> CodingProjects { get; init; } = new HashSet<string>();
+    /// Projects sorted newest-first on their page while honoring pipeline header toggles (`1f3a49712`).
+    public IReadOnlySet<string> ProjectsByNewest { get; init; } = new HashSet<string>();
+    /// Projects sorted by status on their page (`1f3a49712`).
+    public IReadOnlySet<string> ProjectsByStatus { get; init; } = new HashSet<string>();
+    /// A project-page-only PR state filter.
+    public SessionPRState? ProjectPRState { get; init; }
+    /// A coding project page's 4-bucket shipping pipeline filter (`Ready` / `NeedsYou` / `InFlight` / `Shipped`).
+    public CodingPipelineBucket? ProjectPipelineBucket { get; init; }
     /// A closed project keeps its live chats under its row (the app; the Mac's Projects side).
     public bool LiveUnderProjects { get; init; }
     public DateTimeOffset Now { get; init; } = DateTimeOffset.Now;
@@ -53,6 +65,16 @@ public static class SessionListPipeline
     public const string ProjectPrefix = "project-";
     public const string BotPrefix = "bot-";
     public const string ProjectsTitle = "Projects";
+    /// Coding project shipping pipeline sections (after `StatePrefix`).
+    public const string PipelineReady = "pipeline-ready";
+    public const string PipelineNeeds = "pipeline-needs";
+    public const string PipelineInFlight = "pipeline-inflight";
+    public const string PipelineShipped = "pipeline-shipped";
+
+    /// Hidden background tile-maker chats stay out of Sessions (`TileChats.IsTileChat`).
+    public static bool IsHiddenTileChat(SessionSummary s) =>
+        TileChats.IsTileChat(s.Title, s.Id)
+        || (!string.IsNullOrEmpty(s.Preview) && TileChats.IsTileChat(s.Preview, s.Id));
 
     public static string Key(SessionSummary s) => s.Profile + "\u001F" + s.Id;
     public static bool IsFlat(SessionsViewPrefs p) => p.SortBy is SessionSortBy.Tokens or SessionSortBy.Cost;
@@ -81,6 +103,7 @@ public static class SessionListPipeline
             ? input.Prefs.ProjectFilter.Intersect(input.Projects.Select(p => p.Key)).ToHashSet() : [];
         foreach (var s in input.Live)
         {
+            if (IsHiddenTileChat(s)) continue;
             if (input.BotFilter != null && s.Profile != input.BotFilter) continue;
             if (picked.Count > 0 && !picked.Contains(SessionProjects.KeyOf(s.Cwd, s.Profile, input.ProjectsByProfile))) continue;
             foreach (var chip in Enum.GetValues<SessionStatusChip>()) if (Matches(chip, s)) counts[chip]++;
@@ -95,6 +118,7 @@ public static class SessionListPipeline
         int needs = 0, fresh = 0, working = 0;
         foreach (var s in input.Live)
         {
+            if (IsHiddenTileChat(s)) continue;
             if (input.BotFilter != null && s.Profile != input.BotFilter) continue;
             switch (SessionProjects.StateOf(s))
             {
@@ -123,6 +147,7 @@ public static class SessionListPipeline
         var rows = new List<SessionSummary>(pool.Count);
         foreach (var s in pool)
         {
+            if (IsHiddenTileChat(s)) continue;
             if (input.BotFilter != null && s.Profile != input.BotFilter) continue;
             if (prefs.StatusFilter.Count > 0 && !prefs.StatusFilter.Contains(s.Status)) continue;
             if (needsProject)
@@ -238,12 +263,14 @@ public static class SessionListPipeline
         return o;
     }
 
-    /// A project pill opens the project as a page: a header, then its chats in three piles, Pinned, Active, Done.
+    /// A project pill opens the project as a page: a header, then its chats (4-bucket calm shipping pipeline for
+    /// coding projects, else Pinned, Active, Done).
     public static List<SessionGroup> ProjectPage(string key, List<SessionSummary> rows, SessionListInput input)
     {
-        var done = rows.Where(s => SessionProjects.StateOf(s) == SessionProjectState.Quiet && s.Archived).ToList();
+        var visible = rows.Where(s => !IsHiddenTileChat(s)).ToList();
+        var done = visible.Where(s => SessionProjects.StateOf(s) == SessionProjectState.Quiet && s.Archived).ToList();
         var doneKeys = done.Select(Key).ToHashSet();
-        var active = rows.Where(s => !doneKeys.Contains(Key(s))).ToList();
+        var active = visible.Where(s => !doneKeys.Contains(Key(s))).ToList();
         var label = input.Projects.FirstOrDefault(p => p.Key == key)?.Label ?? key;
         var newest = Sort(active, SessionSortBy.Updated);
         var buckets = active.GroupBy(SessionProjects.StateOf).ToDictionary(g => g.Key, g => g.Count());
@@ -257,24 +284,81 @@ public static class SessionListPipeline
             Busy = buckets.GetValueOrDefault(SessionProjectState.Working), Total = active.Count,
         };
         var o = new List<SessionGroup> { page };
+
+        bool UnderPR(SessionSummary s) =>
+            input.ProjectPRState is not { } pickedState || (s.PullRequest?.CountedStates.Contains(pickedState) == true);
+        bool UnderPipeline(SessionSummary s) =>
+            input.ProjectPipelineBucket is not { } pickedBucket || CodingPipeline.BucketFor(s, isDone: doneKeys.Contains(Key(s))) == pickedBucket;
+
+        var byNewest = input.ProjectsByNewest.Contains(key);
+        var filtered = input.Prefs.StatusFilter.Count > 0 || input.StatusChip != null
+            || input.ProjectPRState != null || input.ProjectPipelineBucket != null;
+
+        // Coding projects use the 4-bucket shipping pipeline (`Ready to Ship`, `Needs You`, `Active`, `Shipped`)
+        // under Needs Me First and By Status; Sort › Newest keeps chronological order while honoring bucket toggles (`1f3a49712`).
+        if (input.CodingProjects.Contains(key) && !byNewest)
+        {
+            var matched = visible.Where(s => UnderPR(s) && UnderPipeline(s)).ToList();
+            var byBucket = new Dictionary<CodingPipelineBucket, List<SessionSummary>>();
+            foreach (var s in matched)
+            {
+                var b = CodingPipeline.BucketFor(s, isDone: doneKeys.Contains(Key(s)));
+                if (!byBucket.TryGetValue(b, out var list)) byBucket[b] = list = [];
+                list.Add(s);
+            }
+            foreach (var bucket in CodingPipeline.AllBuckets)
+            {
+                if (!byBucket.TryGetValue(bucket, out var raw) || raw.Count == 0) continue;
+                var orderedBucket = Sort(raw, input.Prefs.SortBy)
+                    .Select((s, i) => (s, i))
+                    .OrderBy(x => CodingPipeline.SubRank(x.s, bucket))
+                    .ThenBy(x => x.i)
+                    .Select(x => x.s)
+                    .ToList();
+                var capped = bucket is CodingPipelineBucket.InFlight or CodingPipelineBucket.Shipped;
+                var group = new SessionGroup
+                {
+                    Id = StatePrefix + bucket.SectionId(),
+                    Title = bucket.SectionTitle(),
+                    Sessions = orderedBucket,
+                    Total = orderedBucket.Count,
+                    Unread = orderedBucket.Count(s => s.Unread),
+                };
+                if (!filtered)
+                {
+                    var startsClosed = bucket.CollapsedByDefault();
+                    if (input.CollapsedGroups.Contains(group.Id) || (startsClosed && !input.OpenGroups.Contains(group.Id)))
+                        group = group with { Collapsed = true, Sessions = [] };
+                    else if (capped && orderedBucket.Count > PageFirstRows + 1)
+                        group = input.ExpandedGroups.Contains(group.Id) ? group with { Expanded = true }
+                            : group with { More = orderedBucket.Count - PageFirstRows, Sessions = orderedBucket.Take(PageFirstRows).ToList() };
+                }
+                o.Add(group);
+            }
+            return o;
+        }
+
         int Rank(SessionSummary s)
         {
             var now = SessionProjects.StateOf(s);
             return (int)(now == SessionProjectState.Quiet && input.KeepNew.Contains(Key(s)) ? SessionProjectState.Ready : now);
         }
-        var ordered = Sort(active, input.Prefs.SortBy).Select((s, i) => (s, i)).OrderBy(x => Rank(x.s)).ThenBy(x => x.i).Select(x => x.s).ToList();
-        var shown = input.StatusChip is { } chip
+        var ordered = byNewest
+            ? Sort(active, input.Prefs.SortBy)
+            : Sort(active, input.Prefs.SortBy).Select((s, i) => (s, i)).OrderBy(x => Rank(x.s)).ThenBy(x => x.i).Select(x => x.s).ToList();
+        var statusShown = input.StatusChip is { } chip
             ? ordered.Where(s => chip == SessionStatusChip.New
                 ? SessionProjects.StateOf(s) is SessionProjectState.NeedsYou or SessionProjectState.Ready || input.KeepNew.Contains(Key(s))
                 : SessionProjects.StateOf(s) == SessionProjectState.Working).ToList()
             : ordered;
+        var shown = statusShown.Where(s => UnderPR(s) && UnderPipeline(s)).ToList();
+        var shownDone = done.Where(s => UnderPR(s) && UnderPipeline(s)).ToList();
         (string Id, string Title, List<SessionSummary> Chats, bool Capped)[] sections =
         [
             ("pinned", "Pinned", shown.Where(s => s.Pinned || s.ProjectPinned).ToList(), false),
             ("active", "Active", shown.Where(s => !s.Pinned && !s.ProjectPinned).ToList(), true),
-            ("done", "Done", input.StatusChip == null ? Sort(done, SessionSortBy.Updated) : [], true),
+            ("done", "Done", input.StatusChip == null ? Sort(shownDone, SessionSortBy.Updated) : [], true),
         ];
-        var filtered = input.Prefs.StatusFilter.Count > 0 || input.StatusChip != null;
         foreach (var (id, title, chats, capped) in sections)
         {
             if (chats.Count == 0) continue;

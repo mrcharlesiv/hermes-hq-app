@@ -38,7 +38,17 @@ public static class J
         _ => null,
     };
 
-    public static long? Int(this JsonNode? node, string key) => node.Num(key) is { } d ? (long)d : null;
+    public static long? Int(this JsonNode? node, string key)
+    {
+        if (node.Get(key) is JsonValue jv)
+        {
+            if (jv.TryGetValue(out long l)) return l;
+            if (jv.TryGetValue(out int i)) return i;
+        }
+        return node.Num(key) is { } d && double.IsFinite(d) && d >= long.MinValue && d < 9223372036854775808.0
+            ? (long)d
+            : null;
+    }
 
     public static bool? Bool(this JsonNode? node, string key) => node.Get(key) switch
     {
@@ -58,6 +68,16 @@ public static class J
         try { return JsonNode.Parse(text); } catch (JsonException) { return null; }
     }
 
-    public static DateTimeOffset? UnixTime(this JsonNode? node, string key) =>
-        node.Num(key) is { } s && s > 0 ? DateTimeOffset.FromUnixTimeMilliseconds((long)(s * 1000)) : null;
+    private static readonly double MinUnixTimeMilliseconds = DateTimeOffset.MinValue.ToUnixTimeMilliseconds();
+    private static readonly double MaxUnixTimeMilliseconds = DateTimeOffset.MaxValue.ToUnixTimeMilliseconds();
+
+    /// Guards against non-finite (NaN / ±Infinity) and out-of-range Unix timestamps so malformed wire numbers
+    /// return null cleanly instead of throwing ArgumentOutOfRangeException (H2).
+    public static DateTimeOffset? UnixTime(this JsonNode? node, string key)
+    {
+        if (node.Num(key) is not { } s || !double.IsFinite(s) || s <= 0) return null;
+        var ms = s * 1000.0;
+        if (!double.IsFinite(ms) || ms < MinUnixTimeMilliseconds || ms > MaxUnixTimeMilliseconds) return null;
+        return DateTimeOffset.FromUnixTimeMilliseconds((long)ms);
+    }
 }

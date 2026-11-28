@@ -18,8 +18,37 @@ public sealed partial class ChatSession
 
     public HermesClient Client => _client;
 
-    /// The drafts store's key for this chat: "<account id>|<profile>|<stored session id>".
-    public string DraftScope => AttachmentCenter.Scope(_client.AccountId, Profile, StoredId);
+    /// The layout cache key for this chat: "<account id>|<profile>|<stored session id or pending scope>".
+    public string LayoutScope => AttachmentCenter.Scope(_client.AccountId, Profile,
+        StoredId.Length > 0 ? StoredId : (PendingScope ?? ""));
+
+    /// The drafts store's key for this chat: a newly started listed chat keeps its deterministic `PendingScope`
+    /// (`"new"` or `"new|<cleanFolder>"`) while empty and idle, so switching bots before sending preserves its unsent
+    /// draft across ephemeral session id changes (HermesKit/Chat/LiveChatSession.swift, #613 / 363ae6c33).
+    public string DraftScope
+    {
+        get
+        {
+            if (StartsNew && ListsWhenStarted && !string.IsNullOrEmpty(PendingScope) && !HasQueuedMessages)
+            {
+                lock (_lock)
+                {
+                    if (_t.Messages.Count == 0 && !_t.Busy)
+                        return AttachmentCenter.Scope(_client.AccountId, Profile, PendingScope);
+                }
+            }
+            return LayoutScope;
+        }
+    }
+
+    /// Migrates any draft from `draftScopeBefore` to the current `DraftScope` when the scope changes (363ae6c33).
+    private void MigrateDraftScope(string draftScopeBefore, AttachmentCenter? center = null)
+    {
+        var draftScopeAfter = DraftScope;
+        if (draftScopeBefore == draftScopeAfter) return;
+        (center ?? _sendingCenter ?? AttachmentCenter.Existing(_client.AccountId))
+            ?.MoveDraft(draftScopeBefore, draftScopeAfter);
+    }
 
     /// The session id a relative media path is read against (spec §8.2).
     public string MediaSessionId => StoredId;
@@ -55,22 +84,27 @@ public sealed partial class ChatSession
     public async Task SendAsync(string text, IReadOnlyList<DraftAttachment> attachments, AttachmentCenter center,
         CancellationToken ct = default)
     {
+        _sendingCenter = center;
         if (attachments.Count == 0) { await SendAsync(text, ct); return; }
         // §6.2, §6.3: a fresh send answers the card about the last one, with attachments as without (`send`'s
         // `sendFailure = nil`), and the chat's problem card ([WIN-COMPOSER-CARD-IDS] `sessionProblem = nil`).
         SendFailure = null;
         ClearProblemForSend();
-        _sendingCenter = center;
         var epoch = Volatile.Read(ref _stopEpoch);
         var ids = attachments.Select(a => a.Id).ToList();
+        var draftScopeBefore = DraftScope;
         ChatMessage local;
         lock (_lock)
         {
+            _turnGeneration++;
             local = _t.AddLocalUser(AttachmentSender.BubbleText(text, attachments),
                 [.. attachments.OrderBy(a => a.Kind == DraftKind.Image ? 0 : 1).Select(a => (ChatPart)new AttachmentPart(LocalAttachment(a)))]);
             _t.BeginPreparing(local.Id);   // [WIN-PROBLEM-CARD-REST] `turn.preparingSendId = localId`
+            _stopPending = false;
         }
-        _stopPending = false;
+        MigrateDraftScope(draftScopeBefore, center);
+        StopTerminalReached();
+        TurnInterrupted = false;
         Changed?.Invoke();
         lock (_inFlightAttachments) _inFlightAttachments[local.Id] = ids;
         try

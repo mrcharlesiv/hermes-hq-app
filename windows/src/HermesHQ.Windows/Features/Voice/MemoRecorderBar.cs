@@ -234,18 +234,22 @@ public sealed class MemoRecorderBar : UserControl
             CornerRadius = new CornerRadius(14),
             Padding = new Thickness(12, 8, 12, 8),
             BorderThickness = new Thickness(1),
-            Background = ThemeBrushes.Get("CardBackgroundFillColorDefaultBrush"),
-            BorderBrush = ThemeBrushes.Get("CardStrokeColorDefaultBrush"),
+            Background = ThemeBrushes.Get("HQPromptCardBrush"),
+            BorderBrush = ThemeBrushes.Get("HQPromptEdgeBrush"),
             Child = root,
         };
     }
 
+    /// True while the recorder is in Review so the composer keeps the `+` attach button enabled (#521).
+    public bool RecorderKeepsPlus { get; private set; }
+
     public void FocusPrimary() => _sendBtn.Focus(FocusState.Programmatic);
 
-    public void Refresh(IMemoChatHost host)
+    public void Refresh(IMemoChatHost host, bool attachmentsPreparing = false)
     {
         if (!_controller.IsActive(host))
         {
+            RecorderKeepsPlus = false;
             Visibility = Visibility.Collapsed;
             _liveWords.Reset();
             return;
@@ -255,6 +259,7 @@ public sealed class MemoRecorderBar : UserControl
         var shown = _controller.ShownPhase;
         if (shown == MemoPhase.Pressing || shown == MemoPhase.Idle)
         {
+            RecorderKeepsPlus = false;
             Visibility = Visibility.Collapsed;
             return;
         }
@@ -267,6 +272,7 @@ public sealed class MemoRecorderBar : UserControl
 
         if (shown == MemoPhase.Holding)
         {
+            RecorderKeepsPlus = false;
             _holdingRow.Visibility = Visibility.Visible;
             _lockedRow.Visibility = Visibility.Collapsed;
             _liveWords.UpdatePlain(_controller.Words, editable: false);
@@ -291,9 +297,10 @@ public sealed class MemoRecorderBar : UserControl
         _lockedRow.Visibility = Visibility.Visible;
 
         var isReview = shown == MemoPhase.Review;
+        RecorderKeepsPlus = isReview;
         _deleteBtn.IsEnabled = !ending;
         _stopBtn.IsEnabled = !ending;
-        _sendBtn.IsEnabled = !ending;
+        _sendBtn.IsEnabled = !ending && !attachmentsPreparing;
         _stopBtn.Visibility = isReview ? Visibility.Collapsed : Visibility.Visible;
         _playReviewBtn.Visibility = isReview ? Visibility.Visible : Visibility.Collapsed;
 

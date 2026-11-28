@@ -205,26 +205,64 @@ public sealed record BotChatsChoice(BotChatsMode Mode, int Count)
     }
 }
 
+/// A manual shortcut placing an ordinary chat under its bot in the sidebar (HermesKit/Store/SessionStore+BotShortcuts.swift).
+public sealed record BotChatShortcut(string Profile, string Id);
+
 public static class BotChatsUnder
 {
     public const int MaxPinned = 5;
 
+    /// Only another chat under this bot calls for a pin icon; the "N more" link isn't a chat
+    /// (App/Bots/BotChatsUnder.swift `showsPin(for:among:)`, `ac80666c3`).
+    public static bool ShowsPin(SessionSummary session, IReadOnlyList<SessionSummary> shown) =>
+        session.Pinned && shown.Count > 1;
+
+    /// Resolves manual per-bot shortcut records against the live session list, preserving shortcut order.
+    public static List<SessionSummary> ResolveShortcuts(
+        IEnumerable<SessionSummary> sessions,
+        IEnumerable<BotChatShortcut> shortcuts,
+        string bot)
+    {
+        var byId = sessions.Where(s => s.Profile == bot && !s.Archived)
+            .GroupBy(s => s.Id, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var result = new List<SessionSummary>();
+        foreach (var sc in shortcuts)
+        {
+            if (sc.Profile == bot && seen.Add(sc.Id) && byId.TryGetValue(sc.Id, out var found))
+                result.Add(found);
+        }
+        return result;
+    }
+
     public static bool IsActive(SessionSummary s) => s.IsRunning || s.Unread || s.Status is SessionStatus.NeedsInput or SessionStatus.Working;
 
-    /// The bot's pinned chats (up to five), then for Pinned + Recent its newest others; `More`: its chats not shown.
-    public static (List<SessionSummary> Shown, int More) Pick(IEnumerable<SessionSummary> sessions, string bot, BotChatsChoice choice)
+    /// The bot's manual per-bot shortcuts first, then its pinned chats (up to five), then for Pinned + Recent its newest
+    /// others; `More`: its remaining non-shortcut chats not shown (App/Bots/BotChatsUnder.swift `pick`).
+    public static (List<SessionSummary> Shown, int More) Pick(
+        IEnumerable<SessionSummary> sessions,
+        string bot,
+        BotChatsChoice choice,
+        IEnumerable<SessionSummary>? shortcuts = null)
     {
-        if (choice.Mode == BotChatsMode.Off) return ([], 0);
-        var own = sessions.Where(s => s.Profile == bot && !s.Archived).ToList();
+        var chosen = new HashSet<string>(StringComparer.Ordinal);
+        var manual = shortcuts == null
+            ? new List<SessionSummary>()
+            : shortcuts.Where(s => s.Profile == bot && !s.Archived && chosen.Add(s.Id)).ToList();
+        if (choice.Mode == BotChatsMode.Off) return (manual, 0);
+        var own = sessions.Where(s => s.Profile == bot && !s.Archived && !chosen.Contains(s.Id)).ToList();
         if (choice.Mode == BotChatsMode.Active)
         {
             static int Rank(SessionSummary s) => s.Status == SessionStatus.NeedsInput ? 0 : s.IsRunning || s.Status == SessionStatus.Working ? 1 : 2;
             var active = own.Where(IsActive).OrderBy(Rank).ThenByDescending(s => s.LastActive ?? DateTimeOffset.MinValue).Take(MaxPinned).ToList();
-            return (active, own.Count - active.Count);
+            manual.AddRange(active);
+            return (manual, own.Count - active.Count);
         }
         var shown = own.Where(s => s.Pinned).Take(MaxPinned).ToList();
         if (choice.Mode == BotChatsMode.Recent)
             shown.AddRange(own.Where(s => !s.Pinned).OrderByDescending(s => s.LastActive ?? DateTimeOffset.MinValue).Take(choice.Count));
-        return (shown, own.Count - shown.Count);
+        manual.AddRange(shown);
+        return (manual, own.Count - shown.Count);
     }
 }

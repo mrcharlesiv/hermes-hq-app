@@ -176,7 +176,8 @@ public sealed class TerminalConnection
                 lock (_lock)
                 {
                     _socket = socket;
-                    _sentSize = _size;
+                    // H27: record the size actually sent during dial so any Resize() during handshake triggers a follow-up resize.
+                    _sentSize = size;
                 }
                 _heard = DateTime.UtcNow;
                 using var watch = CancellationTokenSource.CreateLinkedTokenSource(ct);

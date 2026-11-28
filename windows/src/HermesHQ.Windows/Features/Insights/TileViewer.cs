@@ -1,6 +1,8 @@
 using Hermes.Core.Insights;
 using Hermes.Core.Net;
 using HermesHQ.Controls;
+using HermesHQ.Features.Settings;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
@@ -14,6 +16,7 @@ namespace HermesHQ.Features.Insights;
 /// An opened tile (HTMLPageSheet over the Tiles page, the Mac's sheet in 37-tile-open-desktop-light.png): its name and
 /// "file.html · updated 5 min ago" over the page, Reload, Share… and Done in its bar. A page is live (its buttons ask
 /// the bot); an image fits the sheet; Markdown and text read as they do in a chat. Escape or Done closes it.
+/// Supports in-place WebView2 theme switching via `window.__hqApplyTheme(css, isDark, ground)`.
 public sealed class TileViewer : Grid
 {
     private readonly GatewaySession _session;
@@ -21,7 +24,10 @@ public sealed class TileViewer : Grid
     private readonly Border _body;
     private readonly TextBlock _sub;
     private readonly string _fileName;
+    private readonly DispatcherQueue _ui;
     private WebView2? _web;
+    private string? _shownHtml;
+    private string? _themeKey;
     private bool _closed;
 
     public event Action? Closed;
@@ -34,6 +40,7 @@ public sealed class TileViewer : Grid
         _session = session;
         _pin = pin;
         _fileName = pin.Label;
+        _ui = DispatcherQueue.GetForCurrentThread();
         Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0x66, 0, 0, 0));
         var title = new TextBlock { Text = name, FontWeight = FontWeights.SemiBold, FontSize = 15, HorizontalAlignment = HorizontalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
         AutomationProperties.SetHeadingLevel(title, Microsoft.UI.Xaml.Automation.Peers.AutomationHeadingLevel.Level1);
@@ -66,8 +73,26 @@ public sealed class TileViewer : Grid
         KeyDown += (_, e) => { if (e.Key == Windows.System.VirtualKey.Escape) { e.Handled = true; Close(); } };
         KeyboardAcceleratorPlacementMode = KeyboardAcceleratorPlacementMode.Hidden;
         KeyboardAccelerators.Add(Accel(Windows.System.VirtualKey.R, () => _ = LoadAsync(fresh: true)));
+        ActualThemeChanged += (_, _) => _ = ApplyThemeAsync();
+        ThemeService.Changed += OnThemeServiceChanged;
         Loaded += (_, _) => { done.Focus(FocusState.Programmatic); _ = LoadAsync(fresh: false); };
     }
+
+    private void OnThemeServiceChanged() => _ui.TryEnqueue(() => { if (!_closed) _ = ApplyThemeAsync(); });
+
+    private async Task ApplyThemeAsync()
+    {
+        if (_closed || _web?.CoreWebView2 == null) return;
+        var dark = ActualTheme == ElementTheme.Dark;
+        var key = TileWeb.ThemeKey(dark);
+        if (_themeKey == key) return;
+        _themeKey = key;
+        var needsReload = await TileWeb.ApplyThemeAsync(_web, dark);
+        if (needsReload && !_closed && _shownHtml != null && _web?.CoreWebView2 != null)
+            TileWeb.Show(_web, _shownHtml);
+    }
+
+    public WebView2? WebView => _web;
 
     private static KeyboardAccelerator Accel(Windows.System.VirtualKey key, Action run)
     {
@@ -83,6 +108,7 @@ public sealed class TileViewer : Grid
     {
         if (_closed) return;
         _closed = true;
+        ThemeService.Changed -= OnThemeServiceChanged;
         HermesHQ.Services.UiTree.DeactivateProgressRings(_body);
         CloseWeb();
         Closed?.Invoke();
@@ -93,6 +119,8 @@ public sealed class TileViewer : Grid
         if (_web is { } web)
         {
             _web = null;
+            _shownHtml = null;
+            _themeKey = null;
             if (ReferenceEquals(_body.Child, web)) _body.Child = null;
             try { web.Close(); } catch (Exception) { }
         }
@@ -121,7 +149,9 @@ public sealed class TileViewer : Grid
                         var web = new WebView2();
                         _web = web;
                         _body.Child = web;
-                        if (!await TileWeb.PrepareAsync(web, ActualTheme == ElementTheme.Dark, talks: true, inTile: false))
+                        var dark = ActualTheme == ElementTheme.Dark;
+                        _themeKey = TileWeb.ThemeKey(dark);
+                        if (!await TileWeb.PrepareAsync(web, dark, talks: true, inTile: false))
                         {
                             if (_closed || !ReferenceEquals(_web, web)) { try { web.Close(); } catch (Exception) { } }
                             return;
@@ -136,6 +166,7 @@ public sealed class TileViewer : Grid
                             if (!_closed && TileWeb.Read(e) is { } m && _web != null) WebMessage?.Invoke(_pin, m, _web);
                         };
                     }
+                    _shownHtml = html;
                     TileWeb.Show(_web, html);
                     break;
                 }

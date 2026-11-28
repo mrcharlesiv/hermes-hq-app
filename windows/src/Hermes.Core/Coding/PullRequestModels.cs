@@ -52,6 +52,8 @@ public sealed record SessionPRSize(int Files, int Additions, int Deletions)
 {
     /// "+128 −12" using true minus (U+2212), matching `PRVerdict.swift`.
     public string FormattedDelta => $"+{Additions} \u2212{Deletions}";
+    /// Alias matching `SessionPRSize.diffText` in `HermesKit/Model/PullRequestFacts.swift`.
+    public string DiffText => FormattedDelta;
     public string SpokenDelta => $"{Additions} added, {Deletions} removed across {Files} {(Files == 1 ? "file" : "files")}";
 }
 
@@ -283,6 +285,25 @@ public abstract record PRVerdict
         _ => "",
     };
 
+    /// Prefix glyph matching `PRVerdictMark` (`App/Sessions/PRVerdictView.swift`): `✓`, `✕`, or empty.
+    public string Glyph => this switch
+    {
+        Passed => "\u2713",
+        Failing => "\u2715",
+        _ => "",
+    };
+
+    /// Compact formatted text matching `PRVerdictView`: `✓ +128 −12` / `✓` / `✕ N checks failing` / `checks running` / `+128 −12`.
+    public string DisplayText => this switch
+    {
+        Passed { DiffSize: { } s } => $"\u2713 {s.FormattedDelta}",
+        Passed => "\u2713",
+        Failing { Count: var c } => $"\u2715 {(c == 1 ? "1 check failing" : $"{c} checks failing")}",
+        Running => "checks running",
+        SizeOnly { DiffSize: var s } => s.FormattedDelta,
+        _ => "",
+    };
+
     public PRVerdictTone Tone => this switch
     {
         Failing => PRVerdictTone.Critical,
@@ -307,6 +328,12 @@ public abstract record PRVerdict
     }
 
     public static PRVerdict? From(SessionPRStatus status) => From(status.Checks, status.Size);
+
+    /// Active-row verdict matching `PRVerdict.of(_:)` in `HermesKit/Model/PullRequestFacts.swift` (draft or open, not manually closed).
+    public static PRVerdict? ForActiveRow(SessionPRStatus? status) =>
+        status != null && !status.Manual && status.State is SessionPRState.Draft or SessionPRState.Open
+            ? From(status.Checks, status.Size)
+            : null;
 
     public static PRVerdict? From(SessionPRItem item) => From(item.Checks, item.Size);
 }
@@ -502,20 +529,24 @@ public static class PRFacts
         if (!Uri.TryCreate(raw.Trim(), UriKind.Absolute, out var uri)) return null;
         if (!string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)) return null;
         if (!string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase)) return null;
+        if (!string.IsNullOrEmpty(uri.UserInfo) || !uri.IsDefaultPort) return null;
         var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (segments.Length < 4) return null;
         if (segments[2] is not ("pull" or "commit" or "tree" or "compare")) return null;
         return uri.AbsoluteUri;
     }
 
-    /// Strict HTTPS URL on github.com or known CI hosts for a check run.
+    /// Strict `https://github.com` URL for a check run (`PRFacts.validCheckURL` in `HermesKit/Model/PullRequestFacts.swift`).
+    /// Rejects non-HTTPS schemes, any host other than `github.com`, embedded credentials, custom ports, and empty paths.
     public static string? ValidCheckRunUrl(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw)) return null;
         if (!Uri.TryCreate(raw.Trim(), UriKind.Absolute, out var uri)) return null;
         if (!string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)) return null;
-        if (string.IsNullOrEmpty(uri.Host)) return null;
-        if (uri.IsLoopback) return null;
+        if (!string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase)) return null;
+        if (!string.IsNullOrEmpty(uri.UserInfo)) return null;
+        if (!uri.IsDefaultPort) return null;
+        if (string.IsNullOrEmpty(uri.AbsolutePath) || uri.AbsolutePath == "/") return null;
         return uri.AbsoluteUri;
     }
 

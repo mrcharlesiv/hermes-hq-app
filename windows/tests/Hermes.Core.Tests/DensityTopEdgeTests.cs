@@ -192,7 +192,8 @@ public class DensityTopEdgeTests
     {
         var panes = Source("Features", "Settings", "SettingsPanes.cs");
         var appearance = Body(panes, "private static FrameworkElement Appearance(SettingsPage page)");
-        Assert.Contains("Kit.Section(WorkingRing.SectionTitle, DensityRow.ListsNote(state), DensityRow.Shown(state) ? DensityControl(state) : null, WorkingRingRow())", appearance);
+        Assert.Contains("Kit.Section(WorkingRing.SectionTitle, DensityRow.ListsNote(state), DensityRow.Shown(state) ? DensityControl(state) : null, BotChatsStyleControl(), WorkingRingRow())",
+            Regex.Replace(appearance, @"\s+", " "));
         Assert.DoesNotContain("TopEdge", appearance);
         var row = Body(panes, "private static FrameworkElement DensityControl(ThemeState state)");
         Assert.Contains("DensityRow.Label", row);

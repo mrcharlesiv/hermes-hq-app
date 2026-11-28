@@ -143,6 +143,17 @@ public static class TalkFeature
         public string Profile => _session.Profile;
         public string BotName => string.IsNullOrWhiteSpace(_session.MemoBotName) ? _session.Title : _session.MemoBotName;
         public bool IsBusy => _session.Busy;
+
+        public bool IsAnsweringVoiceRecord
+        {
+            get
+            {
+                if (!_session.Busy) return false;
+                var lastUser = _session.Messages.LastOrDefault(m => m.Role == Role.User);
+                return lastUser != null && VoiceChatRecordCodec.IsVoiceChatRecord(lastUser.Text);
+            }
+        }
+
         public event Action? Changed;
 
         public SpokenReply? NewestReply() => SpokenReply.Newest(_session.Messages);
@@ -155,17 +166,69 @@ public static class TalkFeature
             {
                 var m = msgs[i];
                 if (m.Role is not (Role.User or Role.Assistant)) continue;
+                if (m.Role == Role.User && VoiceChatRecordCodec.SeedSummary(m.Text) is { } voiceSeed)
+                {
+                    list.Add(("user", voiceSeed));
+                    continue;
+                }
                 var text = m.Role == Role.Assistant ? SpokenReply.Of(m).Text : m.Text;
+                if (m.Role == Role.Assistant && string.Equals(text.Trim(), "NO_REPLY", StringComparison.Ordinal))
+                    continue;
                 if (!string.IsNullOrWhiteSpace(text))
                     list.Add((m.Role == Role.User ? "user" : "assistant", text));
             }
             return list;
         }
 
-        public Task<SendOutcome> SendTurnAsync(string text, CancellationToken ct = default) =>
-            _session.SendAsync(text, ct);
+        public async Task<SendOutcome> SendTurnAsync(string text, CancellationToken ct = default)
+        {
+            // Never steer a real spoken/delegated turn into a running NO_REPLY voice-record turn.
+            if (IsAnsweringVoiceRecord)
+                await _session.StopAsync();
+            return await _session.SendAsync(text, ct);
+        }
+
+        /// Queues a `[Voice chat transcript …]` record as an ordinary (non-hidden) user message, waiting for any
+        /// running reply to finish instead of steering into it (whose reply the `NO_REPLY` note would silence).
+        public Task<SendOutcome> SendVoiceRecordAsync(string text, CancellationToken ct = default) =>
+            QueueVoiceRecordAsync(_session, text, ct);
 
         public Task StopTurnAsync() => _session.StopAsync();
+
+        private static async Task<SendOutcome> QueueVoiceRecordAsync(ChatSession session, string text, CancellationToken ct)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return SendOutcome.Refused;
+            if (session.Busy)
+            {
+                var idle = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                void OnTurnEnded(bool isIdle)
+                {
+                    if (isIdle || !session.Busy) idle.TrySetResult(true);
+                }
+                void OnChanged()
+                {
+                    if (!session.Busy) idle.TrySetResult(true);
+                }
+                session.TurnEnded += OnTurnEnded;
+                session.Changed += OnChanged;
+                try
+                {
+                    if (!session.Busy) idle.TrySetResult(true);
+                    using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    waitCts.CancelAfter(TimeSpan.FromMinutes(3));
+                    using var reg = waitCts.Token.Register(() => idle.TrySetResult(false));
+                    await idle.Task;
+                }
+                finally
+                {
+                    session.TurnEnded -= OnTurnEnded;
+                    session.Changed -= OnChanged;
+                }
+                if (ct.IsCancellationRequested || AppShutdown.Stopping) return SendOutcome.Refused;
+                return await session.SendAsync(text, ct, queued: true);
+            }
+            return await session.SendAsync(text, ct, queued: false);
+        }
 
         private void OnChanged() => Changed?.Invoke();
 

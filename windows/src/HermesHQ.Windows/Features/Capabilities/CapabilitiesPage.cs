@@ -1,15 +1,19 @@
 using Hermes.Core.Capabilities;
 using HermesHQ.Controls;
+using HermesHQ.Features.ConnectApps;
 using HermesHQ.Shell;
+using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
+using Windows.UI;
 
 namespace HermesHQ.Features.Capabilities;
 
-/// The Capabilities place: the four rows (Skills, Tools, Connectors, Plugins) and Composio's, each list its own page
-/// with its own Bot row, search and ⋯ (App/Capabilities/CapabilitiesHub.swift, CapabilitiesViewController.swift).
+/// The Capabilities place: the four rows (Skills, Tools, Connectors, Plugins), Connect Apps (Composio),
+/// and discovered Plugin Pages (App/Capabilities/CapabilitiesHub.swift, PluginPagesMore.swift).
 [Microsoft.UI.Xaml.Data.Bindable]
 public sealed partial class CapabilitiesPage : Page
 {
@@ -37,14 +41,31 @@ public sealed partial class CapabilitiesPage : Page
     }
 }
 
-/// Capabilities' four rows (CapabilitiesHubView): Connectors says "1 Issue" in red when a connector needs the owner,
-/// and then opens on the bot of the newest issue, scrolled to it (3x §8.5).
+/// Capabilities' four rows (CapabilitiesHubView), Connect Apps (Composio), and Plugin Pages:
+/// Connectors says "1 Issue" in red when a connector needs the owner (3x §8.5), Plugins shows
+/// `PluginUpdateReminder.BadgeLabel` ("1 Update" / "N Updates"), and Plugin Pages lists discovered
+/// `PluginDashboardPage`s.
 internal sealed class HubScreen(string? profile, bool botLocked) : Screen
 {
     public override string Title => botLocked ? $"{CapabilitiesServices.BotName(profile ?? "default")}’s Capabilities" : "Capabilities";
 
-    public override void Shown() => CapabilitiesServices.Issues.Changed += Redraw;
-    public override void Hidden() => CapabilitiesServices.Issues.Changed -= Redraw;
+    public override void Shown()
+    {
+        CapabilitiesServices.Issues.Changed += Redraw;
+        PluginUpdateReminder.Changed += Redraw;
+        PluginPagesService.Changed += Redraw;
+        PluginPagesService.Register();
+        ConnectAppsFeature.Register();
+        PluginPagesService.Refresh(reconnect: true);
+    }
+
+    public override void Hidden()
+    {
+        CapabilitiesServices.Issues.Changed -= Redraw;
+        PluginUpdateReminder.Changed -= Redraw;
+        PluginPagesService.Changed -= Redraw;
+    }
+
     private void Redraw() => Render();
 
     public static string GlyphOf(CapabilitiesTab tab) => tab switch
@@ -72,13 +93,93 @@ internal sealed class HubScreen(string? profile, bool botLocked) : Screen
             UIElement? value = null;
             if (tab == CapabilitiesTab.Connectors && issues.RowText is { } text)
                 value = Kit.Text(text, 14, color: Kit.Critical, wrap: false);
+            else if (tab == CapabilitiesTab.Plugins && PluginUpdateReminder.BadgeLabel is { } updates)
+                value = Kit.Text(updates, 14, color: Kit.Accent, wrap: false);
+
             var row = Kit.Row(tab.Title(), leading: Kit.Tile(GlyphOf(tab), 28), trailing: value, click: () => Open(tab), chevron: true);
-            if (tab == CapabilitiesTab.Connectors && issues.Summary is { } spoken) AutomationProperties.SetHelpText(row, spoken);
+            if (tab == CapabilitiesTab.Connectors && issues.Summary is { } spoken)
+                AutomationProperties.SetHelpText(row, spoken);
+            else if (tab == CapabilitiesTab.Plugins && PluginUpdateReminder.Spoken is { } updateSpoken)
+                AutomationProperties.SetHelpText(row, updateSpoken);
             AutomationProperties.SetAutomationId(row, $"capabilities.row.{tab.Id()}");
             return row;
         });
         page.Children.Add(Kit.Section(null, rows, CapabilitiesWords.HubFooter));
-        // Composio's row (Connect Apps with your own Composio key) waits for the Composio port; see PARITY.md.
+
+        // Connect Apps (Composio): one account shared across chosen bots (`CapabilitiesHubView.showsComposio`).
+        if (!botLocked)
+        {
+            var connectRow = Kit.Row(
+                "Connect Apps",
+                "Composio",
+                leading: Kit.Tile("\uE703", 28),
+                click: () =>
+                {
+                    ConnectAppsFeature.Register();
+                    Navigator.Open("connect-apps");
+                },
+                chevron: true);
+            AutomationProperties.SetAutomationId(connectRow, "capabilities.row.composio");
+            page.Children.Add(Kit.Section(null, [connectRow], CapabilitiesWords.ComposioFooter));
+        }
+
+        // Plugin Pages: dynamic section listing discovered Hermes dashboard plugin pages (`PluginPagesMore.swift`).
+        var listed = PluginPagesService.Listed();
+        if (botLocked && !string.IsNullOrEmpty(profile))
+            listed = [.. listed.Where(item => item.Profiles.Contains(profile))];
+
+        if (listed.Count > 0)
+        {
+            var manyBots = !botLocked && CapabilitiesServices.Bots().Count > 1;
+            var pageRows = listed.Select(item =>
+            {
+                UIElement? trailing = null;
+                if (manyBots)
+                {
+                    var label = item.Profiles.Count == 1
+                        ? CapabilitiesServices.BotName(item.Profiles[0])
+                        : $"{item.Profiles.Count} Bots";
+                    trailing = Kit.Text(label, 13, secondary: true, wrap: false);
+                }
+                var row = Kit.Row(
+                    item.Page.Label,
+                    leading: PluginPageTile(item.Page.Glyph),
+                    trailing: trailing,
+                    click: () =>
+                    {
+                        PluginPagesService.Register();
+                        if (botLocked && !string.IsNullOrEmpty(profile))
+                            PluginPagesService.Open(item.Page, profile);
+                        else
+                            Navigator.Open("plugin-page", item.Page);
+                    },
+                    chevron: true);
+                AutomationProperties.SetAutomationId(row, $"capabilities.row.plugin-page.{item.Page.Name}");
+                return row;
+            });
+            page.Children.Add(Kit.Section("Plugin Pages", pageRows));
+        }
+    }
+
+    private static UIElement PluginPageTile(string glyph)
+    {
+        var rgb = PluginPagesService.TileRgb;
+        var tileColor = Color.FromArgb(255, (byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb);
+        return new Border
+        {
+            Width = 28,
+            Height = 28,
+            CornerRadius = new CornerRadius(7),
+            Background = new SolidColorBrush(tileColor),
+            Child = new FontIcon
+            {
+                Glyph = glyph,
+                FontSize = 13,
+                Foreground = new SolidColorBrush(Colors.White),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
     }
 }
 

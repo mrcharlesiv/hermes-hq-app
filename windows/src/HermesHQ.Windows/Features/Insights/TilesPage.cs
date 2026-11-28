@@ -1,12 +1,15 @@
-using System.Text.RegularExpressions;
+using System.Text.Json.Nodes;
 using Hermes.Core;
 using Hermes.Core.Chat;
 using Hermes.Core.Composer;
 using Hermes.Core.Insights;
 using Hermes.Core.Model;
 using Hermes.Core.Net;
+using Hermes.Core.Settings;
 using HermesHQ.Features.Attachments;
 using HermesHQ.Features.Bots;
+using HermesHQ.Features.Composer;
+using HermesHQ.Features.Settings;
 using HermesHQ.Services;
 using HermesHQ.Shell;
 using Microsoft.UI.Text;
@@ -15,6 +18,7 @@ using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
+using Windows.ApplicationModel.DataTransfer;
 using Windows.System;
 
 namespace HermesHQ.Features.Insights;
@@ -23,11 +27,20 @@ namespace HermesHQ.Features.Insights;
 /// LiveTiles.swift, TileUpdates.swift, TilesV2Actions.swift): the pages, pictures and files pinned from the bots' chats,
 /// as a dashboard. Supports Small, Medium, Tall, Banner, Large, Extra Large tiles; page icons; Empty Tiles with New Tile
 /// + Open Artifacts (hiding bar filter/search/count/View As when empty); Edit mode batch controls + blue corner resize
-/// handles; Tile Activity dialog; Change… / Duplicate…; and writable Versions Roll Back / Restore.
+/// handles; Tile Activity dialog; Change… / Duplicate…; writable Versions Roll Back / Restore; fast in-place WebView2
+/// theme switching (`__hqApplyTheme`) + 4-view warm pool; live-tile busy/1s throttle guards; PNG image export; persisted
+/// hidden tile makers with inline making cards, changing veils, changed rings, replyGrace, failure recovery, upgraded
+/// Updates menu (Keep Updated, Fix with Bot, View Job/Last Run, Model override), drag-reorder/drop page pills, and Ctrl+1..9.
 [Microsoft.UI.Xaml.Data.Bindable]
 public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
 {
+    public const int WarmLimit = 4;
+    private const string PageDragPrefix = "hq-page:";
+    private const string TileDragPrefix = "hq-tile:";
+
     private static readonly IKeyValueStore Prefs = new JsonFileStore(Path.Combine(AppPaths.Root, "tiles-view.json"));
+    private static readonly IKeyValueStore PendingPrefs = new JsonFileStore(Path.Combine(AppPaths.Root, "tile-pending-makers.json"));
+    private static readonly IKeyValueStore TileModelPrefs = new JsonFileStore(Path.Combine(AppPaths.Root, "tile-models.json"));
     private static readonly Dictionary<string, (TilePinStore Pins, TileHidden Hidden, TileSync Sync, TileUpdates Updates)> Accounts = [];
     private static readonly List<ActiveTileMaker> ActiveMakers = [];
 
@@ -37,16 +50,20 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
     private TileUpdates? _updates;
     private TilePictures? _pictures;
     private HermesClient? _client;
+    private string? _warmAccount;
     private IReadOnlyList<Bot> _bots = [];
     private string _scope = "all";
     private string _query = "";
     private bool _editing;
     private readonly HashSet<string> _selected = [];
+    private readonly HashSet<string> _ringedPins = new(StringComparer.Ordinal);
     private readonly Dictionary<string, TileCell> _cells = [];
+    private readonly TileLiveGuard _liveGuard = new();
     private readonly Grid _header;
     private readonly TextBlock _count;
     private readonly StackPanel _headerButtons;
     private readonly StackPanel _band;
+    private readonly StackPanel _makingBar;
     private readonly ScrollViewer _scroll;
     private readonly Canvas _canvas;
     private readonly Grid _root;
@@ -85,6 +102,8 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
         _header = new Grid { Padding = new Thickness(GridInset, 0, 12, 4), MinHeight = 32, Children = { _count, _headerButtons } };
         _band = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Padding = new Thickness(GridInset, 2, GridInset, 8), Visibility = Visibility.Collapsed };
         AutomationProperties.SetName(_band, "Pages");
+        _makingBar = new StackPanel { Spacing = 6, Padding = new Thickness(GridInset, 2, GridInset, 8), Visibility = Visibility.Collapsed };
+        AutomationProperties.SetAutomationId(_makingBar, "tiles.making.list");
         _canvas = new Canvas();
         _scroll = new ScrollViewer { Content = _canvas, HorizontalScrollMode = ScrollMode.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         AutomationProperties.SetAutomationId(_scroll, "pinned.list");
@@ -92,11 +111,14 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
         _root = new Grid();
         _root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         _root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        _root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         _root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         _root.Children.Add(_header);
         Grid.SetRow(_band, 1);
         _root.Children.Add(_band);
-        Grid.SetRow(_scroll, 2);
+        Grid.SetRow(_makingBar, 2);
+        _root.Children.Add(_makingBar);
+        Grid.SetRow(_scroll, 3);
         _root.Children.Add(_scroll);
         _toast = new Border
         {
@@ -118,12 +140,37 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
         BarActions.Children.Add(_filter);
         BarActions.Children.Add(_search);
 
-        var newAccel = new KeyboardAccelerator { Key = VirtualKey.N, Modifiers = VirtualKeyModifiers.Control };
-        newAccel.Invoked += (s, e) => { e.Handled = true; _ = ShowNewTileAsync(); };
         KeyboardAcceleratorPlacementMode = KeyboardAcceleratorPlacementMode.Hidden;
+        var newAccel = new KeyboardAccelerator { Key = VirtualKey.N, Modifiers = VirtualKeyModifiers.Control };
+        newAccel.Invoked += (s, e) => { if (!ReadOnlyGateway) { e.Handled = true; _ = ShowNewTileAsync(); } };
         KeyboardAccelerators.Add(newAccel);
 
-        ActualThemeChanged += (_, _) => { ClearCells(); Render(); };
+        // [tiles-v2] Ctrl+1..9 switches Dashboard pages when multiple pages exist.
+        for (var i = 0; i < 9; i++)
+        {
+            var pageIndex = i;
+            var accel = new KeyboardAccelerator { Key = VirtualKey.Number1 + i, Modifiers = VirtualKeyModifiers.Control };
+            accel.Invoked += (_, e) =>
+            {
+                if (!ShowsPages || _pins == null || _pins.Pages.Count <= 1 || pageIndex >= _pins.Pages.Count) return;
+                e.Handled = true;
+                SwitchToPage(_pins.Pages[pageIndex].Id);
+            };
+            KeyboardAccelerators.Add(accel);
+        }
+
+        // [28b14acf7] Update existing live WebView2 tiles in place instead of destroying and recreating cells.
+        ActualThemeChanged += (_, _) => ApplyThemeToCells();
+    }
+
+    private void OnThemeServiceChanged() => OnUi(ApplyThemeToCells);
+
+    private void ApplyThemeToCells()
+    {
+        if (AppShutdown.Stopping) return;
+        var dark = ActualTheme == ElementTheme.Dark;
+        foreach (var cell in _cells.Values)
+            _ = cell.ApplyThemeAsync(dark);
     }
 
     private void ClearCells()
@@ -131,6 +178,27 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
         foreach (var cell in _cells.Values) cell.CloseWeb();
         _cells.Clear();
         _canvas.Children.Clear();
+    }
+
+    /// [tiles-v2] Keeps up to `WarmLimit` (4) recently shown WebView2 tiles warm across tab/page switches,
+    /// closing older WebView2 instances cleanly.
+    private void TrimWarmPool(HashSet<string>? keepIds = null)
+    {
+        var ranked = _cells
+            .Where(kv => keepIds == null || !keepIds.Contains(kv.Key))
+            .OrderByDescending(kv => kv.Value.HasWeb ? 1 : 0)
+            .ThenByDescending(kv => kv.Value.ShownAt)
+            .Select(kv => kv.Key)
+            .ToList();
+        var allowedWarm = keepIds == null ? WarmLimit : Math.Max(0, WarmLimit - keepIds.Count);
+        foreach (var id in ranked.Skip(allowedWarm))
+        {
+            if (_cells.Remove(id, out var cell))
+            {
+                cell.CloseWeb();
+                _canvas.Children.Remove(cell);
+            }
+        }
     }
 
     public void KeyRefresh() => RefreshAllTiles();
@@ -169,14 +237,22 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
         _life?.Cancel();
         _life = new CancellationTokenSource();
         _client = Client;
-        ClearCells();
+        ThemeService.Changed -= OnThemeServiceChanged;
+        ThemeService.Changed += OnThemeServiceChanged;
         if (_client == null)
         {
+            ClearCells();
+            _warmAccount = null;
             _filter.Visibility = _search.Visibility = _newTileBar.Visibility = _activityBar.Visibility = Visibility.Collapsed;
             SetBody(Kit.Empty("", TileWords.NoTilesYet, TileWords.HowTo));
             return;
         }
         var account = _client.AccountId;
+        if (_warmAccount != account)
+        {
+            ClearCells();
+            _warmAccount = account;
+        }
         (_pins, _hidden, _sync, _updates) = Ensure(_client);
         _pictures = TilePictures.Of(account);
         _pins.Changed += OnPinsChanged;
@@ -185,6 +261,8 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
         _scope = Prefs.Get("scope." + account) is { } s && (s == "all" || _bots.Any(b => b.Name == s)) ? s : "all";
         BuildFilter();
         SetBody(_overlay);
+        foreach (var remembered in TileChats.ChatIds(account, PendingPrefs)) TileChats.RememberSession(remembered);
+        RestorePendingMakers();
         Render();
         var ct = _life.Token;
         _ = LoadBotsAsync(ct);
@@ -197,12 +275,15 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
     {
         _life?.Cancel();
         _life = null;
+        ThemeService.Changed -= OnThemeServiceChanged;
         _toastTimer?.Stop();
         _toastTimer = null;
         if (_pins != null) _pins.Changed -= OnPinsChanged;
         if (_hidden != null) _hidden.Changed -= OnPinsChanged;
+        _updates?.CancelAllPolls();
         _viewer?.Close();
-        ClearCells();
+        UiTree.DeactivateProgressRings(_makingBar);
+        TrimWarmPool();
         _selected.Clear();
     }
 
@@ -214,7 +295,12 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
         try
         {
             _bots = await _client.BotsAsync(ct);
-            OnUi(() => { BuildFilter(); Render(); });
+            OnUi(() =>
+            {
+                BuildFilter();
+                RestorePendingMakers();
+                Render();
+            });
         }
         catch (Exception e) when (e is GatewayException or OperationCanceledException) { }
     }
@@ -324,7 +410,6 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
             {
                 _scope = id;
                 if (_client != null) Prefs.Set("scope." + _client.AccountId, id);
-                _cells.Clear();
                 Render();
                 BuildFilter();
             };
@@ -344,6 +429,31 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
     // ------------------------------------------------------------------ what shows
 
     private bool ShowsPages => _scope == "all" && _query.Length == 0;
+
+    private List<ActiveTileMaker> AccountMakers() =>
+        _client == null ? [] : ActiveMakers.Where(m => m.AccountId == _client.AccountId && m.Watching).ToList();
+
+    private ActiveTileMaker? WorkingMakerFor(string pinId) =>
+        _client == null ? null : ActiveMakers.FirstOrDefault(m => m.AccountId == _client.AccountId && m.Watching && m.PinId == pinId);
+
+    private bool IsWorkingOn(string pinId) => WorkingMakerFor(pinId) != null;
+
+    private static string? MakersHeaderSuffix(IReadOnlyList<ActiveTileMaker> makers)
+    {
+        if (makers.Count == 0) return null;
+        var making = makers.Count(m => m.PinId == null);
+        var changing = makers.Count(m => m.PinId != null);
+        if (making > 0 && changing > 0) return $"Making {making}, changing {changing}…";
+        if (making > 0) return making == 1 ? "Making a tile…" : $"Making {making} tiles…";
+        return changing == 1 ? "Changing a tile…" : $"Changing {changing} tiles…";
+    }
+
+    private void SwitchToPage(string pageId)
+    {
+        if (_pins == null || _pins.CurrentPage == pageId) return;
+        _pins.CurrentPage = pageId;
+        Render();
+    }
 
     /// The tiles on screen: not removed, the bot picked, the page shown, the search's.
     private List<TilePin> Visible()
@@ -366,17 +476,41 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
         return pin.SessionTitle.Length == 0 ? bot : $"{bot} · {pin.SessionTitle}";
     }
 
+    private void RenderMakingBar(IReadOnlyList<ActiveTileMaker> makers)
+    {
+        UiTree.DeactivateProgressRings(_makingBar);
+        _makingBar.Children.Clear();
+        if (makers.Count == 0)
+        {
+            _makingBar.Visibility = Visibility.Collapsed;
+            return;
+        }
+        _makingBar.Visibility = Visibility.Visible;
+        foreach (var maker in makers)
+        {
+            var m = maker;
+            var card = TileMakingCard.Create(
+                m,
+                openChat: () => Navigator.Go(new ChatDestination(m.Bot.Name, m.SessionId, m.DisplayTitle)),
+                stop: () => m.CancelAction?.Invoke());
+            _makingBar.Children.Add(card);
+        }
+    }
+
     private void Render()
     {
         if (_pins == null || _client == null) return;
         var shown = Visible();
-        // [tiles-v2] Hide filter, Search Tiles, "0 Items", and View As when Tiles is empty (with no active query/filter),
+        var accountMakers = AccountMakers();
+        RenderMakingBar(accountMakers);
+
+        // [tiles-v2] Hide filter, Search Tiles, "0 Items", and View As when Tiles is empty (with no active query/filter/makers),
         // matching Mac build 1264+ ArtifactsViewController empty chrome.
-        var emptyNoControls = shown.Count == 0 && _query.Length == 0 && _scope == "all";
+        var emptyNoControls = shown.Count == 0 && _query.Length == 0 && _scope == "all" && accountMakers.Count == 0;
         _filter.Visibility = !emptyNoControls && _bots.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
         _search.Visibility = emptyNoControls ? Visibility.Collapsed : Visibility.Visible;
-        _newTileBar.Visibility = emptyNoControls ? Visibility.Collapsed : Visibility.Visible;
-        _activityBar.Visibility = !emptyNoControls || ActiveMakers.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        _newTileBar.Visibility = !emptyNoControls && !ReadOnlyGateway ? Visibility.Visible : Visibility.Collapsed;
+        _activityBar.Visibility = !emptyNoControls || accountMakers.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         _header.Visibility = emptyNoControls && !_editing ? Visibility.Collapsed : Visibility.Visible;
 
         if (shown.Count == 0 && _editing)
@@ -386,37 +520,48 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
             _header.Visibility = emptyNoControls ? Visibility.Collapsed : Visibility.Visible;
         }
 
-        _count.Text = _editing && _selected.Count > 0
-            ? $"{_selected.Count} Selected"
-            : TileWords.ItemCount(shown.Count);
+        if (_editing && _selected.Count > 0)
+        {
+            _count.Text = $"{_selected.Count} Selected";
+        }
+        else
+        {
+            var baseCount = TileWords.ItemCount(shown.Count);
+            var makingWords = MakersHeaderSuffix(accountMakers);
+            _count.Text = makingWords == null ? baseCount : $"{baseCount} · {makingWords}";
+        }
         BuildHeaderButtons(shown);
         BuildBand();
         if (shown.Count == 0)
         {
-            _cells.Clear();
             _canvas.Children.Clear();
+            TrimWarmPool();
             _scroll.Content = EmptyState();
             return;
         }
         if (!ReferenceEquals(_scroll.Content, _canvas)) _scroll.Content = _canvas;
         var view = View;
-        var ids = shown.Select(p => p.Id).ToHashSet();
-        foreach (var gone in _cells.Keys.Where(k => !ids.Contains(k)).ToList()) _cells.Remove(gone);
+        var ids = shown.Select(p => p.Id).ToHashSet(StringComparer.Ordinal);
+        TrimWarmPool(ids);
         _selected.IntersectWith(ids);
         _canvas.Children.Clear();
         foreach (var pin in shown)
         {
             if (!_cells.TryGetValue(pin.Id, out var cell) || (string?)cell.Tag != Key(view))
             {
+                if (_cells.TryGetValue(pin.Id, out var stale)) stale.CloseWeb();
                 cell = MakeCell(pin, view);
                 _cells[pin.Id] = cell;
             }
+            cell.ShownAt = DateTimeOffset.UtcNow;
             cell.Update(pin);
             cell.SetName(_pins.Name(pin));
             cell.SetSubtitle(Subtitle(pin));
             cell.SetEditing(_editing);
             cell.SetSelected(_selected.Contains(pin.Id));
             cell.SetHealth(Health(pin.Id));
+            cell.SetWorking(WorkingMakerFor(pin.Id)?.TileWords);
+            cell.SetRinged(_ringedPins.Contains(pin.Id));
             _canvas.Children.Add(cell);
         }
         Layout();
@@ -439,27 +584,29 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
         var flyout = new MenuFlyout();
         flyout.Opening += (_, _) => FillMenu(flyout, cell.Pin);
         cell.ContextFlyout = flyout;
-        // Edit Tiles: drag a tile onto another's place.
+        // Edit Tiles (or dragging onto a page pill): drag a tile onto another tile or a page pill.
         cell.CanDrag = true;
         cell.AllowDrop = true;
         cell.DragStarting += (_, e) =>
         {
-            if (!_editing) { e.Cancel = true; return; }
-            e.Data.SetText(cell.Pin.Id);
-            e.Data.RequestedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.Move;
+            if (!_editing && (_pins == null || _pins.Pages.Count < 2)) { e.Cancel = true; return; }
+            e.Data.SetText(TileDragPrefix + cell.Pin.Id);
+            e.Data.RequestedOperation = DataPackageOperation.Move;
         };
-        cell.DragOver += (_, e) => { if (_editing) e.AcceptedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.Move; };
+        cell.DragOver += (_, e) => { if (_editing) e.AcceptedOperation = DataPackageOperation.Move; };
         cell.Drop += async (_, e) =>
         {
             if (!_editing) return;
             bool hasText;
-            try { hasText = e.DataView.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.Text); }
+            try { hasText = e.DataView.Contains(StandardDataFormats.Text); }
             catch (Exception) { return; }
             if (!hasText) return;
             var deferral = e.GetDeferral();
             try
             {
-                var id = await e.DataView.GetTextAsync();
+                var raw = await e.DataView.GetTextAsync();
+                if (raw.StartsWith(PageDragPrefix, StringComparison.Ordinal)) return;
+                var id = raw.StartsWith(TileDragPrefix, StringComparison.Ordinal) ? raw[TileDragPrefix.Length..] : raw;
                 if (id != cell.Pin.Id) { _pins?.Move(id, cell.Pin.Id); SyncSoon(); }
             }
             catch (Exception ex) { AppLog.Note("tiles", $"drop failed: {ex.GetType().Name}"); }
@@ -616,14 +763,17 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
                 _headerButtons.Children.Add(unpinSelected);
             }
 
-            var batchMenuBtn = new DropDownButton { Content = TileWords.Updates, FontSize = 12, Padding = new Thickness(10, 4, 8, 5) };
-            AutomationProperties.SetAutomationId(batchMenuBtn, "tiles.batch.updates");
-            var batchMenu = new MenuFlyout();
-            Item(batchMenu, TileWords.UpdateAllNow, "\uE72C", () => _ = UpdateAllPageTilesAsync());
-            Item(batchMenu, TileWords.PauseAllUpdates, "\uE769", () => _ = SetAllPageTilesPausedAsync(true));
-            Item(batchMenu, TileWords.ResumeAllUpdates, "\uE768", () => _ = SetAllPageTilesPausedAsync(false));
-            batchMenuBtn.Flyout = batchMenu;
-            _headerButtons.Children.Add(batchMenuBtn);
+            if (!ReadOnlyGateway)
+            {
+                var batchMenuBtn = new DropDownButton { Content = TileWords.Updates, FontSize = 12, Padding = new Thickness(10, 4, 8, 5) };
+                AutomationProperties.SetAutomationId(batchMenuBtn, "tiles.batch.updates");
+                var batchMenu = new MenuFlyout();
+                Item(batchMenu, TileWords.UpdateAllNow, "\uE72C", () => _ = UpdateAllPageTilesAsync());
+                Item(batchMenu, TileWords.PauseAllUpdates, "\uE769", () => _ = SetAllPageTilesPausedAsync(true));
+                Item(batchMenu, TileWords.ResumeAllUpdates, "\uE768", () => _ = SetAllPageTilesPausedAsync(false));
+                batchMenuBtn.Flyout = batchMenu;
+                _headerButtons.Children.Add(batchMenuBtn);
+            }
 
             var done = new Button { Content = TileWords.Done, Style = Kit.Style("AccentButtonStyle"), FontWeight = FontWeights.SemiBold };
             AutomationProperties.SetAutomationId(done, "tiles.edit.done");
@@ -640,23 +790,26 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
         {
             var item = new RadioMenuFlyoutItem { Text = TileWords.ViewTitle(v), GroupName = "view", IsChecked = View == v };
             AutomationProperties.SetAutomationId(item, "pins.view." + v.ToString().ToLowerInvariant());
-            item.Click += (_, _) => { View = v; _cells.Clear(); Render(); };
+            item.Click += (_, _) => { View = v; Render(); };
             menu.Items.Add(item);
         }
         if (View == TilesView.Grid)
         {
             menu.Items.Add(new MenuFlyoutSeparator());
             var names = new ToggleMenuFlyoutItem { Text = TileWords.ShowNames, IsChecked = ShowsNames };
-            names.Click += (_, _) => { ShowsNames = !ShowsNames; _cells.Clear(); Render(); };
+            names.Click += (_, _) => { ShowsNames = !ShowsNames; Render(); };
             menu.Items.Add(names);
             var edit = new MenuFlyoutItem { Text = TileWords.EditTiles, Icon = new FontIcon { Glyph = "" } };
             edit.Click += (_, _) => SetEditing(true);
             menu.Items.Add(edit);
         }
-        menu.Items.Add(new MenuFlyoutSeparator());
-        Item(menu, TileWords.UpdateAllNow, "\uE72C", () => _ = UpdateAllPageTilesAsync());
-        Item(menu, TileWords.PauseAllUpdates, "\uE769", () => _ = SetAllPageTilesPausedAsync(true));
-        Item(menu, TileWords.ResumeAllUpdates, "\uE768", () => _ = SetAllPageTilesPausedAsync(false));
+        if (!ReadOnlyGateway)
+        {
+            menu.Items.Add(new MenuFlyoutSeparator());
+            Item(menu, TileWords.UpdateAllNow, "\uE72C", () => _ = UpdateAllPageTilesAsync());
+            Item(menu, TileWords.PauseAllUpdates, "\uE769", () => _ = SetAllPageTilesPausedAsync(true));
+            Item(menu, TileWords.ResumeAllUpdates, "\uE768", () => _ = SetAllPageTilesPausedAsync(false));
+        }
         if (ShowsPages)
         {
             menu.Items.Add(new MenuFlyoutSeparator());
@@ -679,7 +832,8 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
         Render();
     }
 
-    /// The Tiles' pages as a row of pills (with optional page icon) under the header (DashboardPagesBar).
+    /// The Tiles' pages as a row of pills (with optional page icon, drag-to-reorder, and drop-tile-onto-page-pill)
+    /// under the header (DashboardPagesBar).
     private void BuildBand()
     {
         _band.Children.Clear();
@@ -715,11 +869,68 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
                 IsChecked = page.Id == pins.CurrentPage,
                 CornerRadius = new CornerRadius(14),
                 Padding = new Thickness(12, 4, 12, 5),
+                AllowDrop = true,
+                CanDrag = page.Id != TilePage.MainId,
             };
             AutomationProperties.SetName(pill, page.Name);
             AutomationProperties.SetAutomationId(pill, "dashboard.page." + page.Id);
-            pill.Click += (_, _) => { pins.CurrentPage = page.Id; _cells.Clear(); Render(); };
+            pill.Click += (_, _) => SwitchToPage(page.Id);
             pill.ContextFlyout = PageMenu(pins, page, index, pages.Count);
+
+            if (page.Id != TilePage.MainId)
+            {
+                pill.DragStarting += (_, e) =>
+                {
+                    e.Data.SetText(PageDragPrefix + page.Id);
+                    e.Data.RequestedOperation = DataPackageOperation.Move;
+                };
+            }
+            pill.DragOver += (_, e) =>
+            {
+                e.AcceptedOperation = DataPackageOperation.Move;
+                pill.BorderBrush = Kit.Brush("AccentFillColorDefaultBrush");
+                pill.BorderThickness = new Thickness(2);
+            };
+            pill.DragLeave += (_, _) =>
+            {
+                pill.ClearValue(Control.BorderBrushProperty);
+                pill.ClearValue(Control.BorderThicknessProperty);
+            };
+            pill.Drop += async (_, e) =>
+            {
+                pill.ClearValue(Control.BorderBrushProperty);
+                pill.ClearValue(Control.BorderThicknessProperty);
+                bool hasText;
+                try { hasText = e.DataView.Contains(StandardDataFormats.Text); }
+                catch (Exception) { return; }
+                if (!hasText) return;
+                var deferral = e.GetDeferral();
+                try
+                {
+                    var raw = await e.DataView.GetTextAsync();
+                    if (raw.StartsWith(PageDragPrefix, StringComparison.Ordinal))
+                    {
+                        var sourceId = raw[PageDragPrefix.Length..];
+                        if (sourceId != page.Id)
+                        {
+                            pins.ReorderPage(sourceId, page.Id);
+                            SyncSoon();
+                        }
+                    }
+                    else
+                    {
+                        var tileId = raw.StartsWith(TileDragPrefix, StringComparison.Ordinal) ? raw[TileDragPrefix.Length..] : raw;
+                        if (pins.IndexOf(tileId) >= 0)
+                        {
+                            pins.SetPage(page.Id, tileId);
+                            SyncSoon();
+                            Toast(TileWords.MovedTo(page.Name));
+                        }
+                    }
+                }
+                catch (Exception ex) { AppLog.Note("tiles", $"page pill drop failed: {ex.GetType().Name}"); }
+                finally { deferral.Complete(); }
+            };
             _band.Children.Add(pill);
         }
         var add = new Button { Content = new FontIcon { Glyph = "", FontSize = 12 }, CornerRadius = new CornerRadius(14), Padding = new Thickness(10, 6, 10, 6) };
@@ -737,10 +948,13 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
         AutomationProperties.SetName(more, "Page Options");
         AutomationProperties.SetAutomationId(more, "dashboard.page.menu");
         var moreMenu = PageMenu(pins, currentPage, currentIndex, pages.Count);
-        moreMenu.Items.Add(new MenuFlyoutSeparator());
-        Item(moreMenu, TileWords.UpdateAllNow, "\uE72C", () => _ = UpdateAllPageTilesAsync());
-        Item(moreMenu, TileWords.PauseAllUpdates, "\uE769", () => _ = SetAllPageTilesPausedAsync(true));
-        Item(moreMenu, TileWords.ResumeAllUpdates, "\uE768", () => _ = SetAllPageTilesPausedAsync(false));
+        if (!ReadOnlyGateway)
+        {
+            moreMenu.Items.Add(new MenuFlyoutSeparator());
+            Item(moreMenu, TileWords.UpdateAllNow, "\uE72C", () => _ = UpdateAllPageTilesAsync());
+            Item(moreMenu, TileWords.PauseAllUpdates, "\uE769", () => _ = SetAllPageTilesPausedAsync(true));
+            Item(moreMenu, TileWords.ResumeAllUpdates, "\uE768", () => _ = SetAllPageTilesPausedAsync(false));
+        }
         more.Flyout = moreMenu;
         _band.Children.Add(more);
     }
@@ -821,15 +1035,24 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
         var otherBots = _scope != "all" && kept.Any(p => !ShowsPages || _pins!.PageId(p) == _pins.CurrentPage);
         var title = onOtherPages ? TileWords.ThisPageIsEmpty : otherBots ? TileWords.NoTilesFor(BotName(_scope)) : TileWords.NoTilesYet;
 
-        var newTile = new Button { Content = TileWords.NewTile, Style = Kit.Style("AccentButtonStyle") };
-        AutomationProperties.SetAutomationId(newTile, "tile.new");
-        newTile.Click += (_, _) => _ = ShowNewTileAsync();
-
         var open = new Button { Content = TileWords.OpenArtifacts };
         AutomationProperties.SetAutomationId(open, "tile.open-artifacts");
         open.Click += (_, _) => Navigator.Open("artifacts");
 
-        var state = Kit.Empty("", title, TileWords.HowTo, newTile, open);
+        UIElement[] actions;
+        if (ReadOnlyGateway)
+        {
+            actions = [open];
+        }
+        else
+        {
+            var newTile = new Button { Content = TileWords.NewTile, Style = Kit.Style("AccentButtonStyle") };
+            AutomationProperties.SetAutomationId(newTile, "tile.new");
+            newTile.Click += (_, _) => _ = ShowNewTileAsync();
+            actions = [newTile, open];
+        }
+
+        var state = Kit.Empty("", title, TileWords.HowTo, actions);
         if (state is Grid g && g.Children.Count > 0 && g.Children[0] is StackPanel panel)
         {
             var steps = new StackPanel { Spacing = 4, HorizontalAlignment = HorizontalAlignment.Center };
@@ -848,22 +1071,29 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
         return state;
     }
 
-    // ------------------------------------------------------------------ New Tile, Change, Duplicate & Activity
+    // ------------------------------------------------------------------ New Tile, Change, Duplicate, Keep Updated & Persistence
 
     private async Task ShowNewTileAsync()
     {
-        if (_client == null || _pins == null || XamlRoot == null) return;
+        if (_client == null || _pins == null || XamlRoot == null || ReadOnlyGateway) return;
         var bots = _bots.Count > 0 ? _bots : _client.Bots ?? [];
         var initialBot = _scope != "all" ? _scope : bots.FirstOrDefault()?.Name;
         var req = await NewTileDialog.ShowAsync(XamlRoot, bots, initialBot, _pins.Pages, _pins.CurrentPage, ShowDialog);
         if (req == null) return;
         var prompt = TilePromptBuilder.NewTilePrompt(req.What, req.Size, req.Schedule);
-        _ = StartTileMakerAsync(req.Bot, req.What, prompt, desiredSize: req.Size, pageId: req.PageId, changingPin: null);
+        _ = StartTileMakerAsync(
+            req.Bot,
+            req.What,
+            prompt,
+            displayTitle: $"New tile: {req.What}",
+            desiredSize: req.Size,
+            pageId: req.PageId,
+            changingPin: null);
     }
 
-    private async Task ShowChangeTileAsync(TilePin pin, bool duplicate)
+    private async Task ShowChangeTileAsync(TilePin pin, bool duplicate, string initialWhat = "")
     {
-        if (_client == null || _pins == null || XamlRoot == null || pin.GatewayPath is not { } path) return;
+        if (_client == null || _pins == null || XamlRoot == null || ReadOnlyGateway || pin.GatewayPath is not { } path) return;
         var bot = _bots.FirstOrDefault(b => b.Name == pin.Profile) ?? _client.Bots?.FirstOrDefault(b => b.Name == pin.Profile);
         if (bot == null) { Toast(TileWords.BotGone); return; }
         string? status = null;
@@ -873,108 +1103,446 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
             if (known && job != null) status = TileJobs.Status(job, DateTimeOffset.Now);
         }
         var tileName = _pins.Name(pin);
-        var what = await ChangeTileDialog.ShowAsync(XamlRoot, tileName, bot, duplicate, status, "", ShowDialog);
+        var what = await ChangeTileDialog.ShowAsync(XamlRoot, tileName, bot, duplicate, status, initialWhat, ShowDialog);
         if (what == null) return;
         var prompt = duplicate
             ? TileJobs.DuplicatePrompt(path, tileName, what, pin.TileSize)
             : TilePromptBuilder.ChangePrompt(path, what);
-        _ = StartTileMakerAsync(bot, what, prompt, desiredSize: pin.TileSize, pageId: _pins.PageId(pin), changingPin: duplicate ? null : pin);
+        var display = duplicate ? $"Duplicate {tileName}: {what}" : $"Change tile {tileName}: {what}";
+        _ = StartTileMakerAsync(
+            bot,
+            what,
+            prompt,
+            displayTitle: display,
+            desiredSize: pin.TileSize,
+            pageId: _pins.PageId(pin),
+            changingPin: duplicate ? null : pin,
+            customPath: path);
     }
 
-    private async Task StartTileMakerAsync(Bot bot, string what, string prompt, TileSize desiredSize, string pageId, TilePin? changingPin)
+    private async Task StartKeepUpdatedAsync(TilePin pin, TileJobs.Frequency frequency)
+    {
+        if (_client == null || _pins == null || ReadOnlyGateway || pin.GatewayPath is not { } path) return;
+        var bot = _bots.FirstOrDefault(b => b.Name == pin.Profile) ?? _client.Bots?.FirstOrDefault(b => b.Name == pin.Profile);
+        if (bot == null) { Toast(TileWords.BotGone); return; }
+        var name = _pins.Name(pin);
+        var prompt = TileJobs.SchedulePrompt(path, name, frequency);
+        await StartTileMakerAsync(
+            bot,
+            $"update {frequency.Short}",
+            prompt,
+            displayTitle: $"Keep {name} updated {frequency.Short}",
+            desiredSize: pin.TileSize,
+            pageId: _pins.PageId(pin),
+            changingPin: pin,
+            customPath: path);
+    }
+
+    /// Creates a tile chat with `hidden: true` so it never clutters Sessions lists (`TileChats`).
+    private async Task<string> CreateHiddenTileChatAsync(Bot bot, CancellationToken ct = default)
+    {
+        var made = await SessionCreate.CallAsync(
+            _client!.Rpc.RequestAsync,
+            new JsonObject
+            {
+                ["profile"] = bot.Name,
+                ["follow_profile_config"] = true,
+                ["hidden"] = true,
+                ["idempotency_key"] = Guid.NewGuid().ToString(),
+            },
+            bot.Name,
+            TimeSpan.FromSeconds(30),
+            ct: ct);
+        var stored = made.Text("stored_session_id") ?? made.Text("session_id")
+            ?? throw new GatewayException("rpc", "Gateway did not return a session id.");
+        StartedChats.Note(bot.Name, stored);
+        TileChats.RememberChat(_client.AccountId, stored, PendingPrefs);
+        return stored;
+    }
+
+    private async Task StartTileMakerAsync(
+        Bot bot,
+        string what,
+        string prompt,
+        string displayTitle,
+        TileSize desiredSize,
+        string pageId,
+        TilePin? changingPin,
+        bool acting = false,
+        string? customPath = null,
+        Action? onFinished = null)
     {
         if (_client == null || _pins == null) return;
+        var accountId = _client.AccountId;
         ChatSession? chat = null;
         ActiveTileMaker? maker = null;
         try
         {
-            var chatId = ListsHub.Current is { } hub
-                ? await hub.Sessions.NewChatAsync(bot.Name)
-                : await _client.BotChatIdAsync(bot);
-            chat = _client.OpenChat(bot.Name, chatId, changingPin != null ? $"Change tile: {what}" : $"New tile: {what}");
+            // [tile-versions] Capture current version before a Change… starts.
+            if (changingPin != null && !acting)
+                _ = NoteTileVersionAsync(changingPin, TileVersionKind.Outside, null);
+
+            var chatId = acting && changingPin is { SessionId.Length: > 0 }
+                ? changingPin.SessionId
+                : await CreateHiddenTileChatAsync(bot);
+
+            chat = _client.OpenChat(bot.Name, chatId, displayTitle);
             await chat.OpenAsync();
+
+            var askedAt = DateTimeOffset.UtcNow;
             maker = new ActiveTileMaker
             {
                 Id = Guid.NewGuid().ToString("N"),
+                AccountId = accountId,
                 Bot = bot,
                 What = what,
                 SessionId = chatId,
                 PinId = changingPin?.Id,
                 PinName = changingPin != null ? _pins.Name(changingPin) : null,
+                Path = customPath ?? changingPin?.GatewayPath ?? "",
+                DashboardPage = pageId,
+                DesiredSize = desiredSize,
+                Acting = acting,
+                AskedAt = askedAt,
                 Status = "Working…",
             };
-            var opened = chat;
-            var tracked = maker;
-            maker.CancelAction = () =>
-            {
-                ActiveMakers.Remove(tracked);
-                _ = opened.StopAsync();
-                _ = opened.DisposeAsync().AsTask();
-                OnUi(Render);
-            };
+            AttachMakerSession(maker, chat, displayTitle, changingPin, onFinished);
+            TilePendingStore.Add(maker.ToPending(), PendingPrefs, askedAt);
             ActiveMakers.Add(maker);
             OnUi(Render);
-            Toast(changingPin != null ? $"Changing “{_pins.Name(changingPin)}”…" : $"Making tile with {bot.DisplayName}…");
+            if (!acting)
+                Toast(changingPin != null ? $"{bot.DisplayName} is changing your tile" : $"{bot.DisplayName} is making your tile");
 
-            void Ended(bool ended)
-            {
-                opened.TurnEnded -= Ended;
-                ActiveMakers.Remove(tracked);
-                var replyText = opened.Messages.LastOrDefault(m => m.Role == Role.Assistant)?.Text ?? "";
-                OnUi(() =>
-                {
-                    if (changingPin != null)
-                    {
-                        Reread(changingPin.Id);
-                        Toast($"Updated “{_pins.Name(changingPin)}”");
-                    }
-                    else if (ExtractMediaPath(replyText) is { } mediaPath)
-                    {
-                        var pin = TilePin.Make(TileKind.File, mediaPath, "", bot.Name, chatId, $"New tile: {what}") with
-                        {
-                            Size = desiredSize,
-                            Page = pageId == TilePage.MainId ? null : pageId,
-                        };
-                        _pins.Pin(pin);
-                        SyncSoon();
-                        Toast($"Pinned “{_pins.Name(pin)}”");
-                    }
-                    Render();
-                });
-                _ = opened.DisposeAsync().AsTask();
-            }
-            chat.TurnEnded += Ended;
-            var outcome = await chat.SendAsync(prompt);
+            var outcome = await chat.SendAsync(prompt, display: acting ? null : displayTitle);
             if (outcome == SendOutcome.Refused)
             {
-                chat.TurnEnded -= Ended;
-                ActiveMakers.Remove(maker);
-                await chat.DisposeAsync();
+                StopAndRemoveMaker(maker, chat);
                 OnUi(() => { Toast(TileWords.CouldntSend); Render(); });
             }
         }
         catch (GatewayException)
         {
-            if (maker != null) ActiveMakers.Remove(maker);
-            if (chat != null) await chat.DisposeAsync();
+            if (maker != null) StopAndRemoveMaker(maker, chat);
+            else if (chat != null) await chat.DisposeAsync();
             OnUi(() => { Toast(TileWords.CouldntSend); Render(); });
         }
     }
 
-    private static string? ExtractMediaPath(string text)
+    /// [tiles-v2] Reattaches to any in-flight tile makers persisted under `hq.tilePendingMakers.<accountId>`.
+    private void RestorePendingMakers()
     {
-        if (string.IsNullOrWhiteSpace(text)) return null;
-        var match = MediaPathRx().Match(text);
-        return match.Success ? match.Groups[1].Value.Trim() : null;
+        if (_client == null || _pins == null) return;
+        var accountId = _client.AccountId;
+        var bots = _bots.Count > 0 ? _bots : _client.Bots ?? [];
+        if (bots.Count == 0) return;
+        var pending = TilePendingStore.Load(accountId, PendingPrefs);
+        if (pending.Count == 0) return;
+
+        foreach (var item in pending)
+        {
+            if (ActiveMakers.Any(m => m.Id == item.Id || (m.AccountId == accountId && m.SessionId == item.SessionId)))
+                continue;
+            var bot = bots.FirstOrDefault(b => b.Name == item.BotId);
+            if (bot == null)
+            {
+                TilePendingStore.Remove(item.Id, accountId, PendingPrefs);
+                continue;
+            }
+            var changingPin = item.PinId != null ? _pins.Pins.FirstOrDefault(p => p.Id == item.PinId) : null;
+            var displayTitle = item.PinName != null ? $"{item.PinName}: {item.What}" : $"New tile: {item.What}";
+            var chat = _client.OpenChat(bot.Name, item.SessionId, displayTitle);
+            var maker = new ActiveTileMaker
+            {
+                Id = item.Id,
+                AccountId = accountId,
+                Bot = bot,
+                What = item.What,
+                SessionId = item.SessionId,
+                PinId = item.PinId,
+                PinName = item.PinName,
+                Path = item.Path,
+                DashboardPage = item.DashboardPage,
+                DesiredSize = item.DesiredSize,
+                Acting = item.Acting,
+                AskedAt = DateTimeOffset.FromUnixTimeMilliseconds((long)Math.Round(item.AskedAt * 1000)),
+                Status = "Working…",
+            };
+            AttachMakerSession(maker, chat, displayTitle, changingPin, onFinished: null);
+            ActiveMakers.Add(maker);
+            _ = OpenRestoredMakerAsync(maker, chat, displayTitle, changingPin);
+        }
     }
 
-    [GeneratedRegex(@"^MEDIA:(\S+)", RegexOptions.Multiline)]
-    private static partial Regex MediaPathRx();
+    private async Task OpenRestoredMakerAsync(ActiveTileMaker maker, ChatSession chat, string displayTitle, TilePin? changingPin)
+    {
+        try
+        {
+            await chat.OpenAsync();
+            if (!maker.Watching) return;
+            UpdateMakerStepWords(maker, chat);
+            if (!chat.Busy)
+                await CompleteMakerAsync(maker, chat, displayTitle, changingPin, onFinished: null);
+        }
+        catch (Exception)
+        {
+            if (maker.Watching) StopAndRemoveMaker(maker, chat);
+        }
+    }
+
+    private void AttachMakerSession(ActiveTileMaker maker, ChatSession chat, string displayTitle, TilePin? changingPin, Action? onFinished)
+    {
+        var completing = 0;
+        void OnChanged()
+        {
+            if (!maker.Watching) return;
+            UpdateMakerStepWords(maker, chat);
+        }
+        void OnTurnEnded(bool ended)
+        {
+            if (!maker.Watching || Interlocked.Exchange(ref completing, 1) != 0) return;
+            chat.Changed -= OnChanged;
+            chat.TurnEnded -= OnTurnEnded;
+            _ = CompleteMakerAsync(maker, chat, displayTitle, changingPin, onFinished);
+        }
+        maker.CancelAction = () =>
+        {
+            chat.Changed -= OnChanged;
+            chat.TurnEnded -= OnTurnEnded;
+            StopAndRemoveMaker(maker, chat, stopTurn: true);
+            OnUi(Render);
+        };
+        chat.Changed += OnChanged;
+        chat.TurnEnded += OnTurnEnded;
+    }
+
+    private void StopAndRemoveMaker(ActiveTileMaker maker, ChatSession? chat, bool stopTurn = false)
+    {
+        maker.Watching = false;
+        ActiveMakers.Remove(maker);
+        TilePendingStore.Remove(maker.Id, maker.AccountId, PendingPrefs);
+        if (chat != null)
+        {
+            if (stopTurn) _ = chat.StopAsync();
+            _ = chat.DisposeAsync().AsTask();
+        }
+    }
+
+    private void UpdateMakerStepWords(ActiveTileMaker maker, ChatSession chat)
+    {
+        var runningTool = chat.Messages
+            .LastOrDefault(m => m.Role == Role.Assistant)?
+            .Tools.LastOrDefault(t => t.State == ToolState.Running)?.Title;
+        var next = !string.IsNullOrWhiteSpace(runningTool)
+            ? runningTool!
+            : !string.IsNullOrWhiteSpace(chat.Status)
+                ? chat.Status!
+                : chat.Busy ? "Working…" : "Finishing…";
+        if (maker.Status == next) return;
+        maker.Status = next;
+        OnUi(() =>
+        {
+            RenderMakingBar(AccountMakers());
+            if (maker.PinId != null && _cells.TryGetValue(maker.PinId, out var cell))
+                cell.SetWorking(maker.TileWords);
+        });
+    }
+
+    private static string? ExtractHandedOverPath(ChatSession chat, DateTimeOffset askedAt)
+    {
+        var cutoff = askedAt.AddSeconds(-5);
+        var text = string.Join("\n", chat.Messages
+            .Where(m => m.Role == Role.Assistant && (m.Timestamp ?? DateTimeOffset.MaxValue) >= cutoff)
+            .Select(m => m.Text));
+        return TileWebTheme.ExtractPagePath(text);
+    }
+
+    private static string? FindTurnError(ChatSession chat, DateTimeOffset askedAt)
+    {
+        var cutoff = askedAt.AddSeconds(-5);
+        return chat.Messages
+            .LastOrDefault(m => !string.IsNullOrWhiteSpace(m.Error) && (m.Timestamp ?? DateTimeOffset.MaxValue) >= cutoff)?
+            .Error;
+    }
+
+    private async Task CompleteMakerAsync(ActiveTileMaker maker, ChatSession chat, string displayTitle, TilePin? changingPin, Action? onFinished)
+    {
+        // [tiles-v2] 12 s replyGrace retries ([1, 3, 6, 12] s) when turn ends without a page path and without an error.
+        string? handedPath = ExtractHandedOverPath(chat, maker.AskedAt);
+        string? problem = FindTurnError(chat, maker.AskedAt);
+        if (!maker.Acting && handedPath == null && problem == null)
+        {
+            var prev = 0;
+            foreach (var sec in TileWebTheme.ReplyGraceDelaysSeconds)
+            {
+                if (!maker.Watching) break;
+                try { await Task.Delay(TimeSpan.FromSeconds(sec - prev)); } catch (OperationCanceledException) { break; }
+                prev = sec;
+                if (!maker.Watching) break;
+                try { await chat.RefreshAsync(); } catch (Exception) { }
+                handedPath = ExtractHandedOverPath(chat, maker.AskedAt);
+                problem = FindTurnError(chat, maker.AskedAt);
+                if (handedPath != null || problem != null) break;
+            }
+        }
+
+        maker.Watching = false;
+        ActiveMakers.Remove(maker);
+        TilePendingStore.Remove(maker.Id, maker.AccountId, PendingPrefs);
+        TileChats.RememberChat(maker.AccountId, maker.SessionId, PendingPrefs);
+
+        var sessionId = maker.SessionId;
+        var bot = maker.Bot;
+        var what = maker.What;
+        var desiredSize = maker.DesiredSize ?? TileSize.Small;
+        var pageId = maker.DashboardPage;
+        var activeChangingPin = changingPin ?? (maker.PinId != null ? _pins?.Pins.FirstOrDefault(p => p.Id == maker.PinId) : null);
+
+        OnUi(() =>
+        {
+            if (_pins != null && activeChangingPin != null)
+            {
+                _pins.NoteChat(activeChangingPin.Id, sessionId, displayTitle);
+                SyncSoon();
+            }
+
+            if (activeChangingPin != null)
+            {
+                var pinName = _pins?.Name(activeChangingPin) ?? activeChangingPin.Name;
+                if (maker.Acting)
+                {
+                    Reread(activeChangingPin.Id);
+                    onFinished?.Invoke();
+                    if (problem != null) Toast($"Couldn’t Update {pinName}");
+                    Render();
+                    return;
+                }
+
+                Reread(activeChangingPin.Id);
+                _ = NoteTileVersionAsync(activeChangingPin, TileVersionKind.Changed, what);
+                var done = problem == null && handedPath != null;
+                if (problem != null)
+                {
+                    var retryPin = activeChangingPin;
+                    _ = TileMakerFailureDialog.ShowAsync(
+                        XamlRoot,
+                        $"Couldn’t Change {pinName}",
+                        $"{bot.DisplayName} stopped with a problem: {TileWebTheme.FirstLine(problem)} Open the chat to see what happened, or ask again.",
+                        openChat: () => Navigator.Go(new ChatDestination(bot.Name, sessionId, displayTitle)),
+                        retry: () =>
+                        {
+                            if (retryPin.GatewayPath is { } p)
+                                _ = StartTileMakerAsync(bot, what, TilePromptBuilder.ChangePrompt(p, what), displayTitle, retryPin.TileSize, _pins?.PageId(retryPin) ?? TilePage.MainId, retryPin, customPath: p);
+                        },
+                        ShowDialog);
+                }
+                else if (!done)
+                {
+                    _ = TileMakerFailureDialog.ShowAsync(
+                        XamlRoot,
+                        $"{bot.DisplayName} Needs You",
+                        $"{bot.DisplayName} didn’t say the change is done. It may have a question for you. Open the chat to see what it said.",
+                        openChat: () => Navigator.Go(new ChatDestination(bot.Name, sessionId, displayTitle)),
+                        retry: null,
+                        ShowDialog);
+                }
+                else
+                {
+                    FlashChangedRing(activeChangingPin.Id);
+                    Toast($"{pinName} Changed");
+                }
+                Render();
+                return;
+            }
+
+            if (handedPath != null && _pins != null)
+            {
+                var pin = TilePin.Make(TileKind.File, handedPath, "", bot.Name, sessionId, displayTitle) with
+                {
+                    Size = desiredSize,
+                    Page = pageId == TilePage.MainId ? null : pageId,
+                    ChatAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0,
+                };
+                if (!_pins.Pin(pin))
+                {
+                    _ = TileMakerFailureDialog.ShowAsync(
+                        XamlRoot,
+                        $"{bot.DisplayName} Needs You",
+                        $"You already have {TilePinStore.Limit} tiles pinned. Unpin one to add another. Your new page is in the chat.",
+                        openChat: () => Navigator.Go(new ChatDestination(bot.Name, sessionId, displayTitle)),
+                        retry: null,
+                        ShowDialog);
+                }
+                else
+                {
+                    SyncSoon();
+                    _ = NoteTileVersionAsync(pin, TileVersionKind.Made, what);
+                    Toast("Your New Tile Is Pinned");
+                }
+            }
+            else if (problem != null)
+            {
+                _ = TileMakerFailureDialog.ShowAsync(
+                    XamlRoot,
+                    "Couldn’t Make the Tile",
+                    $"{bot.DisplayName} stopped with a problem: {TileWebTheme.FirstLine(problem)} Open the chat to see what happened.",
+                    openChat: () => Navigator.Go(new ChatDestination(bot.Name, sessionId, displayTitle)),
+                    retry: null,
+                    ShowDialog);
+            }
+            else
+            {
+                _ = TileMakerFailureDialog.ShowAsync(
+                    XamlRoot,
+                    $"{bot.DisplayName} Needs You",
+                    $"{bot.DisplayName} didn’t hand over a tile yet. Open the chat to see what it said.",
+                    openChat: () => Navigator.Go(new ChatDestination(bot.Name, sessionId, displayTitle)),
+                    retry: null,
+                    ShowDialog);
+            }
+            Render();
+        });
+        _ = chat.DisposeAsync().AsTask();
+    }
+
+    private void FlashChangedRing(string pinId)
+    {
+        _ringedPins.Add(pinId);
+        if (_cells.TryGetValue(pinId, out var cell)) cell.SetRinged(true);
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromSeconds(4));
+            OnUi(() =>
+            {
+                _ringedPins.Remove(pinId);
+                if (_cells.TryGetValue(pinId, out var c)) c.SetRinged(false);
+            });
+        });
+    }
+
+    private async Task NoteTileVersionAsync(TilePin pin, TileVersionKind kind, string? what)
+    {
+        if (_client == null || _pins == null || ReadOnlyGateway || !pin.IsPage || pin.GatewayPath is not { } path) return;
+        try
+        {
+            var store = new TileVersionStore(_client.Session, pin.Profile, path);
+            var list = await store.NoteAsync(kind, what);
+            if (list.Current > 0)
+            {
+                OnUi(() =>
+                {
+                    _pins?.NoteVersion(pin.Id, list.Current);
+                    SyncSoon();
+                });
+            }
+        }
+        catch (Exception) { }
+    }
 
     private async Task ShowActivityAsync()
     {
         if (_client == null || _pins == null || _updates == null || XamlRoot == null) return;
         var pages = (_hidden != null ? _hidden.Visible(_pins.Pins) : _pins.Pins).Where(p => p.IsPage).ToList();
+        await _updates.PrefetchAsync(pages.Select(p => p.Profile));
         var scheduled = new List<TileActivityRow>();
         foreach (var pin in pages)
         {
@@ -986,7 +1554,7 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
         }
         await TileActivityDialog.ShowAsync(
             XamlRoot,
-            ActiveMakers.ToList(),
+            AccountMakers(),
             scheduled,
             openMakerChat: m => Navigator.Go(new ChatDestination(m.Bot.Name, m.SessionId, m.DisplayTitle)),
             cancelMaker: m => m.CancelAction?.Invoke(),
@@ -1000,8 +1568,9 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
 
     private async Task UpdateAllPageTilesAsync()
     {
-        if (_updates == null) return;
+        if (_updates == null || ReadOnlyGateway) return;
         var pages = Visible().Where(p => p.IsPage).ToList();
+        await _updates.PrefetchAsync(pages.Select(p => p.Profile));
         var triggered = 0;
         foreach (var pin in pages)
         {
@@ -1018,8 +1587,9 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
 
     private async Task SetAllPageTilesPausedAsync(bool pause)
     {
-        if (_updates == null) return;
+        if (_updates == null || ReadOnlyGateway) return;
         var pages = Visible().Where(p => p.IsPage).ToList();
+        await _updates.PrefetchAsync(pages.Select(p => p.Profile));
         var changed = 0;
         foreach (var pin in pages)
         {
@@ -1056,6 +1626,13 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
         menu.Items.Add(new MenuFlyoutSeparator());
         Item(menu, TileWords.Open, pin.IsPage ? "" : "", () => Open(pin));
         if (pin.SessionId.Length > 0) Item(menu, TileWords.ShowInChat, "", () => ShowInChat(pin));
+        if (pin.IsPage)
+        {
+            var shareImg = new MenuFlyoutItem { Text = "Share as Image…", Icon = new FontIcon { Glyph = "\uEB9F" } };
+            AutomationProperties.SetAutomationId(shareImg, "tile.share-image");
+            shareImg.Click += (_, _) => _ = ShareAsImageAsync(pin);
+            menu.Items.Add(shareImg);
+        }
         if (pin.Kind != TileKind.Link) Item(menu, TileWords.Share, "", () => _ = Share(pin));
         if (pin.Kind != TileKind.Link && TileFiles.IsGatewayFile(pin)) Item(menu, TileWords.SaveAs, "", () => _ = SaveAs(pin));
         Item(menu, pin.Kind == TileKind.Link ? TileWords.CopyLink : TileWords.CopyPath, "", () =>
@@ -1105,6 +1682,7 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
             Item(menu, TileWords.EditTiles, "", () => SetEditing(true));
         }
         menu.Items.Add(new MenuFlyoutSeparator());
+        menu.Items.Add(Features.QuickActions.FavoritesPinAction.ForDashboardTile(pin.Id, name, null, added => Toast(added ? "Added to Favorites" : "Removed from Favorites")));
         Item(menu, TileWords.Unpin, "", () => Unpin(pin));
         menu.Items.Add(new MenuFlyoutSeparator());
         Item(menu, TileWords.Remove, "", () => _ = ConfirmRemove(pin, name));
@@ -1117,7 +1695,7 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
         menu.Items.Add(item);
     }
 
-    private static bool ReadOnlyGateway => false;
+    private bool ReadOnlyGateway => CommandCenterModel.IsReadOnlyGateway(_client);
 
     /// [tile-versions] Offered on both writable and read-only gateways for HTML page tiles.
     private MenuFlyoutItem? VersionsItem(TilePin pin)
@@ -1167,27 +1745,16 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
     private async Task NotifyRolledBackAsync(TilePin pin, string path, Bot bot, string name, int version)
     {
         if (_client == null) return;
-        ChatSession? chat = null;
-        try
-        {
-            var chatId = pin.SessionId.Length > 0 ? pin.SessionId : await _client.BotChatIdAsync(bot);
-            chat = _client.OpenChat(bot.Name, chatId, pin.SessionTitle);
-            await chat.OpenAsync();
-            var opened = chat;
-            void Ended(bool ended)
-            {
-                opened.TurnEnded -= Ended;
-                OnUi(() => Reread(pin.Id));
-                _ = opened.DisposeAsync().AsTask();
-            }
-            chat.TurnEnded += Ended;
-            var outcome = await chat.SendAsync(TilePromptBuilder.RolledBackPrompt(path, name, version));
-            if (outcome == SendOutcome.Refused) { chat.TurnEnded -= Ended; await chat.DisposeAsync(); }
-        }
-        catch (GatewayException)
-        {
-            if (chat != null) await chat.DisposeAsync();
-        }
+        await StartTileMakerAsync(
+            bot,
+            $"its updates follow Version {version}",
+            TilePromptBuilder.RolledBackPrompt(path, name, version),
+            displayTitle: $"Rolled back {name} to Version {version}",
+            desiredSize: pin.TileSize,
+            pageId: _pins?.PageId(pin) ?? TilePage.MainId,
+            changingPin: pin,
+            acting: true,
+            customPath: path);
     }
 
     /// A version full size, as the tile opens (its page's buttons go nowhere: a version isn't the tile).
@@ -1202,8 +1769,8 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
         _overlay.Children.Add(viewer);
     }
 
-    /// Updates (TileUpdates.menu): read as the menu opens. Not Kept Updated when no job rewrites the tile; else its
-    /// model, How Often, Update Now and Pause / Resume.
+    /// Updates (TileUpdates.menu): Keep Updated… schedule submenu when static; else Model override submenu,
+    /// Last Update Failed + Fix with Bot + View Last Run / View Job, How Often, Update/Retry Now (4s active polling), Pause/Resume.
     private MenuFlyoutSubItem UpdatesMenu(TilePin pin)
     {
         var sub = new MenuFlyoutSubItem { Text = TileWords.Updates, Icon = new FontIcon { Glyph = "" } };
@@ -1215,13 +1782,37 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
 
     private async Task FillUpdates(MenuFlyoutSubItem sub, TilePin pin)
     {
-        if (_updates == null || AppShutdown.Stopping) return;
+        if (_updates == null || _client == null || AppShutdown.Stopping) return;
         var updates = _updates;
+        var client = _client;
+        var accountId = client.AccountId;
+        var writable = !ReadOnlyGateway;
         (TileCronJob? job, bool known) result;
         try { result = await updates.LookupAsync(pin); }
         catch (Exception) { return; }
         if (AppShutdown.Stopping || _life == null) return;
         var (job, known) = result;
+
+        var bot = _bots.FirstOrDefault(b => b.Name == pin.Profile);
+        var botName = BotName(pin.Profile);
+        var rosterModel = bot?.Model is { Length: > 0 } m ? ModelNames.DisplayModelName(m) : null;
+        string? botModel = rosterModel;
+        TileModelPick? modelOverride = null;
+        TileModelPick? defaultModel = null;
+        List<TileModelPick> shortList = [];
+
+        if (known && job != null && !TileModels.IsScriptOnly(job))
+        {
+            var settings = new TileModelSettings(accountId, TileModelPrefs);
+            modelOverride = settings.Override(job.Key);
+            defaultModel = settings.DefaultModel;
+            if (writable)
+                _ = TileModelSync.Shared.ReconcileAsync(job, accountId, TileModelPrefs, updates, readOnlyGateway: false, force: false);
+            botModel = await TileModelSync.Shared.BotModelAsync(pin.Profile, rosterModel, accountId, client.Session);
+            shortList = await TileModelSync.Shared.ShortListAsync(accountId, pin.Profile, ComposerServices.Store, client.Session, modelOverride);
+            if (AppShutdown.Stopping || _life == null) return;
+        }
+
         try
         {
             sub.Items.Clear();
@@ -1233,54 +1824,217 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
             }
             if (job == null)
             {
+                if (writable && pin.GatewayPath != null)
+                {
+                    sub.Text = "Keep Updated…";
+                    AutomationProperties.SetAutomationId(sub, "tile.updates.attach");
+                    ToolTipService.SetToolTip(sub, $"Ask {botName} to schedule refreshes");
+                    foreach (var f in TileJobs.Frequencies)
+                    {
+                        var freq = f;
+                        var attach = new MenuFlyoutItem { Text = freq.Title };
+                        AutomationProperties.SetAutomationId(attach, $"tile.updates.attach-{freq.Minutes}");
+                        attach.Click += (_, _) => _ = StartKeepUpdatedAsync(pin, freq);
+                        sub.Items.Add(attach);
+                    }
+                    return;
+                }
                 sub.Text = TileWords.NotKeptUpdated;
                 AutomationProperties.SetAutomationId(sub, "tile.updates.none");
                 sub.Items.Add(new MenuFlyoutItem { Text = TileWords.NoJobRewrites, IsEnabled = false });
                 return;
             }
-            var bot = _bots.FirstOrDefault(b => b.Name == pin.Profile);
-            var botModel = bot?.Model is { Length: > 0 } m ? ModelNames.DisplayModelName(m) : null;
-            ToolTipService.SetToolTip(sub, TileJobs.UpdatesSubtitle(job, botModel, DateTimeOffset.Now));
-            sub.Items.Add(new MenuFlyoutItem { Text = TileJobs.ModelWords(job, BotName(pin.Profile), botModel), IsEnabled = false, Icon = new FontIcon { Glyph = "" } });
-            if (TileJobs.HealthOf(job, DateTimeOffset.Now) is { Kind: TileJobs.HealthKind.Failed } failed)
-                sub.Items.Add(new MenuFlyoutItem { Text = TileWords.LastUpdateFailed + (failed.Why is { } why ? " — " + (why.Length > 120 ? why[..120] : why) : ""), IsEnabled = false });
+
+            ToolTipService.SetToolTip(sub, TileModels.UpdatesSubtitle(job, botModel, DateTimeOffset.Now));
+
+            // Model row / Model override submenu
+            if (TileModels.IsScriptOnly(job))
+            {
+                var scriptItem = new MenuFlyoutItem
+                {
+                    Text = TileJobs.ModelWords(job, botName, botModel),
+                    IsEnabled = false,
+                    Icon = new FontIcon { Glyph = "" },
+                };
+                AutomationProperties.SetAutomationId(scriptItem, "tile.updates.model");
+                sub.Items.Add(scriptItem);
+            }
+            else
+            {
+                var modelSub = new MenuFlyoutSubItem
+                {
+                    Text = "Model",
+                    Icon = new FontIcon { Glyph = "" },
+                };
+                AutomationProperties.SetAutomationId(modelSub, "tile.updates.model");
+                ToolTipService.SetToolTip(modelSub, TileModels.ModelSubtitle(job, botName, botModel));
+
+                var useDefault = new RadioMenuFlyoutItem
+                {
+                    Text = TileModels.UseDefaultTitle(defaultModel, botName, botModel),
+                    GroupName = "tile-model",
+                    IsChecked = modelOverride == null,
+                    IsEnabled = writable,
+                };
+                AutomationProperties.SetAutomationId(useDefault, "tile.model.default");
+                useDefault.Click += (_, _) => _ = ApplyTileModelAsync(pin, job, null);
+                modelSub.Items.Add(useDefault);
+
+                if (shortList.Count > 0)
+                {
+                    modelSub.Items.Add(new MenuFlyoutSeparator());
+                    foreach (var pick in shortList)
+                    {
+                        var p = pick;
+                        var chosen = modelOverride != null && modelOverride.Same(p);
+                        var opt = new RadioMenuFlyoutItem
+                        {
+                            Text = TileModels.Name(p),
+                            GroupName = "tile-model",
+                            IsChecked = chosen,
+                            IsEnabled = writable,
+                        };
+                        if (p.Provider.Length > 0) ToolTipService.SetToolTip(opt, ModelNames.PlainProviderName(p.Provider));
+                        AutomationProperties.SetAutomationId(opt, $"tile.model.option.{p.Model}");
+                        opt.Click += (_, _) => _ = ApplyTileModelAsync(pin, job, p);
+                        modelSub.Items.Add(opt);
+                    }
+                }
+                modelSub.Items.Add(new MenuFlyoutSeparator());
+                var other = new MenuFlyoutItem
+                {
+                    Text = "Other Model…",
+                    Icon = new FontIcon { Glyph = "\uE712" },
+                    IsEnabled = writable,
+                };
+                AutomationProperties.SetAutomationId(other, "tile.model.other");
+                other.Click += async (_, _) =>
+                {
+                    var chosen = await TileModelChooserDialog.ShowAsync(XamlRoot, client.Session, pin.Profile, botName, modelOverride, ShowDialog);
+                    if (chosen != null) await ApplyTileModelAsync(pin, job, chosen);
+                };
+                modelSub.Items.Add(other);
+                sub.Items.Add(modelSub);
+            }
+
+            var health = TileJobs.HealthOf(job, DateTimeOffset.Now);
+            var isFailed = health.Kind == TileJobs.HealthKind.Failed;
+            if (isFailed)
+            {
+                var failedItem = new MenuFlyoutItem
+                {
+                    Text = TileWords.LastUpdateFailed + (health.Why is { } why ? " — " + (why.Length > 120 ? why[..120] : why) : ""),
+                    IsEnabled = false,
+                };
+                AutomationProperties.SetAutomationId(failedItem, "tile.updates.failed");
+                sub.Items.Add(failedItem);
+                if (writable && pin.GatewayPath != null)
+                {
+                    var fix = new MenuFlyoutItem
+                    {
+                        Text = $"Fix with {botName}…",
+                        Icon = new FontIcon { Glyph = "\uE90F" },
+                    };
+                    AutomationProperties.SetAutomationId(fix, "tile.updates.fix");
+                    fix.Click += (_, _) => _ = ShowChangeTileAsync(pin, duplicate: false, initialWhat: TileJobs.FixPrefill(health.Why));
+                    sub.Items.Add(fix);
+                }
+                var viewRun = new MenuFlyoutItem
+                {
+                    Text = "View Last Run",
+                    Icon = new FontIcon { Glyph = "\uE8A5" },
+                };
+                AutomationProperties.SetAutomationId(viewRun, "tile.updates.view-run");
+                viewRun.Click += (_, _) => Navigator.Open("jobs", job.Key);
+                sub.Items.Add(viewRun);
+            }
+            else
+            {
+                var viewJob = new MenuFlyoutItem
+                {
+                    Text = "View Job",
+                    Icon = new FontIcon { Glyph = "\uE823" },
+                };
+                AutomationProperties.SetAutomationId(viewJob, "tile.updates.view-job");
+                viewJob.Click += (_, _) => Navigator.Open("jobs", job.Key);
+                sub.Items.Add(viewJob);
+            }
+
             sub.Items.Add(new MenuFlyoutSeparator());
             sub.Items.Add(new MenuFlyoutItem { Text = TileWords.HowOften, IsEnabled = false });
             var current = TileJobs.FrequencyOf(job);
             if (current == null)
             {
                 var often = TileJobs.HowOften(job);
-                sub.Items.Add(new RadioMenuFlyoutItem { Text = char.ToUpperInvariant(often[0]) + often[1..], IsChecked = true, GroupName = "often" });
+                sub.Items.Add(new RadioMenuFlyoutItem { Text = char.ToUpperInvariant(often[0]) + often[1..], IsChecked = true, GroupName = "often", IsEnabled = writable });
             }
             foreach (var f in TileJobs.Frequencies)
             {
-                var item = new RadioMenuFlyoutItem { Text = f.Title, GroupName = "often", IsChecked = current == f };
-                AutomationProperties.SetAutomationId(item, $"tile.updates.every-{f.Minutes}");
-                item.Click += async (_, _) => await Write(() => updates.SetFrequencyAsync(job, f), TileWords.UpdatesEvery(f.Title), TileWords.CouldntChangeUpdates);
+                var freq = f;
+                var item = new RadioMenuFlyoutItem { Text = freq.Title, GroupName = "often", IsChecked = current == freq, IsEnabled = writable };
+                AutomationProperties.SetAutomationId(item, $"tile.updates.every-{freq.Minutes}");
+                item.Click += async (_, _) => await Write(() => updates.SetFrequencyAsync(job, freq), TileWords.UpdatesEvery(freq.Title), TileWords.CouldntChangeUpdates);
                 sub.Items.Add(item);
             }
             sub.Items.Add(new MenuFlyoutSeparator());
-            var now = new MenuFlyoutItem { Text = TileWords.UpdateNow, Icon = new FontIcon { Glyph = "" } };
+            var now = new MenuFlyoutItem
+            {
+                Text = isFailed ? "Retry Now" : TileWords.UpdateNow,
+                Icon = new FontIcon { Glyph = "" },
+                IsEnabled = writable,
+            };
+            AutomationProperties.SetAutomationId(now, "tile.updates.now");
             now.Click += async (_, _) =>
             {
                 Toast(TileWords.Updating);
-                if (!await Write(() => updates.RunNowAsync(job), null, TileWords.CouldntUpdate)) return;
                 var ct = _life?.Token ?? CancellationToken.None;
-                foreach (var wait in new[] { 20, 60, 180 })
+                try
                 {
-                    try { await Task.Delay(TimeSpan.FromSeconds(wait), ct); } catch (OperationCanceledException) { return; }
-                    if (AppShutdown.Stopping || _life == null) return;
-                    Reread(pin.Id);
+                    await updates.UpdateNowAndPollAsync(
+                        job,
+                        pin,
+                        onFinished: _ => OnUi(() =>
+                        {
+                            if (AppShutdown.Stopping || _life == null) return;
+                            Reread(pin.Id);
+                        }),
+                        ct: ct);
+                }
+                catch (GatewayException)
+                {
+                    Toast(TileWords.CouldntUpdate);
                 }
             };
             sub.Items.Add(now);
             var paused = TileJobs.IsPaused(job);
-            var pause = new MenuFlyoutItem { Text = paused ? TileWords.ResumeUpdates : TileWords.PauseUpdates, Icon = new FontIcon { Glyph = paused ? "" : "" } };
+            var pause = new MenuFlyoutItem
+            {
+                Text = paused ? TileWords.ResumeUpdates : TileWords.PauseUpdates,
+                Icon = new FontIcon { Glyph = paused ? "" : "" },
+                IsEnabled = writable,
+            };
+            AutomationProperties.SetAutomationId(pause, "tile.updates.pause");
             pause.Click += async (_, _) => await Write(() => updates.SetPausedAsync(job, !paused),
                 paused ? TileWords.UpdatesResumed : TileWords.UpdatesPaused, TileWords.CouldntChangeUpdates);
             sub.Items.Add(pause);
         }
         catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or InvalidOperationException) { }
+    }
+
+    private async Task ApplyTileModelAsync(TilePin pin, TileCronJob job, TileModelPick? pick)
+    {
+        if (_client == null || _updates == null || _pins == null || ReadOnlyGateway) return;
+        var accountId = _client.AccountId;
+        var settings = new TileModelSettings(accountId, TileModelPrefs);
+        settings.SetOverride(pick, job.Key);
+        _pins.SetModelOverride(pin.Id, pick?.Provider, pick?.Model);
+        SyncSoon();
+        var outcome = await TileModelSync.Shared.ReconcileAsync(job, accountId, TileModelPrefs, _updates, ReadOnlyGateway, force: true);
+        _updates.Forget(pin.Profile);
+        if (outcome.Kind == TileModelSync.OutcomeKind.Failed)
+            Toast("Couldn’t Change the Model");
+        else
+            Toast(pick != null ? TileModels.Name(pick) : "Tile Default");
     }
 
     private async Task<bool> Write(Func<Task> write, string? done, string failed)
@@ -1326,6 +2080,36 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
                 var (job, _) = await updates.LookupAsync(pin);
                 if (job != null) OnUi(() => viewer.SetStatus(TileJobs.ShortStatus(job, DateTimeOffset.Now)));
             });
+    }
+
+    /// [tiles-v2] Captures a rendered PNG snapshot of a page tile and opens the Windows share sheet (`Share as Image…`).
+    private async Task ShareAsImageAsync(TilePin pin)
+    {
+        byte[]? png = null;
+        if (_cells.TryGetValue(pin.Id, out var cell))
+            png = await cell.CapturePngAsync();
+        if (png == null && _viewer?.Pin.Id == pin.Id && _viewer.WebView is { } viewerWeb)
+            png = await TileWeb.CapturePngAsync(viewerWeb);
+        if (png == null || png.Length == 0)
+        {
+            Toast("Open the tile first to render its image");
+            return;
+        }
+        try
+        {
+            var title = _pins?.Name(pin) ?? pin.Name;
+            var safe = Hermes.Core.Attachments.AttachmentCenter.SafeName(string.IsNullOrWhiteSpace(title) ? "Tile" : title);
+            if (!safe.EndsWith(".png", StringComparison.OrdinalIgnoreCase)) safe += ".png";
+            var folder = Path.Combine(Path.GetTempPath(), "HQNTileImage-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(folder);
+            var file = Path.Combine(folder, safe);
+            await File.WriteAllBytesAsync(file, png);
+            await MediaActions.ShareAsync(file, safe);
+        }
+        catch (Exception e) when (e is IOException or System.Runtime.InteropServices.COMException)
+        {
+            Toast("Couldn’t Render Tile Image");
+        }
     }
 
     /// A file the app has no viewer for (a PDF, a spreadsheet): read, then opened in its own app.
@@ -1403,16 +2187,48 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
         SyncSoon();
     }
 
-    /// A tile's button (on the Tiles page or in the opened tile): its prompt to the tile's bot in the chat it was made
-    /// in (the bot's own chat when there's none), as `TileMaker.act`; the tile is read again when the bot's turn ends.
+    /// A tile's button (on the Tiles page or in the opened tile): guarded by `TileLiveGuard` (`busy` + 1 s `throttled`),
+    /// then delivered to the tile's bot as an acting maker so the tile shows its "Updating…" veil and reloads on finish.
     private void OnWebMessage(TilePin pin, TileWeb.Message m, WebView2 web)
     {
         if (m.Open) { Open(pin); return; }
         if (m.Refresh) { Reread(pin.Id); return; }
         if (m.Id is not { } id) return;
-        var prompt = m.Prompt?.Trim() ?? "";
-        if (prompt.Length == 0) { TileWeb.Ack(web, id, false, "empty"); return; }
-        if (prompt.Length > TileWords.MaxIntentLength) { TileWeb.Ack(web, id, false, "too_long"); return; }
+        if (ReadOnlyGateway) { Toast(TileWords.ReadOnly); TileWeb.Ack(web, id, false, "read_only"); return; }
+
+        var decision = _liveGuard.Evaluate(pin.Id, m.Prompt, IsWorkingOn(pin.Id));
+        switch (decision.Kind)
+        {
+            case TileLiveGuard.DecisionKind.Reject:
+                TileWeb.Ack(web, id, false, decision.Error);
+                return;
+            case TileLiveGuard.DecisionKind.Wait:
+                _ = WaitAndDeliverAsync(pin, m.Prompt!.Trim(), web, id, decision.Delay);
+                return;
+            default:
+                DeliverLivePrompt(pin, m.Prompt!.Trim(), web, id);
+                return;
+        }
+    }
+
+    private async Task WaitAndDeliverAsync(TilePin pin, string prompt, WebView2 web, int id, TimeSpan delay)
+    {
+        try { await Task.Delay(delay, _life?.Token ?? CancellationToken.None); }
+        catch (OperationCanceledException) { _liveGuard.CancelWait(pin.Id); return; }
+        OnUi(() =>
+        {
+            var next = _liveGuard.CompleteWait(pin.Id, IsWorkingOn(pin.Id));
+            if (next.Kind == TileLiveGuard.DecisionKind.Reject)
+            {
+                TileWeb.Ack(web, id, false, next.Error);
+                return;
+            }
+            DeliverLivePrompt(pin, prompt, web, id);
+        });
+    }
+
+    private void DeliverLivePrompt(TilePin pin, string prompt, WebView2 web, int id)
+    {
         if (_client == null || pin.GatewayPath is not { } path) { Toast(TileWords.CouldntSend); TileWeb.Ack(web, id, false); return; }
         var bot = _bots.FirstOrDefault(b => b.Name == pin.Profile);
         if (bot == null) { Toast(TileWords.BotGone); TileWeb.Ack(web, id, false); return; }
@@ -1421,30 +2237,19 @@ public sealed partial class TilesPage : InsightsPage, IKeyRefreshing
 
     private async Task SendFromTile(TilePin pin, string path, Bot bot, string prompt, WebView2 web, int id)
     {
-        if (_client == null) return;
-        ChatSession? chat = null;
-        try
-        {
-            var chatId = pin.SessionId.Length > 0 ? pin.SessionId : await _client.BotChatIdAsync(bot);
-            chat = _client.OpenChat(bot.Name, chatId, pin.SessionTitle);
-            await chat.OpenAsync();
-            var opened = chat;
-            void Ended(bool ended)
-            {
-                opened.TurnEnded -= Ended;
-                OnUi(() => Reread(pin.Id));
-                _ = opened.DisposeAsync().AsTask();
-            }
-            chat.TurnEnded += Ended;
-            var outcome = await chat.SendAsync(TileWords.ActionPrompt(path, _pins?.Name(pin) ?? pin.Name, prompt));
-            OnUi(() => TileWeb.Ack(web, id, outcome != SendOutcome.Refused));
-            if (outcome == SendOutcome.Refused) { chat.TurnEnded -= Ended; await chat.DisposeAsync(); }
-        }
-        catch (GatewayException)
-        {
-            if (chat != null) await chat.DisposeAsync();
-            OnUi(() => { Toast(TileWords.CouldntSend); TileWeb.Ack(web, id, false); });
-        }
+        if (_client == null || _pins == null) return;
+        var tileName = _pins.Name(pin);
+        OnUi(() => TileWeb.Ack(web, id, true));
+        await StartTileMakerAsync(
+            bot,
+            prompt,
+            TileWords.ActionPrompt(path, tileName, prompt),
+            displayTitle: $"Updating {tileName}: {prompt}",
+            desiredSize: pin.TileSize,
+            pageId: _pins.PageId(pin),
+            changingPin: pin,
+            acting: true,
+            customPath: path);
     }
 
     // ------------------------------------------------------------------ small pieces

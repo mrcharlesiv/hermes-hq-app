@@ -20,8 +20,8 @@ internal static class QuestionUi
         CornerRadius = new CornerRadius(14),
         Padding = new Thickness(14, 12, 14, 12),
         Margin = new Thickness(16, 6, 16, 6),
-        Background = Brush("CardBackgroundFillColorDefaultBrush"),
-        BorderBrush = Brush("CardStrokeColorDefaultBrush"),
+        Background = Brush("HQPromptCardBrush"),
+        BorderBrush = Brush("HQPromptEdgeBrush"),
         BorderThickness = new Thickness(1),
     };
 

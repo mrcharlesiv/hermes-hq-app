@@ -506,7 +506,7 @@ public class SettingsFileTests
         Assert.Equal(["action:export", "action:import", "action:clear-models", "action:reset"], actions.Select(e => e.Id));
         Assert.Equal(["Export Settings…", "Import Settings…", "Clear Model Favorites…", "Reset to Defaults…"], actions.Select(e => e.Label));
         Assert.Equal([SettingsFileWords.Export, SettingsFileWords.Import, SettingsFileWords.ClearModels, SettingsFileWords.Reset], actions.Select(e => e.Label));
-        Assert.All(actions, e => Assert.Equal("About", e.Context));
+        Assert.Equal(["Hermes", "Hermes", "Chat", "Hermes"], actions.Select(e => e.Context));
         Assert.All(actions, e => Assert.False(e.IsPage));
         Assert.Equal(["action:export", "action:import", "action:clear-models", "action:reset"], actions.Select(e => e.Target));
         Assert.Equal(["export", "backup", "save settings", "download"], actions[0].Keywords);
@@ -515,7 +515,10 @@ public class SettingsFileTests
         Assert.Equal(["reset", "defaults", "factory", "restore defaults"], actions[3].Keywords);
         // As the Mac's index() ends: the actions come last.
         Assert.Equal(actions, index.TakeLast(4).ToList());
-        foreach (var e in actions) Assert.Equal(SettingsCategory.About, SettingsSearch.Category(e.Target));
+        Assert.Equal(SettingsCategory.Gateway, SettingsSearch.Category("action:export"));
+        Assert.Equal(SettingsCategory.Gateway, SettingsSearch.Category("action:import"));
+        Assert.Equal(SettingsCategory.Chat, SettingsSearch.Category("action:clear-models"));
+        Assert.Equal(SettingsCategory.Gateway, SettingsSearch.Category("action:reset"));
         Assert.Equal(["export", "import", "clear-models", "reset"], actions.Select(e => SettingsSearch.ActionId(e.Target)));
         Assert.Null(SettingsSearch.ActionId("about"));
         Assert.Null(SettingsSearch.ActionId("row:ui-scale"));
@@ -529,9 +532,10 @@ public class SettingsFileTests
         // Words match inside words, as the Mac's do: "load" is in Export's "download".
         Assert.Equal(["Export Settings…", "Import Settings…"], SettingsSearch.Results("load settings", index).Select(e => e.Label));
         Assert.Equal(["Reset to Defaults…"], SettingsSearch.Results("factory", index).Select(e => e.Label));
-        Assert.Equal(["Import Settings…", "Reset to Defaults…"], SettingsSearch.Results("restore", index).Select(e => e.Label));
+        Assert.Contains(SettingsSearch.Results("restore", index), e => e.Id == "action:import");
+        Assert.Contains(SettingsSearch.Results("restore", index), e => e.Id == "action:reset");
         Assert.Contains(SettingsSearch.Results("export", index), e => e.Id == "action:export");
-        Assert.Contains(SettingsSearch.Results("reset about", index), e => e.Id == "action:reset");
+        Assert.Contains(SettingsSearch.Results("reset hermes", index), e => e.Id == "action:reset");
         Assert.Equal(["Clear Model Favorites…"], SettingsSearch.Results("unstar", index).Select(e => e.Label));
         Assert.Contains(SettingsSearch.Results("starred models", index), e => e.Id == "action:clear-models");
         Assert.Contains(SettingsSearch.Results("favourites", index), e => e.Id == "action:clear-models");

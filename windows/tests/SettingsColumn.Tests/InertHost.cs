@@ -74,7 +74,7 @@ namespace Microsoft.UI.Xaml.Input
 namespace HermesHQ.Shell
 {
     public record PlaceArgs(object? Place, object? Argument);
-    public static class Navigator { public static bool Listening => true; }
+    public static class Navigator { public static bool Listening => true; public static void Open(string placeId, object? arg = null) { } }
 }
 namespace HermesHQ.Services
 {

@@ -1,14 +1,21 @@
+using Hermes.Core.Chat;
+using Hermes.Core.Coding;
+using Hermes.Core.Model;
 using Hermes.Core.Net;
+using Hermes.Core.Sessions;
+using Hermes.Core.Settings;
 using HermesHQ.Services;
 using HermesHQ.Shell;
 using HermesHQ.ViewModels;
 using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
 using Windows.System;
+using Windows.UI;
 using Windows.UI.Core;
 
 namespace HermesHQ.Pages;
@@ -20,14 +27,21 @@ public sealed partial class ChatPage : Page
     private bool _loadingOlder;
     private bool _stickToEnd = true; // the view follows new messages while you're at the bottom
     private string? _statusOverride; // a feature's words over "Replying…" (Waiting for your approval)
+    private string? _dismissedCodeMessageId; // verification-code banner dismissed/sent for this assistant message id
+    private ChatProjectBadge? _projectBadge;
 
     private readonly Features.Composer.DirectComposerFit _composerFit;
 
     public ChatPage()
     {
         InitializeComponent();
+        SessionStripRules.Store ??= Features.Transcript.FilePreferences.Shared;
         _composerFit = new(ComposerRow, ComposerMetrics, Composer, ComposerModel);
         Composer.GotFocus += (_, _) => App.Window?.DismissToolTips();
+        SessionTabs.OpenAllChatsRequested += OpenInspectorChats;
+        SessionTabs.NewChatRequested += StartNewChatFromStrip;
+        CodeBanner.SendRequested += OnVerificationCodeSend;
+        CodeBanner.DismissRequested += OnVerificationCodeDismiss;
         Loaded += (_, _) =>
         {
             ApplyLook();
@@ -45,10 +59,13 @@ public sealed partial class ChatPage : Page
 
     private void ApplyLook()
     {
-        var desktop = Features.Settings.ThemeService.State.DesktopLook;
-        ComposerBox.CornerRadius = new CornerRadius(desktop ? 8 : 20);
-        Background = Features.Settings.BackdropPainter.CreateBrush(Hermes.Core.Settings.BackdropPlace.Chats)
+        var state = Features.Settings.ThemeService.State;
+        ComposerBox.CornerRadius = new CornerRadius(state.DesktopLook
+            ? state.ShapeRadius(ShapeRole.Field, 18)
+            : 20);
+        Background = Features.Settings.BackdropPainter.CreateBrush(BackdropPlace.Chats)
             ?? ThemeBrushes.Get("HQPageBrush");
+        UpdateProjectSubtitle(force: true);
     }
 
     private void ComposerModel_Click(object sender, RoutedEventArgs e) => _context?.OpenModelPicker?.Invoke();
@@ -73,6 +90,9 @@ public sealed partial class ChatPage : Page
         try
         {
             _statusOverride = null;
+            _dismissedCodeMessageId = null;
+            _projectBadge = null;
+            CodeBanner.Hide();
             StoredId = args.StoredId;
             ChatTitle = args.Title;
             TitleText.Text = args.Title.ToUpperInvariant();
@@ -80,6 +100,7 @@ public sealed partial class ChatPage : Page
             _composerFit.SetTitle(args.Title);
             _composerFit.SetModel(null);
             var session = client.OpenChat(args.Profile, args.StoredId, args.Title);
+            WirePendingDraftScope(session, args);
             var vm = new ChatViewModel(session, DispatcherQueue);
             var opening = new ChatContext
             {
@@ -100,6 +121,7 @@ public sealed partial class ChatPage : Page
                 var docked = Dock.Content != null;
                 Dock.Visibility = docked ? Visibility.Visible : Visibility.Collapsed;
                 ComposerBox.Visibility = docked ? Visibility.Collapsed : Visibility.Visible;
+                UpdateVerificationCodeBanner();
             });
             opening.Closed += () => Dock.UnregisterPropertyChangedCallback(ContentControl.ContentProperty, dockChange);
             foreach (var hook in ChatExtensions.OnOpen)
@@ -109,8 +131,62 @@ public sealed partial class ChatPage : Page
                 catch (Exception x) { AppLog.Error("chat-extension", x); }
             }
             if (!Owns(opening)) return;
+            if (Features.Transcript.ChatInspector.FromView(Inspector.Content) is { } inspector)
+                inspector.IsBotChat = args.BotChat;
             MoreButton.Visibility = MoreMenu.Items.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
             InspectorToggle.Visibility = Inspector.Content != null ? Visibility.Visible : Visibility.Collapsed;
+
+            // [mac-session-tabs] Configure the in-chat session strip and keep it + the project subtitle synced with ListsHub and live session info.
+            var isTaskChat = SessionStripRules.IsTaskChatTitle(args.Title);
+            SessionTabs.Configure(args.Profile, args.StoredId, args.BotChat, isTaskChat: isTaskChat, isGroupRoom: false);
+            UpdateProjectSubtitle(force: true);
+            UpdateVerificationCodeBanner();
+
+            var hub = Features.Bots.ListsHub.Current;
+            var codingStore = Features.Coding.CodingFeature.GetStore();
+            void OnListsChanged()
+            {
+                if (AppShutdown.Stopping || !Owns(opening)) return;
+                SessionTabs.Refresh();
+                UpdateProjectSubtitle();
+            }
+            void OnCodingChanged() => DispatcherQueue.TryEnqueue(() =>
+            {
+                if (AppShutdown.Stopping || !Owns(opening)) return;
+                UpdateProjectSubtitle(force: true);
+            });
+            void OnInfoChanged(System.Text.Json.Nodes.JsonNode _) => DispatcherQueue.TryEnqueue(() =>
+            {
+                if (AppShutdown.Stopping || !Owns(opening)) return;
+                SyncPendingScopeFromCwd(session);
+                UpdateProjectSubtitle();
+            });
+            void OnStoredIdResolved(string _, string resolved) => DispatcherQueue.TryEnqueue(() =>
+            {
+                if (AppShutdown.Stopping || !Owns(opening)) return;
+                StoredId = resolved;
+                SessionTabs.Configure(args.Profile, resolved, args.BotChat, isTaskChat: SessionStripRules.IsTaskChatTitle(ChatTitle), isGroupRoom: false);
+                UpdateProjectSubtitle();
+            });
+            void OnTranscriptChanged()
+            {
+                if (AppShutdown.Stopping || !Owns(opening)) return;
+                UpdateVerificationCodeBanner();
+            }
+            if (hub != null) hub.Changed += OnListsChanged;
+            codingStore.Changed += OnCodingChanged;
+            session.InfoChanged += OnInfoChanged;
+            session.StoredIdResolved += OnStoredIdResolved;
+            opening.TranscriptChanged += OnTranscriptChanged;
+            opening.Closed += () =>
+            {
+                if (hub != null) hub.Changed -= OnListsChanged;
+                codingStore.Changed -= OnCodingChanged;
+                session.InfoChanged -= OnInfoChanged;
+                session.StoredIdResolved -= OnStoredIdResolved;
+                opening.TranscriptChanged -= OnTranscriptChanged;
+            };
+
             Messages.ItemsSource = vm.Items;
             void MessagesLoaded(object sender, RoutedEventArgs e) { if (Owns(opening)) HookScroller(); }
             Messages.Loaded += MessagesLoaded;
@@ -144,6 +220,187 @@ public sealed partial class ChatPage : Page
             if (Owns(opening)) await FinishOpeningAsync(opening, vm, args);
         }
         catch (Exception ex) { AppLog.Error("chat", ex); LoadingRing.IsActive = false; }
+    }
+
+    /// 363ae6c33 (#613): freshly started listed sessions keep a deterministic `PendingScope` before `ChatExtensions.OnOpen`
+    /// attaches `ChatAttachments`, so unsent drafts survive switching bots even when `session.create` assigns a fresh id.
+    private static void WirePendingDraftScope(ChatSession session, Args args)
+    {
+        if (args.BotChat) return;
+        if (!StartedChats.Take(args.Profile, args.StoredId)) return;
+        // Re-note so `ChatSession.OpenAsync` still treats this first open as fresh (skips 404 REST history).
+        StartedChats.Note(args.Profile, args.StoredId);
+        var folder = Features.Bots.ListsHub.Current?.Sessions.Row(args.Profile, args.StoredId)?.Cwd;
+        session.StartsNew = true;
+        session.ListsWhenStarted = true;
+        session.PendingScope = ChatSession.MakePendingScope(folder);
+    }
+
+    /// Refines `PendingScope` once `session.resume` / `session.info` supplies a folder for a still-empty new chat (#613).
+    private void SyncPendingScopeFromCwd(ChatSession session)
+    {
+        if (!session.StartsNew || !session.ListsWhenStarted || session.Messages.Count > 0 || session.Busy || session.HasQueuedMessages)
+            return;
+        var nextScope = ChatSession.MakePendingScope(session.Cwd);
+        if (nextScope == session.PendingScope) return;
+        var before = session.DraftScope;
+        session.PendingScope = nextScope;
+        var after = session.DraftScope;
+        if (before == after) return;
+        var center = Features.Attachments.AttachmentsFeature.CenterFor(session.Client);
+        var existing = center.GetDraft(after);
+        if (Composer.Text.Length == 0 && existing.Text.Length > 0)
+        {
+            Composer.Text = existing.Text;
+            Composer.SelectionStart = existing.Text.Length;
+        }
+        else
+        {
+            center.MoveDraft(before, after);
+        }
+    }
+
+    /// Opens Inspector › Chats when the user clicks "All N" in `SessionStrip`.
+    private void OpenInspectorChats()
+    {
+        ShowInspector(true);
+        Features.Transcript.ChatInspector.FromView(Inspector.Content)?.OpenChats();
+    }
+
+    /// Starts a new chat with the current bot (in the current project's folder when applicable) from the strip's "+".
+    private async void StartNewChatFromStrip()
+    {
+        if (_context is not { } ctx || Features.Bots.ListsHub.Current is not { } hub) return;
+        var profile = ctx.Session.Profile;
+        string? folder = null;
+        if (!ctx.IsBotChat)
+        {
+            var cwd = ctx.Session.Cwd ?? hub.Sessions.Row(profile, ctx.Session.StoredId)?.Cwd;
+            if (hub.Sessions.ProjectsByProfile.TryGetValue(profile, out var projects)
+                && SessionProject.OwnerOf(cwd, projects) is { } ownerId)
+            {
+                folder = projects.FirstOrDefault(p => p.Id == ownerId)?.Root;
+            }
+        }
+        string? id = null;
+        await Features.Bots.Prompts.RunAsync(XamlRoot, "Couldn’t Start a New Chat", async () => id = await hub.Sessions.NewChatAsync(profile, folder));
+        if (id != null) Navigator.Go(new ChatDestination(profile, id, "New Chat"));
+    }
+
+    /// [new-chat-project] 643492b44: resolves and renders the project subtitle (emoji or colored folder glyph + project
+    /// name) ahead of the header status text for non-BotChat project sessions (both empty New Chat and populated chats).
+    private void UpdateProjectSubtitle(bool force = false)
+    {
+        ChatProjectBadge? next = null;
+        if (_context is { } ctx && Features.Bots.ListsHub.Current is { } hub)
+        {
+            var session = ctx.Session;
+            var isBotChat = ctx.IsBotChat || session.Title == Bot.BotChatTitle;
+            var isTaskChat = SessionStripRules.IsTaskChatTitle(ChatTitle ?? session.Title);
+            var cwd = session.Cwd ?? hub.Sessions.Row(session.Profile, session.StoredId)?.Cwd;
+            var codingStore = Features.Coding.CodingFeature.GetStore();
+            next = SessionStripRules.ResolveProjectBadge(
+                session.Profile,
+                cwd,
+                hub.Sessions.ProjectsByProfile,
+                hub.Sessions.ProjectEntries(),
+                isBotChat: isBotChat,
+                isTaskChat: isTaskChat,
+                isGroupRoom: false,
+                lookFor: key =>
+                {
+                    var look = codingStore.SettingsFor(key).Look;
+                    return (look.Emoji, look.Color);
+                });
+        }
+
+        if (!force && next == _projectBadge)
+        {
+            UpdateSubtitleSeparator();
+            return;
+        }
+        _projectBadge = next;
+
+        if (next == null)
+        {
+            ProjectSubtitle.Visibility = Visibility.Collapsed;
+            ProjectEmoji.Visibility = Visibility.Collapsed;
+            ProjectFolderIcon.Visibility = Visibility.Collapsed;
+            UpdateSubtitleSeparator();
+            return;
+        }
+
+        ProjectSubtitle.Visibility = Visibility.Visible;
+        ProjectNameText.Text = next.Name;
+        AutomationProperties.SetName(ProjectSubtitle, $"Project: {next.Name}");
+
+        if (!string.IsNullOrWhiteSpace(next.Emoji))
+        {
+            ProjectEmoji.Text = next.Emoji;
+            ProjectEmoji.Visibility = Visibility.Visible;
+            ProjectFolderIcon.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            ProjectEmoji.Visibility = Visibility.Collapsed;
+            ProjectFolderIcon.Visibility = Visibility.Visible;
+            ProjectFolderIcon.Foreground = ResolveProjectColorBrush(next.ColorKey);
+        }
+
+        UpdateSubtitleSeparator();
+    }
+
+    private void UpdateSubtitleSeparator() =>
+        SubtitleDot.Visibility = ProjectSubtitle.Visibility == Visibility.Visible && StatusText.Text.Length > 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+    private static Brush ResolveProjectColorBrush(string? colorKey)
+    {
+        if (!string.IsNullOrWhiteSpace(colorKey))
+        {
+            foreach (var swatch in RepoPathHelpers.Swatches)
+            {
+                if (string.Equals(swatch.Key, colorKey, StringComparison.OrdinalIgnoreCase))
+                    return Features.Settings.ThemeService.Ink(Color.FromArgb(0xFF, swatch.R, swatch.G, swatch.B));
+            }
+        }
+        return ThemeBrushes.Get("TextFillColorSecondaryBrush");
+    }
+
+    /// 5cb604059: shows `VerificationCodeBanner` directly above the composer when the latest assistant message asks for
+    /// a one-time verification code (unless dismissed for that message id, covered by a dock, or editing a message).
+    private void UpdateVerificationCodeBanner()
+    {
+        if (_vm == null || Dock.Content != null || _editBanner != null)
+        {
+            if (CodeBanner.Visibility != Visibility.Collapsed) CodeBanner.Hide();
+            return;
+        }
+        var activeId = VerificationCodePrompt.ActiveMessageId(_vm.Session.Messages);
+        var wantedId = activeId != null && activeId != _dismissedCodeMessageId ? activeId : null;
+        if (wantedId != null)
+            CodeBanner.Show(wantedId);
+        else if (CodeBanner.Visibility != Visibility.Collapsed)
+            CodeBanner.Hide();
+    }
+
+    private void OnVerificationCodeSend(string code)
+    {
+        var normalized = VerificationCodePrompt.Normalize(code);
+        if (normalized.Length == 0 || _vm == null) return;
+        _dismissedCodeMessageId = CodeBanner.MessageId;
+        CodeBanner.Hide();
+        LoadProblem.Visibility = Visibility.Collapsed;
+        _stickToEnd = true;
+        _ = _vm.Session.SendAsync(normalized);
+        ScrollToEnd();
+    }
+
+    private void OnVerificationCodeDismiss()
+    {
+        _dismissedCodeMessageId = CodeBanner.MessageId;
+        CodeBanner.Hide();
     }
 
     /// The bot's face left of the name (AppModel.makeChatScreen at 93f984bb1): the chat's own bot by its profile, in a
@@ -345,11 +602,13 @@ public sealed partial class ChatPage : Page
         SendGlyph.Glyph = stop ? "\uE71A" : "\uE74A"; // Stop : Send (an up arrow, as the Mac's)
         ToolTipService.SetToolTip(SendButton, stop ? "Stop (Esc)" : "Send (Enter)");
         // [WIN-55] ComposerView.swift: `case .stop: accessibilityLabel = "Stop"`, `case .send, .disabled: … "Send"`.
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(SendButton, stop ? "Stop" : "Send");
+        AutomationProperties.SetName(SendButton, stop ? "Stop" : "Send");
         SendButton.IsEnabled = busy || CanSend();
         StatusText.Text = _statusOverride ?? _vm?.Status ?? (busy ? "Replying…" : "");
         StatusText.Foreground = ThemeBrushes.Get(_statusOverride != null
             ? "SystemFillColorCautionBrush" : "TextFillColorSecondaryBrush");
+        UpdateSubtitleSeparator();
+        UpdateVerificationCodeBanner();
     }
 
     /// Typed words or a feature's draft (attachments), and nothing holding Send back (a photo still being prepared).

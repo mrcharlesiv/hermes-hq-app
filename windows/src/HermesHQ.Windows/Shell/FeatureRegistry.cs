@@ -24,6 +24,8 @@ public static class FeatureRegistry
         HermesHQ.Features.BotPages.BotPagesFeature.Register();
         HermesHQ.Features.Insights.InsightsFeature.Register();
         HermesHQ.Features.Capabilities.CapabilitiesFeature.Register();
+        HermesHQ.Features.Capabilities.PluginPagesService.Register();
+        HermesHQ.Features.ConnectApps.ConnectAppsFeature.Register();
         HermesHQ.Features.Notifications.NotificationsFeature.Register();
         HermesHQ.Features.TypeToChat.TypeToChatFeature.Register();   // MacTypeToChat: keys typed with nothing focused go to the open chat
         HermesHQ.Features.ChatFind.ChatFindFeature.Register();
@@ -36,6 +38,7 @@ public static class FeatureRegistry
         HermesHQ.Features.Browser.BrowserFeature.Register();   // Watch Browser viewer, tabs, Chrome profiles & chat card
         HermesHQ.Features.Coding.CodingFeature.Register();     // Coding Pipeline View, PR Cards & interactive diffs
         HermesHQ.Features.PhoneCalls.PhoneCallsFeature.Register(); // Phone Calls, samplehost setup, live call window & history
+        HermesHQ.Features.Threads.ThreadsFeature.Register();       // Session threads: auto-routing, inline thread cards & thread window
         HermesHQ.Features.ChatIntro.ChatIntroFeature.Register();   // [WIN-CHAT-INTRO] the empty chat's intro
         Services.ProofWalks.Register();   // the CI's /new, Auto-Archive and Keyboard Shortcuts pictures
     }

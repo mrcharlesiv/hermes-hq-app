@@ -3,6 +3,7 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:controls="using:HermesHQ.Controls"
+    xmlns:composer="using:HermesHQ.Features.Composer"
     NavigationCacheMode="Disabled" Background="{ThemeResource HQPageBrush}">
     <Grid>
         <Grid.ColumnDefinitions>
@@ -17,39 +18,57 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <!-- Header: the bot's name and model in the middle, as the Mac's; actions on the right. -->
-            <Grid Padding="16,8,10,8" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,0,0,1">
-                <StackPanel HorizontalAlignment="Center" Orientation="Horizontal" Spacing="8">
-                    <controls:BotHead x:Name="Head" Width="22" Height="22" VerticalAlignment="Center" />
-                    <StackPanel VerticalAlignment="Center">
-                        <TextBlock x:Name="TitleText" FontWeight="Bold" FontSize="13" CharacterSpacing="40"
-                                   TextTrimming="CharacterEllipsis" HorizontalAlignment="Center" />
-                        <TextBlock x:Name="StatusText" FontSize="12" HorizontalAlignment="Center"
-                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            <!-- Top chrome (Row 0 keeps Messages at Grid.Row="1"): Header + secondary SessionStrip under it. -->
+            <StackPanel Grid.Row="0">
+                <!-- Header: the bot's name, project subtitle and status in the middle, as the Mac's; actions on the right. -->
+                <Grid Padding="16,8,10,8" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,0,0,1">
+                    <StackPanel HorizontalAlignment="Center" Orientation="Horizontal" Spacing="8">
+                        <controls:BotHead x:Name="Head" Width="22" Height="22" VerticalAlignment="Center" />
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock x:Name="TitleText" FontWeight="Bold" FontSize="13" CharacterSpacing="40"
+                                       TextTrimming="CharacterEllipsis" HorizontalAlignment="Center" />
+                            <StackPanel x:Name="SubtitleRow" Orientation="Horizontal" Spacing="4" HorizontalAlignment="Center">
+                                <StackPanel x:Name="ProjectSubtitle" Orientation="Horizontal" Spacing="4" Visibility="Collapsed"
+                                            AutomationProperties.AutomationId="chat.header.project">
+                                    <TextBlock x:Name="ProjectEmoji" FontSize="12" VerticalAlignment="Center" Visibility="Collapsed" />
+                                    <FontIcon x:Name="ProjectFolderIcon" Glyph="&#xE8B7;" FontSize="11" VerticalAlignment="Center" Visibility="Collapsed" />
+                                    <TextBlock x:Name="ProjectNameText" FontSize="12" VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis" MaxWidth="200"
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                </StackPanel>
+                                <TextBlock x:Name="SubtitleDot" Text="·" FontSize="12" VerticalAlignment="Center" Visibility="Collapsed"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <TextBlock x:Name="StatusText" FontSize="12" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            </StackPanel>
+                        </StackPanel>
                     </StackPanel>
-                </StackPanel>
-                <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="2">
-                    <!-- [WIN-62] Buttons features add before the ⋯ (the Mac's Read Replies Aloud speaker). -->
-                    <StackPanel x:Name="HeaderTrailing" Orientation="Horizontal" Spacing="2" />
-                    <!-- [WIN-55] VoiceOver names: ChatViewController.swift "Chat Actions" (the ⋯) and "Inspector". -->
-                    <Button x:Name="MoreButton" Style="{StaticResource QuietButtonStyle}" ToolTipService.ToolTip="More"
-                            AutomationProperties.Name="Chat Actions">
-                        <FontIcon Glyph="&#xE712;" FontSize="14" />
-                        <Button.Flyout>
-                            <MenuFlyout x:Name="MoreMenu" Placement="BottomEdgeAlignedRight" />
-                        </Button.Flyout>
-                    </Button>
-                    <ToggleButton x:Name="InspectorToggle" Style="{StaticResource DefaultToggleButtonStyle}"
-                                  Background="Transparent" BorderThickness="0" Padding="8,6" Click="InspectorToggle_Click"
-                                  KeyboardAcceleratorPlacementMode="Hidden"
-                                  ToolTipService.ToolTip="Info, Steps, Files (Ctrl+I)" AutomationProperties.Name="Inspector">
-                        <FontIcon Glyph="&#xE8A0;" FontSize="14" />
-                        <ToggleButton.KeyboardAccelerators>
-                            <KeyboardAccelerator Key="I" Modifiers="Control" />
-                        </ToggleButton.KeyboardAccelerators>
-                    </ToggleButton>
-                </StackPanel>
-            </Grid>
+                    <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="2">
+                        <!-- [WIN-62] Buttons features add before the ⋯ (the Mac's Read Replies Aloud speaker). -->
+                        <StackPanel x:Name="HeaderTrailing" Orientation="Horizontal" Spacing="2" />
+                        <!-- [WIN-55] VoiceOver names: ChatViewController.swift "Chat Actions" (the ⋯) and "Inspector". -->
+                        <Button x:Name="MoreButton" Style="{StaticResource QuietButtonStyle}" ToolTipService.ToolTip="More"
+                                AutomationProperties.Name="Chat Actions">
+                            <FontIcon Glyph="&#xE712;" FontSize="14" />
+                            <Button.Flyout>
+                                <MenuFlyout x:Name="MoreMenu" Placement="BottomEdgeAlignedRight" />
+                            </Button.Flyout>
+                        </Button>
+                        <ToggleButton x:Name="InspectorToggle" Style="{StaticResource DefaultToggleButtonStyle}"
+                                      Background="Transparent" BorderThickness="0" Padding="8,6" Click="InspectorToggle_Click"
+                                      KeyboardAcceleratorPlacementMode="Hidden"
+                                      ToolTipService.ToolTip="Info, Steps, Files, Helpers, Chats (Ctrl+I)" AutomationProperties.Name="Inspector">
+                            <FontIcon Glyph="&#xE8A0;" FontSize="14" />
+                            <ToggleButton.KeyboardAccelerators>
+                                <KeyboardAccelerator Key="I" Modifiers="Control" />
+                            </ToggleButton.KeyboardAccelerators>
+                        </ToggleButton>
+                    </StackPanel>
+                </Grid>
+
+                <!-- [mac-session-tabs] In-chat session strip under the header for bot/session chats. -->
+                <controls:SessionStrip x:Name="SessionTabs" Visibility="Collapsed" />
+            </StackPanel>
 
             <ListView x:Name="Messages" Grid.Row="1" SelectionMode="None" IsItemClickEnabled="False"
                       AutomationProperties.AutomationId="chat.transcript"
@@ -93,9 +112,14 @@
             <!-- The shelf: subagents, goal, queue, browser cards -->
             <StackPanel x:Name="Shelf" Grid.Row="2" Spacing="6" Margin="16,0,16,6" MaxWidth="900" />
 
-            <!-- The message box, or a dock in its place -->
+            <!-- Verification code banner (directly above composer) + the message box, or a dock in its place -->
             <Grid Grid.Row="3" Padding="16,0,16,14" MaxWidth="900">
-                <Border x:Name="ComposerBox" CornerRadius="20" Padding="8,4,6,4"
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <composer:VerificationCodeBanner x:Name="CodeBanner" Grid.Row="0" Margin="0,0,0,6" />
+                <Border x:Name="ComposerBox" Grid.Row="1" CornerRadius="20" Padding="8,4,6,4"
                         Background="{ThemeResource ControlFillColorDefaultBrush}"
                         BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}" BorderThickness="1">
                     <Border.Resources>
@@ -141,11 +165,11 @@
                         </Button>
                     </Grid>
                 </Border>
-                <ContentControl IsTabStop="False" x:Name="Dock" HorizontalContentAlignment="Stretch" Visibility="Collapsed" />
+                <ContentControl IsTabStop="False" x:Name="Dock" Grid.Row="1" HorizontalContentAlignment="Stretch" Visibility="Collapsed" />
             </Grid>
         </Grid>
 
-        <!-- The inspector (Info, Steps, Files, Helpers) -->
+        <!-- The inspector (Info, Steps, Files, Helpers, Chats) -->
         <Border Grid.Column="1" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1,0,0,0">
             <ContentControl IsTabStop="False" x:Name="Inspector" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
         </Border>

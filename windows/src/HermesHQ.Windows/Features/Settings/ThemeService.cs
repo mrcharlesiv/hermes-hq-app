@@ -119,6 +119,13 @@ public static class ThemeService
         ("HQRedBrush", t => t.Red),
         ("HQGreenBrush", t => t.Green),
         ("HQOrangeBrush", t => t.Orange),
+        // [crisp-frosted-chrome] Whisper hairline and frosted bar veil (`ddcf7975e`, App/Theme/DesktopFrost.swift).
+        ("HQWhisperLineBrush", t => t.WhisperLine),
+        ("HQFrostedBarBrush", t => ThemeResolver.FrostedBarVeil(t, reduceTransparency: !WindowTransparency.IsEnabled || SystemHighContrast)),
+        // [window-transparency] Layered desktop glass shell & floating canvas surfaces (`e2f3aaf39`, App/Mac/MacGlassShell.swift).
+        ("HQGlassVeilBrush", _ => WindowTransparency.ShellBackdropColor(ThemeResolver.Resolve(State), Dark, WindowTransparency.IsEnabled && !SystemHighContrast)),
+        ("HQGlassCanvasSurfaceBrush", _ => WindowTransparency.CanvasSurfaceColor(ThemeResolver.Resolve(State), Dark, WindowTransparency.IsEnabled && !SystemHighContrast)),
+        ("HQGlassCanvasBorderBrush", _ => WindowTransparency.CanvasBorderColor(Dark)),
     ];
 
     private static readonly Dictionary<string, SolidColorBrush> Brushes = [];
@@ -146,6 +153,7 @@ public static class ThemeService
         WorkingRing.Store = FilePreferences.Shared;
         ThinkingBarRow.Store = FilePreferences.Shared;
         ChatsUnderBotsRow.Store = FilePreferences.Shared;
+        WindowTransparency.Store = FilePreferences.Shared;
         State = Store.Load();
         Chosen = Appearance.Read(FilePreferences.Shared);
         Set = ThemeResolver.Resolve(State);
@@ -319,6 +327,51 @@ public static class ThemeService
     {
         Store.SetBubbleStyle(style);
         AppLog.Note("settings", $"bubble style {style.Raw()}");
+        Reload();
+    }
+
+    /// [desktop-radius] Appearance › Look › Corners (Hermes Look app-wide border radius, `a78139597`).
+    public static void SetDesktopRadius(double radius)
+    {
+        Store.SetDesktopRadius(radius);
+        AppLog.Note("settings", $"desktop radius {Math.Round(Math.Clamp(radius, ThemeState.MinDesktopRadius, ThemeState.MaxDesktopRadius), MidpointRounding.AwayFromZero)}");
+        Reload();
+    }
+
+    /// [desktop-radius] Resets Hermes Look's app-wide border radius back to 4 pt.
+    public static void ResetDesktopRadius()
+    {
+        Store.ResetDesktopRadius();
+        AppLog.Note("settings", "desktop radius reset");
+        Reload();
+    }
+
+    /// [plain-replies] Chat Bubbles › Reply Bubbles (`1a1f7200d`).
+    public static void SetPlainReplies(bool plain)
+    {
+        Store.SetPlainReplies(plain);
+        AppLog.Note("settings", $"reply bubbles {(plain ? "off" : "on")}");
+        Reload();
+    }
+
+    /// [window-transparency] Appearance › Look › Window Transparency (`e2f3aaf39`).
+    public static void SetWindowTransparency(bool enabled)
+    {
+        WindowTransparency.IsEnabled = enabled;
+        AppLog.Note("settings", $"window transparency {(enabled ? "on" : "off")}");
+        Refresh();
+    }
+
+    /// Resets every on-device appearance setting back to shipped defaults (App/Theme/Theme.swift `resetAppearance`).
+    public static void ResetAppearance()
+    {
+        Store.ResetAppearance();
+        Chosen = AppearanceSetting.System;
+        WorkingRing.IsOn = false;
+        WindowTransparency.Reset();
+        ThinkingBarRow.IsOn = true;
+        ChatsUnderBotsRow.Current = ChatsUnderBotsChoice.Three;
+        AppLog.Note("settings", "appearance reset");
         Reload();
     }
 

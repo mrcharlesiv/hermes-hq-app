@@ -56,6 +56,9 @@ public sealed record ThemeTokens
     public Rgba ComposerGlyph { get; set; }
     public Rgba Caret { get; set; }
     public Rgba TabIdle { get; set; }
+    /// [crisp-frosted-chrome] Whisper hairline framing frosted top and bottom bars (App/Theme/DesktopFrost.swift
+    /// `whisperLine`): `0.09` dark / `0.07` light alpha of `Label`, or full `Separator` under high contrast.
+    public Rgba WhisperLine { get; set; }
     /// A skin's own iOS look, null for the general rules and in the Desktop Look.
     public SkinOwnLook? OwnLook { get; set; }
     /// The colour of the chosen row where it isn't the tint (Paper's warm grey).
@@ -79,10 +82,22 @@ public sealed record ThemeSet(ThemeState State, ThemeTokens Light, ThemeTokens D
 
     /// The app's standard look: no skin picked and the Desktop Look off.
     public bool IsStandardLook => !State.DesktopLook && State.SkinId == SkinCatalog.DefaultId;
+
+    /// True when the grouped page uses the platform's own neutral palette (Nous or Apple System in Native Look;
+    /// HermesKit/Theme/ThemeTokens.swift `groupedPageIsSystem`).
+    public bool GroupedPageIsSystem =>
+        !State.DesktopLook && (State.SkinId == SkinCatalog.DefaultId || State.SkinId == SkinCatalog.IosId);
 }
 
 public static class ThemeResolver
 {
+    /// [bubble-ink] Minimum contrast ratio for white words on a picked or bot message bubble (`ThemeTokens.swift`).
+    public const double MessageInk = 4.7;
+    /// [crisp-frosted-chrome] Frosted bar veil alphas (`App/Theme/DesktopFrost.swift`, `ddcf7975e`).
+    public const double DesktopBarTintAlpha = 0.94;
+    public const double CompactBarTintAlpha = 0.72;
+    public const double TabBarTintAlpha = 0.76;
+
     public static ThemeSet Resolve(ThemeState state)
     {
         var skin = state.Skin;
@@ -97,6 +112,56 @@ public static class ThemeResolver
         }
         bool? forced = skin.HasOneLook ? skin.Light.RendersDark : null;
         return new ThemeSet(state, Tokens(false, state.HighContrast), Tokens(true, state.HighContrast), forced);
+    }
+
+    /// [crisp-frosted-chrome] Whisper hairline framing frosted bars (`DesktopFrost.whisperLine`, `ddcf7975e`):
+    /// `0.09` dark / `0.07` light alpha of `Label`, or full `Separator` when high contrast is active.
+    public static Rgba WhisperLine(ThemeTokens t, bool dark, bool highContrast) =>
+        highContrast ? t.Separator : t.Label.Alpha(dark ? 0.09 : 0.07);
+
+    /// [crisp-frosted-chrome] Frosted top bar veil (`DesktopFrost.barAppearance`, `ddcf7975e`):
+    /// solid `Page` when `reduceTransparency` is true, else `Page` at `DesktopBarTintAlpha` (0.94).
+    public static Rgba FrostedBarVeil(ThemeTokens t, bool reduceTransparency = false) =>
+        reduceTransparency ? t.Page.Alpha(1) : t.Page.Alpha(DesktopBarTintAlpha);
+
+    /// [bot-colour] A near-black message colour (an ink face) in dark mode (`687406870`): `#363B44` cool slate
+    /// charcoal on Nous dark, and a hue-matched step above the reply bubble on every other skin (ΔE >= 8 while
+    /// preserving >= 4.7 white contrast) so it never turns warm or washes out memo cards.
+    public static Rgba DarkInkBubble(ThemeTokens t)
+    {
+        if (t.Page == Rgba.Hex(0x0D1015) && t.BotBubble == Rgba.Hex(0x26282C))
+            return Rgba.Hex(0x363B44);
+        var page = t.Page.Over(Rgba.White);
+        var reply = t.BotBubble.Over(page);
+        var ink = t.Label.Over(page);
+        var @base = reply.Luminance > page.Luminance ? reply : page.Mix(90, ink);
+        var keep = 88.0;
+        var bubble = @base.Mix(keep, ink);
+        while (keep > 50 && bubble.LabDistance(reply) < 8)
+        {
+            keep -= 2;
+            var next = @base.Mix(keep, ink);
+            if (Rgba.White.Contrast(next) < MessageInk) break;
+            bubble = next;
+        }
+        return bubble;
+    }
+
+    /// Resolves a custom message bubble color (`ThemeTokens.swift` `paintMessage(.custom)`): when `dark` and
+    /// `seed.LabL < 10`, delegates to `DarkInkBubble(t)`, deepening toward black if needed for `MessageInk` (4.7:1).
+    public static Rgba CustomMessageBubble(ThemeTokens t, Rgba seed, bool dark)
+    {
+        var start = dark && seed.LabL < 10
+            ? DarkInkBubble(t)
+            : (dark ? seed.RaisingL(57).Mix(75, Rgba.Black) : seed);
+        var bubble = start;
+        var keep = 100.0;
+        while (keep > 0 && Rgba.White.Contrast(bubble) < MessageInk)
+        {
+            keep -= 1;
+            bubble = start.Mix(keep, Rgba.Black);
+        }
+        return bubble;
     }
 
     /// [WIN-ROW-FACE-RING-PANEL] The sidebar's panel (MacSidebar.swift `panelColor` at 93f984bb1): `Theme.isDesktop ?
@@ -149,6 +214,7 @@ public static class ThemeResolver
             StrokePrimary = separator, StrokeSecondary = separator, StrokeTertiary = separator,
             MeBorder = Rgba.Clear, ComposerBorder = separator, ComposerGlyph = ink.Alpha(0.74), Caret = tint,
             TabIdle = ink.Alpha(0.36),
+            WhisperLine = ink.Alpha(dark ? 0.09 : 0.07),
         };
     }
 
@@ -178,6 +244,7 @@ public static class ThemeResolver
         else
         {
             var own = skin.OwnLook?.Pick(dark);
+            var neutral = seeds.MutedForeground;
             t.Page = own?.Page ?? Chrome(seeds, dark);
             t.Label = ink.Alpha(0.94);
             t.Label2 = ThemeMath.Readable(own?.Subtle ?? ink.Alpha(0.74), ink.Alpha(0.94), t.Page);
@@ -185,12 +252,24 @@ public static class ThemeResolver
             // In dark an accent is brightened to CIELAB L 57, as iOS brightens its tints.
             t.Tint = dark ? seeds.Brand.RaisingL(57) : seeds.Brand;
             t.TintText = ThemeMath.Readable(t.Tint, t.Label, t.Page);
-            t.Grouped = seeds.SidebarBackground ?? seeds.Background;
+            var rawGrouped = seeds.SidebarBackground ?? seeds.Background;
+            t.Grouped = !dark && rawGrouped == seeds.Background ? t.Page.Mix(94, neutral) : rawGrouped;
             t.CodeText = dark ? ink.Mix(72, t.Page) : ink;
-            // Cards and panels are the page raised a step in its own hue.
-            var card = t.Page.Mix(dark ? 91 : 95, ink);
+            // Hue-matched neutrals for every custom skin (HermesKit/Theme/ThemeTokens.swift:214-225).
+            t.Fill1 = neutral.Alpha(dark ? 0.32 : 0.18);
+            t.Fill2 = neutral.Alpha(dark ? 0.26 : 0.14);
+            t.Fill3 = neutral.Alpha(dark ? 0.20 : 0.11);
+            t.Fill4 = neutral.Alpha(dark ? 0.14 : 0.08);
+            t.Separator = neutral.Alpha(dark ? 0.36 : 0.28);
+            t.StrokePrimary = t.Separator;
+            t.StrokeSecondary = t.Separator;
+            t.StrokeTertiary = t.Separator;
+            t.SearchFill = neutral.Alpha(dark ? 0.18 : 0.12);
+            t.Muted = neutral;
+            // Cards lift gently off the grouped canvas in light mode and rise a step in ink in dark mode.
+            var card = dark ? t.Page.Mix(91, ink) : (t.Page.LabL > 96 ? Rgba.White : t.Page.Mix(32, Rgba.White));
             t.GroupedCard = card;
-            t.Lifted = dark ? card : t.Page.Mix(40, Rgba.White);
+            t.Lifted = dark ? card : t.Page.Mix(24, Rgba.White);
             t.Editor = card;
             t.Elevated = card;
             t.CellPressed = t.Page.Mix(dark ? 83 : 88, ink);
@@ -208,6 +287,7 @@ public static class ThemeResolver
             }
             else
             {
+                t.CodeFill = t.Page.Mix(94, ink);
                 t.CodeFillOnBubble = t.CodeFill.Over(t.BotBubble);
             }
             if (own != null)
@@ -220,10 +300,12 @@ public static class ThemeResolver
         t.OnTint = t.Tint.LabL >= 60 ? Rgba.Black : Rgba.White;
         if (skin.OwnLook?.Pick(dark) is { } ownLook)
         {
-            // Your message is the theme's own soft box with the theme's text, not white on the accent.
+            // Your message is the theme's own soft box with its explicit ink or the theme's text.
+            var meInk = ownLook.MeText ?? t.Label;
+            var meTimeSeed = ownLook.MeText != null ? meInk.Alpha(dark ? 0.88 : 0.85) : ownLook.Subtle;
             t.MeBubble = ownLook.MeBubble;
-            t.MeText = t.Label;
-            t.MeTime = ThemeMath.Readable(ownLook.Subtle, t.Label, ownLook.MeBubble.Over(t.Page), 3);
+            t.MeText = meInk;
+            t.MeTime = ThemeMath.Readable(meTimeSeed, meInk, ownLook.MeBubble.Over(t.Page), 3);
         }
         else
         {
@@ -250,6 +332,7 @@ public static class ThemeResolver
         t.Fill2OnPage = t.Fill2.Over(t.Page);
         t.Sidebar = t.Grouped;
         t.TabIdle = t.Label3;
+        t.WhisperLine = WhisperLine(t, dark, highContrast: false);
         return t;
     }
 
@@ -257,6 +340,7 @@ public static class ThemeResolver
     private static void Paint(ThemeTokens t, SkinOwnLook own, Rgba ink)
     {
         t.GroupedCard = own.Card; t.Lifted = own.Card; t.Editor = own.Card; t.Elevated = own.Card;
+        if (own.Grouped is { } grouped) t.Grouped = grouped;
         t.BotBubble = own.Reply ?? own.Card;
         t.PromptCard = own.Card;
         t.PromptEdge = own.Separator;
@@ -269,6 +353,9 @@ public static class ThemeResolver
         t.Fill4 = own.Grey.Alpha(own.FillAlphas[3]);
         t.SearchFill = own.Grey.Alpha(0.12);
         t.Separator = own.Separator;
+        t.StrokePrimary = own.Separator;
+        t.StrokeSecondary = own.Separator;
+        t.StrokeTertiary = own.Separator;
         t.Muted = own.Muted;
     }
 
@@ -294,6 +381,14 @@ public static class ThemeResolver
         var rowActive = Tinted(8, 5);
         var meBubble = (seeds.UserBubble ?? seeds.Popover).Mix(dark ? 46 : 0, neutralCard);
         var meBorder = seeds.UserBubbleBorder ?? seeds.Border;
+        // Repair skins (such as Everforest) whose seed border equals the page background so the message box keeps an edge.
+        var pageGround = page.Over(Rgba.White);
+        var bubbleGround = meBubble.Over(pageGround);
+        if (meBorder.Over(pageGround).Contrast(pageGround) < 1.15 &&
+            meBorder.Over(bubbleGround).Contrast(bubbleGround) < 1.15)
+        {
+            meBorder = strokePrimary;
+        }
         // Legible colours (desktop-look.ts:64-128).
         var accentText = ThemeMath.Legible(accent, textPrimary, page);
         var label2 = ThemeMath.Legible(textSecondary, textPrimary, page);
@@ -352,6 +447,7 @@ public static class ThemeResolver
         t.StrokePrimary = strokePrimary; t.StrokeSecondary = strokeSecondary; t.StrokeTertiary = strokeTertiary;
         t.MeBorder = meBorder; t.ComposerBorder = composerBorder; t.TabIdle = tabIdle;
         t.ComposerGlyph = label3; t.Caret = textPrimary;
+        t.WhisperLine = WhisperLine(t, dark, contrast);
         // Status colours keep the system's own, in the shade that reads on this page.
         t.Red = ThemeMath.Readable(t.Red, textPrimary, page, 4.5);
         t.Orange = ThemeMath.Readable(t.Orange, textPrimary, page, 4.5);

@@ -31,6 +31,26 @@ public sealed class QuickActionSetupDraft
     /// QuickActionDraft.message's setter: an emptied words box is no words, as the tile was before any were typed.
     public static string? Words(string text) => text.Length == 0 ? null : text;
 
+    /// QuickActionDraft.command's setter: trims and ensures a leading slash when non-empty.
+    public static string? NormalizeCommand(string text)
+    {
+        var trimmed = text.Trim();
+        if (trimmed.Length == 0) return null;
+        return trimmed.StartsWith('/') ? trimmed : "/" + trimmed;
+    }
+
+    /// QuickActionDraft.tileSize's setter: reconciles `Wide`, `Size`, and `Short`.
+    public static QuickTile ApplySize(QuickTile tile, QuickTileSize size)
+    {
+        var clearShort = size == QuickTileSize.Mini || size.RowSpan() > 1 || (tile.Known is { } k && !k.SupportsShort());
+        return tile with
+        {
+            Wide = size.IsWideSpan(),
+            Size = size is QuickTileSize.Small or QuickTileSize.Wide ? null : size,
+            Short = clearShort ? false : tile.Short,
+        };
+    }
+
     /// QuickActionDraft.hasChanges.
     public bool Changed => Tile != Original;
 

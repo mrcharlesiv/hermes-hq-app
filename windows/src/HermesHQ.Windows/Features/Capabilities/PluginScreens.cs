@@ -1,12 +1,17 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json.Nodes;
 using Hermes.Core;
 using Hermes.Core.Capabilities;
 using Hermes.Core.Gateways;
+using Hermes.Core.Notifications;
+using HermesHQ.Controls;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Documents;
+using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
 
 namespace HermesHQ.Features.Capabilities;
 
@@ -129,24 +134,17 @@ internal sealed class PluginScreen(CapabilitiesModel model, PluginInfo plugin) :
 
     private async void Update()
     {
-        if (model.Api is not { } api || _busy) return;
+        if (Current is not { } current || _busy) return;
         _busy = true; Render();
         try
         {
-            var r = await api.PluginAsync(new PluginAction.Update(plugin.Name, false), _profile);
-            // The new version asks for more than this one had: say what, and update only on a yes.
-            if (r.ConsentRequired && await Kit.Confirm(Root, $"Update {plugin.Name}?", string.Join("\n", r.DeltaLines), "Update"))
-                r = await api.PluginAsync(new PluginAction.Update(plugin.Name, true), _profile);
-            if (r.ScanBlocked) Kit.Fail(Root, $"Couldn’t Update {plugin.Name}", string.Join("\n", r.ScanFindings.Prepend("Hermes’s security scan stopped the update. Nothing changed.")));
-            else if (r.Unchanged) Flash($"{plugin.Name} is up to date.");
-            else
-            {
-                model.PluginNotice = r.NeedsRestart ? "Restart your gateway to apply." : $"{plugin.Name} updated.";
-                await model.ReloadPlugins();
-            }
+            await PluginUpdateFlow.UpdateSingleAsync(Root, model, current, _profile);
         }
-        catch (Exception e) { Kit.Fail(Root, $"Couldn’t Update {plugin.Name}", McpEntryMask.Phone.Text(CapabilitiesWords.Detail(e))); }
-        _busy = false; Render();
+        finally
+        {
+            _busy = false;
+            Render();
+        }
     }
 
     private async void Uninstall()
@@ -180,7 +178,11 @@ internal sealed class PluginScreen(CapabilitiesModel model, PluginInfo plugin) :
         if (!model.ReadOnly && (p.UpdateAvailable || p.CanUninstall))
         {
             var rows = new List<UIElement>();
-            if (p.UpdateAvailable) rows.Add(Kit.Row(_busy ? "Updating…" : $"Update to {p.NewVersion ?? "the Latest Version"}", click: _busy ? null : Update));
+            if (p.UpdateAvailable)
+            {
+                var target = PluginUpdateFlow.DisplayUpdateVersion(p);
+                rows.Add(Kit.Row(_busy ? "Updating…" : $"Update to {target ?? "the Latest Version"}", click: _busy ? null : Update));
+            }
             if (p.CanUninstall) rows.Add(Kit.Pad(Kit.Button("Uninstall", Uninstall, enabled: !_busy).Also(b => b.Foreground = Kit.Critical)));
             page.Children.Add(Kit.Section(null, rows));
         }
@@ -234,9 +236,10 @@ internal sealed class PluginScreen(CapabilitiesModel model, PluginInfo plugin) :
                     break;
                 case "json" or "string" or "number":
                     s.Children.Add(label);
-                    var tb = new TextBox { Text = _texts.GetValueOrDefault(f.Key) ?? "", IsEnabled = editable, IsSpellCheckEnabled = false, PlaceholderText = f.Type == "json" ? "" : f.Label };
+                    var tb = new TextBox { IsEnabled = editable, IsSpellCheckEnabled = false, PlaceholderText = f.Type == "json" ? "" : f.Label };
                     if (f.Type == "json") { tb.AcceptsReturn = true; tb.MinHeight = 80; tb.MaxHeight = 220; tb.FontFamily = Kit.Res<Microsoft.UI.Xaml.Media.FontFamily>("CodeFont"); tb.TextWrapping = TextWrapping.Wrap; }
                     if (f.Type == "number") tb.InputScope = new Microsoft.UI.Xaml.Input.InputScope { Names = { new Microsoft.UI.Xaml.Input.InputScopeName(Microsoft.UI.Xaml.Input.InputScopeNameValue.Number) } };
+                    tb.Text = _texts.GetValueOrDefault(f.Key) ?? "";
                     tb.TextChanged += (_, _) => { _texts[f.Key] = tb.Text; RefreshSaveEnabled(); };
                     AutomationProperties.SetName(tb, f.Label);
                     s.Children.Add(tb);
@@ -453,6 +456,24 @@ internal sealed class PluginCatalogEntryScreen(CapabilitiesModel model, PluginCa
 
     public override void Build(StackPanel page)
     {
+        if (entry.Image is { } bannerUrl && bannerUrl.Scheme == "https")
+        {
+            var bmp = new BitmapImage(bannerUrl) { DecodePixelWidth = 900 };
+            var img = new Image { Source = bmp, Stretch = Stretch.Uniform, MaxHeight = 240 };
+            AutomationProperties.SetName(img, $"Picture of {entry.Title}");
+            var frame = new Border
+            {
+                Child = img,
+                CornerRadius = new CornerRadius(10),
+                HorizontalAlignment = HorizontalAlignment.Center,
+            };
+            var bannerSection = Kit.Section(null, [Kit.Pad(frame, 8)]);
+            bannerSection.Visibility = Visibility.Collapsed;
+            bmp.ImageOpened += (_, _) => bannerSection.Visibility = Visibility.Visible;
+            bmp.ImageFailed += (_, _) => bannerSection.Visibility = Visibility.Collapsed;
+            page.Children.Add(bannerSection);
+        }
+
         var top = new StackPanel { Spacing = 10 };
         var head = new Grid { ColumnSpacing = 14 };
         head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -460,10 +481,10 @@ internal sealed class PluginCatalogEntryScreen(CapabilitiesModel model, PluginCa
         head.Children.Add(Kit.Tile(Kit.Puzzle, 56));
         var words = new StackPanel { Spacing = 5, VerticalAlignment = VerticalAlignment.Center };
         words.Children.Add(Kit.Text(entry.Title, 20, bold: true));
-        var line = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-        if (entry.TierWord is { } tier) line.Children.Add(Kit.Badge(tier, ConnectorTone.Good));
-        line.Children.Add(Kit.Text(entry.Maintainer.Length == 0 ? entry.Category.Title() : $"{entry.Category.Title()} · by {entry.Maintainer}", 12, secondary: true, wrap: false));
-        words.Children.Add(line);
+        var badges = new FlowWrapPanel { HorizontalSpacing = 6, VerticalSpacing = 4 };
+        if (entry.TierWord is { } tier) badges.Children.Add(Kit.Badge(tier, entry.IsVerified ? ConnectorTone.Good : ConnectorTone.Quiet));
+        badges.Children.Add(Kit.Text(entry.Maintainer.Length == 0 ? entry.Category.Title() : $"{entry.Category.Title()} · by {entry.Maintainer}", 12, secondary: true, wrap: false));
+        words.Children.Add(badges);
         Grid.SetColumn(words, 1);
         head.Children.Add(words);
         top.Children.Add(head);
@@ -501,16 +522,20 @@ internal sealed class PluginCatalogEntryScreen(CapabilitiesModel model, PluginCa
             .Also(t => { t.FontFamily = Kit.Res<Microsoft.UI.Xaml.Media.FontFamily>("CodeFont"); t.IsTextSelectionEnabled = true; t.HorizontalAlignment = HorizontalAlignment.Center; }));
         page.Children.Add(install);
 
-        if (entry.Disclosure is { } disclosure || entry.ProvidesTools.Count > 0)
+        if (entry.ReadmeUrl is { } readmeUrl)
         {
-            var rows = new List<UIElement>();
-            if (entry.Disclosure is { } d) rows.Add(Kit.Plain(d, secondary: false));
-            page.Children.Add(Kit.Section("What It Shares", rows, "From the plugin’s catalog listing, which Nous checks."));
+            page.Children.Add(Kit.Section(null,
+            [
+                Kit.Row("Read the README", leading: Kit.Glyph("\uE8A5", 14, Kit.Accent), chevron: true,
+                    click: () => Push(new PluginReadmeScreen(entry.Title, readmeUrl))),
+            ]));
         }
-        var others = (CapabilitiesServices.PluginCatalog.Entries ?? []).Where(e => e.Maintainer == entry.Maintainer && e.Maintainer.Length > 0 && e.Name != entry.Name)
-            .OrderByDescending(e => e.Stars ?? -1).ToList();
-        if (others.Count > 0)
-            page.Children.Add(Kit.Section($"More by {entry.Maintainer}", others.Take(3).Select(e => ListScreen.PluginCatalogRow(model, e, this))));
+
+        if (entry.Disclosure is { Length: > 0 } disclosure)
+        {
+            var sharesText = Kit.Text(disclosure, 13).Also(t => t.IsTextSelectionEnabled = true);
+            page.Children.Add(Kit.Section("What It Shares", [Kit.Pad(sharesText, 10)], "From the plugin’s catalog listing, which Nous checks."));
+        }
 
         var details = new List<UIElement>();
         UIElement Detail(string label, string value)
@@ -537,5 +562,88 @@ internal sealed class PluginCatalogEntryScreen(CapabilitiesModel model, PluginCa
         if (entry.DocsUrl is { } docs) details.Add(Kit.Row("Learn More", trailing: Kit.Glyph(Kit.OpenOut, 12, Kit.Tertiary), click: () => Kit.Open(docs.ToString())));
         if (entry.PageUrl is { } site) details.Add(Kit.Row("See in the Hermes Marketplace", trailing: Kit.Glyph(Kit.OpenOut, 12, Kit.Tertiary), click: () => Kit.Open(site.ToString())));
         page.Children.Add(Kit.Section("Details", details, MarketplaceWords.TrustNote(entry)));
+
+        List<PluginCatalogEntry> allByMaker = entry.Maintainer.Length == 0
+            ? []
+            : [.. (CapabilitiesServices.PluginCatalog.Entries ?? [])
+                .Where(e => e.Maintainer == entry.Maintainer)
+                .OrderByDescending(e => e.Stars ?? -1)];
+        var more = allByMaker.Where(e => e.Name != entry.Name).Take(4).ToList();
+        if (more.Count > 0)
+        {
+            var makerRows = more.Select(e => ListScreen.PluginCatalogRow(model, e, this)).ToList();
+            if (allByMaker.Count > more.Count + 1)
+            {
+                makerRows.Add(Kit.BrowseRow($"All by {entry.Maintainer}", allByMaker.Count,
+                    () => Push(new MarketplaceScreen(model, MarketplaceKind.Plugins, entry.Maintainer)),
+                    $"All {allByMaker.Count} by {entry.Maintainer}"));
+            }
+            page.Children.Add(Kit.Section($"More by {entry.Maintainer}", makerRows,
+                $"{CapabilitiesWords.Plural(allByMaker.Count, "plugin", "plugins")} by {entry.Maintainer} in the catalog."));
+        }
+    }
+}
+
+/// Inline Markdown viewer for a Marketplace plugin's reviewed README (PluginCatalogPages.swift `readReadme`).
+internal sealed class PluginReadmeScreen(string pluginTitle, Uri readmeUrl) : Screen
+{
+    private static readonly HttpClient ReadmeHttp = new() { Timeout = TimeSpan.FromSeconds(20) };
+    private const int MaxBytes = 2 * 1024 * 1024;
+    private string? _markdown, _error;
+    private bool _loading;
+
+    public override string Title => $"{pluginTitle} README";
+
+    public override void Shown()
+    {
+        if (_markdown == null && !_loading) Load();
+    }
+
+    private async void Load()
+    {
+        _loading = true;
+        _error = null;
+        Render();
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, readmeUrl);
+            req.Headers.UserAgent.ParseAdd("HermesHQ");
+            using var res = await ReadmeHttp.SendAsync(req, HttpCompletionOption.ResponseContentRead);
+            if (!res.IsSuccessStatusCode) throw new InvalidOperationException($"HTTP {(int)res.StatusCode}");
+            var bytes = await res.Content.ReadAsByteArrayAsync();
+            var len = Math.Min(bytes.Length, MaxBytes);
+            _markdown = Encoding.UTF8.GetString(bytes, 0, len);
+        }
+        catch (Exception)
+        {
+            _error = "Couldn’t load the README. Check your internet connection and try again.";
+        }
+        finally
+        {
+            _loading = false;
+            Render();
+        }
+    }
+
+    public override void Build(StackPanel page)
+    {
+        if (_markdown != null)
+        {
+            var panel = new StackPanel { Spacing = 6 };
+            MarkdownRenderer.Render(_markdown, panel);
+            page.Children.Add(Kit.Section(null, [Kit.Pad(panel, 12)]));
+        }
+        else if (_error != null)
+        {
+            var err = new StackPanel { Spacing = 8 };
+            err.Children.Add(Kit.Text("Couldn’t load README", 15, bold: true));
+            err.Children.Add(Kit.Text(_error, 13, secondary: true));
+            err.Children.Add(Kit.Button("Try Again", Load).Also(b => b.HorizontalAlignment = HorizontalAlignment.Left));
+            page.Children.Add(Kit.Section(null, [Kit.Pad(err, 12)]));
+        }
+        else
+        {
+            page.Children.Add(Kit.Section(null, [Kit.Busy("Loading README…")]));
+        }
     }
 }

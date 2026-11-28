@@ -1,3 +1,4 @@
+using Hermes.Core.Heads;
 using Hermes.Core.Model;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
@@ -16,10 +17,22 @@ public sealed partial class BotHead : Grid
         typeof(BotHead), new PropertyMetadata(null, (d, _) => ((BotHead)d).Redraw()));
     public static readonly DependencyProperty DisplayNameProperty = DependencyProperty.Register("DisplayName", typeof(string),
         typeof(BotHead), new PropertyMetadata(null, (d, _) => ((BotHead)d).Redraw()));
+    public static readonly DependencyProperty WorkingProperty = DependencyProperty.Register(nameof(Working), typeof(bool),
+        typeof(BotHead), new PropertyMetadata(false, (d, _) => ((BotHead)d).SyncAnimation()));
+    public static readonly DependencyProperty FollowsMoodProperty = DependencyProperty.Register(nameof(FollowsMood), typeof(bool),
+        typeof(BotHead), new PropertyMetadata(false, (d, _) => ((BotHead)d).SyncAnimation()));
+    public static readonly DependencyProperty MoodProperty = DependencyProperty.Register(nameof(Mood), typeof(object),
+        typeof(BotHead), new PropertyMetadata(null, (d, _) => ((BotHead)d).SyncAnimation()));
 
     public Bot? Bot { get => (Bot?)GetValue(BotProperty); set => SetValue(BotProperty, value); }
     /// For rows without a Bot (a session's profile name).
     public string? DisplayName { get => (string?)GetValue(DisplayNameProperty); set => SetValue(DisplayNameProperty, value); }
+    /// Whether this bot is actively working (drives animated thinking mood unless a specific step mood is active).
+    public bool Working { get => (bool)GetValue(WorkingProperty); set => SetValue(WorkingProperty, value); }
+    /// When true, subscribes the rendered face to `BotMoods.Shared` for this bot's profile.
+    public bool FollowsMood { get => (bool)GetValue(FollowsMoodProperty); set => SetValue(FollowsMoodProperty, value); }
+    /// Optional explicit mood override.
+    public BotMood? Mood { get => GetValue(MoodProperty) as BotMood?; set => SetValue(MoodProperty, value); }
 
     /// Replaced by the heads renderer when it lands: (bot or null, display name, size) → the face.
     public static Func<Bot?, string, double, UIElement>? Renderer { get; set; }
@@ -35,7 +48,13 @@ public sealed partial class BotHead : Grid
         Children.Clear();
         var name = Bot?.DisplayName ?? DisplayName ?? "";
         var size = double.IsNaN(Width) ? 28 : Width;
-        if (Renderer != null) { Children.Add(Renderer(Bot, name, size)); return; }
+        if (Renderer != null)
+        {
+            var elem = Renderer(Bot, name, size);
+            Children.Add(elem);
+            SyncAnimation();
+            return;
+        }
         Children.Add(new Ellipse { Fill = new SolidColorBrush(ColorFor(Bot?.Name ?? name)) });
         Children.Add(new TextBlock
         {
@@ -43,6 +62,14 @@ public sealed partial class BotHead : Grid
             FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
             HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
         });
+    }
+
+    private void SyncAnimation()
+    {
+        if (Children.FirstOrDefault() is not Features.Heads.HeadFace face) return;
+        face.Working = Working;
+        face.PosedMood = Mood;
+        face.Follow(FollowsMood ? (Bot?.Name ?? DisplayName) : null);
     }
 
     private static string Initial(string name) => name.Length > 0 ? char.ToUpperInvariant(name[0]).ToString() : "?";

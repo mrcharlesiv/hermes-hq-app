@@ -14,9 +14,16 @@ public sealed class KanbanApi(IPagesRest rest, KanbanNudger? nudger = null)
     public KanbanNudger Nudger { get; } = nudger ?? new KanbanNudger(rest);
 
     private static string TaskPath(string id, string tail = "") => Base + "/tasks/" + KanbanRest.Segment(id) + tail;
+    private static string BoardPath(string slug) => Base + "/boards/" + KanbanRest.Segment(slug);
 
     public async Task<KanbanBoards> BoardsAsync(TimeSpan? timeout = null, CancellationToken ct = default) =>
         KanbanBoards.From(await Rest.JsonAsync(HttpMethod.Get, Base + "/boards", timeout: timeout, ct: ct));
+
+    public Task RenameBoardAsync(string slug, string name, CancellationToken ct = default) =>
+        Rest.JsonAsync(HttpMethod.Patch, BoardPath(slug), body: new JsonObject { ["name"] = name.Trim() }, ct: ct);
+
+    public Task DeleteBoardAsync(string slug, CancellationToken ct = default) =>
+        Rest.JsonAsync(HttpMethod.Delete, BoardPath(slug), ct: ct);
 
     public async Task<KanbanBoard> BoardAsync(string board, CancellationToken ct = default) =>
         KanbanBoard.From(await Rest.JsonAsync(HttpMethod.Get, Base + "/board", KanbanRest.Query(board), ct: ct));

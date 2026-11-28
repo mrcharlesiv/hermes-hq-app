@@ -61,12 +61,12 @@ public class QuickTileRunTests
         // Jobs not known yet: never "missing".
         Assert.Equal(new QuickTileRoute.RunJob("otto|gone", "Backup"),
             QuickTileRoute.Make(Tile(QuickTileKind.RunJob, null) with { Job = "otto|gone", JobName = "Backup" }, Otto with { Jobs = null }, runs));
-        // Voice Memo and Talk still wait for a Windows route.
-        foreach (var kind in new[] { QuickTileKind.Memo, QuickTileKind.Talk })
-            Assert.Equal(new QuickTileRoute.Unavailable(QuickTileRules.NewerApp), QuickTileRoute.Make(Tile(kind), Otto, runs));
-        // Add Action now offers both.
+        // Voice Memo and Talk now have Windows routes too.
+        Assert.Equal(new QuickTileRoute.Memo("otto"), QuickTileRoute.Make(Tile(QuickTileKind.Memo), Otto, runs));
+        Assert.Equal(new QuickTileRoute.Talk("otto"), QuickTileRoute.Make(Tile(QuickTileKind.Talk), Otto, runs));
+        // Add Action offers the full Chats & Work sets on Windows.
         var groups = QuickActionChoice.Groups(QuickActionChoice.Pages([]), runs: runs);
-        Assert.Equal(["New Chat", "Send a Message", "Open a Chat"], groups[0].Rows.Select(r => r.Title));
+        Assert.Equal(["New Chat", "Voice Memo", "Talk", "Send a Message", "Open a Chat"], groups[0].Rows.Select(r => r.Title));
         Assert.Equal(["Add Task", "Run Job"], groups[1].Rows.Select(r => r.Title));
     }
 

@@ -141,12 +141,16 @@ public static class ClarifyStaging
 public static class ApprovalExpiry
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(300);
+    /// Upper clamp matching Swift's 100-year cap (`PromptLogic.swift`): keeps `TimeSpan.FromSeconds` and
+    /// `DateTimeOffset + TimeSpan` safe against extreme remote doubles (e.g. `1e20`, `double.MaxValue`).
+    public static readonly TimeSpan MaxTimeout = TimeSpan.FromDays(365 * 100);
     public const string Expired = "Expired";
 
     /// "Expires within 0:42", "Expires within 4 min", "Expires within 2 h", or "Expired".
     public static string Label(DateTimeOffset seenAt, TimeSpan timeout, DateTimeOffset now)
     {
-        var left = (long)Math.Ceiling((seenAt + timeout - now).TotalSeconds);
+        var clamped = timeout > MaxTimeout ? MaxTimeout : timeout;
+        var left = (long)Math.Ceiling((seenAt + clamped - now).TotalSeconds);
         if (left <= 0) return Expired;
         if (left > 99 * 60) return $"Expires within {(long)Math.Ceiling(left / 3600.0)} h";
         if (left > 90) return $"Expires within {(long)Math.Ceiling(left / 60.0)} min";
@@ -159,15 +163,18 @@ public static class ApprovalExpiry
         DateTimeOffset now)
     {
         if (timeout is not { } t || readAt is not { } read) return ("", false);
-        var due = seenAt + t;
+        var clamped = t > MaxTimeout ? MaxTimeout : t;
+        var due = seenAt + clamped;
         var stale = now >= due && read < due;
-        var text = Label(seenAt, t, now);
+        var text = Label(seenAt, clamped, now);
         return (stale && text == Expired ? "Expires within 0:00" : text, stale);
     }
 
-    /// `approvals.timeout` from a `/api/config` answer: absent or non-positive → 300.
+    /// `approvals.timeout` from a `/api/config` answer: absent or non-positive → 300; extreme values clamped to `MaxTimeout`.
     public static TimeSpan Timeout(JsonNode? config) =>
-        config.Obj("approvals").Num("timeout") is { } v && double.IsFinite(v) && v > 0 ? TimeSpan.FromSeconds(v) : DefaultTimeout;
+        config.Obj("approvals").Num("timeout") is { } v && double.IsFinite(v) && v > 0
+            ? TimeSpan.FromSeconds(Math.Min(v, MaxTimeout.TotalSeconds))
+            : DefaultTimeout;
 }
 
 /// The words of one value prompt (App/Questions/PromptSheets.swift `PromptSheetCopy`, Mac wording).

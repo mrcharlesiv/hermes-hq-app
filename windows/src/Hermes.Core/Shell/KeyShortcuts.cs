@@ -46,6 +46,14 @@ public static class ShellKeys
     /// Edit › Favorites…, the Mac's ⇧⌘K beside Open Quickly's ⌘K (KeyCommands.quickActions).
     public static readonly KeyChord QuickActions = new("K", Ctrl: true, Shift: true);
     public static readonly KeyChord HideSidebar = new("S", Ctrl: true, Shift: true);
+    /// View › Hide List / Show List, the Mac's ⇧⌘L (KeyCommands.toggleList).
+    public static readonly KeyChord HideList = new("L", Ctrl: true, Shift: true);
+    /// Window › Show Next Tab / Show Previous Tab (App/Root/KeyCommands.swift `windowItems`, `f451f7fd4`):
+    /// walks the Terminal's tabs while Terminal is active, otherwise cycles open workspace tabs in the top bar.
+    public static readonly KeyChord NextTab = new("Tab", Ctrl: true);
+    public static readonly KeyChord PreviousTab = new("Tab", Ctrl: true, Shift: true);
+    public static readonly KeyChord NextTabBracket = new("]", Ctrl: true, Shift: true);
+    public static readonly KeyChord PreviousTabBracket = new("[", Ctrl: true, Shift: true);
     public static readonly KeyChord Refresh = new("R", Ctrl: true);
     public static readonly KeyChord RefreshAlt = new("F5");
     /// Help › Keyboard Shortcuts: the Mac's ⌘/ (KeyCommands.helpItems).
@@ -168,12 +176,13 @@ public static class KeyShortcuts
         new("Window",
         [
             Row("New Tab", "⌘T", Keys.TerminalNewTab),
-            Row("Show Previous Tab", "⇧⌘[", Keys.TerminalPreviousTab),
-            Row("Show Next Tab", "⇧⌘]", Keys.TerminalNextTab),
+            Row("Show Previous Tab", "⇧⌘[", ShellKeys.PreviousTab),
+            Row("Show Next Tab", "⇧⌘]", ShellKeys.NextTab),
         ],
         // The Mac's: "In the Window menu while the Terminal is open. While it is in front, Make Text Bigger, Actual Size
-        // and Make Text Smaller (⌘+ ⌘0 ⌘-) size its text, not the app’s." Windows has no Window menu, and the
-        // Terminal's keys act while it is in front (TerminalPage.OnKey).
+        // and Make Text Smaller (⌘+ ⌘0 ⌘-) size its text, not the app’s." Windows has no Window menu; Show Previous /
+        // Next Tab (Ctrl+Shift+Tab / Ctrl+Tab, and Ctrl+Shift+[ / Ctrl+Shift+]) cycle open workspace tabs everywhere
+        // and yield to the Terminal's own shell tabs while Terminal is in front.
         Footer: "While the Terminal is in front, Make Text Bigger, Actual Size and Make Text Smaller (Ctrl+Plus Ctrl+0 Ctrl+-) size its text, not the app’s."),
         new("Help", [Row("Keyboard Shortcuts", "⌘/", ShellKeys.KeyboardShortcuts)]),
     ];
@@ -189,8 +198,6 @@ public static class KeyShortcuts
         public static readonly KeyChord Escape = new("Esc");
         public static readonly KeyChord AttachFiles = new("A", Ctrl: true, Shift: true);
         public static readonly KeyChord TerminalNewTab = new("T", Ctrl: true, Shift: true);
-        public static readonly KeyChord TerminalPreviousTab = new("Tab", Ctrl: true, Shift: true);
-        public static readonly KeyChord TerminalNextTab = new("Tab", Ctrl: true);
         public static readonly KeyChord Find = new("F", Ctrl: true);
         public static readonly KeyChord FindNext = new("G", Ctrl: true);
         public static readonly KeyChord FindNextAlt = new("F3");
@@ -210,6 +217,11 @@ public static class KeyShortcuts
         new(ShellKeys.OpenQuickly, "Pages/ShellPage.xaml.cs", "AddShortcut(ShellKeys.OpenQuickly, ShowOpenQuickly);"),   // the panel (Features/OpenQuickly)
         new(ShellKeys.QuickActions, "Pages/ShellPage.xaml.cs", "AddShortcut(ShellKeys.QuickActions,"),   // the page (Features/QuickActions)
         new(ShellKeys.HideSidebar, "Pages/ShellPage.xaml.cs", "AddShortcut(ShellKeys.HideSidebar,"),
+        new(ShellKeys.HideList, "Pages/ShellPage.xaml.cs", "AddShortcut(ShellKeys.HideList,"),
+        new(ShellKeys.NextTab, "Pages/ShellPage.xaml.cs", "AddShortcut(ShellKeys.NextTab,"),
+        new(ShellKeys.PreviousTab, "Pages/ShellPage.xaml.cs", "AddShortcut(ShellKeys.PreviousTab,"),
+        new(ShellKeys.NextTabBracket, "Pages/ShellPage.xaml.cs", "AddShortcut(ShellKeys.NextTabBracket,"),
+        new(ShellKeys.PreviousTabBracket, "Pages/ShellPage.xaml.cs", "AddShortcut(ShellKeys.PreviousTabBracket,"),
         new(ShellKeys.NextChat, "Pages/ShellPage.xaml.cs", "AddShortcut(ShellKeys.NextChat,"),
         new(ShellKeys.PreviousChat, "Pages/ShellPage.xaml.cs", "AddShortcut(ShellKeys.PreviousChat,"),
         new(ShellKeys.Refresh, "Pages/ShellPage.xaml.cs", "AddShortcut(ShellKeys.Refresh,"),
@@ -224,8 +236,6 @@ public static class KeyShortcuts
         new(Keys.Escape, "Pages/ChatPage.xaml.cs", "else if (e.Key == VirtualKey.Escape && _vm?.Busy == true)"),
         new(Keys.AttachFiles, "Features/Attachments/ChatAttachments.cs", "new KeyboardAccelerator { Key = VirtualKey.A, Modifiers = VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift }"),
         new(Keys.TerminalNewTab, "Features/Workspace/TerminalPage.cs", "case VirtualKey.T when shift: NewTab();"),
-        new(Keys.TerminalPreviousTab, "Features/Workspace/TerminalPage.cs", "case VirtualKey.Tab: Cycle(shift ? -1 : 1);"),
-        new(Keys.TerminalNextTab, "Features/Workspace/TerminalPage.cs", "case VirtualKey.Tab: Cycle(shift ? -1 : 1);"),
         new(Keys.Find, "Features/ChatFind/ChatFindFeature.cs", "Accelerator(page, VirtualKey.F, VirtualKeyModifiers.Control, bar.Open);"),
         new(Keys.FindNext, "Features/ChatFind/ChatFindFeature.cs", "Accelerator(page, VirtualKey.G, VirtualKeyModifiers.Control, () => bar.Step(forward: true));"),
         new(Keys.FindNextAlt, "Features/ChatFind/ChatFindFeature.cs", "Accelerator(page, VirtualKey.F3, VirtualKeyModifiers.None, () => bar.Step(forward: true));"),

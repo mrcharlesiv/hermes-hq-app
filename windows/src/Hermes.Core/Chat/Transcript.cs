@@ -37,16 +37,20 @@ public sealed class Transcript
     public bool Busy { get; private set; }
     /// Provider-wait / tool status line ("thinking…", "terminal"). Not transcript content.
     public string? Status { get; private set; }
+    /// The active model/provider fallback reported by `status.update`, cleared when primary restores.
+    public ModelFallback? ActiveFallback { get; private set; }
 
     /// Replaces the transcript with a fresh REST page. While a turn streams, the live tail (messages not yet stored)
     /// is kept after the page so the reply doesn't blink.
     public void ReplaceWithHistory(IReadOnlyList<ChatMessage> page)
     {
-        // Kept after the page: the live turn's local bubbles, and any message that failed to send (its text is
-        // the user's, and the gateway never stored it).
+        // Kept after the page: the live turn's local bubbles, local rows, fallback notices, and any message that failed
+        // to send (its text is the user's, and the gateway never stored it).
         // A lost send's restored bubble is not kept here: the chat puts it back where it was said after the page
         // (ChatSession.RestoreLostSends), not at the end.
-        var tail = _messages.Where(m => m.Id.StartsWith("local-") && (Busy || m.Error != null || m.Id.StartsWith(LocalRowPrefix))
+        var tail = _messages.Where(m => m.Id.StartsWith("local-") && (Busy || m.Error != null
+                || m.Id.StartsWith(LocalRowPrefix, StringComparison.Ordinal)
+                || m.Id.StartsWith(ProviderWait.NoticeIdPrefix, StringComparison.Ordinal))
             && !m.Id.StartsWith(LostPrefix, StringComparison.Ordinal)
             && !_endedAway.Contains(m.Id)   // [WIN-INFLIGHT-GRAFT] a turn of ours that ended while away: its stored rows
             && !_interruptedTurns.Any(t => t.Anchor.Id == m.Id || t.Replies.Any(r => r.Id == m.Id))).ToList();
@@ -411,6 +415,18 @@ public sealed class Transcript
                 return Outcome.TurnEnded;
             case "status.update":
                 var kind = p.Str("kind");
+                if (ProviderWait.FallbackNotice(kind, p.Text("text") ?? p.Text("message")) is { } fallbackText)
+                {
+                    if (ModelFallback.Parse(fallbackText) is { } parsedFallback) ActiveFallback = parsedFallback;
+                    else if (ModelFallback.Restores(fallbackText)) ActiveFallback = null;
+                    var last = _messages.Count > 0 ? _messages[^1] : null;
+                    if (last == null || last.Role != Role.System || last.Text != fallbackText)
+                    {
+                        _messages.Add(new ChatMessage($"{ProviderWait.NoticeIdPrefix}{++_localSeq}", Role.System,
+                            [new TextPart(fallbackText)], DateTimeOffset.Now));
+                    }
+                    return Outcome.Changed;
+                }
                 Status = kind is "compacting" or "compressing" ? "Summarizing the chat…" : kind is "compacted" or "ready" ? null : Status;
                 return Outcome.Changed;
             default:

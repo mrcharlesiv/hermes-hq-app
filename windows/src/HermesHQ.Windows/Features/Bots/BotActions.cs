@@ -90,6 +90,7 @@ public sealed class BotActions(ListsHub hub, Func<XamlRoot> root, Panel pillHost
             if (at < Store.Layout.Tiles.Count - 1) place.Add(Item("Move Pin Down", "", () => Store.MovePin(bot.Id, 1)));
         }
         foreach (var extra in PlaceItems) if (extra(bot, root()) is { } added) place.Add(added);
+        place.Add(QuickActions.FavoritesPinAction.ForBot(bot.Id, bot.Name));
         place.Add(Item("Duplicate Bot", "", () => _ = DuplicateAsync(bot)));
         Group(items, [.. place]);
         if (!bot.Hidden) Group(items, Item("Hide from Bots", "", () => _ = Hide(bot, true)));

@@ -175,7 +175,8 @@ public class WorkingRingTests
         var panes = Source("Features", "Settings", "SettingsPanes.cs");
         var appearance = Regex.Match(panes, @"private static FrameworkElement Appearance\(SettingsPage page\)(?<b>.*?)\n    \}", RegexOptions.Singleline).Groups["b"].Value;
         // [density] The group's footer is the Mac's `listsNote` (Compact's note in the iOS look, then this one's).
-        Assert.Contains("Kit.Section(WorkingRing.SectionTitle, DensityRow.ListsNote(state), DensityRow.Shown(state) ? DensityControl(state) : null, WorkingRingRow())", appearance);
+        Assert.Contains("Kit.Section(WorkingRing.SectionTitle, DensityRow.ListsNote(state), DensityRow.Shown(state) ? DensityControl(state) : null, BotChatsStyleControl(), WorkingRingRow())",
+            Regex.Replace(appearance, @"\s+", " "));
         Assert.EndsWith(WorkingRing.Note, DensityRow.ListsNote(ThemeState.Default));
         var row = Regex.Match(panes, @"private static FrameworkElement WorkingRingRow\(\)(?<b>.*?)\n    \}", RegexOptions.Singleline).Groups["b"].Value;
         Assert.Matches(@"Kit\.Toggle\(\w+, WorkingRing\.Label, null, WorkingRing\.IsOn, on => WorkingRing\.IsOn = on, WorkingRing\.RowTarget\)", row);

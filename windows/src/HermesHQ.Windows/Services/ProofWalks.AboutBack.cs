@@ -18,7 +18,7 @@ internal static partial class ProofWalks
     {
         DesktopWalk, FixtureClient, FixtureAddress, CurrentClient, DesktopStamp, CurrentWindow, PageThread, CurrentPage,
         PageLoaded, PageOwner, XamlRoot, Sheet, MarkedCategory, Search, OpenPopup, RouteMarker, OtherRouteMarker,
-        DuplicateMarker, RouteTitle, DetailedLogRow, ExportRow, ImportRow, BackStack, BackControl, BackOwner,
+        DuplicateMarker, RouteTitle, DetailedLogRow, DiscordRow, SupportRow, BackStack, BackControl, BackOwner,
         BackEnabled, BackUri, BackLabel
     }
 
@@ -84,8 +84,8 @@ internal static partial class ProofWalks
             if (pane != AboutPane.Category) return;
             Require(!page.CanGoBack, AboutGuard.BackStack);
             Require(Visible("settings.back") == null, AboutGuard.BackControl);
-            Require(Visible("settings.export") != null, AboutGuard.ExportRow);
-            Require(Visible("settings.import") != null, AboutGuard.ImportRow);
+            Require(Visible("row:discord") != null, AboutGuard.DiscordRow);
+            Require(Visible("row:support") != null, AboutGuard.SupportRow);
         }
         async Task Observe(AboutPhase at, AboutPane pane, string? frame = null)
         {

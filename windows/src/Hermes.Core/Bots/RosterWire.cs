@@ -33,9 +33,15 @@ public static class RosterText
             : n.ToString("R", CultureInfo.InvariantCulture);
 
     /// A strict JSON number (JS `typeof x === 'number'`), finite.
-    public static double? Number(JsonNode? value) =>
-        value is JsonValue v && v.GetValueKind() == JsonValueKind.Number && v.GetValue<double>() is var d && double.IsFinite(d)
-            ? d : null;
+    public static double? Number(JsonNode? value)
+    {
+        if (value is not JsonValue v || v.GetValueKind() != JsonValueKind.Number) return null;
+        if (v.TryGetValue<double>(out var d)) return double.IsFinite(d) ? d : null;
+        if (v.TryGetValue<long>(out var l)) return l;
+        if (v.TryGetValue<int>(out var i)) return i;
+        if (v.TryGetValue<decimal>(out var dec)) return (double)dec;
+        return null;
+    }
 
     /// A strict JSON number as a count, truncated toward zero; null when it does not fit.
     public static long? Count(JsonNode? value) =>

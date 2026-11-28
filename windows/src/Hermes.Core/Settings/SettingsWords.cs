@@ -5,27 +5,42 @@ using Hermes.Core.Transcripts;
 namespace Hermes.Core.Settings;
 
 /// Settings' categories in the Mac's Settings window (App/Settings/SettingsRootView.swift `SettingsCategory`), in order.
-/// Bots & Tools is not on Windows yet: its pages (Capabilities, Bot Profiles…) are the sidebar's places for now.
-public enum SettingsCategory { General, Appearance, Chat, Sounds, Gateway, About }
+/// Sounds is folded under General (`e27566897`); the enum value is kept for backwards compatibility with legacy callers.
+public enum SettingsCategory { General, Appearance, Chat, Gateway, Accounts, Tools, About, Sounds }
 
 public static class SettingsCategories
 {
     public static readonly SettingsCategory[] All =
-        [SettingsCategory.General, SettingsCategory.Appearance, SettingsCategory.Chat, SettingsCategory.Sounds, SettingsCategory.Gateway, SettingsCategory.About];
+    [
+        SettingsCategory.General,
+        SettingsCategory.Appearance,
+        SettingsCategory.Chat,
+        SettingsCategory.Gateway,
+        SettingsCategory.Accounts,
+        SettingsCategory.Tools,
+        SettingsCategory.About,
+    ];
 
     public static string Title(this SettingsCategory c) => c switch
     {
         SettingsCategory.General => "General",
         SettingsCategory.Appearance => "Appearance",
         SettingsCategory.Chat => "Chat",
-        SettingsCategory.Sounds => "Sounds",
         SettingsCategory.Gateway => "Hermes",
+        SettingsCategory.Accounts => "Accounts & Keys",
+        SettingsCategory.Tools => "Bots & Tools",
+        SettingsCategory.About => "About",
+        SettingsCategory.Sounds => "Sounds",
         _ => "About",
     };
 
     public static string Key(this SettingsCategory c) => c.ToString().ToLowerInvariant();
 
-    public static SettingsCategory? Parse(string? key) => All.Cast<SettingsCategory?>().FirstOrDefault(c => c!.Value.Key() == key);
+    public static SettingsCategory? Parse(string? key)
+    {
+        if (string.Equals(key, "sounds", StringComparison.OrdinalIgnoreCase)) return SettingsCategory.General;
+        return All.Cast<SettingsCategory?>().FirstOrDefault(c => c!.Value.Key() == key);
+    }
 
     /// The Settings window opens on the category it was closed on (as the Mac's does).
     public const string LastCategoryKey = "hqn.settings.lastCategory";
@@ -51,7 +66,24 @@ public static class SettingsWords
         return what + " Bots, chats and each bot’s default model stay.";
     }
 
-    // ---------------------------------------------------------------- Appearance (App/Settings/Theme/ThemeSettingsView.swift)
+    // ---------------------------------------------------------------- Appearance (App/Settings/Theme/ThemeSettingsView.swift, AppearancePage.swift)
+
+    public const string HermesLookTitle = "Hermes Look";
+    public const string NativeLookTitle = "Native Look";
+    public const string HermesCornersLabel = "Corners";
+    public const string HermesCornersNote = "Corners sets the border radius across Hermes Look (4 pt is the default).";
+    public const string WindowTransparencyLabel = "Window Transparency";
+    public const string WindowTransparencyOnNote = "Window Transparency lets your desktop show softly through the window.";
+    public const string WindowTransparencyOffNote = "Window Transparency is off while Transparency Effects are off in Windows Settings.";
+    public const string ReplyBubblesLabel = "Reply Bubbles";
+    public const string ReplyBubblesNote = "Off: a bot’s replies have no bubble. Their words go the full width of the chat, straight on the page. Your own messages keep theirs.";
+    public const string ReplyBubblesHermesLookDisabledNote = "Hermes Look draws replies straight on the page unless High Contrast is on.";
+    public const string BotChatsStyleLabel = "Chats Under Bots Style";
+    public const string ResetAppearanceLabel = "Reset Appearance…";
+    public const string ResetAppearanceTitle = "Reset Appearance?";
+    public const string ResetAppearanceAction = "Reset Appearance";
+    public static string ResetAppearanceMessage => $"Restores the default theme, look, text size, chat bubbles, and backgrounds on this {DeviceWord.Name}.";
+    public static string AppearanceStayFooter => $"Appearance settings stay on this {DeviceWord.Name}.";
 
     public static string LookNote => $"Draws Hermes HQ like the Hermes desktop app: your theme’s own colors on every screen, square corners and solid bars instead of glass. {DeviceWord.OnlyHere}";
     public const string ContrastNote = "Sets your messages, boxes, lines and secondary text further apart from the page, in your theme’s own colors. For themes that look flat.";
@@ -60,7 +92,7 @@ public static class SettingsWords
     public const string GridNote = "Themes include the Hermes desktop app's themes and app-only options. Light or Dark (set in Appearance) applies on top.";
     public static string OneLookNote(Skin skin) => $"{skin.Label} has one look, so Light and Dark draw the same.";
 
-    /// Appearance's Look group's footer: a one-look skin's forced mode, then the Desktop Look's note.
+    /// Appearance's Look group's footer: a one-look skin's forced mode, then the look note.
     public static string LookFooter(ThemeState state)
     {
         var forced = Appearance.ForcedBy(state.Skin);
@@ -70,8 +102,38 @@ public static class SettingsWords
         return string.Join(" ", parts);
     }
 
-    // ---------------------------------------------------------------- Chat (ChatRowNotes; ToolCallsSettingsView)
+    /// Appearance › Look section footer matching App/Settings/Appearance/AppearancePage.swift `lookNote(_:)`.
+    public static string AppearanceLookFooter(ThemeState state, bool reduceTransparency)
+    {
+        var parts = new List<string>();
+        if (Appearance.ForcedBy(state.Skin) is { } forced)
+            parts.Add($"{state.Skin.Label} has only a {(forced == AppearanceSetting.Dark ? "dark" : "light")} look.");
+        if (state.DesktopLook)
+        {
+            parts.Add(ContrastNote);
+            parts.Add(HermesCornersNote);
+        }
+        parts.Add(reduceTransparency ? WindowTransparencyOffNote : WindowTransparencyOnNote);
+        return string.Join(" ", parts);
+    }
 
+    // ---------------------------------------------------------------- General & Chat (ChatRowNotes; ToolCallsSettingsView; ChatSettingsPage)
+
+    public const string ResumeLastChatLabel = "Reopen Last Chat on Launch";
+    public static string ResumeLastChatNote => $"Saved on {HostWord.Phrase}.";
+    public const string InAppTipsLabel = "In-App Tips";
+    public const string SessionStripLabel = "Other Chats at the Top";
+    public const string SendWhileBusyLabel = "Send While Replying";
+    public const string SendWhileBusyNote = "What Send does while a reply runs: Steer adds your message to that reply, Queue sends it when the reply finishes. Ctrl+Enter does the other one.";
+    public const string NewChatAsksProjectLabel = "New Chat Asks for a Project";
+    public const string NewChatAsksProjectNote = "Off, New Chat with a bot picked on Sessions starts in no project at once, with no sheet.";
+    public const string ModelsLabel = "Models";
+    public const string MainModelLabel = "Main Model";
+    public const string FallbackModelsLabel = "Fallback Models";
+    public const string AuxiliaryModelsLabel = "Auxiliary Models";
+    public const string MoaLabel = "Mixture of Agents";
+    public const string PluginUpdatesHeader = "Plugin Updates";
+    public const string PluginUpdatesFooter = "Automatic checks for gateway plugin updates are coming in a future update.";
     public const string FewerTimestampsNote = "Shows a day line only when the date changes, and a time only under the bot’s replies.";
     public const string MessageReactionsNote = "Adds Tapbacks to a message’s menu, and lets the bot react to yours.";
     /// SettingsSearch.fileBrowserLabel (UX study #69: was "File Browser").
@@ -80,6 +142,52 @@ public static class SettingsWords
     public const string IntroSplashLabel = "Greeting on Empty Chats";
     public static string ToolCallStyleFooter => $"Each tool call shows as a step. {DeviceWord.TapCap} a line of steps to list them.";
     public const string AfterReplyFooter = "Hide shows each step while the bot works, then clears them when it replies (as in Telegram). A step that failed stays. To see a reply’s steps again, right-click it and choose Show Steps.";
+
+    // ---------------------------------------------------------------- Models scope (HermesKit/Settings/SettingsWords.swift)
+
+    public const string OtherBotsHint = "Other bots keep their own in Bot Info › Brain.";
+    public const string ChatSwitchHint = "A chat can still switch its own model.";
+    public const string OtherBotsModelsHint = "Other bots keep their own models, fallbacks and auxiliary models: change them in each bot’s Bot Info › Brain.";
+
+    public static string Possessive(string name) =>
+        name.Length > 0 && name[^1] is 's' or 'S' ? name + "’" : name + "’s";
+
+    private static string? Named(string? name) =>
+        string.IsNullOrWhiteSpace(name) ? null : name.Trim();
+
+    public static string AppliesOnly(string? bot) => $"Applies to {Named(bot) ?? "the default bot"} only.";
+
+    public static string DefaultScope(string? defaultBot, bool otherBots)
+    {
+        var text = AppliesOnly(defaultBot);
+        return otherBots ? $"{text} {OtherBotsHint}" : text;
+    }
+
+    public static string MainModelHeader(string? defaultBot) =>
+        Named(defaultBot) is { } name ? $"{Possessive(name)} Default Model" : "Default Profile’s Model";
+
+    public static string MainModelFooter(string? defaultBot, bool otherBots) =>
+        $"{DefaultScope(defaultBot, otherBots)} {ChatSwitchHint}";
+
+    public static string MainDefaultsFooter(string? defaultBot) =>
+        $"How hard the model thinks before answering, and the faster (pricier) service tier where the provider offers one. {AppliesOnly(defaultBot)} A chat can still change its own.";
+
+    public static string ModelSectionFooter(string? defaultBot, bool otherBots)
+    {
+        var whose = Named(defaultBot) is { } name ? $"{Possessive(name)} models" : "The default profile’s models";
+        var text = $"{whose}. They’re kept on {HostWord.Phrase}, so every device uses them.";
+        return otherBots ? $"{text} {OtherBotsModelsHint}" : text;
+    }
+
+    public static string BotScoped(string footer, string? bot, string? defaultBot = null, bool otherBots = false) =>
+        Named(bot) is { } name ? $"{footer} {AppliesOnly(name)}" : $"{footer} {DefaultScope(defaultBot, otherBots)}";
+
+    public static string MoaFooter(string? defaultBot, bool on = true)
+    {
+        var what = on ? "To use it, pick Mixture of Agents in a chat’s model menu, or send /moa with a message."
+            : "Off, it is in no model menu.";
+        return $"{what} {AppliesOnly(defaultBot)}";
+    }
 
     // ---------------------------------------------------------------- Sounds
 
@@ -164,11 +272,17 @@ public static class SettingsWords
 /// The connection words the gateway card uses (the Mac's `ConnectionState`).
 public enum GatewayConnection { Ready, Connecting, Reconnecting, Offline, SignedOut }
 
-/// Settings › Chat switches the Windows app keeps here (App/Settings/AppPreferences.swift): Files Button in Chats.
+/// Settings › General & Chat switches kept on this PC (App/Settings/AppPreferences.swift): Files Button in Chats,
+/// In-App Tips, Send While Replying, New Chat Asks for a Project, and local Reopen Last Chat fallback.
 /// Tool Calls, Fewer Timestamps and Message Reactions are `ChatDisplaySettings` (the transcript feature's).
 public static class ChatPrefs
 {
     public const string FileBrowserKey = "hqn.fileBrowser";
+    public const string InAppTipsKey = "hqn.inAppTips";
+    public const string SendWhileBusyKey = "hqn.sendWhileBusy";
+    public const string NewChatAsksProjectKey = "hqn.newChatAsksProject";
+    public const string ResumeLastSessionKey = "hqn.resumeLastSession";
+
     public static IPreferences? Store { get; set; }
     /// Raised after a change, for the files feature (a chat's Files button).
     public static event Action? Changed;
@@ -178,6 +292,34 @@ public static class ChatPrefs
     {
         get => Store?.Get(FileBrowserKey) == "true";
         set { Store?.Set(FileBrowserKey, value ? "true" : null); Changed?.Invoke(); }
+    }
+
+    /// On by default (AppPreferences.swift `InAppTips`).
+    public static bool InAppTips
+    {
+        get => Store?.Get(InAppTipsKey) != "false";
+        set { Store?.Set(InAppTipsKey, value ? null : "false"); Changed?.Invoke(); }
+    }
+
+    /// "steer" (default) or "queue" (AppPreferences.swift `SendWhileBusy`).
+    public static string SendWhileBusy
+    {
+        get => Store?.Get(SendWhileBusyKey) == "queue" ? "queue" : "steer";
+        set { Store?.Set(SendWhileBusyKey, value == "queue" ? "queue" : null); Changed?.Invoke(); }
+    }
+
+    /// On by default (AppPreferences.swift `NewChatProjectChoice`).
+    public static bool NewChatAsksProject
+    {
+        get => Store?.Get(NewChatAsksProjectKey) != "false";
+        set { Store?.Set(NewChatAsksProjectKey, value ? null : "false"); Changed?.Invoke(); }
+    }
+
+    /// On by default until the gateway's `display.resume_last_session` is read.
+    public static bool ResumeLastSessionFallback
+    {
+        get => Store?.Get(ResumeLastSessionKey) != "false";
+        set { Store?.Set(ResumeLastSessionKey, value ? null : "false"); Changed?.Invoke(); }
     }
 }
 

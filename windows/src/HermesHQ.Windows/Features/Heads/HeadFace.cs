@@ -21,6 +21,10 @@ public sealed partial class HeadFace : Grid
     readonly double _side;
     readonly bool? _dark;
     readonly bool _pageUnknown;
+    string? _followsProfile;
+    BotMood? _posedMood;
+    bool _working;
+    AnimatedHeadFace? _animated;
     string _drawn = "";
     readonly DispatcherQueue? _queue = DispatcherQueue.GetForCurrentThread();
 
@@ -43,6 +47,42 @@ public sealed partial class HeadFace : Grid
         _dark = dark;
         _pageUnknown = pageUnknown;
         Init();
+    }
+
+    /// Has this face act out what `profile`'s bot is doing (`null` stops following).
+    public void Follow(string? profile)
+    {
+        var next = string.IsNullOrEmpty(profile) ? null : profile;
+        if (_followsProfile == next) return;
+        _followsProfile = next;
+        _drawn = "";
+        Redraw();
+    }
+
+    /// Explicit mood override (e.g. preview); `null` follows the bot's own mood.
+    public BotMood? PosedMood
+    {
+        get => _posedMood;
+        set
+        {
+            if (_posedMood == value) return;
+            _posedMood = value;
+            _drawn = "";
+            Redraw();
+        }
+    }
+
+    /// Whether the bot is currently working (acts out `Thinking` when no specific step mood is active).
+    public bool Working
+    {
+        get => _working;
+        set
+        {
+            if (_working == value) return;
+            _working = value;
+            _drawn = "";
+            Redraw();
+        }
     }
 
     void Init()
@@ -79,14 +119,41 @@ public sealed partial class HeadFace : Grid
             var key = "photo|" + BotPicture.Fingerprint(photo);
             if (key == _drawn) return;
             _drawn = key;
+            _animated = null;
             Children.Clear();
             Children.Add(Photo(photo, _side));
             return;
         }
         var head = Head;
+        var wantsAnimation = _followsProfile != null || _posedMood != null || _working;
+        if (wantsAnimation)
+        {
+            var animKey = $"anim|{HeadPicture.Key(head, _side, dark)}|{scale}";
+            if (_animated == null || animKey != _drawn)
+            {
+                _drawn = animKey;
+                _animated = new AnimatedHeadFace(head, _side, _dark, _pageUnknown)
+                {
+                    Profile = _followsProfile,
+                    PosedMood = _posedMood,
+                    Working = _working,
+                };
+                Children.Clear();
+                Children.Add(_animated);
+            }
+            else
+            {
+                _animated.Head = head;
+                _animated.Profile = _followsProfile;
+                _animated.PosedMood = _posedMood;
+                _animated.Working = _working;
+            }
+            return;
+        }
         var pictureKey = HeadPicture.Key(head, _side, dark) + "|" + scale;
         if (pictureKey == _drawn) return;
         _drawn = pictureKey;
+        _animated = null;
         Children.Clear();
         Children.Add(HeadDrawing.Draw(HeadPicture.For(head, _side, dark), _side, scale));
     }

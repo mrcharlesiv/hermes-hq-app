@@ -45,12 +45,12 @@ public sealed record TodoChat(string Profile, string SessionId)
     public static TodoChat? From(JsonNode? n)
     {
         if (n is not JsonObject) return null;
-        var session = n.Text("session") ?? n.Text("session_id") ?? n.Text("id");
+        var session = n.Text("session_id") ?? n.Text("session") ?? n.Text("id");
         if (session == null) return null;
         return new TodoChat(n.Text("profile") ?? "default", session);
     }
 
-    public JsonObject Wire() => new() { ["profile"] = Profile, ["session"] = SessionId };
+    public JsonObject Wire() => new() { ["profile"] = Profile, ["session_id"] = SessionId };
 }
 
 /// Short summary & next action synthesized for a Task Page (`TodoPageGist`).
@@ -77,6 +77,17 @@ public sealed record TodoFrom(string? App, string? Who, string? At, string? Ref 
         var r = n.Text("ref");
         var link = TodoMade.ValidLinkUrl(n.Text("link") ?? n.Text("url"));
         return app == null && who == null && at == null && r == null && link == null ? null : new TodoFrom(app, who, at, r, link);
+    }
+
+    public JsonObject Wire()
+    {
+        var o = new JsonObject();
+        if (App != null) o["app"] = App;
+        if (Who != null) o["who"] = Who;
+        if (At != null) o["at"] = At;
+        if (Ref != null) o["ref"] = Ref;
+        if (Link != null) o["link"] = Link;
+        return o;
     }
 
     public string Line(DateTimeOffset now, TimeZoneInfo zone)
@@ -173,7 +184,7 @@ public sealed record TodoTask(string Id)
             Made = [.. (n.Arr("made") ?? []).Select(m => new TodoMade(m.Str("id") ?? "", m.Str("title") ?? "", m.Str("kind") ?? "note", m.Str("ref") ?? "", m.Str("by")))],
             SourceKind = src.Str("kind"),
             SourceProfile = src.Str("profile"),
-            SourceSessionId = src.Text("session") ?? src.Text("session_id"),
+            SourceSessionId = src.Text("session_id") ?? src.Text("session"),
             SourceFrom = TodoFrom.From(n.Get("from") ?? src.Get("from")),
             CreatedAt = n.Str("created_at"),
             UpdatedAt = n.Str("updated_at"),
@@ -244,6 +255,79 @@ public sealed record TodoUserSection(string Id, string Name)
     };
 }
 
+/// [task-ideas 0.9.86] Which built-in sources and opt-in connected apps the Task ideas run may check
+/// (`TodoIdeasSources` in `HermesKit/Pages/Tasks/TodoModel.swift`).
+public sealed record TodoIdeasSources
+{
+    public bool Chats { get; init; } = true;
+    /// Empty = all bots; non-empty = only these bot profile IDs have their recent chats included.
+    public IReadOnlyList<string> ChatBots { get; init; } = [];
+    public bool Memory { get; init; } = true;
+    public bool Files { get; init; } = false;
+    public bool Web { get; init; } = false;
+    /// Opt-in list of enabled connector IDs (`"mcp:<name>"` or `"composio:<slug>"`). Newly connected apps start off.
+    public IReadOnlyList<string> Connectors { get; init; } = [];
+
+    public TodoIdeasSources(
+        bool chats = true,
+        IReadOnlyList<string>? chatBots = null,
+        bool memory = true,
+        bool files = false,
+        bool web = false,
+        IReadOnlyList<string>? connectors = null)
+    {
+        Chats = chats;
+        ChatBots = chatBots ?? [];
+        Memory = memory;
+        Files = files;
+        Web = web;
+        Connectors = connectors ?? [];
+    }
+
+    public static TodoIdeasSources From(JsonNode? n)
+    {
+        if (n is not JsonObject) return new TodoIdeasSources();
+        return new TodoIdeasSources(
+            chats: n.Bool("chats") ?? true,
+            chatBots: [.. (n.Arr("chat_bots") ?? []).Select(J.AsString).OfType<string>().Where(s => s.Length > 0)],
+            memory: n.Bool("memory") ?? true,
+            files: n.Bool("files") ?? false,
+            web: n.Bool("web") ?? false,
+            connectors: [.. (n.Arr("connectors") ?? []).Select(J.AsString).OfType<string>().Where(s => s.Length > 0)]);
+    }
+
+    public JsonObject Wire() => new()
+    {
+        ["chats"] = Chats,
+        ["chat_bots"] = new JsonArray([.. ChatBots.Select(b => (JsonNode)b)]),
+        ["memory"] = Memory,
+        ["files"] = Files,
+        ["web"] = Web,
+        ["connectors"] = new JsonArray([.. Connectors.Select(c => (JsonNode)c)]),
+    };
+
+    public bool Equals(TodoIdeasSources? other) =>
+        other != null
+        && Chats == other.Chats
+        && Memory == other.Memory
+        && Files == other.Files
+        && Web == other.Web
+        && ChatBots.SequenceEqual(other.ChatBots, StringComparer.Ordinal)
+        && Connectors.SequenceEqual(other.Connectors, StringComparer.Ordinal);
+
+    public override int GetHashCode()
+    {
+        var h = new HashCode();
+        h.Add(Chats);
+        h.Add(Memory);
+        h.Add(Files);
+        h.Add(Web);
+        foreach (var b in ChatBots) h.Add(b, StringComparer.Ordinal);
+        foreach (var c in Connectors) h.Add(c, StringComparer.Ordinal);
+        return h.ToHashCode();
+    }
+}
+
 /// `GET/PUT /tasks/settings` (HermesKit TodoModel.swift TodoSettings). `Sort` is a list's order: "smart" (My Order, your
 /// drag order; the default) | "due" | "added" | "priority" (hermes-hq-push 0.9.53). `Group` is kept as the gateway sends
 /// it for an older app; nothing here reads it.
@@ -257,8 +341,17 @@ public sealed record TodoSettings(bool Enabled = true, string Capture = "ask", s
     /// nil from an add-on before Ideas (0.9.39), and then never sent back.
     public bool? Ideas { get; init; }
     public string? IdeasBot { get; init; }
+    /// [task-ideas 0.9.86] Participating bots for multi-bot Task ideas sweeps. null from an older add-on.
+    public IReadOnlyList<string>? IdeasBots { get; init; }
     public string? IdeasAt { get; init; }
     public int? IdeasMax { get; init; }
+    /// [task-ideas 0.9.86] Built-in source toggles and opt-in connected apps. null from an older add-on.
+    public TodoIdeasSources? IdeasSources { get; init; }
+    /// [task-ideas 0.9.86] Optional plain-English Focus & Skip instructions. null from an older add-on.
+    public string? IdeasNote { get; init; }
+
+    public IReadOnlyList<string> ActiveIdeasBots =>
+        IdeasBots is { Count: > 0 } bots ? bots : [IdeasBot ?? "default"];
 
     public static TodoSettings From(JsonNode? n) => new(n.Bool("enabled") ?? true, n.Str("capture") ?? "ask", n.Str("sort") ?? "smart")
     {
@@ -269,8 +362,11 @@ public sealed record TodoSettings(bool Enabled = true, string Capture = "ask", s
         Group = n.Str("group") ?? "smart",
         Ideas = n.Bool("ideas"),
         IdeasBot = n.Str("ideas_bot"),
+        IdeasBots = n.Arr("ideas_bots") is { } bots ? [.. bots.Select(J.AsString).OfType<string>().Where(s => s.Length > 0)] : null,
         IdeasAt = n.Str("ideas_at"),
         IdeasMax = n.Int("ideas_max") is { } m ? (int)m : null,
+        IdeasSources = n.Obj("ideas_sources") is { } src ? TodoIdeasSources.From(src) : null,
+        IdeasNote = n.Str("ideas_note"),
     };
 
     /// The whole settings, as the Mac's JSONEncoder writes them for `PUT /tasks/settings` (the optional ones only when set).
@@ -283,9 +379,52 @@ public sealed record TodoSettings(bool Enabled = true, string Capture = "ask", s
         };
         if (Ideas is { } ideas) o["ideas"] = ideas;
         if (IdeasBot is { } bot) o["ideas_bot"] = bot;
+        if (IdeasBots is { } ideasBots) o["ideas_bots"] = new JsonArray([.. ideasBots.Select(b => (JsonNode)b)]);
         if (IdeasAt is { } at) o["ideas_at"] = at;
         if (IdeasMax is { } max) o["ideas_max"] = max;
+        if (IdeasSources is { } sources) o["ideas_sources"] = sources.Wire();
+        if (IdeasNote is { } note) o["ideas_note"] = note;
         return o;
+    }
+
+    public bool Equals(TodoSettings? other) =>
+        other != null
+        && Enabled == other.Enabled
+        && string.Equals(Capture, other.Capture, StringComparison.Ordinal)
+        && string.Equals(Sort, other.Sort, StringComparison.Ordinal)
+        && PrepPerDay == other.PrepPerDay
+        && string.Equals(QuietStart, other.QuietStart, StringComparison.Ordinal)
+        && string.Equals(QuietEnd, other.QuietEnd, StringComparison.Ordinal)
+        && PrepEveryHours == other.PrepEveryHours
+        && string.Equals(Group, other.Group, StringComparison.Ordinal)
+        && Ideas == other.Ideas
+        && string.Equals(IdeasBot, other.IdeasBot, StringComparison.Ordinal)
+        && (IdeasBots == null && other.IdeasBots == null
+            || IdeasBots != null && other.IdeasBots != null && IdeasBots.SequenceEqual(other.IdeasBots, StringComparer.Ordinal))
+        && string.Equals(IdeasAt, other.IdeasAt, StringComparison.Ordinal)
+        && IdeasMax == other.IdeasMax
+        && Equals(IdeasSources, other.IdeasSources)
+        && string.Equals(IdeasNote, other.IdeasNote, StringComparison.Ordinal);
+
+    public override int GetHashCode()
+    {
+        var h = new HashCode();
+        h.Add(Enabled);
+        h.Add(Capture, StringComparer.Ordinal);
+        h.Add(Sort, StringComparer.Ordinal);
+        h.Add(PrepPerDay);
+        h.Add(QuietStart, StringComparer.Ordinal);
+        h.Add(QuietEnd, StringComparer.Ordinal);
+        h.Add(PrepEveryHours);
+        h.Add(Group, StringComparer.Ordinal);
+        h.Add(Ideas);
+        if (IdeasBot != null) h.Add(IdeasBot, StringComparer.Ordinal);
+        if (IdeasBots != null) foreach (var b in IdeasBots) h.Add(b, StringComparer.Ordinal);
+        if (IdeasAt != null) h.Add(IdeasAt, StringComparer.Ordinal);
+        h.Add(IdeasMax);
+        h.Add(IdeasSources);
+        if (IdeasNote != null) h.Add(IdeasNote, StringComparer.Ordinal);
+        return h.ToHashCode();
     }
 }
 
@@ -303,6 +442,8 @@ public sealed record TodoListAnswer(int Rev, IReadOnlyList<TodoTask>? Tasks, Tod
     public IReadOnlyList<TodoOffer>? Offers { get; init; }
     /// [goals-v2] Add-on supports bots assigned to goals (0.9.66+).
     public bool GoalBots { get; init; }
+    /// Custom interval / after-completion recurrence (`custom_repeat: true` when an add-on supports it).
+    public bool CustomRepeat { get; init; }
 
     public static TodoListAnswer From(JsonNode? n) => new(
         (int)(n.Int("rev") ?? 0),
@@ -318,6 +459,7 @@ public sealed record TodoListAnswer(int Rev, IReadOnlyList<TodoTask>? Tasks, Tod
         IdeasCount = (int)Math.Max(0, n.Int("ideas_count") ?? n.Int("ideas") ?? 0),
         Offers = n.Arr("offers") is { } offers ? [.. offers.Select(TodoOffer.From).OfType<TodoOffer>()] : null,
         GoalBots = n.Bool("goal_bots") ?? false,
+        CustomRepeat = n.Bool("custom_repeat") ?? false,
     };
 }
 
@@ -385,18 +527,32 @@ public static class TodoWire
 {
     public static JsonArray Steps(IEnumerable<TodoStep> steps) => [.. steps.Select(s => (JsonNode)s.Wire())];
 
-    /// A new task's body (TodoWire.newTask).
+    /// A new task's body (`TodoWire.newTask` in `HermesKit/Pages/Tasks/TasksStore.swift`).
+    /// Shared (`together`) tasks preserve `repeat` when `fieldsSupported` is true (hermes-hq-push 0.9.53+);
+    /// bot-only (`bot`) tasks never repeat.
     public static JsonObject NewTask(string title, TodoWho who, string? bot, string? due, string? repeatRule, bool prep, string notes = "",
-        IEnumerable<TodoStep>? steps = null, string sourceKind = "app")
+        IEnumerable<TodoStep>? steps = null, string sourceKind = "app", bool fieldsSupported = false, string? goal = null, string? milestone = null)
     {
         var whoWord = who switch { TodoWho.Bot => "bot", TodoWho.Together => "together", _ => "me" };
-        return new JsonObject
+        var keepRepeat = who == TodoWho.Me || (who == TodoWho.Together && fieldsSupported);
+        var body = new JsonObject
         {
-            ["title"] = title, ["who"] = whoWord, ["notes"] = notes, ["prep"] = prep && who != TodoWho.Me,
-            ["steps"] = Steps(steps ?? []), ["due"] = due, ["repeat"] = who == TodoWho.Me ? repeatRule : null,
+            ["title"] = title,
+            ["who"] = whoWord,
+            ["notes"] = notes,
+            ["prep"] = prep && who != TodoWho.Me,
+            ["steps"] = Steps(steps ?? []),
+            ["due"] = due,
+            ["repeat"] = keepRepeat ? repeatRule : null,
             ["bot"] = who == TodoWho.Me ? null : bot ?? "default",
             ["source"] = new JsonObject { ["kind"] = sourceKind },
         };
+        if (goal != null)
+        {
+            body["goal"] = goal;
+            if (milestone != null) body["milestone"] = milestone;
+        }
+        return body;
     }
 }
 

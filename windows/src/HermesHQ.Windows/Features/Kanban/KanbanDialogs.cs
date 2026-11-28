@@ -268,6 +268,57 @@ internal static class KanbanDialogs
         return await ShowAsync(root, ask) == ContentDialogResult.Primary;
     }
 
+    /// Rename Board dialog: prefilled with the board's current title; requires a non-empty changed name.
+    public static async Task<string?> RenameBoardAsync(XamlRoot? root, string currentTitle)
+    {
+        var field = new TextBox
+        {
+            PlaceholderText = "Board name",
+            MaxLength = 80,
+            Text = currentTitle,
+        };
+        AutomationProperties.SetName(field, "Board name");
+        AutomationProperties.SetAutomationId(field, "kanban.board.rename.field");
+        var dialog = new ContentDialog
+        {
+            Title = "Rename Board",
+            Content = field,
+            PrimaryButtonText = "Rename",
+            CloseButtonText = KanbanCopy.Cancel,
+            DefaultButton = ContentDialogButton.Primary,
+            IsPrimaryButtonEnabled = false,
+        };
+        AutomationProperties.SetAutomationId(dialog, "kanban.board.rename");
+        void Sync()
+        {
+            var trimmed = field.Text.Trim();
+            dialog.IsPrimaryButtonEnabled = trimmed.Length > 0 && trimmed != currentTitle.Trim();
+        }
+        field.TextChanged += (_, _) => Sync();
+        dialog.Opened += (_, _) =>
+        {
+            field.Focus(FocusState.Programmatic);
+            field.SelectAll();
+        };
+        Sync();
+        return await ShowAsync(root, dialog) == ContentDialogResult.Primary ? field.Text.Trim() : null;
+    }
+
+    /// Destructive confirmation before deleting a board ("Delete Board?" / "Delete").
+    public static async Task<bool> ConfirmDeleteBoardAsync(XamlRoot? root, string title, int? total)
+    {
+        var dialog = new ContentDialog
+        {
+            Title = "Delete Board?",
+            Content = new TextBlock { Text = KanbanModel.DeleteBoardMessage(title, total), TextWrapping = TextWrapping.Wrap },
+            PrimaryButtonText = "Delete",
+            CloseButtonText = KanbanCopy.Cancel,
+            DefaultButton = ContentDialogButton.Close,
+        };
+        AutomationProperties.SetAutomationId(dialog, "kanban.board.delete");
+        return await ShowAsync(root, dialog) == ContentDialogResult.Primary;
+    }
+
     private static FrameworkElement Labeled(string label, FrameworkElement control, string help)
     {
         var grid = new Grid { ColumnSpacing = 12 };

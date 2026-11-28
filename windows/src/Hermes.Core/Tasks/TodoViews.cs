@@ -2,21 +2,23 @@ using System.Globalization;
 
 namespace Hermes.Core.Tasks;
 
-// The Tasks page's views (HermesKit/Pages/Tasks/TodoViews.swift): one view at a time, picked in a row of pills: Today,
-// Upcoming, Inbox, each of your lists, and Bots. Tasks are ordered by when, never by what a bot did.
+// The Tasks page's views (`HermesKit/Pages/Tasks/TodoViews.swift`): Today, Upcoming, Inbox, Goals, each of your lists,
+// Suggested, and Bots. Tasks are ordered by priority/when, never by what a bot did.
 
-/// What the Tasks page shows: "today", "upcoming", "inbox", "list:<id>", "bots" (as kept on the device).
+/// What the Tasks page shows: "today", "upcoming", "inbox", "goals", "suggested", "bots", "list:<id>".
 public sealed record TodoView(string Key)
 {
     public static readonly TodoView Today = new("today"), Upcoming = new("upcoming"), Inbox = new("inbox"), Bots = new("bots");
-    /// [goals] The Goals view: goal cards, not tasks (the first pill, on an add-on that keeps goals).
+    /// [goals] The Goals view: goal cards, not tasks.
     public static readonly TodoView Goals = new("goals");
+    /// [task-ideas] Suggested tasks from your bots.
+    public static readonly TodoView Suggested = new("suggested");
     public static TodoView List(string id) => new("list:" + id);
     public string? ListId => Key.StartsWith("list:", StringComparison.Ordinal) && Key.Length > 5 ? Key[5..] : null;
 
     public static TodoView? FromKey(string key) => key switch
     {
-        "today" or "upcoming" or "inbox" or "bots" or "goals" => new TodoView(key),
+        "today" or "upcoming" or "inbox" or "bots" or "goals" or "suggested" => new TodoView(key),
         _ when key.StartsWith("list:", StringComparison.Ordinal) && key.Length > 5 => new TodoView(key),
         _ => null,
     };
@@ -39,6 +41,9 @@ public sealed record TodoGroupKind(string Key)
 
 public sealed record TodoGroup(TodoGroupKind Kind, IReadOnlyList<TodoTask> Tasks, int More = 0);
 
+/// One time bucket in the unified Completed Logbook (`TodoLogbookGroup` in `TodoViews.swift`).
+public sealed record TodoLogbookGroup(string Id, string Title, IReadOnlyList<TodoTask> Tasks);
+
 public enum TodoTone { Plain, Ready, Working, NeedsYou, Overdue }
 
 /// A row's words: the name is the task's; these go beside and under it.
@@ -57,11 +62,15 @@ public sealed record TodoRowWords
     public TodoTone Tone { get; init; }
     /// "working", "ready", "question".
     public string? Dot { get; init; }
+    /// Calm second line without the bot's name prefix.
+    public string? Said { get; init; }
 }
 
 public static class TodoWords
 {
     private static readonly CultureInfo En = CultureInfo.GetCultureInfo("en-US");
+
+    public const string HelpQuestion = "Help me with this: ask me which parts you should take, then start them.";
 
     /// The clock ("5:00 PM").
     public static string Clock(DateTimeOffset date, TimeZoneInfo zone) => TimeZoneInfo.ConvertTime(date, zone).ToString("h:mm tt", En);
@@ -92,17 +101,41 @@ public static class TodoWords
         return due.HasTime ? $"{day}, {Clock(due.Date, zone)}" : day;
     }
 
-    public static string RepeatLabel(string? rule) => rule switch
+    /// Standard and custom (`every:N:unit`, `after:N:unit`) recurrence labels (`TodoWords.repeatLabel` in `TodoModel.swift`).
+    public static string RepeatLabel(string? rule)
     {
-        "daily" => "Every Day",
-        "weekdays" => "Every Weekday",
-        "weekly" => "Every Week",
-        "monthly" => "Every Month",
-        "yearly" => "Every Year",
-        _ => "Never",
-    };
+        switch (rule)
+        {
+            case "daily": return "Every Day";
+            case "weekdays": return "Every Weekday";
+            case "weekly": return "Every Week";
+            case "monthly": return "Every Month";
+            case "yearly": return "Every Year";
+            case { Length: > 0 } custom when custom.StartsWith("every:", StringComparison.Ordinal) || custom.StartsWith("after:", StringComparison.Ordinal):
+                var parts = custom.Split(':');
+                if (parts.Length != 3 || !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var count) || count <= 0)
+                    return custom;
+                var unitBase = parts[2] switch
+                {
+                    "day" or "days" => count == 1 ? "Day" : "Days",
+                    "week" or "weeks" => count == 1 ? "Week" : "Weeks",
+                    "month" or "months" => count == 1 ? "Month" : "Months",
+                    "year" or "years" => count == 1 ? "Year" : "Years",
+                    _ => parts[2],
+                };
+                if (parts[0] == "after")
+                    return $"{count} {unitBase} After Completion";
+                return count == 1 ? $"Every {unitBase}" : $"Every {count} {unitBase}";
+            default:
+                return "Never";
+        }
+    }
 
     public static readonly string[] RepeatRules = ["daily", "weekdays", "weekly", "monthly", "yearly"];
+
+    /// Common custom repeat presets surfaced when `CustomRepeatSupported` is true.
+    public static readonly string[] CustomRepeatPresets =
+        ["every:2:days", "every:2:weeks", "every:3:months", "after:1:week", "after:2:weeks", "after:1:month"];
 
     /// New Task's due words: "Tomorrow", "Fri 5:00 PM".
     public static string NewTaskDue(DateTimeOffset date, bool hasTime, DateTimeOffset now, TimeZoneInfo zone)
@@ -120,6 +153,89 @@ public static class TodoWords
         if (TodoDates.Moment(task.DoneAt ?? task.UpdatedAt) is not { } date) return "Completed";
         var day = Day(date, now, zone);
         return $"Completed {(day is "Today" or "Yesterday" ? day.ToLowerInvariant() : day)}, {Clock(date, zone)}";
+    }
+
+    /// "12 min ago", "Just now", "3 h ago", "Nov 2".
+    public static string Ago(string? raw, DateTimeOffset now, TimeZoneInfo zone)
+    {
+        if (TodoDates.Moment(raw) is not { } date) return "";
+        var seconds = (now - date).TotalSeconds;
+        if (seconds < 60) return "Just now";
+        if (seconds < 3600) return $"{(int)(seconds / 60)} min ago";
+        if (seconds < 86_400) return $"{(int)(seconds / 3600)} h ago";
+        return Day(date, now, zone);
+    }
+
+    /// When the task came to its current state (`TodoWords.stateSince`).
+    public static string? StateSince(TodoTask task)
+    {
+        if (task.IsDone) return task.DoneAt ?? task.UpdatedAt;
+        if (task.Status == "open") return null;
+        var words = task.Status switch { "working" => "Started", "ready" => "Ready", "needs_you" => "Needs you", _ => "" };
+        var entry = task.Log.LastOrDefault(e => e.Text == task.Status || e.Text == words || e.Text.StartsWith(words + ": ", StringComparison.Ordinal));
+        return entry?.At ?? task.UpdatedAt;
+    }
+
+    public static string? StateTime(TodoTask task, DateTimeOffset now, TimeZoneInfo zone)
+    {
+        if (StateSince(task) is not { } raw) return null;
+        if (task.IsDone && TodoDates.Moment(raw) is { } dt)
+        {
+            var day = Day(dt, now, zone);
+            return $"{(day is "Today" or "Yesterday" ? day.ToLowerInvariant() : day)} {Clock(dt, zone)}";
+        }
+        var ago = Ago(raw, now, zone);
+        return ago.Length == 0 ? null : ago;
+    }
+
+    /// What the bot says about the task: its Task Page summary, else its status note.
+    public static string? BotWords(TodoTask task)
+    {
+        if (!string.IsNullOrWhiteSpace(task.Page?.Summary)) return task.Page!.Summary;
+        var note = task.StatusNote.Trim();
+        return note.Length == 0 ? null : note;
+    }
+
+    /// Recent bot-authored "change" log lines after your last entry within `within`.
+    public static List<string> RecentChanges(TodoTask task, DateTimeOffset now, TimeSpan? within = null)
+    {
+        var window = within ?? TimeSpan.FromDays(1);
+        var entries = new List<TodoLogEntry>();
+        for (var i = task.Log.Count - 1; i >= 0; i--)
+        {
+            var e = task.Log[i];
+            if (e.By == "you") break;
+            if (e.Kind == "change") entries.Add(e);
+        }
+        if (entries.Count == 0 || TodoDates.Moment(entries[0].At) is not { } newest || now - newest >= window) return [];
+        entries.Reverse();
+        return [.. entries.TakeLast(3).Select(e => e.Text)];
+    }
+
+    /// "Checks again Wed, 9:00 AM" when `next_check` is in the future.
+    public static string? NextCheckLine(TodoTask task, DateTimeOffset now, TimeZoneInfo zone)
+    {
+        if (task.IsDone || string.IsNullOrWhiteSpace(task.NextCheck)) return null;
+        if (TodoDates.Due(task.NextCheck, zone) is not { } due || due.Date <= now) return null;
+        var day = Day(due.Date, now, zone);
+        var words = due.HasTime ? $"{day}, {Clock(due.Date, zone)}" : day;
+        if (day is "Today" or "Tomorrow") words = char.ToLowerInvariant(words[0]) + words[1..];
+        return "Checks again " + words;
+    }
+
+    /// Deduplicates `task.Made` by `(kind, title)`, keeping newest while preserving order.
+    public static List<TodoMade> ShownMade(TodoTask task)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var newestFirst = new List<TodoMade>();
+        for (var i = task.Made.Count - 1; i >= 0; i--)
+        {
+            var m = task.Made[i];
+            var key = m.Kind + "|" + m.Title.Trim();
+            if (seen.Add(key)) newestFirst.Add(m);
+        }
+        newestFirst.Reverse();
+        return newestFirst;
     }
 }
 
@@ -163,16 +279,46 @@ public static class TodoSections
         _ => now.ToUnixTimeMilliseconds() / 1000.0,
     };
 
-    /// Search: title, notes, the bot's line, steps and tags; "#tag" finds the tag alone.
-    /// [WIN-47] `goals`: a task is found by its goal's and milestone's names too (TodoModel.swift `filtered`).
-    public static List<TodoTask> Filtered(IEnumerable<TodoTask> tasks, string query, IEnumerable<Goal>? goals = null)
+    /// Search & filter: optional scope ("all", "@me", or bot profile), priority (1–3), tag, and free-text query
+    /// (title, notes, statusNote, steps, tags, goal/milestone names; "#tag" finds the tag prefix alone).
+    public static List<TodoTask> Filtered(
+        IEnumerable<TodoTask> tasks,
+        string query,
+        IEnumerable<Goal>? goals = null,
+        int? priority = null,
+        string? tag = null,
+        string scope = "all")
     {
-        var words = query.Trim().ToLowerInvariant();
-        if (words.Length == 0) return [.. tasks];
-        if (words.StartsWith('#')) return [.. tasks.Where(t => t.Tags.Any(tag => tag.ToLowerInvariant().StartsWith(words[1..], StringComparison.Ordinal)))];
+        var words = (query ?? "").Trim().ToLowerInvariant();
+        var wantedTag = tag?.Trim();
         var known = goals?.ToList() ?? [];
-        return [.. tasks.Where(t => new[] { t.Title, t.Notes, t.StatusNote }.Concat(t.Steps.Select(s => s.Title)).Concat(t.Tags)
-            .Concat(GoalViews.SearchWords(t, known)).Any(f => f.ToLowerInvariant().Contains(words)))];
+        var result = new List<TodoTask>();
+        foreach (var t in tasks)
+        {
+            if (scope == "@me") { if (t.Helper != null) continue; }
+            else if (!string.IsNullOrEmpty(scope) && scope != "all" && t.Helper != scope) continue;
+
+            if (priority is { } p && t.Priority != p) continue;
+            if (!string.IsNullOrEmpty(wantedTag) && !t.Tags.Any(x => string.Equals(x, wantedTag, StringComparison.OrdinalIgnoreCase)))
+                continue;
+
+            if (words.Length == 0) { result.Add(t); continue; }
+            if (words.StartsWith('#'))
+            {
+                if (t.Tags.Any(x => x.ToLowerInvariant().StartsWith(words[1..], StringComparison.Ordinal)))
+                    result.Add(t);
+                continue;
+            }
+            if (new[] { t.Title, t.Notes, t.StatusNote }
+                .Concat(t.Steps.Select(s => s.Title))
+                .Concat(t.Tags)
+                .Concat(GoalViews.SearchWords(t, known))
+                .Any(f => f.ToLowerInvariant().Contains(words)))
+            {
+                result.Add(t);
+            }
+        }
+        return result;
     }
 }
 
@@ -186,6 +332,54 @@ public static class TodoViews
     public static bool BotsOwn(TodoTask task) => task.WhoKind == TodoWho.Bot;
     /// It belongs in your day: yours, one you share, or a bot's own once it waits on you.
     public static bool InYourDay(TodoTask task) => !BotsOwn(task) || WaitsOnYou(task);
+    /// The task has a bot on it: its page carries the bot's conversation.
+    public static bool HasTeammate(TodoTask task) => task.Helper != null;
+
+    /// The bot waits on an answer from you: its card stands right under the who row, with its answers as taps.
+    public static bool AsksYou(TodoTask task) =>
+        task.Helper != null && !task.IsDone && (task.Status == "needs_you" || (task.Status == "ready" && task.Choices.Count > 0));
+
+    /// Current valid suggested title (when `suggested_for_title` still matches `title` and differs from it).
+    public static string? CurrentSuggestedTitle(TodoTask task) =>
+        !string.IsNullOrWhiteSpace(task.SuggestedTitle)
+        && string.Equals(task.SuggestedForTitle, task.Title, StringComparison.Ordinal)
+        && !string.Equals(task.SuggestedTitle, task.Title, StringComparison.Ordinal)
+            ? task.SuggestedTitle
+            : null;
+
+    /// Bot-authored links from `made` that should be surfaced directly as action buttons inside the top ask card
+    /// when a task is waiting on you (`needs_you`), so approval or handoff links are not buried below Notes and Steps.
+    public static List<TodoMade> AskActionLinks(TodoTask task)
+    {
+        if (task.IsDone || task.Status != "needs_you") return [];
+        var links = new List<TodoMade>();
+        for (var i = task.Made.Count - 1; i >= 0; i--)
+        {
+            var item = task.Made[i];
+            if (!item.IsYours && item.IsLink && ValidLinkUri(item.Ref) != null)
+                links.Add(item);
+        }
+        if (links.Count == 0) return [];
+        if (task.Choices.Count == 0) return [.. links.Take(2)];
+        var context = $"{task.StatusNote} {task.Page?.Summary ?? ""}".Trim().ToLowerInvariant();
+        if (context.Length == 0) return [];
+        var matched = links.Where(item =>
+        {
+            var title = item.Title.Trim().ToLowerInvariant();
+            if (title.Length >= 4 && context.Contains(title, StringComparison.Ordinal)) return true;
+            if (ValidLinkUri(item.Ref) is { Host: { Length: > 0 } host })
+            {
+                var parts = host.ToLowerInvariant().Split('.', StringSplitOptions.RemoveEmptyEntries)
+                    .Where(p => p.Length >= 4 && p is not ("www" or "app" or "com"));
+                if (parts.Any(p => context.Contains(p, StringComparison.Ordinal))) return true;
+            }
+            return false;
+        }).Take(1).ToList();
+        return matched;
+    }
+
+    private static Uri? ValidLinkUri(string? raw) =>
+        TodoMade.ValidLinkUrl(raw) is { } url && Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri : null;
 
     public static string DayKey(DateTime localDay) => localDay.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
@@ -196,8 +390,16 @@ public static class TodoViews
     public const int NextCount = 3;
 
     /// The view's groups, top to bottom; empty ones are left out.
-    public static List<TodoGroup> Groups(IReadOnlyList<TodoTask> tasks, TodoView view, IReadOnlyList<TodoUserSection> sections,
-        IReadOnlyList<string> bots, DateTimeOffset now, TimeZoneInfo zone, string sort = "smart")
+    /// `pausedGoals`: paused goals' ids whose tasks stay out of Today's "Next in <List>" groups (dated ones still show).
+    public static List<TodoGroup> Groups(
+        IReadOnlyList<TodoTask> tasks,
+        TodoView view,
+        IReadOnlyList<TodoUserSection> sections,
+        IReadOnlyList<string> bots,
+        DateTimeOffset now,
+        TimeZoneInfo zone,
+        string sort = "smart",
+        IReadOnlySet<string>? pausedGoals = null)
     {
         var today = TodoDates.LocalDay(now, zone);
         var known = sections.Select(s => s.Id).ToHashSet();
@@ -209,7 +411,16 @@ public static class TodoViews
         DateTimeOffset Created(TodoTask t) => TodoDates.Moment(t.CreatedAt) ?? DateTimeOffset.MinValue;
         DateTimeOffset Updated(TodoTask t) => TodoDates.Moment(t.UpdatedAt) ?? Created(t);
         DateTimeOffset Finished(TodoTask t) => TodoDates.Moment(t.DoneAt) ?? Updated(t);
+        int PriorityRank(TodoTask t) => t.Priority == 0 ? 4 : t.Priority;
         List<TodoTask> ByDue(IEnumerable<TodoTask> items) => [.. items.OrderBy(DueOf).ThenBy(Created).ThenBy(t => t.Id, StringComparer.Ordinal)];
+        List<TodoTask> ByToday(IEnumerable<TodoTask> items) => sort switch
+        {
+            "due" => [.. items.OrderBy(DueOf).ThenBy(t => t.Order).ThenBy(t => t.Id, StringComparer.Ordinal)],
+            "priority" => [.. items.OrderBy(PriorityRank).ThenBy(t => t.Order).ThenBy(t => t.Id, StringComparer.Ordinal)],
+            "added" => [.. items.OrderByDescending(Created).ThenByDescending(t => t.Id, StringComparer.Ordinal)],
+            // Default Today order: High/Medium priority rises to the top; ties break by due time, then manual order / id.
+            _ => [.. items.OrderBy(PriorityRank).ThenBy(DueOf).ThenBy(t => t.Order).ThenBy(t => t.Id, StringComparer.Ordinal)],
+        };
         List<TodoTask> NewestDone(IEnumerable<TodoTask> items) => [.. items.OrderByDescending(Finished).ThenByDescending(t => t.Id, StringComparer.Ordinal)];
         var output = new List<TodoGroup>();
         void Add(TodoGroupKind kind, List<TodoTask> items) { if (items.Count > 0) output.Add(new TodoGroup(kind, items)); }
@@ -229,15 +440,20 @@ public static class TodoViews
             }).ToList();
             var dated = overdue.Concat(todays).Select(t => t.Id).ToHashSet();
             Add(TodoGroupKind.Overdue, ByDue(overdue));
-            Add(TodoGroupKind.Today, ByDue(todays));
+            Add(TodoGroupKind.Today, ByToday(todays));
             var waiting = mine.Where(t => WaitsOnYou(t) && !dated.Contains(t.Id))
                 .OrderByDescending(Updated).ThenByDescending(t => t.Id, StringComparer.Ordinal).ToList();
             Add(TodoGroupKind.Waiting, waiting);
             var shown = dated.Union(waiting.Select(t => t.Id)).ToHashSet();
             foreach (var section in sections.Where(s => s.InToday))
             {
-                var rest = TodoSections.Ordered(mine.Where(t => t.Section == section.Id && !BotsOwn(t) && !shown.Contains(t.Id) && !Waits(t)
-                    && (DueDay(t) is not { } d || d <= today)), "smart", zone);
+                var rest = TodoSections.Ordered(mine.Where(t =>
+                    t.Section == section.Id
+                    && !BotsOwn(t)
+                    && !shown.Contains(t.Id)
+                    && !Waits(t)
+                    && (DueDay(t) is not { } d || d <= today)
+                    && !(t.Goal is { } gid && pausedGoals != null && pausedGoals.Contains(gid))), "smart", zone);
                 if (rest.Count == 0) continue;
                 output.Add(new TodoGroup(TodoGroupKind.Next(section.Id), [.. rest.Take(NextCount)], Math.Max(0, rest.Count - NextCount)));
             }
@@ -258,7 +474,11 @@ public static class TodoViews
         else if (view.Key == "inbox")
         {
             var loose = open.Where(t => !BotsOwn(t) && ListOf(t) == null).ToList();
-            Add(TodoGroupKind.Open, [.. loose.Where(t => !TodoSections.IsStale(t, now)).OrderByDescending(Created).ThenByDescending(t => t.Id, StringComparer.Ordinal)]);
+            var fresh = loose.Where(t => !TodoSections.IsStale(t, now));
+            var orderedFresh = sort == "smart"
+                ? [.. fresh.OrderByDescending(Created).ThenByDescending(t => t.Id, StringComparer.Ordinal)]
+                : TodoSections.Ordered(fresh, sort, zone);
+            Add(TodoGroupKind.Open, orderedFresh);
             Add(TodoGroupKind.Stale, [.. loose.Where(t => TodoSections.IsStale(t, now)).OrderBy(Updated).ThenBy(t => t.Id, StringComparer.Ordinal)]);
             Add(TodoGroupKind.Done, NewestDone(done.Where(t => !BotsOwn(t) && ListOf(t) == null)));
         }
@@ -276,12 +496,146 @@ public static class TodoViews
                 Add(TodoGroupKind.Bot(bot), [.. byBot[bot].OrderBy(t => t.Status == "working" ? 0 : 1).ThenBy(DueOf).ThenBy(Created).ThenBy(t => t.Id, StringComparer.Ordinal)]);
             Add(TodoGroupKind.Done, NewestDone(done.Where(BotsOwn)));
         }
+        // "goals" and "suggested" render their own cards rather than task groups.
         return output;
     }
 
+    /// Upcoming with one day picked on its week strip: that day's tasks alone (Today shows Today's due tasks).
+    public static List<TodoGroup> DayGroups(
+        IReadOnlyList<TodoTask> tasks,
+        string dayKey,
+        IReadOnlyList<TodoUserSection> sections,
+        IReadOnlyList<string> bots,
+        DateTimeOffset now,
+        TimeZoneInfo zone,
+        string sort = "smart",
+        IReadOnlySet<string>? pausedGoals = null)
+    {
+        if (dayKey == DayKey(TodoDates.LocalDay(now, zone)))
+            return [.. Groups(tasks, TodoView.Today, sections, bots, now, zone, sort, pausedGoals).Where(g => g.Kind == TodoGroupKind.Today)];
+        return [.. Groups(tasks, TodoView.Upcoming, sections, bots, now, zone, sort, pausedGoals).Where(g => g.Kind == TodoGroupKind.Day(dayKey))];
+    }
+
+    /// A picked day with nothing on it: "Nothing due today.", "Nothing on Fri, Nov 13."
+    public static string DayEmptyText(string dayKey, DateTimeOffset now, TimeZoneInfo zone)
+    {
+        if (dayKey == DayKey(TodoDates.LocalDay(now, zone))) return "Nothing due today.";
+        var heading = DayHeading(dayKey, now, zone);
+        return $"Nothing on {heading.Detail ?? heading.Title}.";
+    }
+
+    /// Heading over Upcoming's week strip: "November 2026", or "Nov – Dec 2026" when the 7 days span two months.
+    public static string WeekRangeTitle(IReadOnlyList<DateTimeOffset> dates, TimeZoneInfo zone)
+    {
+        if (dates.Count == 0) return "";
+        var first = TimeZoneInfo.ConvertTime(dates[0], zone);
+        var last = TimeZoneInfo.ConvertTime(dates[^1], zone);
+        if (first.Month == last.Month && first.Year == last.Year) return first.ToString("MMMM yyyy", En);
+        if (first.Year == last.Year) return $"{first.ToString("MMM", En)} – {last.ToString("MMM yyyy", En)}";
+        return $"{first.ToString("MMM yyyy", En)} – {last.ToString("MMM yyyy", En)}";
+    }
+
+    /// Wire due string when rescheduling `task` onto `day`, keeping its clock time if it already had one.
+    public static string RescheduledDue(TodoTask task, DateTimeOffset day, TimeZoneInfo zone, bool preserveTime = true)
+    {
+        if (preserveTime && TodoDates.Due(task.Due, zone) is { HasTime: true } existing)
+        {
+            var localClock = TimeZoneInfo.ConvertTime(existing.Date, zone);
+            var localDay = TodoDates.LocalDay(day, zone);
+            var combined = localDay.AddHours(localClock.Hour).AddMinutes(localClock.Minute);
+            return TodoDates.Wire(new DateTimeOffset(combined, zone.GetUtcOffset(combined)), hasTime: true, zone);
+        }
+        return TodoDates.Wire(day, hasTime: false, zone);
+    }
+
+    /// Every tag in use across `tasks`, most frequent first, then alphabetical (case-insensitive deduplication).
+    public static List<string> AllTags(IEnumerable<TodoTask> tasks)
+    {
+        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var canonical = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var task in tasks)
+        {
+            foreach (var raw in task.Tags)
+            {
+                var clean = raw.Trim();
+                if (clean.Length == 0) continue;
+                counts[clean] = counts.GetValueOrDefault(clean) + 1;
+                canonical.TryAdd(clean, clean);
+            }
+        }
+        return
+        [
+            .. counts.Keys
+                .OrderByDescending(k => counts[k])
+                .ThenBy(k => canonical[k], StringComparer.OrdinalIgnoreCase)
+                .Select(k => canonical[k]),
+        ];
+    }
+
+    /// Unified Completed Logbook groups: Today, Yesterday, This Week, Earlier This Month, then month headings.
+    public static List<TodoLogbookGroup> Logbook(IReadOnlyList<TodoTask> tasks, string query, DateTimeOffset now, TimeZoneInfo zone)
+    {
+        var words = (query ?? "").Trim().ToLowerInvariant();
+        var done = tasks.Where(t =>
+        {
+            if (!t.IsDone) return false;
+            if (words.Length == 0) return true;
+            return new[] { t.Title, t.Notes, t.StatusNote }
+                .Concat(t.Steps.Select(s => s.Title))
+                .Concat(t.Tags)
+                .Any(f => f.ToLowerInvariant().Contains(words));
+        });
+
+        DateTimeOffset Finished(TodoTask t) =>
+            TodoDates.Moment(t.DoneAt) ?? TodoDates.Moment(t.UpdatedAt) ?? TodoDates.Moment(t.CreatedAt) ?? DateTimeOffset.MinValue;
+
+        var sorted = done.OrderByDescending(Finished).ThenByDescending(t => t.Id, StringComparer.Ordinal).ToList();
+        var today = TodoDates.LocalDay(now, zone);
+        var yesterday = today.AddDays(-1);
+        var weekAgo = today.AddDays(-6);
+
+        var order = new List<string>();
+        var titles = new Dictionary<string, string>(StringComparer.Ordinal);
+        var buckets = new Dictionary<string, List<TodoTask>>(StringComparer.Ordinal);
+
+        foreach (var task in sorted)
+        {
+            var at = Finished(task);
+            string key;
+            string title;
+            if (at == DateTimeOffset.MinValue)
+            {
+                key = "earlier";
+                title = "Earlier";
+            }
+            else
+            {
+                var day = TodoDates.LocalDay(at, zone);
+                if (day >= today) { key = "today"; title = "Today"; }
+                else if (day >= yesterday) { key = "yesterday"; title = "Yesterday"; }
+                else if (day >= weekAgo) { key = "week"; title = "This Week"; }
+                else if (day.Year == today.Year && day.Month == today.Month) { key = "month"; title = "Earlier This Month"; }
+                else
+                {
+                    key = day.ToString("yyyy-MM", CultureInfo.InvariantCulture);
+                    title = day.ToString("MMMM yyyy", En);
+                }
+            }
+            if (!buckets.TryGetValue(key, out var list))
+            {
+                order.Add(key);
+                titles[key] = title;
+                list = [];
+                buckets[key] = list;
+            }
+            list.Add(task);
+        }
+
+        return [.. order.Select(k => new TodoLogbookGroup(k, titles[k], buckets[k]))];
+    }
+
     /// [WIN-53] A search looks through every view, whichever pill is picked (Goals too): its matches' open tasks, soonest
-    /// due first ("To Do"), then the done ones, newest first (TasksViewController.reload at 93f984bb1: `if searching`,
-    /// TodoSections.ordered(open, sort: "due") and TodoSections.sorted(done, in: .done)). Empty groups are left out.
+    /// due first ("To Do"), then the done ones, newest first. Empty groups are left out.
     public static List<TodoGroup> SearchGroups(IReadOnlyList<TodoTask> matches, TimeZoneInfo zone)
     {
         DateTimeOffset Created(TodoTask t) => TodoDates.Moment(t.CreatedAt) ?? DateTimeOffset.MinValue;
@@ -377,7 +731,20 @@ public static class TodoViews
                     words = words with { Note = note };
                 break;
         }
-        return words;
+        return words with { Said = SaidLine(task, words, note, name) };
+    }
+
+    private static string? SaidLine(TodoTask task, TodoRowWords words, string note, string name)
+    {
+        if (task.Helper == null) return words.Note;
+        if (task.Status == "ready") return note.Length == 0 ? "Finished its part" : note;
+        if (task.Status == "needs_you") return note.Length == 0 ? "Needs you" : note;
+        if (words.Note is { } line)
+        {
+            var own = name + ": ";
+            return line.StartsWith(own, StringComparison.Ordinal) ? line[own.Length..] : line;
+        }
+        return task.Status == "working" ? "Working on it" : "Not started yet";
     }
 
     /// A group's heading; null for one with none (a list's and Inbox's open tasks).
@@ -398,9 +765,7 @@ public static class TodoViews
         };
     }
 
-    /// A group's heading as the Tasks page draws it (TasksViewController.heading at 93f984bb1): none over a list's or
-    /// Inbox's open tasks, but "To Do" while searching (one flat list of matches); Today's Done is "Done Today" (not while
-    /// searching); every other group as `Heading`.
+    /// A group's heading as the Tasks page draws it.
     public static (string Title, string? Detail)? PageHeading(TodoGroupKind kind, TodoView view, bool searching, DateTimeOffset now,
         TimeZoneInfo zone, IReadOnlyList<TodoUserSection> sections, Func<string?, string> botName)
     {
@@ -409,28 +774,36 @@ public static class TodoViews
         return Heading(kind, now, zone, sections, botName);
     }
 
-    /// Done's rows show once its heading's Show is clicked, and always while searching (TasksViewController.reload:
-    /// `let open = doneOpen || searching`). Every other group shows its rows.
+    /// Done's rows show once its heading's Show is clicked, and always while searching.
     public static bool ShowsRows(TodoGroupKind kind, bool doneOpen, bool searching) =>
         kind != TodoGroupKind.Done || doneOpen || searching;
 
-    /// The words at the end of Done's heading: "Show" while folded, "Hide" while open; none while searching
-    /// (TasksViewController.configureHeader). Other groups have no fold.
+    /// The words at the end of Done's heading: "Show" while folded, "Hide" while open; none while searching.
     public static string? DoneFold(TodoGroupKind kind, bool doneOpen, bool searching) =>
         kind == TodoGroupKind.Done && !searching ? (doneOpen ? "Hide" : "Show") : null;
 
-    /// The heading drawn in red (`hqRed`): Overdue alone (TasksViewController.configureHeader at 93f984bb1,
-    /// `TodoGroupHeaderView(…, red: kind == .overdue)`). In the iOS look its name goes red and the count stays grey.
+    /// The heading drawn in red: Overdue alone.
     public static bool HeadingIsRed(TodoGroupKind kind) => kind == TodoGroupKind.Overdue;
 
-    /// The fold's identifier (TodoGroupHeaderView.foldID).
     public const string DoneFoldId = "tasks.show-done";
-
-    /// A group heading's identifier: "tasks.section.<title>".
     public static string SectionAutomationId(string title) => "tasks.section." + title;
+
+    /// "!!" for high, "!" for medium, null for low or none.
+    public static string? PriorityMark(int priority) => priority switch { 1 => "!!", 2 => "!", _ => null };
 
     /// "High", "Medium", "Low"; "None" for 0.
     public static string PriorityWord(int priority) => priority switch { 1 => "High", 2 => "Medium", 3 => "Low", _ => "None" };
+
+    /// "Starts tomorrow", "Starts Mon", "Started Nov 3": a task's start day in words.
+    public static string? StartWords(TodoTask task, DateTimeOffset now, TimeZoneInfo zone)
+    {
+        if (task.Starts is not { Length: >= 10 } raw || TodoDates.Day(raw[..10], zone) is not { } day) return null;
+        var word = Soon(day, now, zone);
+        var lower = word is "Today" or "Tomorrow" or "Yesterday" ? word.ToLowerInvariant() : word;
+        var today = TodoDates.LocalDay(now, zone);
+        var localDay = TodoDates.LocalDay(day, zone);
+        return (localDay >= today ? "Starts " : "Started ") + lower;
+    }
 
     /// The who row's words: "You", "You & Hermes", "Finance".
     public static string Who(TodoTask task, Func<string?, string> botName) => task.WhoKind switch
@@ -441,9 +814,10 @@ public static class TodoViews
     };
 
     /// What the task's bot is doing: "Working", "Has a question", "Finished its part".
-    public static (string Words, TodoTone Tone)? BotState(TodoTask task)
+    public static (string Words, TodoTone Tone)? BotState(TodoTask task, bool running = false)
     {
         if (task.Helper == null || task.IsDone) return null;
+        if (running) return ("Working", TodoTone.Working);
         return task.Status switch
         {
             "working" => ("Working", TodoTone.Working),
@@ -466,7 +840,9 @@ public static class TodoViews
         "today" => "Nothing due today.",
         "upcoming" => "Nothing coming up. A task with a date shows here.",
         "inbox" => "Nothing left to file. A task in no list lands here.",
+        "suggested" => "No suggested tasks right now.",
         "bots" => "No bot has a task of its own right now.",
+        "goals" => GoalViews.EmptyText,
         _ => $"No tasks in {listName ?? "this list"} yet.",
     };
 
@@ -488,18 +864,13 @@ public static class TodoViews
 /// The page's own words (App/Pages/Tasks/*.swift).
 public static class TasksCopy
 {
-    /// [goals] New Goal on an add-on that keeps no goals (TasksViewController.swift "Goals Need a Newer Add-on").
     public const string GoalsNeedAddOn = "Goals Need a Newer Add-on";
     public const string Title = "Tasks";
     public const string SearchPlaceholder = "Search Tasks";
     public const string NewTask = "New Task";
-    public const string Today = "Today", Upcoming = "Upcoming", Inbox = "Inbox", Bots = "Bots";
-    /// A view pill's count beside its title (TaskViewsHeader.swift line 76 at 93f984bb1: `count > 0`): none for 0 or
-    /// no count, so an emptied list reads "Home", not "Home 0".
+    public const string Today = "Today", Upcoming = "Upcoming", Inbox = "Inbox", Bots = "Bots", Suggested = "Suggested", BotsTasks = "Bots’ Tasks";
     public static string? PillDetail(int? count) =>
-        count is > 0 and var n ? n.ToString(System.Globalization.CultureInfo.InvariantCulture) : null;
-    /// The pill as screen readers hear it (`spoken`, lines 153–156): "Home, 1 task", "Work, 8 tasks", or the title
-    /// alone for 0 or no count. Every pill, Goals too.
+        count is > 0 and var n ? n.ToString(CultureInfo.InvariantCulture) : null;
     public static string PillName(string title, int? count) =>
         count is > 0 and var n ? $"{title}, {n} {(n == 1 ? "task" : "tasks")}" : title;
     public const string NoTasks = "No Tasks";
@@ -516,6 +887,10 @@ public static class TasksCopy
     public const string NoList = "No List";
     public const string Delete = "Delete";
     public const string DeleteTask = "Delete Task";
+    public const string Duplicate = "Duplicate";
+    public const string Schedule = "Schedule";
+    public const string Reschedule = "Reschedule";
+    public const string CompletedLogbook = "Completed Logbook…";
     public const string Cancel = "Cancel";
     public const string Untitled = "Untitled Task";
     public static string DeleteTitle(string title) => $"Delete “{title}”?";
@@ -535,12 +910,11 @@ public static class TasksCopy
     public const string Steps = "Steps";
     public const string AddStep = "Add step";
     public const string DeleteStep = "Delete Step";
-    public const string PlusNotes = "+ Notes", PlusRepeat = "+ Repeat", PlusPriority = "+ Priority", PlusTags = "+ Tags";
+    public const string PlusNotes = "+ Notes", PlusRepeat = "+ Repeat", PlusPriority = "+ Priority", PlusTags = "+ Tags", PlusStartDate = "+ Start Date";
     public const string NoPriority = "No Priority";
     public const string DontRepeat = "Don’t Repeat";
     public const string Done = "Done";
     public const string Save = "Save";
-    // New Task (App/Pages/Tasks/NewTodoSheet.swift).
     public const string Add = "Add";
     public const string WhatNeedsToBeDone = "What needs to be done?";
     public const string TaskTitle = "Task title";
@@ -555,11 +929,11 @@ public static class TasksCopy
     public static string Added(string title) => $"Added “{title}”";
     public static string StartsRightAway(string bot) => $"{bot}’s chat opens and it starts on the task right away.";
     public const string CheckConnection = "Check your connection, then try again.";
-    // Notices (HermesKit/Pages/Tasks/TasksStore.swift).
     public static string CouldNotAdd(string reason) => $"Couldn’t add the task. {reason}";
     public const string StillBeingAdded = "This task is still being added. Try again in a moment.";
     public const string ChangedElsewhere = "This task changed somewhere else. Showing the latest.";
     public const string DeletedElsewhere = "This task was deleted somewhere else.";
+    public const string SavedOffline = "Saved offline. Will sync when connected.";
     public static string CouldNotSave(string reason) => $"Couldn’t save the change. {reason}";
     public static string CouldNotDelete(string reason) => $"Couldn’t delete the task. {reason}";
     public static string CouldNotSaveSettings(string reason) => $"Couldn’t save Tasks settings. {reason}";

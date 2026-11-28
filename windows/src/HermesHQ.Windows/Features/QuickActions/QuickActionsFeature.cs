@@ -7,6 +7,8 @@ using HermesHQ.Shell;
 namespace HermesHQ.Features.QuickActions;
 
 /// The Favorites page: this device's tiles. On Windows Ctrl+Shift+K opens the same place as the sidebar.
+/// NOTE: Kept strictly decoupled from WinUI controls and gateway singletons so `FavoritesPlace.Tests` compiles this
+/// file directly against `InertEdges.cs`.
 public static class QuickActionsFeature
 {
     public const string PlaceId = QuickTileStore.RowID;
@@ -18,7 +20,7 @@ public static class QuickActionsFeature
     {
         if (Places.Get(PlaceId).Page != typeof(PlaceholderPage)) return;
         Places.Register(PlaceId, typeof(QuickActionsPage));
-        // [WIN-24] The chats on show, so a Send a Message tile with Open the Chat on can send in its bot's chat.
+        // [WIN-24] The chats on show, so a Send a Message / Prompt / Slash Command / Memo / Talk tile can act on the chat.
         ChatExtensions.OnOpen.Add(ctx =>
         {
             OpenChats.Add(ctx);
@@ -27,6 +29,20 @@ public static class QuickActionsFeature
     }
 
     private static readonly List<ChatContext> OpenChats = [];
+
+    /// Returns the currently active `ChatContext` for `(profile, storedId)` once its `ChatPage` is loaded and on show.
+    internal static ChatContext? FindOpenChat(string profile, string storedId)
+    {
+        var ctx = OpenChats.LastOrDefault(c => c.Session.Profile == profile && c.Session.StoredId == storedId);
+        return ctx?.Page is ChatPage { IsLoaded: true } page && ChatPage.Current == page ? ctx : null;
+    }
+
+    /// Returns the currently active `ChatContext` for any open chat belonging to `profile` once loaded and on show.
+    internal static ChatContext? FindOpenBotChat(string profile)
+    {
+        var ctx = OpenChats.LastOrDefault(c => c.Session.Profile == profile);
+        return ctx?.Page is ChatPage { IsLoaded: true } page && ChatPage.Current == page ? ctx : null;
+    }
 
     /// NewChatRouter.deliver's send: once `storedId` (the bot's own chat) is the chat on show, `words` go as typed
     /// words do (the composer's Send: its queue and steering, then the session's send), and what was in the box is

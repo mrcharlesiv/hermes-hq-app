@@ -53,6 +53,8 @@ public sealed partial class KanbanPage : Page
     private readonly Grid _boardsPage = new() { Visibility = Visibility.Collapsed };
     private readonly Grid _pageRoot;
     private KanbanBoardList? _boardList;
+    private StackPanel? _boardListRows;
+    private string _boardListQuery = "";
 
     public KanbanPage()
     {
@@ -201,6 +203,7 @@ public sealed partial class KanbanPage : Page
     {
         if (_store is not { } store) return;
         RenderBoardButton(store);
+        if (_boardList != null) RefreshBoardList(store);
         // [WIN-KANBAN-SEARCH-STATE] One decision for the state and the bar (KanbanSearchState, the Mac's
         // searchShownWhileEmpty): the trimmed words, the bar set on every path (loading and can't load too).
         var view = KanbanSearchState.Decide(store.Board, _query, SearchEditing, CurrentBar);
@@ -274,6 +277,7 @@ public sealed partial class KanbanPage : Page
         _boardButton.Content = store.BoardTitle;
         _boardButton.IsEnabled = store.Boards != null;
         AutomationProperties.SetName(_boardButton, $"Board: {store.BoardTitle}. Switch board");
+        _boardButton.ContextFlyout = store.Boards != null ? BoardActionsMenu(store) : null;
         if (store.BoardPickerStyle == KanbanBoardPickerStyle.List)
         {
             _boardButton.Flyout = null;   // the click pushes the Boards list
@@ -294,7 +298,49 @@ public sealed partial class KanbanPage : Page
             };
             menu.Items.Add(item);
         }
+        if (store.Boards != null)
+        {
+            menu.Items.Add(new MenuFlyoutSeparator());
+            var activeSlug = store.BoardKey;
+            var activeTitle = store.BoardTitle;
+            var activeTotal = store.CurrentMeta?.Total;
+            var rename = Item("Rename Board…", "\uE70F", () => _ = RenameBoardAsync(activeSlug, activeTitle));
+            AutomationProperties.SetAutomationId(rename, "kanban.board.rename");
+            menu.Items.Add(rename);
+            if (KanbanModel.CanDeleteBoard(activeSlug))
+            {
+                var delete = Item("Delete Board…", "\uE74D", () => _ = DeleteBoardAsync(activeSlug, activeTitle, activeTotal));
+                delete.Foreground = Critical;
+                AutomationProperties.SetAutomationId(delete, "kanban.board.delete");
+                menu.Items.Add(delete);
+            }
+            if (store.Boards.Boards.Count > 1)
+            {
+                var manage = Item("Manage Boards…", "\uE8FD", ShowBoardList);
+                AutomationProperties.SetAutomationId(manage, "kanban.board.manage");
+                menu.Items.Add(manage);
+            }
+        }
         _boardButton.Flyout = menu;
+    }
+
+    private MenuFlyout BoardActionsMenu(KanbanStore store)
+    {
+        var menu = new MenuFlyout();
+        var activeSlug = store.BoardKey;
+        var activeTitle = store.BoardTitle;
+        var activeTotal = store.CurrentMeta?.Total;
+        var rename = Item("Rename Board…", "\uE70F", () => _ = RenameBoardAsync(activeSlug, activeTitle));
+        AutomationProperties.SetAutomationId(rename, "kanban.board.context.rename");
+        menu.Items.Add(rename);
+        if (KanbanModel.CanDeleteBoard(activeSlug))
+        {
+            var delete = Item("Delete Board…", "\uE74D", () => _ = DeleteBoardAsync(activeSlug, activeTitle, activeTotal));
+            delete.Foreground = Critical;
+            AutomationProperties.SetAutomationId(delete, "kanban.board.context.delete");
+            menu.Items.Add(delete);
+        }
+        return menu;
     }
 
     /// `pickBoard`: the open board does nothing; another clears the search, closes the task and reads the new board.
@@ -317,6 +363,7 @@ public sealed partial class KanbanPage : Page
     private void ShowBoardList()
     {
         if (_store is not { } store || store.Boards is not { } boards) return;
+        _boardListQuery = "";
         var list = _boardList = new KanbanBoardList(boards.Boards, store.BoardKey);
         _boardsPage.Children.Clear();
         _boardsPage.RowDefinitions.Clear();
@@ -339,34 +386,40 @@ public sealed partial class KanbanPage : Page
         bar.Children.Add(title);
         _boardsPage.Children.Add(bar);
 
-        var rows = new StackPanel { Spacing = 0 };
+        var rows = _boardListRows = new StackPanel { Spacing = 0 };
         var card = new Border
         {
             Child = rows, CornerRadius = new CornerRadius(10), BorderThickness = new Thickness(1),
             Background = Brush("CardBackgroundFillColorDefaultBrush"), BorderBrush = Brush("CardStrokeColorDefaultBrush"),
-            HorizontalAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(16, 4, 16, 16),
+            HorizontalAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(16, 4, 16, 8),
         };
         AutomationProperties.SetAutomationId(rows, "kanban.boards.list");
         void Fill()
         {
-            rows.Children.Clear();
-            foreach (var choice in list.Shown) rows.Children.Add(BoardRow(choice));
+            if (_boardList == null || _boardListRows == null) return;
+            _boardListRows.Children.Clear();
+            foreach (var choice in _boardList.Shown) _boardListRows.Children.Add(BoardRow(choice));
         }
         if (list.HasSearch)
         {
             var search = new TextBox { PlaceholderText = "Search", Margin = new Thickness(16, 0, 16, 8), HorizontalAlignment = HorizontalAlignment.Stretch };
             AutomationProperties.SetName(search, "Search Boards");
             AutomationProperties.SetAutomationId(search, "kanban.boards.search");
-            search.TextChanged += (_, _) => { list.Search(search.Text); Fill(); };
+            search.TextChanged += (_, _) => { _boardListQuery = search.Text; _boardList?.Search(_boardListQuery); Fill(); };
             Grid.SetRow(search, 1);
             _boardsPage.Children.Add(search);
         }
         Fill();
+        var body = new StackPanel { Spacing = 4 };
+        body.Children.Add(card);
+        var hint = Text("Right‑click a board to rename or delete it.", 12, color: Secondary);
+        hint.Margin = new Thickness(20, 0, 20, 16);
+        body.Children.Add(hint);
         // The list and its search span the page, as the Mac's inset grouped list does. A 640 cap with Stretch came out
         // right of centre inside this ScrollViewer, its ticks off the window (CI 44971143103, 44971835430).
         var scroll = new ScrollViewer
         {
-            Content = card, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, HorizontalScrollMode = ScrollMode.Disabled,
         };
         Grid.SetRow(scroll, 2);
@@ -375,6 +428,15 @@ public sealed partial class KanbanPage : Page
         _pageRoot.Visibility = Visibility.Collapsed;
         _boardsPage.Visibility = Visibility.Visible;
         back.Focus(FocusState.Programmatic);
+    }
+
+    private void RefreshBoardList(KanbanStore store)
+    {
+        if (store.Boards is not { } boards || _boardListRows == null) return;
+        _boardList = new KanbanBoardList(boards.Boards, store.BoardKey);
+        if (_boardListQuery.Length > 0) _boardList.Search(_boardListQuery);
+        _boardListRows.Children.Clear();
+        foreach (var choice in _boardList.Shown) _boardListRows.Children.Add(BoardRow(choice));
     }
 
     private FrameworkElement BoardRow(KanbanBoardChoice choice)
@@ -402,13 +464,87 @@ public sealed partial class KanbanPage : Page
         if (choice.IsCurrent) AutomationProperties.SetItemStatus(row, "Selected");
         var slug = choice.Slug;
         row.Click += (_, _) => { PickBoard(slug); CloseBoardList(); };
+        row.ContextFlyout = BoardRowMenu(choice);
         return row;
+    }
+
+    private MenuFlyout BoardRowMenu(KanbanBoardChoice choice)
+    {
+        var menu = new MenuFlyout();
+        var slug = choice.Slug;
+        var title = choice.Title;
+        var rename = Item("Rename…", "\uE70F", () => _ = RenameBoardAsync(slug, title));
+        AutomationProperties.SetAutomationId(rename, "kanban.boards.menu.rename." + slug);
+        menu.Items.Add(rename);
+        if (KanbanModel.CanDeleteBoard(slug))
+        {
+            var total = _store?.Boards?.Boards.FirstOrDefault(b => b.Slug == slug)?.Total;
+            var delete = Item("Delete…", "\uE74D", () => _ = DeleteBoardAsync(slug, title, total));
+            delete.Foreground = Critical;
+            AutomationProperties.SetAutomationId(delete, "kanban.boards.menu.delete." + slug);
+            menu.Items.Add(delete);
+        }
+        return menu;
+    }
+
+    private async Task RenameBoardAsync(string slug, string currentTitle)
+    {
+        if (_store is not { } store) return;
+        if (store.ReadOnlyGateway) { _notice.Show(KanbanRest.ReadOnlyNotice); return; }
+        if (await KanbanDialogs.RenameBoardAsync(XamlRoot, currentTitle) is not { } next) return;
+        if (await store.RenameBoardAsync(slug, next) is { } reason)
+            await FailedAsync(XamlRoot, "Couldn’t Rename Board", reason, () => RetryRenameBoardAsync(slug, next));
+    }
+
+    private async Task RetryRenameBoardAsync(string slug, string next)
+    {
+        if (_store is not { } store) return;
+        if (await store.RenameBoardAsync(slug, next) is { } reason)
+            await FailedAsync(XamlRoot, "Couldn’t Rename Board", reason, () => RetryRenameBoardAsync(slug, next));
+    }
+
+    private async Task DeleteBoardAsync(string slug, string title, int? total)
+    {
+        if (_store is not { } store) return;
+        if (!KanbanModel.CanDeleteBoard(slug)) { _notice.Show(KanbanModel.DefaultBoardKept); return; }
+        if (store.ReadOnlyGateway) { _notice.Show(KanbanRest.ReadOnlyNotice); return; }
+        if (!await KanbanDialogs.ConfirmDeleteBoardAsync(XamlRoot, title, total)) return;
+        var wasShown = store.BoardKey == slug;
+        if (await store.DeleteBoardAsync(slug) is { } reason)
+        {
+            await FailedAsync(XamlRoot, "Couldn’t Delete Board", reason, () => RetryDeleteBoardAsync(slug, wasShown));
+            return;
+        }
+        if (wasShown)
+        {
+            _search.Text = "";
+            _query = "";
+            CloseTask();
+        }
+    }
+
+    private async Task RetryDeleteBoardAsync(string slug, bool wasShown)
+    {
+        if (_store is not { } store) return;
+        if (await store.DeleteBoardAsync(slug) is { } reason)
+        {
+            await FailedAsync(XamlRoot, "Couldn’t Delete Board", reason, () => RetryDeleteBoardAsync(slug, wasShown));
+            return;
+        }
+        if (wasShown)
+        {
+            _search.Text = "";
+            _query = "";
+            CloseTask();
+        }
     }
 
     private void CloseBoardList()
     {
         if (_boardList == null) return;
         _boardList = null;
+        _boardListRows = null;
+        _boardListQuery = "";
         _boardsPage.Visibility = Visibility.Collapsed;
         _boardsPage.Children.Clear();
         _pageRoot.Visibility = Visibility.Visible;

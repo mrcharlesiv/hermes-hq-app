@@ -22,6 +22,8 @@ public sealed class BotDeviceState
     public bool ShowHidden { get; set; }
     /// What each bot lists under its row ([chats-under]): "off", "active", "pinned", "recent:2"; "*" is every bot's.
     public Dictionary<string, string> ChatsUnder { get; set; } = [];
+    /// [botsaid] Per-bot cached preview of the bot's newest words to you, persisted per gateway account.
+    public Dictionary<string, BotSaidEntry> BotSaid { get; set; } = [];
 }
 
 /// A section deletion in flight: the Undo pill puts it back.
@@ -148,31 +150,37 @@ public sealed partial class BotStore
     public void ApplyFull(JsonNode result, DateTimeOffset issued)
     {
         var snapshot = RosterSnapshot.Decode(result);
+        NoteRosterMarks(snapshot.Profiles);
+        var activeProfiles = WithChatActivity(snapshot.Profiles);
         lock (_gate)
         {
             BotModeProtocol = snapshot.BotModeProtocol ?? BotModeProtocol;
-            _rows = snapshot.Profiles.Select(p => p.Raw).ToList();
-            foreach (var p in snapshot.Profiles) _createdRows.Remove(p.Name);
+            _rows = activeProfiles.Select(p => p.Raw).ToList();
+            foreach (var p in activeProfiles) _createdRows.Remove(p.Name);
             foreach (var (name, at) in _deletedAt.ToList())
-                if (at < issued || snapshot.Profiles.All(p => p.Name != name)) _deletedAt.Remove(name);
-            foreach (var p in snapshot.Profiles.Where(p => p.CanonicalSession != null)) _minted.Remove(p.Name);
+                if (at < issued || activeProfiles.All(p => p.Name != name)) _deletedAt.Remove(name);
+            foreach (var p in activeProfiles.Where(p => p.CanonicalSession != null)) _minted.Remove(p.Name);
             _descriptions.Clear();
             // A bot written here since the request went out keeps this device's meta (the write fence, 60 s).
-            Device.Meta = BotMetaMerge.Merge(Device.Meta, snapshot.Profiles,
+            Device.Meta = BotMetaMerge.Merge(Device.Meta, activeProfiles,
                 name => _metaWriteAt.TryGetValue(name, out var at) && at > issued && DateTimeOffset.UtcNow - at < TimeSpan.FromSeconds(60));
-            Device.Sections = RosterBuilder.AdoptSections(Device.Sections, snapshot.Profiles, Device.Meta)
+            Device.Sections = RosterBuilder.AdoptSections(Device.Sections, activeProfiles, Device.Meta)
                 .Where(s => !_pendingSectionDeletes.Contains(s.Id)).ToList();
-            Device.Unread.Reconcile(snapshot.Profiles, p => p.Name == VisibleBot);
+            var beforeHeld = new HashSet<string>(Device.Unread.Held.Keys, StringComparer.Ordinal);
+            Device.Unread.Reconcile(activeProfiles, p => p.Name == VisibleBot, holdForCheck: ReadsBotSaid);
+            foreach (var heldName in Device.Unread.Held.Keys)
+                if (!beforeHeld.Contains(heldName)) _unreadHeldAt[heldName] = DateTimeOffset.UtcNow;
             HasRoster = true;
         }
         Persist();
         Rebuild();
+        if (ReadsBotSaid) _ = RefreshBotSaidAsync();
     }
 
     /// Recompose the list from what is held (cheap; called after every change).
     public void Rebuild()
     {
-        var profiles = Profiles();
+        var profiles = WithBotSaid(Profiles());
         RosterLayout layout;
         lock (_gate)
         {
@@ -244,22 +252,19 @@ public sealed partial class BotStore
         Rebuild();
     }
 
-    /// [WIN-OFFSCREEN-TURN-END] Windows reads no bot's own words from its chat (the Mac's [botsaid] `rereadBotSaid`,
-    /// `timing.readsBotSaid`): the Bots row draws the roster's newest line of the chat, so a reply known only by its
-    /// words is that line, and its dot comes at once (no read can follow to hold it).
-    public const bool ReadsBotSaid = false;
+    /// [botsaid] When true, each Bot Chat whose roster mark moved has its tail read via REST to compute the bot's own
+    /// newest words to you and suppress false unread dots after bot-to-bot tool calls (#612). Defaults to false so unit
+    /// tests without mocked history endpoints remain deterministic; runtime hubs enable it.
+    public bool ReadsBotSaid { get; set; } = false;
 
     /// A turn in a bot's own chat ended, seen by this device (its chat on screen, or a turn the device watched that ended
     /// off screen): the row shows that reply and its time now instead of after the next roster read, and gets the dot
     /// when nobody was looking (`unseen`). The next full roster replaces the patch with the gateway's own values. Port of
     /// HermesKit/Store/BotStore.swift `noteChatActivity(profile:sessionId:preview:at:unseen:said:)` at 93f984bb1.
-    ///
-    /// [botsaid] `said` is false for a reply known only by its words (a turn that ended off screen). On the Mac its row's
-    /// words then come from a read of the chat; Windows has no such read (ReadsBotSaid), so the words stand as the
-    /// roster's newest line would.
     public void NoteChatActivity(string name, string? sessionId, string? preview, DateTimeOffset time, bool unseen, bool said = true)
     {
         RosterProfile patched;
+        var reread = false;
         lock (_gate)
         {
             var index = _rows.FindIndex(r => RosterText.Trimmed(r["name"]) == name);
@@ -290,13 +295,33 @@ public sealed partial class BotStore
             if (!changed) return;
             if (index >= 0) _rows[index] = copy; else _createdRows[name] = copy;
             patched = RosterProfile.From(copy)!;
-            // Only the bot's own chat on screen sees this: one of its side chats on screen doesn't (VisibleBot is set for
-            // the Bot Chat alone).
             var watched = VisibleBot == name;
-            if (unseen && !watched) Device.Unread.Mark(patched);
+            if (unseen && !watched)
+            {
+                if (ReadsBotSaid && !said)
+                {
+                    var baseline = Device.Unread.Baselines.GetValueOrDefault(name);
+                    Device.Unread.Hold(patched, baseline);
+                    _unreadHeldAt[name] = DateTimeOffset.UtcNow;
+                    reread = true;
+                }
+                else
+                {
+                    Device.Unread.Mark(patched);
+                }
+            }
+            else if (ReadsBotSaid && !said)
+            {
+                reread = true;
+            }
         }
+        if (said && preview is { Length: > 0 } saidWords
+            && Transcripts.RunSummary.CompactPreview(saidWords, 80) is { Length: > 0 } compactSaid
+            && patched.CanonicalSession is { } cs)
+            NoteBotSaid(name, sessionId ?? cs.OpenId, compactSaid, time.ToUnixTimeMilliseconds() / 1000.0);
         Persist();
         Rebuild();
+        if (reread) RereadBotSaid(name);
     }
 
     /// [WIN-LIVE-STEPS] Each heard chat's step as its row's line ("Reading package.json…"), by bot and stored id ("" for a

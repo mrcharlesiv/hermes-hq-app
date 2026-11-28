@@ -27,12 +27,12 @@ public static class MarkdownRenderer
     /// `onLink`: [artifacts] every link in the text goes here as written (a note's links to other notes, its `#fragment`
     /// headings and web links: Artifacts' linked notes). Null: web links open as before, others are plain words.
     public static void Render(string markdown, Panel into, Brush? foreground = null, string? trailing = null, Action<string>? onLink = null,
-        ChatVisualTokens.TypeRamp? chatType = null)
+        ChatVisualTokens.TypeRamp? chatType = null, bool streaming = false)
     {
-        var previous = (_onLink, _chatType, _formulas, _size, _lineHeight, _inLink);
-        (_onLink, _chatType) = (onLink, chatType);
+        var previous = (_onLink, _chatType, _formulas, _size, _lineHeight, _inLink, _streaming);
+        (_onLink, _chatType, _streaming) = (onLink, chatType, streaming || StreamingContext);
         try { RenderBlocks(markdown, into, foreground); }
-        finally { (_onLink, _chatType, _formulas, _size, _lineHeight, _inLink) = previous; }
+        finally { (_onLink, _chatType, _formulas, _size, _lineHeight, _inLink, _streaming) = previous; }
         if (trailing == null) return;
         var time = new Run
         {
@@ -45,6 +45,11 @@ public static class MarkdownRenderer
             into.Children.Add(new TextBlock { Text = trailing, FontSize = chatType?.Caption2.Size ?? 11, HorizontalAlignment = HorizontalAlignment.Right,
                 Foreground = ThemeBrushes.Get("HQLabel2Brush") });
     }
+
+    /// Ambient streaming flag set by `MessageView.Rebuild` while rendering an in-flight assistant turn so Mermaid
+    /// fences stay as code cards until the turn settles, even when routed through `ReplyWords.Render`.
+    [ThreadStatic] internal static bool StreamingContext;
+    [ThreadStatic] private static bool _streaming;
 
     /// The formulas taken out of the text being drawn (MathText.Extract): their tokens draw as math runs.
     [ThreadStatic] private static IReadOnlyList<Hermes.Core.Transcripts.TakenFormula>? _formulas;
@@ -85,8 +90,24 @@ public static class MarkdownRenderer
 
     private static void RenderBlocks(string markdown, Panel into, Brush? foreground)
     {
+        // H5: oversized replies bypass math extraction and Markdig entirely (App/Chat/Render/MarkdownComplexity.swift).
+        if (Hermes.Core.Transcripts.MarkdownComplexity.ExceedsPlainTextLimit(markdown))
+        {
+            _formulas = null;
+            (_size, _lineHeight, _inLink) = (BodySize, BodyLineHeight, false);
+            RenderPlainText(markdown, into, foreground);
+            return;
+        }
         // [transcript] Math ($…$, \(…\), $$…$$) is lifted out before Markdown sees it, so its _ and * stay math.
         var extracted = Hermes.Core.Transcripts.MathText.Extract(markdown);
+        // H5: linear-time complexity guard — pathological markdown falls back cleanly to plain text before Markdig.
+        if (Hermes.Core.Transcripts.MarkdownComplexity.IsTooComplex(extracted.Text))
+        {
+            _formulas = null;
+            (_size, _lineHeight, _inLink) = (BodySize, BodyLineHeight, false);
+            RenderPlainText(Hermes.Core.Transcripts.MathText.Restore(extracted.Text, extracted.Formulas), into, foreground);
+            return;
+        }
         _formulas = extracted.Formulas;
         (_size, _lineHeight, _inLink) = (BodySize, BodyLineHeight, false);
         var doc = Markdown.Parse(extracted.Text, Pipeline);
@@ -121,7 +142,10 @@ public static class MarkdownRenderer
             if (block is CodeBlock code)
             {
                 prose = null;
-                into.Children.Add(CodeCard(code));
+                if (TryBuildMermaidCard(code) is { } mermaidCard)
+                    into.Children.Add(mermaidCard);
+                else
+                    into.Children.Add(CodeCard(code));
                 continue;
             }
             if (block is Table table)
@@ -138,6 +162,21 @@ public static class MarkdownRenderer
                 text.Blocks.Add(b);
             }
         }
+    }
+
+    private static void RenderPlainText(string text, Panel into, Brush? foreground)
+    {
+        var prose = new RichTextBlock { IsTextSelectionEnabled = true, TextWrapping = TextWrapping.Wrap };
+        if (_chatType != null)
+        {
+            prose.FontSize = BodySize;
+            prose.FontWeight = new Windows.UI.Text.FontWeight { Weight = _chatType.Body.Weight };
+        }
+        if (foreground != null) prose.Foreground = foreground;
+        var p = new Paragraph { Margin = new Thickness(0, 0, 0, 8), LineHeight = _chatType == null ? 21 : BodyLineHeight };
+        p.Inlines.Add(new Run { Text = text.Replace("\r\n", "\n") });
+        prose.Blocks.Add(p);
+        into.Children.Add(prose);
     }
 
     private static IEnumerable<XamlBlock> Blocks(MdBlock block, int depth)
@@ -534,13 +573,145 @@ public static class MarkdownRenderer
         _ => " ",
     }));
 
-    /// The table sheet's grid: every cell, no width cap.
+    private static FrameworkElement? TryBuildMermaidCard(CodeBlock code)
+    {
+        if (_streaming || code is not FencedCodeBlock fenced) return null;
+        var lang = fenced.Info?.Split([' ', '\t'], 2, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        if (!Hermes.Core.Transcripts.MermaidParser.IsMermaidLanguage(lang)) return null;
+        var text = string.Join("\n", code.Lines.Lines.Take(code.Lines.Count).Select(l => l.Slice.ToString())).TrimEnd('\n');
+        var diagram = Hermes.Core.Transcripts.MermaidParser.Parse(text);
+        return diagram == null ? null : new MermaidCardView(diagram);
+    }
+
+    /// Resolves per-column alignment (Markdig alignment + `TableData.NumericColumns` fallback) and applies the
+    /// `tableAlignedMaxWidth` guard (`3a73e822f`) so wide prose columns revert to Left instead of stranding short values.
+    private static Hermes.Core.Transcripts.TableAlignment[] ResolveColumnAlignments(
+        Table table,
+        List<TableRow> rows,
+        int cols,
+        IReadOnlyList<Hermes.Core.Transcripts.TakenFormula>? formulas,
+        double fontSize,
+        out double[] naturalWidths,
+        out List<IReadOnlyList<double>> bodyCellWidths)
+    {
+        naturalWidths = new double[cols];
+        bodyCellWidths = [];
+        var alignments = new Hermes.Core.Transcripts.TableAlignment[cols];
+        if (cols <= 0) return alignments;
+
+        var bodyTextRows = new List<IReadOnlyList<string>>(rows.Count);
+        foreach (var row in rows)
+        {
+            var texts = new string[cols];
+            var widths = row.IsHeader ? null : new double[cols];
+            for (var c = 0; c < cols; c++)
+            {
+                var cellText = c < row.Count ? CellText((TableCell)row[c], formulas) : "";
+                texts[c] = cellText;
+                var w = EstimateCellWidth(cellText, fontSize, bold: row.IsHeader);
+                if (w > naturalWidths[c]) naturalWidths[c] = w;
+                if (widths != null) widths[c] = w;
+            }
+            if (!row.IsHeader)
+            {
+                bodyTextRows.Add(texts);
+                bodyCellWidths.Add(widths!);
+            }
+        }
+
+        var numeric = Hermes.Core.Transcripts.TableData.NumericColumns(bodyTextRows, cols);
+        var alignedMax = fontSize * 14.0;   // ChatMetrics.tableAlignedMaxWidth guard (3a73e822f)
+        for (var c = 0; c < cols; c++)
+        {
+            naturalWidths[c] = Math.Max(28.0, Math.Ceiling(naturalWidths[c]));
+            var explicitAlign = c < table.ColumnDefinitions.Count ? table.ColumnDefinitions[c].Alignment : null;
+            var alignment = explicitAlign switch
+            {
+                TableColumnAlign.Right => Hermes.Core.Transcripts.TableAlignment.Right,
+                TableColumnAlign.Center => Hermes.Core.Transcripts.TableAlignment.Center,
+                TableColumnAlign.Left => Hermes.Core.Transcripts.TableAlignment.Natural,
+                _ => numeric[c] ? Hermes.Core.Transcripts.TableAlignment.Right : Hermes.Core.Transcripts.TableAlignment.Natural,
+            };
+            // Wide prose columns revert to Natural (Left) so short entries aren't stranded at the far edge.
+            if (alignment != Hermes.Core.Transcripts.TableAlignment.Natural && naturalWidths[c] > alignedMax)
+                alignment = Hermes.Core.Transcripts.TableAlignment.Natural;
+            alignments[c] = alignment;
+        }
+        return alignments;
+    }
+
+    private static TextAlignment ToTextAlignment(Hermes.Core.Transcripts.TableAlignment alignment) => alignment switch
+    {
+        Hermes.Core.Transcripts.TableAlignment.Right => TextAlignment.Right,
+        Hermes.Core.Transcripts.TableAlignment.Center => TextAlignment.Center,
+        _ => TextAlignment.Left,
+    };
+
+    private static double EstimateCellWidth(string text, double fontSize, bool bold)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return 0;
+        var units = 0.0;
+        foreach (var ch in text.Trim())
+        {
+            units += ch switch
+            {
+                ' ' => 0.30,
+                'i' or 'l' or 'I' or '1' or '.' or ',' or ':' or ';' or '!' or '|' or '\'' or '(' or ')' => 0.34,
+                'f' or 'j' or 'r' or 't' or '-' or '/' => 0.42,
+                'M' or 'W' or '@' or '#' or '%' or '&' => 0.86,
+                >= 'A' and <= 'Z' => 0.66,
+                >= '0' and <= '9' => 0.58,
+                >= '\u2E80' => 1.0,
+                _ => 0.54,
+            };
+        }
+        return units * fontSize * (bold ? 1.06 : 1.0);
+    }
+
+    private static double[] MinimumColumnWidths(List<TableRow> rows, int cols, double[] natural,
+        IReadOnlyList<Hermes.Core.Transcripts.TakenFormula>? formulas, double fontSize)
+    {
+        var mins = new double[cols];
+        for (var c = 0; c < cols; c++)
+        {
+            var longestWord = 48.0;
+            foreach (var row in rows)
+            {
+                if (c >= row.Count) continue;
+                var text = CellText((TableCell)row[c], formulas);
+                foreach (var word in text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var w = EstimateCellWidth(word, fontSize, bold: row.IsHeader);
+                    if (w > longestWord) longestWord = w;
+                }
+            }
+            mins[c] = Math.Min(natural[c], Math.Clamp(Math.Ceiling(longestWord), 48.0, 160.0));
+        }
+        return mins;
+    }
+
+    /// The table sheet's grid: fitted when squeezing preserves short cells (`TableData.Fit` + `SqueezeBreaksShortCells`),
+    /// otherwise auto-width with horizontal scroll so short values never break mid-cell.
     private static FrameworkElement SheetGrid(Table table, IReadOnlyList<Hermes.Core.Transcripts.TakenFormula>? formulas)
     {
-        var grid = new Grid { ColumnSpacing = 20, RowSpacing = 6 };
+        const double columnSpacing = 20;
+        const double sheetContentWidth = 680;
+        var grid = new Grid { ColumnSpacing = columnSpacing, RowSpacing = 6 };
         var rows = table.OfType<TableRow>().ToList();
         var cols = rows.Count == 0 ? 0 : rows.Max(r => r.Count);
-        for (var c = 0; c < cols; c++) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var sheetFontSize = _chatType?.Footnote.Size ?? 14.0;
+        var alignments = ResolveColumnAlignments(table, rows, cols, formulas, sheetFontSize, out var natural, out var bodyCellWidths);
+        var minimums = MinimumColumnWidths(rows, cols, natural, formulas, sheetFontSize);
+        var available = Math.Max(120, sheetContentWidth - Math.Max(0, cols - 1) * columnSpacing);
+        var fitted = Hermes.Core.Transcripts.TableData.Fit(natural, minimums, available);
+        var breaksShort = Hermes.Core.Transcripts.TableData.SqueezeBreaksShortCells(bodyCellWidths, natural, fitted);
+        for (var c = 0; c < cols; c++)
+        {
+            var width = !breaksShort && c < fitted.Count && fitted[c] > 0
+                ? new GridLength(Math.Min(480, fitted[c]))
+                : GridLength.Auto;
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = width });
+        }
         for (var r = 0; r < rows.Count; r++)
         {
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -549,6 +720,8 @@ public static class MarkdownRenderer
                 var cell = new TextBlock
                 {
                     Text = CellText((TableCell)rows[r][c], formulas), IsTextSelectionEnabled = true, TextWrapping = TextWrapping.Wrap, MaxWidth = 480,
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    TextAlignment = ToTextAlignment(alignments[c]),
                     FontWeight = rows[r].IsHeader ? FontWeights.SemiBold : FontWeights.Normal,
                 };
                 Grid.SetRow(cell, r);
@@ -603,13 +776,20 @@ public static class MarkdownRenderer
         var grid = new Grid { Margin = new Thickness(0, 2, 0, 10), ColumnSpacing = 16, RowSpacing = 4 };
         var rows = table.OfType<TableRow>().ToList();
         var cols = rows.Count == 0 ? 0 : rows.Max(r => r.Count);
+        var tableFontSize = _chatType?.Footnote.Size ?? 13.0;
+        var alignments = ResolveColumnAlignments(table, rows, cols, capturedFormulas, tableFontSize, out _, out _);
         for (var c = 0; c < cols; c++) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         for (var r = 0; r < rows.Count; r++)
         {
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             for (var c = 0; c < rows[r].Count; c++)
             {
-                var cell = new RichTextBlock { IsTextSelectionEnabled = true, TextWrapping = TextWrapping.Wrap, MaxWidth = 320 };
+                var align = ToTextAlignment(alignments[c]);
+                var cell = new RichTextBlock
+                {
+                    IsTextSelectionEnabled = true, TextWrapping = TextWrapping.Wrap, MaxWidth = 320,
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                };
                 cell.PreviewKeyDown += CopyFormulasAsSource;
                 foreach (var b in ((TableCell)rows[r][c]).SelectMany(x => Blocks(x, 0)))
                 {
@@ -618,6 +798,8 @@ public static class MarkdownRenderer
                         p.Margin = new Thickness(0);
                         if (_chatType != null) { p.FontSize = _chatType.Footnote.Size; p.LineHeight = _chatType.TableLine; }
                         if (rows[r].IsHeader) p.FontWeight = FontWeights.SemiBold;
+                        if (p.TextAlignment != TextAlignment.Center && align != TextAlignment.Left)
+                            p.TextAlignment = align;
                     }
                     cell.Blocks.Add(b);
                 }

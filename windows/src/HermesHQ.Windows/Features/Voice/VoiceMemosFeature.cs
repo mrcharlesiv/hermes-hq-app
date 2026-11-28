@@ -1,7 +1,9 @@
+using Hermes.Core.Attachments;
 using Hermes.Core.Chat;
 using Hermes.Core.Composer;
 using Hermes.Core.Model;
 using Hermes.Core.Voice;
+using HermesHQ.Features.Attachments;
 using HermesHQ.Features.Transcript;
 using HermesHQ.Pages;
 using HermesHQ.Services;
@@ -109,6 +111,7 @@ public static class VoiceMemosFeature
     {
         private readonly ChatContext _ctx;
         private readonly MemoAppWiring _wiring;
+        private readonly AttachmentCenter _attachments;
         private readonly DispatcherQueue _queue;
         private readonly MemoMicControl _mic;
         private readonly MemoRecorderBar _recorderBar;
@@ -126,6 +129,7 @@ public static class VoiceMemosFeature
         {
             _ctx = ctx;
             _wiring = wiring;
+            _attachments = AttachmentsFeature.CenterFor(ctx.Session.Client);
             _queue = DispatcherQueue.GetForCurrentThread();
 
             if (ctx.Session.MemoStores == null) ctx.Session.MemoStores = wiring.Stores;
@@ -212,9 +216,12 @@ public static class VoiceMemosFeature
             _hasDraft = () => HasDraft || _wiring.Controller.IsActive(this);
             _sendHandler = HandleComposerSend;
             ctx.HasDraftContent.Add(_hasDraft);
-            ctx.SendHandlers.Add(_sendHandler);
+            // Insert before attachment-only send handlers so a memo + staged photos submit together in one turn (#521).
+            ctx.SendHandlers.Insert(0, _sendHandler);
 
             _wiring.Controller.NoticesChanged += OnNoticesChanged;
+            _attachments.DraftChanged += OnAttachmentsDraftChanged;
+            _attachments.ItemChanged += OnAttachmentItemChanged;
             if (_wiring.Stores.Drafts != null) _wiring.Stores.Drafts.Changed += OnDraftsChanged;
             if (_wiring.Player != null) _wiring.Player.Changed += OnPlayerChanged;
 
@@ -223,6 +230,7 @@ public static class VoiceMemosFeature
 
         private string Scope => _ctx.Session.MemoScope ?? _ctx.Session.DraftScope;
         private bool HasDraft => _wiring.Stores.Drafts?.Draft(Scope) != null;
+        private bool AttachmentsPreparing => _ctx.HoldsSend.Any(h => h());
 
         private MemoTarget? MakeTarget()
         {
@@ -235,6 +243,7 @@ public static class VoiceMemosFeature
         {
             if (_wiring.Controller.IsActive(this) && _wiring.Controller.State.Phase is MemoPhase.Locked or MemoPhase.Review)
             {
+                if (AttachmentsPreparing) return true;
                 _wiring.Controller.Input(new MemoInput.Send());
                 return true;
             }
@@ -242,13 +251,23 @@ public static class VoiceMemosFeature
             return SendCurrentDraft(typed);
         }
 
+        private (IReadOnlyList<DraftAttachment> Attachments, AttachmentCenter? Center) TakeStagedAttachments()
+        {
+            var draftScope = _ctx.Session.DraftScope;
+            if (_attachments.Count(draftScope) == 0) return ([], null);
+            var (_, staged) = _attachments.TakeForSend(draftScope);
+            return (staged, staged.Count > 0 ? _attachments : null);
+        }
+
         private bool SendCurrentDraft(string? typedOverride = null)
         {
+            if (AttachmentsPreparing) return true;
             if (_wiring.Stores.Drafts?.Take(Scope) is not { } draft) return false;
             if (_wiring.Player?.IsCurrent(draft.Path) == true) _wiring.Player.Stop();
             var words = (typedOverride ?? _ctx.Composer.Text).Trim();
             if (typedOverride == null) _ctx.Composer.Text = "";
-            _ = _ctx.Session.SendMemoAsync(draft, words);
+            var (staged, center) = TakeStagedAttachments();
+            _ = _ctx.Session.SendMemoAsync(draft, words, queued: false, attachments: staged, center: center);
             RefreshAll();
             return true;
         }
@@ -286,14 +305,17 @@ public static class VoiceMemosFeature
         {
             _queue.TryEnqueue(() =>
             {
-                _ = _ctx.Session.SendMemoAsync(file, "");
+                var words = _ctx.Composer.Text.Trim();
+                if (words.Length > 0) _ctx.Composer.Text = "";
+                var (staged, center) = TakeStagedAttachments();
+                _ = _ctx.Session.SendMemoAsync(file, words, queued: false, attachments: staged, center: center);
                 RefreshAll();
             });
         }
 
         public void MemoStateChanged() => _queue.TryEnqueue(RefreshAll);
         public void MemoLevelChanged() => _queue.TryEnqueue(RefreshLevels);
-        public void MemoWordsChanged() => _queue.TryEnqueue(() => _recorderBar.Refresh(this));
+        public void MemoWordsChanged() => _queue.TryEnqueue(() => _recorderBar.Refresh(this, AttachmentsPreparing));
         public void MemoFocusStatus() => _queue.TryEnqueue(() => _recorderBar.FocusPrimary());
 
         public void MemoConfirmDelete(double seconds, bool recording, Action<bool> answer)
@@ -359,13 +381,53 @@ public static class VoiceMemosFeature
             if (scope == Scope) _queue.TryEnqueue(RefreshAll);
         }
 
+        private void OnAttachmentsDraftChanged(string scope)
+        {
+            if (scope == _ctx.Session.DraftScope) _queue.TryEnqueue(RefreshAll);
+        }
+
+        private void OnAttachmentItemChanged(string id)
+        {
+            if (_wiring.Controller.IsActive(this)) _queue.TryEnqueue(RefreshAll);
+        }
+
         private void OnPlayerChanged(string? path)
         {
             _queue.TryEnqueue(() =>
             {
                 _draftChip.Update(_wiring.Stores.Drafts?.Draft(Scope), _wiring.Player);
-                if (_wiring.Controller.IsActive(this)) _recorderBar.Refresh(this);
+                if (_wiring.Controller.IsActive(this)) _recorderBar.Refresh(this, AttachmentsPreparing);
             });
+        }
+
+        private void SyncLeadingButtons(bool activeHere)
+        {
+            var shown = _wiring.Controller.ShownPhase;
+            var recording = activeHere && shown is MemoPhase.Holding or MemoPhase.Locked;
+            var review = activeHere && shown == MemoPhase.Review;
+            var keepPlus = review && _recorderBar.RecorderKeepsPlus;
+            foreach (var child in _ctx.ComposerLeading.Children)
+            {
+                var isPlus = child is DependencyObject dep
+                    && string.Equals(AutomationProperties.GetAutomationId(dep), "composer.plus", StringComparison.Ordinal);
+                if (recording)
+                {
+                    child.Visibility = Visibility.Collapsed;
+                    if (child is Control c) c.IsEnabled = false;
+                }
+                else if (review)
+                {
+                    // #521: Keep the `+` attach button visible & enabled during memo review so photos can be attached.
+                    var visible = isPlus && keepPlus;
+                    child.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+                    if (child is Control c) c.IsEnabled = visible;
+                }
+                else
+                {
+                    child.Visibility = Visibility.Visible;
+                    if (child is Control c) c.IsEnabled = true;
+                }
+            }
         }
 
         private void RefreshAll()
@@ -373,7 +435,8 @@ public static class VoiceMemosFeature
             if (_disposed || AppShutdown.Stopping) return;
             var activeHere = _wiring.Controller.IsActive(this);
             _mic.UpdateVisual(_wiring.Controller.State, activeHere);
-            _recorderBar.Refresh(this);
+            _recorderBar.Refresh(this, AttachmentsPreparing);
+            SyncLeadingButtons(activeHere);
             _draftChip.Update(activeHere ? null : _wiring.Stores.Drafts?.Draft(Scope), _wiring.Player);
             RefreshNotice();
             _ctx.RefreshComposer();
@@ -384,7 +447,7 @@ public static class VoiceMemosFeature
             if (_disposed || AppShutdown.Stopping) return;
             var activeHere = _wiring.Controller.IsActive(this);
             _mic.UpdateVisual(_wiring.Controller.State, activeHere);
-            _recorderBar.Refresh(this);
+            _recorderBar.Refresh(this, AttachmentsPreparing);
         }
 
         private void RefreshNotice()
@@ -397,8 +460,11 @@ public static class VoiceMemosFeature
         {
             if (_disposed) return;
             _disposed = true;
+            SyncLeadingButtons(activeHere: false);
             _wiring.Controller.ScreenLeft(this);
             _wiring.Controller.NoticesChanged -= OnNoticesChanged;
+            _attachments.DraftChanged -= OnAttachmentsDraftChanged;
+            _attachments.ItemChanged -= OnAttachmentItemChanged;
             if (_wiring.Stores.Drafts != null) _wiring.Stores.Drafts.Changed -= OnDraftsChanged;
             if (_wiring.Player != null) _wiring.Player.Changed -= OnPlayerChanged;
             _ctx.HasDraftContent.Remove(_hasDraft);

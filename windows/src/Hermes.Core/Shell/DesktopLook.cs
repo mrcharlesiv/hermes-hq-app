@@ -29,6 +29,13 @@ public static class DesktopLook
     /// The box's corner (`MacSelection.radius`): the Desktop Look's 4 pt, the iOS look's 8.
     public static double MarkRadius(bool desktopLook) => desktopLook ? 4 : 8;
 
+    /// Role-scaled selection mark corner via `ThemeState.ShapeRadius` (App/Theme/ThemeShapes.swift `HQShape.radius`).
+    public static double MarkRadius(ThemeState state, double nativeBase = 6) => state.ShapeRadius(ShapeRole.Control, nativeBase);
+
+    /// Role-scaled corner radius for any UI element via `ThemeState.ShapeRadius` (`DesktopRadius` in Hermes Look,
+    /// `nativeBase` in Native Look).
+    public static double ShapeRadius(ThemeState state, ShapeRole role, double nativeBase) => state.ShapeRadius(role, nativeBase);
+
     /// The Mac draws no leading accent bar (WinUI's ListViewItem selection indicator): the whole box is the mark.
     public const bool LeadingIndicator = false;
 

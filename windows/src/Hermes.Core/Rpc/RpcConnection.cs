@@ -32,7 +32,8 @@ public sealed class RpcConnection : IAsyncDisposable
     private readonly CancellationTokenSource _life = new();
     private readonly ConcurrentDictionary<long, Pending> _pending = new();
     private readonly SemaphoreSlim _sendGate = new(1, 1);
-    private readonly ConcurrentDictionary<string, long> _lastSeq = new();
+    private readonly ReplayBook _replayBook = new();
+    private readonly object _deliverGate = new();
     private TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly object _readyGate = new();
     private ClientWebSocket? _ws;
@@ -51,6 +52,11 @@ public sealed class RpcConnection : IAsyncDisposable
     // [authority] This socket's gateway.ready named the session authority; each session's latest turn.
     private volatile bool _sessionAuthority;
     private readonly Dictionary<string, long> _generations = new();
+
+    /// Deadline for one reconnect replay batch (tests may shorten).
+    internal TimeSpan ReplayDeadline { get; set; } = TimeSpan.FromSeconds(10);
+    /// Per-session `session.events.since` timeout (tests may shorten).
+    internal TimeSpan ReplayRequestTimeout { get; set; } = TimeSpan.FromSeconds(10);
 
     public ConnectionState State { get; private set; } = ConnectionState.Connecting;
     public JsonNode? ReadyPayload { get; private set; }
@@ -373,10 +379,13 @@ public sealed class RpcConnection : IAsyncDisposable
                         _sessionAuthority = ev.Payload.Get("session_authority") is JsonValue sa
                             && sa.GetValueKind() == System.Text.Json.JsonValueKind.True;   // [authority]
                         var epoch = ev.Payload.Str("replay_epoch");
-                        var restarted = _epoch != null && epoch != _epoch;
-                        if (restarted) _lastSeq.Clear();
-                        var replay = _epoch != null && !restarted;
-                        _epoch = epoch;
+                        bool restarted;
+                        List<string> toReplay;
+                        lock (_deliverGate)
+                        {
+                            (restarted, toReplay) = _replayBook.Ready(epoch);
+                            _epoch = epoch;
+                        }
                         if (ev.Payload.Bool("heartbeat") == true) heartbeat ??= HeartbeatAsync(ws, socketLife);
                         // [questions] client.capabilities first, before the replay and before any caller may send.
                         if (ServerRequestsEnabled)
@@ -393,6 +402,7 @@ public sealed class RpcConnection : IAsyncDisposable
                             }
                             catch (GatewayException) { }
                         }
+                        var currentEpoch = Volatile.Read(ref _socketEpoch);
                         _socketReady = true;
                         onReady();
                         EverOpen = true;
@@ -400,14 +410,34 @@ public sealed class RpcConnection : IAsyncDisposable
                         LastFailure = null;
                         SetState(ConnectionState.Open);
                         _ready.TrySetResult();
-                        if (replay) _ = ReplayAsync();
+                        if (toReplay.Count > 0) _ = ReplayAsync(toReplay, currentEpoch);
                         Deliver(Reconnected, restarted, nameof(Reconnected));
                         continue;
                     }
-                    NoteGeneration(ev.Generation, ev.SessionId);   // [authority]
-                    if (ev.Seq is { } seq && ev.SessionId.Length > 0)
-                        _lastSeq.AddOrUpdate(ev.SessionId, seq, (_, old) => Math.Max(old, seq));
-                    Deliver(Event, ev, nameof(Event));
+                    var frameBytes = (int)frame.Length;
+                    var socketEpoch = Volatile.Read(ref _socketEpoch);
+                    bool overBudget;
+                    lock (_deliverGate)
+                    {
+                        // H11 / H1: detect a per-session sequence gap, park only that session, and repair independently.
+                        if (_socketReady && _replayBook.HasGap(ev) && _replayBook.Park(ev.SessionId))
+                        {
+                            var gapSession = ev.SessionId;
+                            _ = Task.Run(() => ReplayOneAsync(gapSession, socketEpoch));
+                        }
+                        var (forward, exceeded) = _replayBook.Live(ev, frameBytes);
+                        overBudget = exceeded;
+                        if (!overBudget && forward != null)
+                        {
+                            NoteGeneration(forward.Generation, forward.SessionId);   // [authority]
+                            Deliver(Event, forward, nameof(Event));
+                        }
+                    }
+                    if (overBudget)
+                    {
+                        ws.Abort();
+                        return;
+                    }
                     continue;
                 }
                 // [questions] A server→client request: a string id and a method other than "event" (spec 1x §2.2).
@@ -455,6 +485,7 @@ public sealed class RpcConnection : IAsyncDisposable
             // here can wait (closeSocket → failAllPending). It stops being ready first, as closeSocket clears
             // `socketReady` before failing them: a call made in a failed call's continuation waits for the next socket.
             MarkSocketGone();
+            lock (_deliverGate) _replayBook.SocketClosed();
             FailAllPending();
             await socketLife.CancelAsync();
             if (ws.State == WebSocketState.Open)
@@ -526,33 +557,105 @@ public sealed class RpcConnection : IAsyncDisposable
         }
     }
 
-    /// After a reconnect with the same epoch: fetch what each followed session missed, two at a time.
-    private async Task ReplayAsync()
+    /// After a reconnect with the same epoch: fetch what each followed session missed, two at a time, while live events
+    /// for parked sessions wait in `_replayBook`. Releases only sessions from this reconnect batch that never started so
+    /// concurrent per-session gap repairs stay isolated (H11).
+    private async Task ReplayAsync(IReadOnlyList<string> sessions, int socketEpoch)
     {
-        var cursors = _lastSeq.ToArray().OrderByDescending(kv => kv.Value).Take(8).ToArray();
+        var deadline = DateTimeOffset.UtcNow + ReplayDeadline;
+        var started = new bool[sessions.Count];
         using var gate = new SemaphoreSlim(2);
-        await Task.WhenAll(cursors.Select(async kv =>
+        var tasks = new List<Task>(sessions.Count);
+        try
         {
-            await gate.WaitAsync();
-            try
+            for (var i = 0; i < sessions.Count; i++)
             {
-                var res = await RequestAsync("session.events.since",
-                    new JsonObject { ["session_id"] = kv.Key, ["last_seen"] = kv.Value }, TimeSpan.FromSeconds(10));
-                if (res.Str("epoch") is { } e && e != _epoch) { _lastSeq.Clear(); Deliver(Reconnected, true, nameof(Reconnected)); return; }
+                var remaining = deadline - DateTimeOffset.UtcNow;
+                if (remaining <= TimeSpan.Zero || Volatile.Read(ref _socketEpoch) != socketEpoch) break;
+                try { await gate.WaitAsync(remaining, _life.Token); }
+                catch (OperationCanceledException) { break; }
+                if (Volatile.Read(ref _socketEpoch) != socketEpoch || DateTimeOffset.UtcNow >= deadline)
+                {
+                    gate.Release();
+                    break;
+                }
+                started[i] = true;
+                var sessionId = sessions[i];
+                tasks.Add(Task.Run(async () =>
+                {
+                    try { await ReplayOneAsync(sessionId, socketEpoch); }
+                    finally { gate.Release(); }
+                }));
+            }
+            if (tasks.Count > 0) await Task.WhenAll(tasks);
+        }
+        finally
+        {
+            for (var i = 0; i < sessions.Count; i++)
+            {
+                if (!started[i]) ReleaseParked(sessions[i], socketEpoch);
+            }
+        }
+    }
+
+    /// Replays one parked session (either from a reconnect batch or from live per-session gap repair), delivering
+    /// replayed frames before draining any live frames that arrived while the replay was in flight (H11).
+    private async Task ReplayOneAsync(string sessionId, int socketEpoch)
+    {
+        var epochRestarted = false;
+        try
+        {
+            var lastSeen = _replayBook.CursorFor(sessionId);
+            if (lastSeen is not { } cursor || Volatile.Read(ref _socketEpoch) != socketEpoch) return;
+            var res = await RequestAsync("session.events.since",
+                new JsonObject { ["session_id"] = sessionId, ["last_seen"] = cursor }, ReplayRequestTimeout);
+            lock (_deliverGate)
+            {
+                if (Volatile.Read(ref _socketEpoch) != socketEpoch) return;
+                if (res.Str("epoch") is { } e && e != _epoch)
+                {
+                    _epoch = e;
+                    _replayBook.EpochRestarted(e);
+                    epochRestarted = true;
+                    return;
+                }
                 foreach (var p in res.Arr("events") ?? [])
                 {
-                    var ev = new RpcEvent(p.Str("type") ?? "", p.Str("session_id") ?? kv.Key, p.Get("payload"), p.Int("seq"))
+                    var ev = new RpcEvent(p.Str("type") ?? "", p.Str("session_id") ?? sessionId, p.Get("payload"), p.Int("seq"))
                         { Generation = AuthorityWire.Generation(p) };
-                    NoteGeneration(ev.Generation, ev.SessionId);   // [authority]
-                    if (ev.Seq is { } s && s <= kv.Value) continue;
-                    if (ev.Seq is { } s2) _lastSeq.AddOrUpdate(ev.SessionId, s2, (_, old) => Math.Max(old, s2));
-                    Deliver(Event, ev, nameof(Event));
+                    if (_replayBook.Replayed(ev) is not { } accepted) continue;
+                    NoteGeneration(accepted.Generation, accepted.SessionId);   // [authority]
+                    Deliver(Event, accepted, nameof(Event));
                 }
-                if (res.Bool("truncated") == true) Deliver(Event, new RpcEvent("hq.replay_truncated", kv.Key, null, null), nameof(Event));
+                if (res.Bool("truncated") == true)
+                    Deliver(Event, new RpcEvent("hq.replay_truncated", sessionId, null, null), nameof(Event));
+                DrainParkedLocked(sessionId);
             }
-            catch (GatewayException) { }
-            finally { gate.Release(); }
-        }));
+        }
+        catch (GatewayException) { }
+        finally
+        {
+            if (epochRestarted) Deliver(Reconnected, true, nameof(Reconnected));
+            else ReleaseParked(sessionId, socketEpoch);
+        }
+    }
+
+    private void ReleaseParked(string sessionId, int socketEpoch)
+    {
+        lock (_deliverGate)
+        {
+            if (Volatile.Read(ref _socketEpoch) != socketEpoch) return;
+            DrainParkedLocked(sessionId);
+        }
+    }
+
+    private void DrainParkedLocked(string sessionId)
+    {
+        foreach (var ev in _replayBook.Release(sessionId))
+        {
+            NoteGeneration(ev.Generation, ev.SessionId);   // [authority]
+            Deliver(Event, ev, nameof(Event));
+        }
     }
 
     private void Intercept(Pending pending, JsonNode result)
@@ -613,5 +716,184 @@ public sealed class RpcConnection : IAsyncDisposable
         await _life.CancelAsync();
         _ws?.Abort();
         if (_loop != null) { try { await _loop; } catch { } }
+    }
+}
+
+/// Per-session sequence cursor book, live-event parking during replay / gap repair, and overflow-safe gap detection
+/// (port of HermesKit/Net/ConnectionSupport.swift `ReplayBook`, H11 + H1).
+internal sealed class ReplayBook
+{
+    public const int CursorBudget = 8;
+    public const int ParkedFrameCap = 2048;
+    public const int ParkedByteCap = 4 * 1024 * 1024;
+
+    private readonly object _gate = new();
+    private readonly Dictionary<string, (long Seq, long Tick)> _cursors = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<(RpcEvent Event, int Bytes)>> _parked = new(StringComparer.Ordinal);
+    private long _tick;
+    private string? _epoch;
+    private int _parkedFrames;
+    private int _parkedBytes;
+
+    public (bool Restarted, List<string> SessionsToReplay) Ready(string? epoch)
+    {
+        lock (_gate)
+        {
+            var hadEpoch = _epoch != null;
+            var restarted = hadEpoch && epoch != _epoch;
+            _epoch = epoch;
+            ClearParkedLocked();
+            if (restarted)
+            {
+                _cursors.Clear();
+                return (true, []);
+            }
+            if (!hadEpoch) return (false, []);
+            var sessions = _cursors
+                .OrderByDescending(kv => kv.Value.Tick)
+                .Take(CursorBudget)
+                .Select(kv => kv.Key)
+                .ToList();
+            foreach (var session in sessions) _parked[session] = [];
+            return (false, sessions);
+        }
+    }
+
+    public long? CursorFor(string session)
+    {
+        lock (_gate) return _cursors.TryGetValue(session, out var cur) ? cur.Seq : null;
+    }
+
+    public bool IsParked(string session)
+    {
+        lock (_gate) return _parked.ContainsKey(session);
+    }
+
+    /// True when `ev` jumps past the last delivered sequence number for its session (H1: guards `long.MaxValue`
+    /// against arithmetic overflow).
+    public bool HasGap(RpcEvent ev)
+    {
+        if (ev.Seq is not { } seq || ev.SessionId.Length == 0) return false;
+        lock (_gate)
+        {
+            if (_parked.ContainsKey(ev.SessionId)) return false;
+            if (!_cursors.TryGetValue(ev.SessionId, out var cur)) return false;
+            return cur.Seq < long.MaxValue && seq > cur.Seq + 1;
+        }
+    }
+
+    /// Parks a single session for per-session gap repair. Returns false if it is already parked.
+    public bool Park(string session)
+    {
+        if (session.Length == 0) return false;
+        lock (_gate)
+        {
+            if (_parked.ContainsKey(session)) return false;
+            _parked[session] = [];
+            return true;
+        }
+    }
+
+    /// Processes an incoming live event: parks it if its session is parked, drops duplicates, or advances the cursor.
+    public (RpcEvent? Forward, bool OverBudget) Live(RpcEvent ev, int bytes)
+    {
+        lock (_gate)
+        {
+            if (ev.SessionId.Length > 0 && _parked.TryGetValue(ev.SessionId, out var queue))
+            {
+                var size = Math.Max(1, bytes);
+                if (_parkedFrames + 1 > ParkedFrameCap || _parkedBytes + size > ParkedByteCap)
+                    return (null, true);
+                queue.Add((ev, size));
+                _parkedFrames++;
+                _parkedBytes += size;
+                return (null, false);
+            }
+            if (ev.Seq is { } seq && ev.SessionId.Length > 0)
+            {
+                if (_cursors.TryGetValue(ev.SessionId, out var cur) && seq <= cur.Seq) return (null, false);
+                SetCursorLocked(ev.SessionId, seq);
+            }
+            return (ev, false);
+        }
+    }
+
+    /// Accepts one replayed event from `session.events.since`, advancing the cursor and skipping duplicates.
+    public RpcEvent? Replayed(RpcEvent ev)
+    {
+        lock (_gate)
+        {
+            if (ev.Seq is { } seq && ev.SessionId.Length > 0)
+            {
+                if (_cursors.TryGetValue(ev.SessionId, out var cur) && seq <= cur.Seq) return null;
+                SetCursorLocked(ev.SessionId, seq);
+            }
+            return ev;
+        }
+    }
+
+    /// Unparks one session and returns its queued live events in arrival order, deduplicated against the updated cursor.
+    public List<RpcEvent> Release(string session)
+    {
+        lock (_gate)
+        {
+            if (!_parked.Remove(session, out var queue)) return [];
+            _parkedFrames = Math.Max(0, _parkedFrames - queue.Count);
+            foreach (var (_, size) in queue) _parkedBytes = Math.Max(0, _parkedBytes - size);
+            var out_ = new List<RpcEvent>(queue.Count);
+            foreach (var (ev, _) in queue)
+            {
+                if (ev.Seq is { } seq && ev.SessionId.Length > 0)
+                {
+                    if (_cursors.TryGetValue(ev.SessionId, out var cur) && seq <= cur.Seq) continue;
+                    SetCursorLocked(ev.SessionId, seq);
+                }
+                out_.Add(ev);
+            }
+            return out_;
+        }
+    }
+
+    public void EpochRestarted(string newEpoch)
+    {
+        lock (_gate)
+        {
+            _epoch = newEpoch;
+            _cursors.Clear();
+            ClearParkedLocked();
+        }
+    }
+
+    public void SocketClosed()
+    {
+        lock (_gate) ClearParkedLocked();
+    }
+
+    private void ClearParkedLocked()
+    {
+        _parked.Clear();
+        _parkedFrames = 0;
+        _parkedBytes = 0;
+    }
+
+    private void SetCursorLocked(string session, long seq)
+    {
+        _cursors[session] = (seq, ++_tick);
+        while (_cursors.Count > CursorBudget)
+        {
+            string? oldest = null;
+            var oldestTick = long.MaxValue;
+            foreach (var (key, val) in _cursors)
+            {
+                if (key == session || _parked.ContainsKey(key)) continue;
+                if (val.Tick < oldestTick)
+                {
+                    oldestTick = val.Tick;
+                    oldest = key;
+                }
+            }
+            if (oldest is null) break;
+            _cursors.Remove(oldest);
+        }
     }
 }

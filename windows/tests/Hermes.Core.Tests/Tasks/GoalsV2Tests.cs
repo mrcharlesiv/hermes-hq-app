@@ -23,15 +23,16 @@ public class GoalsV2Tests
             ["lead"] = "ivy",
             ["helpers"] = new JsonArray("herald", "otto"),
             ["adds"] = "auto",
+            ["review"] = new JsonObject { ["day"] = 0, ["time"] = "08:00" },
             ["known_to_all"] = true,
-            ["stands"] = new JsonObject { ["summary"] = "340 signed up", ["next"] = "Share release notes" },
-            ["checkin"] = new JsonObject { ["summary"] = "Up 45 this week", ["by"] = "ivy" },
-            ["chat"] = new JsonObject { ["profile"] = "ivy", ["session"] = "g-chat-1" },
-            ["offer"] = new JsonObject { ["by"] = "ivy", ["text"] = "Hit 1,000 testers!", ["kept"] = false },
+            ["stands"] = new JsonObject { ["by"] = "ivy", ["at"] = "2026-11-24T08:00:00Z", ["text"] = "340 signed up", ["next"] = "Share release notes" },
+            ["checkin"] = new JsonObject { ["at"] = "2026-11-23T08:00:00Z", ["offer"] = "of_c", ["state"] = "offered" },
+            ["chat"] = new JsonObject { ["profile"] = "ivy", ["session_id"] = "g-chat-1" },
+            ["offer"] = new JsonObject { ["kind"] = "done", ["what"] = "goal", ["by"] = "ivy", ["text"] = "Hit 1,000 testers!", ["kept"] = false },
             ["measure"] = new JsonObject
             {
                 ["unit"] = "testers", ["start"] = 0, ["target"] = 1000, ["now"] = 340,
-                ["source"] = new JsonObject { ["kind"] = "manual", ["label"] = "Weekly sheet" },
+                ["source"] = new JsonObject { ["bot"] = "ivy", ["what"] = "TestFlight" },
                 ["history"] = new JsonArray(new JsonObject { ["value"] = 300, ["at"] = "2026-11-17T00:00:00Z" }),
             },
         };
@@ -41,8 +42,16 @@ public class GoalsV2Tests
         Assert.Equal(["ivy", "herald", "otto"], goal.Team);
         Assert.True(goal.HasBots);
         Assert.True(goal.KnownToAll);
+        Assert.Equal(new GoalReview(0, "08:00"), goal.Review);
+        Assert.Equal("340 signed up", goal.Stands!.Text);
         Assert.Equal("340 signed up", goal.Stands!.Summary);
+        Assert.Equal("offered", goal.Checkin!.State);
+        Assert.Equal("of_c", goal.Checkin!.Offer);
         Assert.Equal("g-chat-1", goal.Chat!.SessionId);
+        Assert.Equal("goal", goal.Offer!.What);
+        Assert.Equal("done", goal.Offer!.Kind);
+        Assert.Equal("ivy", goal.Measure!.EffectiveSource.Bot);
+        Assert.Equal("TestFlight", goal.Measure!.EffectiveSource.What);
         Assert.Single(goal.Measure!.History);
 
         // Disjoint 409 conflict merges cleanly; same-field conflict returns null
@@ -74,20 +83,27 @@ public class GoalsV2Tests
     public void GoalOffersBotsAndTeamPickFormatSetupPlansAndPrompts()
     {
         var setupPlan = new GoalPlanSetup(
-            Name: "Ship Windows v2",
-            Why: "Feature parity",
-            Due: "2026-12-31",
-            Measure: new GoalOfferMeasure("features", 0, 10, 3),
-            Milestones: [new GoalOfferMilestone("Coding Pipeline"), new GoalOfferMilestone("Phone Calls")],
-            Tasks: [new TodoOfferTask("Port diff comments")],
-            BuiltOn: ["Existing Tasks layout", "Gateway add-on routes"]);
-        var offer = new TodoOffer("off-1", "plan", "ivy", "", "Proposed milestones", GoalId: "g1", Plan: setupPlan);
+            name: "Ship Windows v2",
+            why: "Feature parity",
+            due: "2026-12-31",
+            measure: new GoalOfferMeasure("features", 0, 10, 3));
+        var offer = new TodoOffer("off-1")
+        {
+            Kind = "plan",
+            Bot = "ivy",
+            Summary = "Proposed milestones",
+            Goal = "g1",
+            Setup = setupPlan,
+            Milestones = [new GoalOfferMilestone("Coding Pipeline"), new GoalOfferMilestone("Phone Calls")],
+            Tasks = [new TodoOfferTask("Port diff comments")],
+            BuiltOn = ["Existing Tasks layout", "Gateway add-on routes"],
+        };
 
         Assert.Equal(2, GoalOffers.BuiltOnLines(offer).Count);
         var rows = GoalOffers.SetupRows(setupPlan, Now, Utc);
-        Assert.Contains(rows, r => r.Label == "Goal" && r.Value == "Ship Windows v2");
+        Assert.Contains(rows, r => r.Label == "Name" && r.Value == "Ship Windows v2");
         Assert.Contains(rows, r => r.Label == "Number" && r.Value == "3 of 10 features");
-        Assert.Equal([TodoOfferAction.Accept, TodoOfferAction.Decline], GoalOffers.Buttons(offer).Select(b => b.Action));
+        Assert.Equal([TodoOfferAction.Accept, TodoOfferAction.AcceptNoPlan], GoalOffers.Buttons(offer).Select(b => b.Action));
         Assert.Equal("Proposed by Ivy", GoalOffers.Foot(offer, _ => "Ivy"));
 
         var told = new GoalPlanTold();
@@ -155,6 +171,7 @@ public class GoalsV2Tests
             ["why"] = "Initial why",
             ["status"] = "active",
             ["milestones"] = new JsonArray(),
+            ["offer"] = new JsonObject { ["kind"] = "done", ["what"] = "goal", ["by"] = "ivy", ["text"] = "Done!", ["kept"] = false },
         };
 
         public Task<JsonNode?> JsonAsync(HttpMethod method, string path, IEnumerable<KeyValuePair<string, string>>? query = null,
@@ -181,7 +198,22 @@ public class GoalsV2Tests
                     throw new GatewayException("http", "conflict", 409, new JsonObject { ["goal"] = _goal.DeepClone() }.ToJsonString());
                 }
                 foreach (var (k, v) in fields)
-                    if (k != "rev") _goal[k] = v?.DeepClone();
+                {
+                    if (k == "rev") continue;
+                    if (k == "offer_answer" && J.AsString(v) == "done")
+                    {
+                        _goal["status"] = "achieved";
+                        _goal["offer"] = null;
+                    }
+                    else if (k == "keep" && fields.Bool("keep") == true)
+                    {
+                        _goal["kept_at"] = TodoDates.Now();
+                    }
+                    else
+                    {
+                        _goal[k] = v?.DeepClone();
+                    }
+                }
                 _goal["rev"] = (int)(_goal.Int("rev") ?? 1) + 1;
                 return Task.FromResult<JsonNode?>(_goal.DeepClone());
             }

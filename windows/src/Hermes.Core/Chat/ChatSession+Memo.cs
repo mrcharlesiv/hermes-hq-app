@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Hermes.Core.Attachments;
 using Hermes.Core.Composer;
 using Hermes.Core.Model;
 using Hermes.Core.Net;
@@ -7,35 +8,33 @@ using Hermes.Core.Voice;
 
 namespace Hermes.Core.Chat;
 
-// [WIN-MEMO-SEND-HOST] Voice memos in the live chat (HermesKit/Chat/LiveChatSession+Memo.swift at 93f984bb1; spec
-// 1x-voice §4.2–§4.5): the optimistic bubble playing the local recording, the staging pipeline (`MemoUploader`), the
-// rewrite to the final text, then `prompt.submit` with the branches the chat's text send has (4001/4007 resume once,
-// 4009 busy window, the wait for another Hermes process holding the chat (ChatSession+OwnerWait.cs), a locked chat, a
-// refusal, "Delivery unconfirmed"). Stop while a memo stages cancels the staging at once and hands
-// the memo back as the chat's draft (nothing reached the gateway). A refused memo comes back as the draft chip with the
-// words typed beside it, and the chat says why in the "Couldn’t Send" card; a retry into the same chat reuses what the
-// first attempt staged (no second upload, attach or paid transcription).
-//
-// Where the Mac's live chat keeps the queue and the steer chain itself, Windows keeps them in `ComposerQueue`
-// (ChatComposer+Memo.cs routes a memo: steer, wait in line, or go now). This file is the session's half: the sends in
-// flight by bubble, their staging, the rewrite, the submit and where the memo goes when each ends.
-//
-// Seams (the Swift each replaces):
-//   MemoStores     MemoAccountStores.shared (drafts, shapes, the playback cache, MemoPaths.remove)
-//   MemoGateway    the chat's `client` as GatewayClient/GatewayTransfers for the uploader's REST (Core's HermesClient
-//                  has no byte-body transfer yet: the app sets an adapter; tests a recording fake)
-//   MemoUploads    MemoUploader's statics (files roots, kept stagings, one transcript per recording)
-//   MemoSessionNotice.Post   NotificationCenter `hq.memo.session.notice`
-//   MemoDraftReturned        onDraftReturned (the typed words back to the field, and why)
-// Not ported: the silence watchdog (Windows' chat has none to hold back), `linkClosedForBackground` (Windows' socket
-// never closes for a background app), the Sessions row's "Not Delivered:" (sessions-m9), AppLog lines.
+// [WIN-MEMO-SEND-HOST] Voice memos in the live chat (HermesKit/Chat/LiveChatSession+Memo.swift at 6e2cec67f; spec
+// 1x-voice §4.2–§4.5, #521): the optimistic bubble playing the local recording (plus any photos/files staged beside it
+// during review), the staging pipeline (`MemoUploader` + `AttachForSendAsync`), the rewrite to the final text, then
+// `prompt.submit` with the branches the chat's text send has (4001/4007 resume once, 4009 busy window, the wait for
+// another Hermes process holding the chat (ChatSession+OwnerWait.cs), a locked chat, a refusal, "Delivery unconfirmed").
+// Stop while a memo stages cancels the staging at once and hands the memo (and any staged attachments) back as the
+// chat's draft (nothing reached the gateway). A refused memo comes back as the draft chip with the words typed beside
+// it and any staged attachments, and the chat says why in the "Couldn’t Send" card; a retry into the same chat reuses
+// what the first attempt staged (no second upload, attach or paid transcription).
 
 /// A memo send in flight (by its optimistic bubble's id).
-public sealed class MemoSendContext(MemoFile memo, string typed, int epoch, string accountId, bool steer)
+public sealed class MemoSendContext(
+    MemoFile memo,
+    string typed,
+    int epoch,
+    string accountId,
+    bool steer,
+    IReadOnlyList<DraftAttachment>? attachments = null,
+    AttachmentCenter? center = null)
 {
     public MemoFile Memo { get; } = memo;
     /// Typed beside the memo: the next bubble in the same turn; back into the empty field on a refusal.
     public string Typed { get; } = typed;
+    /// Photos/files attached beside the memo (e.g., during review, #521): uploaded and submitted in the same turn.
+    public IReadOnlyList<DraftAttachment> Attachments { get; } = attachments ?? [];
+    /// The attachment center owning `Attachments`, when sent from the chat's attachment tray.
+    public AttachmentCenter? Center { get; } = center;
     /// The Stop epoch the send began in.
     public int Epoch { get; } = epoch;
     /// The account the send belongs to: the memo stores are written only while it is still the one signed in.
@@ -65,6 +64,7 @@ public sealed partial class ChatSession : IMemoChatSession
     public const string UnconfirmedMark = "Delivery unconfirmed";
 
     private readonly Dictionary<string, MemoSendContext> _memoSends = [];
+    private readonly Dictionary<string, AttachedSend> _memoAttached = [];
 
     /// The signed-in account's memo stores (drafts, shapes, playback cache). Null: memos aren't offered.
     public MemoAccountStores? MemoStores { get; set; }
@@ -115,16 +115,44 @@ public sealed partial class ChatSession : IMemoChatSession
 
     // MARK: Send
 
-    /// A memo (and the words typed beside it) as this chat's next turn: the bubble shows at once playing the local file,
-    /// it stages, the bubble switches to the transcript, then `prompt.submit` (`queued` for a queue drain).
-    public Task<SendOutcome> SendMemoAsync(MemoFile memo, string typed, bool queued = false)
+    /// A memo (and any words and staged photos/files beside it) as this chat's next turn: the bubble shows at once
+    /// playing the local file (with any staged attachments), it stages, the bubble switches to the transcript, then
+    /// `prompt.submit` (`queued` for a queue drain). Keeping optional `attachments`/`center` compatible with 2- and
+    /// 3-argument callers (#521).
+    public Task<SendOutcome> SendMemoAsync(
+        MemoFile memo,
+        string typed,
+        bool queued = false,
+        IReadOnlyList<DraftAttachment>? attachments = null,
+        AttachmentCenter? center = null)
     {
+        IReadOnlyList<DraftAttachment> extra = attachments is { Count: > 0 } ? [.. attachments] : [];
+        if (center != null) _sendingCenter = center;
         ChatMessage local;
-        lock (_lock) local = _t.AddLocalUser(MemoText.Optimistic(memo.Path, typed));
+        lock (_lock)
+        {
+            if (extra.Count > 0)
+            {
+                var parts = extra
+                    .OrderBy(a => a.Kind == DraftKind.Image ? 0 : 1)
+                    .Select(a => (ChatPart)new AttachmentPart(LocalAttachment(a)))
+                    .ToList();
+                local = _t.AddLocalUser(MemoText.Optimistic(memo.Path, typed), parts);
+                _t.BeginPreparing(local.Id);
+            }
+            else
+            {
+                local = _t.AddLocalUser(MemoText.Optimistic(memo.Path, typed));
+            }
+        }
+        if (extra.Count > 0)
+        {
+            lock (_inFlightAttachments) _inFlightAttachments[local.Id] = [.. extra.Select(a => a.Id)];
+        }
         _stopPending = false;
         TurnInterrupted = false;   // the Couldn't Send card stays: only a typed send or its ✕ clears it (as the Mac)
         _turnStarted = DateTimeOffset.Now;
-        var context = new MemoSendContext(memo, typed, Volatile.Read(ref _stopEpoch), _client.AccountId, steer: false);
+        var context = new MemoSendContext(memo, typed, Volatile.Read(ref _stopEpoch), _client.AccountId, steer: false, extra, center);
         lock (_memoSends) _memoSends[local.Id] = context;
         Changed?.Invoke();
         return RunMemoSendAsync(local.Id, context, queued);
@@ -139,6 +167,11 @@ public sealed partial class ChatSession : IMemoChatSession
             return SendOutcome.Refused;
         }
         if (staged.Prompt is not { } prompt) return SendOutcome.Refused;   // Stop withdrew it while it staged
+        AttachedSend? attached;
+        lock (_memoAttached) _memoAttached.TryGetValue(localId, out attached);
+        JsonObject? submitExtra = attached is { SubmitAttachments.Count: > 0 }
+            ? new JsonObject { ["attachments"] = attached.SubmitAttachments.DeepClone() }
+            : null;
         // A memo goes through the same submit loop as a typed send (runMemoSend → submit): a refusal because another
         // Hermes process holds the chat waits for it ([WIN-MEMO-OWNER-WAIT], ChatSession+OwnerWait.cs), and each
         // ending hands the memo to MemoSendFinished: refused or withdrawn, the draft chip; unconfirmed, the cache.
@@ -168,21 +201,27 @@ public sealed partial class ChatSession : IMemoChatSession
                 try
                 {
                     submitted = true;
-                    try { res = await Submit(runtime, prompt, CancellationToken.None, queued, localId: localId); }
+                    try { res = await Submit(runtime, prompt, CancellationToken.None, queued, extra: submitExtra, localId: localId); }
                     catch (GatewayException e) when (e.RpcCode == 4009 && !IsChatLocked(e))
                     {
-                        res = await RetryBusy(runtime, prompt, CancellationToken.None, queued, localId);
+                        res = await RetryMemoBusyAsync(runtime, prompt, CancellationToken.None, queued, submitExtra, localId);
                     }
                 }
                 catch (GatewayException e) when (e.Code == "rpc")
                 {
                     submitted = false;   // refused: nothing ran
-                    var (step, why) = await OwnerRefusalAsync(wait, e, photos: false);   // a memo carries no photos
+                    var (step, why) = await OwnerRefusalAsync(wait, e, photos: attached?.Photos.Count > 0);
                     switch (step)
                     {
                         case OwnerStep.Retry:
                             resumed = false;   // the chat answered on the runtime in hand: a later reap may resume again
                             firstStale = null;
+                            if (_runtimeId == null && attached != null)
+                            {
+                                var again = await ResumeAsync(CancellationToken.None);
+                                if (await ReattachPhotosAsync(attached, again) is { } lost)
+                                    return Refuse(lost);
+                            }
                             continue;
                         case OwnerStep.Stopped:
                             WithdrawStoppedMemo(localId);
@@ -202,6 +241,12 @@ public sealed partial class ChatSession : IMemoChatSession
                         resumed = true;
                         firstStale = e;
                         _runtimeId = null;
+                        if (attached != null)
+                        {
+                            var fresh = await ResumeAsync(CancellationToken.None);
+                            if (await ReattachPhotosAsync(attached, fresh) is { } lost)
+                                return Refuse(lost);
+                        }
                         continue;
                     }
                     return Refuse(e.RpcCode is 4001 or 4007 ? (firstStale ?? e).Message : e.Message);
@@ -234,6 +279,18 @@ public sealed partial class ChatSession : IMemoChatSession
         }
     }
 
+    private async Task<JsonNode> RetryMemoBusyAsync(string runtime, string text, CancellationToken ct, bool queued,
+        JsonObject? extra, string localId)
+    {
+        var until = DateTimeOffset.UtcNow.AddSeconds(6);
+        while (true)
+        {
+            await Task.Delay(150, ct);
+            try { return await Submit(runtime, text, ct, queued, extra: extra, localId: localId); }
+            catch (GatewayException e) when (e.RpcCode == 4009 && DateTimeOffset.UtcNow < until) { }
+        }
+    }
+
     /// Maybe delivered (no answer in time, the link lost under it, or the gateway's queue may hold it): never resent;
     /// the recording goes to the playback cache under its gateway path (`markUnconfirmed` → memoSendFinished).
     private SendOutcome MarkMemoUnconfirmed(string localId)
@@ -245,8 +302,9 @@ public sealed partial class ChatSession : IMemoChatSession
         return SendOutcome.Unconfirmed;
     }
 
-    /// Steps (a)–(f) and the rewrite: the bubble shows the transcript at once and keeps playing the same file. Returns
-    /// the prompt; or a refusal's words (nothing was submitted); or neither when Stop withdrew the send.
+    /// Steps (a)–(f) and the rewrite: the bubble shows the transcript at once and keeps playing the same file. When
+    /// staged photos/files accompany the memo (#521), attaches them in tray order so audio + photos submit together in
+    /// one turn. Returns the prompt; or a refusal's words (nothing was submitted); or neither when Stop withdrew the send.
     private async Task<(string? Prompt, string? Failure)> StageAsync(string localId, MemoSendContext context)
     {
         var storedId = StoredId;
@@ -270,8 +328,47 @@ public sealed partial class ChatSession : IMemoChatSession
         if (Memo(localId) == null) return (null, null);
         // Stop pressed while it staged: it never goes out; the memo comes back as the chat's draft.
         if (Volatile.Read(ref _stopEpoch) != context.Epoch) { WithdrawStoppedMemo(localId); return (null, null); }
-        var prompt = MemoText.Prompt(staged.Reference, context.Typed);
-        lock (_lock) _t.Revise(localId, m => m with { Parts = [new TextPart(prompt)] });
+
+        AttachedSend? attached = null;
+        if (context.Attachments.Count > 0)
+        {
+            string? refusal;
+            if (context.Center is { } center)
+                (attached, refusal) = await AttachForSendAsync(context.Attachments, localId, context.Epoch, center, context.Staging.Token);
+            else
+                (attached, refusal) = await AttachStandaloneForMemoAsync(context.Attachments, localId, context.Epoch, context.Staging.Token);
+
+            if (Memo(localId) == null)
+            {
+                if (attached != null) await DetachPhotosAsync(attached);
+                return (null, null);
+            }
+            if (attached == null)
+            {
+                if (Volatile.Read(ref _stopEpoch) != context.Epoch || refusal == null)
+                {
+                    WithdrawStoppedMemo(localId);
+                    return (null, null);
+                }
+                return (null, refusal);
+            }
+            lock (_memoAttached) _memoAttached[localId] = attached;
+        }
+
+        var memoPrompt = MemoText.Prompt(staged.Reference, context.Typed);
+        var prompt = attached is { FileRefs.Count: > 0 }
+            ? AttachmentSender.PromptText(memoPrompt, attached.FileRefs, hasImages: false)
+            : memoPrompt;
+        lock (_lock)
+        {
+            _t.Revise(localId, m =>
+            {
+                var nonText = m.Parts.Where(p => p is not TextPart).ToList();
+                nonText.Add(new TextPart(prompt));
+                return m with { Parts = nonText };
+            });
+            _t.EndPreparing(localId);
+        }
         if (!context.Steer) _turnPrompt = prompt;
         if (staged.GatewayPath is { } gatewayPath && MemoStoresAreMine)
         {
@@ -284,6 +381,85 @@ public sealed partial class ChatSession : IMemoChatSession
             MemoSessionNotice.Post(new MemoSessionNoticeInfo(MemoSessionNoticeKind.NoTranscript, DraftScope, failure, BotName));
         Changed?.Invoke();
         return (prompt, null);
+    }
+
+    /// Attaches pre-uploaded `DraftAttachment`s when `SendMemoAsync` is called without an `AttachmentCenter`.
+    private async Task<(AttachedSend? Sent, string? Refusal)> AttachStandaloneForMemoAsync(
+        IReadOnlyList<DraftAttachment> attachments, string localId, int epoch, CancellationToken ct)
+    {
+        bool Stopped() => Volatile.Read(ref _stopEpoch) != epoch || ct.IsCancellationRequested;
+        var resumed = false;
+        while (true)
+        {
+            string rid;
+            try { rid = _runtimeId ?? await ResumeAsync(ct); }
+            catch (OperationCanceledException) { return (null, null); }
+            catch (GatewayException e) { return (null, Stopped() ? null : e.Message); }
+
+            var sent = new AttachedSend { ViaAuthority = AttachmentSender.IsAuthority(_client.Rpc) };
+            var stale = false;
+            foreach (var a in attachments)
+            {
+                if (Stopped()) { await DetachPhotosAsync(sent); return (null, null); }
+                if (a.Kind == DraftKind.Link)
+                {
+                    if (a.RefText is { Length: > 0 } r) sent.FileRefs.Add(r);
+                    continue;
+                }
+                AttachmentSender.Attached? ok;
+                AttachmentSender.AttachFailure? failed;
+                if (a.Kind == DraftKind.Image && sent.ViaAuthority)
+                {
+                    byte[]? data = null;
+                    try { if (!string.IsNullOrEmpty(a.LocalFile)) data = await File.ReadAllBytesAsync(a.LocalFile, ct); }
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+                    if (data is not { Length: > 0 })
+                        return (null, "This attachment is no longer on this PC.");
+                    (ok, var mime, failed) = await AttachmentSender.AttachImageBytesAsync(_client.Rpc, rid, data, a.Name, Profile, ct);
+                    if (ok != null) sent.SubmitAttachments.Add(new JsonObject { ["path"] = ok.StoredPath, ["mime"] = mime });
+                }
+                else
+                {
+                    var path = a.GatewayPath ?? a.LocalFile;
+                    if (string.IsNullOrEmpty(path))
+                    {
+                        await DetachPhotosAsync(sent);
+                        return (null, $"“{a.Name}” wasn’t uploaded yet.");
+                    }
+                    if (a.Kind == DraftKind.Image)
+                        (ok, failed) = await AttachmentSender.AttachImageAsync(_client.Rpc, rid, path, a.Name, Profile, ct);
+                    else
+                        (ok, failed) = await AttachmentSender.AttachFileAsync(_client.Rpc, rid, path, a.Name, Profile, ct);
+                }
+
+                if (ok != null)
+                {
+                    if (a.Kind == DraftKind.Image)
+                    {
+                        sent.Photos.Add((a.Id, ok.StoredPath));
+                        sent.StoredPaths[a.Id] = ok.StoredPath;
+                        SetUploadedPath(localId, a.Id, ok.StoredPath);
+                    }
+                    else
+                    {
+                        if (ok.RefText != null) sent.FileRefs.Add(ok.RefText);
+                        sent.StoredPaths[a.Id] = (ok.RefText != null ? AttachmentSender.RefPath(ok.RefText) : null) ?? ok.StoredPath;
+                    }
+                    continue;
+                }
+                if (failed!.Stale && !resumed) { stale = true; break; }
+                await DetachPhotosAsync(sent);
+                return (null, Stopped() ? null : failed.Reason);
+            }
+            if (stale)
+            {
+                resumed = true;
+                _runtimeId = null;
+                continue;
+            }
+            if (Stopped()) { await DetachPhotosAsync(sent); return (null, null); }
+            return (sent, null);
+        }
     }
 
     /// (c) `file.attach {session_id, profile, name, path}`; a stale runtime id (4001) resumes once and attaches again
@@ -395,6 +571,8 @@ public sealed partial class ChatSession : IMemoChatSession
         foreach (var (localId, context) in staging)
         {
             context.Staging.Cancel();
+            if (context.Attachments.Count > 0)
+                context.Center?.InterruptWaits(context.Attachments.Select(a => a.Id));
             WithdrawStoppedMemo(localId);
         }
         if (!ownTurn) return false;
@@ -409,10 +587,47 @@ public sealed partial class ChatSession : IMemoChatSession
     public string? MemoSendFinished(string localId, MemoSendOutcome outcome)
     {
         MemoSendContext? context;
+        AttachedSend? attached;
         lock (_memoSends)
         {
             if (!_memoSends.Remove(localId, out context)) return null;
         }
+        lock (_memoAttached) _memoAttached.Remove(localId, out attached);
+        lock (_inFlightAttachments) _inFlightAttachments.Remove(localId);
+        lock (_lock) _t.EndPreparing(localId);
+
+        if (context.Attachments.Count > 0)
+        {
+            if (outcome is MemoSendOutcome.Acknowledged or MemoSendOutcome.Unconfirmed)
+            {
+                if (attached != null && context.Center is { } center)
+                {
+                    FinishAttachmentSend(attached, context.Attachments, localId, center);
+                }
+                else if (attached != null)
+                {
+                    lock (_lock)
+                        _t.Revise(localId, m => m with
+                        {
+                            Parts = [.. m.Parts.Select(p => p is AttachmentPart { Attachment.Source: AttachmentSource.Local l } ap
+                                && attached.StoredPaths.TryGetValue(l.DraftId, out var stored)
+                                ? new AttachmentPart(ap.Attachment with { Source = new AttachmentSource.Gateway(stored), UploadedPath = null }) : p)],
+                        });
+                }
+            }
+            else
+            {
+                if (attached != null) _ = DetachPhotosAsync(attached);
+                if (context.Center is { } center)
+                {
+                    var ids = context.Attachments.Select(a => a.Id).ToList();
+                    var current = context.Attachments.Select(a => center.Item(a.Id) ?? a).ToList();
+                    center.SendEnded(ids);
+                    center.ReturnToDraft(DraftScope, Profile, context.Typed, current, setTextIfEmpty: true);
+                }
+            }
+        }
+
         var stores = MemoStores;
         if (stores == null || stores.AccountId != context.AccountId)
         {

@@ -1,8 +1,9 @@
+using System.Globalization;
 using System.Text.Json.Nodes;
 
 namespace Hermes.Core.Tasks;
 
-/// 14-day stall detection for active goals (`GoalModel.swift` / `GoalPlainView.swift`).
+/// 14-day stall detection for active goals (`GoalModel.swift` / `GoalBots.swift`).
 public static class GoalStall
 {
     public static readonly TimeSpan Threshold = TimeSpan.FromDays(14);
@@ -43,33 +44,74 @@ public static class GoalStall
     }
 }
 
-public sealed record GoalSetupRow(string Label, string Value);
+public sealed record GoalSetupRow(string Label, string Value, string Key = "");
 
 /// Presentation rules for Goal Setup Plan and Check-in offer cards (`HermesKit/Pages/Goals/GoalBots.swift` + `GoalOfferViews.swift`).
 public static class GoalOffers
 {
-    public static IReadOnlyList<string> BuiltOnLines(TodoOffer offer) =>
-        offer.Plan?.BuiltOn ?? [];
+    public const string BuiltOnHeader = "Built on";
+    public const string SetupHeader = "Also sets";
+    public const int BuiltOnShown = 3;
 
+    /// "Your course notes, 8 units": one line each, at most 90 chars, empty dropped, at most 3 (`GoalOffers.builtOn`).
+    public static IReadOnlyList<string> BuiltOnLines(TodoOffer offer)
+    {
+        var source = offer.BuiltOn.Count > 0 ? offer.BuiltOn : (offer.Plan?.BuiltOn ?? []);
+        var result = new List<string>();
+        foreach (var line in source)
+        {
+            var flat = string.Join(" ", line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+            if (flat.Length == 0) continue;
+            if (flat.Length > 90) flat = flat[..89] + "…";
+            result.Add(flat);
+            if (result.Count >= BuiltOnShown) break;
+        }
+        return result;
+    }
+
+    /// What accepting a plan also changes on its goal: Name, Why, Number, By (`GoalOffers.setupRows`).
     public static IReadOnlyList<GoalSetupRow> SetupRows(GoalPlanSetup plan, DateTimeOffset now, TimeZoneInfo zone)
     {
         var rows = new List<GoalSetupRow>();
-        if (!string.IsNullOrWhiteSpace(plan.Name)) rows.Add(new("Goal", plan.Name!));
-        if (!string.IsNullOrWhiteSpace(plan.Why)) rows.Add(new("Why", plan.Why!));
+        if (!string.IsNullOrWhiteSpace(plan.Name)) rows.Add(new("Name", plan.Name!, "name"));
+        if (!string.IsNullOrWhiteSpace(plan.Why)) rows.Add(new("Why", plan.Why!, "why"));
         if (plan.Measure is { } m)
-            rows.Add(new("Number", GoalViews.MeasureWords(new GoalMeasure(m.Unit, m.Start, m.Target, m.Now), unit: true)));
+            rows.Add(new("Number", GoalViews.MeasureWords(new GoalMeasure(m.Unit, m.Start, m.Target, m.Now), unit: true), "measure"));
         if (plan.Due is { Length: >= 10 } raw && TodoDates.Day(raw[..10], zone) is { } d)
-            rows.Add(new("By", TodoWords.MonthDay(d, now, zone)));
+            rows.Add(new("By", TodoWords.MonthDay(d, now, zone), "due"));
         return rows;
     }
+
+    public static IReadOnlyList<GoalSetupRow> SetupRows(TodoOffer offer, DateTimeOffset now, TimeZoneInfo zone) =>
+        offer.Kind == "plan" && offer.Setup is { } setup ? SetupRows(setup, now, zone) : [];
+
+    public static IReadOnlyList<TodoOffer> Waiting(IEnumerable<TodoOffer> all) =>
+        [.. all.Where(o => o.IsGoal && o.IsWaiting && !o.Held)];
+
+    public static TodoOffer? Today(IEnumerable<TodoOffer> all, IEnumerable<Goal> goals)
+    {
+        var known = goals.Where(g => g.State == GoalState.Active).Select(g => g.Id).ToHashSet(StringComparer.Ordinal);
+        return Waiting(all)
+            .Where(o => o.Goal == null || known.Contains(o.Goal))
+            .OrderBy(o => TodoDates.Moment(o.At) ?? DateTimeOffset.MinValue)
+            .ThenBy(o => o.Id, StringComparer.Ordinal)
+            .FirstOrDefault();
+    }
+
+    public static IReadOnlyList<TodoOffer> OnGoal(IEnumerable<TodoOffer> all, string goalId) =>
+        [.. all.Where(o => o.IsGoal && !o.Held && (o.Goal == goalId || o.MadeGoal == goalId) && (o.IsWaiting || o.State == "accepted"))
+               .OrderBy(o => TodoDates.Moment(o.At) ?? DateTimeOffset.MinValue)
+               .ThenBy(o => o.Id, StringComparer.Ordinal)];
+
+    public static string MilestoneCount(int n) => n == 1 ? "1 milestone" : $"{n} milestones";
 
     public static IReadOnlyList<TodoOfferButton> Buttons(TodoOffer offer) => TodoOfferRules.OfferButtons(offer);
 
     public static string? Foot(TodoOffer offer, Func<string?, string> botName)
     {
-        if (offer.IsWaiting) return $"Proposed by {botName(offer.By)}";
+        if (offer.IsWaiting) return $"Proposed by {botName(offer.Bot)}";
         var done = TodoOfferRules.DoneLabel(offer);
-        return string.IsNullOrEmpty(done) ? null : $"{done} · {botName(offer.By)}";
+        return string.IsNullOrEmpty(done) ? null : $"{done} · {botName(offer.Bot)}";
     }
 }
 
@@ -90,9 +132,97 @@ public sealed class GoalPlanGuard
     public bool IsBusy(string goalId) => _inFlight.Contains(goalId);
 }
 
-/// Bot selection & prompt text for asking a bot to draft a Goal Setup Plan (`GoalBots.swift`).
+/// Bot selection, formatting, & prompt text for goals with bots (`GoalBots.swift`).
 public static class GoalBots
 {
+    public static readonly IReadOnlyList<string> Weekdays =
+        ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+    public static readonly IReadOnlyList<string> ReviewTimes =
+        ["07:00", "08:00", "09:00", "12:00", "17:00", "18:00", "20:00"];
+
+    /// The who row: "Led by Hermes"; with no lead but helpers, "Helped by Ivy"; null with no bot.
+    public static string? WhoLine(Goal goal, Func<string?, string> botName)
+    {
+        if (goal.Lead is { } lead) return $"Led by {botName(lead)}";
+        if (goal.Helpers.Count == 0) return null;
+        var first = goal.Helpers[0];
+        return goal.Helpers.Count == 1
+            ? $"Helped by {botName(first)}"
+            : $"Helped by {botName(first)} and {goal.Helpers.Count - 1} more";
+    }
+
+    /// Push `request` "goal:<id>" → "<id>"; null for a task's push.
+    public static string? PushedGoal(string? request) =>
+        request != null && request.StartsWith("goal:", StringComparison.Ordinal) && request.Length > 5
+            ? request[5..]
+            : null;
+
+    /// "8 AM", "8:30 AM", "12 PM".
+    public static string Time(string hhmm)
+    {
+        var parts = hhmm.Split(':');
+        if (parts.Length != 2 || !int.TryParse(parts[0], out var h) || !int.TryParse(parts[1], out var m))
+            return hhmm;
+        var hour = h % 24;
+        var twelve = hour % 12 == 0 ? 12 : hour % 12;
+        var clock = m == 0 ? twelve.ToString(CultureInfo.InvariantCulture) : string.Create(CultureInfo.InvariantCulture, $"{twelve}:{m:00}");
+        return clock + (hour < 12 ? " AM" : " PM");
+    }
+
+    /// "Mondays 8 AM"; "Off" with no check-in.
+    public static string ReviewWords(GoalReview? review) =>
+        review != null && review.Day >= 0 && review.Day < Weekdays.Count
+            ? $"{Weekdays[review.Day]}s {Time(review.Time)}"
+            : "Off";
+
+    /// Edit Goal's Number From: "TestFlight · Hermes", or "You".
+    public static string NumberFromWords(GoalMeasure measure, Func<string?, string> botName)
+    {
+        var src = measure.EffectiveSource;
+        if (src.Bot is not { Length: > 0 } bot) return "You";
+        var what = src.What.Trim();
+        return what.Length == 0 ? botName(bot) : $"{what} · {botName(bot)}";
+    }
+
+    /// The number row's end when a bot reads it: "TestFlight · 8:02 AM"; null when the number is yours.
+    public static string? SourceWords(GoalMeasure measure, DateTimeOffset now, Func<string?, string> botName, TimeZoneInfo zone)
+    {
+        var src = measure.EffectiveSource;
+        if (src.Bot is not { Length: > 0 } bot) return null;
+        var what = src.What.Trim();
+        var name = what.Length == 0 ? botName(bot) : what;
+        var when = TodoDates.Moment(measure.CheckedAt) ?? TodoDates.Moment(measure.At);
+        if (when == null) return name;
+        var words = TodoDates.LocalDay(when.Value, zone) == TodoDates.LocalDay(now, zone)
+            ? TodoWords.Clock(when.Value, zone)
+            : TodoWords.Day(when.Value, now, zone);
+        return $"{name} · {words}";
+    }
+
+    /// The lead's "this looks done" while it waits: active goal, not kept, for "goal" or an open milestone.
+    public static GoalDoneOffer? LooksDone(Goal goal)
+    {
+        if (goal.State != GoalState.Active || goal.Offer is not { Kept: false } offer) return null;
+        if (offer.What == "goal") return offer;
+        return goal.Milestones.Any(m => m.Id == offer.What && !m.Done) ? offer : null;
+    }
+
+    /// "Hermes thinks Launch week looks done: all four posts are up. Mark it done?"
+    public static string LooksDoneText(GoalDoneOffer offer, Goal goal, Func<string?, string> botName)
+    {
+        var why = offer.Text.Trim();
+        var reason = why.Length == 0 ? "." : ": " + (why.EndsWith('.') ? why[..^1] : why) + ".";
+        if (offer.What == "goal") return $"{botName(offer.By)} thinks this goal is achieved{reason} Mark it achieved?";
+        var name = goal.Milestone(offer.What)?.Title ?? "this milestone";
+        return $"{botName(offer.By)} thinks {name} looks done{reason} Mark it done?";
+    }
+
+    public static string LooksDoneYes(GoalDoneOffer offer) => offer.What == "goal" ? "Mark Achieved" : "Mark Done";
+
+    public static bool WaitsForYou(Goal goal, IEnumerable<TodoOffer> offers) =>
+        LooksDone(goal) != null || offers.Any(o => o.IsGoal && o.IsWaiting && !o.Held && o.Goal == goal.Id);
+
     public static string PickPlanner(Goal goal, IReadOnlyList<string> availableBots)
     {
         if (goal.Lead is { Length: > 0 } lead) return lead;
@@ -117,7 +247,7 @@ public static class GoalBots
 /// Team picker rules for assigning a lead bot, helper bots, and auto/ask task rule to a goal (`GoalTeam.swift`).
 public static class GoalTeamPick
 {
-    public static JsonObject PatchFields(string? lead, IReadOnlyList<string> helpers, string adds = "ask", bool knownToAll = false)
+    public static JsonObject PatchFields(string? lead, IReadOnlyList<string> helpers, string adds = "ask", bool knownToAll = true)
     {
         var cleanLead = string.IsNullOrWhiteSpace(lead) ? null : lead.Trim();
         var cleanHelpers = helpers

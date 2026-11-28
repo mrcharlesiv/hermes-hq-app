@@ -49,7 +49,7 @@ public static class ThinkingWalkProof
     /// The timer shows from 10 s (ChatWaitingCell `elapsed`).
     public const int TimerFrom = 10;
     /// The inspector (MacInspector.swift): its tabs, the one a click opens, and its count line.
-    public static readonly IReadOnlyList<string> Tabs = ["Info", "Steps", "Files", "Helpers"];
+    public static readonly IReadOnlyList<string> Tabs = ["Info", "Steps", "Files", "Helpers", "Chats"];
     public const string StepsTab = "Steps";
     public const string StepCount = "1 step";
     /// ChatInspector's kept tab (the walk sets Info first, so the click is what opens Steps).

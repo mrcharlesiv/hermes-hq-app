@@ -1,9 +1,15 @@
+using System.Text.Json.Nodes;
+using Hermes.Core.Capabilities;
 using Hermes.Core.Gateways;
+using Hermes.Core.Insights;
+using Hermes.Core.Notifications;
+using Hermes.Core.Sessions;
 using Hermes.Core.Settings;
 using Hermes.Core.Shell;
 using Hermes.Core.Transcripts;
 using Hermes.Core.Updates;
 using HermesHQ.Features.Attachments;
+using HermesHQ.Features.Capabilities;
 using HermesHQ.Features.Gateways;
 using HermesHQ.Features.Transcript;
 using HermesHQ.Services;
@@ -14,7 +20,6 @@ using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
-using Windows.ApplicationModel.DataTransfer;
 
 namespace HermesHQ.Features.Settings;
 
@@ -30,27 +35,36 @@ public static class SettingsHooks
     public static readonly List<Func<FrameworkElement?>> Sidebar = [];
 }
 
-/// Settings' pages (SettingsRootView's categories in two columns, and the pages their rows open), in the Mac's words.
+/// Settings' pages (SettingsRootView's 7 Mac categories in two columns, and the pages their rows open), in the Mac's words.
 internal static class SettingsPanes
 {
     private static IPreferences Prefs => FilePreferences.Shared;
+    private static Windows.UI.ViewManagement.UISettings? _uiSettings;
+
+    private static bool SystemReduceTransparency()
+    {
+        try { return !(_uiSettings ??= new Windows.UI.ViewManagement.UISettings()).AdvancedEffectsEnabled; }
+        catch { return false; }
+    }
 
     // Segoe Fluent glyphs for the Mac's SF Symbols.
     private const string GBell = "", GHalf = "", GPalette = "", GDesktop = "", GText = "",
         GWrench = "", GClock = "", GClip = "", GFolder = "", GSmile = "", GSpeaker = "",
         GNote = "", GMic = "", GInfo = "", GPlay = "", GLink = "", GRing = "\uEA3A", GDensity = "\uE8FD",
-        // bubble.left.and.bubble.right (Segoe Fluent ChatBubbles).
-        GBubbles = "\uE8F2",
-        // sidebar.left (Segoe Fluent DockLeft).
-        GSidebar = "\uE90C";
+        GBubbles = "\uE8F2", GSidebar = "\uE90C", GSparkle = "\uE734", GKey = "\uE8D7", GBolt = "\uE945",
+        GCard = "\uE8C7", GPeople = "\uE77B", GHook = "\uE71B", GImport = "\uE896", GTransparency = "\uE7F4",
+        GCorners = "\uE739", GStrip = "\uE8A1", GSend = "\uE724", GResume = "\uE777", GTip = "\uE82F", GUpdate = "\uE895";
 
     public static FrameworkElement Category(SettingsPage page, SettingsCategory c) => c switch
     {
         SettingsCategory.General => General(page),
         SettingsCategory.Appearance => Appearance(page),
         SettingsCategory.Chat => Chat(page),
-        SettingsCategory.Sounds => Sounds(),
         SettingsCategory.Gateway => HermesCategory(page),
+        SettingsCategory.Accounts => AccountsCategory(page),
+        SettingsCategory.Tools => ToolsCategory(page),
+        SettingsCategory.About => AboutCategory(page),
+        SettingsCategory.Sounds => General(page),
         _ => AboutCategory(page),
     };
 
@@ -62,9 +76,20 @@ internal static class SettingsPanes
         BackdropPrefs.Target => (BackdropPrefs.Title, () => BackgroundsPane.Make()),
         "tool-calls" => ("Tool Calls", () => ToolCalls()),
         "notifications" => ("Notifications", () => Notifications()),
+        "proactivity-beta" => (ProactivityBeta.PageLabel, () => ProactivityBetaPane.Make(page)),
+        "models" => (SettingsWords.ModelsLabel, () => ModelSettingsPane.MakeHub(page)),
+        "main-model" => (SettingsWords.MainModelLabel, () => ModelSettingsPane.MakeMainModel(page)),
+        "fallback-models" => (SettingsWords.FallbackModelsLabel, () => ModelSettingsPane.MakeFallbackModels(page)),
+        "auxiliary-models" => (SettingsWords.AuxiliaryModelsLabel, () => ModelSettingsPane.MakeAuxiliaryModels(page)),
+        "moa" => (SettingsWords.MoaLabel, () => ModelSettingsPane.MakeMoa(page)),
+        "tile-model" => ("Tile Model", () => TileModelPane.Make(page)),
         "voice" => ("Voice", () => Voice()),
         "sessions" => (SettingsWords.SessionsPageTitle, () => Sessions()),
         "browser-cloud" => ("Browser Use Cloud", () => Browser.BrowserFeature.BuildCloudSettingsContent()),
+        "vault" => ("Passwords", () => VaultPane(page)),
+        "providers" => ("Providers", () => ModelSettingsPane.MakeProviders()),
+        "keys" => ("Keys", () => ModelSettingsPane.MakeKeys()),
+        "billing" => ("Billing", () => ModelSettingsPane.MakeBilling()),
         SidebarPage.Target => (SidebarPage.Title, () => SidebarSettingsPage.Make()),
         "about" => ("About", () => About(page)),
         "diagnostics" => ("Diagnostics", () => DiagnosticsPane.Make()),
@@ -77,26 +102,195 @@ internal static class SettingsPanes
         if (PageFor(page, target) is { } p) page.Push(p.Title, p.Make);
     }
 
-    // ---------------------------------------------------------------- General
+    // ---------------------------------------------------------------- General (SettingsRootView.swift `e27566897`: System & Alerts + App & Sharing)
 
     private static FrameworkElement General(SettingsPage page)
     {
-        var n = NotificationPrefs.Load(Prefs);
-        return Kit.Page(
-            Kit.Section(null, null,
-                Kit.Nav(GBell, "Notifications", n.Enabled ? "On" : "Off", () => Go(page, "notifications"), "settings.notifications")));
+        var host = new ContentControl { IsTabStop = false, HorizontalContentAlignment = HorizontalAlignment.Stretch };
+        var soundPrefs = new CompletionSoundPrefs(Prefs);
+        var configStore = AppState.Client is { } client ? ConfigStore(client) : null;
+        var disposed = false;
+
+        bool ResumeLastSession()
+        {
+            if (configStore?.Config != null && configStore.Value("display.resume_last_session") is JsonValue v && v.TryGetValue(out bool b))
+                return b;
+            return ChatPrefs.ResumeLastSessionFallback;
+        }
+
+        void SetResumeLastSession(bool on)
+        {
+            ChatPrefs.ResumeLastSessionFallback = on;
+            if (configStore == null) return;
+            if (configStore.Config == null)
+            {
+                _ = configStore.LoadAsync().ContinueWith(_ => configStore.Set("display.resume_last_session", JsonValue.Create(on)));
+            }
+            else
+            {
+                configStore.Set("display.resume_last_session", JsonValue.Create(on));
+            }
+        }
+
+        void Draw()
+        {
+            var n = NotificationPrefs.Load(Prefs);
+            UIElement? soundRow = null;
+            if (soundPrefs.IsOn)
+            {
+                var name = CompletionSoundSynth.Find(soundPrefs.Variant).Name;
+                var trailing = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+                var play = new Button
+                {
+                    Content = new FontIcon { Glyph = GPlay, FontSize = 14 },
+                    Padding = new Thickness(8, 6, 8, 6),
+                    Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+                    BorderThickness = new Thickness(0),
+                };
+                AutomationProperties.SetName(play, $"Play {name}");
+                ToolTipService.SetToolTip(play, $"Play {name}");
+                play.Click += (_, _) => CompletionCue.Preview(soundPrefs.Variant);
+                trailing.Children.Add(play);
+                var box = new ComboBox { MinWidth = 160, MaxWidth = Kit.DefaultPickerMaxWidth };
+                foreach (var p in CompletionSoundSynth.Presets) box.Items.Add(p.Name);
+                box.SelectedIndex = CompletionSoundSynth.Presets.ToList().FindIndex(p => p.Id == soundPrefs.Variant);
+                AutomationProperties.SetName(box, "Sound");
+                AutomationProperties.SetAutomationId(box, "settings.sound");
+                box.SelectionChanged += (_, _) =>
+                {
+                    if (box.SelectedIndex < 0) return;
+                    var id = CompletionSoundSynth.Presets[box.SelectedIndex].Id;
+                    if (id == soundPrefs.Variant) return;
+                    soundPrefs.Variant = id;
+                    CompletionCue.Preview(id);
+                    Draw();
+                };
+                trailing.Children.Add(box);
+                soundRow = Kit.Row(GNote, "Sound", null, trailing, "row:sound");
+            }
+
+            UIElement? addOnSection = null;
+            if (AddOnReminder.HasUpdate && AppState.Client is { } activeClient)
+            {
+                var badge = ReminderBadge("1");
+                var rowTitle = AddOnReminder.TargetVersion is { Length: > 0 } targetVer
+                    ? $"Add-on Update Available ({targetVer})"
+                    : "Add-on Update Available";
+                addOnSection = Kit.Section(null, AddOnReminder.Summary,
+                    ReminderNavRow(GUpdate, rowTitle, badge,
+                        () => _ = AddOnUpdateDialog.ShowAsync(page.XamlRoot, activeClient),
+                        "settings.addon-update"));
+            }
+
+            UIElement? pluginSection = null;
+            if (PluginUpdateReminder.AvailableCount > 0)
+            {
+                var label = PluginUpdateReminder.BadgeLabel ?? PluginUpdateReminder.AvailableCount.ToString();
+                var rowTitle = PluginUpdateReminder.Title ?? "Plugin Update Available";
+                pluginSection = Kit.Section(null, PluginUpdateReminder.Footer,
+                    ReminderNavRow(GWrench, rowTitle, ReminderBadge(label),
+                        () => Navigator.Open("capabilities"),
+                        "settings.plugin-update"));
+            }
+
+            host.Content = Kit.Page(
+                addOnSection,
+                pluginSection,
+                Kit.Section("System & Alerts", null,
+                    Kit.Nav(GBell, "Notifications", n.Enabled ? "On" : "Off", () => Go(page, "notifications"), "settings.notifications"),
+                    Kit.Toggle(GSpeaker, "Completion Sound", null, soundPrefs.IsOn, on => { soundPrefs.IsOn = on; Draw(); }, "row:completion-sound"),
+                    soundRow,
+                    Kit.Nav(GMic, "Voice", null, () => Go(page, "voice"), "settings.general.voice"),
+                    configStore != null
+                        ? Kit.Nav(GSparkle, ProactivityBeta.PageLabel, "Beta", () => Go(page, "proactivity-beta"), "settings.proactivity-beta")
+                        : null),
+                Kit.Section("App & Sharing", null,
+                    configStore != null
+                        ? Kit.Toggle(GResume, SettingsWords.ResumeLastChatLabel, SettingsWords.ResumeLastChatNote,
+                            ResumeLastSession(), SetResumeLastSession, "row:resume-last-chat")
+                        : null,
+                    Kit.Toggle(GTip, SettingsWords.InAppTipsLabel, null, ChatPrefs.InAppTips, on => ChatPrefs.InAppTips = on, "row:tips")));
+        }
+
+        void OnConfigChanged()
+        {
+            if (disposed) return;
+            host.DispatcherQueue?.TryEnqueue(() => { if (!disposed) Draw(); });
+        }
+
+        if (configStore != null)
+        {
+            configStore.Changed += OnConfigChanged;
+            _ = configStore.LoadAsync();
+        }
+        AddOnReminder.Changed += OnConfigChanged;
+        PluginUpdateReminder.Changed += OnConfigChanged;
+        host.Unloaded += (_, _) =>
+        {
+            disposed = true;
+            AddOnReminder.Changed -= OnConfigChanged;
+            PluginUpdateReminder.Changed -= OnConfigChanged;
+            if (configStore != null)
+            {
+                configStore.Changed -= OnConfigChanged;
+                _ = configStore.Flush();
+            }
+        };
+
+        Draw();
+        return host;
     }
 
-    // ---------------------------------------------------------------- Appearance (AppearanceSections: Look, Text Size, Bots & Sessions)
+    private static Border ReminderBadge(string text) => new()
+    {
+        CornerRadius = new CornerRadius(10),
+        Padding = new Thickness(7, 1, 7, 2),
+        Background = Kit.B("SystemFillColorCriticalBrush"),
+        VerticalAlignment = VerticalAlignment.Center,
+        Child = new TextBlock
+        {
+            Text = text,
+            FontSize = 11,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = new SolidColorBrush(Microsoft.UI.Colors.White),
+        },
+    };
+
+    private static Button ReminderNavRow(string glyph, string title, UIElement badge, Action open, string id)
+    {
+        var trailing = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        trailing.Children.Add(badge);
+        trailing.Children.Add(new FontIcon { Glyph = "", FontSize = 11, Foreground = Kit.B("TextFillColorTertiaryBrush"), VerticalAlignment = VerticalAlignment.Center });
+        var row = Kit.Row(glyph, title, null, trailing, id);
+        var button = new Button
+        {
+            Content = row,
+            Padding = new Thickness(0),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+            BorderThickness = new Thickness(0),
+            CornerRadius = new CornerRadius(0),
+            Tag = id,
+        };
+        AutomationProperties.SetName(button, title);
+        AutomationProperties.SetAutomationId(button, id);
+        button.Click += (_, _) => open();
+        return button;
+    }
+
+    // ---------------------------------------------------------------- Appearance (AppearancePage.swift: LookModePicker, HermesCornersRow, Window Transparency, BotChatsStyle, Reset)
 
     private static FrameworkElement Appearance(SettingsPage page)
     {
         var state = ThemeService.State;
+        var reduceTransparency = SystemReduceTransparency();
+
         UIElement lightOrDark;
         if (global::Hermes.Core.Settings.Appearance.ForcedBy(state.Skin) is { } forced)
         {
-            // A skin with one look: the row says so instead of offering a choice that does nothing.
-            lightOrDark = Kit.Row(GHalf, "Light or Dark", null, new TextBlock { Text = forced.Title(), Foreground = Kit.B("TextFillColorSecondaryBrush") },
+            lightOrDark = Kit.Row(GHalf, "Light or Dark", null,
+                new TextBlock { Text = forced.Title(), Foreground = Kit.B("TextFillColorSecondaryBrush") },
                 "row:appearance");
         }
         else
@@ -105,32 +299,354 @@ internal static class SettingsPanes
                 [.. Enum.GetValues<AppearanceSetting>().Select(a => (a.Title(), a))], ThemeService.Chosen,
                 a => ThemeService.SetAppearance(a), "row:appearance");
         }
+
+        var transparencyToggle = Kit.Toggle(GTransparency, SettingsWords.WindowTransparencyLabel, null,
+            WindowTransparency.IsEffective(reduceTransparency),
+            on => ThemeService.SetWindowTransparency(on),
+            "row:window-transparency", enabled: !reduceTransparency);
+        foreach (var t in transparencyToggle.Children.OfType<ToggleSwitch>())
+            AutomationProperties.SetAutomationId(t, "settings.window-transparency");
+
+        UIElement? highContrastRow = null;
+        UIElement? cornersRow = null;
+        if (state.DesktopLook)
+        {
+            highContrastRow = Kit.Toggle(GHalf, "High Contrast", null, state.HighContrast,
+                on => ThemeService.SetHighContrast(on), "row:high-contrast");
+            foreach (var t in ((Grid)highContrastRow).Children.OfType<ToggleSwitch>())
+                AutomationProperties.SetAutomationId(t, "theme.highContrast");
+            cornersRow = HermesCornersRow(state);
+        }
+
+        var resetButton = Kit.Push(SettingsWords.ResetAppearanceLabel, async () =>
+        {
+            var dialog = new ContentDialog
+            {
+                Title = SettingsWords.ResetAppearanceTitle,
+                Content = new TextBlock { Text = SettingsWords.ResetAppearanceMessage, TextWrapping = TextWrapping.Wrap },
+                PrimaryButtonText = SettingsWords.ResetAppearanceAction,
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Close,
+            };
+            if (await SafeDialog.ShowAsync(page.XamlRoot, dialog) != ContentDialogResult.Primary) return;
+            ThemeService.ResetAppearance();
+            BackdropPainter.Prefs.Reset(BackdropPlace.App);
+            BackdropPainter.Prefs.Reset(BackdropPlace.Chats);
+            BotChatsStylePrefs.Current = BotChatsStyleKind.Branch;
+        }, destructive: true);
+        resetButton.HorizontalAlignment = HorizontalAlignment.Center;
+        AutomationProperties.SetAutomationId(resetButton, "settings.appearance-reset");
+        var resetWrap = new StackPanel { Padding = new Thickness(14, 10, 14, 10), HorizontalAlignment = HorizontalAlignment.Stretch };
+        resetWrap.Children.Add(resetButton);
+
         return Kit.Page(
-            Kit.Section("Look", SettingsWords.LookFooter(state),
+            Kit.Section("Look", SettingsWords.AppearanceLookFooter(state, reduceTransparency),
+                LookModePicker(state),
                 lightOrDark,
                 Kit.Nav(GPalette, "Theme", state.Skin.Label, () => Go(page, "theme"), "settings.theme-row"),
-                Kit.Toggle(GDesktop, "Desktop Look", null, state.DesktopLook, on => ThemeService.SetDesktopLook(on), "row:desktop-look")),
+                transparencyToggle,
+                highContrastRow,
+                cornersRow),
             Kit.Section("Text Size", SettingsWords.ScaleNote, UiScaleRow()),
-            // [theme-pages] Chats (AppearancePage `chats`): Chat Bubbles, Backgrounds (iOS look), Thinking Bar.
+            // [theme-pages] Chats (AppearancePage `chats`): Chat Bubbles, Backgrounds (Native look), Thinking Bar.
             Kit.Section(ChatBubbles.SectionTitle, null,
                 Kit.Nav(GBubbles, ChatBubbles.Label, ChatBubbles.Value(state), () => Go(page, ChatBubbles.Target), ChatBubbles.RowId),
                 !state.DesktopLook ? Kit.Nav(GPalette, BackdropPrefs.Title, BackdropPainter.Prefs.Load(BackdropPlace.Chats).Summary(BackdropPainter.Prefs.Load(BackdropPlace.App)), () => Go(page, BackdropPrefs.Target), "settings.backgrounds") : null,
                 ThinkingBarControl()),
-            // [density] [working-ring] Bots & Sessions (AppearancePage `lists`): Density, then Working Ring.
-            Kit.Section(WorkingRing.SectionTitle, DensityRow.ListsNote(state), DensityRow.Shown(state) ? DensityControl(state) : null, WorkingRingRow()),
-            // [taborder] App (AppearancePage `app`): Sidebar, the Mac's `tabsRow`, plus Chats Under Bots.
+            // [density] [working-ring] [chats-under] Bots & Sessions (AppearancePage `lists`): Density, BotChatsStyle, Working Ring.
+            Kit.Section(WorkingRing.SectionTitle, DensityRow.ListsNote(state),
+                DensityRow.Shown(state) ? DensityControl(state) : null,
+                BotChatsStyleControl(),
+                WorkingRingRow()),
+            // [taborder] App (AppearancePage `app`): Sidebar, plus Chats Under Bots limit.
             Kit.Section(SidebarPage.AppSection, null,
                 Kit.Nav(GSidebar, SidebarPage.Title, null, () => Go(page, SidebarPage.Target), SidebarPage.RowId),
-                ChatsUnderBotsControl()));
+                ChatsUnderBotsControl()),
+            Kit.Section(null, SettingsWords.AppearanceStayFooter, resetWrap));
     }
 
-    /// [theme-pages] Settings › Appearance › Chat Bubbles (ThemeSettingsView.swift `ChatBubblesSettingsView`): no header under
-    /// a bar already titled Chat Bubbles. The iOS look: Corners, then the Tinted switch (the Mac's branch with no Liquid
-    /// Glass); the Desktop Look: its own Corners (no Text Box: this desktop keeps its own message box, as the Mac).
+    /// Visual two-card Look switcher (`Native` | `Hermes`) at the top of Settings › Appearance
+    /// (App/Settings/Appearance/AppearancePage.swift `LookModePicker`).
+    private static FrameworkElement LookModePicker(ThemeState state)
+    {
+        var grid = new Grid { ColumnSpacing = 10, Padding = new Thickness(14, 12, 14, 12), Tag = "row:desktop-look" };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        AutomationProperties.SetAutomationId(grid, "theme.desktopLook");
+
+        var nativeCard = LookCard("Native", isHermes: false, selected: !state.DesktopLook, state);
+        var hermesCard = LookCard("Hermes", isHermes: true, selected: state.DesktopLook, state);
+        grid.Children.Add(nativeCard);
+        Grid.SetColumn(hermesCard, 1);
+        grid.Children.Add(hermesCard);
+        return grid;
+    }
+
+    private static Button LookCard(string title, bool isHermes, bool selected, ThemeState state)
+    {
+        var outerCorner = state.DesktopLook ? state.ShapeRadius(ShapeRole.Card, 12) : 12;
+        var miniCorner = isHermes ? Math.Min(9, state.ShapeRadius(ShapeRole.Card, 9)) : 9;
+        var miniBubble = isHermes ? Math.Min(5.5, state.ShapeRadius(ShapeRole.Control, 5.5)) : 5.5;
+
+        var previewContent = new StackPanel { Spacing = 6 };
+        if (isHermes)
+        {
+            previewContent.Children.Add(new Border
+            {
+                Width = 68, Height = 6, CornerRadius = new CornerRadius(3), HorizontalAlignment = HorizontalAlignment.Left,
+                Background = Kit.B("TextFillColorSecondaryBrush"), Opacity = 0.5,
+            });
+            previewContent.Children.Add(new Border
+            {
+                Width = 48, Height = 11, CornerRadius = new CornerRadius(miniBubble), HorizontalAlignment = HorizontalAlignment.Right,
+                Background = Kit.B("HQMeBubbleBrush"), BorderBrush = Kit.B("AccentTextFillColorPrimaryBrush"), BorderThickness = new Thickness(1),
+            });
+        }
+        else
+        {
+            previewContent.Children.Add(new Border
+            {
+                Width = 62, Height = 10, CornerRadius = new CornerRadius(5), HorizontalAlignment = HorizontalAlignment.Left,
+                Background = Kit.B("HQBotBubbleBrush"),
+            });
+            previewContent.Children.Add(new Border
+            {
+                Width = 44, Height = 10, CornerRadius = new CornerRadius(5), HorizontalAlignment = HorizontalAlignment.Right,
+                Background = Kit.B("AccentFillColorDefaultBrush"),
+            });
+        }
+
+        var mini = new Border
+        {
+            Child = previewContent,
+            Padding = new Thickness(8),
+            MinHeight = 46,
+            CornerRadius = new CornerRadius(miniCorner),
+            Background = Kit.B("HQPageBrush"),
+            BorderBrush = Kit.B("CardStrokeColorDefaultBrush"),
+            BorderThickness = new Thickness(1),
+        };
+        AutomationProperties.SetAccessibilityView(mini, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
+
+        var labelRow = new Grid();
+        labelRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        labelRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        labelRow.Children.Add(new TextBlock { Text = title, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
+        if (selected)
+        {
+            var check = new FontIcon
+            {
+                Glyph = "\uE73E", FontSize = 12, VerticalAlignment = VerticalAlignment.Center,
+                Foreground = Kit.B("AccentTextFillColorPrimaryBrush"),
+            };
+            Grid.SetColumn(check, 1);
+            labelRow.Children.Add(check);
+        }
+
+        var content = new StackPanel { Spacing = 8 };
+        content.Children.Add(mini);
+        content.Children.Add(labelRow);
+
+        var btn = new Button
+        {
+            Content = content,
+            Padding = new Thickness(9),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            CornerRadius = new CornerRadius(outerCorner),
+            Background = Kit.B("HQGroupedBrush"),
+            BorderBrush = Kit.B(selected ? "AccentTextFillColorPrimaryBrush" : "CardStrokeColorDefaultBrush"),
+            BorderThickness = new Thickness(selected ? 2 : 1),
+        };
+        AutomationProperties.SetName(btn, $"{title} Look" + (selected ? ", selected" : ""));
+        AutomationProperties.SetAutomationId(btn, isHermes ? "theme.desktopLook.desktop" : "theme.desktopLook.ios");
+        btn.Click += (_, _) =>
+        {
+            if (ThemeService.State.DesktopLook != isHermes) ThemeService.SetDesktopLook(isHermes);
+        };
+        return btn;
+    }
+
+    /// [desktop-radius] Appearance › Look › Corners: continuous slider (0–20 pt) + live miniature corner preview +
+    /// tappable preset ticks + Reset back to 4 pt (App/Settings/Appearance/AppearancePage.swift `HermesCornersRow`).
+    private static FrameworkElement HermesCornersRow(ThemeState state)
+    {
+        var stored = (int)Math.Round(state.DesktopRadius);
+        var stack = new StackPanel { Padding = new Thickness(14, 10, 14, 12), Spacing = 10, Tag = "row:hermes-corners" };
+
+        var header = new Grid { ColumnSpacing = 8 };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var titleStack = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
+        titleStack.Children.Add(new FontIcon { Glyph = GCorners, FontSize = 16, VerticalAlignment = VerticalAlignment.Center });
+        titleStack.Children.Add(new TextBlock { Text = SettingsWords.HermesCornersLabel, VerticalAlignment = VerticalAlignment.Center });
+        header.Children.Add(titleStack);
+
+        var pointsText = new TextBlock
+        {
+            Text = $"{stored} pt",
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = Kit.B("TextFillColorSecondaryBrush"),
+        };
+        Grid.SetColumn(pointsText, 1);
+        header.Children.Add(pointsText);
+
+        var resetBtn = new HyperlinkButton
+        {
+            Content = "Reset",
+            Padding = new Thickness(4, 0, 4, 0),
+            Visibility = stored != 4 ? Visibility.Visible : Visibility.Collapsed,
+        };
+        AutomationProperties.SetAutomationId(resetBtn, "theme.desktopRadiusReset");
+        resetBtn.Click += (_, _) => ThemeService.ResetDesktopRadius();
+        Grid.SetColumn(resetBtn, 2);
+        header.Children.Add(resetBtn);
+        stack.Children.Add(header);
+
+        // Live miniature showing a Hermes card, Primary button, outlined Button, Tag pill, and bubble morphing together.
+        var primaryBtn = new Border
+        {
+            Padding = new Thickness(10, 4, 10, 4),
+            Background = Kit.B("AccentFillColorDefaultBrush"),
+            Child = new TextBlock { Text = "Primary", FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = Kit.B("TextOnAccentFillColorPrimaryBrush") },
+        };
+        var outlinedBtn = new Border
+        {
+            Padding = new Thickness(10, 4, 10, 4),
+            BorderBrush = Kit.B("CardStrokeColorDefaultBrush"),
+            BorderThickness = new Thickness(1),
+            Child = new TextBlock { Text = "Button", FontSize = 11, Foreground = Kit.B("TextFillColorPrimaryBrush") },
+        };
+        var tagChip = new Border
+        {
+            Padding = new Thickness(8, 3, 8, 3),
+            Background = Kit.B("HQSettingsFieldBrush"),
+            Child = new TextBlock { Text = "Tag", FontSize = 10, FontWeight = FontWeights.Medium, Foreground = Kit.B("TextFillColorSecondaryBrush") },
+        };
+        var hiBubble = new Border
+        {
+            Padding = new Thickness(9, 3, 9, 3),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Background = Kit.B("HQMeBubbleBrush"),
+            BorderBrush = Kit.B("HQMeBorderBrush"),
+            BorderThickness = new Thickness(1),
+            Child = new TextBlock { Text = "Hi!", FontSize = 11, Foreground = Kit.B("HQMeTextBrush") },
+        };
+        var previewGrid = new Grid { ColumnSpacing = 8 };
+        previewGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        previewGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        previewGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        previewGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        previewGrid.Children.Add(primaryBtn);
+        Grid.SetColumn(outlinedBtn, 1); previewGrid.Children.Add(outlinedBtn);
+        Grid.SetColumn(tagChip, 2); previewGrid.Children.Add(tagChip);
+        Grid.SetColumn(hiBubble, 3); previewGrid.Children.Add(hiBubble);
+
+        var previewCard = new Border
+        {
+            Child = previewGrid,
+            Padding = new Thickness(10),
+            Background = Kit.B("HQEditorBrush"),
+            BorderBrush = Kit.B("CardStrokeColorDefaultBrush"),
+            BorderThickness = new Thickness(1),
+        };
+        AutomationProperties.SetAccessibilityView(previewCard, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
+        stack.Children.Add(previewCard);
+
+        void PaintPreview(double pts)
+        {
+            var probe = state with { DesktopRadius = pts };
+            var cardR = probe.ShapeRadius(ShapeRole.Card, 12);
+            var ctrlR = Math.Min(13, probe.ShapeRadius(ShapeRole.Control, 8));
+            var pillR = Math.Min(11, probe.ShapeRadius(ShapeRole.Capsule, 11));
+            var bubbleR = Math.Min(13, cardR);
+            previewCard.CornerRadius = new CornerRadius(cardR);
+            primaryBtn.CornerRadius = new CornerRadius(ctrlR);
+            outlinedBtn.CornerRadius = new CornerRadius(ctrlR);
+            tagChip.CornerRadius = new CornerRadius(pillR);
+            hiBubble.CornerRadius = new CornerRadius(bubbleR);
+        }
+        PaintPreview(stored);
+
+        var slider = new Slider
+        {
+            Minimum = 0, Maximum = 20, StepFrequency = 1, Value = stored,
+            IsThumbToolTipEnabled = false, HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+        AutomationProperties.SetName(slider, "Hermes Corners");
+        AutomationProperties.SetAutomationId(slider, "theme.desktopRadius");
+        AutomationProperties.SetItemStatus(slider, $"{stored} points");
+
+        void Commit()
+        {
+            var at = Math.Round(slider.Value);
+            if (Math.Abs(at - ThemeService.State.DesktopRadius) >= 0.5) ThemeService.SetDesktopRadius(at);
+        }
+
+        slider.ValueChanged += (_, e) =>
+        {
+            var at = (int)Math.Round(e.NewValue);
+            pointsText.Text = $"{at} pt";
+            resetBtn.Visibility = at != 4 ? Visibility.Visible : Visibility.Collapsed;
+            AutomationProperties.SetItemStatus(slider, $"{at} points");
+            PaintPreview(at);
+        };
+        slider.AddHandler(UIElement.PointerReleasedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, _) => Commit()), true);
+        slider.AddHandler(UIElement.PointerCaptureLostEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler((_, _) => Commit()), true);
+        slider.AddHandler(UIElement.KeyUpEvent, new Microsoft.UI.Xaml.Input.KeyEventHandler((_, _) => Commit()), true);
+        slider.LostFocus += (_, _) => Commit();
+
+        var track = new Grid { ColumnSpacing = 10 };
+        track.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        track.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        track.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var square = new Border { Width = 14, Height = 14, CornerRadius = new CornerRadius(2), BorderThickness = new Thickness(1.5), BorderBrush = Kit.B("TextFillColorSecondaryBrush"), VerticalAlignment = VerticalAlignment.Center };
+        var capsule = new Border { Width = 22, Height = 12, CornerRadius = new CornerRadius(6), BorderThickness = new Thickness(1.5), BorderBrush = Kit.B("TextFillColorSecondaryBrush"), VerticalAlignment = VerticalAlignment.Center };
+        AutomationProperties.SetAccessibilityView(square, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
+        AutomationProperties.SetAccessibilityView(capsule, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
+        track.Children.Add(square);
+        Grid.SetColumn(slider, 1); track.Children.Add(slider);
+        Grid.SetColumn(capsule, 2); track.Children.Add(capsule);
+        stack.Children.Add(track);
+
+        // Tappable preset ticks 0, 4, 8, 12, 16, 20.
+        int[] ticks = [0, 4, 8, 12, 16, 20];
+        var tickGrid = new Grid { Margin = new Thickness(20, 0, 20, 0) };
+        for (var i = 0; i < ticks.Length; i++)
+        {
+            var tick = ticks[i];
+            tickGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var btn = new Button
+            {
+                Content = tick.ToString(),
+                FontSize = 11,
+                FontWeight = tick == stored ? FontWeights.SemiBold : FontWeights.Normal,
+                Foreground = Kit.B(tick == stored ? "TextFillColorPrimaryBrush" : "TextFillColorTertiaryBrush"),
+                Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(4, 2, 4, 2),
+                HorizontalAlignment = HorizontalAlignment.Center,
+            };
+            AutomationProperties.SetName(btn, $"{tick} points");
+            AutomationProperties.SetAutomationId(btn, $"theme.desktopRadius.{tick}");
+            btn.Click += (_, _) => ThemeService.SetDesktopRadius(tick);
+            Grid.SetColumn(btn, i);
+            tickGrid.Children.Add(btn);
+        }
+        stack.Children.Add(tickGrid);
+        return stack;
+    }
+
+    /// [theme-pages] Settings › Appearance › Chat Bubbles (ThemeSettingsView.swift `ChatBubblesSettingsView`):
+    /// live `hasChatBackground` from `BackdropPainter.Prefs` + Reply Bubbles toggle (`ThemeService.SetPlainReplies`).
     private static FrameworkElement ChatBubblesPage()
     {
         var state = ThemeService.State;
-        var footer = string.Join("\n\n", ChatBubbles.Footer(state, hasChatBackground: false));
+        var appBg = BackdropPainter.Prefs.Load(BackdropPlace.App);
+        var hasChatBackground = BackdropPainter.Prefs.Load(BackdropPlace.Chats).EffectiveSource(appBg) != null;
+        var footer = string.Join("\n\n", ChatBubbles.Footer(state, hasChatBackground: hasChatBackground));
         UIElement? tinted = null;
         if (ChatBubbles.ShowsStyle(state))
         {
@@ -141,24 +657,49 @@ internal static class SettingsPanes
                 if (next != ChatBubbles.Shown(ThemeService.State.BubbleStyle)) ThemeService.SetBubbleStyle(next);
             }, ChatBubbles.TintedId);
         }
-        var root = Kit.Page(Kit.Section(null, footer, BubbleCornersRow(state), tinted));
+
+        // [plain-replies] Reply Bubbles toggle (ThemeSettingsView.swift `replyBubblesRow`).
+        var replyDisabledNote = ChatBubbles.ReplyBubblesDisabledNote(state, ThemeService.Dark);
+        var replyBubblesRow = Kit.Toggle(null, ChatBubbles.ReplyBubblesLabel,
+            replyDisabledNote ?? ChatBubbles.ReplyBubblesNote,
+            ChatBubbles.ReplyBubblesOn(state, ThemeService.Dark),
+            on => ThemeService.SetPlainReplies(!on),
+            "row:reply-bubbles", enabled: replyDisabledNote == null);
+        foreach (var t in replyBubblesRow.Children.OfType<ToggleSwitch>())
+            AutomationProperties.SetAutomationId(t, ChatBubbles.ReplyBubblesId);
+
+        var root = Kit.Page(Kit.Section(null, footer, BubbleCornersRow(state), tinted, replyBubblesRow));
         AutomationProperties.SetAutomationId(root, ChatBubbles.PageId);
         return root;
     }
 
     /// [theme-pages] Corners (`BubbleCornersRow`): a reply and your message as the chat draws them, then "Corners" and its
-    /// points, then the slider (square to capsule). The preview follows the drag; the chats change when it is let go, or
-    /// at once from the keyboard.
+    /// points, then the slider (square to capsule).
     private static FrameworkElement BubbleCornersRow(ThemeState state)
     {
         var stored = ChatBubbles.Corners(state);
         var stack = new StackPanel { Padding = new Thickness(14, 10, 14, 12), Spacing = 12, Tag = ChatBubbles.CornersId };
         var preview = new StackPanel { Spacing = 10 };
-        preview.Children.Add(new TextBlock
+        var replyText = new TextBlock
         {
             Text = "Your report is ready. It’s in Files, and I can send it to Ivy as well.", TextWrapping = TextWrapping.Wrap,
             Foreground = Kit.B("TextFillColorPrimaryBrush"),
-        });
+        };
+        if (state.AppliedPlainReplies)
+        {
+            preview.Children.Add(replyText);
+        }
+        else
+        {
+            preview.Children.Add(new Border
+            {
+                Child = replyText,
+                Padding = new Thickness(12, 8, 12, 8),
+                CornerRadius = new CornerRadius(stored),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Background = Kit.B("HQBotBubbleBrush"),
+            });
+        }
         var thanks = new TextBlock { Text = "Thanks!", Foreground = Kit.B("HQMeTextBrush") };
         ThemeService.ContrastWords(thanks);   // [WIN-CONTRAST-BUBBLE] your bubble's Highlight pair, no backplate
         var mine = new Border
@@ -177,7 +718,7 @@ internal static class SettingsPanes
         var points = new TextBlock { Text = ChatBubbles.CornersValue(stored), Foreground = Kit.B("TextFillColorSecondaryBrush") };
         Grid.SetColumn(points, 1);
         line.Children.Add(points);
-        AutomationProperties.SetAccessibilityView(line, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);   // the slider says both
+        AutomationProperties.SetAccessibilityView(line, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
         stack.Children.Add(line);
         var slider = new Slider
         {
@@ -187,8 +728,6 @@ internal static class SettingsPanes
         AutomationProperties.SetName(slider, ChatBubbles.CornersName);
         AutomationProperties.SetAutomationId(slider, ChatBubbles.CornersId);
         AutomationProperties.SetItemStatus(slider, ChatBubbles.CornersSpoken(stored));
-        // Applied when the pointer lets go, a key is let up (the arrow keys apply at once) or the slider loses focus: each
-        // change draws Settings and every open chat again, so never in the middle of a drag.
         void Finish()
         {
             var at = (int)Math.Round(slider.Value);
@@ -209,7 +748,6 @@ internal static class SettingsPanes
         track.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         track.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         track.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        // square … capsule, as the Mac's minimum and maximum value labels.
         var square = new Border { Width = 14, Height = 14, CornerRadius = new CornerRadius(2), BorderThickness = new Thickness(1.5), BorderBrush = Kit.B("TextFillColorSecondaryBrush"), VerticalAlignment = VerticalAlignment.Center };
         var capsule = new Border { Width = 22, Height = 12, CornerRadius = new CornerRadius(6), BorderThickness = new Thickness(1.5), BorderBrush = Kit.B("TextFillColorSecondaryBrush"), VerticalAlignment = VerticalAlignment.Center };
         AutomationProperties.SetAccessibilityView(square, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
@@ -223,8 +761,7 @@ internal static class SettingsPanes
         return stack;
     }
 
-    /// [density] Standard / Compact as two segments at the row's end (the Mac's `HQSegmentedPicker` in `DensityRow`), the
-    /// chosen one filled. The row is "row:density" (search scrolls to it), the strip the Mac's "theme.density".
+    /// [density] Standard / Compact as two segments at the row's end.
     private static FrameworkElement DensityControl(ThemeState state)
     {
         var strip = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 0 };
@@ -251,8 +788,13 @@ internal static class SettingsPanes
         return Kit.Row(GDensity, DensityRow.Label, null, strip, DensityRow.RowTarget);
     }
 
-    /// [working-ring] The switch: the row is "row:working-ring" (search scrolls to it), the switch the Mac's
-    /// "theme.workingRing". The write tells the bot and session lists, which draw their rows again at once.
+    private static FrameworkElement BotChatsStyleControl()
+    {
+        var options = BotChatsStylePrefs.All.Select(k => (BotChatsStylePrefs.Label(k), k)).ToList();
+        return Kit.Picker(null, SettingsWords.BotChatsStyleLabel, null, options, BotChatsStylePrefs.Current,
+            v => BotChatsStylePrefs.Current = v, "row:bot-chats-style");
+    }
+
     private static FrameworkElement WorkingRingRow()
     {
         var row = Kit.Toggle(GRing, WorkingRing.Label, null, WorkingRing.IsOn, on => WorkingRing.IsOn = on, WorkingRing.RowTarget);
@@ -310,7 +852,6 @@ internal static class SettingsPanes
     private static FrameworkElement Theme()
     {
         var state = ThemeService.State;
-        // Reflow to 1 column at accessibility text sizes so theme cards never crush horizontally.
         var cols = ThemeService.AccessibilityTextSize ? 1 : 2;
         var grid = new Grid { ColumnSpacing = 12, RowSpacing = 12 };
         for (var c = 0; c < cols; c++) grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -318,7 +859,7 @@ internal static class SettingsPanes
         for (var i = 0; i < skins.Count; i++)
         {
             if (i % cols == 0) grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            var card = SkinCard(skins[i], skins[i].Id == state.SkinId, state.DesktopLook);
+            var card = SkinCard(skins[i], skins[i].Id == state.SkinId, state);
             Grid.SetRow(card, i / cols);
             Grid.SetColumn(card, i % cols);
             grid.Children.Add(card);
@@ -331,18 +872,15 @@ internal static class SettingsPanes
         top.Children.Add(notes);
         return Kit.Page(
             top,
-            // High Contrast is the Desktop Look's: it only draws there.
             state.DesktopLook
                 ? Kit.Section(null, SettingsWords.ContrastNote,
                     Kit.Toggle(null, "High Contrast", null, state.HighContrast, on => ThemeService.SetHighContrast(on), "theme.highContrast"))
                 : null);
     }
 
-    /// A theme's card: its light and dark palettes side by side (one panel for a one-look theme), its name with a check
-    /// when chosen and its "Dark Only" tag, and its description.
-    private static FrameworkElement SkinCard(Skin skin, bool chosen, bool desktop)
+    private static FrameworkElement SkinCard(Skin skin, bool chosen, ThemeState state)
     {
-        var preview = new Grid { Height = 72, CornerRadius = new CornerRadius(desktop ? 2 : 6) };
+        var preview = new Grid { Height = 72, CornerRadius = new CornerRadius(state.DesktopLook ? Math.Min(6, state.ShapeRadius(ShapeRole.Control, 6)) : 6) };
         var looks = skin.HasOneLook ? new[] { skin.Light } : [skin.Light, skin.Dark!];
         for (var i = 0; i < looks.Length; i++)
         {
@@ -374,7 +912,8 @@ internal static class SettingsPanes
         {
             Content = stack, Padding = new Thickness(10), HorizontalAlignment = HorizontalAlignment.Stretch,
             HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalAlignment = VerticalAlignment.Stretch,
-            VerticalContentAlignment = VerticalAlignment.Top, CornerRadius = new CornerRadius(desktop ? 4 : 10),
+            VerticalContentAlignment = VerticalAlignment.Top,
+            CornerRadius = new CornerRadius(state.ShapeRadius(ShapeRole.Card, 10)),
             BorderThickness = new Thickness(chosen ? 2 : 1), Background = Kit.B("CardBackgroundFillColorDefaultBrush"),
             BorderBrush = chosen ? Kit.B("AccentFillColorDefaultBrush") : Kit.B("CardStrokeColorDefaultBrush"),
         };
@@ -385,7 +924,6 @@ internal static class SettingsPanes
         return button;
     }
 
-    /// One palette drawn small: its page, an accent pill, two lines of text, a box.
     private static FrameworkElement Swatch(SkinSeeds s)
     {
         SolidColorBrush C(Rgba c) => new(ThemeService.ToColor(c));
@@ -406,29 +944,72 @@ internal static class SettingsPanes
         return g;
     }
 
-    // ---------------------------------------------------------------- Chat
+    // ---------------------------------------------------------------- Chat (ChatSettingsPage.swift `e27566897`: 4 grouped sections)
 
     private static FrameworkElement Chat(SettingsPage page)
     {
-        // Largest Attachment: the attachments feature's row (its number field, "MB" and help), in a row of this card.
         var attachment = new StackPanel { Padding = new Thickness(14, 10, 14, 10), Tag = "row:attachment-limit" };
         attachment.Children.Add(new LargestAttachmentRow());
+
+        var sessionStripRow = Kit.Toggle(GStrip, SettingsWords.SessionStripLabel, null,
+            SessionStripRules.IsEnabled, on => SessionStripRules.IsEnabled = on, "row:session-strip");
+        foreach (var t in sessionStripRow.Children.OfType<ToggleSwitch>())
+            AutomationProperties.SetAutomationId(t, "settings.session-strip");
+
+        UIElement? clearModelsRow = null;
+        if (AppState.Client is { } client && client.AccountId is { } account)
+        {
+            var models = Composer.ComposerServices.Prefs(account);
+            var clearStatus = new TextBlock
+            {
+                FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(14, 0, 14, 0),
+                Visibility = Visibility.Collapsed, Foreground = Kit.B("TextFillColorSecondaryBrush"),
+            };
+            var clearWrap = new StackPanel { Spacing = 4 };
+            var ui = new SettingsFileUi(clearWrap, (_, _) => { });
+            var actions = new SettingsFileActions(ConfigStore(client), ui) { Models = models };
+            page.FileActions = (actions, clearWrap);
+            actions.StatusChanged += text => clearWrap.DispatcherQueue?.TryEnqueue(() =>
+            {
+                clearStatus.Text = text ?? "";
+                clearStatus.Visibility = text == null ? Visibility.Collapsed : Visibility.Visible;
+            });
+            var clearBtn = Kit.Push(SettingsFileWords.ClearModels, () => _ = actions.ConfirmClearModelsAsync());
+            AutomationProperties.SetAutomationId(clearBtn, "settings.clear-models");
+            clearWrap.Children.Add(Kit.Row(GSparkle, "Favorite & Recent Models", null, clearBtn, "row:clear-models"));
+            clearWrap.Children.Add(clearStatus);
+            clearModelsRow = clearWrap;
+        }
+
         return Kit.Page(
-            Kit.Section(null, null,
+            // 1. Conversation Display
+            Kit.Section("Conversation Display", null,
                 Kit.Nav(GWrench, "Tool Calls", ChatDisplaySettings.Style.Title(), () => Go(page, "tool-calls"), "settings.tool-calls"),
                 Kit.Toggle(GClock, "Fewer Timestamps", SettingsWords.FewerTimestampsNote, ChatDisplaySettings.FewerTimestamps,
                     on => ChatDisplaySettings.FewerTimestamps = on, "row:fewer-timestamps"),
-                attachment,
-                // [WIN-CHAT-INTRO] SettingsRootView.swift's "settings.intro-splash" (§7), on by default.
-                Kit.Toggle(null, SettingsWords.IntroSplashLabel, null, Hermes.Core.Chat.ChatIntro.IsOn,
-                    on => Hermes.Core.Chat.ChatIntro.IsOn = on, "row:intro-splash"),
-                Kit.Toggle(GFolder, SettingsWords.FileBrowserLabel, null, ChatPrefs.FileBrowser, on => ChatPrefs.FileBrowser = on, "row:file-browser"),
                 Kit.Toggle(GSmile, "Message Reactions", SettingsWords.MessageReactionsNote, ChatDisplaySettings.Reactions,
-                    on => ChatDisplaySettings.Reactions = on, "row:message-reactions")));
+                    on => ChatDisplaySettings.Reactions = on, "row:message-reactions"),
+                Kit.Toggle(null, SettingsWords.IntroSplashLabel, null, Hermes.Core.Chat.ChatIntro.IsOn,
+                    on => Hermes.Core.Chat.ChatIntro.IsOn = on, "row:intro-splash")),
+            // 2. Toolbar & Navigation
+            Kit.Section("Toolbar & Navigation", null,
+                Kit.Toggle(GFolder, SettingsWords.FileBrowserLabel, null, ChatPrefs.FileBrowser, on => ChatPrefs.FileBrowser = on, "row:file-browser"),
+                sessionStripRow),
+            // 3. Sending & New Chats
+            Kit.Section("Sending & New Chats", null,
+                Kit.Picker(GSend, SettingsWords.SendWhileBusyLabel, SettingsWords.SendWhileBusyNote,
+                    [("Steer", "steer"), ("Queue", "queue")], ChatPrefs.SendWhileBusy,
+                    v => ChatPrefs.SendWhileBusy = v, "row:send-while-busy"),
+                Kit.Toggle(GFolder, SettingsWords.NewChatAsksProjectLabel, SettingsWords.NewChatAsksProjectNote,
+                    ChatPrefs.NewChatAsksProject, on => ChatPrefs.NewChatAsksProject = on, "row:new-chat-asks-project"),
+                attachment),
+            // 4. Models
+            Kit.Section(SettingsWords.ModelsLabel, null,
+                Kit.Nav(GBolt, SettingsWords.ModelsLabel, null, () => Go(page, "models"), "settings.models"),
+                Kit.Nav(GSparkle, SettingsWords.AuxiliaryModelsLabel, null, () => Go(page, "auxiliary-models"), "settings.auxiliary-models"),
+                clearModelsRow));
     }
 
-    /// Settings › Chat › Tool Calls (App/Settings/ToolCallsSettingsView.swift): Tool Call Style as a radio list, each
-    /// with its own line; Tool Calls After Reply (not under In Header).
     private static FrameworkElement ToolCalls()
     {
         var host = new ContentControl { IsTabStop = false, HorizontalContentAlignment = HorizontalAlignment.Stretch };
@@ -469,60 +1050,23 @@ internal static class SettingsPanes
         return radio;
     }
 
-    // ---------------------------------------------------------------- Sounds
+    // ---------------------------------------------------------------- Hermes (Gateway): Behavior & Runtime + Backup & Reset
 
-    private static FrameworkElement Sounds()
+    private static FrameworkElement HermesCategory(SettingsPage page)
     {
-        var prefs = new CompletionSoundPrefs(Prefs);
-        var host = new ContentControl { IsTabStop = false, HorizontalContentAlignment = HorizontalAlignment.Stretch };
-        void Draw()
-        {
-            UIElement? sound = null;
-            if (prefs.IsOn)
-            {
-                var name = CompletionSoundSynth.Find(prefs.Variant).Name;
-                var trailing = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-                var play = new Button { Content = new FontIcon { Glyph = GPlay, FontSize = 14 }, Padding = new Thickness(8, 6, 8, 6),
-                    Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent), BorderThickness = new Thickness(0) };
-                AutomationProperties.SetName(play, $"Play {name}");
-                ToolTipService.SetToolTip(play, $"Play {name}");
-                play.Click += (_, _) => CompletionCue.Preview(prefs.Variant);
-                trailing.Children.Add(play);
-                var box = new ComboBox { MinWidth = 180 };
-                foreach (var p in CompletionSoundSynth.Presets) box.Items.Add(p.Name);
-                box.SelectedIndex = CompletionSoundSynth.Presets.ToList().FindIndex(p => p.Id == prefs.Variant);
-                AutomationProperties.SetName(box, "Sound");
-                AutomationProperties.SetAutomationId(box, "settings.sound");
-                box.SelectionChanged += (_, _) =>
-                {
-                    if (box.SelectedIndex < 0) return;
-                    var id = CompletionSoundSynth.Presets[box.SelectedIndex].Id;
-                    if (id == prefs.Variant) return;
-                    prefs.Variant = id;
-                    CompletionCue.Preview(id); // choosing a sound plays it
-                    Draw();
-                };
-                trailing.Children.Add(box);
-                sound = Kit.Row(GNote, "Sound", null, trailing, "row:sound");
-            }
-            host.Content = Kit.Page(Kit.Section(null, SettingsWords.SoundsFooter,
-                Kit.Toggle(GSpeaker, "Completion Sound", null, prefs.IsOn, on => { prefs.IsOn = on; Draw(); }, "row:completion-sound"),
-                sound));
-        }
-        Draw();
-        return host;
+        page.FileActions = null;
+        return Kit.Page(
+            Kit.Section("Behavior & Runtime",
+                $"Voice’s Read Replies Aloud and Send Memo on Release, and the default project folder, are kept on this {DeviceWord.Name}.",
+                Kit.Nav(GBolt, SettingsWords.ModelsLabel, null, () => Go(page, "models"), "settings.config.models"),
+                Kit.Nav(GMic, "Voice", null, () => Go(page, "voice"), "settings.config.voice"),
+                Kit.Nav(GFolder, SettingsWords.SessionsPageTitle, null, () => Go(page, "sessions"), "settings.sessions"),
+                Kit.Nav(GLink, "Browser Use Cloud", null, () => Go(page, "browser-cloud"), "settings.browser-cloud")),
+            AppState.Client is { } client
+                ? FileActionsSection(page, ConfigStore(client), client.AccountId is { } account ? Composer.ComposerServices.Prefs(account) : null)
+                : null);
     }
 
-    // ---------------------------------------------------------------- Hermes
-
-    private static FrameworkElement HermesCategory(SettingsPage page) => Kit.Page(
-        Kit.Section(null, $"Voice’s Read Replies Aloud and Send Memo on Release, and the default project folder, are kept on this {DeviceWord.Name}.",
-            Kit.Nav(GMic, "Voice", null, () => Go(page, "voice"), "settings.config.voice"),
-            Kit.Nav(GFolder, SettingsWords.SessionsPageTitle, null, () => Go(page, "sessions"), "settings.sessions"),
-            Kit.Nav(GLink, "Browser Use Cloud", null, () => Go(page, "browser-cloud"), "settings.browser-cloud")));
-
-    /// The gateway's config record, one store per signed-in gateway shared by every page that edits it
-    /// (SettingsNavigator.swift `router.gatewaySettings?.configStore`).
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<global::Hermes.Core.HermesClient, GatewayConfigStore> ConfigStores = new();
 
     private static GatewayConfigStore ConfigStore(global::Hermes.Core.HermesClient client)
@@ -531,9 +1075,6 @@ internal static class SettingsPanes
         return ConfigStores.GetValue(client, c => new GatewayConfigStore(new GatewayConfigApi(c.Session)));
     }
 
-    /// Archiving & Project Folder (VaultBillingPages.swift `SessionsSettingsView`): the save-failure card, then Auto-Archive
-    /// Stale Chats and Archive After … days (the gateway's `sessions.auto_archive` / `auto_archive_days`, autosaved as a
-    /// sparse `PUT /api/config`), then Default Project Folder.
     private static FrameworkElement Sessions()
     {
         if (AppState.Client is not { } client || client.AccountId is not { } account)
@@ -545,7 +1086,7 @@ internal static class SettingsPanes
     private static FrameworkElement AutoArchiveSections(GatewayConfigStore store)
     {
         var root = new StackPanel { Spacing = 22 };
-        var status = new ContentControl { IsTabStop = false, HorizontalContentAlignment = HorizontalAlignment.Stretch };   // failure card, loading, load failure
+        var status = new ContentControl { IsTabStop = false, HorizontalContentAlignment = HorizontalAlignment.Stretch };
         var syncing = false;
 
         var toggle = new ToggleSwitch { OnContent = "", OffContent = "", MinWidth = 0 };
@@ -566,7 +1107,6 @@ internal static class SettingsPanes
         daysTrailing.Children.Add(days);
         daysTrailing.Children.Add(new TextBlock { Text = AutoArchive.DaysUnit, VerticalAlignment = VerticalAlignment.Center, Foreground = Kit.B("TextFillColorSecondaryBrush") });
         var daysRow = Kit.Row(null, AutoArchive.DaysLabel, null, daysTrailing, "row:auto-archive-days");
-        // Archive After shows only while the switch is on: it and its hairline come and go together.
         var daysWrap = new StackPanel();
         daysWrap.Children.Add(new Border { Height = 1, Margin = new Thickness(48, 0, 0, 0), Background = Kit.B("DividerStrokeColorDefaultBrush") });
         daysWrap.Children.Add(daysRow);
@@ -630,8 +1170,6 @@ internal static class SettingsPanes
         return scope;
     }
 
-    /// "Couldn’t Save Your Change" (SettingsComponents.swift `SaveFailureSection`): the words, Details, Copy, Dismiss and
-    /// Try Again, which sends the same change again.
     private static FrameworkElement SaveFailureCard(GatewayConfigStore store, GatewayConfigStore.SaveFailure failure)
     {
         var stack = new StackPanel { Spacing = 6, Padding = new Thickness(14, 12, 14, 12) };
@@ -654,7 +1192,7 @@ internal static class SettingsPanes
         copy = Kit.Push("Copy", async () =>
         {
             if (!SafeClipboard.TrySetText(string.Join("\n", new[] { "Couldn’t save your change", failure.Text, failure.Detail ?? "" }.Where(t => t.Length > 0)))) return;
-            copy!.Content = "Copied";   // "Copied" for two seconds, then "Copy" again
+            copy!.Content = "Copied";
             await Task.Delay(2000);
             copy.Content = "Copy";
         });
@@ -669,8 +1207,6 @@ internal static class SettingsPanes
         return Kit.Card(stack);
     }
 
-    /// Archiving & Project Folder's Default Project Folder (VaultBillingPages.swift `DefaultProjectFolderField`): typed in
-    /// place, kept once the gateway says it is a folder; emptied, it is cleared.
     private static FrameworkElement DefaultFolderSection(string account)
     {
         var saved = DefaultProjectFolder.Path(account) ?? "";
@@ -720,8 +1256,6 @@ internal static class SettingsPanes
         return Kit.Section("Default Project Folder", SettingsWords.DefaultFolderFooter, Kit.Row(null, "Folder", null, trailing, "row:default-folder"));
     }
 
-    /// Settings › Voice, as far as it is this PC's: Read Replies Aloud and Send Memo on Release (the voice feature reads
-    /// them, and adds its own cards through SettingsHooks.Voice).
     private static FrameworkElement Voice()
     {
         var host = new ContentControl { IsTabStop = false, HorizontalContentAlignment = HorizontalAlignment.Stretch };
@@ -746,10 +1280,154 @@ internal static class SettingsPanes
         return host;
     }
 
+    // ---------------------------------------------------------------- Accounts & Keys (SettingsRootView.swift `e27566897`)
+
+    private static FrameworkElement AccountsCategory(SettingsPage page)
+    {
+        var info = SettingsFeature.Gateway();
+        return Kit.Page(
+            Kit.Section(null, null,
+                Kit.Nav(GDesktop, "Gateway", info.Name, () => page.OpenGateway(), "settings.accounts.gateway"),
+                Kit.Nav(GKey, "Passwords", null, () => Go(page, "vault"), "settings.vault"),
+                Kit.Nav(GBolt, "Providers", null, () => Go(page, "providers"), "settings.providers"),
+                Kit.Nav(GKey, "Keys", null, () => Go(page, "keys"), "settings.keys"),
+                Kit.Nav(GCard, "Billing", null, () => Go(page, "billing"), "settings.billing")));
+    }
+
+    private static FrameworkElement VaultPane(SettingsPage page)
+    {
+        var openGateway = Kit.Push("Open Gateway Settings", () => page.OpenGateway());
+        var wrap = new StackPanel { Padding = new Thickness(14, 10, 14, 10) };
+        wrap.Children.Add(openGateway);
+        return Kit.Page(
+            Kit.Section("Passwords",
+                $"Sign-in credentials on this PC are protected in {DeviceWord.Keychain}. Gateway vault entries live on {HostWord.Phrase}.",
+                Kit.Value("Saved Sign-In", DeviceWord.Keychain),
+                wrap));
+    }
+
+    // ---------------------------------------------------------------- Bots & Tools (SettingsRootView.swift `e27566897`)
+
+    private static FrameworkElement ToolsCategory(SettingsPage page)
+    {
+        var host = new ContentControl { IsTabStop = false, HorizontalContentAlignment = HorizontalAlignment.Stretch };
+        var checking = false;
+        string? checkStatus = null;
+        var checkStatusIsIssue = false;
+        var disposed = false;
+
+        void Dispatch(Action work)
+        {
+            if (disposed) return;
+            if (host.DispatcherQueue is { } q) q.TryEnqueue(() => { if (!disposed) work(); });
+            else work();
+        }
+
+        async Task CheckNowAsync()
+        {
+            if (checking || AppState.Client is not { } client) return;
+            checking = true;
+            checkStatus = null;
+            checkStatusIsIssue = false;
+            Dispatch(Draw);
+            try
+            {
+                PluginUpdateReminder.Use(client.AccountId);
+                var profiles = (client.Bots ?? []).Where(b => !b.Hidden).Select(b => b.Name).ToList();
+                if (profiles.Count == 0) profiles.Add("default");
+                await PluginUpdateReminder.CheckNowAsync(client, profiles, CancellationToken.None);
+                checkStatus = PluginUpdateReminder.AvailableCount > 0
+                    ? (PluginUpdateReminder.Footer ?? PluginUpdateReminder.BadgeLabel)
+                    : "All plugins are up to date.";
+            }
+            catch (Exception ex)
+            {
+                checkStatus = SettingsErrorText.Load(ex);
+                checkStatusIsIssue = true;
+            }
+            finally
+            {
+                checking = false;
+                Dispatch(Draw);
+            }
+        }
+
+        void Draw()
+        {
+            if (disposed) return;
+            UiTree.DeactivateProgressRings(host);
+            var client = AppState.Client;
+            if (client != null) PluginUpdateReminder.Use(client.AccountId);
+
+            var tileModelValue = client != null
+                ? TileModels.DefaultValue(TileModelPane.SettingsFor(client.AccountId).DefaultModel)
+                : null;
+
+            var checkAuto = Kit.Toggle(GUpdate, "Check Automatically", null, PluginUpdateReminder.IsAutomatic,
+                on =>
+                {
+                    PluginUpdateReminder.IsAutomatic = on;
+                    AppLog.Note("settings", $"automatic plugin update checks {(on ? "on" : "off")}");
+                },
+                "row:plugin-update-checks", enabled: client != null);
+            foreach (var t in checkAuto.Children.OfType<ToggleSwitch>())
+                AutomationProperties.SetAutomationId(t, "settings.plugin-update-checks");
+
+            var checkTrailing = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            if (checking)
+                checkTrailing.Children.Add(new ProgressRing { IsActive = true, Width = 16, Height = 16 });
+            else if (PluginUpdateReminder.BadgeLabel is { } badgeLabel)
+                checkTrailing.Children.Add(ReminderBadge(badgeLabel));
+            var checkNow = Kit.Push(checking ? "Checking…" : "Check for Plugin Updates", () => _ = CheckNowAsync());
+            checkNow.IsEnabled = client != null && !checking;
+            AutomationProperties.SetAutomationId(checkNow, "settings.check-plugin-updates");
+            checkTrailing.Children.Add(checkNow);
+
+            UIElement? statusRow = null;
+            if (!string.IsNullOrEmpty(checkStatus))
+            {
+                statusRow = new TextBlock
+                {
+                    Text = checkStatus,
+                    FontSize = 12,
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(14, 8, 14, 10),
+                    Foreground = Kit.B(checkStatusIsIssue ? "SystemFillColorCriticalBrush" : "TextFillColorSecondaryBrush"),
+                };
+            }
+
+            host.Content = Kit.Page(
+                Kit.Section("Capabilities & Channels", null,
+                    Kit.Nav(GWrench, "Capabilities", PluginUpdateReminder.BadgeLabel, () => Navigator.Open("capabilities"), "settings.capabilities"),
+                    Kit.Nav(GSparkle, "Tile Model", tileModelValue, () => Go(page, "tile-model"), "settings.tile-model"),
+                    Kit.Nav(GPeople, "Bot Profiles", null, () => Navigator.Open("profiles"), "settings.more.profiles"),
+                    Kit.Nav(GBubbles, "Messaging", null, () => Navigator.Open("messaging"), "settings.more.messaging"),
+                    Kit.Nav(GHook, "Webhooks", null, () => Navigator.Open("webhooks"), "settings.more.webhooks"),
+                    Kit.Nav(GImport, "Import Sessions", null, () => Navigator.Open("import-sessions"), "settings.more.import-sessions")),
+                Kit.Section(SettingsWords.PluginUpdatesHeader, PluginUpdateReminder.AutoCheckFooter,
+                    checkAuto,
+                    Kit.Row(GUpdate, "Check for Plugin Updates", null, checkTrailing, "row:check-plugin-updates"),
+                    statusRow));
+        }
+
+        void OnReminderChanged() => Dispatch(Draw);
+        void OnTileModelChanged(string _) => Dispatch(Draw);
+        PluginUpdateReminder.Changed += OnReminderChanged;
+        TileModelSync.Shared.Changed += OnTileModelChanged;
+        host.Unloaded += (_, _) =>
+        {
+            disposed = true;
+            PluginUpdateReminder.Changed -= OnReminderChanged;
+            TileModelSync.Shared.Changed -= OnTileModelChanged;
+            UiTree.DeactivateProgressRings(host);
+        };
+
+        Draw();
+        return host;
+    }
+
     // ---------------------------------------------------------------- Notifications
 
-    /// Settings › Notifications (App/Notifications/NotificationsSettingsView.swift), its switches as kept on this PC; the
-    /// notifications feature reads them, and adds Send Test Notification and the add-on through SettingsHooks.
     private static FrameworkElement Notifications()
     {
         var host = new ContentControl { IsTabStop = false, HorizontalContentAlignment = HorizontalAlignment.Stretch };
@@ -775,25 +1453,115 @@ internal static class SettingsPanes
         return host;
     }
 
-    // ---------------------------------------------------------------- About
+    // ---------------------------------------------------------------- About + Community Invite (`dcf89ffb1`)
 
     private static FrameworkElement AboutCategory(SettingsPage page)
     {
         page.FileActions = null;
-        return Kit.Page(Kit.Section(null, null, Kit.Nav(GInfo, "About", null, () => Go(page, "about"), "settings.about")),
-            AppState.Client is { } client
-                ? FileActionsSection(page, ConfigStore(client), client.AccountId is { } account ? Composer.ComposerServices.Prefs(account) : null)
-                : null);
+        var host = new ContentControl { IsTabStop = false, HorizontalContentAlignment = HorizontalAlignment.Stretch };
+
+        void Draw()
+        {
+            host.Content = Kit.Page(
+                !CommunityInvite.IsDismissed(Prefs) ? DiscordInviteBanner(Draw) : null,
+                Kit.Section(null, null,
+                    Kit.Nav(GInfo, "About", SettingsFeature.AppVersion, () => Go(page, "about"), "settings.about")),
+                Kit.Section("Community & Links", null,
+                    LinkRow(CommunityInvite.DiscordLabel, CommunityInvite.DiscordUrl, "row:discord"),
+                    LinkRow(CommunityInvite.WebsiteLabel, CommunityInvite.WebsiteUrl),
+                    LinkRow(CommunityInvite.GitHubLabel, CommunityInvite.GitHubUrl),
+                    LinkRow("Support", SettingsWords.SupportUrl, "row:support"),
+                    LinkRow("Privacy Policy", SettingsWords.PrivacyUrl)));
+        }
+
+        Draw();
+        return host;
     }
 
-    /// Export Settings…, Import Settings…, Clear Model Favorites… and Reset to Defaults… under About
-    /// (SettingsRootView.swift, shown while the gateway's config can be reached): two pairs of push buttons, with
-    /// the last action's words and "Exported files leave out keys, tokens and passwords." under them.
-    /// `models`: this account's model stars and recents on this PC, which Clear Model Favorites… empties.
+    /// Dismissible "Join the Hermes HQ Discord" card (App/Pages/More/CommunityInvite.swift `DiscordInviteCard`).
+    private static FrameworkElement DiscordInviteBanner(Action redraw)
+    {
+        var blurple = new SolidColorBrush(ThemeService.ToColor(CommunityInvite.Blurple));
+        var white = new SolidColorBrush(Microsoft.UI.Colors.White);
+
+        var mark = new Border
+        {
+            Width = 40, Height = 40,
+            CornerRadius = new CornerRadius(10),
+            Background = blurple,
+            VerticalAlignment = VerticalAlignment.Top,
+            Child = new FontIcon { Glyph = GBubbles, FontSize = 18, Foreground = white },
+        };
+        AutomationProperties.SetAccessibilityView(mark, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
+
+        var copy = new StackPanel { Spacing = 4 };
+        copy.Children.Add(new TextBlock { Text = CommunityInvite.BannerTitle, FontSize = 15, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
+        copy.Children.Add(new TextBlock
+        {
+            Text = CommunityInvite.BannerBody,
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = Kit.B("TextFillColorSecondaryBrush"),
+        });
+
+        var closeBtn = new Button
+        {
+            Content = new FontIcon { Glyph = "\uE711", FontSize = 11 },
+            Width = 28, Height = 28,
+            Padding = new Thickness(0),
+            CornerRadius = new CornerRadius(14),
+            VerticalAlignment = VerticalAlignment.Top,
+            Background = Kit.B("HQSettingsFieldBrush"),
+            BorderThickness = new Thickness(0),
+        };
+        AutomationProperties.SetName(closeBtn, CommunityInvite.BannerCloseLabel);
+        AutomationProperties.SetHelpText(closeBtn, CommunityInvite.BannerCloseHint);
+        AutomationProperties.SetAutomationId(closeBtn, "more.discord.close");
+        closeBtn.Click += (_, _) => { CommunityInvite.Dismiss(Prefs); redraw(); };
+
+        var header = new Grid { ColumnSpacing = 12 };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.Children.Add(mark);
+        Grid.SetColumn(copy, 1); header.Children.Add(copy);
+        Grid.SetColumn(closeBtn, 2); header.Children.Add(closeBtn);
+
+        var joinBtn = new Button
+        {
+            Content = CommunityInvite.BannerJoinLabel,
+            Background = blurple,
+            Foreground = white,
+            FontWeight = FontWeights.SemiBold,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            CornerRadius = new CornerRadius(ThemeService.State.ShapeRadius(ShapeRole.Capsule, 18)),
+            Padding = new Thickness(14, 7, 14, 7),
+        };
+        AutomationProperties.SetHelpText(joinBtn, CommunityInvite.BannerJoinHint);
+        AutomationProperties.SetAutomationId(joinBtn, "more.discord.join");
+        joinBtn.Click += async (_, _) =>
+        {
+            AppLog.Note("screen", "discord invite: about card join");
+            await Windows.System.Launcher.LaunchUriAsync(new Uri(CommunityInvite.DiscordUrl));
+        };
+
+        var cardStack = new StackPanel { Spacing = 12, Padding = new Thickness(14, 14, 14, 14) };
+        cardStack.Children.Add(header);
+        cardStack.Children.Add(joinBtn);
+        return Kit.Card(cardStack);
+    }
+
+    /// Export Settings…, Import Settings…, Clear Model Favorites… and Reset to Defaults… under Hermes › Backup & Reset
+    /// (SettingsRootView.swift `e27566897`).
     private static FrameworkElement FileActionsSection(SettingsPage page, GatewayConfigStore store, Hermes.Core.Composer.ModelPrefs? models)
     {
         SettingsFileActions.Log ??= line => AppLog.Note("settings", line);
         var section = new StackPanel { Spacing = 6 };
+        section.Children.Add(new TextBlock
+        {
+            Text = "Backup & Reset", FontSize = 13, FontWeight = FontWeights.SemiBold, Margin = new Thickness(14, 0, 0, 0),
+            Foreground = Kit.B("TextFillColorSecondaryBrush"),
+        });
         var hud = new InfoBar { IsOpen = false, IsClosable = true, Severity = InfoBarSeverity.Success };
         AutomationProperties.SetAutomationId(hud, "settings.import-done");
         var status = new TextBlock
@@ -814,14 +1582,12 @@ internal static class SettingsPanes
             _ = Task.Delay(2500).ContinueWith(_ => section.DispatcherQueue?.TryEnqueue(() => { if (mine == hideHud) hud.IsOpen = false; }));
         });
         var actions = new SettingsFileActions(store, ui) { Models = models };
-        // [WIN-06b] What a search result for one of these buttons runs (SettingsPage.Open, SettingsNavigator.open `.action`).
         page.FileActions = (actions, section);
 
         var export = Kit.Push(SettingsFileWords.Export, () => _ = actions.ExportAsync());
         AutomationProperties.SetAutomationId(export, "settings.export");
         var import = Kit.Push(SettingsFileWords.Import, () => _ = actions.PickImportAsync());
         AutomationProperties.SetAutomationId(import, "settings.import");
-        // [WIN-06a] Above Reset, matching the Mac's `settings.clear-models`.
         var clearModels = Kit.Push(SettingsFileWords.ClearModels, () => _ = actions.ConfirmClearModelsAsync());
         AutomationProperties.SetAutomationId(clearModels, "settings.clear-models");
         var reset = Kit.Push(SettingsFileWords.Reset, () => _ = actions.ConfirmResetAsync(), destructive: true);
@@ -843,10 +1609,6 @@ internal static class SettingsPanes
         return section;
     }
 
-    /// Settings › About (App/Settings/AboutView.swift): this app's version, the gateway's Hermes version; Support,
-    /// Privacy Policy, Open-Source Licenses; then Troubleshooting: Diagnostics and Detailed Logging (default on; kept on
-    /// this PC). The Mac's Send Performance Logs and Mark a Slow Moment (and the section footer about what they send) are
-    /// not here: the Windows app sends no performance log.
     private static FrameworkElement About(SettingsPage page)
     {
         var host = new ContentControl { IsTabStop = false, HorizontalContentAlignment = HorizontalAlignment.Stretch };
@@ -880,6 +1642,9 @@ internal static class SettingsPanes
                     UpdatesRow(),
                     Kit.Row(null, "Hermes on Your Gateway", null, gateway)),
                 Kit.Section(null, null,
+                    LinkRow(CommunityInvite.DiscordLabel, CommunityInvite.DiscordUrl),
+                    LinkRow(CommunityInvite.WebsiteLabel, CommunityInvite.WebsiteUrl),
+                    LinkRow(CommunityInvite.GitHubLabel, CommunityInvite.GitHubUrl),
                     LinkRow("Support", SettingsWords.SupportUrl),
                     LinkRow("Privacy Policy", SettingsWords.PrivacyUrl),
                     Kit.Nav(null, LicenseNotices.PageTitle, null, () => Go(page, "licenses"), "about.licenses")),
@@ -887,7 +1652,6 @@ internal static class SettingsPanes
                     Kit.Nav(null, "Diagnostics", null, () => Go(page, "diagnostics"), "about.diagnostics"),
                     Kit.Toggle(null, PerformanceLogPrefs.Title, null, perfOn,
                         on => { PerformanceLogPrefs.SetEnabled(Prefs, on, AppLog.Note); Draw(); }, "about.perf-log"),
-                    // Detailed Logging writes this PC's own log (Diagnostics' Share Logs), so it is always here.
                     Kit.Toggle(null, DetailedLogging.Title, DetailedLogging.Note, DetailedLogging.Enabled,
                         on => DetailedLogging.Set(Prefs, on, AppLog.Note), "about.detailed-log"),
                     markRow));
@@ -1020,7 +1784,6 @@ internal static class SettingsPanes
     private static Button LicenseRow(SettingsPage page, LicenseNotice notice)
     {
         var row = Kit.Nav(null, notice.Name, null, () => page.Push(notice.Name, () => LicenseText(notice)), "license-row-" + notice.Name);
-        // Name over "version · license", as the Mac's row draws it (the row's own words, with the meta as its note).
         if (notice.Meta.Length > 0 && row.Content is Grid grid
             && grid.Children.OfType<StackPanel>().FirstOrDefault(p => p.Children.OfType<TextBlock>().Any(t => t.Text == notice.Name)) is { } words)
         {
@@ -1030,7 +1793,6 @@ internal static class SettingsPanes
         return row;
     }
 
-    /// One notice's text, re-flowed so the window wraps it.
     private static FrameworkElement LicenseText(LicenseNotice notice)
     {
         var stack = new StackPanel { Spacing = 12, Padding = new Thickness(14, 16, 14, 16) };
@@ -1049,25 +1811,24 @@ internal static class SettingsPanes
         return stack;
     }
 
-    private static Button LinkRow(string title, string url)
+    private static Button LinkRow(string title, string url, string? id = null)
     {
-        var row = Kit.Row(null, title, null, new FontIcon { Glyph = GLink, FontSize = 12, Foreground = Kit.B("TextFillColorTertiaryBrush") });
+        var row = Kit.Row(null, title, null, new FontIcon { Glyph = GLink, FontSize = 12, Foreground = Kit.B("TextFillColorTertiaryBrush") }, id);
         var b = new Button
         {
             Content = row, Padding = new Thickness(0), HorizontalAlignment = HorizontalAlignment.Stretch,
             HorizontalContentAlignment = HorizontalAlignment.Stretch, Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
-            BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(0),
+            BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(0), Tag = id,
         };
         AutomationProperties.SetName(b, title);
         AutomationProperties.SetHelpText(b, $"Opens {new Uri(url).Host} in your browser.");
+        if (id != null) AutomationProperties.SetAutomationId(b, id);
         b.Click += async (_, _) => await Windows.System.Launcher.LaunchUriAsync(new Uri(url));
         return b;
     }
 
     // ---------------------------------------------------------------- the gateway card's page
 
-    /// The gateway in use (App/Settings/GatewayPageView.swift): its name, address, account, saved sign-in and state;
-    /// Manage Gateways… (switch, rename, remove, add) and Sign Out.
     public static FrameworkElement GatewayPage(SettingsPage page)
     {
         var info = SettingsFeature.Gateway();

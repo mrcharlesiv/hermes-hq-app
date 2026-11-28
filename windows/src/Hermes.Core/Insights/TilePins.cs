@@ -131,6 +131,7 @@ public sealed record TilePin
     [
         "id", "kind", "value", "label", "profile", "sessionId", "sessionTitle", "pinnedAt",
         "size", "page", "title", "pageTitle", "jobId", "version", "chatAt",
+        "modelOverride", "providerOverride",
     ];
 
     /// `"<profile>\u001F<value>"`.
@@ -152,6 +153,10 @@ public sealed record TilePin
     public string? JobId { get; init; }
     public int? Version { get; init; }
     public double? ChatAt { get; init; }
+    /// Optional per-tile model override (`TileModelPick.Model`) kept alongside synced pins.
+    public string? ModelOverride { get; init; }
+    /// Optional per-tile provider override (`TileModelPick.Provider`) kept alongside synced pins.
+    public string? ProviderOverride { get; init; }
     /// Canonical JSON of any unknown properties preserved from a newer build's synced document.
     private string? ExtraJson { get; init; }
 
@@ -219,6 +224,8 @@ public sealed record TilePin
         if (JobId != null) o["jobId"] = JobId; else o.Remove("jobId");
         if (Version != null) o["version"] = Version; else o.Remove("version");
         if (ChatAt != null) o["chatAt"] = ChatAt; else o.Remove("chatAt");
+        if (!string.IsNullOrEmpty(ModelOverride)) o["modelOverride"] = ModelOverride; else o.Remove("modelOverride");
+        if (!string.IsNullOrEmpty(ProviderOverride)) o["providerOverride"] = ProviderOverride; else o.Remove("providerOverride");
         return o;
     }
 
@@ -239,6 +246,7 @@ public sealed record TilePin
             RawSize = parsedSize == null && !string.IsNullOrEmpty(rawSize) ? rawSize : null,
             Page = n.Str("page"), Title = n.Str("title"),
             PageTitle = n.Str("pageTitle"), JobId = n.Str("jobId"), Version = (int?)n.Int("version"), ChatAt = n.Num("chatAt"),
+            ModelOverride = n.Text("modelOverride"), ProviderOverride = n.Text("providerOverride"),
             ExtraJson = TileExtraJson.Capture(n, KnownKeys),
         };
     }
@@ -515,6 +523,39 @@ public sealed class TilePinStore
     public void NoteVersion(string id, int number) =>
         Update(id, p => p.Version == number ? p : p with { Version = number });
 
+    /// [tile-chats] Records the latest chat a bot worked on this tile in (`ArtifactPins.noteChat`).
+    public void NoteChat(string id, string sessionId, string title, DateTimeOffset? at = null)
+    {
+        var cleanId = (sessionId ?? "").Trim();
+        if (cleanId.Length == 0) return;
+        var stamp = (at ?? DateTimeOffset.UtcNow).ToUnixTimeMilliseconds() / 1000.0;
+        var cleanTitle = (title ?? "").Trim();
+        Update(id, p => p with
+        {
+            SessionId = cleanId,
+            SessionTitle = cleanTitle.Length > 0 ? cleanTitle : p.SessionTitle,
+            ChatAt = stamp,
+        });
+    }
+
+    /// [tile-models] Records or clears the tile's per-tile model override on the pin.
+    public void SetModelOverride(string id, string? provider, string? model)
+    {
+        var cleanModel = model?.Trim();
+        var cleanProvider = provider?.Trim();
+        if (string.IsNullOrEmpty(cleanModel))
+        {
+            Update(id, p => p.ModelOverride == null && p.ProviderOverride == null
+                ? p
+                : p with { ModelOverride = null, ProviderOverride = null });
+            return;
+        }
+        var nextProvider = string.IsNullOrEmpty(cleanProvider) ? null : cleanProvider;
+        Update(id, p => p.ModelOverride == cleanModel && p.ProviderOverride == nextProvider
+            ? p
+            : p with { ModelOverride = cleanModel, ProviderOverride = nextProvider });
+    }
+
     // ------------------------------------------------------------------ pages
 
     public TilePage AddPage(string name, string? symbol = null)
@@ -558,13 +599,14 @@ public sealed class TilePinStore
         Save();
     }
 
-    /// Moves a non-Main page to another non-Main page's index.
+    /// Moves a non-Main page to another page's index (Main always stays first; dropping on Main lands at index 1).
     public void ReorderPage(string id, string targetId)
     {
-        if (id == TilePage.MainId || targetId == TilePage.MainId || id == targetId) return;
+        if (id == TilePage.MainId || id == targetId) return;
         var from = _pages.FindIndex(p => p.Id == id);
-        var to = _pages.FindIndex(p => p.Id == targetId);
-        if (from < 1 || to < 1) return;
+        if (from < 1) return;
+        var to = targetId == TilePage.MainId ? 1 : _pages.FindIndex(p => p.Id == targetId);
+        if (to < 1 || from == to) return;
         var moved = _pages[from];
         _pages.RemoveAt(from);
         _pages.Insert(Math.Clamp(to, 1, _pages.Count), moved);

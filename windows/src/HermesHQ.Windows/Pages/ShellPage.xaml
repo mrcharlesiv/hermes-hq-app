@@ -4,14 +4,18 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     SizeChanged="Page_SizeChanged">
 
-    <Grid>
+    <Grid x:Name="ShellRoot">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
             <ColumnDefinition x:Name="SidebarColumn" Width="Auto" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
         <!-- The sidebar (App/Mac/MacSidebar.swift): its rows are drawn in code (Shell/SidebarItems.cs). -->
-        <Grid x:Name="SidebarPane" Background="{ThemeResource HQSidebarPanelBrush}" Padding="8,0,6,8" RowSpacing="6">
+        <Grid x:Name="SidebarPane" Grid.Row="0" Grid.RowSpan="2" Background="{ThemeResource HQSidebarPanelBrush}" Padding="8,0,6,8" RowSpacing="6">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
@@ -81,13 +85,20 @@
         </Grid>
 
         <!-- The sidebar's edge: drags its width (open) or the rail's names in and out (folded). -->
-        <Border x:Name="Grip" Width="6" HorizontalAlignment="Right" Background="Transparent"
+        <Border x:Name="Grip" Grid.Row="0" Grid.RowSpan="2" Width="6" HorizontalAlignment="Right" Background="Transparent"
                 PointerPressed="Grip_PointerPressed" PointerMoved="Grip_PointerMoved"
                 PointerReleased="Grip_PointerReleased" PointerCaptureLost="Grip_PointerCaptureLost" />
 
-        <!-- What the sidebar opened -->
-        <Border Grid.Column="1" Background="{ThemeResource LayerFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1,1,0,0" CornerRadius="8,0,0,0">
+        <!-- Ambient shadow receiver behind the floating content canvas card. -->
+        <Grid x:Name="CanvasShadowReceiver" Grid.Column="1" Grid.Row="0" Grid.RowSpan="2" IsHitTestVisible="False" />
+
+        <!-- Top open-chats-only workspace tab bar (Shell/WorkspaceBar.cs, App/Mac/MacWorkspaceBar.swift). -->
+        <Grid x:Name="WorkspaceBarHost" Grid.Column="1" Grid.Row="0" Margin="10,0,10,0" />
+
+        <!-- Floating inset rounded content canvas card (Shell/GlassShell.cs, App/Mac/MacGlassShell.swift). -->
+        <Border x:Name="CanvasBorder" Grid.Column="1" Grid.Row="1" Margin="10,0,10,10" CornerRadius="15"
+                Background="{ThemeResource LayerFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
             <Grid x:Name="PaneGrid">
                 <Frame x:Name="ContentFrame" />
                 <StackPanel x:Name="ContentPlaceholder" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="6" Margin="40">

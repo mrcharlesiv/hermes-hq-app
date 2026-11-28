@@ -81,6 +81,10 @@ public sealed class TileCell : Grid
     public TilePin Pin { get; private set; }
     private readonly Border _picture;
     private readonly Grid _pictureContent;
+    private readonly Border _workingVeil;
+    private readonly ProgressRing _workingRing;
+    private readonly TextBlock _workingText;
+    private readonly Border _changedRing;
     private readonly TextBlock _name;
     private readonly TextBlock? _subtitle;
     private readonly Border _mark;
@@ -89,6 +93,7 @@ public sealed class TileCell : Grid
     private readonly TilesView _view;
     private WebView2? _web;
     private string? _shownHtml;
+    private string? _themeKey;
     private bool _live;
     private bool _editing;
     private bool _selected;
@@ -98,6 +103,9 @@ public sealed class TileCell : Grid
     private Point _resizeStartPoint;
     private double _resizeStartWidth, _resizeStartHeight;
     private bool _resizeDragged;
+
+    /// Last time this cell was displayed on screen (used by the TilesPage warm WebView2 pool).
+    public DateTimeOffset ShownAt { get; set; } = DateTimeOffset.UtcNow;
 
     /// A click on the tile (open it), a page's message (a button's ask, open, refresh), unpin, resize, or batch selection.
     public event Action<TileCell>? Activated;
@@ -162,8 +170,56 @@ public sealed class TileCell : Grid
             ResizeRequested?.Invoke(this, next);
         };
 
+        _workingRing = new ProgressRing { Width = 14, Height = 14, IsActive = false, VerticalAlignment = VerticalAlignment.Center };
+        _workingText = new TextBlock
+        {
+            FontSize = 12,
+            FontWeight = FontWeights.SemiBold,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = Kit.Brush("TextFillColorPrimaryBrush"),
+        };
+        var workingPill = new Border
+        {
+            CornerRadius = new CornerRadius(14),
+            Padding = new Thickness(10, 5, 12, 5),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(8, 0, 8, 10),
+            Background = Kit.Brush("AcrylicInAppFillColorDefaultBrush"),
+            BorderBrush = Kit.Brush("AccentFillColorDefaultBrush"),
+            BorderThickness = new Thickness(1.5),
+            Child = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 6,
+                Children = { _workingRing, _workingText },
+            },
+        };
+        _workingVeil = new Border
+        {
+            CornerRadius = _picture.CornerRadius,
+            Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0x4D, 0, 0, 0)),
+            BorderBrush = Kit.Brush("AccentFillColorDefaultBrush"),
+            BorderThickness = new Thickness(1.5),
+            Child = workingPill,
+            IsHitTestVisible = false,
+            Visibility = Visibility.Collapsed,
+        };
+        AutomationProperties.SetAutomationId(_workingVeil, "tile.changing.veil");
+
+        _changedRing = new Border
+        {
+            CornerRadius = _picture.CornerRadius,
+            BorderBrush = Kit.Brush("AccentFillColorDefaultBrush"),
+            BorderThickness = new Thickness(3),
+            IsHitTestVisible = false,
+            Visibility = Visibility.Collapsed,
+        };
+        AutomationProperties.SetAutomationId(_changedRing, "tile.changed.ring");
+
         _name = new TextBlock { FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis, TextWrapping = TextWrapping.NoWrap, Foreground = Kit.Brush("TextFillColorSecondaryBrush") };
-        var pictureHost = new Grid { Children = { _picture, _mark, _unpinBadge, _resizeHandle } };
+        var pictureHost = new Grid { Children = { _picture, _workingVeil, _changedRing, _mark, _unpinBadge, _resizeHandle } };
 
         switch (view)
         {
@@ -182,6 +238,8 @@ public sealed class TileCell : Grid
                 card.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
                 card.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
                 _picture.CornerRadius = new CornerRadius(Radius, Radius, 0, 0);
+                _workingVeil.CornerRadius = _picture.CornerRadius;
+                _changedRing.CornerRadius = _picture.CornerRadius;
                 _picture.BorderThickness = new Thickness(0, 0, 0, 1);
                 card.Children.Add(pictureHost);
                 _name.FontSize = 14; _name.FontWeight = FontWeights.SemiBold; _name.Foreground = Kit.Brush("TextFillColorPrimaryBrush");
@@ -335,9 +393,38 @@ public sealed class TileCell : Grid
         AutomationProperties.SetName(this, spoken == null ? _name.Text : $"{_name.Text}, {spoken}");
     }
 
+    /// [tiles-v2] Shows or hides the inline `TileChangingVeil` overlay while a bot is changing/updating this tile.
+    public void SetWorking(string? words)
+    {
+        var show = !string.IsNullOrWhiteSpace(words);
+        _workingText.Text = words ?? "";
+        _workingRing.IsActive = show;
+        _workingVeil.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// [tiles-v2] Shows or hides the brief `TileChangedRing` accent outline after a change finishes.
+    public void SetRinged(bool ringed) => _changedRing.Visibility = ringed ? Visibility.Visible : Visibility.Collapsed;
+
+    /// [28b14acf7] Updates the tile's live WebView2 theme in place via `window.__hqApplyTheme`, reloading only if needed.
+    public async Task ApplyThemeAsync(bool dark)
+    {
+        var key = TileWeb.ThemeKey(dark);
+        if (_web?.CoreWebView2 == null) { _themeKey = key; return; }
+        if (_themeKey == key) return;
+        _themeKey = key;
+        var needsReload = await TileWeb.ApplyThemeAsync(_web, dark);
+        if (needsReload && _shownHtml != null && _web?.CoreWebView2 != null)
+            TileWeb.Show(_web, _shownHtml);
+    }
+
+    /// Captures a PNG snapshot of this tile's live WebView2 (null when no live WebView is active).
+    public Task<byte[]?> CapturePngAsync() =>
+        _web != null ? TileWeb.CapturePngAsync(_web) : Task.FromResult<byte[]?>(null);
+
     /// Draws what was read: the page (in its web view), the image, or the glyph (a gone file's broken mark).
     public void ShowPicture(TilePictures.Entry? entry, bool showsName, bool dark, bool allowWeb)
     {
+        ShownAt = DateTimeOffset.UtcNow;
         var failed = entry is { Gone: true } || (entry?.Failure != null && entry.Html == null && entry.Image == null);
         if (Pin.IsPage && entry?.Html is { } html && allowWeb)
         {
@@ -350,10 +437,15 @@ public sealed class TileCell : Grid
                 _pictureContent.Children.Add(_web);
                 _ = StartWeb(_web, html, dark);
             }
-            else if (_shownHtml != html && _web.CoreWebView2 != null)
+            else if (_web.CoreWebView2 != null)
             {
-                _shownHtml = html;
-                TileWeb.Show(_web, html);
+                if (_shownHtml != html)
+                {
+                    _shownHtml = html;
+                    TileWeb.Show(_web, html);
+                }
+                if (_themeKey != TileWeb.ThemeKey(dark))
+                    _ = ApplyThemeAsync(dark);
             }
             _web.IsHitTestVisible = _live && !_editing;
             return;
@@ -410,6 +502,7 @@ public sealed class TileCell : Grid
 
     private async Task StartWeb(WebView2 web, string html, bool dark)
     {
+        _themeKey = TileWeb.ThemeKey(dark);
         if (!await TileWeb.PrepareAsync(web, dark, talks: true, inTile: true)) return;
         if (web != _web) return;
         web.CoreWebView2.WebMessageReceived += (_, e) =>
@@ -430,11 +523,13 @@ public sealed class TileCell : Grid
 
     public void CloseWeb()
     {
+        _workingRing.IsActive = false;
         HermesHQ.Services.UiTree.DeactivateProgressRings(this);
         if (_web is { } web)
         {
             _web = null;
             _shownHtml = null;
+            _themeKey = null;
             _pictureContent.Children.Remove(web);
             try { web.Close(); } catch (Exception) { }
         }

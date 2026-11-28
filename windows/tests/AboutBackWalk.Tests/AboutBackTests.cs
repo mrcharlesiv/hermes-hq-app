@@ -43,7 +43,7 @@ public class AboutBackTests
     private void Notice() => page.Show(LicenseNotices.First, "‹ Open-Source Licenses", "license.text");
     private void Licenses() => page.Show("Open-Source Licenses", "‹ About", "licenses.intro");
     private void Detail() => page.Show("About", "‹ About", "about.version", "about.detailed-log");
-    private void Category() => page.Show("About", null, "settings.about", "settings.export", "settings.import");
+    private void Category() => page.Show("About", null, "settings.about", "row:discord", "row:support");
     private void OpenPopup(bool withChild = true) => page.XamlRoot!.Popups.Add(new Popup(withChild ? new FrameworkElement() : null));
     private void OnBackShow(params Action[] panes)
     {
@@ -258,7 +258,7 @@ public class AboutBackTests
             case "popup": OpenPopup(); break;
             case "owner": page.Parent = App.Window!.Content = new FrameworkElement { XamlRoot = page.XamlRoot }; break;
             case "xaml-root": page.XamlRoot = page.Parent!.XamlRoot = new XamlRoot(); break;
-            case "category": page.Show("About", "‹ About", "settings.about", "settings.export", "settings.import"); break;
+            case "category": page.Show("About", "‹ About", "settings.about", "row:discord", "row:support"); break;
             case "both": page.Children.Add(new FrameworkElement("settings.about") { Parent = page }); break;
         }
         release.SetResult();
@@ -290,8 +290,8 @@ public class AboutBackTests
     [InlineData("version", "OtherRouteMarker")]
     [InlineData("stack", "BackStack")]
     [InlineData("back", "BackControl")]
-    [InlineData("settings.export", "ExportRow")]
-    [InlineData("settings.import", "ImportRow")]
+    [InlineData("row:discord", "DiscordRow")]
+    [InlineData("row:support", "SupportRow")]
     public async Task LoggingBackDoesNotCallAnIncompleteIndexACategoryFrame(string defect, string guard)
     {
         Detail();

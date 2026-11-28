@@ -1,16 +1,28 @@
 using System.Text.Json.Nodes;
+using Hermes.Core.Net;
 using Hermes.Core.Rpc;
 
 namespace Hermes.Core.Activity;
 
-// One chat's activity (docs/spec/1x-activity.md §3.2): its subagents, task lists and goal, folded from gateway events.
-// Port of the per-chat part of HermesKit/Activity/ActivityStore.swift (the Swift store is app-wide and keyed by runtime
-// id; here the app keeps one store per open chat). The polls (`subagent.list` 5→30 s, `subagent.tail` 2→16 s, the
-// `delegation.status` stale check) stay with the app: this class builds each request and folds each answer, with the
-// same "a read answered after a newer change is discarded" guard (pass the `Version` you read when you sent it).
+// One chat's activity (docs/spec/1x-activity.md §3.2): its subagents, task lists, goal, and background-process claims,
+// folded from gateway events. Port of HermesKit/Activity/ActivityStore.swift and HermesKit/Activity/StaleWork.swift.
+// The polls (`subagent.list` 5→30 s, `subagent.tail` 2→16 s, `process.list` 5 s, and stale checks) drive this store
+// with the same "a read answered after a newer change is discarded" guard (pass the `Version` you read when you sent it).
 
 public sealed class ActivityStore
 {
+    /// A background process a chat says is running (or was: finished rows linger for a moment).
+    /// Port of HermesKit/Activity/StaleWork.swift `ProcessClaim`.
+    public sealed record ProcessClaim(string Id, bool Running);
+
+    private sealed class ProcessState(string profile, string? storedId, ValueList<ProcessClaim> claims, int version)
+    {
+        public string Profile { get; set; } = profile;
+        public string? StoredId { get; set; } = storedId;
+        public ValueList<ProcessClaim> Claims { get; set; } = claims;
+        public int Version { get; set; } = version;
+    }
+
     private SubagentRoster _roster = new();
     private TodoState _todos = new();
     private ControlEntry _control = new();
@@ -18,6 +30,7 @@ public sealed class ActivityStore
     private readonly Dictionary<string, SubagentTail> _tails = new(StringComparer.Ordinal);
     private readonly Dictionary<string, SubagentProgress> _unread = new(StringComparer.Ordinal);
     private readonly HashSet<string> _read = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ProcessState> _processes = new(StringComparer.Ordinal);
     private bool _controlReadDue;
 
     public ActivityStore(string profile = "", string? runtimeId = null, string? storedId = null)
@@ -42,12 +55,30 @@ public sealed class ActivityStore
     /// Bumped by every control snapshot applied from an event or action.
     public int ControlVersion { get; private set; }
 
+    /// Raised when a session's background-process claims change.
+    public event Action<string>? ProcessClaimsChanged;
+    /// `agents.list` answered -32601 on this connection: not asked again until the next `gateway.ready`.
+    public bool AgentsListUnsupported { get; private set; }
+    /// `subagent.roster` answered -32601 on this connection: not asked again until the next `gateway.ready`.
+    public bool RosterUnsupported { get; private set; }
+    /// How many `agents.list` reads went out during stale-process checks.
+    public int AgentsListReads { get; private set; }
+    /// How many `subagent.roster` reads went out during stale-process checks.
+    public int RosterReads { get; private set; }
+
     /// A chat's resume bound `runtimeId` (again after a reconnect or a re-mint): the state moves with it.
     public void Bind(string runtimeId, string? storedId = null, string? profile = null)
     {
+        var previous = RuntimeId;
         RuntimeId = runtimeId;
         if (storedId is not null) StoredId = storedId;
         if (profile is not null) Profile = profile;
+        if (previous is not null && previous != runtimeId && _processes.Remove(previous, out var moved))
+        {
+            moved.Profile = Profile;
+            if (StoredId is not null) moved.StoredId = StoredId;
+            _processes[runtimeId] = moved;
+        }
     }
 
     /// Sign-out / leaving for good: everything goes.
@@ -60,10 +91,15 @@ public sealed class ActivityStore
         _tails.Clear();
         _unread.Clear();
         _read.Clear();
+        _processes.Clear();
         _controlReadDue = false;
         Interrupted = false;
         Version = 0;
         ControlVersion = 0;
+        AgentsListUnsupported = false;
+        RosterUnsupported = false;
+        AgentsListReads = 0;
+        RosterReads = 0;
     }
 
     // MARK: Reading
@@ -80,8 +116,86 @@ public sealed class ActivityStore
         UnreadHelperFailures = new(_unread.Values.OrderBy(s => s.Id, StringComparer.Ordinal)),
     };
 
-    /// The chat holds a running (or queued) child (its Sessions row says Working…, §8.4).
-    public bool HasLiveWork => _roster.LiveCount > 0;
+    /// Any tracked session currently claims a running background process.
+    public bool HasRunningProcessClaims => _processes.Values.Any(p => StaleWork.ClaimsRunning(p.Claims));
+
+    /// The chat holds a running (or queued) child or a running background process (its Sessions row says Working…, §8.4).
+    public bool HasLiveWork => _roster.LiveCount > 0 || HasRunningProcessClaims;
+
+    /// Whether a bot profile holds a running child or running background process claim.
+    public bool HasLiveWorkForProfile(string profile) =>
+        (string.Equals(Profile, profile, StringComparison.Ordinal) && _roster.LiveCount > 0)
+        || _processes.Values.Any(p => string.Equals(p.Profile, profile, StringComparison.Ordinal) && StaleWork.ClaimsRunning(p.Claims));
+
+    /// Whether a stored session holds a running child or running background process claim.
+    public bool HasLiveWorkForStoredId(string storedId) =>
+        (string.Equals(StoredId, storedId, StringComparison.Ordinal) && _roster.LiveCount > 0)
+        || _processes.Values.Any(p => string.Equals(p.StoredId, storedId, StringComparison.Ordinal) && StaleWork.ClaimsRunning(p.Claims));
+
+    /// Stored session IDs holding a live helper or running background process (optionally filtered to one profile).
+    public HashSet<string> LiveWorkStoredIds(string? profile = null)
+    {
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        if (_roster.LiveCount > 0 && !string.IsNullOrEmpty(StoredId)
+            && (profile is null || string.Equals(Profile, profile, StringComparison.Ordinal)))
+            ids.Add(StoredId);
+        foreach (var entry in _processes.Values)
+        {
+            if (string.IsNullOrEmpty(entry.StoredId) || !StaleWork.ClaimsRunning(entry.Claims)) continue;
+            if (profile is not null && !string.Equals(entry.Profile, profile, StringComparison.Ordinal)) continue;
+            ids.Add(entry.StoredId);
+        }
+        return ids;
+    }
+
+    // MARK: Background-process claims (HermesKit/Activity/ActivityStore.swift §6.6)
+
+    /// Records a chat's active background processes (running or just finished). An empty list forgets the chat.
+    public bool SetProcessClaims(string runtimeId, string profile, string? storedId, IEnumerable<ProcessClaim> claims)
+    {
+        var list = new ValueList<ProcessClaim>(claims);
+        if (list.Count == 0)
+        {
+            if (!_processes.Remove(runtimeId)) return false;
+        }
+        else if (_processes.TryGetValue(runtimeId, out var existing))
+        {
+            if (existing.Claims == list && existing.Profile == profile && existing.StoredId == storedId) return false;
+            existing.Profile = profile;
+            existing.StoredId = storedId;
+            existing.Claims = list;
+            existing.Version++;
+        }
+        else
+        {
+            _processes[runtimeId] = new ProcessState(profile, storedId, list, version: 1);
+        }
+        ProcessClaimsChanged?.Invoke(runtimeId);
+        return true;
+    }
+
+    /// Convenience single-chat form using this store's `RuntimeId`, `Profile`, and `StoredId`.
+    public bool SetProcessClaims(IEnumerable<ProcessClaim> claims) =>
+        SetProcessClaims(RuntimeId ?? "", Profile, StoredId, claims);
+
+    /// Active background-process claims for `runtimeId` (defaults to this store's `RuntimeId`).
+    public IReadOnlyList<ProcessClaim> GetProcessClaims(string? runtimeId = null) =>
+        _processes.TryGetValue(runtimeId ?? RuntimeId ?? "", out var state) ? state.Claims : ValueList<ProcessClaim>.Empty;
+
+    /// Version watermark for a session's process claims (pass to `ApplyAgentsList` / `ApplySubagentRoster`).
+    public int ProcessClaimsVersion(string? runtimeId = null) =>
+        _processes.TryGetValue(runtimeId ?? RuntimeId ?? "", out var state) ? state.Version : 0;
+
+    /// Runtime IDs that currently claim at least one running background process.
+    public IReadOnlyList<string> ProcessClaimants =>
+        _processes.Where(kv => StaleWork.ClaimsRunning(kv.Value.Claims)).Select(kv => kv.Key).ToList();
+
+    /// Resets per-connection unsupported capability flags (called on `gateway.ready`).
+    public void ResetConnectionCapabilities()
+    {
+        AgentsListUnsupported = false;
+        RosterUnsupported = false;
+    }
 
     /// When the next finished task list goes away (seconds since 1970); call `ExpireTodos` then.
     public double? NextTodoDeadline => _todos.DropAt;
@@ -104,6 +218,11 @@ public sealed class ActivityStore
     /// Folds one gateway event; true when the snapshot changed.
     public bool Apply(RpcEvent e)
     {
+        if (e.Type == "gateway.ready")
+        {
+            ResetConnectionCapabilities();
+            return false;
+        }
         if (RuntimeId is not null && e.SessionId != RuntimeId) return false;
         var p = e.Payload;
         var t = Now();
@@ -283,7 +402,166 @@ public sealed class ActivityStore
     }
 
     public static bool IsMethodNotFound(int code, string message) =>
-        code == -32601 || message.Contains("method not found", StringComparison.OrdinalIgnoreCase);
+        code == -32601
+        || message.Contains("method not found", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("unknown method", StringComparison.OrdinalIgnoreCase);
+
+    /// A `agents.list` answer: running process claims the gateway no longer lists are dropped; finished claims stay.
+    /// Ignored when claims changed since `versionWhenSent`.
+    public bool ApplyAgentsList(string runtimeId, JsonNode? answer, int versionWhenSent)
+    {
+        if (!_processes.TryGetValue(runtimeId, out var current) || current.Version != versionWhenSent) return false;
+        if (StaleWork.RunningProcesses(answer) is not { } running) return false;
+        if (StaleWork.DropProcesses(current.Claims, running) is not { } kept) return false;
+        if (kept.Count == 0) _processes.Remove(runtimeId);
+        else
+        {
+            current.Claims = new ValueList<ProcessClaim>(kept);
+            current.Version++;
+        }
+        ProcessClaimsChanged?.Invoke(runtimeId);
+        return true;
+    }
+
+    public bool ApplyAgentsList(JsonNode? answer, int versionWhenSent) =>
+        ApplyAgentsList(RuntimeId ?? "", answer, versionWhenSent);
+
+    /// A `subagent.roster` answer (fallback when `agents.list` returns -32601): drops running process claims for a
+    /// non-visible session whose stored id is no longer counted with `background > 0`.
+    public bool ApplySubagentRoster(string runtimeId, JsonNode? answer, int versionWhenSent, string? visibleRuntimeId = null)
+    {
+        if (runtimeId == visibleRuntimeId) return false;
+        if (!_processes.TryGetValue(runtimeId, out var current) || current.Version != versionWhenSent) return false;
+        if (string.IsNullOrEmpty(current.StoredId)) return false;
+        if (StaleWork.BackgroundSessions(answer) is not { } busy || busy.Contains(current.StoredId)) return false;
+        var kept = current.Claims.Where(c => !c.Running).ToList();
+        if (kept.Count == current.Claims.Count) return false;
+        if (kept.Count == 0) _processes.Remove(runtimeId);
+        else
+        {
+            current.Claims = new ValueList<ProcessClaim>(kept);
+            current.Version++;
+        }
+        ProcessClaimsChanged?.Invoke(runtimeId);
+        return true;
+    }
+
+    /// Reconciles active background-process claims against `agents.list`, falling back to `subagent.roster` when the
+    /// gateway lacks `agents.list` (-32601). Port of HermesKit/Activity/ActivityStore.swift `staleProcessCheck`.
+    public Task<bool> ReconcileStaleProcessesAsync(HermesClient client, string? visibleRuntimeId = null, CancellationToken ct = default) =>
+        ReconcileStaleProcessesAsync((method, p, token) => client.Rpc.RequestAsync(method, p, ReadTimeout, token), visibleRuntimeId, ct);
+
+    public async Task<bool> ReconcileStaleProcessesAsync(
+        Func<string, JsonObject, CancellationToken, Task<JsonNode>> call,
+        string? visibleRuntimeId = null,
+        CancellationToken ct = default)
+    {
+        var claimants = ProcessClaimants;
+        if (claimants.Count == 0) return false;
+        if (AgentsListUnsupported)
+            return await ReconcileStaleProcessesByRosterAsync(call, claimants, visibleRuntimeId, ct).ConfigureAwait(false);
+
+        var answers = new Dictionary<string, (bool HasAnswer, HashSet<string>? Running)>(StringComparer.Ordinal);
+        var changed = false;
+        foreach (var rid in claimants)
+        {
+            if (!_processes.TryGetValue(rid, out var entry)) continue;
+            var snapshotVersion = entry.Version;
+            var profile = entry.Profile;
+            if (!answers.TryGetValue(profile, out var cached))
+            {
+                AgentsListReads++;
+                try
+                {
+                    var (_, p) = AgentsList(profile);
+                    var raw = await call("agents.list", p, ct).ConfigureAwait(false);
+                    cached = (true, StaleWork.RunningProcesses(raw));
+                }
+                catch (GatewayException e) when (BackgroundProcessesApi.IsMethodNotFound(e))
+                {
+                    AgentsListUnsupported = true;
+                    return await ReconcileStaleProcessesByRosterAsync(call, claimants, visibleRuntimeId, ct).ConfigureAwait(false) || changed;
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    return changed;
+                }
+                catch (Exception)
+                {
+                    cached = (true, null);
+                }
+                answers[profile] = cached;
+            }
+            if (cached.Running is null) continue;
+            if (!_processes.TryGetValue(rid, out var current) || current.Version != snapshotVersion) continue;
+            if (StaleWork.DropProcesses(current.Claims, cached.Running) is not { } kept) continue;
+            if (kept.Count == 0) _processes.Remove(rid);
+            else
+            {
+                current.Claims = new ValueList<ProcessClaim>(kept);
+                current.Version++;
+            }
+            changed = true;
+            ProcessClaimsChanged?.Invoke(rid);
+        }
+        return changed;
+    }
+
+    private async Task<bool> ReconcileStaleProcessesByRosterAsync(
+        Func<string, JsonObject, CancellationToken, Task<JsonNode>> call,
+        IReadOnlyList<string> claimants,
+        string? visibleRuntimeId,
+        CancellationToken ct)
+    {
+        if (RosterUnsupported) return false;
+        var answers = new Dictionary<string, (bool HasAnswer, HashSet<string>? Busy)>(StringComparer.Ordinal);
+        var changed = false;
+        foreach (var rid in claimants)
+        {
+            if (rid == visibleRuntimeId) continue;
+            if (!_processes.TryGetValue(rid, out var entry) || string.IsNullOrEmpty(entry.StoredId)) continue;
+            var snapshotVersion = entry.Version;
+            var stored = entry.StoredId;
+            var profile = entry.Profile;
+            if (!answers.TryGetValue(profile, out var cached))
+            {
+                RosterReads++;
+                try
+                {
+                    var (_, p) = SubagentRosterRequest(profile);
+                    var raw = await call("subagent.roster", p, ct).ConfigureAwait(false);
+                    cached = (true, StaleWork.BackgroundSessions(raw));
+                }
+                catch (GatewayException e) when (BackgroundProcessesApi.IsMethodNotFound(e))
+                {
+                    RosterUnsupported = true;
+                    return changed;
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    return changed;
+                }
+                catch (Exception)
+                {
+                    cached = (true, null);
+                }
+                answers[profile] = cached;
+            }
+            if (cached.Busy is null || cached.Busy.Contains(stored)) continue;
+            if (rid == visibleRuntimeId || !_processes.TryGetValue(rid, out var current) || current.Version != snapshotVersion) continue;
+            var kept = current.Claims.Where(c => !c.Running).ToList();
+            if (kept.Count == current.Claims.Count) continue;
+            if (kept.Count == 0) _processes.Remove(rid);
+            else
+            {
+                current.Claims = new ValueList<ProcessClaim>(kept);
+                current.Version++;
+            }
+            changed = true;
+            ProcessClaimsChanged?.Invoke(rid);
+        }
+        return changed;
+    }
 
     /// A goal action went out: every goal action is disabled until it answers.
     public void BeginControl(string action) => _control = _control with { PendingAction = action, ActionError = null };
@@ -335,6 +613,14 @@ public sealed class ActivityStore
     public static (string Method, JsonObject Params) DelegationStatus(string? profile) =>
         ("delegation.status", string.IsNullOrEmpty(profile) ? new JsonObject() : new JsonObject { ["profile"] = profile });
 
+    /// Stale background-process check via `agents.list`: `{}` for default/empty, else `{profile}`.
+    public static (string Method, JsonObject Params) AgentsList(string? profile) =>
+        ("agents.list", BackgroundProcessesApi.ProfileParams(profile));
+
+    /// Fallback stale background-process check via `subagent.roster`: `{}` for default/empty, else `{profile}`.
+    public static (string Method, JsonObject Params) SubagentRosterRequest(string? profile) =>
+        ("subagent.roster", BackgroundProcessesApi.ProfileParams(profile));
+
     /// The goal snapshot (§6.1). Answer → `ApplyControlRead`.
     public static (string Method, JsonObject Params) ControlRead(string runtimeId, string? profile) =>
         ("session.control.read", Params(runtimeId, profile));
@@ -369,6 +655,50 @@ public sealed class ActivityStore
         RuntimeId is { } rid ? StopChild(rid, Profile, subagentId) : null;
     public (string Method, JsonObject Params)? Control(string action, JsonObject? args = null) =>
         RuntimeId is { } rid ? Control(rid, Profile, action, args) : null;
+}
+
+/// Process-claim reconciliation helpers (port of HermesKit/Activity/StaleWork.swift).
+public static class StaleWork
+{
+    /// The IDs `agents.list` reports as running; null when the answer has no `processes` list.
+    public static HashSet<string>? RunningProcesses(JsonNode? answer)
+    {
+        if (answer.Get("processes") is not JsonArray rows) return null;
+        var running = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var row in rows)
+        {
+            if (row is null || ActivityJson.StrOrNull(row.Get("status")) != "running") continue;
+            var id = row.Text("session_id") ?? row.Text("id");
+            if (id is not null) running.Add(id);
+        }
+        return running;
+    }
+
+    /// The claims less the running ones the gateway no longer has; null when nothing changes. Finished rows stay.
+    public static List<ActivityStore.ProcessClaim>? DropProcesses(
+        IReadOnlyList<ActivityStore.ProcessClaim> claims, IReadOnlySet<string> running)
+    {
+        if (!claims.Any(c => c.Running && !running.Contains(c.Id))) return null;
+        return claims.Where(c => !c.Running || running.Contains(c.Id)).ToList();
+    }
+
+    public static bool ClaimsRunning(IEnumerable<ActivityStore.ProcessClaim> claims) =>
+        claims.Any(c => c.Running);
+
+    /// The stored chats `subagent.roster` says still hold a background process (`background > 0`);
+    /// null when the answer has no `sessions` list.
+    public static HashSet<string>? BackgroundSessions(JsonNode? answer)
+    {
+        if (answer.Get("sessions") is not JsonArray rows) return null;
+        var outSet = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var row in rows)
+        {
+            if (row is null) continue;
+            var id = row.Text("session_id");
+            if (id is not null && ActivityJson.Num(row.Get("background")) is > 0) outSet.Add(id);
+        }
+        return outSet;
+    }
 }
 
 /// The goal actions the card and its ⋯ menu send through `session.control` (App/Chat/Activity/ChatActivityController.swift).

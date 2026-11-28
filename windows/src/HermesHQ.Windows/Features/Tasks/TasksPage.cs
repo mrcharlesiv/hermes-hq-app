@@ -3,6 +3,7 @@ using Hermes.Core.Gateways;
 using Hermes.Core.Kanban;
 using Hermes.Core.Tasks;
 using HermesHQ.Features.Kanban;
+using HermesHQ.Features.QuickActions;
 using HermesHQ.Services;
 using HermesHQ.Shell;
 using Microsoft.UI.Dispatching;
@@ -15,17 +16,18 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
 using Microsoft.UI.Xaml.Shapes;
+using Windows.ApplicationModel.DataTransfer;
 using Windows.System;
 using Windows.UI;
 using static HermesHQ.Features.Kanban.PageKit;
 
 namespace HermesHQ.Features.Tasks;
 
-/// Tasks (App/Pages/Tasks/TasksViewController.swift; docs/tasks.md): the shared to-do list of you and your bots, kept by
-/// the Hermes HQ add-on. "Tasks" with New Task and Search at the bar's end; a row of pills (Today, Upcoming, Inbox, each
-/// of your lists, Bots once a bot has a task of its own) picks the view; each view's groups ("Today 6", "Waiting on
-/// You 4", "Next in Work 3"); a row is the circle that ticks it off, the title with its steps, when it's due and the
-/// bot's face, and under it what a bot has for you. A click opens the task beside the list (TaskPane).
+/// Tasks (`App/Pages/Tasks/TasksViewController.swift`; `docs/tasks.md`): shared hub store with foreground-gated polling
+/// & live `tasks.changed`, collapsible `TasksSidebarView` (with compact view switcher/pills when collapsed or narrow),
+/// dedicated `Suggested` view with Sources banner, Priority/Tag filter menus + active chips bar, Overdue `Reschedule`,
+/// Select `Schedule`/`Priority`, row triage submenus + `Duplicate`, multi-week `TodoWeekStripView` in Upcoming,
+/// Completed Logbook, and Favorites pinning.
 [Microsoft.UI.Xaml.Data.Bindable]
 public sealed partial class TasksPage : Page, IKeyRefreshing
 {
@@ -35,12 +37,30 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
     private readonly HashSet<string> _expandedIdeas = [];
     private TodoView _view = TodoView.Today;
 
-    /// View › Refresh (Ctrl+R, F5): as its own Ctrl+R and F5.
-    public void KeyRefresh() => _ = _store?.RefreshAsync(force: true);
+    /// View › Refresh (Ctrl+R, F5).
+    public void KeyRefresh()
+    {
+        _ = _store?.RefreshAsync(force: true);
+        if (_view == TodoView.Suggested) _ = _ideasStore?.RefreshAsync(force: true);
+    }
+
     private string _query = "";
+    private int? _priorityFilter;
+    private string? _tagFilter;
+    private int _upcomingWeekOffset;
+    private string? _upcomingPickedDay;
+    private bool _sidebarCollapsed;
     private string? _selected;
     private bool _doneOpen;
+
+    private readonly TasksSidebarView _sidebar = new();
+    private readonly Button _sidebarToggle;
+    private readonly DropDownButton _compactViewPicker = new() { Visibility = Visibility.Collapsed };
+    private readonly TextBlock _barTitle = new() { Text = TasksCopy.Title, VerticalAlignment = VerticalAlignment.Center };
     private readonly StackPanel _pills = new() { Orientation = Orientation.Horizontal, Spacing = 6 };
+    private readonly ScrollViewer _pillsHost;
+    private readonly StackPanel _activeFiltersBar = new() { Orientation = Orientation.Horizontal, Spacing = 6, Padding = new Thickness(16, 4, 16, 4), Visibility = Visibility.Collapsed };
+    private readonly TodoWeekStripView _weekStrip = new();
     private readonly StackPanel _list = new() { Spacing = 2, Padding = new Thickness(16, 4, 16, 24) };
     private readonly TextBox _search = new() { PlaceholderText = TasksCopy.SearchPlaceholder, Width = 220, VerticalAlignment = VerticalAlignment.Center };
     private readonly ContentControl _paneHost = new() { IsTabStop = false, HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
@@ -49,42 +69,64 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
     private TaskPane? _taskPane;
     private GoalDetailPane? _goalPane;
     private string? _selectedGoal;
-    /// The bar's +: New Task, or New Goal in Goals ("Update Add-on" on an older add-on), as screen readers hear it.
-    private readonly Button _add = new() { Content = new FontIcon { Glyph = "", FontSize = Hermes.Core.Shell.DesktopLook.BarGlyph }, Style = Style("QuietButtonStyle") };
-    /// Select (⋯ › Select Tasks, or Select in a row's menu): the picks and the bar that replaces the page's buttons.
+
+    private readonly Button _add = new() { Content = new FontIcon { Glyph = "\uE710", FontSize = Hermes.Core.Shell.DesktopLook.BarGlyph }, Style = Style("QuietButtonStyle") };
     private readonly TodoSelection _selection = new();
     private readonly StackPanel _tools = new() { Orientation = Orientation.Horizontal, Spacing = 4 };
     private readonly StackPanel _selectBar = new() { Orientation = Orientation.Horizontal, Spacing = 4, Visibility = Visibility.Collapsed };
+    private readonly DropDownButton _selectSchedule = new() { Content = TasksCopy.Schedule };
+    private readonly DropDownButton _selectPriority = new() { Content = TasksCopy.Priority };
     private readonly DropDownButton _selectMove = new() { Content = TasksCopy.MoveTo };
     private readonly Button _selectDone = new() { Content = TasksCopy.MarkDone };
     private readonly Button _selectDelete = new() { Content = TasksCopy.Delete };
-    /// A list's open rows as shown, top to bottom (where a dragged task lands), and the task being dragged.
+
     private List<string> _openIds = [];
     private string? _dragging;
-    /// Where the held task would land (TasksViewController `dropPlace`), and the line that shows it.
     private readonly TodoDropPlace _dropPlace = new();
     private Rectangle? _dropMark;
-    private CancellationTokenSource? _poll;
     private static readonly TimeZoneInfo Zone = TimeZoneInfo.Local;
 
     public TasksPage()
     {
         AutomationProperties.SetName(this, TasksCopy.Title);
-        var title = new TextBlock { Text = TasksCopy.Title, VerticalAlignment = VerticalAlignment.Center };
-        HermesHQ.Shell.PageBar.Title(title, "tasks");   // [WIN-49] the Mac's page-title token (MacWindow.pageBar)
+        HermesHQ.Shell.PageBar.Title(_barTitle, "tasks");
+
+        _sidebarToggle = new Button
+        {
+            Content = new FontIcon { Glyph = "\uE700", FontSize = Hermes.Core.Shell.DesktopLook.BarGlyph },
+            Style = Style("QuietButtonStyle"),
+        };
+        AutomationProperties.SetName(_sidebarToggle, "Toggle Tasks Sidebar");
+        AutomationProperties.SetAutomationId(_sidebarToggle, "tasks.sidebar.toggle");
+        ToolTipService.SetToolTip(_sidebarToggle, "Toggle Sidebar");
+        _sidebarToggle.Click += (_, _) => { _sidebarCollapsed = !_sidebarCollapsed; Render(); };
+
+        AutomationProperties.SetName(_compactViewPicker, "Switch Tasks View");
+        AutomationProperties.SetAutomationId(_compactViewPicker, "tasks.view.switcher");
+        var compactMenu = new MenuFlyout();
+        compactMenu.Opening += (_, _) => FillCompactViewMenu(compactMenu);
+        _compactViewPicker.Flyout = compactMenu;
+
+        var titleLead = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
+        titleLead.Children.Add(_sidebarToggle);
+        titleLead.Children.Add(_barTitle);
+        titleLead.Children.Add(_compactViewPicker);
+
         var add = _add;
         AutomationProperties.SetName(add, TasksCopy.NewTask);
         AutomationProperties.SetAutomationId(add, "tasks.new");
         ToolTipService.SetToolTip(add, TasksCopy.NewTask);
         add.Click += (_, _) => NewTask();
+
         _search.TextChanged += (_, _) => { _query = _search.Text; Render(); };
         AutomationProperties.SetName(_search, TasksCopy.SearchPlaceholder);
-        AutomationProperties.SetAutomationId(_search, "tasks.search");   // [WIN-49] the magnifier's field, at the bar's edge
-        var bar = new Grid { Padding = HermesHQ.Shell.PageBar.Padding(12, 4), ColumnSpacing = 10 };   // [WIN-49] the page's side
+        AutomationProperties.SetAutomationId(_search, "tasks.search");
+
+        var bar = new Grid { Padding = HermesHQ.Shell.PageBar.Padding(12, 4), ColumnSpacing = 10 };
         bar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         bar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        bar.Children.Add(title);
-        // ⋯ (the Mac's Filter / ⋯ menu): Sort By in a list, then Select Tasks.
+        bar.Children.Add(titleLead);
+
         var more = new Button { Content = new FontIcon { Glyph = "\uE712", FontSize = Hermes.Core.Shell.DesktopLook.BarGlyph }, Style = Style("QuietButtonStyle") };
         AutomationProperties.SetName(more, "More");
         AutomationProperties.SetAutomationId(more, "tasks.more");
@@ -95,61 +137,107 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
         _tools.Children.Add(more);
         _tools.Children.Add(add);
         _tools.Children.Add(_search);
-        // Select's bar: Move To, Mark Done, Delete, then Done (the Mac's right-hand items, read left to right).
+
+        // Select bar: Schedule, Priority, Move To, Mark Done, Delete, Done.
+        AutomationProperties.SetAutomationId(_selectSchedule, "tasks.select.schedule");
+        _selectSchedule.Flyout = new MenuFlyout();
+        ((MenuFlyout)_selectSchedule.Flyout).Opening += (_, _) => FillSelectSchedule((MenuFlyout)_selectSchedule.Flyout);
+
+        AutomationProperties.SetAutomationId(_selectPriority, "tasks.select.priority");
+        _selectPriority.Flyout = new MenuFlyout();
+        ((MenuFlyout)_selectPriority.Flyout).Opening += (_, _) => FillSelectPriority((MenuFlyout)_selectPriority.Flyout);
+
         AutomationProperties.SetAutomationId(_selectMove, "tasks.select.move");
         _selectMove.Flyout = new MenuFlyout();
         ((MenuFlyout)_selectMove.Flyout).Opening += (_, _) => FillSelectMove((MenuFlyout)_selectMove.Flyout);
+
         AutomationProperties.SetAutomationId(_selectDone, "tasks.select.mark-done");
         _selectDone.Click += (_, _) => MarkSelectedDone();
         AutomationProperties.SetAutomationId(_selectDelete, "tasks.select.delete");
         _selectDelete.Foreground = Critical;
         _selectDelete.Click += (_, _) => _ = DeleteSelectedAsync();
+
         var endSelect = new Button { Content = TasksCopy.Done, Style = Style("AccentButtonStyle") };
         AutomationProperties.SetAutomationId(endSelect, "tasks.select.done");
         endSelect.Click += (_, _) => SetSelecting(false);
+
+        _selectBar.Children.Add(_selectSchedule);
+        _selectBar.Children.Add(_selectPriority);
         _selectBar.Children.Add(_selectMove);
         _selectBar.Children.Add(_selectDone);
         _selectBar.Children.Add(_selectDelete);
         _selectBar.Children.Add(endSelect);
+
         var ends = new Grid();
         ends.Children.Add(_tools);
         ends.Children.Add(_selectBar);
         Grid.SetColumn(ends, 1);
         bar.Children.Add(ends);
+
         AutomationProperties.SetName(_pills, "Views");
-        var pills = new ScrollViewer
+        _pillsHost = new ScrollViewer
         {
-            Content = _pills, HorizontalScrollMode = ScrollMode.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden,
-            VerticalScrollMode = ScrollMode.Disabled, Padding = new Thickness(16, 4, 16, 8),
+            Content = _pills,
+            HorizontalScrollMode = ScrollMode.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Hidden,
+            VerticalScrollMode = ScrollMode.Disabled,
+            Padding = new Thickness(16, 4, 16, 8),
         };
+
+        _sidebar.OnPickView = v => SwitchView(v);
+        _sidebar.OnNewList = () => _ = PromptNewListAsync([]);
+        _sidebar.BuildListMenu = id => _store != null ? ListMenu(_store, id) : new MenuFlyout();
+
+        _weekStrip.OnWeekOffsetChanged = offset => { _upcomingWeekOffset = offset; Render(); };
+        _weekStrip.OnPickDay = day => { _upcomingPickedDay = day; Render(); };
+        _weekStrip.GetDraggingTaskId = () => _dragging;
+        _weekStrip.OnDropTaskOnDay = (taskId, day) =>
+        {
+            _dragging = null;
+            if (_store != null) _ = _store.RescheduleAsync([taskId], day, preserveTime: true, zone: Zone);
+        };
+
         var listScroll = new ScrollViewer { Content = _list, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollMode = ScrollMode.Disabled };
-        var left = new Grid();
-        left.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        left.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        left.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-        left.Children.Add(bar);
-        Grid.SetRow(pills, 1);
-        left.Children.Add(pills);
-        Grid.SetRow(listScroll, 2);
-        left.Children.Add(listScroll);
-        Grid.SetRow(_notice.Bar, 2);
-        left.Children.Add(_notice.Bar);
+        var center = new Grid();
+        center.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        center.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        center.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        center.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        center.Children.Add(bar);
+        Grid.SetRow(_pillsHost, 1);
+        center.Children.Add(_pillsHost);
+        Grid.SetRow(_activeFiltersBar, 2);
+        center.Children.Add(_activeFiltersBar);
+        Grid.SetRow(listScroll, 3);
+        center.Children.Add(listScroll);
+        Grid.SetRow(_notice.Bar, 3);
+        center.Children.Add(_notice.Bar);
+
         _pane = new Border
         {
-            Width = 440, Visibility = Visibility.Collapsed, Child = _paneHost, BorderThickness = new Thickness(1, 0, 0, 0),
-            BorderBrush = Brush("DividerStrokeColorDefaultBrush"), Background = Brush("LayerFillColorDefaultBrush"),
+            Width = 440,
+            Visibility = Visibility.Collapsed,
+            Child = _paneHost,
+            BorderThickness = new Thickness(1, 0, 0, 0),
+            BorderBrush = Brush("DividerStrokeColorDefaultBrush"),
+            Background = Brush("LayerFillColorDefaultBrush"),
         };
+
         var root = new Grid();
+        root.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         root.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        root.Children.Add(left);
-        Grid.SetColumn(_pane, 1);
+        root.Children.Add(_sidebar);
+        Grid.SetColumn(center, 1);
+        root.Children.Add(center);
+        Grid.SetColumn(_pane, 2);
         root.Children.Add(_pane);
         Content = root;
-        Accelerator(VirtualKey.F5, VirtualKeyModifiers.None, () => _ = _store?.RefreshAsync(force: true));
-        Accelerator(VirtualKey.R, VirtualKeyModifiers.Control, () => _ = _store?.RefreshAsync(force: true));
+
+        SizeChanged += (_, _) => Render();
+        Accelerator(VirtualKey.F5, VirtualKeyModifiers.None, KeyRefresh);
+        Accelerator(VirtualKey.R, VirtualKeyModifiers.Control, KeyRefresh);
         Accelerator(VirtualKey.F, VirtualKeyModifiers.Control, () => _search.Focus(FocusState.Keyboard));
-        // Esc while selecting does nothing (the Mac keeps Select and its picks); otherwise it closes the task beside the list.
         Accelerator(VirtualKey.Escape, VirtualKeyModifiers.None, () => { if (_selection.OnEscape() == TodoSelection.EscapeAction.CloseTask) CloseTask(); });
     }
 
@@ -167,46 +255,81 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
-        if (AppState.Client is not { } client) return;
-        var api = new TasksApi(new GatewaySessionRest(client.Session));
-        _store = new TasksStore(api);
+        if (AppState.Client is not { } client || TasksHub.For(client) is not { } hub) return;
+        _store = hub.Store;
+        _ideasStore = hub.Ideas;
         _store.Changed += OnChanged;
         _store.Notice += OnStoreNotice;
-        _ideasStore = new TaskIdeasStore(api);
         _ideasStore.Changed += OnChanged;
         _ideasStore.Notice += OnIdeaNotice;
-        Render();
-        var cts = _poll = new CancellationTokenSource();
-        _ = PollAsync(cts.Token);
-        _ = _ideasStore.RefreshAsync(cts.Token);
+        _store.SetVisible(true);
+        _ = _store.RefreshAsync();
+        _ = _ideasStore.RefreshAsync();
         AppLog.Note("tasks", "page shown");
-        if (e.Parameter is PlaceArgs { Argument: string taskId }) OpenTask(taskId);
+
+        if (e.Parameter is PlaceArgs { Argument: string arg } && !string.IsNullOrWhiteSpace(arg))
+        {
+            if (TodoView.FromKey(arg) is { } targetView)
+            {
+                _view = targetView;
+            }
+            else if (GoalBots.PushedGoal(arg) is { } gid)
+            {
+                _view = TodoView.Goals;
+                OpenGoal(gid);
+            }
+            else if (_store.FindGoal(arg) != null)
+            {
+                _view = TodoView.Goals;
+                OpenGoal(arg);
+            }
+            else
+            {
+                OpenTask(arg);
+            }
+        }
+        Render();
     }
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
         base.OnNavigatedFrom(e);
-        _poll?.Cancel();
-        _selection.End();   // Select ends as the page goes
-        if (_store != null) { _store.Changed -= OnChanged; _store.Notice -= OnStoreNotice; }
-        if (_ideasStore != null) { _ideasStore.Changed -= OnChanged; _ideasStore.Notice -= OnIdeaNotice; }
-    }
-
-    /// Read on show and every 30 s while it shows (`?since=` answers "unchanged" when nothing moved).
-    private async Task PollAsync(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested && _store != null)
+        _taskPane?.FlushUnsavedEdits();
+        _goalPane?.FlushUnsavedEdits();
+        _selection.End();
+        if (_store != null)
         {
-            await _store.RefreshAsync();
-            try { await Task.Delay(TimeSpan.FromSeconds(30), ct); } catch (OperationCanceledException) { return; }
+            _store.SetVisible(false);
+            _store.Changed -= OnChanged;
+            _store.Notice -= OnStoreNotice;
+        }
+        if (_ideasStore != null)
+        {
+            _ideasStore.Changed -= OnChanged;
+            _ideasStore.Notice -= OnIdeaNotice;
         }
     }
 
     private void OnChanged() => _ui.TryEnqueue(() => { Render(); _taskPane?.Render(); _goalPane?.Render(); });
 
+    private void SwitchView(TodoView next)
+    {
+        if (_view == next) return;
+        _view = next;
+        if (next != TodoView.Upcoming) { _upcomingPickedDay = null; _upcomingWeekOffset = 0; }
+        if (next == TodoView.Suggested && _ideasStore != null) _ = _ideasStore.RefreshAsync();
+        Render();
+    }
+
     // ------------------------------------------------------------------ drawing
 
     private IReadOnlyList<string> BotOrder => [.. PageKit.Bots.Select(b => b.Name)];
+
+    private double PaneWidthForSidebar()
+    {
+        var total = ActualWidth > 0 ? ActualWidth : 1000;
+        return _pane.Visibility == Visibility.Visible ? Math.Max(0, total - _pane.Width) : total;
+    }
 
     private void Render()
     {
@@ -215,21 +338,32 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
         var sections = store.Sections;
         if (_view.ListId is { } id && !sections.Any(s => s.Id == id)) _view = TodoView.Today;
         if (_view == TodoView.Bots && !TodoViews.ShowsBots(store.Tasks)) _view = TodoView.Today;
-        // [goals] No goals and nothing to update (no list yet): Today. [WIN-47] An older add-on keeps Goals, locked.
         if (GoalsAddOn.FallsBack(_view, store.GoalsSupported, store.GoalsNeedAddOn)) _view = TodoView.Today;
+
+        var showSidebar = TasksNavigationLayout.ShouldShowSidebar(true, PaneWidthForSidebar(), _sidebarCollapsed, store.HasList, store.NeedsAddOn);
+        _sidebar.Visibility = showSidebar ? Visibility.Visible : Visibility.Collapsed;
+        _sidebarToggle.Visibility = store.HasList && !store.NeedsAddOn ? Visibility.Visible : Visibility.Collapsed;
+        _pillsHost.Visibility = !showSidebar && store.HasList && !store.NeedsAddOn ? Visibility.Visible : Visibility.Collapsed;
+        _compactViewPicker.Visibility = !showSidebar && store.HasList && !store.NeedsAddOn ? Visibility.Visible : Visibility.Collapsed;
+        _compactViewPicker.Content = TasksNavigationLayout.Title(_view, sections);
+        _barTitle.Text = showSidebar ? TasksNavigationLayout.Title(_view, sections) : TasksCopy.Title;
+
+        if (showSidebar) _sidebar.Render(store, _ideasStore, _view, now, Zone);
         RenderPills(store, now);
         RenderBar(store);
+        RenderActiveFiltersBar();
+
         _list.Children.Clear();
         _openIds = [];
         if (store.NeedsAddOn)
         {
-            _list.Children.Add(State("", TasksCopy.UpdateAddOn, TasksCopy.UpdateAddOnText(HostWord.UpdateTarget), null, null));
+            _list.Children.Add(State("\uEA86", TasksCopy.UpdateAddOn, TasksCopy.UpdateAddOnText(HostWord.UpdateTarget), null, null));
             return;
         }
         if (!store.HasList)
         {
             if (!store.Loading && store.Error is { } reason)
-                _list.Children.Add(State("", TasksCopy.CouldNotLoad, reason, TasksCopy.TryAgain, () => _ = store.RefreshAsync(force: true)));
+                _list.Children.Add(State("\uE783", TasksCopy.CouldNotLoad, reason, TasksCopy.TryAgain, () => _ = store.RefreshAsync(force: true)));
             else
             {
                 var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 40, 0, 0) };
@@ -239,75 +373,260 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
             }
             return;
         }
+
         var searching = _query.Trim().Length > 0;
-        // [WIN-47] [goals-addon] Goals on an add-on without them: the update state alone, no task lines.
+        var hasFilters = _priorityFilter != null || _tagFilter != null;
+
         if (GoalsAddOn.Locked(_view, searching, store.GoalsSupported))
         {
             _list.Children.Add(GoalsLockedState(store));
             return;
         }
-        // [WIN-47] A search's Goals group first (the Goals view's cards, any status), then To Do and Done.
+
         var goalsFound = searching && RenderFoundGoals(store, now);
-        // [WIN-42] The Goals view: its cards, not tasks (TasksViewController.appendGoals).
+
         if (_view == TodoView.Goals && !searching)
         {
             RenderGoals(store, now);
             return;
         }
-        // [tasks-v2] Today Check-in strip + pending List/Goal Offers at the top of Today.
-        if (_view == TodoView.Today && !searching)
+
+        if (_view == TodoView.Suggested && !searching)
+        {
+            RenderSuggestedView(store, now);
+            return;
+        }
+
+        if (_view == TodoView.Today && !searching && !hasFilters)
         {
             RenderTodayCheckInStrip(store, now);
             RenderTodayOffers(store, now);
         }
-        // [WIN-42] Today leads with the Goals shelf while there is an active goal (GoalShelf.shows).
-        if (GoalShelf.Shows(_view, searching, "all", store.GoalsSupported, store.Goals)) _list.Children.Add(GoalShelfView(store, now));
+
+        if (GoalShelf.Shows(_view, searching, "all", store.GoalsSupported, store.Goals) && !hasFilters)
+            _list.Children.Add(GoalShelfView(store, now));
+
+        var tasks = TodoSections.Filtered(store.Tasks, _query, store.Goals, priority: _priorityFilter, tag: _tagFilter);
+
+        // Multi-week strip at the top of Upcoming (with busy dots + drag-drop rescheduling).
+        if (_view == TodoView.Upcoming && !searching)
+        {
+            var busyDays = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var g in TodoViews.Groups(tasks, TodoView.Upcoming, sections, BotOrder, now, Zone, store.Settings.Sort))
+                if (g.Kind.IsDay && g.Kind.Arg is { } dk) busyDays.Add(dk);
+            if (TodoViews.Groups(tasks, TodoView.Today, sections, BotOrder, now, Zone, store.Settings.Sort).Any(g => g.Kind == TodoGroupKind.Today))
+                busyDays.Add(TodoViews.DayKey(TodoDates.LocalDay(now, Zone)));
+            _weekStrip.Render(_upcomingWeekOffset, _upcomingPickedDay, busyDays, now, Zone);
+            _list.Children.Add(_weekStrip);
+        }
+
         if (store.Tasks.Count == 0 && !goalsFound)
         {
-            _list.Children.Add(State("", TasksCopy.NoTasks, TasksCopy.NothingText, TasksCopy.NewTask, NewTask));
+            _list.Children.Add(State("\uE762", TasksCopy.NoTasks, TasksCopy.NothingText, TasksCopy.NewTask, NewTask));
             return;
         }
-        var tasks = TodoSections.Filtered(store.Tasks, _query, store.Goals);
-        // [WIN-53] A search looks through every view (Goals too): To Do, then Done (TasksViewController.reload).
-        var groups = searching ? TodoViews.SearchGroups(tasks, Zone) : TodoViews.Groups(tasks, _view, sections, BotOrder, now, Zone, store.Settings.Sort);
+
+        var pausedGoals = GoalViews.Groups(store.Goals).Someday.Select(g => g.Id).ToHashSet(StringComparer.Ordinal);
+        List<TodoGroup> groups;
+        if (searching)
+            groups = TodoViews.SearchGroups(tasks, Zone);
+        else if (_view == TodoView.Upcoming && _upcomingPickedDay is { } pickedDay)
+            groups = TodoViews.DayGroups(tasks, pickedDay, sections, BotOrder, now, Zone, store.Settings.Sort, pausedGoals);
+        else
+            groups = TodoViews.Groups(tasks, _view, sections, BotOrder, now, Zone, store.Settings.Sort, pausedGoals);
+
         if (groups.Count == 0)
         {
-            if (goalsFound) return;   // the Goals group is the search's match
-            var empty = _query.Trim().Length > 0 ? $"No Results for “{_query.Trim()}”" : TodoViews.EmptyText(_view, ListName(_view.ListId));
+            if (goalsFound) return;
+            var empty = searching
+                ? $"No Results for “{_query.Trim()}”"
+                : hasFilters
+                    ? "No tasks match the active filters."
+                    : _view == TodoView.Upcoming && _upcomingPickedDay is { } pd
+                        ? TodoViews.DayEmptyText(pd, now, Zone)
+                        : TodoViews.EmptyText(_view, ListName(_view.ListId));
             var t = Text(empty, 14, color: Secondary);
             t.Margin = new Thickness(4, 16, 4, 0);
             _list.Children.Add(t);
-            if (_view == TodoView.Inbox && !searching) RenderInboxIdeas(store, now);
             return;
         }
+
         foreach (var group in groups)
         {
-            // TasksViewController.configureHeader / reload at 93f984bb1: Done stays folded under its heading until Show
-            // (Hide folds it again; a search shows its rows with no fold), Today calls it "Done Today", and a search's
-            // open tasks are "To Do". `_doneOpen` is the page's own, as the Mac's instance var: never saved.
             if (TodoViews.PageHeading(group.Kind, _view, searching, now, Zone, sections, BotName) is { } h)
                 _list.Children.Add(GroupHeading(group, h.Title, h.Detail, TodoViews.DoneFold(group.Kind, _doneOpen, searching)));
             if (!TodoViews.ShowsRows(group.Kind, _doneOpen, searching)) continue;
-            var arranging = group.Kind == TodoGroupKind.Open && _view.ListId != null && _query.Trim().Length == 0;
+            var arranging = group.Kind == TodoGroupKind.Open && _view.ListId != null && !searching && !hasFilters;
             if (arranging) _openIds = [.. group.Tasks.Select(t => t.Id)];
-            foreach (var task in group.Tasks) _list.Children.Add(RowView(task, group.Kind, now, arranging));
+            var allowDayDrag = _view == TodoView.Upcoming && !searching && !store.ReadOnlyGateway && !_selection.Active;
+            foreach (var task in group.Tasks) _list.Children.Add(RowView(task, group.Kind, now, arranging, allowDayDrag));
             if (group.Kind.IsNext && group.More > 0 && group.Kind.Arg is { } list)
             {
                 var more = new HyperlinkButton { Content = TodoViews.MoreLine(group.More, ListName(list) ?? "List") + " ›" };
-                more.Click += (_, _) => { _view = TodoView.List(list); Render(); };
+                more.Click += (_, _) => SwitchView(TodoView.List(list));
                 _list.Children.Add(more);
             }
         }
-        // [tasks-v2] Inbox foot Ideas section ("Suggested by {Bot}" with Add / Add & Start / Dismiss + Undo / Look Now).
-        if (_view == TodoView.Inbox && !searching) RenderInboxIdeas(store, now);
     }
 
-    /// A group's heading (TodoGroupHeaderView): Mac calm small-caps section header ("TODAY · 6", "WAITING ON YOU · 4"),
-    /// with Overdue in hqRed and Done's Show or Hide at its end. Its identifier stays "tasks.section.<title>".
+    private void RenderActiveFiltersBar()
+    {
+        _activeFiltersBar.Children.Clear();
+        if (_priorityFilter == null && _tagFilter == null)
+        {
+            _activeFiltersBar.Visibility = Visibility.Collapsed;
+            return;
+        }
+        _activeFiltersBar.Visibility = Visibility.Visible;
+
+        if (_priorityFilter is { } pri)
+        {
+            var chip = Quiet($"Priority: {TodoViews.PriorityWord(pri)}  ✕", () => { _priorityFilter = null; Render(); });
+            AutomationProperties.SetName(chip, $"Clear {TodoViews.PriorityWord(pri)} priority filter");
+            AutomationProperties.SetAutomationId(chip, "tasks.filter.chip.priority");
+            _activeFiltersBar.Children.Add(chip);
+        }
+        if (_tagFilter is { } tag)
+        {
+            var chip = Quiet($"#{tag}  ✕", () => { _tagFilter = null; Render(); });
+            AutomationProperties.SetName(chip, $"Clear tag {tag} filter");
+            AutomationProperties.SetAutomationId(chip, "tasks.filter.chip.tag");
+            _activeFiltersBar.Children.Add(chip);
+        }
+        var clearAll = Quiet("Clear Filters", () => { _priorityFilter = null; _tagFilter = null; Render(); });
+        AutomationProperties.SetAutomationId(clearAll, "tasks.filter.clear");
+        _activeFiltersBar.Children.Add(clearAll);
+    }
+
+    /// Dedicated Suggested view (`1da255c07` / `f3a9b867a`) with Sources banner, Look Now, Ideas Settings, and expandable cards.
+    private void RenderSuggestedView(TasksStore store, DateTimeOffset now)
+    {
+        if (_ideasStore is not { } ideasStore) return;
+        var page = ideasStore.Page;
+        var visible = ideasStore.VisibleIdeas;
+        var roster = PageKit.Bots.Select(b => (Id: b.Name, Name: BotName(b.Name))).ToList();
+        var botsLabel = TaskIdeasSummary.ActiveBotsLabel(store.Settings.ActiveIdeasBots, roster);
+        var sources = store.Settings.IdeasSources ?? page.Sources ?? new TodoIdeasSources();
+        var connectors = page.AvailableSources?.Connectors ?? [];
+        var sourcesLabel = TaskIdeasSummary.ActiveSourcesLabel(sources, connectors);
+        var isOn = page.On || store.Settings.Ideas == true;
+        var looking = ideasStore.Looking || page.Running;
+
+        // "Checking <sourcesSummary>" Sources > banner
+        var bannerGrid = new Grid { ColumnSpacing = 12 };
+        bannerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        bannerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var bannerInfo = new StackPanel { Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
+        bannerInfo.Children.Add(Text(isOn ? $"Checking {sourcesLabel}" : "Task suggestions are off", 13.5, bold: true));
+        if (isOn)
+        {
+            var sub = looking
+                ? "Looking through your recent activity…"
+                : page.RanAt is { Length: > 0 } ranAt && TodoDates.Moment(ranAt) is { } dt
+                    ? $"Suggested by {botsLabel} · Last checked {TodoWords.Ago(ranAt, now, Zone)}"
+                    : $"Suggested by {botsLabel}";
+            bannerInfo.Children.Add(Text(sub, 12, color: Secondary));
+        }
+        else
+        {
+            bannerInfo.Children.Add(Text(TodoSettingsCopy.IdeasFooter(botsLabel), 12, color: Secondary));
+        }
+        bannerGrid.Children.Add(bannerInfo);
+
+        var bannerTools = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
+        if (isOn)
+        {
+            var sourcesBtn = Quiet("Sources ›", () => _ = IdeasSourcesDialog.PresentAsync(XamlRoot, store, ideasStore));
+            AutomationProperties.SetAutomationId(sourcesBtn, "tasks.suggested.sources");
+            bannerTools.Children.Add(sourcesBtn);
+
+            var lookBtn = Push(looking ? "Looking…" : "Look Now", () => _ = ideasStore.LookNowAsync(), accent: false);
+            lookBtn.IsEnabled = !looking && !store.ReadOnlyGateway;
+            AutomationProperties.SetAutomationId(lookBtn, "tasks.suggested.look-now");
+            bannerTools.Children.Add(lookBtn);
+
+            var settingsBtn = Quiet("Settings…", () => _ = TasksSettingsDialog.PresentAsync(XamlRoot, store, ideasStore));
+            bannerTools.Children.Add(settingsBtn);
+        }
+        else
+        {
+            var turnOnBtn = Push("Turn On Ideas", () => _ = ideasStore.SetOnAsync(true, store), accent: true);
+            turnOnBtn.IsEnabled = !store.ReadOnlyGateway;
+            bannerTools.Children.Add(turnOnBtn);
+        }
+        Grid.SetColumn(bannerTools, 1);
+        bannerGrid.Children.Add(bannerTools);
+
+        var bannerCard = Card(bannerGrid, 12);
+        bannerCard.Margin = new Thickness(0, 4, 0, 10);
+        AutomationProperties.SetAutomationId(bannerCard, "tasks.suggested.banner");
+        _list.Children.Add(bannerCard);
+
+        if (!isOn) return;
+
+        if (visible.Count == 0)
+        {
+            var empty = Text(looking ? "Looking through recent activity…" : TodoViews.EmptyText(TodoView.Suggested, null), 14, color: Secondary);
+            empty.Margin = new Thickness(4, 16, 4, 0);
+            _list.Children.Add(empty);
+            return;
+        }
+
+        foreach (var idea in visible)
+        {
+            var item = idea;
+            var expanded = _expandedIdeas.Contains(item.Id);
+            var stack = new StackPanel { Spacing = 6 };
+
+            var top = new Grid { ColumnSpacing = 8 };
+            top.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            top.Children.Add(Text(item.Title, 14, bold: true));
+            var toggle = Quiet(expanded ? "Less" : "Details", () =>
+            {
+                if (!_expandedIdeas.Add(item.Id)) _expandedIdeas.Remove(item.Id);
+                Render();
+            });
+            Grid.SetColumn(toggle, 1);
+            top.Children.Add(toggle);
+            stack.Children.Add(top);
+
+            if (!string.IsNullOrWhiteSpace(item.Why))
+                stack.Children.Add(Text(item.Why, 12.5, color: Secondary));
+            if (expanded && !string.IsNullOrWhiteSpace(item.Help))
+                stack.Children.Add(Text($"{BotName(item.Bot ?? page.Bot)} can help: {item.Help}", 12, color: Accent));
+            if (expanded)
+            {
+                var origin = !string.IsNullOrWhiteSpace(item.Source) ? item.Source : item.From?.Line(now, Zone);
+                if (!string.IsNullOrWhiteSpace(origin))
+                    stack.Children.Add(Text("From " + origin, 11.5, color: Tertiary));
+            }
+
+            var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            var addOnly = Push("Add", () => _ = ideasStore.AddAsync(item, letBotStart: false, store), accent: !item.BotHelps);
+            addOnly.IsEnabled = !store.ReadOnlyGateway;
+            actions.Children.Add(addOnly);
+            if (item.BotHelps)
+            {
+                var addStart = Push($"Add & Let {BotName(item.Bot ?? page.Bot)} Start", () => _ = ideasStore.AddAsync(item, letBotStart: true, store), accent: true);
+                addStart.IsEnabled = !store.ReadOnlyGateway;
+                actions.Children.Add(addStart);
+            }
+            var dismiss = Quiet("Dismiss", () => _ = DismissIdeaWithUndoAsync(ideasStore, item));
+            dismiss.IsEnabled = !store.ReadOnlyGateway;
+            actions.Children.Add(dismiss);
+            stack.Children.Add(actions);
+
+            var card = Card(stack, 12);
+            card.Margin = new Thickness(0, 3, 0, 3);
+            AutomationProperties.SetAutomationId(card, "tasks.idea." + item.Id);
+            _list.Children.Add(card);
+        }
+    }
+
     private FrameworkElement GroupHeading(TodoGroup group, string title, string? detail, string? fold)
     {
         var head = new TextBlock { FontSize = 11.5, CharacterSpacing = 45, VerticalAlignment = VerticalAlignment.Center };
-        // Overdue's name in hqRed (TodoGroupHeaderView.Words: the name red, its count still grey).
         var name = new Run
         {
             Text = title.ToUpperInvariant(),
@@ -318,13 +637,30 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
         if (detail is { } d) head.Inlines.Add(new Run { Text = "  ·  " + d.ToUpperInvariant(), Foreground = Secondary, FontSize = 11.5 });
         if (!group.Kind.IsDay) head.Inlines.Add(new Run { Text = "  ·  " + (group.Tasks.Count + group.More), Foreground = Secondary });
         AutomationProperties.SetHeadingLevel(head, Microsoft.UI.Xaml.Automation.Peers.AutomationHeadingLevel.Level2);
-        // TodoGroupHeaderView's padding: 18 over, 6 under; the name starts where the rows' circles do (a row's 6 in).
+
         var row = new Grid { Margin = new Thickness(6, 18, 8, 6) };
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         row.Children.Add(head);
         AutomationProperties.SetAutomationId(row, TodoViews.SectionAutomationId(title));
-        if (fold != null)
+
+        if (group.Kind == TodoGroupKind.Overdue && _store is { ReadOnlyGateway: false } store && group.Tasks.Count > 0)
+        {
+            var overdueIds = group.Tasks.Select(t => t.Id).ToList();
+            var rescheduleBtn = new DropDownButton { Content = TasksCopy.Reschedule, Padding = new Thickness(8, 2, 8, 2), FontSize = 12 };
+            AutomationProperties.SetAutomationId(rescheduleBtn, "tasks.overdue.reschedule");
+            var menu = new MenuFlyout();
+            var now = DateTimeOffset.Now;
+            menu.Items.Add(Item(TasksCopy.Today, "\uE787", () => _ = store.RescheduleAsync(overdueIds, now, preserveTime: true, zone: Zone)));
+            menu.Items.Add(Item(TasksCopy.Tomorrow, "\uE787", () => _ = store.RescheduleAsync(overdueIds, now.AddDays(1), preserveTime: true, zone: Zone)));
+            menu.Items.Add(Item(TasksCopy.NextWeek, "\uE787", () => _ = store.RescheduleAsync(overdueIds, now.AddDays(7), preserveTime: true, zone: Zone)));
+            menu.Items.Add(new MenuFlyoutSeparator());
+            menu.Items.Add(Item(TasksCopy.ChooseDate, "\uE787", () => _ = ChooseDateBatchAsync(store, overdueIds)));
+            rescheduleBtn.Flyout = menu;
+            Grid.SetColumn(rescheduleBtn, 1);
+            row.Children.Add(rescheduleBtn);
+        }
+        else if (fold != null)
         {
             var toggle = new HyperlinkButton { Content = fold, Padding = new Thickness(12, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
             AutomationProperties.SetAutomationId(toggle, TodoViews.DoneFoldId);
@@ -337,25 +673,56 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
 
     private string? ListName(string? id) => _store?.Sections.FirstOrDefault(s => s.Id == id)?.Name;
 
+    private void FillCompactViewMenu(MenuFlyout menu)
+    {
+        menu.Items.Clear();
+        if (_store is not { } store) return;
+        var goalsPill = GoalsAddOn.Pill(store.GoalsSupported, store.GoalsNeedAddOn, store.Goals);
+        void AddChoice(TodoView v, string title)
+        {
+            var item = new ToggleMenuFlyoutItem { Text = title, IsChecked = _view == v };
+            item.Click += (_, _) => SwitchView(v);
+            menu.Items.Add(item);
+        }
+        AddChoice(TodoView.Today, TasksCopy.Today);
+        AddChoice(TodoView.Upcoming, TasksCopy.Upcoming);
+        AddChoice(TodoView.Inbox, TasksCopy.Inbox);
+        if (goalsPill.Shows) AddChoice(TodoView.Goals, GoalsCopy.Goals);
+        if (store.Sections.Count > 0)
+        {
+            menu.Items.Add(new MenuFlyoutSeparator());
+            foreach (var sec in store.Sections) AddChoice(TodoView.List(sec.Id), sec.Name);
+        }
+        var showSuggested = _ideasStore != null && (store.Settings.Ideas != null || _ideasStore.Page.On || _ideasStore.VisibleIdeas.Count > 0);
+        var showBots = TodoViews.ShowsBots(store.Tasks);
+        if (showSuggested || showBots)
+        {
+            menu.Items.Add(new MenuFlyoutSeparator());
+            if (showSuggested) AddChoice(TodoView.Suggested, TasksCopy.Suggested);
+            if (showBots) AddChoice(TodoView.Bots, TasksCopy.BotsTasks);
+        }
+    }
+
     private void RenderPills(TasksStore store, DateTimeOffset now)
     {
         _pills.Children.Clear();
         if (!store.HasList || store.NeedsAddOn) return;
         var sections = store.Sections;
         var goalsPill = GoalsAddOn.Pill(store.GoalsSupported, store.GoalsNeedAddOn, store.Goals);
-        int? Count(TodoView v) => v == TodoView.Goals ? goalsPill.Count : TodoViews.OpenCount(store.Tasks, v, sections, now, Zone);
+        int? Count(TodoView v) => v == TodoView.Goals ? goalsPill.Count
+            : v == TodoView.Suggested ? (_ideasStore?.Loaded == true ? _ideasStore.VisibleIdeas.Count : store.IdeasCount)
+            : TodoViews.OpenCount(store.Tasks, v, sections, now, Zone);
         var views = new List<(TodoView View, string Title)> { (TodoView.Today, TasksCopy.Today), (TodoView.Upcoming, TasksCopy.Upcoming), (TodoView.Inbox, TasksCopy.Inbox) };
-        // [WIN-42] Goals is the first pill, with its active goals, on an add-on that keeps goals. [WIN-47] On one from
-        // before Goals it stays, with no count, and says to update the add-on.
         if (goalsPill.Shows) views.Insert(0, (TodoView.Goals, GoalsCopy.Goals));
         views.AddRange(sections.Select(s => (TodoView.List(s.Id), s.Name)));
+        if (_ideasStore != null && (store.Settings.Ideas != null || _ideasStore.Page.On || _ideasStore.VisibleIdeas.Count > 0))
+            views.Add((TodoView.Suggested, TasksCopy.Suggested));
         if (TodoViews.ShowsBots(store.Tasks)) views.Add((TodoView.Bots, TasksCopy.Bots));
         foreach (var (view, title) in views)
         {
             var picked = view == _view;
             var words = new TextBlock { FontSize = 14 };
             words.Inlines.Add(new Run { Text = title, FontWeight = FontWeights.SemiBold });
-            // [WIN-TASK-PILL-COUNT] The count only above 0 (TaskViewsHeader.swift line 76): an emptied Home reads "Home".
             var count = Count(view);
             var contrast = ContrastPair(Hermes.Core.Settings.ContrastTheme.PillSurface(picked));
             if (TasksCopy.PillDetail(count) is { } detail)
@@ -365,11 +732,10 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
             AutomationProperties.SetName(pill, TasksCopy.PillName(title, count));
             AutomationProperties.SetAutomationId(pill, "tasks.view." + view.Key);
             var v = view;
-            pill.Click += (_, _) => { _view = v; Render(); };
+            pill.Click += (_, _) => SwitchView(v);
             if (view.ListId is { } listId && store.EditsLists) pill.ContextFlyout = ListMenu(store, listId);
             _pills.Children.Add(pill);
         }
-        // + New List after the views (TaskViewsHeader.swift), while your lists can be edited.
         if (store.EditsLists)
         {
             var face = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
@@ -390,10 +756,6 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
         }
     }
 
-    /// [WIN-CONTRAST-BUBBLE] Under a Windows contrast theme a pill is the theme's own pair (Hermes.Core.Settings
-    /// ContrastTheme): the picked one Highlight under HighlightText (the Mac's `hqTint` under `Theme.pickedPillInk`), the
-    /// others ButtonFace under ButtonText (`hqFill3` under `hqLabel`), the count in the same ink. Null without a
-    /// contrast theme (the look's own colours), or when Windows won't say its colours.
     internal static (SolidColorBrush Fill, SolidColorBrush Ink, SolidColorBrush Edge)? ContrastPair(Hermes.Core.Settings.ContrastTheme.Surface surface)
     {
         if (!HermesHQ.Features.Settings.ThemeService.SystemHighContrast) return null;
@@ -403,9 +765,6 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
             && HermesHQ.Features.Settings.ThemeService.SystemBrush(want.Edge) is { } edge ? (fill, ink, edge) : null;
     }
 
-    /// The pill's fill, words and edge in every state (rest, pointer over, pressed) from the pair, through the control's
-    /// lightweight keys (`ToggleButtonBackgroundChecked`, `ButtonForegroundPointerOver`…), its words without WinUI's
-    /// backplate. The fill stays put under the pointer, as the Mac's pill does.
     private static void ContrastPill(Control pill, string kind, string state, (SolidColorBrush Fill, SolidColorBrush Ink, SolidColorBrush Edge) pair, TextBlock words)
     {
         foreach (var over in new[] { "", "PointerOver", "Pressed" })
@@ -421,17 +780,18 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
         HermesHQ.Features.Settings.ThemeService.ContrastWords(words);
     }
 
-    /// A right-click on a list's pill (TaskViewsHeader.swift `menu(for:)`): Edit List… (name, colour, icon, its bot,
-    /// Today), Rename…, Move Left, Move Right, then Delete List….
     private MenuFlyout ListMenu(TasksStore store, string id)
     {
         var menu = new MenuFlyout();
         var at = store.Sections.ToList().FindIndex(s => s.Id == id);
+        var sectionName = store.Sections.FirstOrDefault(s => s.Id == id)?.Name ?? TodoListCopy.FallbackName;
         foreach (var entry in TodoListCopy.Menu(Math.Max(at, 0), store.Sections.Count))
         {
-            switch (entry)
+            if (entry == TodoListMenuItem.Divider)
             {
-                case TodoListMenuItem.Divider: menu.Items.Add(new MenuFlyoutSeparator()); continue;
+                menu.Items.Add(FavoritesPinAction.ForTaskView(TodoView.List(id).Key, sectionName));
+                menu.Items.Add(new MenuFlyoutSeparator());
+                continue;
             }
             var (glyph, run) = entry switch
             {
@@ -449,10 +809,8 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
         return menu;
     }
 
-    // ------------------------------------------------------------------ your lists (TasksViewController.swift "Lists")
+    // ------------------------------------------------------------------ your lists
 
-    /// Asks for a list's name (askName): the field says "List Name", Add (or Save) waits for a name, and a rename
-    /// starts with the old name selected so typing replaces it. The trimmed name, or null when cancelled.
     private async Task<string?> AskNameAsync(string title, string? message, string name, string action)
     {
         var field = new TextBox { Text = name, PlaceholderText = TodoListCopy.NamePlaceholder };
@@ -471,7 +829,6 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
         return TodoListCopy.CleanName(field.Text);
     }
 
-    /// New List (the + pill, or Move To › New List… with `ids`): makes the list, moves the tasks into it, shows it.
     private async Task PromptNewListAsync(List<string> ids, Action? after = null)
     {
         if (_store is not { } store) return;
@@ -480,8 +837,7 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
         if (await store.AddSectionAsync(name) is not { } made) return;
         if (ids.Count > 0) await store.MoveAsync(ids, made.Id);
         after?.Invoke();
-        _view = TodoView.List(made.Id);
-        Render();
+        SwitchView(TodoView.List(made.Id));
     }
 
     private async Task RenameListAsync(string id)
@@ -491,8 +847,6 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
         await store.RenameSectionAsync(id, name);
     }
 
-    /// [WIN-TASK-LIST-EDIT] Edit List… (TasksViewController.swift editList): refused with the notice on a read-only
-    /// gateway; Delete List… in it closes the editor, then asks (the Mac dismisses the sheet, then alerts).
     private async Task EditListAsync(string id)
     {
         if (_store is not { } store) return;
@@ -504,7 +858,6 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
         if (delete) await DeleteListAsync(id);
     }
 
-    /// Delete List: “Delete “Home”?”, saying its tasks are kept in no list; Cancel, or Delete List.
     private async Task DeleteListAsync(string id)
     {
         if (_store is not { } store) return;
@@ -550,7 +903,6 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
 
     internal static Color? PriorityColor(int priority) => priority switch { 1 => Red, 2 => Rgb(0xEE, 0x94, 0x00), 3 => Blue, _ => null };
 
-    /// The circle that ticks a task off (coloured by its priority).
     internal static Button Circle(TodoTask task, Func<Task> toggle)
     {
         var ring = new Ellipse { Width = 20, Height = 20, StrokeThickness = 1.5 };
@@ -561,49 +913,44 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
         {
             ring.Fill = Accent;
             ring.Stroke = Accent;
-            grid.Children.Add(new FontIcon { Glyph = "", FontSize = 11, Foreground = Brush("TextOnAccentFillColorPrimaryBrush") });
+            grid.Children.Add(new FontIcon { Glyph = "\uE73E", FontSize = 11, Foreground = Brush("TextOnAccentFillColorPrimaryBrush") });
         }
         var button = new Button { Content = grid, Padding = new Thickness(2), Style = Style("QuietButtonStyle"), VerticalAlignment = VerticalAlignment.Top };
         AutomationProperties.SetName(button, task.IsDone ? "Done. Open it again" : TasksCopy.MarkDone);
         button.Click += (_, _) => _ = toggle();
-        button.Tapped += (_, e) => e.Handled = true;   // the row under it doesn't open the task
+        button.Tapped += (_, e) => e.Handled = true;
         return button;
     }
 
-    /// [WIN-58] A task's row as the keyboard reaches it: the Mac's rows are a collection view's cells, which its Tab and
-    /// arrows land on (TasksViewController.swift `walkOrder`: "the system's focus used to start on it"), and Return opens
-    /// the task. The row itself is a Border, which takes no focus, so it sits in a tab stop drawing the system's ring;
-    /// Enter or Space does what a click does (opens the task, or picks it while Select picks).
-    private FrameworkElement RowView(TodoTask task, TodoGroupKind kind, DateTimeOffset now, bool arranging = false)
+    private FrameworkElement RowView(TodoTask task, TodoGroupKind kind, DateTimeOffset now, bool arranging = false, bool allowDayDrag = false)
     {
-        var row = RowBody(task, kind, now, arranging);
+        var row = RowBody(task, kind, now, arranging, allowDayDrag);
         var host = new ContentControl
         {
             Content = row, IsTabStop = true, UseSystemFocusVisuals = true,
             HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch,
         };
         AutomationProperties.SetAutomationId(host, Hermes.Core.Shell.KeyboardOnlyWalkProof.TaskRowPrefix + task.Id);
-        // Narrator reads the stop the keyboard lands on: the row's own words (title, when, steps…), not an unnamed pane.
         AutomationProperties.SetName(host, AutomationProperties.GetName(row));
         host.KeyDown += (_, e) =>
         {
-            if (e.Key is not (Windows.System.VirtualKey.Enter or Windows.System.VirtualKey.Space)) return;
+            if (e.Key is not (VirtualKey.Enter or VirtualKey.Space)) return;
             e.Handled = true;
             if (_selection.Active) TogglePicked(task.Id); else OpenTask(task.Id);
         };
         return host;
     }
 
-    private FrameworkElement RowBody(TodoTask task, TodoGroupKind kind, DateTimeOffset now, bool arranging)
+    private FrameworkElement RowBody(TodoTask task, TodoGroupKind kind, DateTimeOffset now, bool arranging, bool allowDayDrag)
     {
         var words = TodoViews.Row(task, kind, now, Zone, BotName);
-        var wide = ActualWidth <= 0 || ActualWidth >= 720;
+        var contentWidth = PaneWidthForSidebar() - (_sidebar.Visibility == Visibility.Visible ? TasksNavigationLayout.SidebarWidth : 0);
+        var wide = ActualWidth <= 0 || TasksNavigationLayout.ShouldUseTable(true, contentWidth);
         var grid = new Grid { ColumnSpacing = 12, Padding = new Thickness(6, wide ? 5 : 6, 8, wide ? 5 : 6) };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         if (wide)
         {
-            // Mac calm wide table columns: status | detail & due | goal mark + owner with bot face.
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -615,12 +962,11 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
         grid.Children.Add(_selection.Active ? PickCircle(task) : Circle(task, () => ToggleDone(task)));
         var middle = new StackPanel { Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
         var name = new TextBlock { FontSize = wide ? 13.5 : 15, TextWrapping = wide ? TextWrapping.NoWrap : TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis };
-        if (!task.IsDone && task.Priority is 1 or 2)
+        if (!task.IsDone && TodoViews.PriorityMark(task.Priority) is { } mark)
         {
-            var bang = task.Priority == 1 ? "!! " : "! ";
             name.Inlines.Add(new Run
             {
-                Text = bang,
+                Text = mark + " ",
                 FontWeight = FontWeights.SemiBold,
                 Foreground = HermesHQ.Features.Settings.ThemeService.Ink(PriorityColor(task.Priority) ?? Red),
             });
@@ -634,7 +980,6 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
         Grid.SetColumn(middle, 1);
         grid.Children.Add(middle);
 
-        // [WIN-47] A task in an active or paused goal carries the goal's mark (TaskRowViews.swift), in every view.
         var markGoal = _store is { } s0 ? GoalViews.MarkGoal(task, s0.Goals) : null;
         if (wide)
         {
@@ -694,6 +1039,7 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
             Grid.SetColumn(end, 2);
             grid.Children.Add(end);
         }
+
         var chosen = _selected == task.Id;
         var row = new Border { Child = grid, CornerRadius = new CornerRadius(6), Background = chosen ? AccentWash(0.14) : Solid(Microsoft.UI.Colors.Transparent) };
         AutomationProperties.SetName(row, $"{task.Title}. {string.Join(", ", new[] { words.When, words.Steps is { } s ? s.Replace("/", " of ") + " steps" : null, words.Note, markGoal is { } mg ? GoalViews.MarkWords(mg) : null }.OfType<string>())}");
@@ -702,8 +1048,6 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
         row.PointerExited += (_, _) => { if (_selected != task.Id) row.Background = Solid(Microsoft.UI.Colors.Transparent); };
         if (_selection.Active)
         {
-            // Select: a click picks the row (nothing opens, no menu, no drag). A picked row shows the filled check only,
-            // with no tint (the Mac's cell isn't selected).
             var picked = _selection.IsPicked(task.Id);
             AutomationProperties.SetItemStatus(row, picked ? "Selected" : "");
             row.Tapped += (_, _) => TogglePicked(task.Id);
@@ -712,45 +1056,163 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
         row.Tapped += (_, _) => OpenTask(task.Id);
         row.ContextFlyout = RowMenu(task);
         if (arranging) AllowArrange(row, task);
+        else if (allowDayDrag && !task.IsDone)
+        {
+            row.CanDrag = true;
+            row.DragStarting += (_, e) =>
+            {
+                _dragging = task.Id;
+                e.Data.SetText(TodoWeekStripView.DragPrefix + task.Id);
+                e.Data.RequestedOperation = DataPackageOperation.Move;
+            };
+            row.DropCompleted += (_, _) => _dragging = null;
+        }
         return row;
     }
 
     private MenuFlyout RowMenu(TodoTask task)
     {
         var menu = new MenuFlyout();
-        menu.Items.Add(Item(TasksCopy.OpenTask, "", () => OpenTask(task.Id)));
-        menu.Items.Add(Item(task.IsDone ? TasksCopy.MarkNotDone : TasksCopy.MarkDone, task.IsDone ? "" : "", () => _ = ToggleDone(task)));
-        if (_store is { } store && (store.Sections.Count > 0 || store.EditsLists))
+        menu.Items.Add(Item(TasksCopy.OpenTask, "\uE8A7", () => OpenTask(task.Id)));
+        menu.Items.Add(Item(task.IsDone ? TasksCopy.MarkNotDone : TasksCopy.MarkDone, task.IsDone ? "\uEA3A" : "\uE73E", () => _ = ToggleDone(task)));
+
+        if (_store is { } store)
         {
-            var move = new MenuFlyoutSubItem { Text = TasksCopy.MoveTo, Icon = new FontIcon { Glyph = "" } };
-            AddMoveChoices(move.Items, store, [task.Id], null);
-            menu.Items.Add(move);
+            // Schedule submenu
+            var sched = new MenuFlyoutSubItem { Text = TasksCopy.Schedule, Icon = new FontIcon { Glyph = "\uE787" } };
+            var now = DateTimeOffset.Now;
+            sched.Items.Add(Item(TasksCopy.Today, "\uE787", () => _ = store.RescheduleAsync([task.Id], now, preserveTime: true, zone: Zone)));
+            sched.Items.Add(Item(TasksCopy.Tomorrow, "\uE787", () => _ = store.RescheduleAsync([task.Id], now.AddDays(1), preserveTime: true, zone: Zone)));
+            sched.Items.Add(Item(TasksCopy.NextWeek, "\uE787", () => _ = store.RescheduleAsync([task.Id], now.AddDays(7), preserveTime: true, zone: Zone)));
+            sched.Items.Add(Item(TasksCopy.ChooseDate, "\uE787", () => _ = ChooseDateBatchAsync(store, [task.Id])));
+            if (task.Due != null)
+            {
+                sched.Items.Add(new MenuFlyoutSeparator());
+                sched.Items.Add(Item(TasksCopy.NoDueDate, "\uE711", () => _ = store.RescheduleAsync([task.Id], null)));
+            }
+            menu.Items.Add(sched);
+
+            // Priority submenu
+            if (store.FieldsSupported)
+            {
+                var pri = new MenuFlyoutSubItem { Text = TasksCopy.Priority, Icon = new FontIcon { Glyph = "\uE7C1" } };
+                foreach (var level in new[] { 1, 2, 3, 0 })
+                {
+                    var l = level;
+                    var t = new ToggleMenuFlyoutItem { Text = l == 0 ? TasksCopy.NoPriority : TodoViews.PriorityWord(l), IsChecked = task.Priority == l };
+                    t.Click += (_, _) => _ = store.SetPriorityAsync([task.Id], l);
+                    pri.Items.Add(t);
+                }
+                menu.Items.Add(pri);
+            }
+
+            // Assign submenu
+            var assign = new MenuFlyoutSubItem { Text = TasksCopy.Assign, Icon = new FontIcon { Glyph = "\uE77B" } };
+            var meItem = new ToggleMenuFlyoutItem { Text = TasksCopy.JustMe, IsChecked = task.WhoKind == TodoWho.Me };
+            meItem.Click += (_, _) => _ = store.PatchAsync(task.Id, new JsonObject
+            {
+                ["who"] = "me", ["bot"] = null,
+                ["steps"] = TodoWire.Steps(task.Steps.Select(s => s with { Who = "me" })),
+            });
+            assign.Items.Add(meItem);
+            if (PageKit.Bots.Count > 0)
+            {
+                var withMe = new MenuFlyoutSubItem { Text = TasksCopy.WithMe };
+                var byItself = new MenuFlyoutSubItem { Text = TasksCopy.ByItself };
+                foreach (var bot in PageKit.Bots)
+                {
+                    var name = bot.Name;
+                    var w = new ToggleMenuFlyoutItem { Text = bot.DisplayName, IsChecked = task.WhoKind == TodoWho.Together && task.Helper == name };
+                    w.Click += (_, _) => _ = store.PatchAsync(task.Id, new JsonObject { ["who"] = "together", ["bot"] = name });
+                    withMe.Items.Add(w);
+
+                    var a = new ToggleMenuFlyoutItem { Text = bot.DisplayName, IsChecked = task.WhoKind == TodoWho.Bot && task.Helper == name };
+                    a.Click += (_, _) => _ = store.PatchAsync(task.Id, new JsonObject { ["who"] = "bot", ["bot"] = name });
+                    byItself.Items.Add(a);
+                }
+                assign.Items.Add(withMe);
+                assign.Items.Add(byItself);
+            }
+            menu.Items.Add(assign);
+
+            if (store.Sections.Count > 0 || store.EditsLists)
+            {
+                var move = new MenuFlyoutSubItem { Text = TasksCopy.MoveTo, Icon = new FontIcon { Glyph = "\uE8B7" } };
+                AddMoveChoices(move.Items, store, [task.Id], null);
+                menu.Items.Add(move);
+            }
+
+            if (AddToGoalMenu(store, task) is { } goalMenu) menu.Items.Add(goalMenu);
+
+            menu.Items.Add(Item(TasksCopy.Duplicate, "\uE8C8", () => _ = DuplicateTaskAsync(store, task.Id)));
         }
-        // [WIN-47] Add to Goal, beside Move To (docs/goals.md "A task in a goal").
-        if (_store is { } goalStore && AddToGoalMenu(goalStore, task) is { } goalMenu) menu.Items.Add(goalMenu);
+
         var select = Item(TodoSelection.RowMenuTitle, "\uE73A", () => { _selection.StartWith(task.Id); Render(); });
         AutomationProperties.SetAutomationId(select, "tasks.select.row");
         menu.Items.Add(select);
         menu.Items.Add(new MenuFlyoutSeparator());
-        var delete = Item(TasksCopy.Delete, "", () => _ = ConfirmDeleteAsync(task.Id));
+        var delete = Item(TasksCopy.Delete, "\uE74D", () => _ = ConfirmDeleteAsync(task.Id));
         delete.Foreground = Critical;
         menu.Items.Add(delete);
         return menu;
     }
 
-    // ------------------------------------------------------------------ Sort By, Select, drag
+    private async Task DuplicateTaskAsync(TasksStore store, string id)
+    {
+        if (await store.DuplicateAsync(id) is { } made)
+            _notice.Show($"Duplicated “{(made.Title.Length == 0 ? TasksCopy.Untitled : made.Title)}”");
+    }
 
-    /// ⋯: Sort By (a list's view only) with My Order, Due Date, Priority (0.9.53), Date Added; then Select Tasks; then
-    /// Tasks Settings….
+    // ------------------------------------------------------------------ ⋯ menu, Filter, Sort By, Select, drag
+
     private void FillMoreMenu(MenuFlyout menu)
     {
         menu.Items.Clear();
         if (_store is not { } store) return;
-        if (TodoSortBy.Shows(_view))
+
+        // Priority & Tag filters (when fields supported and viewing tasks)
+        if (store.FieldsSupported && _view != TodoView.Suggested && _view != TodoView.Goals)
+        {
+            var priSub = new MenuFlyoutSubItem { Text = TasksCopy.Priority, Icon = new FontIcon { Glyph = "\uE7C1" } };
+            AutomationProperties.SetAutomationId(priSub, "tasks.filter.priority");
+            foreach (var (level, label) in new (int?, string)[] { (null, "Any Priority"), (1, "High"), (2, "Medium"), (3, "Low") })
+            {
+                var l = level;
+                var item = new RadioMenuFlyoutItem { Text = label, GroupName = "tasks-filter-pri", IsChecked = _priorityFilter == l };
+                item.Click += (_, _) => { _priorityFilter = l; Render(); };
+                priSub.Items.Add(item);
+            }
+            menu.Items.Add(priSub);
+
+            var tags = TodoViews.AllTags(store.Tasks);
+            if (tags.Count > 0 || _tagFilter != null)
+            {
+                var tagSub = new MenuFlyoutSubItem { Text = "Tag", Icon = new FontIcon { Glyph = "\uE8EC" } };
+                AutomationProperties.SetAutomationId(tagSub, "tasks.filter.tag");
+                var allItem = new RadioMenuFlyoutItem { Text = "All Tags", GroupName = "tasks-filter-tag", IsChecked = _tagFilter == null };
+                allItem.Click += (_, _) => { _tagFilter = null; Render(); };
+                tagSub.Items.Add(allItem);
+                foreach (var t in tags)
+                {
+                    var tag = t;
+                    var ti = new RadioMenuFlyoutItem
+                    {
+                        Text = "#" + tag,
+                        GroupName = "tasks-filter-tag",
+                        IsChecked = string.Equals(_tagFilter, tag, StringComparison.OrdinalIgnoreCase),
+                    };
+                    ti.Click += (_, _) => { _tagFilter = tag; Render(); };
+                    tagSub.Items.Add(ti);
+                }
+                menu.Items.Add(tagSub);
+            }
+            menu.Items.Add(new MenuFlyoutSeparator());
+        }
+
+        if (TodoSortBy.Shows(_view) || _view == TodoView.Today || _view == TodoView.Inbox)
         {
             var sort = store.Settings.Sort;
             var sub = new MenuFlyoutSubItem { Text = TodoSortBy.Title, Icon = new FontIcon { Glyph = "\uE8CB" } };
-            // The Mac's submenu says the sort in force under its title; here it is the item's help text and tip.
             if (TodoSortBy.Subtitle(sort) is { } subtitle)
             {
                 AutomationProperties.SetHelpText(sub, subtitle);
@@ -760,24 +1222,34 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
             foreach (var option in TodoSortBy.Options(store.FieldsSupported, sort))
             {
                 var key = option.Key;
-                var item = new RadioMenuFlyoutItem { Text = option.Title, GroupName = "tasks-sort", IsChecked = sort == key, Icon = new FontIcon { Glyph = option.Glyph } };
+                var optTitle = key == "smart" && _view.ListId == null ? "Default" : option.Title;
+                var item = new RadioMenuFlyoutItem { Text = optTitle, GroupName = "tasks-sort", IsChecked = sort == key, Icon = new FontIcon { Glyph = option.Glyph } };
                 AutomationProperties.SetAutomationId(item, "tasks.sort." + key);
                 item.Click += (_, _) => _ = store.SetSortAsync(key);
                 sub.Items.Add(item);
             }
             menu.Items.Add(sub);
         }
-        var select = Item(TodoSelection.MenuTitle, "\uE73A", () => SetSelecting(true));
-        AutomationProperties.SetAutomationId(select, "tasks.select.start");
-        menu.Items.Add(select);
-        // Tasks Settings… last (the Mac's Import from Reminders… sits between; Windows has no Reminders).
+
+        if (_view != TodoView.Suggested && _view != TodoView.Goals)
+        {
+            var select = Item(TodoSelection.MenuTitle, "\uE73A", () => SetSelecting(true));
+            AutomationProperties.SetAutomationId(select, "tasks.select.start");
+            menu.Items.Add(select);
+        }
+
+        menu.Items.Add(FavoritesPinAction.ForTaskView(_view.Key, TasksNavigationLayout.Title(_view, store.Sections)));
         menu.Items.Add(new MenuFlyoutSeparator());
-        var settings = Item(TodoSettingsCopy.MenuTitle, "\uE713", () => _ = TasksSettingsDialog.PresentAsync(XamlRoot, store));
+
+        var logbook = Item(TasksCopy.CompletedLogbook, "\uE82D", () => _ = TaskLogbookDialog.PresentAsync(XamlRoot, store, OpenTask));
+        AutomationProperties.SetAutomationId(logbook, "tasks.logbook.open");
+        menu.Items.Add(logbook);
+
+        var settings = Item(TodoSettingsCopy.MenuTitle, "\uE713", () => _ = TasksSettingsDialog.PresentAsync(XamlRoot, store, _ideasStore));
         AutomationProperties.SetAutomationId(settings, "tasks.settings.open");
         menu.Items.Add(settings);
     }
 
-    /// The bar: the page's buttons, or Select's (its three greyed with nothing picked or on a read-only gateway).
     private void RenderBar(TasksStore store)
     {
         var on = _selection.Active;
@@ -785,13 +1257,14 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
         _selectBar.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
         _tools.IsHitTestVisible = !store.NeedsAddOn;
         _tools.Opacity = store.NeedsAddOn ? 0.4 : 1;
-        // [WIN-47] The bar's + in Goals makes a goal ("New Goal"; "Update Add-on" on an older add-on), line 805.
         var addLabel = GoalsAddOn.AddLabel(_view, store.GoalsNeedAddOn);
         AutomationProperties.SetName(_add, addLabel);
         ToolTipService.SetToolTip(_add, addLabel);
         if (!on) return;
         var can = _selection.CanAct(SelectedIds().Count, store.ReadOnlyGateway);
-        _selectMove.IsEnabled = _selectDone.IsEnabled = _selectDelete.IsEnabled = can;
+        _selectSchedule.IsEnabled = _selectMove.IsEnabled = _selectDone.IsEnabled = _selectDelete.IsEnabled = can;
+        _selectPriority.Visibility = store.FieldsSupported ? Visibility.Visible : Visibility.Collapsed;
+        _selectPriority.IsEnabled = can;
     }
 
     private List<string> SelectedIds() => _store is { } store ? _selection.SelectedIds(id => store.Find(id) != null) : [];
@@ -809,7 +1282,6 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
         Render();
     }
 
-    /// The pick circle that stands in for the tick circle while selecting (filled when picked).
     private FrameworkElement PickCircle(TodoTask task)
     {
         var picked = _selection.IsPicked(task.Id);
@@ -822,7 +1294,6 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
         return grid;
     }
 
-    /// Move To's places: No List, then each list, the one every task is in ticked.
     private void AddMoveChoices(IList<MenuFlyoutItemBase> items, TasksStore store, List<string> ids, Action? after)
     {
         var tick = TodoSelection.MoveTick(ids, store.Find);
@@ -838,11 +1309,54 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
             };
             items.Add(item);
         }
-        // New List…: names a list, moves these tasks into it and shows it (moveChoices' last item).
         items.Add(new MenuFlyoutSeparator());
         var make = Item(TodoListCopy.NewListEllipsis, "\uE710", () => _ = PromptNewListAsync(ids, after));
         AutomationProperties.SetAutomationId(make, "tasks.move.new-list");
         items.Add(make);
+    }
+
+    private void FillSelectSchedule(MenuFlyout menu)
+    {
+        menu.Items.Clear();
+        if (_store is not { } store || SelectedIds() is not { Count: > 0 } ids) return;
+        var now = DateTimeOffset.Now;
+        menu.Items.Add(Item(TasksCopy.Today, "\uE787", () => { _ = store.RescheduleAsync(ids, now, preserveTime: true, zone: Zone); SetSelecting(false); }));
+        menu.Items.Add(Item(TasksCopy.Tomorrow, "\uE787", () => { _ = store.RescheduleAsync(ids, now.AddDays(1), preserveTime: true, zone: Zone); SetSelecting(false); }));
+        menu.Items.Add(Item(TasksCopy.NextWeek, "\uE787", () => { _ = store.RescheduleAsync(ids, now.AddDays(7), preserveTime: true, zone: Zone); SetSelecting(false); }));
+        menu.Items.Add(Item(TasksCopy.ChooseDate, "\uE787", () => _ = ChooseDateBatchAsync(store, ids, () => SetSelecting(false))));
+        menu.Items.Add(new MenuFlyoutSeparator());
+        menu.Items.Add(Item(TasksCopy.NoDueDate, "\uE711", () => { _ = store.RescheduleAsync(ids, null); SetSelecting(false); }));
+    }
+
+    private void FillSelectPriority(MenuFlyout menu)
+    {
+        menu.Items.Clear();
+        if (_store is not { } store || SelectedIds() is not { Count: > 0 } ids) return;
+        foreach (var level in new[] { 1, 2, 3, 0 })
+        {
+            var l = level;
+            menu.Items.Add(Item(l == 0 ? TasksCopy.NoPriority : TodoViews.PriorityWord(l), "\uE7C1", () =>
+            {
+                _ = store.SetPriorityAsync(ids, l);
+                SetSelecting(false);
+            }));
+        }
+    }
+
+    private async Task ChooseDateBatchAsync(TasksStore store, List<string> ids, Action? after = null)
+    {
+        var picker = new CalendarDatePicker { Date = DateTimeOffset.Now.AddDays(1), HorizontalAlignment = HorizontalAlignment.Stretch };
+        var dialog = new ContentDialog
+        {
+            Title = TasksCopy.Reschedule,
+            Content = picker,
+            PrimaryButtonText = KanbanCopy.Set,
+            CloseButtonText = TasksCopy.Cancel,
+            DefaultButton = ContentDialogButton.Primary,
+        };
+        if (await ShowAsync(XamlRoot, dialog) != ContentDialogResult.Primary || picker.Date is not { } picked) return;
+        await store.RescheduleAsync(ids, picked, preserveTime: true, zone: Zone);
+        after?.Invoke();
     }
 
     private void FillSelectMove(MenuFlyout menu)
@@ -873,18 +1387,11 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
         foreach (var id in ids) await store.DeleteAsync(id);
     }
 
-    /// A list's open row can be dragged up or down it; the drop sets its position halfway between its new neighbours
-    /// (in another sort too, which then says why the row went back to its sorted place). TasksViewController.swift at
-    /// 93f984bb1, "MARK: Drag a task up or down its list": the rules are Hermes.Core's `TodoArrange` / `TodoDropPlace`.
-    /// The Mac ticks (a selection haptic) each time the held task reaches a new place; a Windows pointer has no haptic,
-    /// so the place shows as an accent line over or under the row it would land beside (UIKit opens a gap there).
-    /// The Mac has no keyboard equivalent for this drag (no key command in the Tasks page), so neither does Windows.
     private void AllowArrange(Border row, TodoTask task)
     {
         if (_store is not { } store || !TodoArrange.CanLift(task, _view, _query.Trim().Length > 0, _selection.Active, store.ReadOnlyGateway)) return;
         row.CanDrag = true;
         row.AllowDrop = true;
-        // The line drawn over (or under) this row while a held task would land there; it takes no room and no pointer.
         var mark = new Rectangle
         {
             Height = 2, Fill = Accent, IsHitTestVisible = false, Visibility = Visibility.Collapsed,
@@ -898,7 +1405,7 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
         void EndDrag()
         {
             _dragging = null;
-            _dropPlace.Reset();   // dropSessionDidEnd
+            _dropPlace.Reset();
             ClearDropMark();
         }
         row.DragStarting += (_, e) =>
@@ -906,23 +1413,21 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
             _dragging = task.Id;
             _dropPlace.Reset();
             e.Data.SetText(task.Title);
-            e.Data.RequestedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.Move;
+            e.Data.RequestedOperation = DataPackageOperation.Move;
         };
         row.DropCompleted += (_, _) => EndDrag();
         row.DragOver += (_, e) =>
         {
-            // Only a task picked up here (`canHandle`: the local session's id), over an open row of this list.
             if (_dragging == null) return;
             var y = e.GetPosition(row).Y;
             if (TodoArrange.DropIndex(_openIds, task.Id, y, row.ActualHeight) is not { } at) return;
-            _ = _dropPlace.Update(at);   // a new place: the Mac's tick; here the line moves
+            _ = _dropPlace.Update(at);
             ShowDropMark(mark, under: at > _openIds.IndexOf(task.Id));
-            e.AcceptedOperation = Windows.ApplicationModel.DataTransfer.DataPackageOperation.Move;
+            e.AcceptedOperation = DataPackageOperation.Move;
             e.Handled = true;
         };
         row.DragLeave += (_, _) =>
         {
-            // dropSessionDidExit: off this row, the place is forgotten (the next row it reaches sets it again).
             if (_dropMark == mark) ClearDropMark();
         };
         row.Drop += (_, e) =>
@@ -934,7 +1439,7 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
             EndDrag();
             if (plan == null) return;
             if (plan.Notice is { } why) _notice.Show(why, TodoArrange.NoticeSeconds);
-            _ = store.MoveAsync([plan.Id], plan.List, plan.Position);   // a refusal's notice says why
+            _ = store.MoveAsync([plan.Id], plan.List, plan.Position);
         };
     }
 
@@ -993,6 +1498,8 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
         }
     }
 
+    internal void ShowNotice(string text, int seconds = 4) => _notice.Show(text, seconds);
+
     private void RenderTodayCheckInStrip(TasksStore store, DateTimeOffset now)
     {
         var summary = TodayCheckIn.Compute(store.Tasks, store.Offers, now, Zone);
@@ -1038,8 +1545,7 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
                 Border? itemCard = null;
                 void DismissRow(Func<Task> work)
                 {
-                    if (itemCard != null) itemCard.IsHitTestVisible = false;
-                    if (itemCard != null) itemCard.Opacity = 0.45;
+                    if (itemCard != null) { itemCard.IsHitTestVisible = false; itemCard.Opacity = 0.45; }
                     _ = RunAndRemoveAsync();
                     async Task RunAndRemoveAsync()
                     {
@@ -1048,8 +1554,8 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
                         if (itemCard != null) panel.Children.Remove(itemCard);
                     }
                 }
-                btns.Children.Add(Quiet("Today", () => DismissRow(() => store.PatchAsync(task.Id, new JsonObject { ["due"] = TodoDates.Wire(now, false, Zone) }))));
-                btns.Children.Add(Quiet("Tomorrow", () => DismissRow(() => store.PatchAsync(task.Id, new JsonObject { ["due"] = TodoDates.Wire(now.AddDays(1), false, Zone) }))));
+                btns.Children.Add(Quiet("Today", () => DismissRow(() => store.RescheduleAsync([task.Id], now, preserveTime: true, zone: Zone))));
+                btns.Children.Add(Quiet("Tomorrow", () => DismissRow(() => store.RescheduleAsync([task.Id], now.AddDays(1), preserveTime: true, zone: Zone))));
                 btns.Children.Add(Quiet("Done", () => DismissRow(() => ToggleDone(task))));
                 Grid.SetColumn(btns, 1);
                 row.Children.Add(btns);
@@ -1106,7 +1612,6 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
     {
         var waiting = TodoOfferRules.Waiting(store.Offers);
         if (waiting.Count == 0) return;
-        // Show all list/task offers, and one goal offer at a time to keep Today calm.
         var shownGoal = false;
         foreach (var offer in waiting)
         {
@@ -1119,16 +1624,29 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
             var stack = new StackPanel { Spacing = 6 };
             stack.Children.Add(Text(TodoOfferRules.OfferTitle(o, BotName), 14, bold: true));
             if (!string.IsNullOrWhiteSpace(o.Summary)) stack.Children.Add(Text(o.Summary, 13, color: Secondary));
-            if (o.Plan is { } plan)
+            if (o.IsGoalOffer)
             {
-                foreach (var row in GoalOffers.SetupRows(plan, now, Zone))
-                    stack.Children.Add(Text($"{row.Label}: {row.Value}", 12));
-                if (plan.Milestones.Count > 0)
-                    stack.Children.Add(Text($"{plan.Milestones.Count} milestones · {plan.Tasks.Count} tasks", 12, color: Secondary));
+                var builtOn = GoalOffers.BuiltOnLines(o);
+                if (builtOn.Count > 0)
+                {
+                    stack.Children.Add(Text(GoalOffers.BuiltOnHeader, 12, bold: true, color: Secondary));
+                    foreach (var line in builtOn) stack.Children.Add(Text("• " + line, 12, color: Secondary));
+                }
+                var setupRows = GoalOffers.SetupRows(o, now, Zone);
+                if (setupRows.Count > 0)
+                {
+                    stack.Children.Add(Text(GoalOffers.SetupHeader, 12, bold: true, color: Secondary));
+                    foreach (var row in setupRows) stack.Children.Add(Text($"{row.Label}: {row.Value}", 12));
+                }
+                if (o.Milestones.Count > 0)
+                {
+                    foreach (var ms in o.Milestones.Take(3)) stack.Children.Add(Text("□  " + ms.Title, 12.5));
+                    if (o.Milestones.Count > 3) stack.Children.Add(Text($"{o.Milestones.Count - 3} more milestones ›", 12, color: Secondary));
+                }
             }
-            else if (o.AllTasks.Count > 0)
+            if (o.AllTasks.Count > 0)
             {
-                foreach (var t in o.AllTasks.Take(4))
+                foreach (var t in o.AllTasks.Take(3))
                 {
                     var itemGrid = new Grid { ColumnSpacing = 8 };
                     itemGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -1146,6 +1664,8 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
                     }
                     stack.Children.Add(itemGrid);
                 }
+                if (o.AllTasks.Count > 3)
+                    stack.Children.Add(Text($"{o.AllTasks.Count - 3} more ›", 12, color: Secondary));
             }
             var btns = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 4, 0, 0) };
             foreach (var button in TodoOfferRules.OfferButtons(o))
@@ -1168,93 +1688,13 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
     {
         var answer = await store.AnswerOfferAsync(offer.Id, action);
         if (answer == null) return;
-        if (action is TodoOfferAction.Accept or TodoOfferAction.AcceptNoList)
+        if (action is TodoOfferAction.Accept or TodoOfferAction.AcceptNoList or TodoOfferAction.AcceptNoPlan or TodoOfferAction.AcceptJustTasks)
         {
             _notice.Show("Offer accepted.", seconds: 6, action: "Undo", onAction: () => _ = store.AnswerOfferAsync(offer.Id, TodoOfferAction.Undo));
         }
         else if (action == TodoOfferAction.Decline)
         {
             _notice.Show("Offer dismissed.", seconds: 6, action: "Undo", onAction: () => _ = store.AnswerOfferAsync(offer.Id, TodoOfferAction.Undo));
-        }
-    }
-
-    private void RenderInboxIdeas(TasksStore store, DateTimeOffset now)
-    {
-        if (_ideasStore is not { } ideasStore) return;
-        var page = ideasStore.Page;
-        var visible = ideasStore.VisibleIdeas;
-
-        // Show Ideas section when enabled, has ideas, or supported by settings.
-        if (!page.On && visible.Count == 0 && store.Settings.Ideas == null) return;
-
-        var head = new Grid { Margin = new Thickness(6, 20, 8, 6) };
-        head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var title = Text($"Suggested by {BotName(page.Bot)}", 15, bold: true);
-        head.Children.Add(title);
-
-        var tools = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-        if (page.On)
-        {
-            var lookBtn = Quiet(ideasStore.Looking || page.Running ? "Looking…" : "Look Now", () => _ = ideasStore.LookNowAsync());
-            lookBtn.IsEnabled = !ideasStore.Looking && !page.Running;
-            tools.Children.Add(lookBtn);
-        }
-        else
-        {
-            tools.Children.Add(Push("Turn On Ideas", () => _ = ideasStore.SetOnAsync(true, store), accent: true));
-        }
-        Grid.SetColumn(tools, 1);
-        head.Children.Add(tools);
-        _list.Children.Add(head);
-
-        if (!page.On)
-        {
-            _list.Children.Add(Text(TodoSettingsCopy.IdeasFooter(BotName(page.Bot)), 12, color: Secondary));
-            return;
-        }
-        if (visible.Count == 0)
-        {
-            _list.Children.Add(Text(ideasStore.Looking ? "Looking through recent activity…" : "No new ideas right now.", 13, color: Secondary));
-            return;
-        }
-
-        foreach (var idea in visible)
-        {
-            var item = idea;
-            var expanded = _expandedIdeas.Contains(item.Id);
-            var stack = new StackPanel { Spacing = 6 };
-
-            var top = new Grid { ColumnSpacing = 8 };
-            top.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            top.Children.Add(Text(item.Title, 14, bold: true));
-            var toggle = Quiet(expanded ? "Less" : "Details", () =>
-            {
-                if (!_expandedIdeas.Add(item.Id)) _expandedIdeas.Remove(item.Id);
-                Render();
-            });
-            Grid.SetColumn(toggle, 1);
-            top.Children.Add(toggle);
-            stack.Children.Add(top);
-
-            if (!string.IsNullOrWhiteSpace(item.Why))
-                stack.Children.Add(Text(item.Why, 12, color: Secondary));
-
-            if (expanded && item.From?.Line(now, Zone) is { Length: > 0 } fromLine)
-                stack.Children.Add(Text("From " + fromLine, 11, color: Tertiary));
-
-            var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-            actions.Children.Add(Push("Add", () => _ = ideasStore.AddAsync(item, letBotStart: false, store), accent: true));
-            actions.Children.Add(Push($"Add & Let {BotName(item.Bot ?? page.Bot)} Start", () => _ = ideasStore.AddAsync(item, letBotStart: true, store)));
-            var dismiss = Quiet("Dismiss", () => _ = DismissIdeaWithUndoAsync(ideasStore, item));
-            actions.Children.Add(dismiss);
-            stack.Children.Add(actions);
-
-            var card = Card(stack, 10);
-            card.Margin = new Thickness(0, 3, 0, 3);
-            AutomationProperties.SetAutomationId(card, "tasks.idea." + item.Id);
-            _list.Children.Add(card);
         }
     }
 
@@ -1267,6 +1707,8 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
     internal void OpenGoal(string goalId)
     {
         if (_store == null) return;
+        _taskPane?.FlushUnsavedEdits();
+        _goalPane?.FlushUnsavedEdits();
         _selected = null;
         _taskPane = null;
         _selectedGoal = goalId;
@@ -1290,6 +1732,8 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
     internal void OpenTask(string id)
     {
         if (_store == null) return;
+        _taskPane?.FlushUnsavedEdits();
+        _goalPane?.FlushUnsavedEdits();
         _selectedGoal = null;
         _goalPane = null;
         _selected = id;
@@ -1301,6 +1745,8 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
 
     internal void CloseTask()
     {
+        _taskPane?.FlushUnsavedEdits();
+        _goalPane?.FlushUnsavedEdits();
         _taskPane = null;
         _goalPane = null;
         _selectedGoal = null;
@@ -1314,13 +1760,11 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
     {
         if (_store is not { } store) return;
         if (store.ReadOnlyGateway) { _notice.Show(KanbanRest.ReadOnlyNotice); return; }
-        // [WIN-42] the bar's + makes a goal in Goals; [WIN-47] on an older add-on it asks for the update.
         switch (GoalsAddOn.AddAction(_view, _query.Trim().Length > 0, store.GoalsSupported, store.GoalsNeedAddOn))
         {
             case GoalsAddAction.NewGoal: NewGoal(); return;
             case GoalsAddAction.UpdateAddOn: _ = UpdateGoalsAddOnAsync(store); return;
         }
-        // The list on show is the one it starts in; Today's + starts it today.
         _ = NewTodoDialog.PresentAsync(XamlRoot, store, _view.ListId, _view == TodoView.Today ? DateTimeOffset.Now : null, made =>
         {
             if (made?.Helper is { } helper && PageKit.Bots.FirstOrDefault(b => b.Name == helper) is { } bot) Navigator.Go(new BotChatDestination(bot));

@@ -49,6 +49,31 @@ public sealed class TerminalPage : Page
         /// The program's title (OSC 0/2) or the shell's name: "1 zsh", "2 vim".
         public string? Name;
         public bool EndedHere, NewAfterEnd, Closing;
+        /// Single-line initial command waiting to run once this tab's fresh shell is live.
+        public string? PendingCommand;
+        public CancellationTokenSource? CommandCts;
+        public bool SawOutput;
+        public bool Resumed;
+    }
+
+    private static WeakReference<TerminalPage>? _active;
+
+    /// Strips surrounding whitespace and rejects empty or multi-line input (`\n`, `\r`, `\0`) so an initial command
+    /// never injects extra lines (`TerminalViewController.sanitizeInitialCommand`, `7b264e66d`).
+    public static string? SanitizeInitialCommand(string? command) =>
+        Hermes.Core.Chat.ModelFallbackRow.DetailModel.SanitizeInitialCommand(command);
+
+    /// Opens the Terminal (or a fresh tab if already open) and runs `command + "\r"` once the shell is ready.
+    public static void OpenWithCommand(string command)
+    {
+        var clean = SanitizeInitialCommand(command);
+        if (clean == null) return;
+        if (_active?.TryGetTarget(out var page) == true && !page._navigatedOut && page.ShellsOpen)
+        {
+            page._ui?.TryEnqueue(() => page.OpenFreshTabWithCommand(clean));
+            return;
+        }
+        HermesHQ.Shell.Navigator.Open("terminal", clean);
     }
 
     private readonly TerminalSettings _settings = new(FilePreferences.Shared);
@@ -59,6 +84,8 @@ public sealed class TerminalPage : Page
     private State _state = new State.Asking();
     private bool _updateAsked, _relocked, _unlocking;
     private string? _relockWhy;
+    private string? _pendingCommand;
+    private bool _hadAllowedAtInit;
 
     private readonly Grid _root = new() { Background = TerminalView.Panel };
     private readonly TextBlock _title = W.Text("Terminal", 17, bold: true);
@@ -147,9 +174,13 @@ public sealed class TerminalPage : Page
     {
         base.OnNavigatedTo(e);
         _navigatedOut = false;
+        _active = new WeakReference<TerminalPage>(this);
         _ui = DispatcherQueue.GetForCurrentThread();
         if (AppState.Client is not { } client) return;
         _account = client.AccountId;
+        var initialArg = (e.Parameter as HermesHQ.Shell.PlaceArgs)?.Argument as string ?? e.Parameter as string;
+        _pendingCommand = SanitizeInitialCommand(initialArg);
+        _hadAllowedAtInit = _settings.Allowed(_account);
         var names = _settings.TabNames(_account);
         var sessions = _settings.Sessions(_account);
         for (var i = 0; i < sessions.Count; i++) Install(new Tab(sessions[i], i < names.Count ? names[i] : ""));
@@ -165,9 +196,15 @@ public sealed class TerminalPage : Page
     {
         base.OnNavigatedFrom(e);
         _navigatedOut = true;
+        if (_active?.TryGetTarget(out var current) == true && ReferenceEquals(current, this)) _active = null;
         if (App.Window is { } window) window.VisibilityChanged -= OnWindowVisibility;
         // The sockets close; the shells stay on the computer for 15 minutes.
-        foreach (var tab in _tabs) { tab.Connection?.Stop(); tab.Connection = null; }
+        foreach (var tab in _tabs)
+        {
+            CancelCommandTask(tab);
+            tab.Connection?.Stop();
+            tab.Connection = null;
+        }
     }
 
     // MARK: Opening
@@ -207,8 +244,48 @@ public sealed class TerminalPage : Page
             case TerminalWire.AddOn.NeedsUpdate: SetState(new State.NeedsAddOn()); break;
             case TerminalWire.AddOn.Unsupported: SetState(new State.Connection(new TerminalConnection.Phase.Stopped(new(TerminalWire.EndingKind.Unsupported)))); break;
             case TerminalWire.AddOn.Off: SetState(new State.Connection(new TerminalConnection.Phase.Stopped(new(TerminalWire.EndingKind.Off)))); break;
-            default: foreach (var tab in _tabs) Connect(tab); break;   // can't tell: the socket says itself
+            default:
+                PreparePendingCommand();
+                foreach (var tab in _tabs) Connect(tab);
+                break;   // can't tell: the socket says itself
         }
+    }
+
+    /// Assigns `_pendingCommand` to a brand-new shell tab (or the unused first tab on first-time setup) so an existing
+    /// shell is never clobbered. When all `MaxTabs` tabs are already open, keeps `_pendingCommand` to confirm once live.
+    private void PreparePendingCommand()
+    {
+        if (_pendingCommand is not { } command) return;
+        if (!_hadAllowedAtInit && _tabs.Count == 1)
+        {
+            _tabs[0].PendingCommand = command;
+            _pendingCommand = null;
+            return;
+        }
+        if (_tabs.Count >= TerminalSettings.MaxTabs) return;
+        var tab = new Tab(TerminalWire.NewSession(), "") { PendingCommand = command };
+        Install(tab);
+        ApplyFont();
+        _current = _tabs.Count - 1;
+        SaveTabs();
+        ShowTabs();
+        _pendingCommand = null;
+        AppLog.Note("terminal", $"new tab for initial command ({_tabs.Count} open)");
+    }
+
+    private void OpenFreshTabWithCommand(string command)
+    {
+        if (_tabs.Count >= TerminalSettings.MaxTabs)
+        {
+            if (IsLive) _ = ConfirmOverflowCommandAsync(command, Front);
+            else _pendingCommand = command;
+            return;
+        }
+        var tab = new Tab(TerminalWire.NewSession(), "") { PendingCommand = command };
+        Install(tab);
+        ApplyFont();
+        Select(_tabs.Count - 1);
+        _ui.TryEnqueue(DispatcherQueuePriority.Low, () => Connect(tab));
     }
 
     private void TurnOn()
@@ -227,12 +304,23 @@ public sealed class TerminalPage : Page
     private void Connect(Tab tab)
     {
         if (AppState.Client is not { } client) return;
+        CancelCommandTask(tab);
+        tab.SawOutput = false;
+        tab.Resumed = false;
         tab.Connection?.Stop();
         tab.EndedHere = false;
         var dial = TerminalDialer.For(client.Session);
         var connection = new TerminalConnection(tab.Session, (q, ct) => dial(q, ct));
-        connection.Output += data => _ui.TryEnqueue(() => tab.View.Screen.Feed(data));
-        connection.Reset += () => _ui.TryEnqueue(tab.View.Clear);
+        connection.Output += data => _ui.TryEnqueue(() =>
+        {
+            tab.View.Screen.Feed(data);
+            if (data.Length > 0) NoteOutput(tab);
+        });
+        connection.Reset += () => _ui.TryEnqueue(() =>
+        {
+            tab.Resumed = true;
+            tab.View.Clear();
+        });
         connection.PhaseChanged += phase => _ui.TryEnqueue(() => PhaseChanged(phase, tab, connection));
         connection.Trace += line => AppLog.Note("terminal", line);
         tab.Connection = connection;
@@ -249,6 +337,8 @@ public sealed class TerminalPage : Page
         if (phase is TerminalConnection.Phase.Live && from.Shell.Length > 0 && tab.View.Screen.Title.Length == 0) tab.Name = from.Shell;
         if (phase is TerminalConnection.Phase.Ended)
         {
+            CancelCommandTask(tab);
+            tab.PendingCommand = null;
             // The next open starts a fresh shell rather than dialling one that's gone.
             tab.Session = TerminalWire.NewSession();
             SaveTabs();
@@ -261,11 +351,110 @@ public sealed class TerminalPage : Page
                 return;
             }
         }
+        else if (phase is TerminalConnection.Phase.Stopped)
+        {
+            CancelCommandTask(tab);
+            tab.PendingCommand = null;
+        }
         tab.Phase = phase;
         FillStrip();
+        if (phase is TerminalConnection.Phase.Live)
+        {
+            if (tab.PendingCommand is { } command)
+            {
+                if (tab.Resumed || from.Shown > 0)
+                {
+                    tab.PendingCommand = null;
+                    if (tab == Front) _ = ConfirmOverflowCommandAsync(command, tab);
+                }
+                else
+                {
+                    SchedulePendingCommand(tab);
+                }
+            }
+            else if (tab == Front && _pendingCommand is { } overflow)
+            {
+                _pendingCommand = null;
+                _ = ConfirmOverflowCommandAsync(overflow, tab);
+            }
+        }
         if (tab != Front) return;
         SetState(new State.Connection(phase));
         if (phase is TerminalConnection.Phase.Live && !_relocked) tab.View.Focus(FocusState.Programmatic);
+    }
+
+    private static void CancelCommandTask(Tab tab)
+    {
+        var cts = tab.CommandCts;
+        tab.CommandCts = null;
+        if (cts != null)
+        {
+            try { cts.Cancel(); } catch (ObjectDisposedException) { }
+            cts.Dispose();
+        }
+    }
+
+    private void NoteOutput(Tab tab)
+    {
+        if (tab.PendingCommand == null || tab.SawOutput) return;
+        tab.SawOutput = true;
+        if (tab.Phase is TerminalConnection.Phase.Live) SchedulePendingCommand(tab);
+    }
+
+    /// Waits briefly for the fresh shell's initial prompt (120 ms after output, 800 ms fallback) before sending command + `\r`.
+    private void SchedulePendingCommand(Tab tab)
+    {
+        if (tab.PendingCommand == null || tab.Phase is not TerminalConnection.Phase.Live || _relocked) return;
+        CancelCommandTask(tab);
+        var delay = tab.SawOutput ? 120 : 800;
+        var cts = new CancellationTokenSource();
+        tab.CommandCts = cts;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(delay, cts.Token);
+                if (!cts.Token.IsCancellationRequested && !_navigatedOut)
+                    _ui.TryEnqueue(() => RunPendingCommand(tab));
+            }
+            catch (OperationCanceledException) { }
+        });
+    }
+
+    private void RunPendingCommand(Tab tab)
+    {
+        if (tab.Phase is not TerminalConnection.Phase.Live || _relocked || tab.PendingCommand is not { } command) return;
+        tab.PendingCommand = null;
+        CancelCommandTask(tab);
+        tab.Connection?.Send(Encoding.UTF8.GetBytes(command + "\r"));
+        AppLog.Note("terminal", "ran initial command");
+    }
+
+    private async Task ConfirmOverflowCommandAsync(string command, Tab tab)
+    {
+        if (XamlRoot == null || _navigatedOut) return;
+        var dialog = new ContentDialog
+        {
+            Title = "Run in Current Tab?",
+            Content = new TextBlock
+            {
+                Text = $"All {TerminalSettings.MaxTabs} terminal tabs are open. Run “{command}” in this tab, or copy it to paste into an idle shell.",
+                TextWrapping = TextWrapping.Wrap,
+            },
+            PrimaryButtonText = "Run Here",
+            SecondaryButtonText = "Copy Command",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+        };
+        var answer = await SafeDialog.ShowAsync(XamlRoot, dialog);
+        if (answer == ContentDialogResult.Primary)
+            tab.Connection?.Send(Encoding.UTF8.GetBytes(command + "\r"));
+        else if (answer == ContentDialogResult.Secondary)
+        {
+            SafeClipboard.TrySetText(command);
+            Pill("Copied");
+        }
+        FocusShell();
     }
 
     // MARK: Tabs
@@ -770,6 +959,7 @@ public sealed class TerminalPage : Page
         _relockWhy = null;
         ShowTabs();
         Render();
+        if (_tabs.Count > 0 && IsLive && Front.PendingCommand != null) SchedulePendingCommand(Front);
         FocusShell();
     }
 

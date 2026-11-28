@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Hermes.Core.Chat;
 using Hermes.Core.Transcripts;
 
@@ -21,6 +22,14 @@ public interface ITalkChatBridge
     IReadOnlyList<(string Role, string Text)> RecentHistory(int maxMessages = 10);
     Task<SendOutcome> SendTurnAsync(string text, CancellationToken ct = default);
     Task StopTurnAsync();
+
+    /// True when the chat's currently running turn is answering a `[Voice chat transcript …]` record (`NO_REPLY`).
+    /// Delegated requests must stop that turn instead of steering into it.
+    bool IsAnsweringVoiceRecord => false;
+
+    /// Queues a formatted `[Voice chat transcript …]` message as an ordinary (non-hidden) user message,
+    /// never steering into a running reply.
+    Task<SendOutcome> SendVoiceRecordAsync(string text, CancellationToken ct = default) => Task.FromResult(SendOutcome.Accepted);
 }
 
 public sealed record TalkSession(
@@ -66,6 +75,8 @@ public sealed class TalkController : IDisposable
 
     private readonly SilenceClock _silence = new();
     private readonly List<TalkTurn> _turns = [];
+    private readonly List<VoiceTurn> _liveRecordTurns = [];
+    private readonly Stopwatch _speechProgressWatch = new();
 
     private ITalkChatBridge? _chat;
     private TalkSession? _session;
@@ -73,6 +84,7 @@ public sealed class TalkController : IDisposable
     private LiveTalkState _live = LiveTalkState.Initial;
     private ILiveVoiceTransport? _transport;
     private CancellationTokenSource? _workCts;
+    private CancellationTokenSource? _speechCts;
 
     private string? _visibleScope;
     private string? _endedCaption;
@@ -86,6 +98,11 @@ public sealed class TalkController : IDisposable
     private TalkEngine _engine = TalkEngine.Classic;
     private List<TalkAudioRoute> _routes = [];
     private string? _selectedRouteId;
+    private string _liveAssistantBuffer = "";
+    private bool _liveRecordSent;
+    private int _speechGeneration;
+    private DateTimeOffset _lastSpeechProgressAt;
+    private double _liveSpeakingStallSeconds;
 
     public TalkController(
         ITalkCapturing capture,
@@ -117,7 +134,7 @@ public sealed class TalkController : IDisposable
         _capture.BargeInDetected += OnCaptureBargeIn;
         _capture.PcmCaptured += OnCapturePcm;
         _capture.Failed += OnCaptureFailed;
-        _speaker.LevelChanged += OnLevelChanged;
+        _speaker.LevelChanged += OnSpeakerLevelChanged;
         if (_liveWords != null) _liveWords.Changed += OnLiveWordsChanged;
         if (_systemEvents != null) _systemEvents.Raised += OnSystemEvent;
     }
@@ -130,9 +147,13 @@ public sealed class TalkController : IDisposable
     public event Action<string>? ReturnToChatRequested;
     public event Action<string>? RouteSelected;
 
+    /// Watchdog limit for a wedged TTS playback or stalled live-voice speaking state (M18).
+    public TimeSpan SpeechStallTimeout { get; set; } = TimeSpan.FromSeconds(15);
+
     public TalkSession? Session => _session;
     public TalkEngine PreferredEngine => TalkPrefs.Engine(_prefs);
     public IReadOnlyList<TalkTurn> Turns => _turns;
+    public IReadOnlyList<VoiceTurn> LiveRecordTurns => _liveRecordTurns;
     public VoiceEvents Events => _events;
 
     public TalkStatus Status => _engine.IsLive() ? _live.Status : _classic.Status;
@@ -221,6 +242,10 @@ public sealed class TalkController : IDisposable
         _level = 0;
         _liveWordsText = LiveWordsText.Empty;
         _turns.Clear();
+        _liveRecordTurns.Clear();
+        _liveRecordSent = false;
+        _liveAssistantBuffer = "";
+        _liveSpeakingStallSeconds = 0;
         _silence.Reset();
         _awaitingReply = false;
         _lastBotSpokenText = null;
@@ -348,6 +373,23 @@ public sealed class TalkController : IDisposable
             if (signal == SilenceSignal.Hint) DispatchClassic(new TalkLoopInput.SilenceHint());
             else if (signal == SilenceSignal.Pause) DispatchClassic(new TalkLoopInput.SilencePause());
         }
+        else if (_live.Status == TalkStatus.Speaking && SpeechStallTimeout > TimeSpan.Zero)
+        {
+            // M18: guard against a wedged live-voice speaking state if AssistantDone never arrives.
+            _liveSpeakingStallSeconds += dtSeconds;
+            if (_liveSpeakingStallSeconds >= SpeechStallTimeout.TotalSeconds)
+            {
+                _liveSpeakingStallSeconds = 0;
+                _events.Record("live talk speech stalled watchdog triggered");
+                _speaker.FlushPcm();
+                DispatchLive(new LiveTalkInput.AssistantDone(null));
+                return;
+            }
+        }
+        else
+        {
+            _liveSpeakingStallSeconds = 0;
+        }
         Publish();
     }
 
@@ -402,6 +444,7 @@ public sealed class TalkController : IDisposable
                 _ = SpeakClassicAsync(sp.Text);
                 break;
             case TalkLoopEffect.StopSpeech:
+                CancelSpeechWatchdog();
                 _speaker.Stop();
                 break;
             case TalkLoopEffect.StopTurn:
@@ -568,12 +611,30 @@ public sealed class TalkController : IDisposable
         DispatchClassic(new TalkLoopInput.ReplyReady(text));
     }
 
+    private void CancelSpeechWatchdog()
+    {
+        Interlocked.Increment(ref _speechGeneration);
+        var cts = Interlocked.Exchange(ref _speechCts, null);
+        if (cts != null)
+        {
+            try { cts.Cancel(); } catch (ObjectDisposedException) { }
+            cts.Dispose();
+        }
+    }
+
     private async Task SpeakClassicAsync(string text)
     {
         var ct = _workCts?.Token ?? CancellationToken.None;
         _lastBotSpokenText = text;
         _lastBotSpokenAt = _now();
         _capture.BargeInEnabled = true;
+
+        CancelSpeechWatchdog();
+        var speechCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _speechCts = speechCts;
+        var generation = Interlocked.Increment(ref _speechGeneration);
+        _lastSpeechProgressAt = _now();
+        _speechProgressWatch.Restart();
 
         Func<string, CancellationToken, Task<SpeechClip>>? gatewaySpeak =
             _gateway != null && _session?.Config.TtsEnabled == true
@@ -583,7 +644,31 @@ public sealed class TalkController : IDisposable
         try
         {
             DispatchClassic(new TalkLoopInput.SpeechStarted());
-            var outcome = await _speaker.SpeakAsync(text, gatewaySpeak, ct);
+            var speakTask = _speaker.SpeakAsync(text, gatewaySpeak, speechCts.Token);
+            if (SpeechStallTimeout > TimeSpan.Zero && !speakTask.IsCompleted)
+            {
+                var watchdogTask = WatchSpeechStallAsync(speakTask, speechCts.Token);
+                var finished = await Task.WhenAny(speakTask, watchdogTask);
+                if (finished == watchdogTask && await watchdogTask)
+                {
+                    if (Volatile.Read(ref _speechGeneration) == generation && _classic.Status == TalkStatus.Speaking)
+                    {
+                        try { speechCts.Cancel(); } catch (ObjectDisposedException) { }
+                        _speaker.Stop();
+                        _lastBotSpokenAt = _now();
+                        _events.Record("talk speech stalled watchdog triggered");
+                        DispatchClassic(new TalkLoopInput.SpeechFailed(new TalkNotice(
+                            TalkNoticeKind.SpeechFailed,
+                            "Audio Playback Stalled",
+                            "Voice playback stopped responding.",
+                            Action: TalkNoticeAction.Resume)));
+                    }
+                    return;
+                }
+            }
+
+            var outcome = await speakTask;
+            if (Volatile.Read(ref _speechGeneration) != generation) return;
             _lastBotSpokenAt = _now();
             if (outcome == TalkSpeechOutcome.Completed)
                 DispatchClassic(new TalkLoopInput.SpeechFinished());
@@ -594,9 +679,32 @@ public sealed class TalkController : IDisposable
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
+            if (Volatile.Read(ref _speechGeneration) != generation) return;
             var failure = VoicePlainWords.Plain(ex, "play the voice reply");
             DispatchClassic(new TalkLoopInput.SpeechFailed(TalkNotice.FromFailure(failure)));
         }
+        finally
+        {
+            if (ReferenceEquals(Interlocked.CompareExchange(ref _speechCts, null, speechCts), speechCts))
+                speechCts.Dispose();
+        }
+    }
+
+    private async Task<bool> WatchSpeechStallAsync(Task speakTask, CancellationToken ct)
+    {
+        var limit = SpeechStallTimeout;
+        var pollMs = Math.Clamp((int)(limit.TotalMilliseconds / 4.0), 10, 250);
+        while (!speakTask.IsCompleted && !ct.IsCancellationRequested)
+        {
+            try { await Task.Delay(pollMs, ct); }
+            catch (OperationCanceledException) { return false; }
+
+            if (speakTask.IsCompleted || ct.IsCancellationRequested) return false;
+            var wallStalled = _speechProgressWatch.Elapsed >= limit;
+            var clockStalled = (_now() - _lastSpeechProgressAt) >= limit;
+            if (wallStalled || clockStalled) return true;
+        }
+        return false;
     }
 
     // MARK: - Live Reducer & Effects
@@ -737,18 +845,27 @@ public sealed class TalkController : IDisposable
                         return;
                     }
                     _turns.Add(new TalkTurn("user", f.Text, _now()));
+                    VoiceChatRecordCodec.AddFragment(_liveRecordTurns, isUser: true, f.Text);
                 }
                 DispatchLive(new LiveTalkInput.UserTranscript(f.Text, true));
                 break;
             case LiveServerEvent.AssistantAudioDelta a:
+                _liveSpeakingStallSeconds = 0;
                 DispatchLive(new LiveTalkInput.AssistantAudio(a.Pcm24k));
                 break;
             case LiveServerEvent.AssistantTextDelta t:
+                _liveAssistantBuffer += t.Text;
                 DispatchLive(new LiveTalkInput.AssistantTextDelta(t.Text));
                 break;
             case LiveServerEvent.AssistantDone done:
-                if (!string.IsNullOrWhiteSpace(done.FullText))
-                    _turns.Add(new TalkTurn("assistant", done.FullText, _now()));
+                _liveSpeakingStallSeconds = 0;
+                var spoken = !string.IsNullOrWhiteSpace(done.FullText) ? done.FullText : _liveAssistantBuffer;
+                _liveAssistantBuffer = "";
+                if (!string.IsNullOrWhiteSpace(spoken))
+                {
+                    _turns.Add(new TalkTurn("assistant", spoken, _now()));
+                    VoiceChatRecordCodec.AddFragment(_liveRecordTurns, isUser: false, spoken);
+                }
                 DispatchLive(new LiveTalkInput.AssistantDone(done.FullText));
                 break;
             case LiveServerEvent.FunctionCall call:
@@ -777,6 +894,9 @@ public sealed class TalkController : IDisposable
         var ct = _workCts?.Token ?? CancellationToken.None;
         try
         {
+            // Never steer a real delegated request into a running NO_REPLY voice-record turn: stop it first.
+            if (_chat.IsAnsweringVoiceRecord)
+                await _chat.StopTurnAsync();
             var before = _chat.NewestReply()?.MessageId;
             await _chat.SendTurnAsync(prompt, ct);
             var deadline = _now().AddSeconds(45);
@@ -831,6 +951,16 @@ public sealed class TalkController : IDisposable
     {
         _level = level;
         LevelChanged?.Invoke(level);
+    }
+
+    private void OnSpeakerLevelChanged(double level)
+    {
+        if (level > 0.001)
+        {
+            _lastSpeechProgressAt = _now();
+            _speechProgressWatch.Restart();
+        }
+        OnLevelChanged(level);
     }
 
     private void OnCaptureSpeechStarted()
@@ -927,21 +1057,56 @@ public sealed class TalkController : IDisposable
     private void FinishSessionRecord(TalkEnd reason)
     {
         var session = _session;
+        var chat = _chat;
         var duration = _elapsedSeconds;
         var turnCount = _turns.Count;
+
+        // Flush any in-flight live transcript deltas before formatting the transcript record.
+        if (!string.IsNullOrWhiteSpace(_liveWordsText.Text))
+            VoiceChatRecordCodec.AddFragment(_liveRecordTurns, isUser: true, _liveWordsText.Text);
+        if (!string.IsNullOrWhiteSpace(_liveAssistantBuffer))
+        {
+            VoiceChatRecordCodec.AddFragment(_liveRecordTurns, isUser: false, _liveAssistantBuffer);
+            _liveAssistantBuffer = "";
+        }
+
+        string? transcriptMessage = null;
+        if (!_liveRecordSent && _liveRecordTurns.Count > 0
+            && reason is not (TalkEnd.SignedOut or TalkEnd.AccountSwitch or TalkEnd.ChatLeft))
+        {
+            _liveRecordSent = true;
+            transcriptMessage = VoiceChatRecordCodec.FormatMessage(_liveRecordTurns, TimeSpan.FromSeconds(duration));
+            _liveRecordTurns.Clear();
+        }
+        else
+        {
+            _liveRecordTurns.Clear();
+        }
+
         _endedCaption = VoiceChatRecord.EndedCaption(duration);
         ClearSession();
+
+        if (transcriptMessage != null && chat != null)
+            _ = SendVoiceRecordQuietlyAsync(chat, transcriptMessage);
+
         if (session != null)
         {
             var record = new VoiceChatRecord(session.Scope, session.BotName, session.Engine,
-                session.StartedAt, _now(), duration, turnCount, reason);
+                session.StartedAt, _now(), duration, turnCount, reason, TranscriptMessage: transcriptMessage);
             RecordCompleted?.Invoke(record);
         }
         Publish();
     }
 
+    private async Task SendVoiceRecordQuietlyAsync(ITalkChatBridge chat, string message)
+    {
+        try { await chat.SendVoiceRecordAsync(message); }
+        catch (Exception ex) { _events.Record($"talk voice record send failed: {ex.GetType().Name}"); }
+    }
+
     private void ClearSession()
     {
+        CancelSpeechWatchdog();
         _workCts?.Cancel();
         _workCts?.Dispose();
         _workCts = null;
@@ -953,6 +1118,8 @@ public sealed class TalkController : IDisposable
         _session = null;
         _awaitingReply = false;
         _liveWordsText = LiveWordsText.Empty;
+        _liveAssistantBuffer = "";
+        _liveSpeakingStallSeconds = 0;
         _level = 0;
         _silence.Reset();
     }
@@ -968,7 +1135,7 @@ public sealed class TalkController : IDisposable
         _capture.BargeInDetected -= OnCaptureBargeIn;
         _capture.PcmCaptured -= OnCapturePcm;
         _capture.Failed -= OnCaptureFailed;
-        _speaker.LevelChanged -= OnLevelChanged;
+        _speaker.LevelChanged -= OnSpeakerLevelChanged;
         if (_liveWords != null) _liveWords.Changed -= OnLiveWordsChanged;
         if (_systemEvents != null) _systemEvents.Raised -= OnSystemEvent;
     }

@@ -64,20 +64,18 @@ public class QuickTileRouteTests
     public void WindowsRunsOnlyKindsItHasARouteFor()
     {
         var runs = QuickTileRules.Windows;
-        foreach (var kind in new[] { QuickTileKind.Memo, QuickTileKind.Talk })
-        {
-            var tile = Tile(kind) with { Message = "x", Job = "otto|nightly" };
-            Assert.Equal(new QuickTileRoute.Unavailable(QuickTileRules.NewerApp), QuickTileRoute.Make(tile, Otto, runs));
-        }
+        // Voice Memo and Talk are now supported on Windows (12ae25a6c / e91074a89).
+        Assert.Equal(new QuickTileRoute.Memo("otto"), QuickTileRoute.Make(Tile(QuickTileKind.Memo), Otto, runs));
+        Assert.Equal(new QuickTileRoute.Talk("otto"), QuickTileRoute.Make(Tile(QuickTileKind.Talk), Otto, runs));
         // [WIN-24] Send a Message and Run Job run on Windows (QuickTileRunTests has their routes).
         Assert.Equal(new QuickTileRoute.SendInBackground("otto", "x"), QuickTileRoute.Make(Tile(QuickTileKind.Send) with { Message = "x" }, Otto, runs));
         Assert.Equal(new QuickTileRoute.RunJob("otto|nightly", "Run Job"),
             QuickTileRoute.Make(Tile(QuickTileKind.RunJob, bot: null) with { Job = "otto|nightly" }, Otto, runs));
         Assert.Equal(new QuickTileRoute.OpenChat("otto"), QuickTileRoute.Make(Tile(QuickTileKind.OpenChat), Otto, runs));
         Assert.Equal(new QuickTileRoute.Search(), QuickTileRoute.Make(Tile(QuickTileKind.Search, bot: null), Otto, runs));
-        // The seeded starter set: Memo and Talk are drawn switched off on Windows, the rest run.
+        // The seeded starter set: all five run on Windows now that Memo and Talk are routed.
         var starter = QuickTileStore.Starter("otto", "Otto");
-        Assert.Equal([true, true, false, false, false], starter.Select(t => QuickTileRules.Missing(t, Otto, runs) != null));
+        Assert.Equal([false, false, false, false, false], starter.Select(t => QuickTileRules.Missing(t, Otto, runs) != null));
     }
 
     [Fact]
@@ -101,7 +99,7 @@ public class QuickTileRouteTests
         Assert.Equal(["New Chat", "Voice Memo", "Talk", "Send a Message", "Open a Chat"], all[0].Rows.Select(r => r.Title));
         Assert.Equal(["Add Task", "Run Job"], all[1].Rows.Select(r => r.Title));
         var windows = QuickActionChoice.Groups(pages, runs: QuickTileRules.Windows);
-        Assert.Equal(["New Chat", "Send a Message", "Open a Chat"], windows[0].Rows.Select(r => r.Title));
+        Assert.Equal(["New Chat", "Voice Memo", "Talk", "Send a Message", "Open a Chat"], windows[0].Rows.Select(r => r.Title));
         Assert.Equal(["Add Task", "Run Job"], windows[1].Rows.Select(r => r.Title));
         Assert.Equal(["Search Chats"], QuickActionChoice.Groups(pages, "search").SelectMany(g => g.Rows).Select(r => r.Title));
         Assert.Empty(QuickActionChoice.Groups(pages, "zzz"));

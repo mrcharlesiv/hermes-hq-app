@@ -29,6 +29,9 @@
             <ListView x:Name="Sidebar" Grid.Row="2" SelectionMode="Single" IsItemClickEnabled="True"
                       ItemClick="Sidebar_ItemClick" Padding="0,0,0,10" CanDragItems="True" AllowDrop="True"
                       DragItemsStarting="Sidebar_DragItemsStarting" DragOver="Sidebar_DragOver" Drop="Sidebar_Drop">
+                <ListView.ItemContainerTransitions>
+                    <TransitionCollection />
+                </ListView.ItemContainerTransitions>
                 <ListView.ItemsPanel>
                     <ItemsPanelTemplate>
                         <StackPanel />

@@ -374,12 +374,14 @@ public sealed partial class TasksPage
     /// One small shelf card (GoalShelfCardView): the ring, the name, the grey line, and "Next: …".
     private static FrameworkElement ShelfCardView(GoalShelfCard card)
     {
-        var stack = new StackPanel { Spacing = 3, Width = 196 };
-        var top = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        var stack = new StackPanel { Spacing = 4, Width = 280 };
+        var top = new Grid { ColumnSpacing = 8 };
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        top.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         top.Children.Add(Ring(card.Fraction, Tint(card.Color), 22));
         var name = Text(card.Title, 14, bold: true, wrap: false);
-        name.MaxWidth = 150;
         name.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(name, 1);
         top.Children.Add(name);
         stack.Children.Add(top);
         stack.Children.Add(Text(card.Line.Length == 0 ? " " : card.Line, 12, color: Secondary, wrap: false));

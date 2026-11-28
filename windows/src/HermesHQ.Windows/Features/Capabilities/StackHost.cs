@@ -22,6 +22,8 @@ internal abstract class Screen
     public virtual IEnumerable<MenuFlyoutItemBase> Menu() => [];
     /// Fills the page (called again on every change).
     public abstract void Build(StackPanel page);
+    /// Optional max width for the scrolling column; null uses full available desktop width (e.g. Marketplace).
+    public virtual double? MaxContentWidth => 1120;
     /// A bar pinned under the page (the tool editor's Save / Discard), or null.
     public virtual UIElement? Bottom => null;
     public virtual void Shown() { }
@@ -45,8 +47,14 @@ internal sealed class StackHost : UserControl
     private readonly TextBlock _title = new() { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
     private readonly TextBox _search = new() { Width = 240, Visibility = Visibility.Collapsed, VerticalAlignment = VerticalAlignment.Center };
     private readonly Button _more = new() { Content = Kit.Glyph(Kit.More, 14), Padding = new Thickness(8, 6, 8, 6) };
-    private readonly ScrollViewer _scroll = new() { HorizontalScrollMode = ScrollMode.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
-    private readonly StackPanel _column = new() { MaxWidth = 760, Padding = new Thickness(24, 16, 24, 32) };
+    private readonly ScrollViewer _scroll = new()
+    {
+        HorizontalScrollMode = ScrollMode.Disabled,
+        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        HorizontalContentAlignment = HorizontalAlignment.Stretch,
+        VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+    };
+    private readonly StackPanel _column = new() { Padding = new Thickness(24, 16, 24, 32), HorizontalAlignment = HorizontalAlignment.Stretch };
     private readonly ContentControl _bottom = new() { IsTabStop = false, HorizontalContentAlignment = HorizontalAlignment.Stretch };
     private bool _rendering;
 
@@ -91,6 +99,11 @@ internal sealed class StackHost : UserControl
         bar.Children.Add(_more);
 
         _scroll.Content = _column;
+        _scroll.SizeChanged += (_, _) =>
+        {
+            if (_scroll.ViewportWidth > 0)
+                _column.Width = _scroll.ViewportWidth;
+        };
         var root = new Grid();
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
@@ -187,6 +200,8 @@ internal sealed class StackHost : UserControl
             _backWords.Text = _stack.Count > 1 ? _stack[^2].Title : "";
             _more.Visibility = s.Menu().Any() ? Visibility.Visible : Visibility.Collapsed;
             var offset = _scroll.VerticalOffset;
+            if (_scroll.ViewportWidth > 0) _column.Width = _scroll.ViewportWidth;
+            _column.HorizontalAlignment = HorizontalAlignment.Stretch;
             _column.Children.Clear();
             s.Build(_column);
             _bottom.Content = s.Bottom;

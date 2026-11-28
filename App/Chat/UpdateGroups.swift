@@ -140,10 +140,19 @@ nonisolated enum UpdateGroups {
         let input: ChatRowBuilder.Input
         private var made: [Int: [ChatRow]] = [:]
         let helpers: HelperStatusRows.Plan
-        init(_ input: ChatRowBuilder.Input) { self.input = input; helpers = HelperStatusRows.Plan(input) }
+        let voiceFolded: Set<Int>
+        init(_ input: ChatRowBuilder.Input) {
+            self.input = input
+            helpers = HelperStatusRows.Plan(input)
+            let threadedIds = Set(input.threads.compactMap { $0.value.isEmpty ? nil : $0.key })
+            voiceFolded = VoiceChatRecord.foldedIndices(in: input.messages,
+                                                        hiddenIds: input.voiceFoldedIds,
+                                                        hiddenRowIds: input.voiceFoldedRowIds,
+                                                        excludedIds: threadedIds)
+        }
         func at(_ i: Int) -> [ChatRow] {
             if let known = made[i] { return known }
-            let rows = helpers.rows(at: i, input: input)
+            let rows = helpers.rows(at: i, input: input, voiceFolded: voiceFolded.contains(i))
             made[i] = rows
             return rows
         }
@@ -192,11 +201,12 @@ nonisolated enum UpdateGroups {
             let maxAhead = min(input.messages.count, m.message + UpdateGroups.reach + 1)
             for i in (m.message + 1)..<maxAhead {
                 for row in at(i) {
-                    if UpdateGroups.endsTalk(row) { return false }
                     if let key = cronJobKey(row), key == jobKey {
                         sawLaterSameJob = true
                         continue
                     }
+                    if case .bubble(let b) = row.kind, b.mine { return false }
+                    if case .prompt = row.kind { return false }
                     if sawLaterSameJob, UpdateGroups.isBotsReply(row) { return true }
                 }
             }

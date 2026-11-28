@@ -46,10 +46,11 @@ nonisolated enum SteerRule {
         text.range(of: #"^\/[^\s/]*(?:\s|$)"#, options: .regularExpression) != nil
     }
 
-    /// Steerable: visible text, nothing attached, not a memo, not a slash command.
+    /// Steerable: visible text, nothing attached, not a memo, not a slash command, not a Voice Chat record.
     static func steerable(_ m: QueuedMessage) -> Bool {
         let t = m.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !m.hidden && !t.isEmpty && m.attachments.isEmpty && m.memo == nil && !isSlashCommand(t)
+        return !m.hidden && !t.isEmpty && m.attachments.isEmpty && m.memo == nil
+            && !isSlashCommand(t) && !VoiceChatRecord.isRecord(t)
     }
 
     static let failedNotice = "Couldn’t add this to the running reply. It’ll send after this reply."
@@ -170,8 +171,14 @@ extension LiveChatSession {
     /// Seals the live reply where it stands and adds the pending bubble under it, so whatever the bot says after the
     /// correction lands below it (the desktop's `appendMidTurnUserMessage`). A tool still running in the sealed bubble
     /// finishes there (`toolOwner` finds it by id).
-    func beginSteer(shown: String) -> SteerHandle {
+    func beginSteer(shown: String, voiceDelegated: Bool = false) -> SteerHandle {
         flushDeltas()
+        if !voiceDelegated && liveVoiceTurnActive {
+            // A typed steer into a running live-voice turn makes the whole turn visible so the typed question and its
+            // answer stay paired in chat.
+            liveVoiceTurnActive = false
+            unhideRunningLiveVoiceTurn()
+        }
         let sealed = turn.streamId.flatMap { indexById[$0] != nil ? $0 : nil }
         let wasStreaming = sealed.flatMap { indexById[$0] }.map { messages[$0].isStreaming } ?? false
         if let sealed { updateMessage(sealed) { $0.isStreaming = false } }

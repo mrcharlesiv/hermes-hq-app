@@ -244,9 +244,25 @@ extension LiveChatSession {
         let wasLive = turn.turnLive
         AppLog.trace("turn", "start on \(logIds): \(wasLive ? "next message in the live turn" : turn.busy ? "our send's turn" : "a turn this phone didn't send"), anchor \(AppLog.tag(turn.userAnchorId)), rows=\(messages.count)")
         if wasLive { flushDeltas() } else { pendingDeltas.removeAll() }
-        // A turn we didn't just send (another device, a server-drained queue, an auto-continue): no own user bubble.
+        // A turn we didn't just send (another device, a server-drained queue, an auto-continue): no own user bubble,
+        // except a live-voice steer the gateway queued for this next turn (`liveVoiceQueuedTurnIds`).
         let foreign = !wasLive && !turn.busy
-        if foreign { turn.userAnchorId = nil; turn.anchorPromptKey = nil }
+        if foreign {
+            turn.userAnchorId = nil
+            turn.anchorPromptKey = nil
+            liveVoiceActiveQueuedSteerId = nil
+            if liveVoiceActive, !liveVoiceQueuedTurnIds.isEmpty,
+               let queuedIdx = messages.firstIndex(where: { $0.role == .user && liveVoiceQueuedTurnIds.contains($0.id) }),
+               !messages[(queuedIdx + 1)...].contains(where: { ($0.role == .user && ($0.sender != nil || $0.job != nil)) || ($0.role == .system && $0.job != nil) }) {
+                let queued = messages[queuedIdx]
+                liveVoiceQueuedTurnIds.remove(queued.id)
+                liveVoiceActiveQueuedSteerId = queued.id
+                turn.userAnchorId = queued.id
+                liveVoiceTurnActive = true
+            } else {
+                liveVoiceTurnActive = false
+            }
+        }
         if !wasLive { turn.inflightUserKey = nil }
         turn.idleConfirmed = false
         turn.busy = true
@@ -320,6 +336,7 @@ extension LiveChatSession {
         localCounter += 1
         var m = ChatMessage(id: "local-assistant-\(localCounter)", role: .assistant, parts: [], timestamp: Date(), rowId: nil)
         m.isStreaming = true
+        if isLiveVoiceTurn { liveVoiceHiddenIds.insert(m.id) }
         AppLog.trace("turn", "live row \(AppLog.tag(m.id)) added on \(logIds) at \(messages.count) (previous stream \(AppLog.tag(turn.streamId)))")
         appendMessage(m)
         turn.streamId = m.id
@@ -604,6 +621,14 @@ extension LiveChatSession {
                && TranscriptMerge.holds($0, metaById[$0.id], row: finalRow) }) {
             let dropLive = target.flatMap { t in t != shown.id ? indexById[t].map { messages[$0].isLocal } : nil } ?? false
             AppLog.note("merge", "complete on \(lids): final row \(finalRow) already shown as \(AppLog.tag(shown.id)) at \(indexById[shown.id] ?? -1); keeps it, \(dropLive ? "drops live row \(AppLog.tag(target))" : "no live row to drop") (no double)")
+            if isLiveVoiceTurn || target.map({ liveVoiceHiddenIds.contains($0) }) == true {
+                liveVoiceHiddenIds.insert(shown.id)
+                liveVoiceHiddenRowIds.insert(finalRow)
+            }
+            if target.map({ liveVoiceHeardIds.contains($0) }) == true {
+                liveVoiceHeardIds.insert(shown.id)
+                liveVoiceHeardRowIds.insert(finalRow)
+            }
             if let t = target, t != shown.id, let i = indexById[t], messages[i].isLocal { removeMessage(t) }
             target = nil
             alreadyShown = true
@@ -611,6 +636,7 @@ extension LiveChatSession {
         if target == nil && !alreadyShown && (!ChatText.trimmed(text).isEmpty || isError) {
             localCounter += 1
             let m = ChatMessage(id: "local-assistant-\(localCounter)", role: .assistant, parts: [], timestamp: Date(), rowId: nil)
+            if isLiveVoiceTurn { liveVoiceHiddenIds.insert(m.id) }
             insertMessage(m, at: scopeEnd)
             target = m.id
             targetWhy = "new row at \(scopeEnd) (nothing in scope)"
@@ -619,6 +645,27 @@ extension LiveChatSession {
         if let target {
             let partial = p["partial"]?.bool == true
             let errorText = (p["error"]?.nonEmptyString) ?? (ChatText.trimmed(text).isEmpty ? "Hermes couldn't finish this turn." : text)
+            // Verify a foreign-started queued steer actually owns this completed turn: if `user_row_id` belongs to a
+            // non-voice message (cron/bot DM/another device), unhide this reply and restore the queued steer.
+            var foreignMismatch = false
+            if let queuedId = liveVoiceActiveQueuedSteerId, let userRow,
+               let owner = messages.first(where: { $0.role == .user && $0.rowId == userRow }),
+               owner.id != queuedId && !liveVoiceUserIds.contains(owner.id) {
+                foreignMismatch = true
+                liveVoiceQueuedTurnIds.insert(queuedId)
+                liveVoiceActiveQueuedSteerId = nil
+                liveVoiceTurnActive = false
+                liveVoiceHiddenIds.remove(target)
+                if let finalRow { liveVoiceHiddenRowIds.remove(finalRow) }
+                changes.update(target)
+            }
+            let voiceTurn = !foreignMismatch && (isLiveVoiceTurn || liveVoiceHiddenIds.contains(target))
+            if voiceTurn && !isError {
+                liveVoiceHiddenIds.insert(target)
+                if let finalRow { liveVoiceHiddenRowIds.insert(finalRow) }
+                if let userRow { liveVoiceHiddenRowIds.insert(userRow) }
+            }
+            if liveVoiceHeardIds.contains(target), let finalRow { liveVoiceHeardRowIds.insert(finalRow) }
             updateMessage(target) { m in
                 m.isStreaming = false
                 if stopFailed { m.interrupted = false }      // the stop never landed: this is a whole reply
@@ -629,6 +676,10 @@ extension LiveChatSession {
                 }
                 LiveChatSession.sealTools(&m, summary: "Result unavailable")
                 if m.rowId == nil, let finalRow { m.rowId = finalRow }
+            }
+            if voiceTurn && isError {
+                // Keep the prompt visible above an error card so Retry always has context.
+                unhideRunningLiveVoiceTurn()
             }
             if !turn.sawAssistantPayload && !isError { turn.heartbeatSettledStreamId = nil }
             if !isError, !turn.interrupted, let turnBegan { noteTurnDuration(messageId: target, seconds: Date().timeIntervalSince(turnBegan)) }

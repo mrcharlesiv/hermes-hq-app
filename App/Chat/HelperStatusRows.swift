@@ -255,12 +255,13 @@ nonisolated enum HelperStatusRows {
 
         func group(requestID: String) -> Group? { groups.first { $0.requestID == requestID } }
 
-        func rows(at index: Int, input: ChatRowBuilder.Input) -> [ChatRow] {
+        func rows(at index: Int, input: ChatRowBuilder.Input, voiceFolded: Bool = false) -> [ChatRow] {
             var result: [ChatRow] = []
             if !reports.contains(index) {
                 var scoped = input
                 scoped.activity.consolidatedHelperCalls = calls[index] ?? []
-                ChatRowBuilder.appendRows(for: input.messages[index], at: index, input: scoped, into: &result)
+                ChatRowBuilder.appendRows(for: input.messages[index], at: index, input: scoped,
+                                          voiceFolded: voiceFolded, into: &result)
             }
             if let group = groups.first(where: { $0.anchor == index }) { result.insert(group.row(input: input), at: 0) }
             return result

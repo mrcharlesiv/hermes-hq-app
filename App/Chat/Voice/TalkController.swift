@@ -57,6 +57,11 @@ import UIKit
         /// [voice record] Everything said with the live voice, both speakers (`VoiceChatRecord`): sent to the chat when
         /// the conversation ends. It outlives a fall back to the standard engine, whose turns are messages already.
         var record: [VoiceChatRecord.Turn] = []
+        /// [voice record] Assistant message ids whose replies finished being spoken aloud and heard in the live voice.
+        /// Outlives a fall back to the standard engine alongside `record`.
+        var heardLiveReplyIds: Set<String> = []
+        /// Heard ids recorded during the currently active live voice segment (mirrors revocations on barge-in/stop).
+        var activeSegmentHeardIds: Set<String> = []
         /// The standard engine's warm-up leases are held (given back when GPT-Live takes over).
         var leased = false
         // [live words] (docs/spec/3x-live-words.md)
@@ -567,9 +572,13 @@ import UIKit
             case (.gptLive, .standard(let input)), (.grokLive, .standard(let input)):
                 cleanUp(next)
                 guard let input = Self.liveInput(input) else { continue }
-                performLive(LiveTalkLoop.reduce(&conversation.state, &conversation.liveState, input, now: now()), in: conversation)
+                let effects = LiveTalkLoop.reduce(&conversation.state, &conversation.liveState, input, now: now())
+                syncHeardLiveReplies(in: conversation)
+                performLive(effects, in: conversation)
             case (.gptLive, .live(let input)), (.grokLive, .live(let input)):
-                performLive(LiveTalkLoop.reduce(&conversation.state, &conversation.liveState, input, now: now()), in: conversation)
+                let effects = LiveTalkLoop.reduce(&conversation.state, &conversation.liveState, input, now: now())
+                syncHeardLiveReplies(in: conversation)
+                performLive(effects, in: conversation)
             case (.standard, .live):
                 continue
             }
@@ -747,12 +756,25 @@ import UIKit
             VoiceGateway.lease(client: chat.voiceClient, kind: .stt, lease: .conversation, active: false, profile: chat.profile.isEmpty ? nil : chat.profile)
         }
         // [voice record] The live voice's conversation goes into the chat, for the person and the bot (nothing for a
-        // chat that went away, or when the person said nothing).
-        if reason != .gone, let record = VoiceChatRecord.message(conversation.record, seconds: length, stopPhrases: conversation.state.stopPhrases) {
-            AppLog.trace("talk", "voice record sent \(AppLog.tag(scope: scope)): \(conversation.record.count) turns, \(record.count) chars")
+        // chat that went away, or when the person said nothing). Delegated turns whose replies were actually heard fold
+        // into the Voice Chat card unless the transcript had to be truncated to fit `maxChars`; any turn still running
+        // or unheard unhides so the person can read it in chat.
+        syncHeardLiveReplies(in: conversation)
+        let willSendRecord = reason != .gone
+            && VoiceChatRecord.message(conversation.record, seconds: length, stopPhrases: conversation.state.stopPhrases) != nil
+        let truncated = willSendRecord && VoiceChatRecord.willTruncate(conversation.record)
+        let foldedTags = chat.finishLiveVoice(heardReplyIds: conversation.heardLiveReplyIds,
+                                              sendingRecord: willSendRecord && !truncated)
+        if willSendRecord, let record = VoiceChatRecord.message(conversation.record, seconds: length,
+                                                                stopPhrases: conversation.state.stopPhrases,
+                                                                foldedTags: foldedTags,
+                                                                includeExplicitMarker: true) {
+            AppLog.trace("talk", "voice record sent \(AppLog.tag(scope: scope)): \(conversation.record.count) turns, \(foldedTags.count) folded turns, truncated=\(truncated), \(record.count) chars")
             chat.sendVoiceRecord(record)
         }
         conversation.record = []
+        conversation.heardLiveReplyIds = []
+        conversation.activeSegmentHeardIds = []
         conversation.heard.values.forEach { $0.cancel() }   // [live words]
         conversation.heard = [:]
         clearWords(conversation)
@@ -1059,6 +1081,7 @@ extension TalkController {
         conversation.liveState.resumeNote = resumes.removeValue(forKey: chat.memoScope)?.note(now: now())
         conversation.liveSince = Date()
         conversation.capture = LiveInertCapture()
+        chat.setLiveVoiceActive(true)
         if conversation.leased {
             conversation.leased = false
             VoiceGateway.lease(client: chat.voiceClient, kind: .tts, lease: .conversation, active: false, profile: chat.profile.isEmpty ? nil : chat.profile)
@@ -1121,7 +1144,11 @@ extension TalkController {
         guard live === conversation, conversation.engine.isLive else { return }
         VoiceEvents.note("\(conversation.engine.title) stopped (\(VoiceReport.scrub(reason))): the standard engine takes over")
         AppLog.note("talk", "\(conversation.engine.title) failed \(AppLog.tag(conversation.chat.memoScope)): falling back to the standard engine")
+        syncHeardLiveReplies(in: conversation)
         conversation.engine = .standard
+        conversation.activeSegmentHeardIds = []
+        conversation.chat.releaseUnheardLiveVoice(heardReplyIds: conversation.heardLiveReplyIds)
+        conversation.chat.setLiveVoiceActive(false)
         conversation.chat.onDelegationRefused = nil
         let transport = conversation.transport
         conversation.transport = nil
@@ -1167,6 +1194,21 @@ extension TalkController {
         sendLive(.recentReplies(conversation.chat.spokenReplies(since: conversation.liveSince)))
     }
 
+    private func syncHeardLiveReplies(in conversation: Conversation) {
+        guard conversation.engine.isLive else { return }
+        let current = conversation.liveState.heardReplyIds
+        for id in current where conversation.activeSegmentHeardIds.insert(id).inserted {
+            conversation.heardLiveReplyIds.insert(id)
+            conversation.chat.noteLiveVoiceHeard(messageId: id)
+        }
+        let revoked = conversation.activeSegmentHeardIds.subtracting(current)
+        if !revoked.isEmpty {
+            conversation.activeSegmentHeardIds.subtract(revoked)
+            conversation.heardLiveReplyIds.subtract(revoked)
+            for id in revoked { conversation.chat.revokeLiveVoiceHeard(messageId: id) }
+        }
+    }
+
     private func wireLive(_ conversation: Conversation, _ transport: any LiveVoiceTransport) {
         transport.onEvent = { [weak self, weak conversation] event in
             guard let self, let conversation, self.live === conversation else { return }
@@ -1178,6 +1220,7 @@ extension TalkController {
                 self.sendLive(.transcript(fragment))
             case .delegation(let id): self.sendLive(.delegation(id: id))
             case .askAgent(let id, let request): self.sendLive(.askAgent(id: id, request: request))   // [grok-live]
+            case .bargeIn: self.sendLive(.bargeIn)
             case .error(let message): self.sendLive(.vendorError(message))
             case .closed(let reason, let seconds): self.sendLive(.closed(reason: reason, usageSeconds: seconds))
             case .other: break

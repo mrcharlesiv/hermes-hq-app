@@ -20,6 +20,8 @@ nonisolated enum LiveTalkInput: Sendable, Equatable {
     case submitFailed
     /// The voice's own audio is playing (or stopped).
     case assistantSpeaking(Bool)
+    /// The person spoke over the voice or the vendor cancelled/truncated its active response.
+    case bargeIn
     /// The microphone's level, 0…1.
     case level(Double)
     case turnRunning(Bool)
@@ -118,6 +120,19 @@ nonisolated struct LiveTalkState: Sendable, Equatable {
     var answer: AnswerStage = .none
     /// Rides the first delegation's context, then cleared: the previous talk's answer was never heard.
     var resumeNote: String?
+    /// [voice record] Reply message ids handed to the voice, actively being spoken, and fully heard (never includes
+    /// replies cut short by barge-in, stop, connection drop, or hang-up before playback finished).
+    var pendingSpeakReplyIds: Set<String> = []
+    var speakingReplyIds: Set<String> = []
+    /// Streaming replies whose already-sent sentences finished playing before the turn ended (promoted to
+    /// `heardReplyIds` only if the turn ends with no further unheard text).
+    var spokenWhileStreamingIds: Set<String> = []
+    var heardReplyIds: Set<String> = []
+    /// Most recent batch promoted on `.assistantSpeaking(false)`; moved back to `speakingReplyIds` if playback resumes
+    /// after a mid-reply pause without a new handoff, or revoked if barge-in/stop/drop fires immediately after.
+    var lastCompletedSpeakIds: Set<String> = []
+    var speakingStartedAt: TimeInterval?
+    var lastSpeakingEndedAt: TimeInterval?
 
     enum AnswerStage: Sendable, Equatable { case none, waiting, passed, speaking, heard }
 
@@ -235,6 +250,14 @@ nonisolated enum LiveTalkLoop {
                 let rest = String(Array(spoken)[done...])
                 effects.append(.speak(delegationId: nil, text: rest))
                 passed(reply.messageId, upTo: spoken.count, of: spoken)
+                live.heardReplyIds.remove(reply.messageId)
+                live.lastCompletedSpeakIds.remove(reply.messageId)
+                // Always enter `pendingSpeakReplyIds` so filler already playing never marks a freshly handed reply heard.
+                if live.assistantSpeaking && live.speakingReplyIds.contains(reply.messageId) {
+                    live.speakingReplyIds.insert(reply.messageId)
+                } else {
+                    live.pendingSpeakReplyIds.insert(reply.messageId)
+                }
             }
         }
 
@@ -266,6 +289,14 @@ nonisolated enum LiveTalkLoop {
                 if cut > live.spokenLength {
                     effects.append(.speak(delegationId: id, text: String(characters[live.spokenLength..<cut])))
                     live.spokenLength = cut
+                    live.heardReplyIds.remove(reply.messageId)
+                    live.spokenWhileStreamingIds.remove(reply.messageId)
+                    live.lastCompletedSpeakIds.remove(reply.messageId)
+                    if live.assistantSpeaking && live.speakingReplyIds.contains(reply.messageId) {
+                        live.speakingReplyIds.insert(reply.messageId)
+                    } else {
+                        live.pendingSpeakReplyIds.insert(reply.messageId)
+                    }
                 }
                 return
             }
@@ -274,9 +305,29 @@ nonisolated enum LiveTalkLoop {
                 effects.append(.speak(delegationId: id, text: String(characters[live.spokenLength...])))
                 live.spokenLength = characters.count
             }
-            // [resume] The answer is out; heard once the voice has said it (all of it went out earlier: said already).
-            if id != nil, live.answer == .waiting, !characters.isEmpty {
-                live.answer = live.assistantSpeaking ? .speaking : (fresh ? .passed : .heard)
+            // [resume] The answer is out; heard once the voice has actually finished playing every sentence of it.
+            if !characters.isEmpty {
+                if fresh {
+                    live.heardReplyIds.remove(reply.messageId)
+                    live.spokenWhileStreamingIds.remove(reply.messageId)
+                    live.lastCompletedSpeakIds.remove(reply.messageId)
+                    if live.assistantSpeaking && live.speakingReplyIds.contains(reply.messageId) {
+                        live.speakingReplyIds.insert(reply.messageId)
+                        if id != nil, live.answer == .waiting { live.answer = .speaking }
+                    } else {
+                        live.pendingSpeakReplyIds.insert(reply.messageId)
+                        if id != nil, live.answer == .waiting { live.answer = .passed }
+                    }
+                } else if live.speakingReplyIds.contains(reply.messageId) {
+                    if id != nil, live.answer == .waiting { live.answer = .speaking }
+                } else if live.pendingSpeakReplyIds.contains(reply.messageId) {
+                    if id != nil, live.answer == .waiting { live.answer = .passed }
+                } else if live.spokenWhileStreamingIds.remove(reply.messageId) != nil {
+                    live.heardReplyIds.insert(reply.messageId)
+                    if id != nil, live.answer == .waiting { live.answer = .heard }
+                } else if live.heardReplyIds.contains(reply.messageId) {
+                    if id != nil, live.answer == .waiting { live.answer = .heard }
+                }
             }
             clearDelegation()
         }
@@ -323,7 +374,25 @@ nonisolated enum LiveTalkLoop {
             // steers it into the running reply (or stops that reply when it can't), so the work done so far is kept
             // (owner, 2026-10-28: one thought split into two requests 3 s apart, and the second stopped the first's
             // searches). What the voice had begun saying of the reply so far is not caught up later.
-            if state.turnRunning, let id = state.lastReply?.messageId, live.passedOn[id] != nil { live.passedOn[id] = .max }
+            // What the voice had begun saying of the reply so far is not caught up later, and was never fully heard.
+            // If a steered turn's sealed first reply had 100% of its speech text played before this steer arrived,
+            // preserve that heard status so the steered turn can fold cleanly once the follow-up finishes.
+            var sealedFullyHeardId: String?
+            if state.turnRunning, let prev = state.lastReply,
+               live.spokenWhileStreamingIds.contains(prev.messageId),
+               (live.passedOn[prev.messageId] ?? 0) >= speech(prev).count {
+                live.heardReplyIds.insert(prev.messageId)
+                sealedFullyHeardId = prev.messageId
+            }
+            // Moving on to a new delegation cuts off any previous reply that was still waiting to start or mid-speech.
+            live.pendingSpeakReplyIds.removeAll()
+            live.speakingReplyIds.removeAll()
+            live.spokenWhileStreamingIds.removeAll()
+            live.lastCompletedSpeakIds.removeAll()
+            if state.turnRunning, let id = state.lastReply?.messageId, live.passedOn[id] != nil {
+                live.passedOn[id] = .max
+                if id != sealedFullyHeardId { live.heardReplyIds.remove(id) }
+            }
             live.delegationId = id
             live.spokenReplyId = nil
             live.spokenLength = 0
@@ -370,7 +439,20 @@ nonisolated enum LiveTalkLoop {
             live.heard.append(fragment)
             if live.heard.count > heardKeep { live.heard.removeFirst(live.heard.count - heardKeep) }
             guard fragment.speaker == .user else { break }
-            if !LiveVoiceWire.collapse(fragment.text).isEmpty { live.personSpoke = true }
+            if !LiveVoiceWire.collapse(fragment.text).isEmpty {
+                live.personSpoke = true
+                // Belt-and-suspenders barge-in for vendors that don't emit `speech_started`: user words arriving
+                // well into active playback (>= 0.8s after speech started, ruling out delayed transcripts of the
+                // earlier question) mean the person talked over the voice.
+                if live.assistantSpeaking, !live.speakingReplyIds.isEmpty,
+                   let startedAt = live.speakingStartedAt, now - startedAt >= 0.8 {
+                    if live.answer == .speaking { live.answer = .passed }
+                    live.pendingSpeakReplyIds.removeAll()
+                    live.speakingReplyIds.removeAll()
+                    live.spokenWhileStreamingIds.removeAll()
+                    live.lastCompletedSpeakIds.removeAll()
+                }
+            }
             state.silence.reset(now: now)
             state.silenceState = .ok
             live.utterance += fragment.text
@@ -395,9 +477,55 @@ nonisolated enum LiveTalkLoop {
 
         case .assistantSpeaking(let speaking):
             live.assistantSpeaking = speaking
-            if speaking, live.answer == .passed { live.answer = .speaking }
-            if !speaking, live.answer == .speaking { live.answer = .heard }
+            if speaking {
+                live.speakingStartedAt = now
+                if !live.pendingSpeakReplyIds.isEmpty {
+                    live.speakingReplyIds.formUnion(live.pendingSpeakReplyIds)
+                    live.pendingSpeakReplyIds.removeAll()
+                    live.lastCompletedSpeakIds.removeAll()
+                } else if !live.lastCompletedSpeakIds.isEmpty {
+                    // The voice resumed after a pause longer than the silence hangover without any new handoff:
+                    // move the just-completed batch back to speaking so hanging up during the rest keeps it visible.
+                    live.heardReplyIds.subtract(live.lastCompletedSpeakIds)
+                    live.speakingReplyIds.formUnion(live.lastCompletedSpeakIds)
+                    live.lastCompletedSpeakIds.removeAll()
+                    if live.answer == .heard { live.answer = .speaking }
+                }
+                if live.answer == .passed { live.answer = .speaking }
+            } else {
+                live.speakingStartedAt = nil
+                live.lastSpeakingEndedAt = now
+                if !live.speakingReplyIds.isEmpty {
+                    let streamingId: String? = (live.delegationId != nil && (state.turnRunning || state.lastReply?.pending == true))
+                        ? live.spokenReplyId : nil
+                    var completed: Set<String> = []
+                    for id in live.speakingReplyIds {
+                        if id == streamingId {
+                            live.spokenWhileStreamingIds.insert(id)
+                        } else {
+                            live.heardReplyIds.insert(id)
+                            completed.insert(id)
+                        }
+                    }
+                    if !completed.isEmpty { live.lastCompletedSpeakIds = completed }
+                    live.speakingReplyIds.removeAll()
+                }
+                if live.answer == .speaking { live.answer = .heard }
+            }
             refreshStatus()
+
+        case .bargeIn:
+            if live.answer == .speaking { live.answer = .passed }
+            if live.assistantSpeaking || !live.speakingReplyIds.isEmpty || !live.pendingSpeakReplyIds.isEmpty {
+                live.pendingSpeakReplyIds.removeAll()
+                live.speakingReplyIds.removeAll()
+                live.spokenWhileStreamingIds.removeAll()
+                live.lastCompletedSpeakIds.removeAll()
+            } else if let endedAt = live.lastSpeakingEndedAt, now - endedAt <= 1.0, !live.lastCompletedSpeakIds.isEmpty {
+                live.heardReplyIds.subtract(live.lastCompletedSpeakIds)
+                live.lastCompletedSpeakIds.removeAll()
+                if live.answer == .heard { live.answer = .passed }
+            }
 
         case .level(let level):
             state.silence.observe(status: state.status, level: level, muted: state.muted, now: now)
@@ -448,15 +576,24 @@ nonisolated enum LiveTalkLoop {
 
         case .stopOrInterrupt:
             // An answer cut off while spoken was not heard (the voice going quiet next is not its end).
+            let interruptingActiveSpeech = live.assistantSpeaking || !live.speakingReplyIds.isEmpty
+                || !live.pendingSpeakReplyIds.isEmpty || state.turnRunning
             if live.answer == .speaking { live.answer = .passed }
+            live.pendingSpeakReplyIds.removeAll()
+            live.speakingReplyIds.removeAll()
+            live.spokenWhileStreamingIds.removeAll()
+            live.lastCompletedSpeakIds.removeAll()
             if state.turnRunning { effects.append(.stopTurn) }
             if live.assistantSpeaking { effects.append(.instruct(LiveVoiceWire.stopTalking)) }
             if live.delegationId != nil {
                 live.ignoredReplyId = state.lastReply?.messageId
                 clearDelegation()
             }
-            // What the voice was cut off saying is not caught up later (a reply begun is the one interrupted).
-            if let id = state.lastReply?.messageId, live.passedOn[id] != nil { live.passedOn[id] = .max }
+            // What the voice was cut off saying is not caught up later (never revoke an earlier finished turn).
+            if interruptingActiveSpeech, let id = state.lastReply?.messageId, live.passedOn[id] != nil {
+                live.passedOn[id] = .max
+                live.heardReplyIds.remove(id)
+            }
 
         case .end:
             end(.user)
@@ -469,7 +606,16 @@ nonisolated enum LiveTalkLoop {
                 let words = live.utterance
                 live.utterance = ""
                 live.utteranceAt = nil
-                if TalkStopWord.isStop(words, config: state.stopPhrases) { end(.said); break }
+                if TalkStopWord.isStop(words, config: state.stopPhrases) {
+                    // Saying "stop" mid-answer cuts audio off right before the utterance settles: revoke any batch
+                    // that went quiet during this utterance so the cut-off answer stays readable.
+                    if let endedAt = live.lastSpeakingEndedAt, now - endedAt <= utteranceSettle + 1.0 {
+                        live.heardReplyIds.subtract(live.lastCompletedSpeakIds)
+                        live.lastCompletedSpeakIds.removeAll()
+                    }
+                    end(.said)
+                    break
+                }
             }
             noteTool()
             settleIfQuiet()
@@ -510,6 +656,14 @@ nonisolated enum LiveTalkLoop {
 
         case .closed(let reason, _):
             // Not the person's doing (their end is recorded first, and nothing comes after it): carry on without it.
+            // Audio often decays to quiet right before a drop arrives, so revoke any reply that just ended.
+            if let endedAt = live.lastSpeakingEndedAt, now - endedAt <= 3.0 {
+                live.heardReplyIds.subtract(live.lastCompletedSpeakIds)
+            }
+            live.pendingSpeakReplyIds.removeAll()
+            live.speakingReplyIds.removeAll()
+            live.spokenWhileStreamingIds.removeAll()
+            live.lastCompletedSpeakIds.removeAll()
             live.readinessInvalidated = true
             live.delegationId = nil
             effects.append(.fallBack(reason: reason))

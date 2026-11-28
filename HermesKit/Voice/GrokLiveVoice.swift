@@ -281,7 +281,9 @@ import Foundation
                 setSpeaking(true)
             case .flushPlayback:
                 stages.flushes += 1
+                let interruptedSpeech = speaking || calls.responseInFlight || (audio?.isPlaying == true)
                 audio?.flush()
+                if interruptedSpeech { onEvent?(.bargeIn) }
                 speakerLevel = 0
                 setSpeaking(false)
             }

@@ -582,11 +582,11 @@ nonisolated enum InlineCameraLogic {
         focusReticle.center = point
         focusReticle.transform = CGAffineTransform(scaleX: 1.25, y: 1.25)
         focusReticle.alpha = 1
-        UIView.animate(withDuration: 0.22, delay: 0, options: .curveEaseOut) {
+        HQMotion.animate(HQMotion.pane, delay: 0, options: .curveEaseOut, changes: {
             self.focusReticle.transform = .identity
-        } completion: { _ in
-            UIView.animate(withDuration: 0.25, delay: 0.55) { self.focusReticle.alpha = 0 }
-        }
+        }, completion: { _ in
+            HQMotion.animate(0.25, delay: 0.55) { self.focusReticle.alpha = 0 }
+        })
         sessionQueue.async { [weak self] in
             guard let device = self?.activeDevice, (try? device.lockForConfiguration()) != nil else { return }
             if device.isFocusPointOfInterestSupported {
@@ -630,7 +630,7 @@ nonisolated enum InlineCameraLogic {
 
         // Crisp shutter flash feedback
         flashVeil.alpha = 0.85
-        UIView.animate(withDuration: 0.20) { self.flashVeil.alpha = 0 }
+        HQMotion.animate(HQMotion.fade) { self.flashVeil.alpha = 0 }
 
         let desiredFlash = flashMode.avFlashMode
         let rotationAngle: CGFloat = 90
@@ -735,7 +735,7 @@ private final class ShutterControlButton: UIControl {
 
     override var isHighlighted: Bool {
         didSet {
-            UIView.animate(withDuration: 0.1) {
+            HQMotion.animate(HQMotion.quick) {
                 self.inner.transform = self.isHighlighted ? CGAffineTransform(scaleX: 0.88, y: 0.88) : .identity
             }
         }

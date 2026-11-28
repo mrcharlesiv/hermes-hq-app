@@ -557,6 +557,32 @@ final class LiveChatSession: ChatSessionModel {
     var memoSends: [String: MemoSendContext] = [:]
     /// [gpt-live] Sends a GPT-Live delegation made, by local id: the spoken exchange that rides `voice_context`.
     var voiceLiveSends: [String: String] = [:]
+    /// [voice record] Active live-voice call tracking (Grok Bot style): delegated user prompts and their heard
+    /// replies fold into the Voice Chat card instead of duplicating as chat bubbles.
+    struct PendingVoiceRecordFold {
+        var recordText: String?
+        var ids: Set<String>
+        var rowIds: Set<Int>
+    }
+    var liveVoiceActive = false
+    /// Monotonic counter bumped on call start/end/fallback so late async steer fallbacks never hide turns post-call.
+    var liveVoiceGeneration = 0
+    /// True only while the currently running turn belongs to an active live-voice delegation.
+    var liveVoiceTurnActive = false
+    var liveVoiceUserIds: Set<String> = []
+    /// Steered voice prompts accepted into an active live-voice turn (`status == "redirected"`).
+    var liveVoiceSteerIds: Set<String> = []
+    /// Steered voice prompts the gateway queued for the next turn (paired when that foreign turn starts).
+    var liveVoiceQueuedTurnIds: Set<String> = []
+    /// The queued voice steer currently paired to a foreign-started turn (verified against `user_row_id` on completion).
+    var liveVoiceActiveQueuedSteerId: String?
+    var liveVoiceHiddenIds: Set<String> = []
+    var liveVoiceHiddenRowIds: Set<Int> = []
+    var liveVoiceHeardIds: Set<String> = []
+    var liveVoiceHeardRowIds: Set<Int> = []
+    /// Short-lived holds kept only while a finished call's `VoiceChatRecord` is queued or in-flight; cleared on ack
+    /// (since `VoiceChatRecord.foldedIndices` reads `[folded: ...]` directly) and rolled back on refusal/stop/removal.
+    var pendingVoiceRecordFolds: [PendingVoiceRecordFold] = []
     /// [gpt-live] A delegation's `prompt.submit` was refused: the voice says it could not reach Hermes.
     var onVoiceLiveRefused: (() -> Void)?
 
@@ -1350,7 +1376,16 @@ final class LiveChatSession: ChatSessionModel {
         localCounter += 1
         let localId = "local-user-" + (retryItem?.id ?? "\(localCounter)-\(UInt32.random(in: 0...UInt32.max))")
         AppLog.trace("send", "send \(AppLog.tag(localId)) in \(logIds): queued=\(queued), attachments=\(attachments.count), memo=\(memo != nil), voice=\(voiceContext != nil), interrupted=\(interrupted), waits for stop=\(turn.stopTerminalPending), \(memo.map(Self.memoLogWords) ?? "\(text.count) chars")")
-        if let voiceContext { voiceLiveSends[localId] = voiceContext }   // [gpt-live]
+        if let voiceContext {
+            voiceLiveSends[localId] = voiceContext   // [gpt-live]
+            if liveVoiceActive {
+                liveVoiceTurnActive = true
+                liveVoiceUserIds.insert(localId)
+                liveVoiceHiddenIds.insert(localId)
+            }
+        } else {
+            liveVoiceTurnActive = false
+        }
         let typed = display ?? text                                                                     // MENUS
         let shown = (attachments.isEmpty || memo != nil) ? typed : AttachmentSender.bubbleText(typed: typed, attachments: attachments)  // [attachments] #521
         let draftScopeBefore = draftScope
@@ -1426,6 +1461,7 @@ final class LiveChatSession: ChatSessionModel {
             let hasHandler = onBusyThreadSend != nil || (!isMemo && onBusyThread != nil && attachments.isEmpty && draft == text)
             return hasHandler && (!queued || allowBusyThread) && !interrupted && !voiceHold
                 && voiceLiveSends[localId] == nil && rewindParams(for: localId) == nil
+                && !VoiceChatRecord.isRecord(text)
         }
         func threadTakes(reason: OwnerWait?) -> Bool {
             guard stopEpoch == epoch, threadable() else { return false }
@@ -1733,7 +1769,13 @@ final class LiveChatSession: ChatSessionModel {
         rewindAcknowledged(localId: localId, result: result)   // MENUS: the kept rows' new ids
         updateMessage(localId) { m in
             m.isPending = false
-            if let row = result["user_row_id"]?.positiveInt { m.rowId = row }
+            if let row = result["user_row_id"]?.positiveInt {
+                m.rowId = row
+                if self.liveVoiceHiddenIds.contains(localId) { self.liveVoiceHiddenRowIds.insert(row) }
+            }
+        }
+        if let idx = indexById[localId], VoiceChatRecord.isRecord(messages[idx].plainText) {
+            confirmVoiceRecordFold(for: messages[idx].plainText)
         }
         // Sent past the stop hold but not held in the gateway's queue: it runs now, so the stopped turn is over.
         if result["status"]?.string != "queued", turn.userAnchorId == localId { releaseSendPastStop("its send was accepted to run now") }
@@ -1755,6 +1797,11 @@ final class LiveChatSession: ChatSessionModel {
         AppLog.trace("send", "send \(AppLog.tag(localId)) withdrawn: Stop came before it went out; text back to the field")
         let text = memoSendFinished(localId, .withdrawn) ?? text   // VOICE: a memo's typed words; the memo → draft chip
         voiceLiveSends[localId] = nil   // [gpt-live]
+        liveVoiceUserIds.remove(localId)
+        liveVoiceQueuedTurnIds.remove(localId)
+        liveVoiceHiddenIds.remove(localId)
+        if turn.userAnchorId == localId { liveVoiceTurnActive = false }
+        if VoiceChatRecord.isRecord(text) { rollbackVoiceRecordFold(for: text) }
         // A newer send owns the turn (sent after the Stop): its bubble, hold and flags stay as they are.
         let ownsTurn = turn.userAnchorId == nil || turn.userAnchorId == localId
         if let index = indexById[localId], index + 1 < messages.count {
@@ -1826,7 +1873,10 @@ final class LiveChatSession: ChatSessionModel {
         changes.markState()
         scheduleFlush()
         if !item.attachments.isEmpty { returnAttachments(item.attachments, text: nil) }                        // [attachments]
-        if VoiceChatRecord.isRecord(item.text) { return nil }   // [voice record] a voice chat's words never fill the field
+        if VoiceChatRecord.isRecord(item.text) {
+            rollbackVoiceRecordFold(for: item.text)
+            return nil   // [voice record] a voice chat's words never fill the field
+        }
         return item.hidden ? nil : (item.display ?? item.text)   // [activity] a hidden continuation never reaches the field
     }
 
@@ -1890,7 +1940,14 @@ final class LiveChatSession: ChatSessionModel {
         AppLog.note("send", "send \(AppLog.tag(localId)) refused in \(logIds): \(AppLog.scrub(String((reason.split(separator: "\n").first ?? "").prefix(100)))); queued=\(queued), attachments=\(attachments.count), \(observing ? "on screen" : "off screen"), queue parked (\(queuedMessages.count))")
         // MENUS: a refused rewind puts the transcript back as it was and says why (no error card, no draft).
         if rewindRefused(localId: localId, reason: reason) { return }
-        if voiceLiveSends.removeValue(forKey: localId) != nil { onVoiceLiveRefused?() }   // [gpt-live]
+        if voiceLiveSends.removeValue(forKey: localId) != nil {
+            liveVoiceUserIds.remove(localId)
+            liveVoiceQueuedTurnIds.remove(localId)
+            liveVoiceHiddenIds.remove(localId)
+            if turn.userAnchorId == localId { liveVoiceTurnActive = false }
+            onVoiceLiveRefused?()
+        }   // [gpt-live]
+        if VoiceChatRecord.isRecord(text) { rollbackVoiceRecordFold(for: text) }
         let text = memoSendFinished(localId, .refused) ?? text   // VOICE: a memo's typed words; the memo → draft chip
         removeMessage(localId)
         if turn.userAnchorId == localId { turn.userAnchorId = nil; turn.anchorPromptKey = nil }
@@ -1978,6 +2035,13 @@ final class LiveChatSession: ChatSessionModel {
         AppLog.note("send", "send \(AppLog.tag(localId)) in \(logIds) marked Delivery unconfirmed (queued=\(queued), memo=\(memo)); queue parked")
         _ = memoSendFinished(localId, .unconfirmed)   // VOICE: never resent; the file goes to the cache
         voiceLiveSends[localId] = nil   // [gpt-live] the turn may run: the delegation waits for its reply as usual
+        liveVoiceUserIds.remove(localId)
+        liveVoiceQueuedTurnIds.remove(localId)
+        liveVoiceHiddenIds.remove(localId)
+        if turn.userAnchorId == localId { liveVoiceTurnActive = false }
+        if let idx = indexById[localId], VoiceChatRecord.isRecord(messages[idx].plainText) {
+            rollbackVoiceRecordFold(for: messages[idx].plainText)
+        }
         if menus.rewinds.removeValue(forKey: localId) != nil { menus.wholeReloadOwed = true }   // MENUS: read it whole later
         updateMessage(localId) { m in
             m.isPending = false
@@ -2278,6 +2342,8 @@ final class LiveChatSession: ChatSessionModel {
         turn.anchorPromptKey = nil
         turn.correctionIds = []
         turn.followsStopAt = nil
+        liveVoiceTurnActive = false
+        liveVoiceActiveQueuedSteerId = nil
         watchdogTask?.cancel()
         watchdogTask = nil
     }

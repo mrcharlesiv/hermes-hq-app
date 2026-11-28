@@ -40,8 +40,16 @@ protocol ChatVoiceTurns: AnyObject {
     func answerQuestion(_ id: String, spoken: String)
     var onDelegationRefused: (() -> Void)? { get set }
     func spokenReplies(since: Date) -> [SpokenReply]
-    // [voice record] default below
+    // [voice record] defaults below
     func sendVoiceRecord(_ text: String)
+    var voiceFoldedMessageIds: Set<String> { get }
+    var voiceFoldedRowIds: Set<Int> { get }
+    var isAnsweringVoiceRecord: Bool { get }
+    func setLiveVoiceActive(_ active: Bool)
+    func noteLiveVoiceHeard(messageId: String)
+    func revokeLiveVoiceHeard(messageId: String)
+    func releaseUnheardLiveVoice(heardReplyIds: Set<String>)
+    func finishLiveVoice(heardReplyIds: Set<String>, sendingRecord: Bool) -> [String]
 }
 
 // [gpt-live] What a GPT-Live conversation asks of the chat beyond the standard engine (docs/spec/3x-gpt-live.md §4).
@@ -66,6 +74,23 @@ extension ChatVoiceTurns {
     /// What was said in a live voice conversation that just ended (`VoiceChatRecord.message`): one message, after
     /// whatever the chat is doing now. It never stops or steers a running reply.
     func sendVoiceRecord(_ text: String) {}
+    /// [voice record] Delegated live-voice message ids and stored row ids folded into the Voice Chat card.
+    var voiceFoldedMessageIds: Set<String> { [] }
+    var voiceFoldedRowIds: Set<Int> { [] }
+    /// [voice record] True only when the running turn is answering a `VoiceChatRecord` (`NO_REPLY`).
+    var isAnsweringVoiceRecord: Bool { false }
+    /// [voice record] Marks whether a live voice engine (GPT-Live / Grok Live) is actively running in this chat.
+    func setLiveVoiceActive(_ active: Bool) {}
+    /// [voice record] Records that `messageId`'s reply finished being spoken aloud and heard.
+    func noteLiveVoiceHeard(messageId: String) {}
+    /// [voice record] Revokes a previously noted heard reply if it was cut off on stop/interrupt.
+    func revokeLiveVoiceHeard(messageId: String) {}
+    /// [voice record] On fallback to Standard Talk, releases any still-running or unheard delegated live-voice turns
+    /// immediately while keeping already-heard turns folded until the call ends.
+    func releaseUnheardLiveVoice(heardReplyIds: Set<String>) {}
+    /// [voice record] Ends live-voice hiding: returns stable content-hash fold tags (`[folded: …]`) for turns whose
+    /// replies were actually heard, while unhiding any turn still running or unheard so the person can read it in chat.
+    func finishLiveVoice(heardReplyIds: Set<String>, sendingRecord: Bool) -> [String] { [] }
     /// Called when a delegation's send was refused before the turn ran.
     var onDelegationRefused: (() -> Void)? {
         get { nil }

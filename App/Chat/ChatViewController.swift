@@ -654,6 +654,11 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
                 }
             }
         }
+        if let voiceTurns = session as? ChatVoiceTurns {                                        // [voice record]
+            input.voiceFoldedIds = voiceTurns.voiceFoldedMessageIds
+            input.voiceFoldedRowIds = voiceTurns.voiceFoldedRowIds
+            input.answeringVoiceRecord = voiceTurns.isAnsweringVoiceRecord
+        }
         addThreads(to: &input)   // [threads]
         return input
     }
@@ -1240,6 +1245,12 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         } else if model.builtFrom > 0 || model.hiddenOlder > 0 {
             // [right-open] Messages exist whose rows aren't in the table yet (built or revealed a moment later): never
             // the empty chat's "No messages yet" over a chat that has messages.
+            mode = nil
+        } else if !session.messages.isEmpty,
+                  let voiceTurns = session as? ChatVoiceTurns,
+                  !voiceTurns.voiceFoldedMessageIds.isEmpty {
+            // [voice record] An active live voice call in a brand-new chat folds delegated turns until the Voice Chat
+            // card arrives: never flash the empty-chat intro splash over an ongoing call.
             mode = nil
         } else {
             switch openPhase {
@@ -2572,9 +2583,12 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     }
 
     private func noteAppended(_ ids: [String]) {
+        let foldedIds = (session as? ChatVoiceTurns)?.voiceFoldedMessageIds ?? []
+        let visibleIds = foldedIds.isEmpty ? ids : ids.filter { !foldedIds.contains($0) }
+        guard !visibleIds.isEmpty else { return }
         let messages = session.messages
-        followSpokenSend(ids, in: messages)
-        for id in ids {
+        followSpokenSend(visibleIds, in: messages)
+        for id in visibleIds {
             guard awaitingReply, let index = messages.lastIndex(where: { $0.id == id }), messages[index].role != .user else { continue }
             var user = index - 1
             while user >= 0 && messages[user].role != .user { user -= 1 }
@@ -2583,7 +2597,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
                 awaitingReply = false
             }
         }
-        if !following { unseen += ids.count; jumpButton.setCount(unseen) }
+        if !following { unseen += visibleIds.count; jumpButton.setCount(unseen) }
     }
 
     /// [talk] A spoken request goes from the conversation straight to the session, past `sendComposer`: its bubble

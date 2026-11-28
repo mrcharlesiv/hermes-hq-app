@@ -48,6 +48,9 @@ extension LiveChatSession {
     /// thread in order; only non-threadable items (memos, hidden continuations) stay parked.
     func sendWentToThread(_ localId: String, reason: OwnerWait? = nil) {
         AppLog.note("send", "send \(AppLog.tag(localId)) went on in a thread: \(logIds) could not take it now")
+        if let idx = indexById[localId], VoiceChatRecord.isRecord(messages[idx].plainText) {
+            rollbackVoiceRecordFold(for: messages[idx].plainText)
+        }
         removeMessage(localId)
         if turn.userAnchorId == localId { turn.userAnchorId = nil; turn.anchorPromptKey = nil }
         if turn.preparingSendId == localId { turn.preparingSendId = nil }

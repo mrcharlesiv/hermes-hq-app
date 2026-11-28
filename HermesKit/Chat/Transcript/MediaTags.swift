@@ -68,6 +68,38 @@ nonisolated enum MediaTags {
         }
     }
 
+    /// True when `text` contains a real `MEDIA: <path>` directive (not ordinary prose like "social media: …").
+    static func hasMediaTag(_ text: String) -> Bool {
+        guard text.range(of: "MEDIA:", options: .caseInsensitive) != nil else { return false }
+        let ns = text as NSString
+        for m in tag.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            if value(ns.substring(with: m.range(at: 1))) != nil { return true }
+        }
+        return false
+    }
+
+    /// True when `text` contains a bare absolute picture path (`barePath` or backtick-quoted `quotedPath`) outside
+    /// fenced code blocks, matching what `renderBarePaths` renders inline.
+    static func hasBareImagePath(_ text: String) -> Bool {
+        guard text.contains("/") || text.contains("\\") else { return false }
+        var inFence = false
+        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine)
+            if line.trimmingCharacters(in: .whitespaces).hasPrefix("```") { inFence.toggle(); continue }
+            if inFence { continue }
+            let ns = line as NSString
+            let whole = NSRange(location: 0, length: ns.length)
+            if barePath.firstMatch(in: line, range: whole) != nil { return true }
+            for m in codeSpan.matches(in: line, range: whole) {
+                let inner = ns.substring(with: m.range(at: 2)).trimmingCharacters(in: .whitespaces)
+                if quotedPath.firstMatch(in: inner, range: NSRange(location: 0, length: (inner as NSString).length)) != nil {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
     /// `isPlausibleMediaPath`: a separator, or a dot with something after it. A bare word stays prose.
     static func isPlausible(_ value: String) -> Bool {
         value.contains("/") || value.contains("\\") || value.range(of: #"\.[^.]"#, options: .regularExpression) != nil

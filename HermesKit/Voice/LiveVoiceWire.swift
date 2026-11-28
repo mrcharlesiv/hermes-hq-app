@@ -78,6 +78,8 @@ nonisolated enum LiveServerEvent: Sendable, Equatable {
     case delegation(id: String)
     /// [grok-live] An `ask_agent` call: the request is the tool's argument, not the transcript.
     case askAgent(callId: String, request: String)
+    /// The user talked over the voice or the vendor cancelled/truncated its spoken response before it finished.
+    case bargeIn
     /// `context_injection_incomplete` (a late append after our own close) is expected noise and is dropped here.
     case error(message: String)
     case closed(reason: String, usageSeconds: Double?)
@@ -95,6 +97,12 @@ nonisolated enum LiveServerEvent: Sendable, Equatable {
         case "session.delegation.created":
             guard let id = json["delegation"]?["id"]?.string, !id.isEmpty else { return .other(type: type) }
             return .delegation(id: id)
+        case "input_audio_buffer.speech_started", "response.cancelled":
+            return .bargeIn
+        case "response.done":
+            let status = json["response"]?["status"]?.string
+            if status == "cancelled" || status == "incomplete" { return .bargeIn }
+            return .other(type: type)
         case "error":
             if json["error"]?["code"]?.string == "context_injection_incomplete" { return .other(type: type) }
             return .error(message: json["error"]?["message"]?.string ?? "GPT-Live error")

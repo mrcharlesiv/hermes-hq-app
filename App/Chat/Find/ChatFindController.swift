@@ -11,9 +11,11 @@ final class ChatFindController: NSObject, UITextFieldDelegate {
     private(set) var matches: [ChatFindMatch] = []
     private(set) var current: Int?
     private(set) var isActive = false
-    /// Bubbles' searchable text, rebuilt when the messages change.
+    /// Bubbles' searchable text, rebuilt when the messages or folded voice turns change.
     private var units: [ChatFindUnit] = []
     private var unitsStale = true
+    private var lastFoldedIds: Set<String> = []
+    private var lastFoldedRowIds: Set<Int> = []
     private var researchWork: DispatchWorkItem?
 
     init(chat: ChatViewController) {
@@ -85,7 +87,13 @@ final class ChatFindController: NSObject, UITextFieldDelegate {
     private func research(keepCurrent: Bool) {
         guard let chat else { return }
         if unitsStale {
-            units = ChatFind.units(chat.session.messages)
+            let snap = chat.input()
+            lastFoldedIds = snap.voiceFoldedIds
+            lastFoldedRowIds = snap.voiceFoldedRowIds
+            let excludedIds = Set(snap.threads.compactMap { $0.value.isEmpty ? nil : $0.key })
+            let mediaIds = Set(snap.media.attachments.compactMap { $0.value.isEmpty ? nil : $0.key })
+            units = ChatFind.units(snap.messages, foldedIds: snap.voiceFoldedIds, foldedRowIds: snap.voiceFoldedRowIds,
+                                   excludedIds: excludedIds, mediaMessageIds: mediaIds)
             unitsStale = false
         }
         let previous = current.flatMap { matches.indices.contains($0) ? matches[$0] : nil }
@@ -111,9 +119,14 @@ final class ChatFindController: NSObject, UITextFieldDelegate {
         update()
     }
 
-    /// The session's paging state changed (loading, failed, nothing older left): the bar's Search Earlier row follows.
+    /// The session's paging or live-voice fold state changed: refresh Search Earlier and re-index if folding changed.
     func sessionStateChanged() {
         guard isActive else { return }
+        if let voiceTurns = chat?.session as? ChatVoiceTurns,
+           voiceTurns.voiceFoldedMessageIds != lastFoldedIds || voiceTurns.voiceFoldedRowIds != lastFoldedRowIds {
+            messagesChanged()
+            return
+        }
         update()
     }
 

@@ -39,7 +39,10 @@ struct ChatRowModel {
         // first message, so a build of its later messages alone made no rows at all. The owner's phone, 2026-11-11: a
         // bot's chat ending in a long run of bot-to-bot updates went blank ("No messages yet") each time older
         // messages loaded, until the background fill reached the group's first message.
-        if lo > 0, lo < messages.count { lo = min(lo, UpdateGroups.widen(lo...lo, input: input).lowerBound) }
+        if lo > 0, lo < messages.count {
+            lo = min(lo, VoiceChatRecord.reach(from: lo, floor: 0, in: messages))
+            lo = min(lo, UpdateGroups.widen(lo...lo, input: input).lowerBound)
+        }
         allRows = ChatRowBuilder.build(input, range: lo..<messages.count).reversed()
         builtFrom = lo
         generation += 1
@@ -95,12 +98,13 @@ struct ChatRowModel {
             let reach = PageOrder.reach(from: lo, floor: builtFrom, in: messages)
             if reach < lo { lo = max(builtFrom, UpdateGroups.widen(reach...reach, input: input).lowerBound) }
         }
-        // [calm-chat] Back to earlier drafts, asks, settled clarifies, and task cards whose fold/stale state changed.
+        // [calm-chat] Back to earlier drafts, asks, settled clarifies, task cards, and live-voice turns folded by a Voice Chat card.
         if lo < messages.count {
             let reach = min(min(DraftCards.reach(from: lo, floor: builtFrom, in: messages),
                                 AskCards.reach(from: lo, floor: builtFrom, in: messages)),
-                            min(ClarifyLate.reach(from: lo, floor: builtFrom, in: messages),
-                                ActivityRows.tasksAddedReach(from: lo, floor: builtFrom, in: messages)))
+                            min(min(ClarifyLate.reach(from: lo, floor: builtFrom, in: messages),
+                                    ActivityRows.tasksAddedReach(from: lo, floor: builtFrom, in: messages)),
+                                VoiceChatRecord.reach(from: lo, floor: builtFrom, in: messages)))
             if reach < lo { lo = max(builtFrom, UpdateGroups.widen(reach...reach, input: input).lowerBound) }
         }
         // [chat-refine] A reply's time reads up to minuteReach later messages: rebuild that many earlier ones when

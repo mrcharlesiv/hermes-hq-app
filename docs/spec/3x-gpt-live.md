@@ -137,7 +137,27 @@ transcript. I mean you were literally talking to the bot."
   nothing in the transcript, and recalled a word from it when asked afterwards.
 - The chat draws the message as one line, "Voice Chat · 4:12" with a waveform, that opens on the words ("You: …",
   "Voice: …"); the note is never shown. It is a row of its own, never folded into a run of updates. The Bots row's
-  preview passes over it, and the next live session's seed gets its words without the note.
+  preview passes over it, and the next live session's seed gets its words without the note (and skips the folded
+  delegated turns so the call is not seeded twice).
+- **No duplicate bubbles above the Voice Chat card (owner 2026-11-27, Grok Bot model):** During an active live voice
+  call, plain delegated user prompts and their plain replies/lookup tool steps stay folded out of the main chat
+  stream rather than appearing both as chat bubbles and again inside the trailing Voice Chat pill. When the call ends,
+  `ChatVoiceTurns.finishLiveVoice` decides atomically per turn: only completed turns whose non-empty replies were
+  actually **heard** (`LiveTalkState.heardReplyIds`, after playback ends — never merely handed to the voice, cut off by
+  barge-in/stop/connection drop, or interrupted; and never when a long transcript had to be truncated past `maxChars`)
+  fold into the card. Their stable content-hash turn tokens (`[folded: u:<hex8>+a:<hex8>]`, or `[folded: none]` when
+  nothing folded or the transcript was truncated) ride inside the hidden app note before the `NO_REPLY` instruction,
+  surviving SQLite row-id renumbering on rewind/edit/regenerate and working identically across devices without running
+  legacy text matching on new records. Fold holds are cleared once the record is acknowledged and rolled back
+  immediately if the record is refused, stopped, removed from the queue, routed to a thread, or delivery-unconfirmed. Any turn still running or unheard unhides
+  immediately on hang-up or fallback to Standard Talk; typed messages and typed steers stay visible; visual deliverables
+  and interactive items (HTML page cards, media/attachments, bare image paths, Markdown images, code blocks, tables,
+  clickable links, generated images, inline diff previews, draft/shopping/travel/ask/clarify/approval cards, task/file
+  cards, bot DMs, errors, reactions, threads) remain visible in chat and searchable in Find. The live waiting capsule
+  still shows while a folded delegated turn is thinking or running tools (so Steps remain reachable mid-call), retires
+  once plain spoken text starts writing, and is suppressed while answering `VoiceChatRecord` (`NO_REPLY`). Consecutive
+  same-speaker sentences insert clean spacing on sentence boundaries without splitting decimals, initials, domains, or
+  jittery subword chunks.
 - Cost: one short bot turn per live voice chat. The standard engine needs none of this: its turns are messages.
 
 ## 5. Transport (`WebRTCLiveVoice`)

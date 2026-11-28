@@ -74,8 +74,14 @@ extension LiveChatSession: ChatVoiceTurns {
     /// [voice record] The conversation's words, for the chat and the bot. Queued, never typed into a running reply:
     /// its note asks for no answer, and steered into the reply to a real request it would have silenced that reply.
     func sendVoiceRecord(_ text: String) {
-        guard !chatGone, !ChatText.trimmed(text).isEmpty else { return }
+        guard !chatGone, !ChatText.trimmed(text).isEmpty else {
+            rollbackUnboundVoiceRecordFolds()
+            return
+        }
         flushDeltas()
+        if let idx = pendingVoiceRecordFolds.lastIndex(where: { $0.recordText == nil }) {
+            pendingVoiceRecordFolds[idx].recordText = text
+        }
         // An ordinary message, not a hidden one: a hidden row (`display_kind: "hidden"`) reaches the bot but is never
         // drawn, and the chat's line is made from this message (build 1073 sent it hidden: the bot had the words and
         // the chat showed nothing).
@@ -84,6 +90,281 @@ extension LiveChatSession: ChatVoiceTurns {
         changes.markState()
         scheduleFlush()
         if !turn.busy { drainQueueHead() }
+    }
+
+    var voiceFoldedMessageIds: Set<String> {
+        pendingVoiceRecordFolds.reduce(into: liveVoiceHiddenIds) { $0.formUnion($1.ids) }
+    }
+    var voiceFoldedRowIds: Set<Int> {
+        pendingVoiceRecordFolds.reduce(into: liveVoiceHiddenRowIds) { $0.formUnion($1.rowIds) }
+    }
+
+    var isAnsweringVoiceRecord: Bool { answeringVoiceRecord }
+
+    func setLiveVoiceActive(_ active: Bool) {
+        liveVoiceGeneration += 1
+        liveVoiceActive = active
+        if !active { liveVoiceTurnActive = false }
+    }
+
+    func noteLiveVoiceHeard(messageId: String) {
+        liveVoiceHeardIds.insert(messageId)
+        if let idx = indexById[messageId] {
+            if let row = messages[idx].rowId { liveVoiceHeardRowIds.insert(row) }
+            if let row = messages[idx].reactionRow { liveVoiceHeardRowIds.insert(row) }
+        }
+    }
+
+    func revokeLiveVoiceHeard(messageId: String) {
+        liveVoiceHeardIds.remove(messageId)
+        if let idx = indexById[messageId] {
+            if let row = messages[idx].rowId { liveVoiceHeardRowIds.remove(row) }
+            if let row = messages[idx].reactionRow { liveVoiceHeardRowIds.remove(row) }
+        }
+    }
+
+    /// True only while the currently running turn belongs to an active live-voice delegation.
+    var isLiveVoiceTurn: Bool { liveVoiceActive && liveVoiceTurnActive }
+
+    /// Releases the currently running live-voice turn's prompt and replies immediately (called on typed steer into a
+    /// live-voice turn, or when a live-voice turn ends in an error).
+    func unhideRunningLiveVoiceTurn() {
+        let anchor = turnAnchorIndex()
+        guard anchor >= 0, anchor < messages.count else { return }
+        let scopeEnd = turnScopeEnd(after: anchor)
+        var released: [String] = []
+        for i in anchor..<min(scopeEnd, messages.count) {
+            let m = messages[i]
+            var changed = false
+            if liveVoiceHiddenIds.remove(m.id) != nil { changed = true }
+            liveVoiceUserIds.remove(m.id)
+            liveVoiceSteerIds.remove(m.id)
+            liveVoiceQueuedTurnIds.remove(m.id)
+            if let row = m.rowId, liveVoiceHiddenRowIds.remove(row) != nil { changed = true }
+            if let row = m.reactionRow, liveVoiceHiddenRowIds.remove(row) != nil { changed = true }
+            if changed { released.append(m.id) }
+        }
+        guard !released.isEmpty else { return }
+        for id in released { changes.update(id) }
+        changes.markState()
+        scheduleFlush()
+    }
+
+    /// Drops the temporary fold hold once `VoiceChatRecord` is acknowledged (from here `[folded: ...]` on the message
+    /// itself drives folding across reloads and devices).
+    func confirmVoiceRecordFold(for recordText: String) {
+        if let idx = pendingVoiceRecordFolds.firstIndex(where: { $0.recordText == recordText })
+            ?? pendingVoiceRecordFolds.firstIndex(where: { $0.recordText == nil }) {
+            pendingVoiceRecordFolds.remove(at: idx)
+        }
+    }
+
+    /// Restores turns held for a `VoiceChatRecord` that was refused, stopped, removed from queue, or unconfirmed.
+    func rollbackVoiceRecordFold(for recordText: String) {
+        guard let idx = pendingVoiceRecordFolds.firstIndex(where: { $0.recordText == recordText })
+            ?? pendingVoiceRecordFolds.firstIndex(where: { $0.recordText == nil }) else { return }
+        let entry = pendingVoiceRecordFolds.remove(at: idx)
+        for id in entry.ids { changes.update(id) }
+        if !entry.ids.isEmpty {
+            changes.markState()
+            scheduleFlush()
+        }
+    }
+
+    private func rollbackUnboundVoiceRecordFolds() {
+        var released: Set<String> = []
+        pendingVoiceRecordFolds.removeAll { entry in
+            guard entry.recordText == nil else { return false }
+            released.formUnion(entry.ids)
+            return true
+        }
+        guard !released.isEmpty else { return }
+        for id in released { changes.update(id) }
+        changes.markState()
+        scheduleFlush()
+    }
+
+    /// Groups active-call hidden messages into atomic turns so a turn either folds whole (prompt + all its replies) or
+    /// stays completely visible.
+    private struct ActiveVoiceTurn {
+        var userIndices: [Int]
+        var assistantIndices: [Int]
+        var foldable: Bool
+    }
+
+    private func partitionActiveVoiceTurns(heardReplyIds: Set<String>, allowingFold: Bool) -> (turns: [ActiveVoiceTurn], orphanIds: [String]) {
+        var heardIds = heardReplyIds.union(liveVoiceHeardIds)
+        var heardRows = liveVoiceHeardRowIds
+        for m in messages where heardIds.contains(m.id) {
+            if let r = m.rowId { heardRows.insert(r) }
+            if let r = m.reactionRow { heardRows.insert(r) }
+        }
+        func inActiveCall(_ m: ChatMessage) -> Bool {
+            liveVoiceHiddenIds.contains(m.id)
+                || (m.rowId.map { liveVoiceHiddenRowIds.contains($0) } == true)
+                || (m.reactionRow.map { liveVoiceHiddenRowIds.contains($0) } == true)
+        }
+        func wasHeard(_ m: ChatMessage) -> Bool {
+            heardIds.contains(m.id)
+                || (m.rowId.map { heardRows.contains($0) } == true)
+                || (m.reactionRow.map { heardRows.contains($0) } == true)
+        }
+        var covered: Set<Int> = []
+        var turns: [ActiveVoiceTurn] = []
+        var i = 0
+        while i < messages.count {
+            let m = messages[i]
+            if m.role == .user, m.sender == nil, m.job == nil, !VoiceChatRecord.isRecord(m.plainText), inActiveCall(m) {
+                var uList = [i]
+                var aList: [Int] = []
+                var scan = i + 1
+                while scan < messages.count {
+                    let next = messages[scan]
+                    if next.role == .system || next.sender != nil || next.job != nil || VoiceChatRecord.isRecord(next.plainText) {
+                        scan += 1
+                        continue
+                    }
+                    if next.role == .user {
+                        if (turn.correctionIds.contains(next.id) || liveVoiceSteerIds.contains(next.id)), inActiveCall(next) {
+                            uList.append(scan)
+                            scan += 1
+                            continue
+                        }
+                        break
+                    }
+                    if next.role == .assistant {
+                        aList.append(scan)
+                    }
+                    scan += 1
+                }
+                for idx in uList { covered.insert(idx) }
+                for idx in aList { covered.insert(idx) }
+
+                let runningAnchorMatch = turn.busy && turn.userAnchorId.map { anchor in
+                    uList.contains { u in
+                        messages[u].id == anchor
+                            || (messages[u].rowId != nil && indexById[anchor].flatMap { messages[$0].rowId } == messages[u].rowId)
+                    }
+                } == true
+                let hasPendingOrQueuedUser = uList.contains { u in
+                    messages[u].isPending || liveVoiceQueuedTurnIds.contains(messages[u].id)
+                }
+                let usersClean = uList.allSatisfy { u in
+                    let msg = messages[u]
+                    return msg.error == nil && msg.reactions.isEmpty && msg.phoneResultText == nil
+                        && VoiceMemo.parse(msg.plainText) == nil
+                }
+                let repliesFoldable = !aList.isEmpty && aList.allSatisfy { a in
+                    let reply = messages[a]
+                    guard !reply.isStreaming, reply.error == nil, reply.reactions.isEmpty else { return false }
+                    let text = ChatText.trimmed(ReasoningTags.strip(reply.plainText))
+                    if text.isEmpty || Hydration.isSilentWords(text) { return true }
+                    if reply.interrupted { return false }
+                    return wasHeard(reply)
+                }
+                let foldable = allowingFold && !runningAnchorMatch && !hasPendingOrQueuedUser && usersClean && repliesFoldable
+                turns.append(ActiveVoiceTurn(userIndices: uList, assistantIndices: aList, foldable: foldable))
+                i = scan
+            } else {
+                i += 1
+            }
+        }
+        var orphanIds: [String] = []
+        for idx in messages.indices where !covered.contains(idx) && inActiveCall(messages[idx]) {
+            orphanIds.append(messages[idx].id)
+        }
+        return (turns, orphanIds)
+    }
+
+    func releaseUnheardLiveVoice(heardReplyIds: Set<String>) {
+        liveVoiceGeneration += 1
+        liveVoiceActive = false
+        liveVoiceTurnActive = false
+        liveVoiceActiveQueuedSteerId = nil
+        guard !liveVoiceHiddenIds.isEmpty || !liveVoiceHiddenRowIds.isEmpty else {
+            liveVoiceQueuedTurnIds = []
+            return
+        }
+        let (turns, orphanIds) = partitionActiveVoiceTurns(heardReplyIds: heardReplyIds, allowingFold: true)
+        var releasedIds = orphanIds
+        for t in turns where !t.foldable {
+            for idx in t.userIndices + t.assistantIndices {
+                let m = messages[idx]
+                liveVoiceUserIds.remove(m.id)
+                liveVoiceSteerIds.remove(m.id)
+                liveVoiceQueuedTurnIds.remove(m.id)
+                liveVoiceHiddenIds.remove(m.id)
+                if let r = m.rowId { liveVoiceHiddenRowIds.remove(r) }
+                if let r = m.reactionRow { liveVoiceHiddenRowIds.remove(r) }
+                releasedIds.append(m.id)
+            }
+        }
+        for id in orphanIds {
+            liveVoiceHiddenIds.remove(id)
+            if let idx = indexById[id] {
+                if let r = messages[idx].rowId { liveVoiceHiddenRowIds.remove(r) }
+                if let r = messages[idx].reactionRow { liveVoiceHiddenRowIds.remove(r) }
+            }
+        }
+        liveVoiceQueuedTurnIds = []
+        guard !releasedIds.isEmpty else { return }
+        for id in releasedIds { changes.update(id) }
+        changes.markState()
+        scheduleFlush()
+    }
+
+    func finishLiveVoice(heardReplyIds: Set<String>, sendingRecord: Bool) -> [String] {
+        liveVoiceGeneration += 1
+        liveVoiceActive = false
+        liveVoiceTurnActive = false
+        liveVoiceActiveQueuedSteerId = nil
+        let hadHidden = !liveVoiceHiddenIds.isEmpty || !liveVoiceHiddenRowIds.isEmpty
+        guard hadHidden else {
+            liveVoiceUserIds = []
+            liveVoiceSteerIds = []
+            liveVoiceQueuedTurnIds = []
+            liveVoiceHeardIds = []
+            liveVoiceHeardRowIds = []
+            return []
+        }
+        let (turns, orphanIds) = partitionActiveVoiceTurns(heardReplyIds: heardReplyIds, allowingFold: sendingRecord)
+        var foldedTags: [String] = []
+        var pendingIds: Set<String> = []
+        var pendingRowIds: Set<Int> = []
+        var releasedIds = orphanIds
+        for t in turns {
+            if t.foldable,
+               let tag = VoiceChatRecord.turnFoldTag(users: t.userIndices.map { messages[$0] },
+                                                     assistants: t.assistantIndices.map { messages[$0] }) {
+                foldedTags.append(tag)
+                for idx in t.userIndices + t.assistantIndices {
+                    let m = messages[idx]
+                    pendingIds.insert(m.id)
+                    if let r = m.rowId { pendingRowIds.insert(r) }
+                    if let r = m.reactionRow { pendingRowIds.insert(r) }
+                }
+            } else {
+                for idx in t.userIndices + t.assistantIndices {
+                    releasedIds.append(messages[idx].id)
+                }
+            }
+        }
+        liveVoiceUserIds = []
+        liveVoiceSteerIds = []
+        liveVoiceQueuedTurnIds = []
+        liveVoiceHiddenIds = []
+        liveVoiceHiddenRowIds = []
+        liveVoiceHeardIds = []
+        liveVoiceHeardRowIds = []
+        if sendingRecord && (!pendingIds.isEmpty || !pendingRowIds.isEmpty) {
+            pendingVoiceRecordFolds.append(PendingVoiceRecordFold(recordText: nil, ids: pendingIds, rowIds: pendingRowIds))
+        }
+        if !releasedIds.isEmpty {
+            for id in releasedIds { changes.update(id) }
+            changes.markState()
+            scheduleFlush()
+        }
+        return foldedTags
     }
 
     // [gpt-live] (docs/spec/3x-gpt-live.md §4)
@@ -118,15 +399,50 @@ extension LiveChatSession: ChatVoiceTurns {
     /// The request's bubble shows at once under the running reply. Not taken (the reply ended first, a gateway without
     /// redirect): it goes out as its own request, stopping the reply if one still runs, never into the queue.
     private func steerDelegated(_ text: String, voiceContext: String) {
-        let steer = beginSteer(shown: text)
+        let generation = liveVoiceGeneration
+        // Only hide a voice steer when steering into an already-folded live-voice turn (never into a visible typed turn).
+        let foldSteer = liveVoiceActive && liveVoiceTurnActive
+        let steer = beginSteer(shown: text, voiceDelegated: true)
+        if foldSteer {
+            liveVoiceUserIds.insert(steer.localId)
+            liveVoiceHiddenIds.insert(steer.localId)
+        }
         let previous = typedSteerChain
         typedSteerChain = Task { [weak self] in
             await previous?.value
-            guard let self, await self.finishSteer(steer, text: text) == .failed else { return }
-            AppLog.note("send", "voice steer \(AppLog.tag(steer.localId)) on \(self.logIds) not taken; sent as its own request")
-            let stopped = self.interruptForVoice()
-            self.unparkQueue()
-            self.beginSend(text, queued: false, interrupted: stopped, voiceContext: voiceContext)
+            guard let self else { return }
+            let outcome = await self.finishSteer(steer, text: text)
+            switch outcome {
+            case .redirected:
+                if foldSteer, self.liveVoiceHiddenIds.contains(steer.localId) {
+                    self.liveVoiceSteerIds.insert(steer.localId)
+                }
+                return
+            case .nextTurn:
+                if self.liveVoiceActive && self.liveVoiceGeneration == generation {
+                    // The gateway queued this steer for the next turn: keep its prompt folded and mark it so `onStart`
+                    // pairs the upcoming foreign-started turn with it.
+                    self.liveVoiceUserIds.insert(steer.localId)
+                    self.liveVoiceHiddenIds.insert(steer.localId)
+                    self.liveVoiceQueuedTurnIds.insert(steer.localId)
+                } else if self.liveVoiceHiddenIds.remove(steer.localId) != nil {
+                    self.liveVoiceUserIds.remove(steer.localId)
+                    self.changes.update(steer.localId)
+                    self.changes.markState()
+                    self.scheduleFlush()
+                }
+                return
+            case .failed:
+                self.liveVoiceUserIds.remove(steer.localId)
+                self.liveVoiceHiddenIds.remove(steer.localId)
+                self.liveVoiceQueuedTurnIds.remove(steer.localId)
+                AppLog.note("send", "voice steer \(AppLog.tag(steer.localId)) on \(self.logIds) not taken; sent as its own request")
+                let stopped = self.interruptForVoice()
+                self.unparkQueue()
+                // If the live call ended while the steer was in flight, `beginSend` checks `liveVoiceActive` and leaves
+                // the fallback send visible rather than leaking a hidden bubble post-call.
+                self.beginSend(text, queued: false, interrupted: stopped, voiceContext: voiceContext)
+            }
         }
     }
 
@@ -146,7 +462,13 @@ extension LiveChatSession: ChatVoiceTurns {
     var spokenHistory: [(assistant: Bool, text: String)] { LiveChatSession.spokenTurns(messages) }
 
     nonisolated static func spokenTurns(_ messages: [ChatMessage]) -> [(assistant: Bool, text: String)] {
-        messages.compactMap { message -> (assistant: Bool, text: String)? in
+        let folded = VoiceChatRecord.foldedIndices(in: messages)
+        return messages.enumerated().compactMap { index, message -> (assistant: Bool, text: String)? in
+            if folded.contains(index) {
+                guard message.role == .assistant, VoiceChatRecord.textHasDeliverable(message.plainText) else { return nil }
+                let words = SpeechText.sanitizeForSpeech(LiveChatSession.spoken(message).text)
+                return words.isEmpty ? nil : (true, words)
+            }
             switch message.role {
             case .user:
                 let words = message.parts.compactMap { part -> String? in

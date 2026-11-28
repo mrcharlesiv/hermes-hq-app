@@ -368,6 +368,11 @@ nonisolated enum ChatRowBuilder {
         /// [threads] The chat's threads, by the id of the message each hangs under (oldest first), and their line's colour.
         var threads: [String: [ThreadRowInput]] = [:]
         var threadTint: ThreadTint = .label2
+        /// [voice record] Live voice delegated messages folded into their Voice Chat card (active + pending-record).
+        var voiceFoldedIds: Set<String> = []
+        var voiceFoldedRowIds: Set<Int> = []
+        /// [voice record] True only while the currently running turn is answering a `VoiceChatRecord` (`NO_REPLY`).
+        var answeringVoiceRecord = false
 
         var speakerName: String {
             let name = botName.trimmingCharacters(in: .whitespaces)
@@ -392,7 +397,7 @@ nonisolated enum ChatRowBuilder {
         // [updates] Each message's own rows are made once per build: the runs, their lines and the rows below read them.
         let made = UpdateGroups.Rows(input)
         var contextStart = max(0, lower - 1)
-        for _ in 0..<8 where contextStart > 0 && contextStart < lower {
+        for _ in 0..<120 where contextStart > 0 && contextStart < lower {
             guard made.at(contextStart).isEmpty else { break }
             contextStart -= 1
         }
@@ -463,15 +468,25 @@ nonisolated enum ChatRowBuilder {
             }
         }()
         if upper == messages.count, input.isRunning, !waitsOnUser, let last = messages.last {
-            let replyVisible = last.role == .assistant && rows.last?.messageId == last.id
-            // [activity] In Header (and tool progress off) draw no steps: the status line says what runs (§10.4).
-            // [toolnow] It stays under a reply that is still working (a step runs, or it thinks between steps), and names
-            // the newest step; it goes once the reply is writing.
-            if last.role == .user || (last.role == .system && last.job != nil)
-                || (last.role == .assistant && (!replyVisible || ToolNowRows.working(last))
-                    && !ActivityRows.suppressesWaiting(last, input: input)) {
-                rows.append(waitingRow(input: input))
-                owners.append(-1)
+            let answeringVoiceRecord = input.answeringVoiceRecord
+                || (last.role == .user && VoiceChatRecord.isRecord(last.plainText))
+            if !answeringVoiceRecord {
+                let voiceFoldedTail = made.voiceFolded.contains(messages.count - 1)
+                let foldedHasText = voiceFoldedTail && last.role == .assistant && last.parts.contains {
+                    if case .text(let t) = $0 { return !ReasoningTags.isBlank(t) }
+                    return false
+                }
+                let replyVisible = last.role == .assistant
+                    && (rows.last?.messageId == last.id || (foldedHasText && !ToolNowRows.working(last)))
+                // [activity] In Header (and tool progress off) draw no steps: the status line says what runs (§10.4).
+                // [toolnow] It stays under a reply that is still working (a step runs, or it thinks between steps), and names
+                // the newest step; it goes once the reply is writing (including folded live-voice turns once text begins).
+                if last.role == .user || (last.role == .system && last.job != nil)
+                    || (last.role == .assistant && (!replyVisible || ToolNowRows.working(last))
+                        && !ActivityRows.suppressesWaiting(last, input: input)) {
+                    rows.append(waitingRow(input: input))
+                    owners.append(-1)
+                }
             }
         }
         // [groups] A room's typing rows: one per member answering now, at the newest end.
@@ -543,7 +558,7 @@ nonisolated enum ChatRowBuilder {
 
     // MARK: Per message
 
-    static func appendRows(for m: ChatMessage, at index: Int, input: Input, into rows: inout [ChatRow]) {
+    static func appendRows(for m: ChatMessage, at index: Int, input: Input, voiceFolded: Bool = false, into rows: inout [ChatRow]) {
         switch m.role {
         case .system:
             let text = m.parts.compactMap { if case .text(let t) = $0 { return t } else { return nil } }.joined(separator: "\n")
@@ -625,6 +640,12 @@ nonisolated enum ChatRowBuilder {
             let text = m.parts.compactMap { if case .text(let t) = $0 { return t } else { return nil } }.joined(separator: "\n")
             let attachments = input.media.attachments[m.id] ?? []                                     // [attachments]
             if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && m.parts.isEmpty && attachments.isEmpty { return }
+            if voiceFolded, attachments.isEmpty, m.sender == nil, m.job == nil, m.error == nil,
+               m.reactions.isEmpty, VoiceMemo.parse(text) == nil, !VoiceChatRecord.isRecord(text) {
+                // [voice record] Spoken live-voice delegation: its words live inside the Voice Chat card, never
+                // duplicated as a plain chat bubble above the pill (Grok Bot model).
+                return
+            }
             if let sender = m.sender, m.job == nil {
                 // [groups] A delivery from another bot (§7.12): one line, "From Inbox: <its words>", that opens on the
                 // whole message, as a finished subagent's row. Drawn as bubbles they filled the chat (owner, 2026-10-18).
@@ -760,8 +781,42 @@ nonisolated enum ChatRowBuilder {
                                     kind: .sendState(SendStateRow(text: words, actionable: false)), gapAbove: 2, variant: 0))
             }
         case .assistant:
-            appendAssistant(m, at: index, input: input, into: &rows)
+            if voiceFolded {
+                // [voice record] Plain spoken replies and lookup steps fold into the Voice Chat card; rich deliverables
+                // (media, HTML pages, Mermaid diagrams, links, generated images, drafts/shopping/travel/ask/clarify
+                // cards, task/file cards, bot DMs, errors) still surface cleanly in the chat.
+                var candidate: [ChatRow] = []
+                appendAssistant(m, at: index, input: input, into: &candidate)
+                rows += candidate.filter(Self.keepsInFoldedVoiceTurn)
+            } else {
+                appendAssistant(m, at: index, input: input, into: &rows)
+            }
         }
+    }
+
+    /// Whether a row from a folded live-voice assistant reply carries a visual deliverable or interactive card that
+    /// should remain visible in the main chat stream (rather than folding silently into the Voice Chat pill).
+    static func keepsInFoldedVoiceTurn(_ row: ChatRow) -> Bool {
+        switch row.kind {
+        case .prompt, .error, .reactions, .thread, .phoneResult, .slashOutput, .backgroundResult:
+            return true
+        case .activity(let kind):
+            switch kind {
+            case .toolBubble: return false
+            default: return true
+            }
+        case .bubble(let b):
+            return bubbleHasDeliverable(b)
+        case .toolRun, .thought, .caption, .stoppedEarly, .day, .notice, .modelFallback, .waiting, .sendState, .actions:
+            return false
+        }
+    }
+
+    /// True when an assistant bubble carries non-spoken content (attachments, HTML page card, bare image path,
+    /// markdown image, code block, table, or clickable link) that belongs in the chat stream alongside the Voice Chat card.
+    static func bubbleHasDeliverable(_ b: BubbleRow) -> Bool {
+        if !b.media.isEmpty || !b.files.isEmpty { return true }
+        return VoiceChatRecord.textHasDeliverable(b.text)
     }
 
     /// The message's Tapback badges, when it has any (shown whether or not Message Reactions is on).

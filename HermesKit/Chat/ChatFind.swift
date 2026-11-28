@@ -25,26 +25,39 @@ nonisolated enum ChatFind {
     /// The bubbles the transcript draws for these messages, oldest first, with the text each shows. Mirrors
     /// `ChatRowBuilder`'s bubble ids: your message is "b0" (a voice memo: anything typed with it, "b1"); each
     /// non-empty text part of a reply is "b<part index>". System rows (notices, slash output) are not searched, nor is
-    /// another bot's delivery or a cron run: each draws as one folded row, so a match there could be counted but never shown.
-    static func units(_ messages: [ChatMessage]) -> [ChatFindUnit] {
+    /// another bot's delivery, a cron run, a collapsed Voice Chat record, or delegated voice turns folded into one:
+    /// each draws no bubble, so a match there could be counted but never shown. Folded assistant parts carrying a
+    /// visible deliverable remain searchable.
+    static func units(_ messages: [ChatMessage], foldedIds: Set<String> = [], foldedRowIds: Set<Int> = [],
+                      excludedIds: Set<String> = [], mediaMessageIds: Set<String> = []) -> [ChatFindUnit] {
+        let folded = VoiceChatRecord.foldedIndices(in: messages, hiddenIds: foldedIds,
+                                                   hiddenRowIds: foldedRowIds, excludedIds: excludedIds)
         var out: [ChatFindUnit] = []
-        for m in messages {
+        for (index, m) in messages.enumerated() {
+            let isFolded = folded.contains(index)
+            let hasMedia = mediaMessageIds.contains(m.id)
             switch m.role {
             case .system:
                 continue
-            case .user where m.sender != nil:
+            case .user where m.sender != nil || m.job != nil:
                 continue
             case .user:
                 let text = m.parts.compactMap { if case .text(let t) = $0 { return t } else { return nil } }.joined(separator: "\n")
+                if !hasMedia, VoiceChatRecord.isRecord(text) {
+                    continue
+                }
                 if let memo = VoiceMemo.parse(text) {
                     // The memo's own bubble is an audio message (its transcript folds away): only what was typed with it.
                     if !memo.rest.isEmpty { out.append(ChatFindUnit(rowId: "\(m.id)|b1", messageId: m.id, text: memo.rest)) }
+                } else if isFolded, !hasMedia, m.error == nil, m.reactions.isEmpty {
+                    continue
                 } else if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     out.append(ChatFindUnit(rowId: "\(m.id)|b0", messageId: m.id, text: text))
                 }
             case .assistant:
                 for (i, part) in m.parts.enumerated() {
                     guard case .text(let raw) = part, !ReasoningTags.isBlank(raw) else { continue }
+                    if isFolded, !hasMedia, !VoiceChatRecord.textHasDeliverable(raw) { continue }
                     out.append(ChatFindUnit(rowId: "\(m.id)|b\(i)", messageId: m.id, text: drawnText(raw)))
                 }
             }
@@ -89,11 +102,14 @@ nonisolated enum ChatFind {
     }
 
     /// Every match in the messages, oldest first.
-    static func matches(_ query: String, in messages: [ChatMessage]) -> [ChatFindMatch] {
+    static func matches(_ query: String, in messages: [ChatMessage], foldedIds: Set<String> = [],
+                        foldedRowIds: Set<Int> = [], excludedIds: Set<String> = [],
+                        mediaMessageIds: Set<String> = []) -> [ChatFindMatch] {
         let query = normalized(query)
         guard !query.isEmpty else { return [] }
         var out: [ChatFindMatch] = []
-        for unit in units(messages) {
+        for unit in units(messages, foldedIds: foldedIds, foldedRowIds: foldedRowIds,
+                          excludedIds: excludedIds, mediaMessageIds: mediaMessageIds) {
             let count = ranges(of: query, in: unit.text).count
             for k in 0..<count { out.append(ChatFindMatch(rowId: unit.rowId, messageId: unit.messageId, occurrence: k)) }
         }

@@ -50,6 +50,10 @@ struct GuideActions {
                 guard let host = presenter().map(Self.top) else { return false }
                 // One browser at a time: a second tap while one is up (or still rising) changes nothing and is no error.
                 if host is SFSafariViewController || host.isBeingPresented || host.isBeingDismissed { return true }
+                // Let an installed app that claims the link (Universal Links) take it before falling back to the Safari sheet.
+                if await UIApplication.shared.open(url, options: [.universalLinksOnly: true]) { return true }
+                guard let host = presenter().map(Self.top) else { return false }
+                if host is SFSafariViewController || host.isBeingPresented || host.isBeingDismissed { return true }
                 let browser = SFSafariViewController(url: url)
                 host.present(browser, animated: true)
                 return true

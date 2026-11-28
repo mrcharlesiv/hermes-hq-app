@@ -1,5 +1,8 @@
 import Foundation
+import SafariServices
+import SwiftUI
 import Testing
+import UIKit
 @testable import HermesHQNative
 
 /// [links-browser] Settings › Open Links In: web links go to the browser chosen; a file a bot made never does.
@@ -89,4 +92,216 @@ import Testing
         #expect(LinkBrowserChoice.system.title(installed: installed) == "Default Browser")
         #expect(LinkBrowserChoice.inApp.title(installed: installed) == "In the App")
     }
+
+    // MARK: Universal Links first (installed apps before in-app Safari or a specific browser)
+
+    @MainActor private final class FakePlatform {
+        var universalLinkOpens = false
+        var deferUniversalLink = false
+        var browserOpens = true
+        var pendingUniversalCompletions: [@MainActor @Sendable (Bool) -> Void] = []
+        var universalLinks: [URL] = []
+        var systemLinks: [URL] = []
+        var browserLinks: [(URL, String)] = []
+        var safariLinks: [URL] = []
+        var notices: [String] = []
+
+        var platform: LinkOpener.Platform {
+            LinkOpener.Platform(
+                openUniversalLink: { [weak self] url, done in
+                    guard let self else { return }
+                    self.universalLinks.append(url)
+                    if self.deferUniversalLink {
+                        self.pendingUniversalCompletions.append(done)
+                    } else {
+                        done(self.universalLinkOpens)
+                    }
+                },
+                openSystem: { [weak self] url in
+                    self?.systemLinks.append(url)
+                },
+                openBrowser: { [weak self] url, id, failed in
+                    guard let self else { return }
+                    self.browserLinks.append((url, id))
+                    if !self.browserOpens { failed() }
+                },
+                presentSafari: { [weak self] url, _ in
+                    self?.safariLinks.append(url)
+                },
+                showNotice: { [weak self] text, _ in
+                    self?.notices.append(text)
+                }
+            )
+        }
+    }
+
+    @MainActor @Test func inAppTriesInstalledAppFirstAndSkipsSafariWhenHandled() {
+        let fake = FakePlatform()
+        fake.universalLinkOpens = true
+        let page = URL(string: "https://app.example.com/workspace/page-123")!
+        let host = UIViewController()
+        LinkOpener.open(page, from: host, choice: .inApp, platform: fake.platform)
+        #expect(fake.universalLinks == [page])
+        #expect(fake.safariLinks.isEmpty)
+        #expect(fake.browserLinks.isEmpty)
+        #expect(fake.systemLinks.isEmpty)
+    }
+
+    @MainActor @Test func inAppFallsBackToSafariWhenNoInstalledAppClaimsLink() {
+        let fake = FakePlatform()
+        fake.universalLinkOpens = false
+        let page = URL(string: "https://example.com/article")!
+        let host = UIViewController()
+        LinkOpener.open(page, from: host, choice: .inApp, platform: fake.platform)
+        #expect(fake.universalLinks == [page])
+        #expect(fake.safariLinks == [page])
+        #expect(fake.browserLinks.isEmpty)
+        #expect(fake.systemLinks.isEmpty)
+    }
+
+    @MainActor @Test func inAppSkipsSafariWhenHostDeallocatesBeforeUniversalLinkReturns() {
+        let fake = FakePlatform()
+        fake.deferUniversalLink = true
+        let page = URL(string: "https://example.com/article")!
+        var host: UIViewController? = UIViewController()
+        LinkOpener.open(page, from: host!, choice: .inApp, platform: fake.platform)
+        #expect(fake.pendingUniversalCompletions.count == 1)
+        host = nil
+        fake.pendingUniversalCompletions[0](false)
+        #expect(fake.safariLinks.isEmpty)
+    }
+
+    @MainActor @Test func chosenBrowserTriesInstalledAppFirstBeforeRewritingURL() {
+        let fake = FakePlatform()
+        fake.universalLinkOpens = true
+        let page = URL(string: "https://app.example.com/workspace/page-123")!
+        let host = UIViewController()
+        LinkOpener.open(page, from: host, choice: .browser("chrome"), platform: fake.platform)
+        #expect(fake.universalLinks == [page])
+        #expect(fake.browserLinks.isEmpty)
+        #expect(fake.systemLinks.isEmpty)
+        #expect(fake.safariLinks.isEmpty)
+    }
+
+    @MainActor @Test func chosenBrowserFallsBackToBrowserThenDefaultWhenNoAppClaimsLink() {
+        let page = URL(string: "https://example.com/docs")!
+        let host = UIViewController()
+
+        let opensInBrowser = FakePlatform()
+        opensInBrowser.universalLinkOpens = false
+        opensInBrowser.browserOpens = true
+        LinkOpener.open(page, from: host, choice: .browser("chrome"), platform: opensInBrowser.platform)
+        #expect(opensInBrowser.universalLinks == [page])
+        #expect(opensInBrowser.browserLinks.count == 1 && opensInBrowser.browserLinks[0].0 == page && opensInBrowser.browserLinks[0].1 == "chrome")
+        #expect(opensInBrowser.systemLinks.isEmpty)
+
+        let browserRemoved = FakePlatform()
+        browserRemoved.universalLinkOpens = false
+        browserRemoved.browserOpens = false
+        LinkOpener.open(page, from: host, choice: .browser("chrome"), platform: browserRemoved.platform)
+        #expect(browserRemoved.universalLinks == [page])
+        #expect(browserRemoved.browserLinks.count == 1)
+        #expect(browserRemoved.systemLinks == [page])
+    }
+
+    @MainActor @Test func defaultBrowserHandsDirectlyToSystem() {
+        let fake = FakePlatform()
+        let page = URL(string: "https://app.example.com/workspace/page-123")!
+        let host = UIViewController()
+        LinkOpener.open(page, from: host, choice: .system, platform: fake.platform)
+        #expect(fake.systemLinks == [page])
+        #expect(fake.universalLinks.isEmpty)
+        #expect(fake.safariLinks.isEmpty)
+        #expect(fake.browserLinks.isEmpty)
+    }
+
+    @MainActor @Test func openOutsideTriesInstalledAppFirstForChosenBrowserAndBlocksFiles() {
+        let page = URL(string: "https://app.example.com/doc/42")!
+
+        let handled = FakePlatform()
+        handled.universalLinkOpens = true
+        LinkOpener.openOutside(page, choice: .browser("chrome"), platform: handled.platform)
+        #expect(handled.universalLinks == [page])
+        #expect(handled.browserLinks.isEmpty)
+        #expect(handled.systemLinks.isEmpty)
+
+        let missed = FakePlatform()
+        missed.universalLinkOpens = false
+        LinkOpener.openOutside(page, choice: .browser("chrome"), platform: missed.platform)
+        #expect(missed.universalLinks == [page])
+        #expect(missed.browserLinks.count == 1 && missed.browserLinks[0].1 == "chrome")
+
+        let fileBlocked = FakePlatform()
+        LinkOpener.openOutside(URL(string: "file:///Users/me/report.html")!, choice: .browser("chrome"), platform: fileBlocked.platform)
+        LinkOpener.openOutside(FileLinks.url("/Users/me/report.html")!, choice: .system, platform: fileBlocked.platform)
+        #expect(fileBlocked.universalLinks.isEmpty && fileBlocked.browserLinks.isEmpty && fileBlocked.systemLinks.isEmpty)
+    }
+
+    @MainActor @Test func swiftUIOpenURLActionTriesInstalledAppFirst() {
+        let page = URL(string: "https://app.example.com/doc/99")!
+        let host = UIViewController()
+
+        let handled = FakePlatform()
+        handled.universalLinkOpens = true
+        _ = LinkOpener.handleOpenURL(page, choice: .inApp, host: { host }, platform: handled.platform)
+        #expect(handled.universalLinks == [page])
+        #expect(handled.safariLinks.isEmpty)
+
+        let missed = FakePlatform()
+        missed.universalLinkOpens = false
+        _ = LinkOpener.handleOpenURL(page, choice: .inApp, host: { host }, platform: missed.platform)
+        #expect(missed.universalLinks == [page])
+        #expect(missed.safariLinks == [page])
+
+        let browserHandled = FakePlatform()
+        browserHandled.universalLinkOpens = true
+        _ = LinkOpener.handleOpenURL(page, choice: .browser("firefox"), host: { host }, platform: browserHandled.platform)
+        #expect(browserHandled.universalLinks == [page])
+        #expect(browserHandled.browserLinks.isEmpty)
+
+        let fileBlocked = FakePlatform()
+        _ = LinkOpener.handleOpenURL(URL(string: "file:///Users/me/report.html")!, choice: .inApp, host: { host }, platform: fileBlocked.platform)
+        _ = LinkOpener.handleOpenURL(FileLinks.url("/Users/me/report.html")!, choice: .inApp, host: { host }, platform: fileBlocked.platform)
+        #expect(fileBlocked.universalLinks.isEmpty && fileBlocked.safariLinks.isEmpty && fileBlocked.systemLinks.isEmpty)
+    }
+
+    @MainActor @Test func nonWebLinksNeverProbeUniversalLinks() {
+        let fake = FakePlatform()
+        let host = UIViewController()
+        LinkOpener.open(URL(string: "http://localhost:3000/report.html")!, from: host, choice: .inApp, platform: fake.platform)
+        LinkOpener.open(URL(string: "javascript:alert(1)")!, from: host, choice: .inApp, platform: fake.platform)
+        LinkOpener.open(URL(string: "file:///Users/me/report.html")!, from: host, choice: .inApp, platform: fake.platform)
+        LinkOpener.open(URL(string: "mailto:a@example.com")!, from: host, choice: .inApp, platform: fake.platform)
+        #expect(fake.universalLinks.isEmpty)
+        #expect(fake.safariLinks.isEmpty)
+        #expect(fake.browserLinks.isEmpty)
+        #expect(fake.systemLinks == [URL(string: "mailto:a@example.com")!])
+        #expect(fake.notices.count == 3)
+    }
+
+    #if !targetEnvironment(macCatalyst)
+    /// Live smoke test on Simulator: an unclaimed HTTPS link falls through `universalLinksOnly` to `SFSafariViewController`,
+    /// and a second rapid tap does not try to present a second Safari view.
+    @MainActor @Test func liveUnclaimedLinkFallsBackToInAppSafari() async {
+        guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else { return }
+        let window = UIWindow(windowScene: scene)
+        let root = UIViewController()
+        window.rootViewController = root
+        window.isHidden = false
+        defer {
+            root.dismiss(animated: false)
+            window.isHidden = true
+        }
+        let page = URL(string: "https://hermes-hq.invalid/page")!
+        LinkOpener.open(page, from: root, choice: .inApp, platform: .live)
+        for _ in 0..<40 where !(root.presentedViewController is SFSafariViewController) {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(root.presentedViewController is SFSafariViewController)
+        let first = root.presentedViewController
+        LinkOpener.open(page, from: root, choice: .inApp, platform: .live)
+        try? await Task.sleep(for: .milliseconds(150))
+        #expect(root.presentedViewController === first)
+    }
+    #endif
 }

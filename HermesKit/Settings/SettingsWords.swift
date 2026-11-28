@@ -264,7 +264,7 @@ nonisolated enum ChatRowNotes {
         "What Send does while a reply runs: Steer adds your message to that reply, Queue sends it when the reply finishes."
             + (mac ? " ⌘Return does the other one." : " Touch and hold Send for the other one.")
     }
-    static let openLinksIn = "For web links: pages and files your bots make always open in the app."
+    static let openLinksIn = "For web links without an installed app of their own: pages and files your bots make always open in the app."
     /// ⌘N Opens (Mac only): what ⌘N and its two neighbours do, by the row's choice. `botChat`: ⌘N opens the bot's chat.
     static func newChatMode(botChat: Bool) -> String {
         botChat

@@ -205,7 +205,7 @@ struct ChatSections: View {
                     .accessibilityIdentifier("settings.open-links-in")
                     .hqMacSettingsControl()
                 }
-                .help("Web links open in this browser. Pages and files your bots make always open in the app.")
+                .help("Web links without an installed app of their own open in this browser. Pages and files your bots make always open in the app.")
                 .revealRow(ChatSettingsRows.openLinksIn, revealed)
             } else {
                 SettingsMenuRowFace(label: SettingsRowLabel(title: SettingsSearch.openLinksInLabel, systemImage: "safari"),

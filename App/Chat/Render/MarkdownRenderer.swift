@@ -114,11 +114,22 @@ nonisolated struct MarkdownTheme: @unchecked Sendable, Hashable {
     static let bot = MarkdownTheme(text: ChatPalette.label, secondary: ChatPalette.label2, marker: ChatPalette.label2,
                                    link: ChatPalette.tintText, underlineLinks: false,
                                    inlineCodeFill: ChatPalette.inlineCodeFill, variant: 0)
+    /// [theme review M2] Your bubble's quotes, table headers and list markers: its time colour, moved toward your text's
+    /// ink until it reads at 4.5:1 on the bubble (the Desktop Look's 54 % time colour left quotes at 2 to 3:1).
+    static let meSecondary = UIColor { @Sendable traits in
+        func rgba(_ colour: UIColor) -> RGBA {
+            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            colour.resolvedColor(with: traits).getRed(&r, green: &g, blue: &b, alpha: &a)
+            return RGBA(unit: Double(r), Double(g), Double(b), Double(a))
+        }
+        let bubble = rgba(ChatPalette.meBubble).over(rgba(HQPalette.page).over(.white))
+        return ThemeMath.readable(rgba(ChatPalette.meTime), text: rgba(ChatPalette.meText), on: bubble).uiColor
+    }
     // Inline code's box in your bubble is your text's own ink at 18 % (white over the tint; dark on a skin whose own
     // bubble is light with dark words, where a fixed white box couldn't be seen). [bubble-ink] Where that would leave the
     // code's words under 4.5:1 (a white box under white words: the default blue's code was 4.25:1), it is a shade the
     // other way instead (`ThemeMath.inlineCodeBox`).
-    static let me = MarkdownTheme(text: ChatPalette.meText, secondary: ChatPalette.meTime, marker: ChatPalette.meTime,
+    static let me = MarkdownTheme(text: ChatPalette.meText, secondary: meSecondary, marker: meSecondary,
                                   link: ChatPalette.meText, underlineLinks: true,
                                   inlineCodeFill: UIColor { @Sendable traits in
                                       func rgba(_ colour: UIColor) -> RGBA {

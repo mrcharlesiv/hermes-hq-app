@@ -1736,12 +1736,12 @@ final class PrimaryButton: UIControl {
         disc.tint = discTint()
         switch kind {
         case .send:
-            glyph.strokeColor = ChatPalette.onTint.cgColor
+            glyph.strokeColor = ChatPalette.onTint.resolvedColor(with: t).cgColor
             glyph.fillColor = nil
         case .talk:
-            glyph.fillColor = ChatPalette.onTint.cgColor
+            glyph.fillColor = ChatPalette.onTint.resolvedColor(with: t).cgColor
             glyph.strokeColor = nil
-            symbol.backgroundColor = ChatPalette.onTint.cgColor
+            symbol.backgroundColor = ChatPalette.onTint.resolvedColor(with: t).cgColor
         case .stop:
             glyph.fillColor = ChatPalette.page.resolvedColor(with: t).cgColor
             glyph.strokeColor = nil

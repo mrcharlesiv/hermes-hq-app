@@ -879,7 +879,7 @@ final class PreviewTabController: UIViewController, WKNavigationDelegate, WKUIDe
 
         addressField.translatesAutoresizingMaskIntoConstraints = false
         addressField.delegate = self
-        addressField.backgroundColor = .tertiarySystemFill
+        addressField.backgroundColor = HQPalette.fill3
         addressField.layer.cornerRadius = 8
         addressField.layer.cornerCurve = .continuous
         addressField.font = HQFont.preferred(.footnote)

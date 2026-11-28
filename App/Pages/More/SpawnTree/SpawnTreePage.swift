@@ -364,7 +364,7 @@ struct SpawnRow: View {
         switch row.record.status {
         case .running: ProgressView().controlSize(.small)
         case .queued: Image(systemName: "clock").foregroundStyle(Color.hqLabel3)
-        case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.green)
+        case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.hqGreen)
         case .failed: Image(systemName: "exclamationmark.circle.fill").foregroundStyle(Color.hqRed)
         }
     }

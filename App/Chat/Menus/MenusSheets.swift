@@ -135,7 +135,7 @@ final class MenusSkeletonCell: UITableViewCell {
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
         selectionStyle = .none
-        bar.backgroundColor = .tertiarySystemFill
+        bar.backgroundColor = HQPalette.fill3
         bar.layer.cornerRadius = 5
         bar.layer.cornerCurve = .continuous
         contentView.addSubview(bar)

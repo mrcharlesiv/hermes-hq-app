@@ -622,7 +622,7 @@ struct InstallNoticeRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             if notice.done {
-                Image(systemName: "checkmark.circle.fill").font(Font.hq(.title3)).foregroundStyle(.green).accessibilityHidden(true)
+                Image(systemName: "checkmark.circle.fill").font(Font.hq(.title3)).foregroundStyle(Color.hqGreen).accessibilityHidden(true)
             } else {
                 ProgressView()
             }

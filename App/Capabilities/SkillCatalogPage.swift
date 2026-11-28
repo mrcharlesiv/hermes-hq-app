@@ -174,7 +174,7 @@ struct SkillCatalogEntryView: View {
             VStack(spacing: 10) {
                 if page.installed {
                     Label("Installed for \(page.parent.botName)", systemImage: "checkmark.circle.fill")
-                        .font(Font.hq(.subheadline).weight(.semibold)).foregroundStyle(.green)
+                        .font(Font.hq(.subheadline).weight(.semibold)).foregroundStyle(Color.hqGreen)
                         .accessibilityIdentifier("skill-catalog.installed")
                 } else {
                     Button { page.install() } label: {

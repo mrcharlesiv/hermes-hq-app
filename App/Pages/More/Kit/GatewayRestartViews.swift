@@ -71,7 +71,7 @@ struct GatewayRestartProgress: View {
                 Text(words.text)
                     .font(Font.hq(.subheadline))
                     // Green is for "Gateway Restarted" only: a restart that can't be followed isn't known to have worked.
-                    .foregroundStyle(words.isError ? Color.hqRed : (words.isBusy || run.phase == .untracked ? Color.hqLabel2 : Color.green))
+                    .foregroundStyle(words.isError ? Color.hqRed : (words.isBusy || run.phase == .untracked ? Color.hqLabel2 : Color.hqGreen))
                     .fixedSize(horizontal: false, vertical: true)
             }
             .accessibilityElement(children: .combine)

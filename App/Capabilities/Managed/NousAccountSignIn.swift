@@ -186,7 +186,7 @@ struct NousAccountBox: View {
                 words("Sign in to Nous to use managed apps.",
                       "Gmail, Google Calendar, Slack and more connect through a Nous account. This signs \(HostWord.phrase) in to Nous, for \(botName) and your other bots.")
                 if case .failed(let reason) = nous.state {
-                    Text(reason).font(Font.hq(.subheadline)).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                    Text(reason).font(Font.hq(.subheadline)).foregroundStyle(Color.hqRed).fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("nous.failed")
                 }
                 if readOnly {

@@ -171,7 +171,11 @@ struct HQSectionFooter<Content: View>: View {
         #else
         // [ui-sizing] A footnote, not the page's scaled body (`HQListText`): iOS's own at a UI Scale, the look's in the
         // Desktop Look; nothing set at 100 % in the iOS look.
-        content.font(HQListText.scaledRoot ? (Theme.isDesktop ? .hq(.footnote) : HQListText.footer) : nil)
+        // [theme-audit] Always render section footers in the active skin's contrast-checked secondary ink.
+        let _ = Theme.touch()
+        content
+            .font(HQListText.scaledRoot ? (Theme.isDesktop ? .hq(.footnote) : HQListText.footer) : nil)
+            .foregroundStyle(Color.hqLabel2)
         #endif
     }
 }

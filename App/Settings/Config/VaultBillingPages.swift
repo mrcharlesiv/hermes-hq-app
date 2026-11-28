@@ -597,7 +597,7 @@ struct DefaultProjectFolderPage: View {
                     .hqRowPadding(4)   // [mac] Stress test 2026-10-28 round 9: the list's one room on the Mac
                     .accessibilityIdentifier("sessions.default-folder.field")
                 if let problem {
-                    Text(problem).font(Font.hq(.footnote)).foregroundStyle(Color.red)
+                    Text(problem).font(Font.hq(.footnote)).foregroundStyle(Color.hqRed)
                         .accessibilityIdentifier("sessions.default-folder.problem")
                 }
             } footer: { HQSectionFooter {

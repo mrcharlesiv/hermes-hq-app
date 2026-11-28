@@ -191,12 +191,13 @@ nonisolated extension SkinCatalog {
         }(),
         "vercel": SkinOwnLook.Pair(
             // Pure white in light and true OLED black in dark, keeping crisp neutral elevation and electric blue bubbles.
-            light: SkinOwnLook(page: RGBA(hex: 0xFFFFFF), card: RGBA(hex: 0xF4F4F5), pressed: RGBA(hex: 0xE6E6E8),
+            // Light grouped cards stay pure white (#FFFFFF) over #EFEFF1 grouped pages while chat replies keep #F4F4F5.
+            light: SkinOwnLook(page: RGBA(hex: 0xFFFFFF), card: RGBA(hex: 0xFFFFFF), pressed: RGBA(hex: 0xE6E6E8),
                                meBubble: RGBA(hex: 0x006AFF), codeFill: RGBA(hex: 0xEFEFF1), grey: RGBA(hex: 0x737373),
                                fillAlphas: [0.20, 0.16, 0.12, 0.08], separator: RGBA(hex: 0x737373).alpha(0.32),
                                replyEdge: RGBA(hex: 0x737373).alpha(0.24), tableHead: RGBA(hex: 0xEAEAEC),
                                replyGlassTint: 0.85, subtle: RGBA(hex: 0x555555), muted: RGBA(hex: 0x737373),
-                               reply: RGBA(hex: 0xF4F4F5), grouped: RGBA(hex: 0xF5F5F6), meText: .white),
+                               reply: RGBA(hex: 0xF4F4F5), grouped: RGBA(hex: 0xEFEFF1), meText: .white),
             dark: SkinOwnLook(page: RGBA(hex: 0x000000), card: RGBA(hex: 0x141414), pressed: RGBA(hex: 0x222222),
                               meBubble: RGBA(hex: 0x005CE0), codeFill: RGBA(hex: 0x0C0C0C), grey: RGBA(hex: 0x888888),
                               fillAlphas: [0.34, 0.28, 0.22, 0.14], separator: RGBA(hex: 0x888888).alpha(0.32),

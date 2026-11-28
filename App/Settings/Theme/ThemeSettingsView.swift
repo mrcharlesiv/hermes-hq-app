@@ -275,6 +275,7 @@ struct ChatBubblesSettingsView: View {
         let forcedPlain = disabledNote != nil
         VStack(alignment: .leading, spacing: 4) {
             Toggle("Reply Bubbles", isOn: Binding(get: { !forcedPlain && !state.plainReplies }, set: { setPlainReplies(!$0) }))
+                .foregroundStyle(Color.hqLabel)
                 .tint(Color.hqTint)
                 .disabled(forcedPlain)
                 .accessibilityIdentifier("theme.replyBubbles")

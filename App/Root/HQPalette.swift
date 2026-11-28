@@ -678,6 +678,7 @@ private struct GroupedPageModifier: ViewModifier {
                 .background(DesktopListProbe())
                 .listSectionSpacing(18)
                 .tint(Color.hqTintText)
+                .hqInkSwitches()   // [theme-audit] keep white switch knobs legible on bright accents in Desktop Look too
         } else if chatLead {
             // [tasks] On a chat's page: no page of its own (the chat's colour or picture shows), cards as the chat's.
             content
@@ -732,10 +733,20 @@ private struct GroupedPageModifier: ViewModifier {
     private static var inkTint: Color? { Theme.inkIcons != nil ? Color.hqTintText : nil }
 }
 
+private struct HQInkSwitchStyle: ToggleStyle {
+    let color: Color
+    func makeBody(configuration: Configuration) -> some View {
+        Toggle(configuration)
+            .toggleStyle(.switch)
+            .tint(color)
+    }
+}
+
 extension View {
-    /// [paper-ink] Switches in an ink skin: `Theme.inkSwitch` (other controls keep the ink). Elsewhere unchanged.
+    /// [paper-ink] Switches when the skin's accent would wash out the white switch thumb: `Theme.inkSwitch` (other
+    /// controls keep the accent). Elsewhere unchanged.
     @ViewBuilder func hqInkSwitches() -> some View {
-        if let ink = Theme.inkSwitch { self.toggleStyle(SwitchToggleStyle(tint: Color(uiColor: ink))) } else { self }
+        if let ink = Theme.inkSwitch { self.toggleStyle(HQInkSwitchStyle(color: Color(uiColor: ink))) } else { self }
     }
 }
 

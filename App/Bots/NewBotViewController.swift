@@ -197,6 +197,7 @@ struct NewBotView: View {
                 TextField("inbox-triage", text: $model.name)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                    .foregroundStyle(Color.hqLabel)   // [theme review] the skin's ink, not the system's black
                     .focused($focused, equals: .name)
                     .accessibilityIdentifier("new-bot.name")
                 if model.taken {
@@ -215,6 +216,7 @@ struct NewBotView: View {
             Section {
                 TextField("Inbox Triage", text: $model.title)
                     .textInputAutocapitalization(.words)
+                    .foregroundStyle(Color.hqLabel)   // [theme review] the skin's ink, not the system's black
                     .focused($focused, equals: .title)
                     .accessibilityIdentifier("new-bot.title")
             } header: { HQSectionLabel { Text("Display Name") } } footer: { HQSectionFooter {   // Edit Bot's word for the same field (UX study #184)
@@ -223,6 +225,7 @@ struct NewBotView: View {
             Section {
                 TextField("What should this bot help with?", text: $model.description, axis: .vertical)
                     .lineLimit(3...8)
+                    .foregroundStyle(Color.hqLabel)   // [theme review] the skin's ink, not the system's black
                     .focused($focused, equals: .description)
                     .accessibilityIdentifier("new-bot.description")
             } header: { HQSectionLabel { Text("Description") } }

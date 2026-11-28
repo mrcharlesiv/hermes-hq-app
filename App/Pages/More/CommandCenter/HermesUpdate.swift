@@ -1178,7 +1178,7 @@ private struct HermesUpdateStepRow: View {
             ZStack {
                 switch step.state {
                 case .done:
-                    Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.green).transition(.hqMotion(.scale.combined(with: .opacity)))
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.hqGreen).transition(.hqMotion(.scale.combined(with: .opacity)))
                 case .active:
                     ProgressView().controlSize(.small)
                 case .skipped:
@@ -1186,7 +1186,7 @@ private struct HermesUpdateStepRow: View {
                 case .waiting:
                     Image(systemName: "circle").foregroundStyle(Color.hqLabel3)
                 case .failed:
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(Color.red)
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(Color.hqRed)
                 }
             }
             .font(Font.hq(.title3))

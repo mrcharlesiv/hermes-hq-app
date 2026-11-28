@@ -266,7 +266,8 @@ final class BrowserViewerController: UIViewController, BrowserStageHost, UITextF
 
         address.translatesAutoresizingMaskIntoConstraints = false
         address.delegate = self
-        address.backgroundColor = .tertiarySystemFill
+        address.backgroundColor = HQPalette.fill3
+        address.textColor = HQPalette.label
         address.layer.cornerRadius = HQShape.radius(12, .card)
         address.layer.cornerCurve = .continuous
         address.font = HQFont.preferred(.subheadline)
@@ -301,11 +302,13 @@ final class BrowserViewerController: UIViewController, BrowserStageHost, UITextF
         view.addSubview(addressRow)
 
         askCard.translatesAutoresizingMaskIntoConstraints = false
-        askCard.backgroundColor = DeviceWord.isMac ? HQPalette.groupedCard : HQPalette.card   // [mac] round 7: a card on the grouped page
+        // [mac] round 7: a card on the grouped page. [theme review] `card` is the grouped card made for that page (the
+        // raw `groupedCard` token matched the Nous / iOS System light grouped page, so the card vanished).
+        askCard.backgroundColor = HQPalette.card
         askCard.layer.cornerRadius = HQShape.radius(12, .card)
         askCard.layer.cornerCurve = .continuous
         let stripe = UIView()
-        stripe.backgroundColor = .systemOrange
+        stripe.backgroundColor = HQPalette.orange
         stripe.translatesAutoresizingMaskIntoConstraints = false
         askTitle.font = HQFont.preferred(.headline)
         askTitle.adjustsFontForContentSizeCategory = true

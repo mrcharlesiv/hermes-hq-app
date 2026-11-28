@@ -187,8 +187,12 @@ nonisolated struct ChatFindHighlight: Hashable, Sendable {
     var query: String
     var current: Int?
 
-    static let matchColor = UIColor.systemYellow.withAlphaComponent(0.55)
-    static let currentColor = UIColor.systemOrange
+    /// [theme review C1] Solid, light fills the matched words redraw on in `matchInk`, so a match reads on every skin,
+    /// light or dark, in a reply and in your own bubble (a see-through yellow under light ink was unreadable in dark).
+    static let matchColor = UIColor(hex: 0xFFE066)
+    static let currentColor = UIColor(hex: 0xFF9F0A)
+    /// The matched words' ink on both fills (black on #FFE066 is 15.6:1, on #FF9F0A 10.0:1).
+    static let matchInk = UIColor.black
 }
 
 /// The find bar: a glass capsule with the search field, the count, ↑ ↓ and Done. When the text is too large for one

@@ -225,10 +225,15 @@ private let allStates: [ThemeState] = SkinCatalog.all.flatMap { skin in
         #expect(light.groupedCard == RGBA(hex: 0xF2F2F7) && dark.groupedCard == RGBA(hex: 0x1C1C1E))
         #expect(light.lifted == RGBA(hex: 0xFFFFFF) && dark.lifted == RGBA(hex: 0x1C1C1E))
         #expect(light.searchFill == RGBA(118, 118, 128, 0.12) && dark.searchFill == RGBA(118, 118, 128, 0.12))
-        #expect(light.orange == RGBA(hex: 0xC93400) && dark.orange == RGBA(hex: 0xFF9F0A))
-        #expect(light.red == RGBA(hex: 0xD70015) && dark.red == RGBA(hex: 0xFF453A))
+        for (mode, tokens) in [("light", light), ("dark", dark)] {
+            let page = tokens.page.over(.white)
+            for ground in [page, tokens.groupedCard.over(page), tokens.botBubble.over(page)] {
+                #expect(tokens.orange.over(ground).contrast(with: ground) >= 4.5 - 0.01, "Nous \(mode) orange")
+                #expect(tokens.red.over(ground).contrast(with: ground) >= 4.5 - 0.01, "Nous \(mode) red")
+                #expect(tokens.green.over(ground).contrast(with: ground) >= 4.5 - 0.01, "Nous \(mode) green")
+            }
+        }
         #expect(light.alertRed == RGBA(hex: 0xFF3B30) && dark.alertRed == RGBA(hex: 0xFF453A))
-        #expect(light.green == RGBA(hex: 0x248A3D) && dark.green == RGBA(hex: 0x30D158))
         #expect(light.muted == RGBA(hex: 0x8E8E93) && dark.muted == RGBA(hex: 0x8E8E93))
         #expect(light.botBubble == RGBA(hex: 0xE9E9EB) && dark.botBubble == RGBA(hex: 0x26282C))
         #expect(light.meBubble == RGBA(hex: 0x0053FD) && dark.meBubble == RGBA(hex: 0x3863BF))
@@ -2186,5 +2191,64 @@ private let allStates: [ThemeState] = SkinCatalog.all.flatMap { skin in
     @Test func searchFindsUIScale() {
         let row = SettingsSearch.appRows.first { $0.id == "app:ui-scale" }
         #expect(row?.label == "UI Scale" && row?.target == .root("row:ui-scale"))
+    }
+
+    /// [theme-audit] Locks in contrast and separation guarantees across all 19 skins, modes, and looks.
+    @Test func allSkinsMeetThemeAuditContrastAndSurfaceRules() {
+        let exemptOnTint: Set<String> = [SkinCatalog.iosID, SkinCatalog.defaultID]
+        for skin in SkinCatalog.all {
+            for (desktop, hc) in [(false, false), (true, false), (true, true)] {
+                let set = ThemeResolver.resolve(ThemeState(skinID: skin.id, desktopLook: desktop, highContrast: hc))
+                for (mode, tokens) in [("light", set.light), ("dark", set.dark)] {
+                    let tag = "\(skin.id) \(desktop ? (hc ? "Desktop-HC" : "Desktop") : "iOS") \(mode)"
+                    let page = tokens.page.over(.white)
+                    let grouped = tokens.grouped.over(.white)
+                    let card = tokens.groupedCard.over(grouped)
+                    let bubble = tokens.botBubble.over(page)
+                    let prompt = tokens.promptCard.over(page)
+                    let codeGround = tokens.codeFillOnBubble.over(bubble)
+
+                    // H3: Primary text reads >= 4.5:1 on page, grouped, cards, and replies.
+                    for ground in [page, grouped, card, bubble, prompt] {
+                        #expect(tokens.label.over(ground).contrast(with: ground) >= 4.5 - 0.01, "\(tag) label")
+                    }
+                    // H5: Plain code text reads >= 4.5:1 on code blocks.
+                    #expect(tokens.codeText.over(codeGround).contrast(with: codeGround) >= 4.5 - 0.01, "\(tag) codeText")
+                    // H4: Semantic red, orange, and green read >= 4.5:1 on page, cards, and replies.
+                    for ground in [page, card, bubble, prompt] {
+                        #expect(tokens.red.over(ground).contrast(with: ground) >= 4.5 - 0.01, "\(tag) red")
+                        #expect(tokens.orange.over(ground).contrast(with: ground) >= 4.5 - 0.01, "\(tag) orange")
+                        #expect(tokens.green.over(ground).contrast(with: ground) >= 4.5 - 0.01, "\(tag) green")
+                    }
+                    // H2: onTint meets 4.5:1 on non-exempt skins.
+                    let isExempt = exemptOnTint.contains(skin.id) && !(skin.id == SkinCatalog.defaultID && mode == "light")
+                    if !isExempt {
+                        let tintGround = tokens.tint.over(page)
+                        #expect(tokens.onTint.over(tintGround).contrast(with: tintGround) >= 4.5 - 0.01, "\(tag) onTint")
+                    }
+                    // M1: tintText reads >= 4.5:1 on bubbles and cards (except intentional Apple/Nous dark iOS blue).
+                    if !(exemptOnTint.contains(skin.id) && !desktop && mode == "dark") {
+                        for ground in [page, card, bubble, prompt] {
+                            #expect(tokens.tintText.over(ground).contrast(with: ground) >= 4.5 - 0.01, "\(tag) tintText")
+                        }
+                    }
+                    // M3 & M10: Desktop Look composer glyphs & idle tabs >= 3:1; HC table headers distinct from reply.
+                    if desktop {
+                        let editor = tokens.editor.over(page)
+                        let sidebar = tokens.sidebar.over(page)
+                        let elevated = tokens.elevated.over(page)
+                        #expect(tokens.composerGlyph.over(editor).contrast(with: editor) >= 3.0 - 0.01, "\(tag) composerGlyph")
+                        #expect(tokens.tabIdle.over(sidebar).contrast(with: sidebar) >= 3.0 - 0.01, "\(tag) tabIdle sidebar")
+                        #expect(tokens.tabIdle.over(elevated).contrast(with: elevated) >= 3.0 - 0.01, "\(tag) tabIdle elevated")
+                        if hc {
+                            #expect(tokens.tableHead.over(bubble).labDistance(to: bubble) >= 3.0, "\(tag) HC tableHead")
+                        }
+                    }
+                }
+            }
+        }
+        // H7: Vercel Light iOS Look grouped cards separate cleanly from grouped canvas.
+        let vercelLight = ThemeResolver.resolve(ThemeState(skinID: "vercel")).light
+        #expect(vercelLight.groupedCard.labDistance(to: vercelLight.grouped) >= 2.0, "Vercel light groupedCard vs grouped")
     }
 }

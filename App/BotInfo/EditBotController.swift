@@ -334,6 +334,7 @@ struct EditBotView: View {
                 // Empty means no custom title, so the field is never filled with the name (that would save one).
                 TextField(model.defaultName, text: $model.title)
                     .textInputAutocapitalization(.words)
+                    .foregroundStyle(Color.hqLabel)   // [theme review] the skin's ink, not the system's black
                     .focused($focused, equals: .title)
                     .onSubmit { if DeviceWord.isMac { model.submit?() } }
                     .accessibilityIdentifier("edit-bot.title")
@@ -343,6 +344,7 @@ struct EditBotView: View {
             Section {
                 TextField("What should this bot help with?", text: $model.description, axis: .vertical)
                     .lineLimit(Theme.isDesktop ? 3...8 : 2...8)   // [compact] iOS look: two lines empty (was three), growing as it fills
+                    .foregroundStyle(Color.hqLabel)   // [theme review] the skin's ink, not the system's black
                     .focused($focused, equals: .description)
                     .accessibilityIdentifier("edit-bot.description")
             } header: { HQSectionLabel { Text("Description") } }

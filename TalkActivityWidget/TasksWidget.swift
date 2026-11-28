@@ -157,20 +157,25 @@ extension WidgetFamily {
 
 /// The page's tone colours (`TodoInk`) and circle colours (`TodoPriorityLook`), as the app draws them.
 nonisolated enum TasksInk {
+    /// [theme review] Words in orange and red: deeper shades in light (the system's read at about 2.2 and 3.6:1 on a
+    /// light widget; #B85400 and #D70015 hold 4.5:1), the system's own in dark.
+    static let orange = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor.systemOrange.resolvedColor(with: $0) : UIColor(red: 0.72, green: 0.33, blue: 0, alpha: 1) })
+    static let red = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor.systemRed.resolvedColor(with: $0) : UIColor(red: 0.84, green: 0, blue: 0.08, alpha: 1) })
+
     static func tone(_ raw: String, tint: Color) -> Color {
         switch raw {
         case "ready": return Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.19, green: 0.82, blue: 0.35, alpha: 1)
                                                                                        : UIColor(red: 0.11, green: 0.50, blue: 0.22, alpha: 1) })
         case "working": return tint
-        case "needsYou": return .orange
-        case "overdue": return .red
+        case "needsYou": return orange
+        case "overdue": return red
         default: return .secondary
         }
     }
 
     static func circle(_ priority: Int, tint: Color) -> Color {
         switch priority {
-        case 1: return .red
+        case 1: return red
         case 2: return Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 1, green: 0.70, blue: 0.20, alpha: 1)
                                                                                  : UIColor(red: 0.93, green: 0.58, blue: 0, alpha: 1) })
         case 3: return tint
@@ -207,7 +212,7 @@ struct TasksSmallView: View {
             HStack(alignment: .firstTextBaseline, spacing: 5) {
                 Text("\(head.number)")
                     .font(.system(.title, design: .rounded).weight(.bold))
-                    .foregroundStyle(head.waiting ? Color.orange : tint)
+                    .foregroundStyle(head.waiting ? TasksInk.orange : tint)
                     .widgetAccentable()
                     .contentTransition(.numericText())
                 Text(frame.count == 0 && !head.waiting ? "All Done" : head.words)
@@ -261,7 +266,7 @@ struct TasksListView: View {
                 ForEach(Array(picked.sections.enumerated()), id: \.offset) { index, section in
                     if let title = section.title {
                         HStack(spacing: 4) {
-                            Text(title).font(.footnote.weight(.semibold)).foregroundStyle(section.red ? Color.red : Color.secondary)
+                            Text(title).font(.footnote.weight(.semibold)).foregroundStyle(section.red ? TasksInk.red : Color.secondary)
                             if let detail = section.detail { Text(detail).font(.footnote).foregroundStyle(.secondary) }
                             // The group's count, as the page's heading has it ("Today 6"), shown rows or not.
                             if index < frame.sections.count {
@@ -288,7 +293,7 @@ struct TasksListView: View {
                     Text(entry.view).font(.headline)
                     Text("\(frame.count)").font(.headline).foregroundStyle(.secondary).contentTransition(.numericText())
                     if frame.waiting > 0 {
-                        Text("· \(frame.waiting) Waiting on You").font(.footnote.weight(.medium)).foregroundStyle(.orange).lineLimit(1)
+                        Text("· \(frame.waiting) Waiting on You").font(.footnote.weight(.medium)).foregroundStyle(TasksInk.orange).lineLimit(1)
                     }
                 }
             }
@@ -359,7 +364,7 @@ struct TasksRowView: View {
                     if let when = row.when {
                         Text(when)
                             .font(.footnote).monospacedDigit()
-                            .foregroundStyle(row.late && !row.done ? Color.red : Color.secondary)
+                            .foregroundStyle(row.late && !row.done ? TasksInk.red : Color.secondary)
                             .lineLimit(1)
                             .fixedSize()
                     }

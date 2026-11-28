@@ -12,19 +12,19 @@ enum ConnectorTone {
 
     var dot: Color {
         switch self {
-        case .good: .green
+        case .good: Color.hqGreen
         case .quiet: Color.hqLabel3
-        case .busy: .gray
-        case .warn: .orange
-        case .bad: .red
+        case .busy: Color.hqLabel2
+        case .warn: Color.hqOrange
+        case .bad: Color.hqRed
         }
     }
 
     /// Trouble is said in its colour; everything else in the row's second ink.
     var words: Color {
         switch self {
-        case .warn: .orange
-        case .bad: .red
+        case .warn: Color.hqOrange
+        case .bad: Color.hqRed
         default: Color.hqLabel2
         }
     }

@@ -23,12 +23,14 @@ enum PluginPageTheme {
             ("--hq-label3", css(HQPalette.label3)),
             ("--hq-separator", css(HQPalette.separator)),
             ("--hq-tint", css(HQPalette.tint)),
+            // [theme review M6] Words in the tint (a ghost or outlined button, a tag) read in its readable shade.
+            ("--hq-tint-text", css(HQPalette.tintText)),
             ("--hq-on-tint", css(HQPalette.onTint)),
             ("--hq-fill", css(HQPalette.fill3)),
             ("--hq-segment", dark ? css(HQPalette.label, alpha: 0.2) : css(HQPalette.lifted)),   // the chosen tab; lifted is the card itself in dark
             ("--hq-red", css(HQPalette.red)),
             ("--hq-orange", css(HQPalette.orange)),
-            ("--hq-green", css(UIColor.systemGreen)),
+            ("--hq-green", css(ChatPalette.green)),
             // Floating chrome (a dialog, a toast) on glass: the card, see-through, with a thin edge (glass rule 5).
             ("--hq-glass", css(HQPalette.card, alpha: desktop ? 1 : 0.72)),
             ("--hq-glass-edge", dark ? "rgba(255,255,255,0.16)" : "rgba(0,0,0,0.08)"),

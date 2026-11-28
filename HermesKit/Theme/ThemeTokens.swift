@@ -73,9 +73,10 @@ nonisolated struct ThemeTokens: Sendable, Hashable {
     /// [message-colour] What the Mac's chosen row is tinted with (`MacSelection.accent`).
     var chosenRow: RGBA { rowAccent ?? tint }
 
-    /// A table card: Fill 4, with its header row Fill 4 again over it, unless a skin shades the header alone.
+    /// A table card: Fill 4, with its header row Fill 4 again over it, unless a skin or High Contrast shades the header alone.
+    var desktopTableHead: RGBA? = nil
     var tableBody: RGBA { ownLook == nil ? fill4 : RGBA(unit: 0, 0, 0, 0) }
-    var tableHead: RGBA { ownLook?.tableHead ?? fill4 }
+    var tableHead: RGBA { ownLook?.tableHead ?? desktopTableHead ?? fill4 }
     /// The line round a reply's bubble in the iOS look: none unless a skin draws one.
     var replyEdge: RGBA { ownLook?.replyEdge ?? RGBA(unit: 0, 0, 0, 0) }
 }
@@ -119,7 +120,7 @@ nonisolated enum ThemeResolver {
             // A palette is painted in the mode its own background says (`renderedModeFor`): a dark-only skin stays
             // dark when Light is asked for.
             let dark = skin.id == SkinCatalog.defaultID && !state.desktopLook ? wantsDark : seeds.rendersDark
-            var t = state.desktopLook ? desktop(seeds, dark: dark, contrast: contrast) : ios(skin, seeds, dark: dark)
+            var t = state.desktopLook ? desktop(seeds, dark: dark, contrast: contrast, skinID: skin.id) : ios(skin, seeds, dark: dark)
             paintMessage(&t, state.appliedMessageColour, dark: dark)
             if let own = skin.syntax?.pick(dark) { t.syntax = syntax(own, on: t.codeFillOnBubble.over(t.botBubble.over(t.page.over(.white))), dark: dark) }
             return t
@@ -181,11 +182,26 @@ nonisolated enum ThemeResolver {
         seeds.background.mix(dark ? 74 : 92, dark ? RGBA(hex: 0x0D0D0E) : RGBA(hex: 0xF3F3F3))
     }
 
+    /// Best black/white ink for controls filled with `tint`, preserving Apple/Nous white-on-blue where requested.
+    private static func bestOnTint(for tint: RGBA, page: RGBA, keepWhite: Bool = false) -> RGBA {
+        if keepWhite { return .white }
+        let ground = tint.over(page.over(.white))
+        return RGBA.white.contrast(with: ground) >= RGBA.black.contrast(with: ground) ? .white : .black
+    }
+
     /// A skin in the iOS look: it gives the page, the text and the accent; cells, fills, separators and the bot
     /// bubble stay the phone's own palette (phone-ui-desktop.css:3-4).
     static func ios(_ skin: Skin, _ seeds: SkinSeeds, dark: Bool) -> ThemeTokens {
         var t = base(dark: dark)
-        guard skin.id != SkinCatalog.defaultID else { return t }
+        if skin.id == SkinCatalog.defaultID {
+            let pageGround = t.page.over(.white)
+            let statusGrounds = [pageGround, t.groupedCard.over(pageGround), t.botBubble.over(pageGround)]
+            let anchor: RGBA = dark ? .white : .black
+            t.red = ThemeMath.readable(t.red, text: anchor, on: statusGrounds, ratio: 4.5)
+            t.orange = ThemeMath.readable(t.orange, text: anchor, on: statusGrounds, ratio: 4.5)
+            t.green = ThemeMath.readable(t.green, text: anchor, on: statusGrounds, ratio: 4.5)
+            return t
+        }
         let ink = seeds.foreground
         if skin.id == SkinCatalog.iosID {
             // The iOS System skin: exact iOS values (phone-ios-tokens.css:137-153).
@@ -198,6 +214,12 @@ nonisolated enum ThemeResolver {
             t.cellPressed = dark ? RGBA(hex: 0x3A3A3C) : RGBA(hex: 0xD1D1D6)
             t.grouped = dark ? .black : RGBA(hex: 0xF2F2F7)
             t.codeFill = dark ? RGBA(hex: 0x1C1C1E) : RGBA(hex: 0xF2F2F7)
+            let pageGround = t.page.over(.white)
+            let statusGrounds = [pageGround, t.groupedCard.over(pageGround), t.botBubble.over(pageGround)]
+            let anchor: RGBA = dark ? .white : .black
+            t.red = ThemeMath.readable(t.red, text: anchor, on: statusGrounds, ratio: 4.5)
+            t.orange = ThemeMath.readable(t.orange, text: anchor, on: statusGrounds, ratio: 4.5)
+            t.green = ThemeMath.readable(t.green, text: anchor, on: statusGrounds, ratio: 4.5)
         } else {
             let own = skin.ownLook?.pick(dark)
             let neutral = seeds.mutedForeground
@@ -207,7 +229,6 @@ nonisolated enum ThemeResolver {
             t.label3 = own?.muted ?? ink.alpha(0.36)
             // In dark an accent is brightened to CIELAB L 57, as iOS brightens its tints (phone-ios-tokens.css:109).
             t.tint = dark ? seeds.brand.raisingL(to: 57) : seeds.brand
-            t.tintText = ThemeMath.readable(t.tint, text: t.label, on: t.page)
             let rawGrouped = seeds.sidebarBackground ?? seeds.background
             t.grouped = !dark && rawGrouped == seeds.background ? t.page.mix(94, neutral) : rawGrouped
             t.codeText = dark ? ink.mix(72, t.page) : ink
@@ -250,8 +271,27 @@ nonisolated enum ThemeResolver {
                 // [Mac AAA 2026-11-16] Paper's chosen row is its own warm grey, not its ink (a message colour still wins).
                 if let row = own.chosenRow { t.rowAccent = row }
             }
+            let pageGround = t.page.over(.white)
+            let groupedGround = t.grouped.over(.white)
+            let cardGround = t.groupedCard.over(groupedGround)
+            let bubbleGround = t.botBubble.over(pageGround)
+            let promptGround = t.promptCard.over(pageGround)
+            let pressedGround = t.cellPressed.over(pageGround)
+            let anchor: RGBA = dark ? .white : .black
+            // Primary text, links, code text and semantic status colours must read at >= 4.5:1 on cards and replies too.
+            t.label = ThemeMath.readable(t.label, text: anchor,
+                                         on: [pageGround, groupedGround, cardGround, bubbleGround, promptGround, pressedGround], ratio: 4.5)
+            t.label2 = ThemeMath.readable(t.label2, text: t.label, on: [pageGround, groupedGround, cardGround, bubbleGround], ratio: 4.5)
+            t.tintText = ThemeMath.readable(t.tint, text: t.label,
+                                            on: [pageGround, groupedGround, cardGround, bubbleGround, promptGround], ratio: 4.5)
+            let codeGrounds = [t.codeFill.over(pageGround), t.codeFillOnBubble.over(bubbleGround)]
+            t.codeText = ThemeMath.readable(t.codeText, text: anchor, on: codeGrounds, ratio: 4.5)
+            let statusGrounds = [pageGround, cardGround, bubbleGround, promptGround]
+            t.red = ThemeMath.readable(t.red, text: anchor, on: statusGrounds, ratio: 4.5)
+            t.orange = ThemeMath.readable(t.orange, text: anchor, on: statusGrounds, ratio: 4.5)
+            t.green = ThemeMath.readable(t.green, text: anchor, on: statusGrounds, ratio: 4.5)
         }
-        t.onTint = t.tint.labL >= 60 ? .black : .white
+        t.onTint = bestOnTint(for: t.tint, page: t.page, keepWhite: skin.id == SkinCatalog.iosID)
         if let own = skin.ownLook?.pick(dark) {
             // Your message is the theme's own soft box with its explicit ink or the theme's text.
             let meInk = own.meText ?? t.label
@@ -390,10 +430,15 @@ nonisolated enum ThemeResolver {
 
     /// A skin's own iOS look (`SkinOwnLook`) over what the general rule made: its surfaces, its greys, its code card.
     private static func paint(_ t: inout ThemeTokens, _ own: SkinOwnLook, ink: RGBA) {
-        t.groupedCard = own.card; t.lifted = own.card; t.editor = own.card; t.elevated = own.card
+        // When `own.card` matches `own.page` (e.g. Vercel light: #FFFFFF cards on #EFEFF1 grouped pages and #FFFFFF chat
+        // page), keep `groupedCard` white while chat-page surfaces (`promptCard`, `lifted`, `editor`, `elevated`) take
+        // `own.reply` (#F4F4F5) so they still lift cleanly off the white chat page.
+        let chatCard = own.card == own.page ? (own.reply ?? own.card) : own.card
+        t.groupedCard = own.card
+        t.lifted = chatCard; t.editor = chatCard; t.elevated = chatCard
         if let grouped = own.grouped { t.grouped = grouped }
         t.botBubble = own.reply ?? own.card
-        t.promptCard = own.card
+        t.promptCard = chatCard
         t.promptEdge = own.separator
         t.cellPressed = own.pressed
         t.codeFill = own.codeFill; t.codeFillOnBubble = own.codeFill
@@ -418,7 +463,7 @@ nonisolated enum ThemeResolver {
 
     /// The desktop's own mixes (styles.css:297-399) mapped to the app's tokens (phone-ui-desktop.css:16-58), then
     /// High Contrast on top (phone-ui-contrast.css:10-49).
-    static func desktop(_ seeds: SkinSeeds, dark: Bool, contrast: Bool) -> ThemeTokens {
+    static func desktop(_ seeds: SkinSeeds, dark: Bool, contrast: Bool, skinID: String = "") -> ThemeTokens {
         var t = base(dark: dark)
         let ink = seeds.foreground, accent = seeds.brand
         let neutralCard = dark ? RGBA(hex: 0x161618) : RGBA(hex: 0xFCFCFC)
@@ -442,66 +487,88 @@ nonisolated enum ThemeResolver {
            meBorder.over(bubbleGround).contrast(with: bubbleGround) < 1.15 {
             meBorder = strokePrimary
         }
-        // Legible colours (desktop-look.ts:64-128): the accent as text and the secondary text, each mixed toward the
-        // text colour until it reads at 4.5:1 on the page.
-        let accentText = ThemeMath.legible(source: accent, text: textPrimary, page: page)
-        var label2 = ThemeMath.legible(source: textSecondary, text: textPrimary, page: page)
-        var label3 = textTertiary
         var separator = strokeSecondary
         var fill1 = bgQuaternary
         var composerBorder = strokePrimary
+        var desktopTableHead: RGBA? = nil
+        var primaryLabel = textPrimary
+        let label2Seed = textSecondary
+        var label3 = textTertiary
         var tabIdle = textTertiary
         if contrast {
             strokePrimary = textPrimary.faded(18); strokeSecondary = textPrimary.faded(13); strokeTertiary = textPrimary.faded(10)
             separator = strokeTertiary
-            label2 = label2.mixOklab(65, textPrimary)
-            label3 = textTertiary.mixOklab(70, textPrimary)
             let solidInk = textPrimary.over(page)
             editor = solidInk.mixOklab(dark ? 10 : 5, page)
             bgCard = editor
+            // Keep High Contrast table headers distinct from reply bubbles (`editor`).
+            desktopTableHead = solidInk.mixOklab(dark ? 18 : 11, page)
             fill1 = solidInk.mixOklab(12, page)
             rowActive = accent.mixOklab(dark ? 22 : 14, page)
             meBubble = accent.mixOklab(dark ? 28 : 13, page)
             meBorder = accent.mixOklab(dark ? 75 : 65, page)
             composerBorder = textPrimary.faded(50)
+        }
+        let editorGround = editor.over(pageGround)
+        let elevatedGround = elevated.over(pageGround)
+        let sidebarGround = sidebar.over(pageGround)
+        let pressedGround = rowActive.over(pageGround)
+        let anchor: RGBA = dark ? .white : .black
+        primaryLabel = ThemeMath.readable(primaryLabel, text: anchor,
+                                          on: [pageGround, editorGround, pressedGround], ratio: 4.5)
+        let promptCard = liftedCard(page: page, ink: ink, label: primaryLabel, dark: dark, contrast: contrast)
+        let promptGround = promptCard.over(pageGround)
+        // Legible colours (desktop-look.ts:64-128): check against page, cards/replies, prompt cards, and tab bars.
+        let accentText = ThemeMath.readable(ThemeMath.legible(source: accent, text: primaryLabel, page: page),
+                                            text: primaryLabel,
+                                            on: [pageGround, editorGround, promptGround, elevatedGround, sidebarGround], ratio: 4.5)
+        var label2 = ThemeMath.legible(source: label2Seed, text: primaryLabel, page: page)
+        if contrast {
+            label2 = label2.mixOklab(65, primaryLabel)
+            label3 = textTertiary.mixOklab(70, primaryLabel)
             tabIdle = label2
         }
+        label2 = ThemeMath.readable(label2, text: primaryLabel, on: [pageGround, editorGround, promptGround, sidebarGround], ratio: 4.5)
         t.page = page
-        t.label = textPrimary; t.label2 = label2; t.label3 = label3
+        t.label = primaryLabel; t.label2 = label2; t.label3 = label3
         t.tint = accentText; t.tintText = accentText
-        t.onTint = accentText.over(page).labL >= 60 ? .black : .white
+        t.onTint = bestOnTint(for: accentText, page: page, keepWhite: skinID == SkinCatalog.defaultID && dark)
         t.separator = separator
         t.fill1 = fill1; t.fill2 = bgTertiary; t.fill3 = bgTertiary; t.fill4 = bgCard
+        t.desktopTableHead = desktopTableHead
         t.fill2OnPage = bgTertiary.over(page)
-        t.cellPressed = rowActive.over(page)
+        t.cellPressed = pressedGround
         t.groupedCard = editor; t.lifted = editor
         t.searchFill = bgTertiary
         t.muted = textQuaternary.over(page)
         t.botBubble = editor
-        t.promptCard = liftedCard(page: page, ink: ink, label: textPrimary, dark: dark, contrast: contrast)
+        t.promptCard = promptCard
         t.promptEdge = contrast ? strokePrimary : strokeSecondary
         // Your message is text on a box. Where a skin's box is too close to its text, the text goes toward plain
         // black or white until it reads (the web leaves it; Solarized dark is 4.4:1 there).
-        let meGround = meBubble.over(page.over(.white))
+        let meGround = meBubble.over(pageGround)
         let strongest: RGBA = RGBA.white.contrast(with: meGround) >= RGBA.black.contrast(with: meGround) ? .white : .black
-        var meInk = textPrimary
+        var meInk = primaryLabel
         for keep in stride(from: 100.0, through: 0, by: -10) {
-            meInk = textPrimary.mixOklab(keep, strongest)
+            meInk = primaryLabel.mixOklab(keep, strongest)
             if meInk.over(meGround).contrast(with: meGround) >= 4.5 { break }
         }
         t.meBubble = meBubble; t.meText = meInk; t.meTime = textTertiary
         t.codeFill = editor; t.codeFillOnBubble = editor
-        t.codeText = ink.alpha(0.86).over(editor)
+        t.codeText = ThemeMath.readable(ink.alpha(0.86).over(editor), text: anchor, on: [editorGround], ratio: 4.5)
         t.grouped = page
-        t.statusWorking = dark ? textPrimary : accentText
+        t.statusWorking = dark ? primaryLabel : accentText
         t.editor = editor; t.elevated = elevated; t.sidebar = sidebar
         t.strokePrimary = strokePrimary; t.strokeSecondary = strokeSecondary; t.strokeTertiary = strokeTertiary
-        t.meBorder = meBorder; t.composerBorder = composerBorder; t.tabIdle = tabIdle
-        t.composerGlyph = label3; t.caret = textPrimary
-        // Status colours keep iOS's own (a Failed job, an error), in the shade that reads on this page.
-        t.red = ThemeMath.readable(t.red, text: textPrimary, on: page, ratio: 4.5)
-        t.orange = ThemeMath.readable(t.orange, text: textPrimary, on: page, ratio: 4.5)
-        t.green = ThemeMath.readable(t.green, text: textPrimary, on: page, ratio: 4.5)
+        t.meBorder = meBorder; t.composerBorder = composerBorder
+        t.tabIdle = ThemeMath.readable(tabIdle, text: primaryLabel, on: [sidebarGround, elevatedGround], ratio: 3.0)
+        t.composerGlyph = ThemeMath.readable(label3, text: primaryLabel, on: [editorGround], ratio: 3.0)
+        t.caret = primaryLabel
+        // Status colours keep iOS's own (a Failed job, an error), in the shade that reads on page, cards and bubbles.
+        let statusGrounds = [pageGround, editorGround, promptGround]
+        t.red = ThemeMath.readable(t.red, text: anchor, on: statusGrounds, ratio: 4.5)
+        t.orange = ThemeMath.readable(t.orange, text: anchor, on: statusGrounds, ratio: 4.5)
+        t.green = ThemeMath.readable(t.green, text: anchor, on: statusGrounds, ratio: 4.5)
         return t
     }
 

@@ -717,7 +717,7 @@ struct CatalogAppView: View {
                 .disabled(!page.canInstall)
                 .accessibilityIdentifier("catalog-app.install")
                 if let error = page.error {
-                    Text(error).font(Font.hq(.subheadline)).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                    Text(error).font(Font.hq(.subheadline)).foregroundStyle(Color.hqRed).fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("catalog-app.error")
                 } else if page.parent.readOnly {
                     Text("This gateway is read-only. Install from a gateway you can change.").font(Font.hq(.subheadline)).foregroundStyle(Color.hqLabel2)

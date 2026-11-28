@@ -46,9 +46,9 @@ import UIKit
         #expect(NameColor.parse("hsl(0, 100%, 50%)") == NameColor.RGB(255, 0, 0))
         for junk in ["", "teal", "#12", "#gggggg", "url(x)", "rgb(a,b,c)"] {
             #expect(NameColor.readable(junk) == nil, "\(junk) → the label colour")
-            #expect(ChatSenderPalette.nameColor(hex: junk) == UIColor.label)
+            #expect(ChatSenderPalette.nameColor(hex: junk) == ChatPalette.label)
         }
-        #expect(ChatSenderPalette.nameColor(hex: nil) == UIColor.label)
+        #expect(ChatSenderPalette.nameColor(hex: nil) == ChatPalette.label)
         let yellow = ChatSenderPalette.nameColor(hex: "#FFD60A")
         #expect(yellow.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light)) != yellow.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark)))
         #expect(NameColor.contrast(NameColor.RGB(0, 0, 0), NameColor.RGB(255, 255, 255)) == 21)

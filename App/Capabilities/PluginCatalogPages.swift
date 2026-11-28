@@ -155,7 +155,7 @@ struct PluginCatalogRow: View {
                             Spacer(minLength: 4)
                             Group {
                                 if installed {
-                                    Label("Installed", systemImage: "checkmark.circle.fill").foregroundStyle(.green).labelStyle(.titleAndIcon)
+                                    Label("Installed", systemImage: "checkmark.circle.fill").foregroundStyle(Color.hqGreen).labelStyle(.titleAndIcon)
                                 } else if let stars = entry.stars {
                                     Text("\(Image(systemName: "star.fill")) \(stars.starWords)").foregroundStyle(Color(uiColor: HQPalette.cardNote))
                                 }
@@ -170,7 +170,7 @@ struct PluginCatalogRow: View {
                     }
                     if !edged {
                         if installed {
-                            Label("Installed", systemImage: "checkmark.circle.fill").font(Font.hq(.caption)).foregroundStyle(.green)
+                            Label("Installed", systemImage: "checkmark.circle.fill").font(Font.hq(.caption)).foregroundStyle(Color.hqGreen)
                                 .labelStyle(.titleAndIcon)
                         } else if let line = byline {
                             // Mac polish #68: label 2 in the iOS look (label 3 read about 2.2:1); the Desktop Look's 3.
@@ -537,7 +537,7 @@ struct PluginCatalogEntryView: View {
             VStack(spacing: 10) {
                 if let installed = page.installed {
                     Label("Installed for \(page.parent.botName)", systemImage: "checkmark.circle.fill")
-                        .font(Font.hq(.subheadline).weight(.semibold)).foregroundStyle(.green)
+                        .font(Font.hq(.subheadline).weight(.semibold)).foregroundStyle(Color.hqGreen)
                         .accessibilityIdentifier("plugin-catalog.installed")
                     if let shown = page.parent.dashboardPage(for: installed) {
                         // [plugin-pages] A plugin that adds a page opens it first; Plugins is still a tap away.

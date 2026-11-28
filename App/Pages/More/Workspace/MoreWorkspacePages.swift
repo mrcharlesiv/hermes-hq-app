@@ -858,14 +858,14 @@ final class MoreWorkspaceController: UITableViewController {
             if let word = MoreWorkspaceRoot.linesWord(added: change.added, removed: change.removed, status: change.status, path: change.path) {
                 lines.append(NSAttributedString(string: word, attributes: [.font: MacFilesTable.text, .foregroundColor: HQPalette.label2]))
             } else if change.added > 0 || change.removed == 0 {
-                lines.append(NSAttributedString(string: "+\(max(0, change.added))", attributes: [.font: MacFilesTable.text, .foregroundColor: UIColor.systemGreen]))
+                lines.append(NSAttributedString(string: "+\(max(0, change.added))", attributes: [.font: MacFilesTable.text, .foregroundColor: ChatPalette.green]))
             }
             if change.removed > 0 {
                 lines.append(NSAttributedString(string: (lines.length > 0 ? " " : "") + "−\(change.removed)",
                                                 attributes: [.font: MacFilesTable.text, .foregroundColor: HQPalette.red]))
             }
             cell.set(symbol: MoreWorkspaceRoot.statusSymbol(change.status),
-                     tint: deleted ? HQPalette.red : added ? .systemGreen : HQPalette.orange,
+                     tint: deleted ? HQPalette.red : added ? ChatPalette.green : HQPalette.orange,
                      name: name,
                      columns: [(NSAttributedString(string: change.statusName, attributes: [.font: MacFilesTable.text, .foregroundColor: HQPalette.label2]),
                                 .status), (lines, .lines)],
@@ -959,7 +959,7 @@ final class MoreWorkspaceController: UITableViewController {
             config.directionalLayoutMargins.bottom = 12
             let added = letter == "A" || letter == "?", deleted = letter == "D"
             config.image = UIImage(systemName: MoreWorkspaceRoot.statusSymbol(change.status))
-            config.imageProperties.tintColor = deleted ? HQPalette.red : added ? .systemGreen : HQPalette.orange
+            config.imageProperties.tintColor = deleted ? HQPalette.red : added ? ChatPalette.green : HQPalette.orange
             cell.contentConfiguration = config
             cell.backgroundConfiguration = nil
             cell.accessoryView = nil

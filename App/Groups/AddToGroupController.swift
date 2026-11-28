@@ -270,7 +270,7 @@ struct AddToGroupView: View {
                 .accessibilityIdentifier("add-to-group.create")
             } footer: { HQSectionFooter {
                 if let problem = model.problem {
-                    Text(problem).foregroundStyle(Color.red).accessibilityIdentifier("add-to-group.problem")
+                    Text(problem).foregroundStyle(Color.hqRed).accessibilityIdentifier("add-to-group.problem")
                 }
             } }
 

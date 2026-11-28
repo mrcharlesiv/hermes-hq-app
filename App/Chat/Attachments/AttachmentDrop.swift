@@ -200,7 +200,7 @@ final class AttachmentDropOverlay: UIView {
         super.init(frame: frame)
         isUserInteractionEnabled = false
         accessibilityIdentifier = "chat.dropOverlay"
-        backgroundColor = UIColor.systemBackground.withAlphaComponent(0.55)
+        backgroundColor = HQPalette.page.withAlphaComponent(0.55)
         outline.lineWidth = 2
         outline.lineDashPattern = [8, 6]
         layer.addSublayer(outline)

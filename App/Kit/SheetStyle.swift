@@ -432,7 +432,12 @@ extension UIBarButtonItem {
         let close = UIBarButtonItem(systemItem: item, primaryAction: action)
         // [popup-consistency] The ✕ says "Close" to VoiceOver, as the sheets that draw their own ✕ do
         // (`SheetCloseDisc`); the system item alone said "close".
-        if item == .close { close.accessibilityLabel = SheetCloseDisc.Glyph.close.label }
+        if item == .close {
+            close.accessibilityLabel = SheetCloseDisc.Glyph.close.label
+            // [theme-audit] Give the system close glyph the skin's primary ink on custom skins (including dark-only
+            // skins under light system appearance) so it never inherits system black-on-dark.
+            if !Theme.isStandard(Theme.shared.state) { close.tintColor = HQPalette.label }
+        }
         return close
         #endif
     }

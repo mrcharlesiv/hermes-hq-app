@@ -100,7 +100,7 @@
     display: inline-flex; align-items: center; gap: 4px;
     flex-shrink: 0; max-width: 100%; padding: 4px 8px; border-radius: 999px;
     font-size: max(12px, var(--hq-text-min, 0px)); font-weight: 600; line-height: 1.15;   /* [mac] Mac polish #125 */
-    background: color-mix(in srgb, var(--hq-tint) 15%, transparent); color: var(--hq-tint);
+    background: color-mix(in srgb, var(--hq-tint) 15%, transparent); color: var(--hq-tint-text, var(--hq-tint));
   }
   .hq-badge-secondary { background: var(--hq-fill); color: var(--hq-label2); }
   .hq-badge-outline { background: transparent; box-shadow: inset 0 0 0 1px var(--hq-separator); color: var(--hq-label2); }
@@ -120,8 +120,8 @@
     .hq-button:active { opacity: 0.6; }
   }
   .hq-button-filled { background: var(--hq-tint); color: var(--hq-on-tint); }
-  .hq-button-outlined { background: var(--hq-fill); color: var(--hq-tint); }
-  .hq-button-ghost { background: transparent; color: var(--hq-tint); }
+  .hq-button-outlined { background: var(--hq-fill); color: var(--hq-tint-text, var(--hq-tint)); }
+  .hq-button-ghost { background: transparent; color: var(--hq-tint-text, var(--hq-tint)); }
   .hq-button-destructive { background: var(--hq-red); color: #ffffff; }
   .hq-button-destructive-plain { background: transparent; color: var(--hq-red); }
   .hq-button-sm { min-height: 30px; padding: 0 10px; font-size: 14px; border-radius: 8px; }

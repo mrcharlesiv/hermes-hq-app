@@ -737,7 +737,7 @@ private struct StripHeadImage: View {
             if let picture {
                 Image(uiImage: picture).resizable().interpolation(.high)
             } else {
-                RoundedRectangle(cornerRadius: size * 0.22, style: .continuous).fill(Color(uiColor: .tertiarySystemFill))
+                RoundedRectangle(cornerRadius: size * 0.22, style: .continuous).fill(Color.hqFill3)
             }
         }
         .frame(width: size, height: size)

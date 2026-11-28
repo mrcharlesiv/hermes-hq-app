@@ -90,16 +90,19 @@ import UIKit
         guard colour.getHue(nil, saturation: &saturation, brightness: &brightness, alpha: nil) else { return false }
         return saturation < 0.12 && brightness > 0.75
     }
-    /// The unfocused mark and a press: the sidebar's grey.
+    /// The unfocused mark and a press: the sidebar's grey, tinted from the skin's ink.
     static let grey = UIColor { traits in
-        UIColor.label.resolvedColor(with: traits).withAlphaComponent(traits.userInterfaceStyle == .dark ? 0.14 : 0.09)
+        HQPalette.label.resolvedColor(with: traits).withAlphaComponent(traits.userInterfaceStyle == .dark ? 0.14 : 0.09)
     }
 
     /// [mac] Stress test 2026-10-28 round 7: the unfocused mark on a grouped card in the iOS look, opaque: the Mac's own
-    /// unemphasized selection (220 grey in light, 70 in dark). The see-through grey over the white card came to
-    /// (232,233,233) on the (236,236,236) page, so the selected row hardly showed and looked as if it had lost its card.
+    /// unemphasized selection (220 grey in light, 70 in dark) on system skins, or the skin's `cellPressed` on custom
+    /// skins so warm/tinted surfaces keep their hue.
     static let unemphasized = UIColor { traits in
-        traits.userInterfaceStyle == .dark ? UIColor(white: 70 / 255, alpha: 1) : UIColor(white: 220 / 255, alpha: 1)
+        if !ThemeTable.current.groupedPageIsSystem {
+            return HQPalette.cellPressed.resolvedColor(with: traits)
+        }
+        return traits.userInterfaceStyle == .dark ? UIColor(white: 70 / 255, alpha: 1) : UIColor(white: 220 / 255, alpha: 1)
     }
 
     /// A plain list's row (Bots, Sessions, Jobs, Artifacts, Kanban; More in the Desktop Look).

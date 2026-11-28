@@ -349,7 +349,9 @@ struct HQSectionLabel<Content: View>: View {
         }
         #else
         // [ui-sizing] iOS's own header at the UI Scale in use, not the page's scaled body (`HQListText`).
-        content.hqDesktopLabel().font(HQListText.header)
+        // [theme-audit] Always render section headers in the active skin's contrast-checked secondary ink.
+        let _ = Theme.touch()
+        content.hqDesktopLabel().font(HQListText.header).foregroundStyle(Color.hqLabel2)
         #endif
     }
 }

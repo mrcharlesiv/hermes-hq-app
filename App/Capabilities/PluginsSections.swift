@@ -160,14 +160,14 @@ struct PluginRow: View {
                                 .lineLimit(typeSize.isAccessibilitySize ? nil : Density.compact ? 1 : 2)   // [ui-sizing] Compact: one line
                         }
                         ForEach(plugin.servers.compactMap(\.words), id: \.self) { words in
-                            Text(words).font(Font.hq(.caption)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                            Text(words).font(Font.hq(.caption)).foregroundStyle(Color.hqOrange).fixedSize(horizontal: false, vertical: true)
                         }
                         if plugin.updateAvailable { Text("Update available").font(Font.hq(.caption)).foregroundStyle(Color.hqTint) }
                         if plugin.key == nil {
                             Text("Update Hermes on \(HostWord.updateTarget) to turn this plugin on or off here.").font(Font.hq(.caption)).foregroundStyle(Color.hqLabel2)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
-                        ForEach(warnings.prefix(3), id: \.self) { Text($0).font(Font.hq(.caption)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
+                        ForEach(warnings.prefix(3), id: \.self) { Text($0).font(Font.hq(.caption)).foregroundStyle(Color.hqOrange).fixedSize(horizontal: false, vertical: true) }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     SettingsChevron()
@@ -482,7 +482,7 @@ struct PluginPageView: View {
                 fieldRow(field, editable: editable)
             }
             if let error = page.fieldError {
-                Text(error).font(Font.hq(.subheadline)).foregroundStyle(.red).accessibilityIdentifier("plugin.settings.error")
+                Text(error).font(Font.hq(.subheadline)).foregroundStyle(Color.hqRed).accessibilityIdentifier("plugin.settings.error")
             }
             if editable {
                 Button(page.saving ? "Saving…" : "Save Settings") { page.saveSettings() }
@@ -686,12 +686,12 @@ struct PluginInstallView: View {
                 Text("Repository")
             } } footer: { HQSectionFooter {
                 if state.check == .invalid {
-                    Text("That doesn’t look like a repository address.").foregroundStyle(.red).accessibilityIdentifier("plugins.install.invalid")
+                    Text("That doesn’t look like a repository address.").foregroundStyle(Color.hqRed).accessibilityIdentifier("plugins.install.invalid")
                 } else if state.check == .insecure {
-                    Text("This URL uses an insecure or local scheme. Prefer https:// or git@ for production installs.").foregroundStyle(.orange)
+                    Text("This URL uses an insecure or local scheme. Prefer https:// or git@ for production installs.").foregroundStyle(Color.hqOrange)
                         .accessibilityIdentifier("plugins.install.insecure")
                 } else if let already = state.already {
-                    Text(already).foregroundStyle(.red).accessibilityIdentifier("plugins.install.already")
+                    Text(already).foregroundStyle(Color.hqRed).accessibilityIdentifier("plugins.install.already")
                 } else {
                     Text("owner/repo and owner/repo/folder work too.")
                 }
@@ -709,7 +709,7 @@ struct PluginInstallView: View {
                 if PluginRepo.refValid(state.ref) {
                     Text("Pin to Commit (Optional): everyone installing this SHA gets the same code; the plugin then refuses updates until re-pinned. Leave empty for the latest commit.")
                 } else {
-                    Text("Must be a full 40-character commit SHA (branches and tags are not accepted).").foregroundStyle(.red)
+                    Text("Must be a full 40-character commit SHA (branches and tags are not accepted).").foregroundStyle(Color.hqRed)
                         .accessibilityIdentifier("plugins.install.ref-invalid")
                 }
             } }

@@ -12,8 +12,8 @@ enum KanbanTone {
         case "triage": return .hqLabel3
         case "todo": return .hqLabel2
         case "scheduled": return Color(red: 0xAF / 255, green: 0x52 / 255, blue: 0xDE / 255)
-        case "ready": return Color(uiColor: .systemBlue)
-        case "running": return Color(uiColor: .systemGreen)
+        case "ready": return .hqTintText
+        case "running": return .hqGreen
         case "review": return .hqOrange
         case "done": return .hqLabel3
         default: return .hqLabel3
@@ -199,7 +199,8 @@ struct KanbanChipView: View {
         let solid = selected && (Theme.flatPills || Theme.inkIcons != nil)
         let textColor: Color = solid ? Theme.pickedPillInk : selected ? .hqTintText : alert ? .hqRed : count == 0 ? .hqLabel2 : .hqLabel
         HStack(spacing: 6) {
-            Circle().fill(KanbanTone.color(status)).frame(width: 8, height: 8)
+            // [theme review] On the solid picked chip the dot takes the chip's own ink (a green dot vanished on a green accent).
+            Circle().fill(solid ? Theme.pickedPillInk : KanbanTone.color(status)).frame(width: 8, height: 8)
             Text(KanbanModel.label(status))
                 .font(Font.hq(.subheadline).weight(count == 0 && !selected ? .regular : .semibold))
                 .foregroundStyle(textColor)

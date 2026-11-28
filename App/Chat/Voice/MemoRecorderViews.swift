@@ -382,7 +382,7 @@ final class MemoLockedRow: UIView {
         dot.backgroundColor = ChatPalette.alertRed
         dot.layer.cornerRadius = 4
         // A small lit orb, not a flat dot.
-        dot.layer.shadowColor = ChatPalette.alertRed.cgColor
+        dot.layer.shadowColor = ChatPalette.alertRed.resolvedColor(with: traitCollection).cgColor
         dot.layer.shadowOpacity = 0.9
         dot.layer.shadowRadius = 4
         dot.layer.shadowOffset = .zero
@@ -417,7 +417,10 @@ final class MemoLockedRow: UIView {
         accessibilityIdentifier = "memo.locked"
         // VoiceOver reads the row as one group: "Voice memo" (locked) / "Voice memo to review".
         accessibilityContainerType = .semanticGroup
-        registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (view: MemoLockedRow, _) in view.reviewWave.barColor = ChatPalette.label2 }
+        registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (view: MemoLockedRow, _) in
+            view.reviewWave.barColor = ChatPalette.label2
+            view.dot.layer.shadowColor = ChatPalette.alertRed.resolvedColor(with: view.traitCollection).cgColor
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }

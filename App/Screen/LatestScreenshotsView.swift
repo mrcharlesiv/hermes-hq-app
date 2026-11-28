@@ -66,7 +66,7 @@ final class LatestScreenshotsView: UIView, UIScrollViewDelegate {
             label.adjustsFontForContentSizeCategory = true
         }
 
-        frameView.backgroundColor = .tertiarySystemFill
+        frameView.backgroundColor = HQPalette.fill3
         frameView.layer.cornerRadius = HQShape.radius(16, .card)
         frameView.layer.cornerCurve = .continuous
         frameView.clipsToBounds = true

@@ -509,10 +509,10 @@ final class DiffPanel: UIView {
             label.attributedText = Self.wrapping(line.text.isEmpty ? " " : line.text, font: font, step: step)
             switch line.kind {
             case .added:
-                label.backgroundColor = UIColor.systemGreen.withAlphaComponent(0.12)
+                label.backgroundColor = ChatPalette.green.withAlphaComponent(0.12)
                 label.accessibilityLabel = "Added: \(line.text)"
             case .removed:
-                label.backgroundColor = UIColor.systemRed.withAlphaComponent(0.12)
+                label.backgroundColor = ChatPalette.red.withAlphaComponent(0.12)
                 label.accessibilityLabel = "Removed: \(line.text)"
             case .context:
                 label.backgroundColor = .clear

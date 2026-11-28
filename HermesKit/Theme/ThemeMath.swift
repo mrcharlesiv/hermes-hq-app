@@ -197,4 +197,28 @@ nonisolated enum ThemeMath {
         }
         return text
     }
+
+    /// Mixes `source` toward `text` (and if needed toward the stronger of white/black) in 5 % Oklab steps until
+    /// `ratio` holds on every ground in `grounds`. Leaves `source` untouched when it already passes on every ground.
+    static func readable(_ source: RGBA, text: RGBA, on grounds: [RGBA], ratio: Double = 4.5) -> RGBA {
+        let solid = grounds.map { $0.over(.white) }
+        guard !solid.isEmpty else { return source }
+        func passes(_ colour: RGBA) -> Bool {
+            solid.allSatisfy { g in colour.over(g).contrast(with: g) >= ratio }
+        }
+        if passes(source) { return source }
+        for keep in stride(from: 95, through: 0, by: -5) {
+            let colour = source.mixOklab(Double(keep), text)
+            if passes(colour) { return colour }
+        }
+        let anchor: RGBA = solid.first.map { RGBA.white.contrast(with: $0) >= RGBA.black.contrast(with: $0) ? .white : .black } ?? text
+        if anchor != text {
+            for keep in stride(from: 95, through: 0, by: -5) {
+                let colour = text.mixOklab(Double(keep), anchor)
+                if passes(colour) { return colour }
+            }
+            return anchor
+        }
+        return text
+    }
 }

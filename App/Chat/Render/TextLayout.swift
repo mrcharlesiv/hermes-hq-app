@@ -55,6 +55,11 @@ nonisolated final class TextKitLayout: @unchecked Sendable {
         manager.drawGlyphs(forGlyphRange: range, at: origin)
     }
 
+    /// [theme review C1] Only the glyphs, no backgrounds (Find redraws the matched words over their marks).
+    func drawGlyphs(at origin: CGPoint) {
+        manager.drawGlyphs(forGlyphRange: manager.glyphRange(for: container), at: origin)
+    }
+
     /// MENUS (Find in chat): the line boxes a character range covers, in the text's own coordinates.
     func rects(for range: NSRange) -> [CGRect] {
         guard range.location != NSNotFound, NSMaxRange(range) <= text.length, range.length > 0 else { return [] }

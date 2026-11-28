@@ -355,8 +355,8 @@ extension SessionStripRules {
         #endif
     }
 
-    static let workingColor = UIColor.systemGreen
-    static let unreadColor = UIColor.systemBlue
+    static let workingColor = ChatPalette.green
+    static let unreadColor = ChatPalette.tint
 
     static func dot(_ color: UIColor, side: CGFloat = 7) -> UIImage {
         UIGraphicsImageRenderer(size: CGSize(width: side, height: side)).image { _ in

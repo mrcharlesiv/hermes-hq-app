@@ -32,7 +32,7 @@ final class StepScreenshotBlock: UIView {
         label.font = HQFont.preferred(.footnote)
         label.adjustsFontForContentSizeCategory = true
         label.textColor = HQPalette.label2
-        frameView.backgroundColor = .tertiarySystemFill
+        frameView.backgroundColor = HQPalette.fill3
         frameView.layer.cornerRadius = HQShape.radius(12, .card)
         frameView.layer.cornerCurve = .continuous
         frameView.clipsToBounds = true

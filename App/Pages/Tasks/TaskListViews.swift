@@ -11,19 +11,25 @@ import SwiftUI
 import UIKit
 
 extension TodoListColor {
-    /// The colour as drawn: the system's own, so it follows light, dark and Increase Contrast.
+    /// The colour as drawn: the system's own, so it follows light, dark and Increase Contrast. [theme review M11]
+    /// Yellow, orange and green are deeper shades in light (the system's read at 1.5 to 2.2:1 on a white card, about
+    /// 4.5:1 now), and the system's own in dark.
     var ink: Color {
         switch self {
         case .blue: return Color(uiColor: .systemBlue)
-        case .green: return Color(uiColor: .systemGreen)
-        case .orange: return Color(uiColor: .systemOrange)
+        case .green: return Color(uiColor: Self.lightShade(0x248A3D, dark: .systemGreen))
+        case .orange: return Color(uiColor: Self.lightShade(0xB85400, dark: .systemOrange))
         case .red: return Color(uiColor: .systemRed)
         case .purple: return Color(uiColor: .systemPurple)
         case .pink: return Color(uiColor: .systemPink)
         case .teal: return Color(uiColor: .systemTeal)
-        case .yellow: return Color(uiColor: .systemYellow)
+        case .yellow: return Color(uiColor: Self.lightShade(0x9A6700, dark: .systemYellow))
         case .gray: return Color(uiColor: .systemGray)
         }
+    }
+
+    private static func lightShade(_ light: UInt32, dark: UIColor) -> UIColor {
+        UIColor { @Sendable traits in traits.userInterfaceStyle == .dark ? dark.resolvedColor(with: traits) : UIColor(hex: light) }
     }
 }
 

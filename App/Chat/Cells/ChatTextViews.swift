@@ -49,7 +49,7 @@ final class TextDrawView: UIView {
         setNeedsDisplay()
     }
 
-    /// MENUS (Find in chat): ranges drawn under the text — every match, the current one in its own colour.
+    /// MENUS (Find in chat): ranges marked over the text — every match, the current one in its own colour.
     var findHighlights: [FindMark] = [] { didSet { if findHighlights != oldValue { drawGeneration += 1; setNeedsDisplay() } } }
 
     nonisolated struct FindMark: Hashable {
@@ -66,15 +66,38 @@ final class TextDrawView: UIView {
             selectionColor.setFill()
             for box in textKit.rects(for: selection) { UIBezierPath(rect: box).fill() }
         }
-        if let textKit, !findHighlights.isEmpty {
+        textKit?.draw(at: .zero)
+        // [theme review C1] Find marks go over the text on solid fills, and the matched words redraw on them in
+        // `ChatFindHighlight.matchInk`, so they read whatever the bubble's own ink is.
+        if let textKit, !findHighlights.isEmpty, let context = UIGraphicsGetCurrentContext() {
+            let clip = UIBezierPath()
             for mark in findHighlights {
                 (mark.current ? ChatFindHighlight.currentColor : ChatFindHighlight.matchColor).setFill()
                 for box in textKit.rects(for: mark.range) {
-                    UIBezierPath(roundedRect: box.insetBy(dx: -1.5, dy: 0), cornerRadius: 4).fill()
+                    let path = UIBezierPath(roundedRect: box.insetBy(dx: -1.5, dy: 0), cornerRadius: 4)
+                    path.fill()
+                    clip.append(path)
                 }
             }
+            context.saveGState()
+            clip.addClip()
+            findInkLayout(textKit).drawGlyphs(at: .zero)
+            context.restoreGState()
         }
-        textKit?.draw(at: .zero)
+    }
+
+    /// The same text laid out at the same width with every character in the find ink (only its glyphs are drawn,
+    /// clipped to the marks). Kept until the text changes.
+    private var findInk: (source: TextKitLayout, layout: TextKitLayout)?
+    private func findInkLayout(_ source: TextKitLayout) -> TextKitLayout {
+        if let findInk, findInk.source === source { return findInk.layout }
+        let inked = NSMutableAttributedString(attributedString: source.text)
+        let all = NSRange(location: 0, length: inked.length)
+        inked.addAttribute(.foregroundColor, value: ChatFindHighlight.matchInk, range: all)
+        inked.removeAttribute(.backgroundColor, range: all)
+        let layout = TextKitLayout(inked, width: source.container.size.width)
+        findInk = (source, layout)
+        return layout
     }
 
     func link(at point: CGPoint) -> URL? { textKit?.link(at: point) }
@@ -315,7 +338,7 @@ final class BlockView: UIView, UIScrollViewDelegate {
                 layer.cornerRadius = HQShape.radius(8, .card)
                 showsLabel = true
                 showsAlert = true
-                let tone = alertColor(alert.title)
+                let tone = alertColor(alert.title, mine: mine)
                 label.text = alert.title
                 label.font = HQFont.scaled(13, weight: .semibold, like: .footnote, cap: 22)
                 label.adjustsFontForContentSizeCategory = true   // [a11y] follows a live text-size change
@@ -660,13 +683,28 @@ final class BlockView: UIView, UIScrollViewDelegate {
 
     // MARK: Actions
 
-    private func alertColor(_ title: String) -> UIColor {
+    /// [theme review H1] An alert's title and icon: the theme's own green, orange, red and tint text (a purple for
+    /// Important), each made readable (4.5:1) on the alert card over a reply's bubble; in your own bubble, your text's
+    /// ink (a blue Note title on the blue bubble could not be read).
+    private func alertColor(_ title: String, mine: Bool) -> UIColor {
+        if mine { return ChatPalette.meText }
+        let seed: UIColor
         switch title {
-        case "Tip": return .systemGreen
-        case "Important": return .systemPurple
-        case "Warning": return .systemOrange
-        case "Caution": return .systemRed
-        default: return Theme.inkIcons != nil ? ChatPalette.tint : .systemBlue   // [paper-ink] Note in an ink skin's ink
+        case "Tip": seed = ChatPalette.green
+        case "Important": seed = .systemPurple
+        case "Warning": seed = ChatPalette.orange
+        case "Caution": seed = ChatPalette.red
+        default: seed = Theme.inkIcons != nil ? ChatPalette.tint : ChatPalette.tintText   // [paper-ink] Note in an ink skin's ink
+        }
+        return UIColor { @Sendable traits in
+            func rgba(_ colour: UIColor) -> RGBA {
+                var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+                colour.resolvedColor(with: traits).getRed(&r, green: &g, blue: &b, alpha: &a)
+                return RGBA(unit: Double(r), Double(g), Double(b), Double(a))
+            }
+            let page = rgba(ChatPalette.page).over(.white)
+            let card = rgba(ChatPalette.fill4).over(rgba(ChatPalette.botBubble).over(page))
+            return ThemeMath.readable(rgba(seed), text: rgba(ChatPalette.label), on: card).uiColor
         }
     }
 

@@ -656,9 +656,9 @@ final class WorkspaceTextPage: UIViewController {
             var background: UIColor?
             if diff {
                 if line.hasPrefix("+++") || line.hasPrefix("---") { color = ChatPalette.label2 }
-                else if line.hasPrefix("+") { background = UIColor.systemGreen.withAlphaComponent(0.15) }
-                else if line.hasPrefix("-") { background = UIColor.systemRed.withAlphaComponent(0.15) }
-                else if line.hasPrefix("@@") { color = Theme.inkIcons != nil ? HQPalette.label2 : .systemBlue }   // [paper-ink]
+                else if line.hasPrefix("+") { background = ChatPalette.green.withAlphaComponent(0.15) }
+                else if line.hasPrefix("-") { background = ChatPalette.red.withAlphaComponent(0.15) }
+                else if line.hasPrefix("@@") { color = Theme.inkIcons != nil ? HQPalette.label2 : ChatPalette.tintText }   // [paper-ink]
             }
             var attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
             if let background { attributes[.backgroundColor] = background; attributes[.lineWash] = true }

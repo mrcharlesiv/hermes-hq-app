@@ -309,7 +309,7 @@ struct ToolsetSetupSections: View {
                 Text("Execution Backend")
             } } footer: { HQSectionFooter {
                 if let active, !active.isReady {
-                    Text("This backend is currently selected without full setup — commands will fail until setup is complete.").foregroundStyle(.red)
+                    Text("This backend is currently selected without full setup — commands will fail until setup is complete.").foregroundStyle(Color.hqRed)
                 }
             } }
         } else if page.backendsFailed {

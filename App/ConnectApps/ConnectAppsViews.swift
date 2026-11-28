@@ -709,7 +709,7 @@ struct ConnectAppsBotsView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(bot.name).foregroundStyle(Color.hqLabel)
                 if case .failed(let on, let reason) = state {
-                    Text("Couldn’t turn \(on ? "on" : "off"): \(reason)").font(Font.hq(.caption)).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                    Text("Couldn’t turn \(on ? "on" : "off"): \(reason)").font(Font.hq(.caption)).foregroundStyle(Color.hqRed).fixedSize(horizontal: false, vertical: true)
                     if !model.readOnly {
                         Button("Try Again") { model.setBot(bot, on: on) }.hqBorderedButtonStyle().font(Font.hq(.footnote).weight(.semibold))
                             .accessibilityIdentifier("connect-bot-retry-\(bot.id)")
@@ -869,7 +869,7 @@ struct ConnectAppView: View {
         } footer: { HQSectionFooter {
             if !toolkit.noAuth {
                 switch adding ? nil : connect.outcome {
-                case .failed(let reason): Text(reason).foregroundStyle(.red).accessibilityIdentifier("connect-app.outcome")
+                case .failed(let reason): Text(reason).foregroundStyle(Color.hqRed).accessibilityIdentifier("connect-app.outcome")
                 case .unfinished: Text("Sign-in not finished. \(DeviceWord.Tap) Connect to try again.").accessibilityIdentifier("connect-app.outcome")
                 case .needsOwnApp: ownAppNotice
                 default:
@@ -883,7 +883,7 @@ struct ConnectAppView: View {
     /// §10.13: Composio has no sign-in for this app; the owner can add their own in Composio's dashboard.
     private var ownAppNotice: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(ComposioSignIn.ownAppMessage(name)).foregroundStyle(.red)
+            Text(ComposioSignIn.ownAppMessage(name)).foregroundStyle(Color.hqRed)
             Link("Open Composio Dashboard", destination: ComposioSignIn.dashboard).font(Font.hq(.footnote).weight(.semibold))
                 .accessibilityIdentifier("connect-app.open-dashboard")
         }
@@ -994,9 +994,9 @@ struct ConnectAppView: View {
             Text(list.count == 1 ? "Account" : "Accounts")
         } } footer: { HQSectionFooter {
             if let accountNotice {
-                Text(accountNotice).foregroundStyle(.red).accessibilityIdentifier("connect-app.account-notice")
+                Text(accountNotice).foregroundStyle(Color.hqRed).accessibilityIdentifier("connect-app.account-notice")
             } else if adding, case .failed(let reason) = connect.outcome {
-                Text(reason).foregroundStyle(.red).accessibilityIdentifier("connect-app.outcome")
+                Text(reason).foregroundStyle(Color.hqRed).accessibilityIdentifier("connect-app.outcome")
             } else if adding, connect.outcome == .needsOwnApp {
                 ownAppNotice
             } else if adding, connect.outcome == .unfinished {
@@ -1093,7 +1093,7 @@ struct ConnectAppView: View {
             .hqMacFormButton(destructive: true)   // [macpass-settings2] a red push button under the form, as Delete Bot
             .accessibilityIdentifier("connect-app.disconnect")
         } footer: { HQSectionFooter {
-            if let disconnectError { Text("Couldn’t disconnect: \(disconnectError)").foregroundStyle(.red) }
+            if let disconnectError { Text("Couldn’t disconnect: \(disconnectError)").foregroundStyle(Color.hqRed) }
             else { Text("Your bots lose access to this account. You can connect it again anytime.") }
         } }
     }
@@ -1280,8 +1280,8 @@ struct ConnectAccountView: View {
                 .hqDesktopBareRow()
                 .accessibilityIdentifier("connect-account.sign-in")
             } footer: { HQSectionFooter {
-                if case .failed(let reason) = connect.outcome { Text(reason).foregroundStyle(.red) }
-                else if connect.outcome == .needsOwnApp { Text(ComposioSignIn.ownAppMessage(toolkit.name)).foregroundStyle(.red) }
+                if case .failed(let reason) = connect.outcome { Text(reason).foregroundStyle(Color.hqRed) }
+                else if connect.outcome == .needsOwnApp { Text(ComposioSignIn.ownAppMessage(toolkit.name)).foregroundStyle(Color.hqRed) }
                 else { Text("You sign in to \(toolkit.name) again in a secure \(DeviceWord.isMac ? "browser window" : "Safari sheet").") }
             } }
         }
@@ -1305,7 +1305,7 @@ struct ConnectAccountView: View {
             if !date.isEmpty { field("Connected", date) }
         } footer: { HQSectionFooter {
             VStack(alignment: .leading, spacing: 4) {
-                if let notice { Text(notice).foregroundStyle(.red).accessibilityIdentifier("connect-account.notice") }
+                if let notice { Text(notice).foregroundStyle(Color.hqRed).accessibilityIdentifier("connect-account.notice") }
                 else { Text("Your bots pick an account by its name.") }
                 if !account.wordID.isEmpty {
                     Text("Composio code: \(account.wordID)").font(Font.hq(.caption2)).foregroundStyle(Color.hqLabel3).textSelection(.enabled)

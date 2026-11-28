@@ -76,8 +76,14 @@ nonisolated enum SyntaxPalette {
     private static func c(_ light: UInt32, _ dark: UInt32, _ own: KeyPath<SyntaxColours, RGBA> & Sendable) -> UIColor {
         UIColor { @Sendable traits in
             let isDark = traits.userInterfaceStyle == .dark
-            let skin = ThemeTable.withSet(generation: traits[ThemeGenerationTrait.self]) { $0.tokens(dark: isDark).syntax?[keyPath: own] }
-            return skin?.uiColor ?? hex(isDark ? dark : light)
+            let increaseContrast = traits.accessibilityContrast == .high
+            return ThemeTable.withSet(generation: traits[ThemeGenerationTrait.self]) { set in
+                let tokens = set.tokens(dark: isDark, increaseContrast: increaseContrast)
+                if let skin = tokens.syntax?[keyPath: own] { return skin.uiColor }
+                let ground = tokens.codeFillOnBubble.over(tokens.botBubble.over(tokens.page.over(.white)))
+                let fallback = RGBA(hex: isDark ? dark : light)
+                return ThemeMath.readable(fallback, text: isDark ? .white : .black, on: ground).uiColor
+            }
         }
     }
     private static func hex(_ v: UInt32) -> UIColor {

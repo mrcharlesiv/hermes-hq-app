@@ -904,7 +904,7 @@ struct MarketplaceView: View {
             .overlay(alignment: .bottomTrailing) {
                 if installed {
                     Label("Installed", systemImage: "checkmark.circle.fill").labelStyle(.titleAndIcon)
-                        .font(Font.hq(.caption).weight(.semibold)).foregroundStyle(.green)
+                        .font(Font.hq(.caption).weight(.semibold)).foregroundStyle(Color.hqGreen)
                         .frame(minHeight: 26)
                 } else {
                     Button(action: install) {
@@ -1736,7 +1736,7 @@ struct SkillCatalogRow: View {
                             .lineLimit(typeSize.isAccessibilitySize ? nil : Density.compact ? 1 : 2)   // [ui-sizing] Compact: one line
                     }
                     if installed {
-                        Label("Installed", systemImage: "checkmark.circle.fill").font(Font.hq(.caption)).foregroundStyle(.green)
+                        Label("Installed", systemImage: "checkmark.circle.fill").font(Font.hq(.caption)).foregroundStyle(Color.hqGreen)
                             .labelStyle(.titleAndIcon)
                     } else {
                         Text([entry.author, entry.categoryLabel].filter { !$0.isEmpty }.joined(separator: "  ·  "))
@@ -1839,7 +1839,7 @@ struct MarketplaceHero: View {
                 HStack(spacing: 10) {
                     if installed {
                         Label("Installed", systemImage: "checkmark.circle.fill").font(Font.hq(.subheadline).weight(.semibold))
-                            .foregroundStyle(.green)
+                            .foregroundStyle(Color.hqGreen)
                     } else {
                         Button { open(true) } label: {
                             Text("Install").font(Font.hq(.subheadline).weight(.semibold)).frame(minWidth: 84, minHeight: 30)
@@ -2021,7 +2021,7 @@ struct MarketplaceCarousel: View {
                 HStack(spacing: 8) {
                     if installed(entry) {
                         Label("Installed", systemImage: "checkmark.circle.fill").font(Font.hq(.footnote).weight(.semibold))
-                            .foregroundStyle(.green)
+                            .foregroundStyle(Color.hqGreen)
                     } else {
                         Button { open(entry, true) } label: {
                             Text("Install").font(Font.hq(.footnote).weight(.semibold)).frame(minWidth: 56, minHeight: 22)
@@ -2064,7 +2064,7 @@ struct MarketplaceCarousel: View {
                 HStack(spacing: 10) {
                     if installed(entry) {
                         Label("Installed", systemImage: "checkmark.circle.fill").font(Font.hq(.subheadline).weight(.semibold))
-                            .foregroundStyle(.green)
+                            .foregroundStyle(Color.hqGreen)
                     } else {
                         Button { open(entry, true) } label: {
                             Text("Install").font(Font.hq(.subheadline).weight(.semibold)).frame(minWidth: 70, minHeight: 28)

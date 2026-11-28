@@ -389,7 +389,7 @@ struct ManagedAppView: View {
                     Button("Open the Link Again") { managed.openAgain(app.slug) }.accessibilityIdentifier("managed-open-again")
                 }
                 Button("Stop Waiting") { managed.stopWaiting(app.slug) }.accessibilityIdentifier("managed-stop-waiting")
-                if let notice { Text(notice).font(Font.hq(.subheadline)).foregroundStyle(.orange) }
+                if let notice { Text(notice).font(Font.hq(.subheadline)).foregroundStyle(Color.hqOrange) }
             }
         } else if let operation, operation.stillOpen, let target = operation.target(app.slug), target.state != .connected, app.state != .connected {
             Section {
@@ -435,10 +435,10 @@ struct ManagedAppView: View {
                 .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
                 .hqDesktopBareRow()
                 .accessibilityIdentifier("managed-verb")
-                if let notice { Text(notice).font(Font.hq(.subheadline)).foregroundStyle(.orange) }
+                if let notice { Text(notice).font(Font.hq(.subheadline)).foregroundStyle(Color.hqOrange) }
             }
         } else if let notice {
-            Section { Text(notice).font(Font.hq(.subheadline)).foregroundStyle(.orange) }
+            Section { Text(notice).font(Font.hq(.subheadline)).foregroundStyle(Color.hqOrange) }
         }
     }
 

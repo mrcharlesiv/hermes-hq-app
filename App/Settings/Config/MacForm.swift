@@ -301,9 +301,9 @@ struct MacSwitch: View {
     var body: some View {
         let _ = Theme.touch()
         let height = MacForm.switchHeight
-        // [Mac AAA 2026-11-16] An ink skin (Paper) gives its switches their own on colour (`Theme.inkSwitch`), as the
-        // iPhone's do: the ivory ink in dark left the white knob on a near-white track.
-        let on = Theme.isDesktop ? Color.hqTintText : Theme.inkSwitch.map { Color(uiColor: $0) } ?? Color.hqTint
+        // [Mac AAA 2026-11-16] [theme-audit] Any bright accent (including in Desktop Look) uses `Theme.inkSwitch` so
+        // the white knob never sits on a bright pastel or ivory track.
+        let on = Theme.inkSwitch.map { Color(uiColor: $0) } ?? (Theme.isDesktop ? Color.hqTintText : Color.hqTint)
         // [mac] Stress test 2026-10-28 #51 (review): dimmed, the whole switch at 45 % was a grey knob on a navy track in
         // the Desktop Look dark, neither on nor off. Now a dimmed switch keeps its state's shape: on is a paler accent
         // track with the white knob at the trailing end, off an outlined empty track with a grey knob at the leading end.

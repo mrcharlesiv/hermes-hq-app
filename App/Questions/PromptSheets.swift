@@ -237,7 +237,7 @@ final class PromptSheetController: UIViewController, UITextFieldDelegate, UIAdap
         for (i, kind) in copy.fields.enumerated() {
             if i > 0 {
                 let line = UIView()
-                line.backgroundColor = .separator
+                line.backgroundColor = HQPalette.separator
                 line.heightAnchor.constraint(equalToConstant: HQShape.pixel(traitCollection.displayScale)).isActive = true
                 group.addArrangedSubview(line)
             }
@@ -625,7 +625,7 @@ final class PromptCommandBlock: UIView {
         font = UIFontMetrics(forTextStyle: .footnote).scaledFont(for: HQFont.mono(ofSize: 13, weight: .regular))
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byCharWrapping
-        text = NSAttributedString(string: head, attributes: [.font: font, .foregroundColor: UIColor.label, .paragraphStyle: paragraph])
+        text = NSAttributedString(string: head, attributes: [.font: font, .foregroundColor: HQPalette.label, .paragraphStyle: paragraph])
         super.init(frame: .zero)
         let card = UIView()
         card.backgroundColor = HQPalette.sheetCard   // [glass-design] frosted on a glass sheet, solid off it

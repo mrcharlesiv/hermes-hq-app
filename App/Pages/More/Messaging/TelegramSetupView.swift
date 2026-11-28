@@ -131,7 +131,7 @@ struct TelegramSetupView: View {
 
     private func connected(_ bot: String?) -> some View {
         VStack(spacing: 10) {
-            Image(systemName: "checkmark.circle.fill").font(Font.hq(.largeTitle)).imageScale(.large).foregroundStyle(Color.green).accessibilityHidden(true)
+            Image(systemName: "checkmark.circle.fill").font(Font.hq(.largeTitle)).imageScale(.large).foregroundStyle(Color.hqGreen).accessibilityHidden(true)
             Text(Self.connectedText(bot)).font(Font.hq(.title3).weight(.semibold)).foregroundStyle(Color.hqLabel)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)

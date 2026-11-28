@@ -468,6 +468,14 @@ extension UIBarButtonItem {
             // smaller than the same control in the look the owner uses least (2026-11-16).
             let size = 13 * 1.3 / max(ThemeState.macBase(desktopLook: Theme.isDesktop), 0.01)
             attributes[.font] = HQFont.system(ofSize: size, weight: .regular)
+            if Theme.isDesktop {
+                let current = attributes[.foregroundColor] as? UIColor
+                if current == nil || current === HQPalette.label || current === HQPalette.label2 {
+                    attributes[.foregroundColor] = state == .selected ? HQPalette.label : HQPalette.label2
+                }
+            } else if attributes[.foregroundColor] as? UIColor === HQPalette.label || attributes[.foregroundColor] as? UIColor === HQPalette.label2 {
+                attributes[.foregroundColor] = nil
+            }
             control.setTitleTextAttributes(attributes, for: state)
         }
         #else
@@ -478,8 +486,17 @@ extension UIBarButtonItem {
         for state in [UIControl.State.normal, .selected] {
             var attributes = control.titleTextAttributes(for: state) ?? [:]
             let own = (attributes[.font] as? UIFont).map { !ScaledTitles.marked($0) } ?? false
-            guard !own else { continue }
-            attributes[.font] = scaled ? ScaledTitles.mark(HQFont.system(ofSize: 13, weight: state == .selected ? .semibold : .medium)) : nil
+            if !own {
+                attributes[.font] = scaled ? ScaledTitles.mark(HQFont.system(ofSize: 13, weight: state == .selected ? .semibold : .medium)) : nil
+            }
+            if Theme.isDesktop {
+                let current = attributes[.foregroundColor] as? UIColor
+                if current == nil || current === HQPalette.label || current === HQPalette.label2 {
+                    attributes[.foregroundColor] = state == .selected ? HQPalette.label : HQPalette.label2
+                }
+            } else if attributes[.foregroundColor] as? UIColor === HQPalette.label || attributes[.foregroundColor] as? UIColor === HQPalette.label2 {
+                attributes[.foregroundColor] = nil
+            }
             control.setTitleTextAttributes(attributes, for: state)
         }
         #endif

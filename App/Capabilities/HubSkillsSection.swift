@@ -31,7 +31,7 @@ struct HubSection: View {
                     }
                 } else {
                     if let error = model.hubError {
-                        Text(error).font(Font.hq(.subheadline)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                        Text(error).font(Font.hq(.subheadline)).foregroundStyle(Color.hqOrange).fixedSize(horizontal: false, vertical: true)
                             .accessibilityIdentifier("skills.hub.error")
                     }
                     Button {

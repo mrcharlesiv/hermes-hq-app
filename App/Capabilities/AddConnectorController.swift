@@ -213,9 +213,9 @@ struct AddConnectorView: View {
                     .accessibilityIdentifier("add-connector.name")
             } footer: { HQSectionFooter {
                 if !draft.trimmedName.isEmpty, !draft.nameValid {
-                    Text("Names use 1-64 letters, digits, dots, dashes, or underscores.").foregroundStyle(.red)
+                    Text("Names use 1-64 letters, digits, dots, dashes, or underscores.").foregroundStyle(Color.hqRed)
                 } else if draft.nameTaken(state.existing) {
-                    Text("That name is already used.").foregroundStyle(.red).accessibilityIdentifier("add-connector.name-taken")
+                    Text("That name is already used.").foregroundStyle(Color.hqRed).accessibilityIdentifier("add-connector.name-taken")
                 } else {
                     Text("Add a connector to \(state.model.botName).")
                 }

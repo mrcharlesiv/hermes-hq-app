@@ -585,7 +585,7 @@ struct GroupNamePhotoView: View {
                 Text("Group name")
             } } footer: { HQSectionFooter {
                 if let problem = model.problem {
-                    Text(problem).foregroundStyle(Color.red).accessibilityIdentifier("group-settings.problem")
+                    Text(problem).foregroundStyle(Color.hqRed).accessibilityIdentifier("group-settings.problem")
                 }
             } }
         }
@@ -638,7 +638,7 @@ struct GroupActivityView: View {
                 ForEach(Array(events.enumerated()), id: \.offset) { index, event in
                     let line = GroupRowWords.activity(event, name: labels[event.member] ?? event.member)
                     let words = Text(line.text)
-                        .foregroundStyle(line.red ? Color.red : Color.hqLabel)
+                        .foregroundStyle(line.red ? Color.hqRed : Color.hqLabel)
                         .fixedSize(horizontal: false, vertical: true)
                     let time = Text(Date(timeIntervalSince1970: event.at / 1000).formatted(date: .omitted, time: .shortened))
                         .font(Font.hq(.footnote))
@@ -646,7 +646,7 @@ struct GroupActivityView: View {
                         .foregroundStyle(Color.hqLabel2)
                     HStack(alignment: .firstTextBaseline, spacing: 12) {
                         Image(systemName: line.symbol)
-                            .foregroundStyle(line.red ? Color.red : Color.hqLabel2)
+                            .foregroundStyle(line.red ? Color.hqRed : Color.hqLabel2)
                             .frame(minWidth: 24)
                             .accessibilityHidden(true)
                         if typeSize.isAccessibilitySize {

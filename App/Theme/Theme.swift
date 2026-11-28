@@ -52,14 +52,33 @@ final class Theme {
     /// which draws its own glyphs). A DEBUG build draws the other with `-HQDebugInkIcons tiles`, to compare.
     enum InkIcons { case tiles, plain }
 
-    /// [paper-ink] A switch that is on, in a monochrome ink skin (Paper): the ink in light; in dark a warm mid grey,
-    /// since iOS's white thumb vanished on the ivory ink (2026-11-16 audit, Connectors). nil: every other skin keeps its own.
+    /// [paper-ink] A switch that is on, in a skin whose switch tint is too bright for iOS's white thumb (Paper dark
+    /// ivory, Cyberpunk neon green, Everforest dark sage, Catppuccin/Rosé Pine dark lavender, Mono grey): keeps the
+    /// skin's tint when white already reads on it (>= 3:1), else darkens it until the white thumb clearly separates.
     static var inkSwitch: UIColor? {
-        guard !isDesktop, ThemeTable.current.light.ownLook?.plainIcons == true else { return nil }
+        let desktop = isDesktop
+        guard desktop || ThemeTable.current.light.ownLook?.iconTile != nil else { return nil }
+        if !desktop, ThemeTable.current.light.ownLook?.plainIcons == true {
+            return UIColor { traits in
+                traits.userInterfaceStyle == .dark
+                    ? UIColor(red: 0x9C / 255, green: 0x9B / 255, blue: 0x93 / 255, alpha: 1)
+                    : HQPalette.tintText.resolvedColor(with: traits)
+            }
+        }
         return UIColor { traits in
-            traits.userInterfaceStyle == .dark
-                ? UIColor(red: 0x9C / 255, green: 0x9B / 255, blue: 0x93 / 255, alpha: 1)
-                : HQPalette.tintText.resolvedColor(with: traits)
+            let set = ThemeTable.set(generation: traits[ThemeGenerationTrait.self])
+            let tokens = set.tokens(dark: traits.userInterfaceStyle == .dark,
+                                    increaseContrast: traits.accessibilityContrast == .high)
+            // Start from the brand `tint` (not lightened `tintText`) so switches stay rich in the skin's own hue.
+            let raw = tokens.tint.over(tokens.page.over(.white))
+            if RGBA.white.contrast(with: raw) >= 3.0 { return raw.uiColor }
+            var track = raw
+            var keep = 96.0
+            while keep > 10, RGBA.white.contrast(with: track) < 3.2 {
+                keep -= 4
+                track = raw.mixOklab(keep, .black)
+            }
+            return track.uiColor
         }
     }
 
@@ -124,7 +143,8 @@ final class Theme {
         window.traitOverrides[ThemeGenerationTrait.self] = generation
         window.overrideUserInterfaceStyle = style(for: AppearanceSetting.current.style)
         // The standard app never set a window tint (system blue on the system's own controls): leave it inherited.
-        window.tintColor = Theme.isStandard(state) ? nil : HQPalette.tint
+        // Use readable `tintText` on themed skins so nav bar buttons and tinted text actions meet contrast on light pages.
+        window.tintColor = Theme.isStandard(state) ? nil : HQPalette.tintText
         // [desktoplook] The look's outlines and borders are layer colours, resolved when drawn: light/dark or Increase
         // Contrast changing on its own (not through `reload`) repaints them too.
         if watchedWindows.insert(ObjectIdentifier(window)).inserted {

@@ -717,7 +717,7 @@ final class HotelsCardView: UIView, UIScrollViewDelegate {
         let photo = ShoppingPhotoView()
         photo.translatesAutoresizingMaskIntoConstraints = false
         photo.isUserInteractionEnabled = false
-        photo.set(hotel.image, maxPoints: max(width, 220))
+        photo.set(images: hotel.images, fallbackPages: [hotel.url], maxPoints: max(width, 220))
         tile.addSubview(photo)
         #if targetEnvironment(macCatalyst)
         PointerEffects.surface(tile, above: photo)

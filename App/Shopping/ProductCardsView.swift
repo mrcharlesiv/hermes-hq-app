@@ -682,7 +682,7 @@ final class ProductCardView: UIControl {
         photo.frame = parts.photo
         photo.layer.cornerRadius = g.mode == .pair || g.mode == .row ? 0 : 8
         photo.layer.cornerCurve = .continuous
-        photo.set(p.image, maxPoints: max(parts.photo.width, parts.photo.height))
+        photo.set(images: p.images, fallbackPages: [p.url] + p.offers.map(\.url), maxPoints: max(parts.photo.width, parts.photo.height))
         photo.alpha = p.stock == .out ? 0.55 : 1
         name.font = g.fonts.name
         name.text = p.title

@@ -38,7 +38,7 @@ nonisolated enum RemoteImageFetch {
         guard let url = URL(string: raw), url.scheme?.lowercased() == "https" else { throw Refused(reason: "not https") }
         guard await PublicHostPolicy.allowed(url, hosts: hosts) else { throw Refused(reason: "not a public host") }
         var request = URLRequest(url: url)
-        request.setValue("image/*", forHTTPHeaderField: "Accept")
+        request.setValue("image/webp,image/png,image/jpeg,image/*;q=0.8", forHTTPHeaderField: "Accept")
         request.httpShouldHandleCookies = false
         let load = RemoteImageLoad(ceiling: ceiling) { hop, next in await admitRedirect(hops: hop, to: next, hosts: hosts) }
         return try await withTaskCancellationHandler {
@@ -110,7 +110,7 @@ nonisolated final class RemoteImageLoad: NSObject, URLSessionDataDelegate, @unch
             fail(RemoteImageFetch.Refused(reason: "status \((response as? HTTPURLResponse)?.statusCode ?? 0)"), dataTask)
             return completionHandler(.cancel)
         }
-        guard (http.mimeType ?? "").lowercased().hasPrefix("image/") else {
+        guard RemoteImageFetcher.isAcceptableMIME(http.mimeType) else {
             fail(RemoteImageFetch.Refused(reason: "not an image"), dataTask)
             return completionHandler(.cancel)
         }
@@ -161,6 +161,10 @@ nonisolated final class RemoteImageLoad: NSObject, URLSessionDataDelegate, @unch
         // A refused redirect ends the task with the 3xx response and no error.
         guard let http = task.response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             return continuation.resume(throwing: RemoteImageFetch.Refused(reason: "status \((task.response as? HTTPURLResponse)?.statusCode ?? 0)"))
+        }
+        // Verify raster image decoding (catches HTML/SVG served under octet-stream).
+        guard let (w, h) = PhotoNormalizer.pixelSize(of: body), w > 0, h > 0 else {
+            return continuation.resume(throwing: RemoteImageFetch.Refused(reason: "not an image"))
         }
         continuation.resume(returning: body)
     }

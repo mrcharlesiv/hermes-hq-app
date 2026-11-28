@@ -172,8 +172,16 @@ final class ProductPageSheet: UIViewController, UIScrollViewDelegate {
         return l
     }
 
+    private var fallbackPages: [URL] { [product.url] + product.offers.map(\.url) }
+
+    private var shownImages: [URL] {
+        if !product.images.isEmpty { return product.images }
+        if let resolved = ProductPhotoResolver.cachedResolved(for: fallbackPages) { return [resolved] }
+        return []
+    }
+
     private func addPhotos() {
-        let urls = product.images
+        let urls = shownImages
         // No photo: no box at all; the page starts with the name (the card in the chat shows the placeholder).
         guard !urls.isEmpty else { return }
         let box = UIView()
@@ -246,9 +254,11 @@ final class ProductPageSheet: UIViewController, UIScrollViewDelegate {
         lastPagerWidth = size.width
         isLayingOutPager = true
         defer { isLayingOutPager = false }
+        let urls = shownImages
         for (i, photo) in photos.enumerated() {
             photo.frame = CGRect(x: CGFloat(i) * size.width, y: 0, width: size.width, height: size.height)
-            photo.set(i < product.images.count ? product.images[i] : nil, maxPoints: max(size.width, size.height))
+            let url = i < urls.count ? urls[i] : nil
+            photo.set(images: url.map { [$0] } ?? [], fallbackPages: i == 0 ? fallbackPages : [], maxPoints: max(size.width, size.height))
         }
         pager.contentSize = CGSize(width: size.width * CGFloat(photos.count), height: size.height)
         if widthChanged, photos.indices.contains(dots.currentPage) {

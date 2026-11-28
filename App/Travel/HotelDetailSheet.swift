@@ -19,7 +19,8 @@ enum HotelDetailSheet {
             bookingLocked: bookingLocked,
             onOpenPhotos: { index in
                 guard let hostVC = box.vc else { return }
-                HotelPhotoGalleryController.present(hotelName: hotel.name, urls: hotel.images, index: index, from: hostVC)
+                let urls = hotel.images.isEmpty ? ProductPhotoResolver.cachedResolved(for: [hotel.url]).map { [$0] } ?? [] : hotel.images
+                HotelPhotoGalleryController.present(hotelName: hotel.name, urls: urls, index: index, from: hostVC)
             },
             onAsk: { ask in
                 vc.dismiss(animated: true) { onAsk(ask) }
@@ -64,10 +65,16 @@ private struct HotelDetailView: View {
         onAsk(ask)
     }
 
+    private var shownImages: [URL] {
+        if !hotel.images.isEmpty { return hotel.images }
+        if let resolved = ProductPhotoResolver.cachedResolved(for: [hotel.url]) { return [resolved] }
+        return []
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                if !hotel.images.isEmpty { photosStrip }
+                if !shownImages.isEmpty { photosStrip }
                 summaryCard
                 if hotel.hasCoordinates { mapCard }
                 if !hotel.address.isEmpty { addressCard }
@@ -83,21 +90,22 @@ private struct HotelDetailView: View {
     }
 
     private var photosStrip: some View {
-        let count = hotel.images.count
+        let images = shownImages
+        let count = images.count
         let visibleSlots = count <= 1 ? 1 : 2
         let current = min(max(0, photoAnchor ?? 0), max(0, count - 1))
         let maxAnchor = max(0, count - visibleSlots)
         let cardRadius = HQShape.radius(14, .card)
         return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
-                ForEach(Array(hotel.images.enumerated()), id: \.offset) { idx, url in
+                ForEach(Array(images.enumerated()), id: \.offset) { idx, url in
                     Button {
                         Haptics.play(.selection)
                         onOpenPhotos(idx)
                     } label: {
                         // The photo is a UIKit view: without a shape of its own the button takes no tap on it
                         // (only the "1 / 3" badge did), so the whole picture is the button.
-                        HotelRemotePhoto(url: url)
+                        HotelRemotePhoto(url: url, fallbackPages: idx == 0 ? [hotel.url] : [])
                             .allowsHitTesting(false)
                             // One photo spans the sheet's card width; on Mac, multiple photos fit whole pairs cleanly
                             // without slicing a 3rd photo mid-frame, while iOS keeps its 240 pt peeking strip.
@@ -478,13 +486,14 @@ private struct HotelMapRepresentable: UIViewRepresentable {
 
 private struct HotelRemotePhoto: UIViewRepresentable {
     let url: URL
+    var fallbackPages: [URL] = []
     func makeUIView(context: Context) -> ShoppingPhotoView {
         let view = ShoppingPhotoView()
-        view.set(url, maxPoints: 340)
+        view.set(images: [url], fallbackPages: fallbackPages, maxPoints: 340)
         return view
     }
     func updateUIView(_ uiView: ShoppingPhotoView, context: Context) {
-        uiView.set(url, maxPoints: 340)
+        uiView.set(images: [url], fallbackPages: fallbackPages, maxPoints: 340)
     }
 }
 

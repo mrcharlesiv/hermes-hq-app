@@ -159,7 +159,7 @@ nonisolated final class RemoteImageFetcher: NSObject, URLSessionDownloadDelegate
         config.timeoutIntervalForRequest = 20
         config.timeoutIntervalForResource = 60
         config.httpMaximumConnectionsPerHost = 4
-        config.httpAdditionalHeaders = ["Accept": "image/*"]
+        config.httpAdditionalHeaders = ["Accept": "image/webp,image/png,image/jpeg,image/*;q=0.8"]
         return URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
     }
 
@@ -246,11 +246,18 @@ nonisolated final class RemoteImageFetcher: NSObject, URLSessionDownloadDelegate
         }
     }
 
+    /// Accepts raster `image/*` MIME types (never SVG), plus `octet-stream` / missing MIME (CDNs like S3/CloudFront
+    /// often serve product photos as `application/octet-stream`; `settle` verifies ImageIO decodes a raster image).
+    static func isAcceptableMIME(_ mimeType: String?) -> Bool {
+        let type = (mimeType ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if type.isEmpty || type == "application/octet-stream" || type == "binary/octet-stream" { return true }
+        return type.hasPrefix("image/") && !type.contains("svg")
+    }
+
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64,
                     totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
         guard let job = job(downloadTask) else { return }
-        if let type = (downloadTask.response as? HTTPURLResponse)?.mimeType?.lowercased(),
-           !type.hasPrefix("image/") || type.contains("svg") {
+        if let response = downloadTask.response as? HTTPURLResponse, !Self.isAcceptableMIME(response.mimeType) {
             job.notImage = true
             downloadTask.cancel()
             return
@@ -265,8 +272,7 @@ nonisolated final class RemoteImageFetcher: NSObject, URLSessionDownloadDelegate
         guard let job = job(downloadTask) else { return }
         let response = downloadTask.response as? HTTPURLResponse
         guard let response, (200..<300).contains(response.statusCode) else { return }
-        let type = response.mimeType?.lowercased() ?? ""
-        guard type.hasPrefix("image/"), !type.contains("svg") else { job.notImage = true; return }
+        guard Self.isAcceptableMIME(response.mimeType) else { job.notImage = true; return }
         try? FileManager.default.createDirectory(at: job.target.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? FileManager.default.removeItem(at: job.target)
         job.moved = (try? FileManager.default.moveItem(at: location, to: job.target)) != nil
@@ -321,8 +327,12 @@ nonisolated final class RemoteImageFetcher: NSObject, URLSessionDownloadDelegate
             return continuation.resume(throwing: RemoteImageError.failed)
         }
         guard job.moved else { return continuation.resume(throwing: RemoteImageError.failed) }
-        // ≤ 100 megapixels before anything decodes it.
-        if let (w, h) = PhotoNormalizer.pixelSize(of: job.target), w * h > RemoteImagePolicy.maxPixels {
+        // Must decode as a real raster image (also rejects HTML/SVG sent with octet-stream) and stay ≤ 100 megapixels.
+        guard let (w, h) = PhotoNormalizer.pixelSize(of: job.target), w > 0, h > 0 else {
+            try? FileManager.default.removeItem(at: job.target)
+            return continuation.resume(throwing: RemoteImageError.notImage)
+        }
+        if w * h > RemoteImagePolicy.maxPixels {
             try? FileManager.default.removeItem(at: job.target)
             return continuation.resume(throwing: RemoteImageError.tooLarge)
         }

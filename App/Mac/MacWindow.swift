@@ -7,6 +7,7 @@ import UIKit.UIGestureRecognizerSubclass
 
 #if targetEnvironment(macCatalyst)
 nonisolated(unsafe) private var pageBarKey: UInt8 = 0
+nonisolated(unsafe) private var pageBarWatchKey: UInt8 = 0
 
 @MainActor enum MacWindow {
     static let supportPage = URL(string: "https://gethermeshq.com/support")!
@@ -209,18 +210,33 @@ nonisolated(unsafe) private var pageBarKey: UInt8 = 0
             if again { DispatchQueue.main.async { [weak page] in if let page { pageBar(page, again: false) } } }
             return
         }
-        let bar = UINavigationBarAppearance()
-        bar.configureWithOpaqueBackground()
-        bar.backgroundColor = colour
-        bar.shadowColor = .clear
+        // In the glass canvas the bar is clear while the page is at its top and takes a near-solid veil once rows pass
+        // under it. At rest it has no background at all, not a clear colour: with any colour there the bar keeps its
+        // scrolled background drawn underneath (it can't tell that the colour is clear), a strip across the page's top.
+        let glass = page.traitCollection[MacGlassCanvasTrait.self] && MacGlassShell.isTransparencyEnabled
+        let standard = UINavigationBarAppearance()
+        standard.configureWithTransparentBackground()
+        standard.backgroundColor = glass ? MacGlassShell.canvasPageBarVeilColor : colour
+        standard.shadowColor = .clear
         // The page's title follows UI Scale with its rows (the system's 17 pt carries none).
-        bar.titleTextAttributes[.font] = MacType.pageTitle   // [mac] Stress test 2026-10-28 #52
-        bar.subtitleTextAttributes[.font] = pageSubtitle     // Mac polish #77
-        item.standardAppearance = bar
-        item.scrollEdgeAppearance = bar
-        item.compactAppearance = bar
-        item.compactScrollEdgeAppearance = bar
+        standard.titleTextAttributes[.font] = MacType.pageTitle   // [mac] Stress test 2026-10-28 #52
+        standard.subtitleTextAttributes[.font] = pageSubtitle     // Mac polish #77
+
+        let rest = standard.copy()
+        if glass { rest.backgroundColor = nil }
+
+        item.standardAppearance = standard
+        item.scrollEdgeAppearance = rest
+        item.compactAppearance = standard
+        item.compactScrollEdgeAppearance = rest
         objc_setAssociatedObject(item, &pageBarKey, true, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        // Window Transparency switched (or the page moved into the canvas after its bar was made): made again.
+        if objc_getAssociatedObject(page, &pageBarWatchKey) == nil {
+            objc_setAssociatedObject(page, &pageBarWatchKey, true, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+            page.registerForTraitChanges([MacGlassCanvasTrait.self]) { (page: UIViewController, _: UITraitCollection) in
+                pageBar(page)
+            }
+        }
     }
 
     /// [mac] Stress test 2026-10-28 #52 (round 3): the page-title token on bars a page set itself (each state that has
@@ -251,6 +267,13 @@ nonisolated(unsafe) private var pageBarKey: UInt8 = 0
     /// The colour behind the page's rows: its biggest list's own, else the grouped page most pages are. Nil for a page
     /// with nothing that scrolls (the empty right pane), which has nothing to pass under its bar.
     private static func pageColour(_ view: UIView) -> UIColor? {
+        guard let biggest = biggestList(view) else { return nil }
+        if let colour = biggest.backgroundColor, colour.cgColor.alpha > 0.5 { return colour }
+        return HQPalette.groupedPage
+    }
+
+    /// The page's biggest list (its rows), or nil for a page with nothing that scrolls.
+    private static func biggestList(_ view: UIView) -> UIScrollView? {
         var lists: [UIScrollView] = []
         func walk(_ view: UIView, depth: Int) {
             if let list = view as? UIScrollView, !list.isHidden, list.bounds.width > 100 { lists.append(list) }
@@ -258,9 +281,7 @@ nonisolated(unsafe) private var pageBarKey: UInt8 = 0
             for child in view.subviews { walk(child, depth: depth + 1) }
         }
         walk(view, depth: 0)
-        guard let biggest = lists.max(by: { $0.bounds.width * $0.bounds.height < $1.bounds.width * $1.bounds.height }) else { return nil }
-        if let colour = biggest.backgroundColor, colour.cgColor.alpha > 0.5 { return colour }
-        return HQPalette.groupedPage
+        return lists.max(by: { $0.bounds.width * $0.bounds.height < $1.bounds.width * $1.bounds.height })
     }
 
     /// The page view's own colour when it is solid (a hosted SwiftUI page paints its grouped grey there).

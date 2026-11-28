@@ -17,6 +17,7 @@ enum AppearanceRows {
     static let desktopLook = "row:desktop-look"
     static let highContrast = "row:high-contrast"
     static let desktopRadius = "row:desktop-radius"
+    static let windowTransparency = "row:window-transparency"
     static let uiScale = "row:ui-scale"
     static let density = "row:density"
     static let workingRing = "row:working-ring"
@@ -27,6 +28,7 @@ enum AppearanceRows {
     static func contains(_ row: String) -> Bool {
         switch row {
         case lightOrDark, desktopLook, highContrast, desktopRadius, uiScale, density, workingRing, topEdge, thinkingBar: true
+        case windowTransparency: DeviceWord.isMac
         default: false
         }
     }
@@ -39,7 +41,7 @@ enum AppearancePage {
     static func make(model: SettingsRootModel, router: SettingsRouter, reveal: String? = nil) -> UIViewController {
         let page = SettingsPageController(title: title, AppearancePageView(model: model, router: router, reveal: reveal))
         page.view.accessibilityIdentifier = "settings.appearance-page"
-        page.view.backgroundColor = HQPalette.page
+        page.view.backgroundColor = HQPalette.panePage
         return page
     }
 }
@@ -94,6 +96,10 @@ struct AppearanceSections: View {
     /// The row a search result marks.
     var revealed: String?
     @AppStorage(WorkingRing.key) private var workingRing = false   // [ring-off-default]
+    #if targetEnvironment(macCatalyst)
+    @AppStorage(MacGlassShell.transparencyKey) private var windowTransparency = true
+    @Environment(\.accessibilityReduceTransparency) private var systemReduceTransparency
+    #endif
     @Environment(\.colorSchemeContrast) private var systemContrast
     @State private var confirmReset = false
 
@@ -125,10 +131,20 @@ struct AppearanceSections: View {
     }
 
     private func lookNote(_ state: ThemeState) -> String? {
+        #if targetEnvironment(macCatalyst)
+        let macTransparencyNote: String? = (systemReduceTransparency || HQAccessibility.overrides.reduceTransparency)
+            ? "Window Transparency is off while Reduce Transparency is enabled in System Settings."
+            : "Window Transparency lets your desktop show softly through the window."
+        #else
+        let macTransparencyNote: String? = nil
+        #endif
+        // The Mac's note goes last: ahead of High Contrast's "Sets your messages…", that line read as Window
+        // Transparency's doing.
         let parts = [
             AppearanceSetting.forcedBySkin.map { "\(state.skin.label) has only a \($0 == .dark ? "dark" : "light") look." },
             state.desktopLook ? ThemeContrast.switchNote(state, increaseContrast: increaseContrast) ?? ThemeSettingsView.contrastNote : nil,
             state.desktopLook ? "Corners sets the border radius across Hermes Look (4 pt is the default)." : nil,
+            macTransparencyNote,
         ].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
@@ -151,6 +167,9 @@ struct AppearanceSections: View {
             }
             lightOrDark
             themeRow(state)
+            #if targetEnvironment(macCatalyst)
+            windowTransparencyRow(state)
+            #endif
             if state.desktopLook {
                 highContrastRow(state)
                 HermesCornersRow(stored: state.desktopRadius, symbol: "rectangle.roundedtop") { points in
@@ -170,6 +189,23 @@ struct AppearanceSections: View {
         }
         .accessibilityIdentifier("settings.theme-row")
     }
+
+    #if targetEnvironment(macCatalyst)
+    private func windowTransparencyRow(_ state: ThemeState) -> some View {
+        let forcedOff = systemReduceTransparency || HQAccessibility.overrides.reduceTransparency
+        return Toggle(isOn: Binding(get: { !forcedOff && windowTransparency }, set: { on in
+            windowTransparency = on
+            MacGlassShell.setUserTransparencyEnabled(on)
+            AppLog.trace("settings", "mac window transparency \(on ? "on" : "off")")
+        })) {
+            SettingsRowLabel(title: "Window Transparency", systemImage: "square.on.square")
+        }
+        .tint(state.desktopLook ? Color.hqTintText : nil)
+        .disabled(forcedOff)
+        .accessibilityIdentifier("settings.window-transparency")
+        .revealRow(AppearanceRows.windowTransparency, revealed)
+    }
+    #endif
 
     private func highContrastRow(_ state: ThemeState) -> some View {
         Toggle(isOn: Binding(get: { ThemeContrast.switchOn(state, increaseContrast: increaseContrast) }, set: { on in
@@ -385,6 +421,10 @@ struct AppearanceSections: View {
                     Theme.shared.resetAppearance()
                     model.appearance = .system
                     workingRing = false
+                    #if targetEnvironment(macCatalyst)
+                    windowTransparency = true
+                    MacGlassShell.setUserTransparencyEnabled(true)
+                    #endif
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {

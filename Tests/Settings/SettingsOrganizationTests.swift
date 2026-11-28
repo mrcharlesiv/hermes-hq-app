@@ -44,6 +44,8 @@ import Testing
     @Test func rootRowRoutingCoversAppearanceChatSoundsAndTasks() {
         #expect(AppearanceRows.contains(AppearanceRows.thinkingBar))
         #expect(SettingsRootModel.category(ofRow: AppearanceRows.thinkingBar) == .appearance)
+        #expect(AppearanceRows.contains(AppearanceRows.windowTransparency) == DeviceWord.isMac)
+        #expect(SettingsRootModel.category(ofRow: AppearanceRows.windowTransparency) == (DeviceWord.isMac ? .appearance : nil))
         #expect(SettingsRootModel.category(ofRow: SoundsHapticsRows.completionSound) == .general)
         #expect(SettingsRootModel.category(ofRow: SoundsHapticsRows.sound) == .general)
         #expect(SettingsRootModel.category(ofRow: ChatSettingsRows.resumeLastChat) == .general)
@@ -59,6 +61,10 @@ import Testing
     @Test func searchIndexReflectsReorganizedHomes() {
         let index = SettingsSearch.index()
         #expect(SettingsSearch.results("thinking bar", in: index).first?.context == "Appearance")
+        #if targetEnvironment(macCatalyst)
+        #expect(SettingsSearch.results("window transparency", in: index).first?.target == .root(AppearanceRows.windowTransparency))
+        #expect(SettingsSearch.results("frosted", in: index).contains { $0.target == .root(AppearanceRows.windowTransparency) })
+        #endif
         #expect(SettingsSearch.results("tasks", in: index).first?.context == "Workspace & Tasks")
         #expect(SettingsSearch.results("phone calls", in: index).first?.target == .root("phone-calls"))
         #expect(SettingsSearch.results("backup", in: index).contains { $0.target == .root("backup-reset") })

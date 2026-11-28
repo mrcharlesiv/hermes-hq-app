@@ -20,19 +20,19 @@ enum HQPalette {
     // Head's page); a main-actor provider closure trapped there (EXC_BREAKPOINT in New Task).
     /// Page / list background.
     static let page = ThemedColor.make(\.page)
-    /// Root pane surface inside the Mac floating glass canvas: `.clear` inside `macCanvas` (when Reduce Transparency
-    /// is off) so the canvas's unified translucent surface shows through; `HQPalette.page` everywhere else.
+    /// Root pane surface inside the Mac floating glass canvas: `.clear` inside `macCanvas` (when window transparency
+    /// is active) so the canvas's unified translucent surface shows through; `HQPalette.page` everywhere else.
     static let panePage = UIColor { @Sendable traits in
         #if targetEnvironment(macCatalyst)
-        if traits[MacGlassCanvasTrait.self], !HQAccessibility.reduceTransparency { return .clear }
+        if traits[MacGlassCanvasTrait.self], MacGlassShell.isTransparencyEnabled { return .clear }
         #endif
         return page.resolvedColor(with: traits)
     }
     /// Grouped / inspector pane surface inside the Mac floating glass canvas: a subtle translucent tint over
-    /// `macCanvas` when Reduce Transparency is off, instead of an opaque grey block; `HQPalette.groupedPage` elsewhere.
+    /// `macCanvas` when window transparency is active, instead of an opaque grey block; `HQPalette.groupedPage` elsewhere.
     static let paneGroupedPage = UIColor { @Sendable traits in
         #if targetEnvironment(macCatalyst)
-        if traits[MacGlassCanvasTrait.self], !HQAccessibility.reduceTransparency {
+        if traits[MacGlassCanvasTrait.self], MacGlassShell.isTransparencyEnabled {
             let dark = traits.userInterfaceStyle == .dark
             return dark ? UIColor(white: 1, alpha: 0.025) : UIColor(white: 0, alpha: 0.022)
         }
@@ -674,7 +674,7 @@ private struct GroupedPageModifier: ViewModifier {
         if Theme.isDesktop {
             content
                 .scrollContentBackground(.hidden)
-                .background(chatLead ? Color.clear : Color.hqGroupedPage)   // [tasks] on a chat: the chat's page
+                .background((chatLead ? Color.clear : Color(uiColor: HQPalette.paneGroupedPage)).ignoresSafeArea())   // [tasks] on a chat: the chat's page
                 .background(DesktopListProbe())
                 .listSectionSpacing(18)
                 .tint(Color.hqTintText)
@@ -704,15 +704,18 @@ private struct GroupedPageModifier: ViewModifier {
             // without a header or footer (around Search Models, under the Model card). Bot Info's pages had none.
             #if targetEnvironment(macCatalyst)
             let sheetForm = formSide == MacForm.sheetSide
+            let macCanvasGrouped = !sheetForm && !backdrop
             #else
             let sheetForm = false
+            let macCanvasGrouped = false
             #endif
             content
-                .scrollContentBackground(system && !backdrop && !sheetForm ? .automatic : .hidden)
+                .scrollContentBackground(system && !backdrop && !sheetForm && !macCanvasGrouped ? .automatic : .hidden)
                 .background {
                     // 2026-11-02 theme audit: the skin's page runs up under the bar too; a `.background { }` view
                     // stops at the safe area, which left iOS's black (or white) strip behind the clock and title.
                     if backdrop { PageBackdropLayer().ignoresSafeArea() }
+                    else if macCanvasGrouped { Color(uiColor: HQPalette.paneGroupedPage).ignoresSafeArea() }
                     else if !system { Color.hqGroupedPage.ignoresSafeArea() }
                     else if sheetForm { Color(uiColor: HQPalette.sheetPage).ignoresSafeArea() }
                 }

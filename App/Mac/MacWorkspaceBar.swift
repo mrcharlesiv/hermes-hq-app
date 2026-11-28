@@ -28,19 +28,20 @@ final class MacWorkspaceBar: UIView {
     private weak var split: RootSplitController?
     private weak var tabs: MainTabController?
 
-    // Left controls: Back, Forward, Quick Action, Active Section pill
+    // Left controls: Back, Forward, and optional collapsible list toggle (only shown when a list column can fold).
     private let backButton = BarIconButton(symbol: "chevron.left", pointSize: 13, weight: .semibold, label: "Back", tip: "Back (⌘[)")
     private let forwardButton = BarIconButton(symbol: "chevron.right", pointSize: 13, weight: .semibold, label: "Forward", tip: "Forward (⌘])")
-    private let listToggleButton = BarIconButton(symbol: "clock", pointSize: 14, weight: .regular, label: "Quick Switcher", tip: "Search or jump to… (⌘K)")
-    private let placePill = ActivePlacePill()
+    private let listToggleButton = BarIconButton(symbol: "sidebar.leading", pointSize: 14, weight: .regular, label: "Hide List", tip: "Hide List (⇧⌘L)")
 
     // Center scrollable workspace tab strip
     private let scroll = UIScrollView()
+    /// Holds `scroll` and carries the edge fade: a mask on the scroll view itself would move with its content.
+    private let scrollHost = UIView()
+    private let scrollFade = CAGradientLayer()
     private let strip = UIStackView()
     private var tabViews: [WorkspaceTabButton] = []
     /// The row's tabs as drawn, left to right (the place's own tab first while it shows): what the keys walk.
     private var shownItems: [TabItem] = []
-    private var dividers: [UIView] = []
 
     // Trailing + button
     private let addButton = BarIconButton(symbol: "plus", pointSize: 14.5, weight: .medium, label: "New Chat", tip: "New Chat (⌘N)")
@@ -76,10 +77,16 @@ final class MacWorkspaceBar: UIView {
         scroll.alwaysBounceVertical = false
         scroll.backgroundColor = .clear
         scroll.delaysContentTouches = false
+        scroll.delegate = self
+        scrollHost.backgroundColor = .clear
+        scrollHost.addSubview(scroll)
+        scrollFade.startPoint = CGPoint(x: 0, y: 0.5)
+        scrollFade.endPoint = CGPoint(x: 1, y: 0.5)
+        scrollHost.layer.mask = scrollFade
 
         strip.axis = .horizontal
         strip.alignment = .center
-        strip.spacing = 2
+        strip.spacing = 4
         strip.translatesAutoresizingMaskIntoConstraints = false
         scroll.addSubview(strip)
 
@@ -91,14 +98,13 @@ final class MacWorkspaceBar: UIView {
             strip.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
         ])
 
-        for view in [backButton, forwardButton, listToggleButton, placePill, scroll, addButton] as [UIView] {
+        for view in [backButton, forwardButton, listToggleButton, scrollHost, addButton] as [UIView] {
             addSubview(view)
         }
 
         backButton.addAction(UIAction { [weak self] _ in self?.goBack() }, for: .touchUpInside)
         forwardButton.addAction(UIAction { [weak self] _ in self?.goForward() }, for: .touchUpInside)
-        listToggleButton.addAction(UIAction { [weak self] _ in self?.quickActionTapped() }, for: .touchUpInside)
-        placePill.addAction(UIAction { [weak self] _ in self?.placePillTapped() }, for: .touchUpInside)
+        listToggleButton.addAction(UIAction { [weak self] _ in self?.listToggleTapped() }, for: .touchUpInside)
         addButton.addAction(UIAction { _ in
             UIApplication.shared.sendAction(KeyCommands.newChat, to: UIApplication.shared.delegate, from: nil, for: nil)
         }, for: .touchUpInside)
@@ -145,26 +151,45 @@ final class MacWorkspaceBar: UIView {
         let h = bounds.height
         let midY = max(13, min(h - 13, h / 2 + centerYOffset))
         let btnSize: CGFloat = 28
-        let pillW: CGFloat = 34
-        let pillH: CGFloat = 28
 
         var x: CGFloat = 4
         backButton.frame = CGRect(x: x, y: (midY - btnSize / 2).rounded(), width: btnSize, height: btnSize)
         x += btnSize + 2
         forwardButton.frame = CGRect(x: x, y: (midY - btnSize / 2).rounded(), width: btnSize, height: btnSize)
-        x += btnSize + 12
+        x += btnSize + 8
 
-        listToggleButton.frame = CGRect(x: x, y: (midY - btnSize / 2).rounded(), width: btnSize, height: btnSize)
-        x += btnSize + 4
-        placePill.frame = CGRect(x: x, y: (midY - pillH / 2).rounded(), width: pillW, height: pillH)
-        x += pillW + 10
+        if !listToggleButton.isHidden {
+            listToggleButton.frame = CGRect(x: x, y: (midY - btnSize / 2).rounded(), width: btnSize, height: btnSize)
+            x += btnSize + 8
+        } else {
+            listToggleButton.frame = .zero
+        }
 
         let trailingPad: CGFloat = 4
         let addFrame = CGRect(x: bounds.width - trailingPad - btnSize, y: (midY - btnSize / 2).rounded(), width: btnSize, height: btnSize)
         addButton.frame = addFrame
 
         let scrollWidth = max(0, addFrame.minX - 8 - x)
-        scroll.frame = CGRect(x: x, y: (midY - 16).rounded(), width: scrollWidth, height: 32)
+        scrollHost.frame = CGRect(x: x, y: (midY - 16).rounded(), width: scrollWidth, height: 32)
+        scroll.frame = scrollHost.bounds
+        scroll.layoutIfNeeded()   // the strip's width (the content size) before the fade reads it
+        updateScrollFade()
+    }
+
+    /// Tabs that run past an edge fade out there instead of being cut mid-word by the + button.
+    private func updateScrollFade() {
+        let width = scrollHost.bounds.width
+        guard width > 0 else { return }
+        let fade = min(28, width / 3) / width
+        let hiddenLeft = scroll.contentOffset.x > 0.5
+        let hiddenRight = scroll.contentSize.width - scroll.contentOffset.x - width > 0.5
+        let clear = UIColor.clear.cgColor, solid = UIColor.black.cgColor
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        scrollFade.frame = scrollHost.bounds
+        scrollFade.colors = [hiddenLeft ? clear : solid, solid, solid, hiddenRight ? clear : solid]
+        scrollFade.locations = [0, NSNumber(value: Double(fade)), NSNumber(value: Double(1 - fade)), 1]
+        CATransaction.commit()
     }
 
     private func alignToTrafficLights() {
@@ -206,8 +231,7 @@ final class MacWorkspaceBar: UIView {
     func sync() {
         guard split != nil, tabs != nil else { return }
         loadPersistedTabsIfNeeded()
-        syncQuickAction()
-        syncActivePlacePill()
+        syncListToggle()
         seedDemoTabsIfNeeded()
         recordCurrentDestinationIfNeeded()
         rebuildTabStrip()
@@ -232,28 +256,18 @@ final class MacWorkspaceBar: UIView {
         tabList.save(gatewayId: currentGatewayId)
     }
 
-    private func syncQuickAction() {
+    private func syncListToggle() {
         guard let split else { return }
-        if split.canToggleList {
-            listToggleButton.setSymbol("sidebar.leading", pointSize: 14, weight: .regular)
+        let show = split.canToggleList
+        let changed = listToggleButton.isHidden == show
+        listToggleButton.isHidden = !show
+        if show {
             let hidden = split.isListCollapsedForUser
             listToggleButton.accessibilityLabel = hidden ? "Show List" : "Hide List"
             listToggleButton.toolTip = hidden ? "Show List (⇧⌘L)" : "Hide List (⇧⌘L)"
             listToggleButton.isSelectedState = hidden
-        } else {
-            listToggleButton.setSymbol("clock", pointSize: 14, weight: .regular)
-            listToggleButton.accessibilityLabel = "Search or jump to…"
-            listToggleButton.toolTip = "Search or jump to… (⌘K)"
-            listToggleButton.isSelectedState = false
         }
-    }
-
-    private func syncActivePlacePill() {
-        guard let tabs else { return }
-        let selected = tabs.selectedViewController
-        let item = selected?.tabBarItem
-        let drawn = MacSidebar.rowIcon(item?.image, folded: false)
-        placePill.configure(image: drawn.image, title: item?.title ?? "Hermes HQ")
+        if changed { setNeedsLayout() }
     }
 
     /// Demo-only tab seeding (`-HQDemoLists`) so demo/screenshot builds show populated tabs immediately.
@@ -380,31 +394,8 @@ final class MacWorkspaceBar: UIView {
         guard let tabs else { return }
         let current = currentDestination()
 
-        // First tab is always the active place home (e.g. "Sessions", "Bots", "Tasks", "Jobs").
-        let selectedVC = tabs.selectedViewController
-        let placeTag = selectedVC?.tabBarItem.tag ?? HQTab.sessions.rawValue
-        let placeTitle = selectedVC?.tabBarItem.title ?? "Sessions"
-        let placeIcon = MacSidebar.rowIcon(selectedVC?.tabBarItem.image, folded: false).image
-        let placeActive: Bool = {
-            if case .place(let t) = current, t == placeTag { return true }
-            return current == nil
-        }()
-
-        let showPlaceTab = !(placeTag == HQTab.bots.rawValue && MacSidebar.botsInSidebar && !placeActive)
+        // Only open chats and sessions appear as tabs on the top bar; the sidebar owns switching sections.
         var displayItems: [TabItem] = []
-        if showPlaceTab {
-            displayItems.append(TabItem(
-                id: "place:\(placeTag)",
-                title: placeTitle,
-                iconName: nil,
-                customIcon: placeIcon,
-                destination: .place(tag: placeTag),
-                isWorking: false,
-                isUnread: false,
-                closable: false,
-                isActive: placeActive
-            ))
-        }
 
         for record in tabList.tabs {
             let dest = destination(for: record)
@@ -448,19 +439,8 @@ final class MacWorkspaceBar: UIView {
         // Rebuild arranged subviews cleanly.
         strip.arrangedSubviews.forEach { $0.removeFromSuperview() }
         tabViews.removeAll()
-        dividers.removeAll()
 
-        for (idx, item) in displayItems.enumerated() {
-            if idx > 0 {
-                let prevActive = displayItems[idx - 1].isActive
-                let div = UIView()
-                div.translatesAutoresizingMaskIntoConstraints = false
-                div.widthAnchor.constraint(equalToConstant: HQShape.pixel(traitCollection.displayScale)).isActive = true
-                div.heightAnchor.constraint(equalToConstant: 14).isActive = true
-                div.alpha = (prevActive || item.isActive) ? 0 : 1
-                dividers.append(div)
-                strip.addArrangedSubview(div)
-            }
+        for item in displayItems {
             let btn = WorkspaceTabButton(item: item)
             btn.onSelect = { [weak self] in self?.activate(item.destination) }
             btn.onClose = item.closable ? { [weak self] in self?.closeTab(id: item.id) } : nil
@@ -468,6 +448,7 @@ final class MacWorkspaceBar: UIView {
             tabViews.append(btn)
             strip.addArrangedSubview(btn)
         }
+        setNeedsLayout()
     }
 
     private func scrollActiveTabIntoView() {
@@ -668,24 +649,10 @@ final class MacWorkspaceBar: UIView {
         forwardButton.alpha = canGoForward ? 1 : 0.34
     }
 
-    private func quickActionTapped() {
-        guard let split else { return }
-        if split.canToggleList {
-            split.toggleList()
-            syncQuickAction()
-        } else {
-            UIApplication.shared.sendAction(KeyCommands.openQuickly, to: UIApplication.shared.delegate, from: nil, for: nil)
-        }
-    }
-
-    private func placePillTapped() {
-        guard let split else { return }
-        if split.canToggleList {
-            split.toggleList()
-            syncQuickAction()
-        } else if !split.detailIsEmpty {
-            split.closeDetail(animated: true)
-        }
+    private func listToggleTapped() {
+        guard let split, split.canToggleList else { return }
+        split.toggleList()
+        syncListToggle()
     }
 
     @objc private func handleWindowDrag(_ pan: UIPanGestureRecognizer) {
@@ -695,16 +662,16 @@ final class MacWorkspaceBar: UIView {
     }
 
     func recolor() {
-        let dark = traitCollection.userInterfaceStyle == .dark
-        let divColor = dark ? UIColor(white: 1, alpha: 0.14) : UIColor(white: 0, alpha: 0.11)
-        for d in dividers { d.backgroundColor = divColor }
         backButton.recolor()
         forwardButton.recolor()
         listToggleButton.recolor()
-        placePill.recolor()
         addButton.recolor()
         tabViews.forEach { $0.recolor() }
     }
+}
+
+extension MacWorkspaceBar: UIScrollViewDelegate {
+    func scrollViewDidScroll(_ scrollView: UIScrollView) { updateScrollFade() }
 }
 
 extension MacWorkspaceBar: UIGestureRecognizerDelegate {
@@ -795,70 +762,6 @@ private final class BarIconButton: UIControl {
         } else {
             pill.backgroundColor = .clear
         }
-    }
-}
-
-@MainActor
-private final class ActivePlacePill: UIControl {
-    private let bg = UIView()
-    private let iconView = TabIconView()
-    private var hovered = false
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        isAccessibilityElement = true
-        accessibilityTraits = .button
-        MacTitleBarClick.markInteractive(self)
-        MacHover.drawsOwnHover(self)
-
-        bg.isUserInteractionEnabled = false
-        bg.layer.cornerRadius = 9
-        bg.layer.cornerCurve = .continuous
-        bg.layer.shadowColor = UIColor.black.cgColor
-        bg.layer.shadowOffset = CGSize(width: 0, height: 1)
-        bg.layer.shadowRadius = 2.5
-        addSubview(bg)
-
-        iconView.isUserInteractionEnabled = false
-        iconView.contentMode = .center
-        iconView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 13.5, weight: .medium)
-        addSubview(iconView)
-
-        addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hover(_:))))
-        recolor()
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
-
-    func configure(image: UIImage?, title: String) {
-        iconView.icon = image
-        accessibilityLabel = title
-        toolTip = title
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        bg.frame = bounds
-        bg.layer.shadowPath = UIBezierPath(roundedRect: bounds, cornerRadius: 9).cgPath
-        iconView.frame = bounds
-    }
-
-    override var isHighlighted: Bool { didSet { recolor() } }
-
-    @objc private func hover(_ g: UIHoverGestureRecognizer) {
-        hovered = g.state == .began || g.state == .changed
-        recolor()
-    }
-
-    func recolor() {
-        let dark = traitCollection.userInterfaceStyle == .dark
-        bg.backgroundColor = dark
-            ? UIColor(white: 1, alpha: isHighlighted ? 0.20 : hovered ? 0.16 : 0.13)
-            : UIColor(white: 1, alpha: isHighlighted ? 0.96 : hovered ? 0.90 : 0.78)
-        bg.layer.borderWidth = HQShape.pixel(traitCollection.displayScale)
-        bg.layer.borderColor = (dark ? UIColor(white: 1, alpha: 0.14) : UIColor(white: 0, alpha: 0.08)).cgColor
-        bg.layer.shadowOpacity = dark ? 0.22 : 0.07
-        iconView.tintColor = HQPalette.label
     }
 }
 

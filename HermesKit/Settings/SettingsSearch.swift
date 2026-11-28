@@ -178,10 +178,11 @@ nonisolated enum SettingsSearch {
         .init(id: "app:check-plugin-updates", label: checkPluginUpdatesLabel, context: "Bots & Tools", keywords: ["plugin", "plugins", "updates", "check", "manual"], target: .root("row:check-plugin-updates")),
     ] + shareMenuRow + VoiceSettingsCatalog.searchRows
 
-    /// [macpass-settings2] The Mac's Share Menu row (General): "share" found only Share Logs.
+    /// [macpass-settings2] The Mac's Share Menu row (General) and Window Transparency row (Appearance).
     #if targetEnvironment(macCatalyst)
     private static let shareMenuRow: [SettingsSearchEntry] = [
         .init(id: "app:share-menu", label: "Share Menu", context: "General", keywords: ["share", "share sheet", "share extension", "send to bot", "other apps"], target: .root("row:share-menu")),
+        .init(id: "app:window-transparency", label: "Window Transparency", context: "Appearance", keywords: ["transparency", "translucent", "glass", "frosted", "vibrancy", "opaque", "solid", "window", "sidebar"], target: .root("row:window-transparency")),
     ]
     #else
     private static let shareMenuRow: [SettingsSearchEntry] = []

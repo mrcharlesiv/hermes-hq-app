@@ -17,20 +17,46 @@ enum MacGlassShell {
     /// Leading clearance reserved for the native red/yellow/green traffic lights (app pts).
     static let trafficLightsClearance: CGFloat = 104
 
+    /// UserDefaults key for opting out of Mac window translucency (defaults to `true` when unset).
+    nonisolated static let transparencyKey = "hqn.macWindowTransparency"
+    /// Posted on main whenever the user toggles Window Transparency in Settings › Appearance.
+    nonisolated static let transparencyDidChange = Notification.Name("hq.macGlassShell.transparencyDidChange")
+
+    /// User preference for Mac window transparency (`true` unless explicitly turned off in Settings › Appearance).
+    nonisolated static var userTransparencyEnabled: Bool {
+        let defaults = UserDefaults.standard
+        return defaults.object(forKey: transparencyKey) == nil || defaults.bool(forKey: transparencyKey)
+    }
+
+    /// Updates the user's Window Transparency preference and refreshes every open Mac window immediately.
+    static func setUserTransparencyEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: transparencyKey)
+        NotificationCenter.default.post(name: transparencyDidChange, object: nil)
+        for scene in UIApplication.shared.connectedScenes {
+            guard let ws = scene as? UIWindowScene else { continue }
+            for window in ws.windows { apply(to: window) }
+        }
+    }
+
+    /// Whether live behind-window glass and subtle canvas translucency are active right now.
+    nonisolated static var isTransparencyEnabled: Bool {
+        !HQAccessibility.reduceTransparency && userTransparencyEnabled
+    }
+
     private static var effectViewKey: UInt8 = 0
     private static var configuredKey: UInt8 = 0
 
     /// Applies behind-window vibrancy to the backing AppKit `NSWindow` of `window`, and synchronizes
-    /// its appearance and Reduce Transparency state. Safe to call repeatedly on trait/theme changes.
+    /// its appearance and transparency state. Safe to call repeatedly on trait/theme/setting changes.
     static func apply(to window: UIWindow?) {
         guard let window else { return }
-        let reduced = HQAccessibility.reduceTransparency
+        let solid = !isTransparencyEnabled
         let dark = window.traitCollection.userInterfaceStyle == .dark
 
-        window.isOpaque = reduced
-        window.backgroundColor = reduced ? fallbackShellColor.resolvedColor(with: window.traitCollection) : .clear
-        window.layer.isOpaque = reduced
-        window.layer.backgroundColor = (reduced ? fallbackShellColor.resolvedColor(with: window.traitCollection) : UIColor.clear).cgColor
+        window.isOpaque = solid
+        window.backgroundColor = solid ? fallbackShellColor.resolvedColor(with: window.traitCollection) : .clear
+        window.layer.isOpaque = solid
+        window.layer.backgroundColor = (solid ? fallbackShellColor.resolvedColor(with: window.traitCollection) : UIColor.clear).cgColor
 
         guard let nsWindow = nsWindow(for: window) else {
             // The AppKit NSWindow attaches slightly after `willConnectTo`; retry shortly.
@@ -40,14 +66,14 @@ enum MacGlassShell {
             }
             return
         }
-        configure(nsWindow: nsWindow, for: window, dark: dark, reduced: reduced)
+        configure(nsWindow: nsWindow, for: window, dark: dark, solid: solid)
     }
 
     private static func applyIfWindowPresent(_ window: UIWindow, attempt: Int) {
         guard window.windowScene != nil else { return }
         if let nsWindow = nsWindow(for: window) {
             configure(nsWindow: nsWindow, for: window, dark: window.traitCollection.userInterfaceStyle == .dark,
-                      reduced: HQAccessibility.reduceTransparency)
+                      solid: !isTransparencyEnabled)
             NotificationCenter.default.post(name: didAttachWindow, object: window)
         } else if attempt < 10 {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak window] in
@@ -103,86 +129,109 @@ enum MacGlassShell {
     }
 
     /// Soft neutral fallback color when Reduce Transparency is active (or during offscreen UIKit-only snapshots).
-    static let fallbackShellColor = UIColor { @Sendable traits in
+    nonisolated static let fallbackShellColor = UIColor { @Sendable traits in
         let dark = traits.userInterfaceStyle == .dark
         let set = ThemeTable.set(generation: traits[ThemeGenerationTrait.self])
         if set.groupedPageIsSystem {
             return dark ? UIColor(red: 0.10, green: 0.105, blue: 0.12, alpha: 1)
                         : UIColor(red: 0.915, green: 0.922, blue: 0.938, alpha: 1)
         }
-        // Tinted gently toward colored skin's page color.
-        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        HQPalette.page.resolvedColor(with: traits).getRed(&r, green: &g, blue: &b, alpha: &a)
-        let delta: CGFloat = dark ? -0.04 : -0.055
-        return UIColor(red: min(max(r + delta, 0), 1), green: min(max(g + delta, 0), 1), blue: min(max(b + delta, 0), 1), alpha: 1)
+        let high = traits.accessibilityContrast == .high || HQAccessibility.overrides.contrast
+        let page = set.tokens(dark: dark, increaseContrast: high).page.uiColor
+        return adjusted(page, delta: dark ? -0.04 : -0.055)
     }
 
-    /// Subtle translucent tint over the live behind-window vibrancy so the sidebar and top bar stay cohesive with
-    /// the floating content canvas while letting the desktop wallpaper bloom cleanly through the frosted shell.
-    static let glassVeilColor = UIColor { @Sendable traits in
+    /// Light translucent tint over the live behind-window vibrancy so the outer sidebar & top bar feel noticeably
+    /// more transparent and glassy than the floating content canvas while keeping icons and text crisp.
+    nonisolated static let glassVeilColor = UIColor { @Sendable traits in
         let dark = traits.userInterfaceStyle == .dark
         let set = ThemeTable.set(generation: traits[ThemeGenerationTrait.self])
         if set.groupedPageIsSystem {
-            // Light: luminous airy veil so the frosted shell stays close in brightness to the white card (never muddy grey).
-            // Dark: deep smoked obsidian veil so the shell sits slightly deeper than the elevated dark glass canvas.
-            return dark ? UIColor(red: 0.052, green: 0.058, blue: 0.076, alpha: 0.58)
-                        : UIColor(red: 0.985, green: 0.988, blue: 0.994, alpha: 0.44)
+            // Enough veil that the frame stays a dark (or light) surface on any wallpaper: at 0.08 a yellow desktop
+            // turned the dark sidebar mustard (109/101/42 under white names and the blue "Working…"), and a black
+            // one turned the light sidebar mid grey. The desktop's hue still shows clearly, more than in the canvas.
+            return dark ? UIColor(red: 0.04, green: 0.048, blue: 0.065, alpha: 0.40)
+                        : UIColor(red: 0.99, green: 0.994, blue: 1.0, alpha: 0.34)
         }
-        let page = HQPalette.page.resolvedColor(with: traits)
+        let high = traits.accessibilityContrast == .high || HQAccessibility.overrides.contrast
+        let page = set.tokens(dark: dark, increaseContrast: high).page.uiColor
         if dark {
-            return adjusted(page, delta: -0.025).withAlphaComponent(0.60)
+            // A skin's frame is the skin's colour first and the desktop second, so it stays one piece with its canvas.
+            return adjusted(page, delta: -0.02).withAlphaComponent(0.52)
         }
-        return page.withAlphaComponent(0.46)
+        return page.withAlphaComponent(0.50)
     }
 
     /// Opaque base tone of the floating content canvas (used by `canvasSurfaceColor` and scrolled header frosts
-    /// so scrolled bars match the lifted dark canvas tone instead of dropping back to darker raw `HQPalette.page`).
-    static let canvasBaseColor = UIColor { @Sendable traits in
+    /// so scrolled bars match the floating canvas seamlessly).
+    nonisolated static let canvasBaseColor = UIColor { @Sendable traits in
         let dark = traits.userInterfaceStyle == .dark
         let set = ThemeTable.set(generation: traits[ThemeGenerationTrait.self])
-        let page = HQPalette.page.resolvedColor(with: traits)
+        let high = traits.accessibilityContrast == .high || HQAccessibility.overrides.contrast
+        let page = set.tokens(dark: dark, increaseContrast: high).page.uiColor
         if set.groupedPageIsSystem {
             if dark {
-                let lift: CGFloat = set.state.desktopLook ? 0.028 : 0.052
+                let lift: CGFloat = set.state.desktopLook ? 0.010 : 0.014
                 return adjusted(page, delta: lift)
             }
             return .white
         }
-        return dark ? adjusted(page, delta: 0.026) : page
+        return dark ? adjusted(page, delta: 0.010) : page
     }
 
-    /// Unified translucent surface for the floating content canvas (`RootSplitController.macCanvas`).
-    /// Lets a whisper of the behind-window frosted glass continue across the main workspace (~13–18% live ambient
-    /// tint) so the sidebar and content pane feel cut from the same window while preserving razor-sharp legibility.
-    static let canvasSurfaceColor = UIColor { @Sendable traits in
-        if HQAccessibility.reduceTransparency {
-            return HQPalette.page.resolvedColor(with: traits)
-        }
+    /// Unified subtly translucent surface for the floating content canvas (`RootSplitController.macCanvas`).
+    /// Clearly more solid than the outer frosted shell for effortless reading, yet lets just a touch of the
+    /// behind-window frosted wallpaper breathe softly through the workspace.
+    nonisolated static let canvasSurfaceColor = UIColor { @Sendable traits in
         let dark = traits.userInterfaceStyle == .dark
         let set = ThemeTable.set(generation: traits[ThemeGenerationTrait.self])
+        if !isTransparencyEnabled {
+            let high = traits.accessibilityContrast == .high || HQAccessibility.overrides.contrast
+            return set.tokens(dark: dark, increaseContrast: high).page.uiColor
+        }
         let base = canvasBaseColor.resolvedColor(with: traits)
         if set.groupedPageIsSystem {
-            return base.withAlphaComponent(dark ? 0.76 : 0.74)
+            // "Just a touch" (owner, 2026-11-27): at 0.64 / 0.72 the white card read cream beside the frame
+            // and a busy desktop tinted the whole chat. Dark stops at 0.76: lower, a bright desktop lifts the canvas
+            // to within a few steps of the bot bubbles' grey.
+            return base.withAlphaComponent(dark ? 0.76 : 0.84)
         }
-        return base.withAlphaComponent(dark ? 0.78 : 0.76)
+        return base.withAlphaComponent(dark ? 0.78 : 0.84)
     }
 
     /// Frosted header veil matching `canvasBaseColor` when scrolled content passes under the chat bar.
-    static let canvasBarVeilColor = UIColor { @Sendable traits in
-        let base = HQAccessibility.reduceTransparency
-            ? HQPalette.page.resolvedColor(with: traits)
-            : canvasBaseColor.resolvedColor(with: traits)
-        return base.withAlphaComponent(HQAccessibility.reduceTransparency ? 1.0 : 0.90)
+    nonisolated static let canvasBarVeilColor = UIColor { @Sendable traits in
+        let solid = !isTransparencyEnabled
+        let base: UIColor
+        if solid {
+            let dark = traits.userInterfaceStyle == .dark
+            let set = ThemeTable.set(generation: traits[ThemeGenerationTrait.self])
+            let high = traits.accessibilityContrast == .high || HQAccessibility.overrides.contrast
+            base = set.tokens(dark: dark, increaseContrast: high).page.uiColor
+        } else {
+            base = canvasBaseColor.resolvedColor(with: traits)
+        }
+        return base.withAlphaComponent(solid ? 1.0 : 0.42)
     }
 
-    /// Whisper-thin glass seam separating the floating canvas from the outer frosted shell.
-    static let canvasBorderColor = UIColor { @Sendable traits in
+    /// The backing a titled page's bar takes inside the glass canvas once rows scroll under it (`MacWindow.pageBar`;
+    /// at rest that bar has no background, so the header is the page itself with no strip). At the chat band's 0.42 a
+    /// row's label showed through under the title; this is near solid, as a bar over rows is. The base alone made a
+    /// white strip over a light page (ten steps brighter, the canvas lets a little desktop through and a grouped page
+    /// adds its tint), so it is nudged to where such a page lands.
+    nonisolated static let canvasPageBarVeilColor = UIColor { @Sendable traits in
+        let dark = traits.userInterfaceStyle == .dark
+        return adjusted(canvasBaseColor.resolvedColor(with: traits), delta: dark ? 0.03 : -0.04).withAlphaComponent(0.94)
+    }
+
+    /// Crisp glass seam separating the floating canvas card from the translucent outer shell.
+    nonisolated static let canvasBorderColor = UIColor { @Sendable traits in
         traits.userInterfaceStyle == .dark
-            ? UIColor(white: 1, alpha: 0.085)
-            : UIColor(white: 0, alpha: 0.052)
+            ? UIColor(white: 1, alpha: 0.115)
+            : UIColor(white: 0, alpha: 0.08)
     }
 
-    private static func adjusted(_ color: UIColor, delta: CGFloat) -> UIColor {
+    nonisolated private static func adjusted(_ color: UIColor, delta: CGFloat) -> UIColor {
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         guard color.getRed(&r, green: &g, blue: &b, alpha: &a) else { return color }
         return UIColor(red: min(max(r + delta, 0), 1),
@@ -193,9 +242,9 @@ enum MacGlassShell {
 
     // MARK: - AppKit Bridge
 
-    private static func configure(nsWindow: NSObject, for uiWindow: UIWindow, dark: Bool, reduced: Bool) {
+    private static func configure(nsWindow: NSObject, for uiWindow: UIWindow, dark: Bool, solid: Bool) {
         // 1. Window transparency & transparent titlebar.
-        setBool(nsWindow, selector: "setOpaque:", value: reduced)
+        setBool(nsWindow, selector: "setOpaque:", value: solid)
         setBool(nsWindow, selector: "setTitlebarAppearsTransparent:", value: true)
         if let nsColorClass = NSClassFromString("NSColor") as? NSObject.Type,
            let clearColor = nsColorClass.perform(NSSelectorFromString("clearColor"))?.takeUnretainedValue() as? NSObject {
@@ -221,12 +270,14 @@ enum MacGlassShell {
         if let effectView {
             // NSVisualEffectBlendingModeBehindWindow = 0
             setInt(effectView, selector: "setBlendingMode:", value: 0)
-            // Light: NSVisualEffectMaterialSidebar (7) for airy luminous vibrancy.
-            // Dark: NSVisualEffectMaterialUnderWindowBackground (18) for deep smoked glass without grey washout.
-            setInt(effectView, selector: "setMaterial:", value: dark ? 18 : 7)
-            // NSVisualEffectStateActive = 1 (or Inactive = 2 when Reduce Transparency is on)
-            setInt(effectView, selector: "setState:", value: reduced ? 2 : 1)
-            setBool(effectView, selector: "setHidden:", value: reduced)
+            // NSVisualEffectMaterialPopover (6) delivers rich, luminous behind-window frosted translucency
+            // in both Dark and Light appearances without washing out grey like .hudWindow (13) or flattening
+            // into opaque grey like .sidebar (7) in Light Mode.
+            setInt(effectView, selector: "setMaterial:", value: 6)
+            // NSVisualEffectStateFollowsWindowActiveState = 0: the glass goes quiet when the window is in the background,
+            // as every Mac window's does (Inactive = 2 when transparency is off).
+            setInt(effectView, selector: "setState:", value: solid ? 2 : 0)
+            setBool(effectView, selector: "setHidden:", value: solid)
         }
 
         // 4. Ensure Catalyst's hosting layer doesn't paint an opaque background over the NSVisualEffectView.
@@ -235,7 +286,7 @@ enum MacGlassShell {
         if objc_getAssociatedObject(uiWindow, &configuredKey) == nil {
             objc_setAssociatedObject(uiWindow, &configuredKey, true, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
             let subviewNames = ((contentView.value(forKey: "subviews") as? [NSObject]) ?? []).map { NSStringFromClass(type(of: $0)) }
-            AppLog.note("mac", "glass shell attached to NSWindow (dark=\(dark), reduced=\(reduced), subviews=\(subviewNames.joined(separator: ",")))")
+            AppLog.note("mac", "glass shell attached to NSWindow (dark=\(dark), solid=\(solid), subviews=\(subviewNames.joined(separator: ",")))")
         }
     }
 
@@ -334,6 +385,7 @@ enum MacGlassShell {
 final class MacShellBackdrop: UIView {
     private var themeToken: NSObjectProtocol?
     private var a11yToken: NSObjectProtocol?
+    private var prefToken: NSObjectProtocol?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -349,6 +401,9 @@ final class MacShellBackdrop: UIView {
         a11yToken = NotificationCenter.default.addObserver(forName: UIAccessibility.reduceTransparencyStatusDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
         }
+        prefToken = NotificationCenter.default.addObserver(forName: MacGlassShell.transparencyDidChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refresh() }
+        }
         refresh()
     }
 
@@ -357,6 +412,7 @@ final class MacShellBackdrop: UIView {
     isolated deinit {
         if let themeToken { NotificationCenter.default.removeObserver(themeToken) }
         if let a11yToken { NotificationCenter.default.removeObserver(a11yToken) }
+        if let prefToken { NotificationCenter.default.removeObserver(prefToken) }
     }
 
     override func didMoveToWindow() {
@@ -365,8 +421,8 @@ final class MacShellBackdrop: UIView {
     }
 
     func refresh() {
-        let reduced = HQAccessibility.reduceTransparency
-        backgroundColor = reduced ? MacGlassShell.fallbackShellColor : MacGlassShell.glassVeilColor
+        let solid = !MacGlassShell.isTransparencyEnabled
+        backgroundColor = solid ? MacGlassShell.fallbackShellColor : MacGlassShell.glassVeilColor
         MacGlassShell.apply(to: window)
     }
 }

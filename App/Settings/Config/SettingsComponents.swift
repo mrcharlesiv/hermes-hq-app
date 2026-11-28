@@ -16,6 +16,11 @@ final class SettingsPageController<Content: View>: UIHostingController<HQScaledR
 
     @MainActor required dynamic init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = HQPalette.paneGroupedPage
+    }
+
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         if isMovingFromParent || navigationController == nil { onDisappear?() }

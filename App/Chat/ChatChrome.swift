@@ -1128,7 +1128,13 @@ final class ChatEdgeStandIn: UIView {
             picture.alpha = 0
             blur.isHidden = solid
             blur.layer.mask = nil
+            #if targetEnvironment(macCatalyst)
+            let macGlass = traitCollection[MacGlassCanvasTrait.self] && MacGlassShell.isTransparencyEnabled
+            let page = (macGlass ? MacGlassShell.canvasBaseColor : ChatPalette.page).resolvedColor(with: traitCollection)
+            #else
+            let macGlass = false
             let page = ChatPalette.page.resolvedColor(with: traitCollection)
+            #endif
             // [Mac AAA rest 2026-11-17] In Desktop Look the band carries `DesktopFrost.barTintAlpha`; in Native mode
             // with the extra-chats banner this is the sole frosted sheet (no `edgeHost.topEdgeEffect` stacked behind
             // it), so a slightly lighter page veil lets scrolled bubbles breathe through while keeping a clean sheet.
@@ -1137,6 +1143,8 @@ final class ChatEdgeStandIn: UIView {
                 veil = 1
             } else if nativeSheet {
                 veil = picture.showsPicture ? 0.55 : 0.65
+            } else if macGlass {
+                veil = keeps ? 0.45 : 0.42
             } else {
                 veil = keeps ? DesktopFrost.barTintAlpha : 0.6
             }

@@ -448,6 +448,7 @@ final class SettingsRootController: UIHostingController<HQScaledRoot<SettingsRoo
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        view.backgroundColor = HQPalette.paneGroupedPage
         if router.navigation == nil { router.navigation = navigationController }
         if isSheetRoot {
             // Every sheet's bar matches (ChatSheet.wrap, verify round 1): the ✕ leading, an inline title.
@@ -511,11 +512,12 @@ final class SettingsRootController: UIHostingController<HQScaledRoot<SettingsRoo
         if model.twoColumn {
             if paneStack == nil {
                 let page = UIHostingController(rootView: HQScaledRoot(SettingsRootView(model: model, router: router, actions: actions, pane: true)))
+                page.view.backgroundColor = HQPalette.paneGroupedPage
                 page.navigationItem.largeTitleDisplayMode = .never
                 let stack = UINavigationController(rootViewController: page)
                 stack.navigationBar.prefersLargeTitles = false
                 stack.delegate = PushedPageTitles.shared
-                stack.view.backgroundColor = HQPalette.groupedPage
+                stack.view.backgroundColor = HQPalette.paneGroupedPage
                 // [Mac AAA 2026-11-16] Hosted by the SwiftUI page beside the column (`SettingsPaneHost`), not added to
                 // this hosting controller's own view: UIKit warned it does not support that ("Adding … as a subview
                 // of UIHostingController.view is not supported").
@@ -723,7 +725,7 @@ struct SettingsRootView: View {
                     Color.clear
                 }
             }
-            .background(Color.hqGroupedPage.ignoresSafeArea())
+            .background(Color(uiColor: HQPalette.paneGroupedPage).ignoresSafeArea())
         } else {
             list
         }

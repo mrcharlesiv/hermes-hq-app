@@ -75,27 +75,103 @@ nonisolated struct ProjectNewChat: Codable, Hashable, Sendable {
     }
 }
 
-/// [project-look] A project's own emoji and colour (an index into `SessionColors`).
+/// [project-look] A project's own emoji or SF Symbol and colour (an index into `SessionColors`).
+/// `emoji` and `symbol` are mutually exclusive: setting an emoji clears any symbol, and setting a symbol clears any emoji.
 nonisolated struct ProjectLook: Codable, Hashable, Sendable {
     var emoji: String? = nil
+    var symbol: String? = nil
     var color: Int? = nil
 
-    var isEmpty: Bool { emoji == nil && color == nil }
+    var isEmpty: Bool { emoji == nil && symbol == nil && color == nil }
 
-    init(emoji: String? = nil, color: Int? = nil) {
-        self.emoji = Self.oneEmoji(emoji)
+    init(emoji: String? = nil, symbol: String? = nil, color: Int? = nil) {
+        let cleanEmoji = Self.oneEmoji(emoji)
+        self.emoji = cleanEmoji
+        self.symbol = cleanEmoji == nil ? Self.cleanSymbol(symbol) : nil
         self.color = color.flatMap { SessionColors.names.indices.contains($0) ? $0 : nil }
     }
 
     init(json: JSONValue?) {
-        self.init(emoji: json?["emoji"]?.string, color: json?["color"]?.int)
+        self.init(emoji: json?["emoji"]?.string, symbol: json?["symbol"]?.string, color: json?["color"]?.int)
     }
 
     var json: JSONValue {
         var out: [String: JSONValue] = [:]
         if let emoji { out["emoji"] = .string(emoji) }
+        if let symbol, emoji == nil { out["symbol"] = .string(symbol) }
         if let color { out["color"] = .number(Double(color)) }
         return .object(out)
+    }
+
+    /// Short description for settings rows and VoiceOver ("Default Folder", "🚀 · Teal", "Tools · Blue", "Teal Folder").
+    var summaryLabel: String {
+        let colorName = color.flatMap(SessionColors.name)
+        if let emoji {
+            return colorName.map { "\(emoji) · \($0)" } ?? emoji
+        }
+        if let symbol {
+            let symbolName = Self.symbolLabel(symbol)
+            return colorName.map { "\(symbolName) · \($0)" } ?? symbolName
+        }
+        if let colorName {
+            return "\(colorName) Folder"
+        }
+        return "Default Folder"
+    }
+
+    /// Curated project emojis for one-tap picking.
+    static let emojis: [String] = [
+        "🚀", "🛠️", "📱", "🌐", "🎨", "✨",
+        "⚡", "📝", "📚", "📊", "💰", "🛒",
+        "🏠", "🌿", "🎵", "🎮", "📷", "🔒",
+        "🧪", "🤖", "📦", "🎯", "🔥", "❤️",
+    ]
+
+    /// Curated monochrome SF Symbols for cleaner / Desktop Look project badges.
+    static let symbols: [(name: String, label: String)] = [
+        ("hammer.fill", "Tools"),
+        ("wrench.and.screwdriver.fill", "Build"),
+        ("terminal.fill", "Terminal"),
+        ("chevron.left.forwardslash.chevron.right", "Code"),
+        ("iphone", "Phone"),
+        ("laptopcomputer", "Computer"),
+        ("globe", "Web"),
+        ("server.rack", "Server"),
+        ("paintbrush.fill", "Design"),
+        ("sparkles", "Sparkles"),
+        ("bolt.fill", "Lightning"),
+        ("doc.text.fill", "Document"),
+        ("book.fill", "Book"),
+        ("chart.bar.fill", "Analytics"),
+        ("banknote.fill", "Finance"),
+        ("cart.fill", "Shopping"),
+        ("house.fill", "Home"),
+        ("leaf.fill", "Nature"),
+        ("music.note", "Music"),
+        ("gamecontroller.fill", "Gaming"),
+        ("camera.fill", "Camera"),
+        ("lock.shield.fill", "Security"),
+        ("flame.fill", "Flame"),
+        ("star.fill", "Star"),
+    ]
+
+    static func symbolLabel(_ name: String) -> String {
+        if let found = symbols.first(where: { $0.name == name }) { return found.label }
+        let plain = name.replacingOccurrences(of: ".fill", with: "").replacingOccurrences(of: ".", with: " ")
+        return plain.prefix(1).uppercased() + plain.dropFirst()
+    }
+
+    /// Validated SF Symbol name: trimmed, ASCII letters/digits/dots/hyphens/underscores only; nil when blank or invalid.
+    static func cleanSymbol(_ text: String?) -> String? {
+        let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty, trimmed.count <= 64 else { return nil }
+        let ok = trimmed.unicodeScalars.allSatisfy { s in
+            (s.value >= 0x30 && s.value <= 0x39)
+                || (s.value >= 0x41 && s.value <= 0x5A)
+                || (s.value >= 0x61 && s.value <= 0x7A)
+                || s == "." || s == "-" || s == "_"
+        }
+        return ok ? trimmed : nil
     }
 
     /// The field holds one character: the last one typed (so typing over a set emoji replaces it); nothing for

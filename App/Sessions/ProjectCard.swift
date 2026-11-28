@@ -835,15 +835,19 @@ struct ProjectCardHeader: View {
 
     /// A folder (Home: a house) in a small box, where a chat row has its face.
     private var folder: some View {
-        // [project-look] The project's own emoji stands where the folder did (on its colour, when it has both); a
-        // colour alone fills the folder with it. Home keeps its house.
+        // [project-look] The project's own emoji or SF Symbol stands where the folder did (on its colour, when it has
+        // both); a colour alone fills the folder with it. Home keeps its house.
         let look = summary.home ? ProjectLook() : summary.look
         let colour = look.color.map { Color(uiColor: SessionsOrganizer.uiColor($0)) }
-        let backed = look.emoji != nil && colour != nil
+        let backed = (look.emoji != nil || look.symbol != nil) && colour != nil
         let bare = quiet && !carded   // [projects-tidy] no box on the Mac's page (a dragged chat held over it: its card's)
         return Group {
             if let emoji = look.emoji {
                 Text(emoji).font(.system(size: boxSize * 0.56))     // a11y-font-ok: sized to the face column, as the faces
+            } else if let symbol = look.symbol {
+                Image(systemName: symbol)
+                    .font(.system(size: boxSize * 0.50, weight: .semibold))     // a11y-font-ok: sized to the face column, as the faces
+                    .foregroundStyle(colour ?? Color.hqLabel2)
             } else {
                 Image(systemName: summary.home ? "house" : colour != nil ? "folder.fill" : "folder")
                     .font(.system(size: boxSize * 0.52, weight: .medium))     // a11y-font-ok: sized to the face column, as the faces
@@ -853,9 +857,10 @@ struct ProjectCardHeader: View {
             // [slim-rail] In the slim column the folder stands alone, as wide as the column: no box.
             // [projects-tidy] Bare, the glyph starts on the column's leading edge (an emoji or a box stays centred).
             .frame(width: ProjectCard.slim ? ProjectCard.column : bare ? Self.quietColumn : boxSize, height: boxSize,
-                   alignment: bare && look.emoji == nil ? .leading : .center)
+                   alignment: bare && look.emoji == nil && !backed ? .leading : .center)
             .background(RoundedRectangle(cornerRadius: desk ? 6 : 8, style: .continuous)
-                .fill(backed ? (colour ?? .clear).opacity(0.32) : Color(uiColor: carded && !ProjectCard.soft ? ProjectCard.box : ProjectCard.boxOnPage))
+                .fill(backed ? (colour ?? .clear).opacity(look.emoji != nil ? 0.32 : 0.20)
+                             : Color(uiColor: carded && !ProjectCard.soft ? ProjectCard.box : ProjectCard.boxOnPage))
                 .frame(width: backed && ProjectCard.slim ? boxSize : nil, height: backed && bare ? Self.quietColumn : nil)
                 .opacity((ProjectCard.slim || bare) && !backed ? 0 : 1))
             .overlay {

@@ -81,8 +81,12 @@ extension SessionsViewController {
         }
         let keys = shown + all.filter { !shown.contains($0) }
         return keys.map { key in
-            SessionGroupOrderPage.Item(key: key, title: titles[key] ?? key,
-                                       canDelete: !bots && key != SessionProjects.homeKey && store.canDeleteProject(key: key))
+            let isHome = !bots && key == SessionProjects.homeKey
+            return SessionGroupOrderPage.Item(
+                key: key, title: titles[key] ?? key,
+                canDelete: !bots && !isHome && store.canDeleteProject(key: key),
+                look: bots || isHome ? ProjectLook() : store.projectLook(key),
+                isHome: isHome)
         }
     }
 

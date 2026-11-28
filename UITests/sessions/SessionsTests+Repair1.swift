@@ -79,11 +79,11 @@ extension SessionsTests {
         fixture("/__fixture/fail", ["rpc": "projects.create", "delay": 40, "count": 1])
         openFilter(app)
         tapFilter(app, "project", "project.new")
-        let alert = app.alerts["New Project"]
-        XCTAssertTrue(alert.waitForExistence(timeout: 5), "the New Project alert")
-        fill(alert.textFields["project.name"], "Slow")
-        fill(alert.textFields["project.folder"], "~/Projects/slow")
-        press(alert.buttons["Create"])
+        let nav = app.navigationBars["New Project"]
+        XCTAssertTrue(nav.waitForExistence(timeout: 5), "the New Project sheet")
+        fill(app.textFields["project.name"], "Slow")
+        fill(app.textFields["project.folder"], "~/Projects/slow")
+        app.buttons["project.create"].tap()
         let failed = app.alerts["Couldn’t Create Project"]
         XCTAssertTrue(failed.waitForExistence(timeout: 60), "the failure, after the 30 s the call is given")
         let words = failed.staticTexts.allElementsBoundByIndex.map(\.label)

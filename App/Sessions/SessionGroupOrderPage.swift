@@ -10,6 +10,8 @@ struct SessionGroupOrderPage: View {
         var key: String
         var title: String
         var canDelete = false
+        var look = ProjectLook()
+        var isHome = false
         var id: String { key }
     }
 
@@ -64,6 +66,19 @@ struct SessionGroupOrderPage: View {
     private func rows(_ lane: [Item], favorite: Bool) -> some View {
         ForEach(lane) { item in
             HStack(spacing: 12) {
+                if !bots {
+                    Group {
+                        if item.isHome {
+                            Image(systemName: "house")
+                                .font(Font.hqSystem(size: HQFont.scaled(15), weight: .medium))
+                                .foregroundStyle(Color.hqLabel2)
+                        } else {
+                            ProjectLookMark(look: item.look, size: 17, defaultFilled: false)
+                        }
+                    }
+                    .frame(width: HQFont.scaled(24))
+                    .accessibilityHidden(true)
+                }
                 Text(item.title).foregroundStyle(Color.hqLabel).lineLimit(2)
                 Spacer(minLength: 0)
                 if !bots {

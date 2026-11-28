@@ -122,6 +122,8 @@ struct ProjectPillRun: View {
         }
         .opacity(project.archived && !picked ? 0.6 : 1)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { widths[project.key] = $0 }
+        .accessibilityAction(named: "Icon & Color…") { model.onLookProject(project.key, project.label) }
+        .accessibilityAction(named: "Project Settings…") { model.onSettingsProject(project.key, project.label) }
         .accessibilityAction(named: archive) { model.onArchiveProject(project.key, !project.archived) }
         .accessibilityActions {
             if index > 0 {
@@ -131,25 +133,31 @@ struct ProjectPillRun: View {
                 Button("Move After") { model.onMoveProject(project.key, shown[index + 1].key, shown.map(\.key)) }
             }
         }
-        .modifier(MacArchiveMenu(title: archive, archived: project.archived) {
-            model.onArchiveProject(project.key, !project.archived)
-        })
+        .modifier(MacProjectPillMenu(
+            archiveTitle: archive, archived: project.archived,
+            onLook: { model.onLookProject(project.key, project.label) },
+            onSettings: { model.onSettingsProject(project.key, project.label) },
+            onArchive: { model.onArchiveProject(project.key, !project.archived) }))
         .popover(isPresented: Binding(get: { menuFor == project.key },
                                       set: { if !$0, menuFor == project.key { menuFor = nil } }),
                  attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
-            Button {
-                menuFor = nil
-                model.onArchiveProject(project.key, !project.archived)
-            } label: {
-                Label(archive, systemImage: project.archived ? "tray.and.arrow.up" : "archivebox")
-                    .font(Font.hq(.body))
-                    .foregroundStyle(Color.hqLabel)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 13)
-                    .contentShape(Rectangle())
+            VStack(alignment: .leading, spacing: 0) {
+                popoverItem("Icon & Color…", symbol: "paintbrush", id: "sessions.chip.project.look") {
+                    menuFor = nil
+                    model.onLookProject(project.key, project.label)
+                }
+                Divider()
+                popoverItem("Project Settings…", symbol: "gearshape", id: "sessions.chip.project.settings") {
+                    menuFor = nil
+                    model.onSettingsProject(project.key, project.label)
+                }
+                Divider()
+                popoverItem(archive, symbol: project.archived ? "tray.and.arrow.up" : "archivebox", id: "sessions.chip.project.archive") {
+                    menuFor = nil
+                    model.onArchiveProject(project.key, !project.archived)
+                }
             }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("sessions.chip.project.archive")
+            .fixedSize(horizontal: true, vertical: true)
             .presentationCompactAdaptation(.popover)
         }
         // Carried, the pill is not read through: the pills it passes over don't show in its glass.
@@ -167,6 +175,20 @@ struct ProjectPillRun: View {
         // The lifted pill stays under the finger: its place in the row and its offset change together, unanimated.
         .transaction { if lifted { $0.animation = nil } }
         .id(SessionsHeaderModel.projectPillId(project.key))
+    }
+
+    private func popoverItem(_ title: String, symbol: String, id: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: symbol)
+                .font(Font.hq(.body))
+                .foregroundStyle(Color.hqLabel)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 12)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(id)
     }
 
     // MARK: Places
@@ -317,16 +339,21 @@ struct ProjectPillRun: View {
     }
 }
 
-/// The Mac's secondary click keeps the choice a hold gives.
-private struct MacArchiveMenu: ViewModifier {
-    var title: String
+/// The Mac's secondary click keeps the choices a hold gives.
+private struct MacProjectPillMenu: ViewModifier {
+    var archiveTitle: String
     var archived: Bool
-    var action: () -> Void
+    var onLook: () -> Void
+    var onSettings: () -> Void
+    var onArchive: () -> Void
 
     func body(content: Content) -> some View {
         if DeviceWord.isMac {
             content.contextMenu {
-                Button(action: action) { Label(title, systemImage: archived ? "tray.and.arrow.up" : "archivebox") }
+                Button(action: onLook) { Label("Icon & Color…", systemImage: "paintbrush") }
+                Button(action: onSettings) { Label("Project Settings…", systemImage: "gearshape") }
+                Divider()
+                Button(action: onArchive) { Label(archiveTitle, systemImage: archived ? "tray.and.arrow.up" : "archivebox") }
             }
         } else {
             content

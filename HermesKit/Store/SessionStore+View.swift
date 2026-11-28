@@ -267,13 +267,14 @@ extension SessionStore {
         onChange?()
     }
 
-    /// [project-look] A project's emoji and colour.
+    /// [project-look] A project's emoji or symbol and colour.
     func projectLook(_ key: String) -> ProjectLook { device.projectLooks[key] ?? ProjectLook() }
 
     func setProjectLook(_ key: String, _ look: ProjectLook) {
         guard projectLook(key) != look else { return }
         device.projectLooks[key] = look
-        AppLog.trace("sessions", "project look \(look.emoji == nil ? "no emoji" : "emoji"), \(look.color.map { "colour \($0)" } ?? "no colour")")
+        let iconKind = look.emoji != nil ? "emoji" : look.symbol != nil ? "symbol" : "no icon"
+        AppLog.trace("sessions", "project look \(iconKind), \(look.color.map { "colour \($0)" } ?? "no colour")")
         persistState()
         onChange?()
     }

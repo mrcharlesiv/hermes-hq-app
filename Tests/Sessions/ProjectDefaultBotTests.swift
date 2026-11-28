@@ -218,8 +218,8 @@ import Testing
         #expect(SessionRowView.branchShown("feat/a-very-long-branch-name-for-the-pricing-page-rewrite") == "feat/a-very…age-rewrite")
     }
 
-    /// [project-look] One character, the last typed; a colour outside the palette is none.
-    @Test func aProjectsLookHoldsOneEmojiAndAPaletteColour() {
+    /// [project-look] One emoji or validated SF Symbol (mutually exclusive), palette colour, summaries, and JSON/Codable round-trips.
+    @Test func aProjectsLookHoldsOneEmojiAndAPaletteColour() throws {
         #expect(ProjectLook.oneEmoji("🚀") == "🚀" && ProjectLook.oneEmoji("🚀🌊") == "🌊" && ProjectLook.oneEmoji("  ") == nil)
         #expect(ProjectLook.oneEmoji("👩‍🚀") == "👩‍🚀", "one grapheme, however many scalars")
         #expect(ProjectLook.oneEmoji("🌊🚀", replacing: "🚀") == "🌊", "typed before the old one, the new one stands")
@@ -228,6 +228,23 @@ import Testing
         #expect(ProjectLook(emoji: "ab", color: 99) == ProjectLook(emoji: "b", color: nil))
         #expect(ProjectLook(json: ["emoji": "", "color": 3]) == ProjectLook(color: 3))
         #expect(ProjectLook(json: ProjectLook(emoji: "🌊", color: 7).json) == ProjectLook(emoji: "🌊", color: 7))
+
+        // SF Symbol support, mutual exclusivity, validation, and sync round-trip.
+        let sym = ProjectLook(symbol: "hammer.fill", color: 8)
+        #expect(!sym.isEmpty && sym.emoji == nil && sym.symbol == "hammer.fill" && sym.color == 8)
+        #expect(ProjectLook(json: sym.json) == sym)
+        #expect(sym.json["symbol"]?.string == "hammer.fill" && sym.json["emoji"] == nil && sym.json["color"]?.int == 8)
+        let both = ProjectLook(emoji: "🚀", symbol: "hammer.fill", color: 2)
+        #expect(both.emoji == "🚀" && both.symbol == nil, "emoji and symbol are mutually exclusive")
+        #expect(ProjectLook.cleanSymbol("  globe  ") == "globe")
+        #expect(ProjectLook.cleanSymbol("bad name!") == nil && ProjectLook.cleanSymbol("") == nil)
+        #expect(ProjectLook().summaryLabel == "Default Folder")
+        #expect(ProjectLook(color: 6).summaryLabel == "Teal Folder")
+        #expect(ProjectLook(emoji: "🚀", color: 6).summaryLabel == "🚀 · Teal")
+        #expect(ProjectLook(symbol: "hammer.fill", color: 8).summaryLabel == "Tools · Blue")
+        #expect(!ProjectLook.emojis.isEmpty && !ProjectLook.symbols.isEmpty)
+        let legacy = try JSONDecoder().decode(ProjectLook.self, from: Data(#"{"emoji":"🌊","color":5}"#.utf8))
+        #expect(legacy == ProjectLook(emoji: "🌊", color: 5))
     }
 
     /// [project-new-chat-model] What a project's New Chat adds to `session.create`: nothing when nothing was chosen (the

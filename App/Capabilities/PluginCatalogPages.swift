@@ -52,7 +52,23 @@ struct PluginFindSection: View {
 
     private var query: String { model.query.trimmingCharacters(in: .whitespacesAndNewlines) }
 
+    /// [hq-plugins] Hermes HQ's own plugins this bot doesn't have (while searching: the ones that match, had or not).
+    private var fromHQ: [PluginCatalogEntry] {
+        PluginCatalogEntry.hermesHQ(matching: query).filter { !query.isEmpty || model.installedPlugin(for: $0) == nil }
+    }
+
     var body: some View {
+        // [hq-plugins] Above the catalog and not waiting on it: the list is the app's own.
+        let ours = fromHQ
+        if !ours.isEmpty, model.plugins != nil {
+            Section {
+                ForEach(ours) { entry in
+                    PluginCatalogRow(entry: entry, installed: model.installedPlugin(for: entry) != nil) { open(entry) }
+                }
+            } header: { HQSectionLabel { Text("From Hermes HQ") } } footer: { HQSectionFooter {
+                Text(PluginCatalogEntry.hermesHQFooter)
+            } }
+        }
         if let entries = catalog.entries {
             if query.isEmpty {
                 let popular = model.pluginCatalogPicks
@@ -288,13 +304,19 @@ final class PluginCatalogEntryModel {
             defer { installing = false; PluginInstallState.running = false }
             do {
                 let result: PluginResult
-                do {
-                    result = try await store.plugin(.installCatalog(name: entry.name, enable: true), profile: profile)
-                } catch where Self.predatesCatalogName(error) {
-                    // A Hermes from before `catalog_name` (2026-09): the same reviewed commit, by its address and pin.
-                    AppLog.note("plugins", "catalog install \(entry.name): gateway predates catalog_name, installing by repo at the pin")
-                    result = try await store.plugin(.install(identifier: entry.installIdentifier, force: false, enable: true,
-                                                             ref: entry.sha.isEmpty ? nil : entry.sha), profile: profile)
+                if entry.fromHQ {
+                    // [hq-plugins] Not in Nous's catalog: by its address, the newest version, as Install from Git does.
+                    result = try await store.plugin(.install(identifier: entry.installIdentifier, force: false, enable: true, ref: nil),
+                                                    profile: profile)
+                } else {
+                    do {
+                        result = try await store.plugin(.installCatalog(name: entry.name, enable: true), profile: profile)
+                    } catch where Self.predatesCatalogName(error) {
+                        // A Hermes from before `catalog_name` (2026-09): the same reviewed commit, by its address and pin.
+                        AppLog.note("plugins", "catalog install \(entry.name): gateway predates catalog_name, installing by repo at the pin")
+                        result = try await store.plugin(.install(identifier: entry.installIdentifier, force: false, enable: true,
+                                                                 ref: entry.sha.isEmpty ? nil : entry.sha), profile: profile)
+                    }
                 }
                 let name = result.name ?? entry.name
                 parent.noteInstalled(result, name: name)
@@ -424,7 +446,7 @@ struct PluginCatalogEntryView: View {
                         .padding(.vertical, 3)
                         .accessibilityIdentifier("plugin-catalog.shares")
                 } header: { HQSectionLabel { Text("What It Shares") } } footer: { HQSectionFooter {
-                    Text("From the plugin’s catalog listing, which Nous checks.")
+                    Text(entry.fromHQ ? "As Hermes HQ, who made it, describes it." : "From the plugin’s catalog listing, which Nous checks.")
                 } }
             }
             detailsSection
@@ -570,7 +592,11 @@ struct PluginCatalogEntryView: View {
         }
         if page.parent.pluginsUnavailable { return ("This gateway’s Hermes is too old to install plugins here. Update Hermes on \(HostWord.updateTarget).", Color.hqLabel2) }
         if page.parent.readOnly { return ("This gateway is read-only. Install from a gateway you can change.", Color.hqLabel2) }
-        if page.installing { return ("Hermes is downloading the version Nous reviewed. This can take a minute.", Color.hqLabel2) }
+        if page.installing {
+            return (entry.fromHQ ? "Hermes is downloading it from Hermes HQ’s repository. This can take a minute."
+                                 : "Hermes is downloading the version Nous reviewed. This can take a minute.", Color.hqLabel2)
+        }
+        if let note = entry.setupNote { return (note, Color.hqLabel2) }   // [hq-plugins] where its switch is
         // [plugin-pages] A page for the dashboard opens in Hermes HQ too.
         if entry.addsDashboardPage { return ("It adds a page you can open in Hermes HQ.", Color.hqLabel2) }
         if entry.category == .desktop { return ("This one adds to the Hermes desktop app on \(HostWord.phrase). It won’t show in Hermes HQ.", Color.hqLabel2) }
@@ -600,7 +626,7 @@ struct PluginCatalogEntryView: View {
             if let updated = entry.updatedAt ?? entry.addedAt {
                 detail(entry.updatedAt != nil && entry.updatedAt != entry.addedAt ? "Updated" : "Listed", updated.formatted(date: .abbreviated, time: .omitted))
             }
-            if let docs = entry.docsURL { link("Learn More", docs, id: "plugin-catalog.learn-more") }
+            if let docs = entry.docsURL { link(entry.fromHQ ? "See It on GitHub" : "Learn More", docs, id: "plugin-catalog.learn-more") }
             if let site = entry.pageURL { link("See in the Hermes Marketplace", site, id: "plugin-catalog.website") }
         } header: { HQSectionLabel { Text("Details") } } footer: { HQSectionFooter {
             Text(trustWords)
@@ -608,6 +634,9 @@ struct PluginCatalogEntryView: View {
     }
 
     private var trustWords: String {
+        if entry.fromHQ {
+            return "Made by Hermes HQ. It is not in the Hermes Marketplace, so Nous has not reviewed it. Hermes installs the newest version from Hermes HQ’s public repository."
+        }
         if entry.isOfficial { return "An official plugin, made by Nous. Hermes installs the exact version listed here." }
         if entry.isVerified { return "Certified: made by the company behind the service, checked by Nous. Hermes installs the exact version Nous reviewed." }
         return "Made by the Hermes community. Nous reviewed this exact version before listing it, and Hermes installs only that version."

@@ -3,32 +3,41 @@
 // Save): the page behind it redraws as a switch moves. Each setting is per project and follows the owner to their
 // other devices in the "sessions" document (`SessionStore+Sync.swift`).
 //
+//   Look            Icon & Color [project-look] (pushes visual Emoji/Symbol/Color picker); a coding project: Show Branch on Rows
 //   Chats           Keep Chats in This Project [project-keep] · Pins Stay in Project [project-pins] ·
 //                   Move Quiet Chats to Done [project-auto-done]
+//   Coding          Coding Project · Repository
 //   Notifications   All, Only When It Needs Me, Mute [project-mute]
 //   New Chats       Model, Reasoning [project-new-chat-model]
-//   Look            Icon, Color [project-look]; a coding project: Show Branch on Rows [project-branch-rows]
 //   (last)          Icon Guide [coding-pr-review]: the marks the page draws (it was the header's ⓘ)
 //
 // Home (the chats in no project) has a page too: it keeps what makes sense there (its pins, Done, notifications).
 
 import SwiftUI
 
+/// Shared tick so edits pushed inside the Project Settings sheet (e.g. Icon & Color) refresh the summary row live.
+@MainActor @Observable final class ProjectSettingsRefresh {
+    var tick = 0
+}
+
 struct ProjectSettingsPage: View {
     let project: String
+    let projectName: String
     let store: SessionStore
     /// The bot the project's New Chat starts with (its models are the ones offered), and its name.
     var bot: (id: String, name: String)? = nil
     /// The page behind redraws.
     var onChange: () -> Void = {}
+    /// Pushes the visual Icon & Color picker inside this settings sheet.
+    var onLook: (() -> Void)? = nil
     /// Pushes the project's Repository… configuration page inside this settings sheet.
     var onRepository: (() -> Void)? = nil
     /// [coding-pr-review] Icon Guide: the sheet pushes the project's icon guide (nil: no row).
     var onIconGuide: (() -> Void)? = nil
+    var refresh = ProjectSettingsRefresh()
 
     /// Bumped by every change: the page reads the store again.
     @State private var tick = 0
-    @State private var emoji = ""
     @State private var providers: [JobModelProvider] = []
     @State private var modelsLoaded = false
     @State private var loaded = false
@@ -48,23 +57,21 @@ struct ProjectSettingsPage: View {
     }
 
     var body: some View {
-        let _ = tick
+        let _ = (tick, refresh.tick)
         return List { Group {
+            if !isHome { look }
             chats
             if !isHome { codingSection }
             notifications
-            if !isHome {
-                newChats
-                look
-            }
+            if !isHome { newChats }
             iconGuide
         }.hqMacSettingsRowInsets() }
         .settingsList()
         .accessibilityIdentifier("sessions.projectSettings")
+        .onAppear { tick += 1 }
         .task {
             guard !loaded else { return }
             loaded = true
-            emoji = store.projectLook(project).emoji ?? ""
             guard !isHome, let bot else { modelsLoaded = true; return }
             let found = await Result.of { try await store.projectModelProviders(profile: bot.id) }
             providers = (try? found.get()) ?? []
@@ -251,103 +258,42 @@ struct ProjectSettingsPage: View {
     // MARK: Look
 
     private var look: some View {
-        Section {
-            HStack {
-                Text("Icon").foregroundStyle(Color.hqLabel)
-                Spacer(minLength: 12)
-                TextField("Emoji", text: $emoji, prompt: Text("None"))
-                    .multilineTextAlignment(.trailing)
-                    .autocorrectionDisabled()
-                    .frame(maxWidth: 120)
-                    .accessibilityIdentifier("sessions.projectSettings.emoji")
-                    .onChange(of: emoji) { was, typed in
-                        // One character: the one just typed stands, wherever the caret was.
-                        let one = ProjectLook.oneEmoji(typed, replacing: was) ?? ""
-                        if one != typed { emoji = one; return }
-                        var look = store.projectLook(project)
-                        guard look.emoji != (one.isEmpty ? nil : one) else { return }
-                        look.emoji = one.isEmpty ? nil : one
-                        store.setProjectLook(project, look)
-                        tick += 1
-                        onChange()
+        let current = store.projectLook(project)
+        let colour = current.color.map { Color(uiColor: SessionsOrganizer.uiColor($0)) }
+        return Section {
+            if let onLook {
+                Button(action: onLook) {
+                    HStack(spacing: 12) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: HQShape.radius(10, .control), style: .continuous)
+                                .fill(colour.map { $0.opacity(current.emoji != nil ? 0.24 : 0.16) } ?? Color.hqFill3)
+                                .frame(width: HQFont.scaled(36), height: HQFont.scaled(36))
+                            ProjectLookMark(look: current, size: 19, defaultFilled: false)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Icon & Color")
+                                .font(Font.hq(.body).weight(.medium))
+                                .foregroundStyle(Color.hqLabel)
+                            Text(current.summaryLabel)
+                                .font(Font.hq(.footnote))
+                                .foregroundStyle(Color.hqLabel2)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 8)
+                        SettingsChevron()
                     }
-                if !emoji.isEmpty {
-                    // The way back to no icon, whatever side of the character the caret is on.
-                    Button { emoji = "" } label: {
-                        Image(systemName: "xmark.circle.fill").font(Font.hq(.body)).foregroundStyle(Color.hqLabel3)
-                            .frame(width: 30, height: 44).contentShape(Rectangle())
-                    }
-                    .buttonStyle(.borderless)
-                    .accessibilityLabel("Clear Icon")
-                    .accessibilityIdentifier("sessions.projectSettings.emojiClear")
+                    .padding(.vertical, 2)
+                    .contentShape(Rectangle())
                 }
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Color").foregroundStyle(Color.hqLabel)
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 44), spacing: 0)], alignment: .leading, spacing: 0) {
-                    swatch(nil)
-                    ForEach(SessionColors.names.indices, id: \.self) { swatch($0) }
-                }
+                .buttonStyle(.plain)
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityIdentifier("sessions.projectSettings.look")
             }
             if coding {
                 Toggle("Show Branch on Rows", isOn: bound({ store.isProjectBranchRows(project) }) { store.setProjectBranchRows(project, $0) })
                     .accessibilityIdentifier("sessions.projectSettings.branchRows")
             }
         } header: { HQSectionLabel { Text("Look") } }
-    }
-
-    /// One colour (nil: None): a 28 pt disc in a 44 pt touch, ringed while it is the project's.
-    private func swatch(_ index: Int?) -> some View {
-        let picked = store.projectLook(project).color == index
-        let name = index.flatMap { SessionColors.name($0) } ?? "None"
-        return Button {
-            Haptics.play(.selection)
-            var look = store.projectLook(project)
-            look.color = index
-            store.setProjectLook(project, look)
-            tick += 1
-            onChange()
-        } label: {
-            ZStack {
-                if let index {
-                    Circle().fill(Color(uiColor: SessionsOrganizer.uiColor(index))).frame(width: 28, height: 28)
-                } else {
-                    Circle().strokeBorder(Color.hqLabel3, lineWidth: 1.5).frame(width: 28, height: 28)
-                    Image(systemName: "slash.circle").font(Font.hq(.body)).foregroundStyle(Color.hqLabel2)
-                }
-                if picked { Circle().strokeBorder(Color.hqTint, lineWidth: 2).frame(width: 36, height: 36) }
-            }
-            .frame(width: 44, height: 44)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.borderless)
-        .accessibilityLabel(name)
-        .accessibilityAddTraits(picked ? .isSelected : [])
-        .accessibilityIdentifier("sessions.projectSettings.color.\(index.map(String.init) ?? "none")")
-    }
-}
-
-/// [project-look] A project's own mark: its emoji (on a disc of its colour, when it has both), or a folder in its colour.
-/// `ink`: the colour a mark without a colour of its own takes (a picked pill's is the pill's ink).
-struct ProjectLookMark: View {
-    var look: ProjectLook
-    var size: CGFloat = 16
-    var ink: Color? = nil
-
-    var body: some View {
-        let colour = look.color.map { Color(uiColor: SessionsOrganizer.uiColor($0)) }
-        Group {
-            if let emoji = look.emoji {
-                Text(emoji)
-                    .font(Font.hqSystem(size: HQFont.scaled(size * 0.82)))
-                    .frame(width: HQFont.scaled(size + 4), height: HQFont.scaled(size + 4))
-                    .background { if let colour { Circle().fill(colour.opacity(0.32)) } }
-            } else {
-                Image(systemName: "folder.fill")
-                    .font(Font.hqSystem(size: HQFont.scaled(size * 0.86), weight: .medium))
-                    .foregroundStyle(ink ?? colour ?? Color.hqLabel2)
-            }
-        }
-        .accessibilityHidden(true)
     }
 }

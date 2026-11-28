@@ -32,26 +32,44 @@ nonisolated struct PluginCatalogEntry: Sendable, Hashable, Identifiable {
     var featured: Int? = nil
     /// [marketplace] The README at the reviewed commit, when the listing has one.
     var readmeURL: URL? = nil
+    /// [hq-plugins] The name to show when the plugin's id reads badly as a title ("hermes-hq-proactive").
+    var shownTitle: String? = nil
+    /// [hq-plugins] Still a beta: the row and the page say so.
+    var beta = false
+    /// [hq-plugins] It adds a page that opens in Hermes HQ (a catalog listing says so in its words instead).
+    var addsPage = false
+    /// [hq-plugins] One line under Install about what comes next (where its switch is), in place of the general one.
+    var setupNote: String? = nil
     var id: String { name }
 
-    /// [marketplace] What the website's Install box shows for a terminal.
-    var installCommand: String { "hermes plugins install \(name)" }
+    /// [hq-plugins] One of Hermes HQ's own plugins (`PluginCatalogEntry.fromHermesHQ`): not in Nous's catalog, so it
+    /// has no reviewed commit and installs from its repository by address.
+    var fromHQ: Bool { tier == Self.hqTier }
+    static let hqTier = "hq"
 
-    var title: String { DisplayName.title(name) }
+    /// [marketplace] What the website's Install box shows for a terminal.
+    var installCommand: String {
+        guard fromHQ else { return "hermes plugins install \(name)" }
+        let path = repo.replacingOccurrences(of: "https://github.com/", with: "")
+        return "hermes plugins install " + (subdir.isEmpty ? path : "\(path)/\(subdir)")
+    }
+
+    var title: String { shownTitle ?? DisplayName.title(name) }
 
     /// What `plugins.manage install` takes when the gateway predates `catalog_name` (with `ref` = `sha`).
     var installIdentifier: String { subdir.isEmpty ? repo : "\(repo)#\(subdir)" }
 
     /// The plugin's page in the Hermes Marketplace (hermes-agent.nousresearch.com/marketplace/<name>).
     var pageURL: URL? {
-        URL(string: "https://hermes-agent.nousresearch.com/marketplace/\(name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name)")
+        if fromHQ { return nil }
+        return URL(string: "https://hermes-agent.nousresearch.com/marketplace/\(name.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? name)")
     }
 
     var isOfficial: Bool { tier == "official" }
     var isVerified: Bool { tier == "verified" }
 
     /// "Official" / "Certified" (the site's word for a verified partner since 2026-11); nil for community plugins (most of the list).
-    var tierWord: String? { isOfficial ? "Official" : isVerified ? "Certified" : nil }
+    var tierWord: String? { isOfficial ? "Official" : isVerified ? "Certified" : beta ? "Beta" : nil }
 
     /// What it does, without the "Disclosure — …" paragraph most entries end with.
     var about: String { Self.split(description).about }

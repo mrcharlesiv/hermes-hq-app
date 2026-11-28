@@ -53,20 +53,20 @@ extension SessionsTests {
         closeFilter(app)
         XCTAssertTrue(strip(app).waitForExistence(timeout: 4), "the menu still filters")
         strip(app).tap()
-        // The New Project alert, with words typed.
+        // The New Project sheet, with words typed.
         tapChip(app, "default")
         openFilter(app)
         tapFilter(app, "project", "project.new")
-        let alert = app.alerts["New Project"]
-        XCTAssertTrue(alert.waitForExistence(timeout: 5), "the New Project alert")
-        let name = alert.textFields["project.name"]
+        let nav = app.navigationBars["New Project"]
+        XCTAssertTrue(nav.waitForExistence(timeout: 5), "the New Project sheet")
+        let name = app.textFields["project.name"]
         fill(name, "Site")
         awayAndBack(app)
-        XCTAssertTrue(alert.waitForExistence(timeout: 6), "the alert is still up")
-        XCTAssertEqual(alert.textFields["project.name"].value as? String, "Site", "with the words as typed")
+        XCTAssertTrue(nav.waitForExistence(timeout: 6), "the sheet is still up")
+        XCTAssertEqual(app.textFields["project.name"].value as? String, "Site", "with the words as typed")
         shot(app, "S-back-with-the-alert")
-        press(alert.buttons["Cancel"])
-        XCTAssertTrue(waitUntil(5) { !alert.exists })
+        app.buttons["project.cancel"].tap()
+        XCTAssertTrue(waitUntil(5) { !nav.exists })
         XCTAssertTrue(rpc("projects.create").isEmpty, "nothing was created")
         clearPick(app)
         // Session Info.

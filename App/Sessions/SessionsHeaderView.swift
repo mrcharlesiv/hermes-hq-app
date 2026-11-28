@@ -53,6 +53,9 @@ final class SessionsHeaderModel {
     @ObservationIgnored var onPickProject: (String?) -> Void = { _ in }
     /// [project-pills] A project pill's hold: Archive Project / Unarchive Project.
     @ObservationIgnored var onArchiveProject: (String, Bool) -> Void = { _, _ in }
+    /// [project-look] A project pill's hold/right-click: Icon & Color… and Project Settings….
+    @ObservationIgnored var onLookProject: (String, String) -> Void = { _, _ in }
+    @ObservationIgnored var onSettingsProject: (String, String) -> Void = { _, _ in }
     /// [pill-reorder] VoiceOver's Move Before / Move After: this project onto that one, among the pills shown.
     @ObservationIgnored var onMoveProject: (String, String, [String]) -> Void = { _, _, _ in }
     /// [pill-reorder] A dragged pill let go: the pills shown, in their new order.

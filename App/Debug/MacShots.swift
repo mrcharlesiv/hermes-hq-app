@@ -2805,6 +2805,13 @@ enum MacShots {
                 try? await Task.sleep(for: .seconds(3))
                 await snap("marketplace-open")
                 tabs.split?.closeDetail(animated: false)
+                if let ours = PluginCatalogEntry.fromHermesHQ.first {   // [hq-plugins] one of Hermes HQ's own, open beside the store
+                    try? await Task.sleep(for: .seconds(1))
+                    market.debugOpen(ours)
+                    try? await Task.sleep(for: .seconds(3))
+                    await snap("marketplace-hq")
+                    tabs.split?.closeDetail(animated: false)
+                }
                 market.debugKind(.all)
             }
         }

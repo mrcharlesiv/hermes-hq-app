@@ -301,7 +301,7 @@ enum DesktopLookTourHooks {
                         nav.pushViewController(MarketplaceController(model: model, router: router, kind: .all, query: String(item.dropFirst(13))), animated: false)
                     } else if item.hasPrefix("findsearch:") {
                         nav.pushViewController(MarketplaceController(model: model, router: router, kind: .plugins, query: String(item.dropFirst(11))), animated: false)
-                    } else if let entry = entries.first(where: { $0.name == item }) {
+                    } else if let entry = (entries + PluginCatalogEntry.fromHermesHQ).first(where: { $0.name == item }) {   // [hq-plugins] HQ's own too
                         nav.pushViewController(PluginCatalogEntryController(model: model, entry: entry, router: router), animated: false)
                     }
                 }

@@ -488,7 +488,8 @@ def plugins_manage(profile, params):
         identifier = str(params.get('identifier') or '').strip()
         if not identifier or identifier.startswith('-'):
             raise RPCFailure(4063, 'identifier required')
-        name = re.sub(r'\.git$', '', identifier.rstrip('/').split('/')[-1].split(':')[-1])
+        # A plugin in a folder of a repository (`owner/repo#folder`, `https://…/repo#folder`) is named after the folder.
+        name = re.sub(r'\.git$', '', identifier.rstrip('/').split('#')[-1].split('/')[-1].split(':')[-1])
         if by_name(name) is not None:
             if not params.get('force'):
                 raise RPCFailure(4090, f"plugin '{name}' is already installed")

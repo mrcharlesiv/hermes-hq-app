@@ -63,6 +63,38 @@ import Testing
         #expect(412.starWords == "412")
     }
 
+    /// [hq-plugins] Hermes HQ's own plugins: listed by the app, installed by their address, never called Nous's.
+    @Test func hermesHQPluginsInstallByAddress() throws {
+        let ours = PluginCatalogEntry.fromHermesHQ
+        #expect(Set(ours.map(\.name)).count == ours.count && !ours.isEmpty)
+        for entry in ours {
+            #expect(entry.fromHQ && !entry.isOfficial && !entry.isVerified, "\(entry.name) is not Nous's")
+            #expect(entry.pageURL == nil, "\(entry.name) has no page in the Hermes Marketplace")
+            #expect(entry.sha.isEmpty, "\(entry.name) installs the newest version, so no pin is shown")
+            #expect(entry.installIdentifier == "https://github.com/mrcharlesiv/hermes-hq-plugins#\(entry.name)")
+            #expect(entry.installCommand == "hermes plugins install mrcharlesiv/hermes-hq-plugins/\(entry.name)")
+            #expect(entry.disclosure?.isEmpty == false, "\(entry.name) says what it reads and where that goes")
+            #expect(!entry.about.contains("Disclosure"))
+            #expect(entry.maintainer == "Hermes HQ")
+        }
+        let proactivity = try #require(ours.first { $0.name == "hermes-hq-proactive" })
+        #expect(proactivity.title == "Proactivity" && proactivity.tierWord == "Beta")
+        #expect(proactivity.hermesWords == "0.22 or newer")
+        #expect(proactivity.addsPage)
+        #expect(proactivity.name == ProactivityBeta.pluginName, "the same plugin Settings › Proactivity (Beta) installs")
+        #expect(proactivity.installCommand == "hermes plugins install \(ProactivityBeta.pluginSource)")
+        #expect(proactivity.setupNote?.contains("Settings › Proactivity (Beta)") == true, "it is off after an install; the note says where its switch is")
+        #expect(proactivity.providesTools.count == 7 && proactivity.providesTools.allSatisfy { $0.hasPrefix("proactive_") })
+        #expect(PluginCatalogEntry.hermesHQ(matching: "").map(\.name) == ours.map(\.name))
+        #expect(PluginCatalogEntry.hermesHQ(matching: "  proactiv ").map(\.name) == ["hermes-hq-proactive"])
+        #expect(PluginCatalogEntry.hermesHQ(matching: "morning brief").map(\.name) == ["hermes-hq-proactive"])
+        #expect(PluginCatalogEntry.hermesHQ(matching: "spotify").isEmpty)
+        // A listed plugin's words are untouched by the extra fields.
+        let mem0 = try entries()[0]
+        #expect(!mem0.fromHQ && !mem0.beta && !mem0.addsPage && mem0.title == "Mem0")
+        #expect(mem0.installCommand.hasPrefix("hermes plugins install "))
+    }
+
     @Test func searchRanksNamesFirstAndNeedsEveryWord() throws {
         let list = try entries()
         #expect(PluginCatalogEntry.search(list, "spot").map(\.name) == ["spotify"])

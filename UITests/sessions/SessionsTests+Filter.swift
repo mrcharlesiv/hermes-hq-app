@@ -811,27 +811,27 @@ extension SessionsTests {
         fixture("/__fixture/fail", ["rpc": "projects.create", "message": "That folder is not on this computer.", "count": 1])
         openFilter(app)
         tapFilter(app, "project", "project.new")
-        let alert = app.alerts["New Project"]
-        XCTAssertTrue(alert.waitForExistence(timeout: 5), "the New Project alert")
-        let create = alert.buttons["Create"]
+        let nav = app.navigationBars["New Project"]
+        XCTAssertTrue(nav.waitForExistence(timeout: 5), "the New Project sheet")
+        let create = app.buttons["project.create"]
         XCTAssertFalse(create.isEnabled, "Create waits for a name")
-        let name = alert.textFields["project.name"], folder = alert.textFields["project.folder"]
+        let name = app.textFields["project.name"], folder = app.textFields["project.folder"]
         fill(name, "Site")
         XCTAssertTrue(create.isEnabled, "a name is enough: the folder is optional")
         XCTAssertEqual(folder.placeholderValue, "~/Projects/site", "the empty folder says where it will go")
         fill(folder, "~/Projects/site")
         XCTAssertTrue(create.isEnabled)
         shot(app, "D1-new-project")
-        press(create)
+        create.tap()
         let failed = app.alerts["Couldn’t Create Project"]
         XCTAssertTrue(failed.waitForExistence(timeout: 8), "the failure")
         XCTAssertTrue(failed.staticTexts["That folder is not on this computer."].exists)
         shot(app, "D3-create-failed")
         failed.buttons["Try Again"].tap()
-        XCTAssertTrue(alert.waitForExistence(timeout: 5), "Try Again reopens the alert")
-        XCTAssertEqual(alert.textFields["project.name"].value as? String, "Site", "with the name as typed")
-        XCTAssertEqual(alert.textFields["project.folder"].value as? String, "~/Projects/site", "and the folder")
-        press(alert.buttons["Create"])
+        XCTAssertTrue(nav.waitForExistence(timeout: 5), "Try Again reopens the sheet")
+        XCTAssertEqual(app.textFields["project.name"].value as? String, "Site", "with the name as typed")
+        XCTAssertEqual(app.textFields["project.folder"].value as? String, "~/Projects/site", "and the folder")
+        app.buttons["project.create"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["menus.hud"].waitForExistence(timeout: 6), "the HUD")
         XCTAssertTrue(app.staticTexts["Created Site"].exists, "it says Created Site")
         shot(app, "D1-created-hud")
@@ -867,21 +867,21 @@ extension SessionsTests {
         XCTAssertTrue(research.waitForExistence(timeout: 5), "Choose a Bot comes first")
         shot(app, "D2-choose-bot")
         research.tap()
-        let alert = app.alerts["New Project"]
-        XCTAssertTrue(alert.waitForExistence(timeout: 5))
-        press(alert.buttons["Cancel"])
+        let nav = app.navigationBars["New Project"]
+        XCTAssertTrue(nav.waitForExistence(timeout: 5))
+        app.buttons["project.cancel"].tap()
         Thread.sleep(forTimeInterval: 0.8)
         XCTAssertTrue(rpc("projects.create").isEmpty, "Cancel sends nothing")
         openFilter(app)
         tapFilter(app, "project", "project.new")
         XCTAssertTrue(research.waitForExistence(timeout: 5))
         research.tap()
-        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        XCTAssertTrue(nav.waitForExistence(timeout: 5))
         // 2026-10-28 owner: no folder to type. A name alone makes ~/Projects/<name> on the gateway's computer.
-        fill(alert.textFields["project.name"], "Papers")
-        XCTAssertTrue(alert.buttons["Create"].isEnabled, "a name is enough")
+        fill(app.textFields["project.name"], "Papers")
+        XCTAssertTrue(app.buttons["project.create"].isEnabled, "a name is enough")
         shot(app, "D2-name-only")
-        press(alert.buttons["Create"])
+        app.buttons["project.create"].tap()
         let sent = waitUntil(8) { self.rpc("projects.create").count == 1 }
         if !sent { shot(app, "D2-create-not-sent") }
         XCTAssertTrue(sent, "one projects.create (\(rpc("projects.create")); alerts \(app.alerts.allElementsBoundByIndex.map(\.label)))")
@@ -898,10 +898,10 @@ extension SessionsTests {
         tapChip(app, "default")
         openFilter(app)
         tapFilter(app, "project", "project.new")
-        let alert = app.alerts["New Project"]
-        XCTAssertTrue(alert.waitForExistence(timeout: 5), "the New Project alert")
+        let nav = app.navigationBars["New Project"]
+        XCTAssertTrue(nav.waitForExistence(timeout: 5), "the New Project sheet")
         shot(app, "D5-alert-with-choose-folder")
-        press(alert.buttons["Choose Folder…"].firstMatch)
+        app.buttons["project.choose-folder"].tap()
         let native = app.buttons["project-folder-hermes-hq-native"]
         XCTAssertTrue(native.waitForExistence(timeout: 8), "it opens in the gateway's Projects folder")
         XCTAssertFalse(app.buttons["project-folder-notes.txt"].exists, "folders only")
@@ -911,18 +911,18 @@ extension SessionsTests {
         XCTAssertTrue(app.buttons["project-folder-up"].exists, "and Up goes back out")
         shot(app, "D5-folder-inside")
         app.buttons["project-folder-use"].tap()
-        XCTAssertTrue(alert.waitForExistence(timeout: 5), "New Project comes back")
-        XCTAssertEqual(alert.textFields["project.folder"].value as? String, "/home/hermes/Projects/hermes-hq-native", "with the picked folder")
-        XCTAssertEqual(alert.textFields["project.name"].value as? String, "hermes-hq-native", "and its name offered")
+        XCTAssertTrue(nav.waitForExistence(timeout: 5), "New Project comes back")
+        XCTAssertEqual(app.textFields["project.folder"].value as? String, "/home/hermes/Projects/hermes-hq-native", "with the picked folder")
+        XCTAssertEqual(app.textFields["project.name"].value as? String, "hermes-hq-native", "and its name offered")
         shot(app, "D5-alert-filled")
         // Closed without a pick: what was typed is kept.
-        press(alert.buttons["Choose Folder…"].firstMatch)
+        app.buttons["project.choose-folder"].tap()
         XCTAssertTrue(app.buttons["project-folder-App"].waitForExistence(timeout: 8), "it reopens in the folder already chosen")
-        app.buttons["sheet.close"].firstMatch.tap()
-        XCTAssertTrue(alert.waitForExistence(timeout: 5), "New Project comes back after a close")
-        XCTAssertEqual(alert.textFields["project.name"].value as? String, "hermes-hq-native")
-        XCTAssertEqual(alert.textFields["project.folder"].value as? String, "/home/hermes/Projects/hermes-hq-native")
-        press(alert.buttons["Create"])
+        app.navigationBars["Choose Folder"].buttons.firstMatch.tap()
+        XCTAssertTrue(nav.waitForExistence(timeout: 5), "New Project comes back after going back")
+        XCTAssertEqual(app.textFields["project.name"].value as? String, "hermes-hq-native")
+        XCTAssertEqual(app.textFields["project.folder"].value as? String, "/home/hermes/Projects/hermes-hq-native")
+        app.buttons["project.create"].tap()
         XCTAssertTrue(waitUntil(8) { self.rpc("projects.create").count == 1 }, "one projects.create")
         XCTAssertEqual(rpc("projects.create").first?["folders"] as? [String], ["/home/hermes/Projects/hermes-hq-native"])
         XCTAssertEqual(rpc("projects.create").first?["name"] as? String, "hermes-hq-native")
@@ -937,12 +937,12 @@ extension SessionsTests {
         app.buttons["Move to Project"].firstMatch.tap()
         XCTAssertTrue(app.buttons["New Project…"].firstMatch.waitForExistence(timeout: 5))
         app.buttons["New Project…"].firstMatch.tap()
-        let alert = app.alerts["New Project"]
-        XCTAssertTrue(alert.waitForExistence(timeout: 5))
-        fill(alert.textFields["project.name"], "Beds")
-        fill(alert.textFields["project.folder"], "~/beds")
-        XCTAssertTrue(alert.buttons["Create"].isEnabled, "both fields are filled")
-        press(alert.buttons["Create"])
+        let nav = app.navigationBars["New Project"]
+        XCTAssertTrue(nav.waitForExistence(timeout: 5))
+        fill(app.textFields["project.name"], "Beds")
+        fill(app.textFields["project.folder"], "~/beds")
+        XCTAssertTrue(app.buttons["project.create"].isEnabled, "both fields are filled")
+        app.buttons["project.create"].tap()
         let sent = waitUntil(8) { self.rpc("projects.create").contains { $0["name"] as? String == "Beds" && $0["profile"] as? String == "default" } }
         if !sent { shot(app, "D4-create-not-sent") }
         XCTAssertTrue(sent, "projects.create for Beds (\(rpc("projects.create")); alerts \(app.alerts.allElementsBoundByIndex.map(\.label)))")

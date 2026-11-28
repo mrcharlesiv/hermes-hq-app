@@ -397,6 +397,9 @@ final class MarketplaceController: SearchPageHost<HQScaledRoot<MarketplaceView>>
     func debugKind(_ kind: MarketplaceKind) { state.choose(kind) }
     func debugOpenFirst() {
         guard let entry = PluginCatalogStore.shared.entries?.first else { return }
+        debugOpen(entry)
+    }
+    func debugOpen(_ entry: PluginCatalogEntry) {
         let page = PluginCatalogEntryController(model: debugModel, entry: entry, router: router)
         let close = UIBarButtonItem(image: UIImage(systemName: "xmark"), primaryAction: UIAction { _ in
             MainTabController.current?.split?.closeDetail(animated: true)
@@ -447,6 +450,7 @@ struct MarketplaceView: View {
                         featured
                     }
                     controls
+                    fromHQ
                     if state.browsing {
                         shelves
                     } else {
@@ -491,9 +495,11 @@ struct MarketplaceView: View {
                                 }
                             }
                         }
+                        gridFromHQ
                         gridShelves
                     } else {
                         resultsHead(wide: wide)
+                        gridFromHQ
                         gridResults
                     }
                 }
@@ -853,8 +859,11 @@ struct MarketplaceView: View {
                          install: {
             // One small button a card: it asks first (a skill's Install does too), then installs on the plugin's page.
             let from = entry.isOfficial ? "It comes from Nous. " : "It comes from \(entry.maintainer), listed in the Hermes Marketplace. "
+            let words = entry.fromHQ   // [hq-plugins] not Nous's to check
+                ? "It comes from Hermes HQ and is not in the Hermes Marketplace. Hermes installs the newest version from Hermes HQ’s repository."
+                : from + "Hermes installs the exact version Nous checked."
             TextPrompt.confirmPlain(title: "Install \(entry.title) for \(model.botName)?",
-                                    message: from + "Hermes installs the exact version Nous checked.",
+                                    message: words,
                                     action: "Install", from: model.presenter) { openPlugin(entry, install: true) }
         })
     }
@@ -1152,6 +1161,36 @@ struct MarketplaceView: View {
     private func scoped() -> [MarketplaceItem] { state.scoped(plugins: pluginEntries, skills: skillEntries) }
 
     private func matching() -> [MarketplaceItem] { state.ordered(state.filter(scoped())) }
+
+    // MARK: From Hermes HQ
+
+    /// [hq-plugins] Hermes HQ's own plugins (`PluginCatalogEntry.fromHermesHQ`): on the store front, over plugins with
+    /// no chip chosen, and in a search that finds one. Not on Skills, and not under a chip (Official, a kind): those
+    /// narrow Nous's catalog, which these are not part of.
+    private var hqEntries: [PluginCatalogEntry] {
+        guard state.kind == .all || state.kind == .plugins, !state.filtered else { return [] }
+        return PluginCatalogEntry.hermesHQ(matching: state.trimmed)
+    }
+
+    @ViewBuilder private var fromHQ: some View {
+        let ours = hqEntries
+        if !ours.isEmpty {
+            Section {
+                ForEach(ours) { entry in
+                    PluginCatalogRow(entry: entry, installed: model.installedPlugin(for: entry) != nil) { openPlugin(entry) }
+                }
+            } header: { HQSectionLabel { Text("From Hermes HQ") } } footer: { HQSectionFooter {
+                Text(PluginCatalogEntry.hermesHQFooter)
+            } }
+        }
+    }
+
+    @ViewBuilder private var gridFromHQ: some View {
+        let ours = hqEntries
+        if !ours.isEmpty {
+            gridSection("From Hermes HQ", about: PluginCatalogEntry.hermesHQFooter) { cards { ForEach(ours) { pluginCard($0) } } }
+        }
+    }
 
     // MARK: Featured
 

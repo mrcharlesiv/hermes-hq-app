@@ -209,16 +209,49 @@ final class CapabilitiesEndToEndTests: XCTestCase {
         repo.tap(); repo.typeText("not a repo")
         shot(app, "plugin-install-invalid")
         XCTAssertFalse(app.buttons["plugins.install.go"].isEnabled, "an address that isn't a repository can't be sent")
-        repo.clearAndType("acme/notes-plugin")
-        XCTAssertTrue(waitUntil(timeout: 3) { app.buttons["plugins.install.go"].isEnabled })
+        // [hq-plugins] A plugin in a folder of a repository is an address too (it was refused before 2026-11-27).
+        repo.clearAndType("acme/plugins/notes-plugin")
+        let go = app.buttons["plugins.install.go"]
+        XCTAssertTrue(waitUntil(timeout: 3) { go.isEnabled })
         shot(app, "plugin-install-ready")
-        app.buttons["plugins.install.go"].tap()
+        repo.typeText("\n")   // Install is under the keyboard on a phone; Return puts the keyboard away
+        XCTAssertTrue(waitUntil(timeout: 5) { go.isHittable }, "Install is in reach once the keyboard is away")
+        go.tap()
         let confirm = app.alerts["Install This Plugin?"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 5), "installing asks first")
         shot(app, "plugin-install-confirm")
         confirm.buttons["Install"].tap()
         XCTAssertTrue(waitUntil(timeout: 15) { !self.plugin("notes-plugin").isEmpty }, "the gateway installed it: \(pluginNames())")
         shot(app, "plugin-installed")
+    }
+
+    /// [hq-plugins] One of Hermes HQ's own plugins: listed on the Plugins tab though Nous's catalog doesn't have it,
+    /// and installed by its repository address with one press.
+    @MainActor func testC6b_HermesHQPluginInstallsByAddress() throws {
+        let app = launch()
+        openCapabilities(app, tab: "Plugins")
+        XCTAssertTrue(app.descendants(matching: .any)["plugin-row-web-clipper"].waitForExistence(timeout: 10), "the plugins list shows")
+        let row = app.descendants(matching: .any)["plugin-catalog-row-hermes-hq-proactive"]
+        for _ in 0..<8 where !row.exists || !row.isHittable { app.swipeUp(velocity: .slow) }
+        XCTAssertTrue(row.waitForExistence(timeout: 5), "Proactivity is listed under From Hermes HQ")
+        reach(app, row)
+        shot(app, "hq-plugins-list")
+        row.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["plugin-catalog.page"].waitForExistence(timeout: 8), "its page")
+        XCTAssertTrue(app.staticTexts["Proactivity"].firstMatch.exists, "by its own name, not the folder's")
+        shot(app, "hq-plugin-page")
+        let install = app.buttons["plugin-catalog.install"]
+        XCTAssertTrue(install.waitForExistence(timeout: 5))
+        install.tap()
+        XCTAssertTrue(waitUntil(timeout: 15) { !self.plugin("hermes-hq-proactive").isEmpty }, "the gateway installed it: \(pluginNames())")
+        let made = plugin("hermes-hq-proactive")
+        XCTAssertEqual(made["source"] as? String, "git", "by address, not as a catalog pick")
+        XCTAssertEqual(made["description"] as? String,
+                       "Installed from https://github.com/mrcharlesiv/hermes-hq-plugins#hermes-hq-proactive.", "the folder of HQ's repository")
+        XCTAssertNil(made["pinned_sha"] as? String, "the newest version: no pin")
+        XCTAssertEqual(made["status"] as? String, "enabled")
+        XCTAssertTrue(app.descendants(matching: .any)["plugin-page"].waitForExistence(timeout: 10), "straight on to the plugin's own page")
+        shot(app, "hq-plugin-installed")
     }
 
     // MARK: - Issues on More (L853, L875)

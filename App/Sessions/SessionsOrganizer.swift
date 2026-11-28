@@ -126,7 +126,11 @@ extension AppModel: SessionsServices {}
                 _ = try? await store.projects(for: session.profile)
                 let targets = store.moveTargets(for: session) ?? []
                 let rows = targets.map { project in
-                    BotMenuNode.action(project.label, nil) { [weak self] in self?.move(session, to: project) }
+                    let key = SessionProjects.key(project, profile: session.profile)
+                    let icon = ProjectLookMenuIcon.menuAppearance(for: store.projectLook(key))
+                    return BotMenuNode.action(project.label, icon.image, color: icon.color, customImage: icon.customImage) { [weak self] in
+                        self?.move(session, to: project)
+                    }
                 }
                 completion(rows.isEmpty ? [newProject] : rows + [BotMenuNode(title: "", kind: .inline([newProject]))])
             }
@@ -320,10 +324,11 @@ extension AppModel: SessionsServices {}
             }
         }
         // All Projects: every project, A to Z, on a page of its own in the sheet (which goes to its full height).
+        let looks = store?.projectLooks ?? [:]
         let showAll: (String) -> Void = { bot in
             guard let sheet = box.sheet else { return }
             let name = ordered.first { $0.id == bot }?.name ?? "this bot"
-            let all = NewChatKeysPage(rootView: AnyView(HQScaledRoot(NewChatAllProjectsView(projects: projects, botName: name,
+            let all = NewChatKeysPage(rootView: AnyView(HQScaledRoot(NewChatAllProjectsView(projects: projects, looks: looks, botName: name,
                                                                                            last: NewChatLast.project(for: bot)) { pick(bot, $0) })))
             let allTitle = NewChatSheetView.allTitle(projects)
             // [Mac UI check 2026-11-13] C2: Escape here goes back one step to the sheet's first page, not out of the sheet.
@@ -335,7 +340,7 @@ extension AppModel: SessionsServices {}
             sheet.pushViewController(all, animated: true)
         }
         box.bot = opensOn
-        let view = NewChatSheetView(bots: ordered, projects: projects, bot: opensOn, recent: recent, start: pick, showAll: showAll,
+        let view = NewChatSheetView(bots: ordered, projects: projects, looks: looks, bot: opensOn, recent: recent, start: pick, showAll: showAll,
                                     onBot: { box.bot = $0 })
         let page = NewChatKeysPage(rootView: AnyView(HQScaledRoot(view)))
         // [Mac UI check 2026-11-13] C2: Return starts the chat with the lit bot, as the Start Chat button at the foot does.
@@ -742,13 +747,15 @@ extension AppModel: SessionsServices {}
         })
     }
 
-    /// Move to Project › New Project…: a name and a folder on the gateway's computer (a project holds chats by
-    /// folder), then the chat moves into it.
+    /// Move to Project › New Project…: a name, folder, and optional icon/color, then the chat moves into it.
     func newProjectThenMove(_ session: SessionSummary) {
         guard let store else { return }
-        askNewProject(profile: session.profile) { [weak self] name, folder in
+        askNewProject(profile: session.profile) { [weak self] name, folder, look in
             self?.run("Couldn’t Move Chat", {
                 let project = try await store.createProject(name: name, folder: folder, profile: session.profile)
+                if !look.isEmpty {
+                    store.setProjectLook(SessionProjects.key(project, profile: session.profile), look)
+                }
                 try await store.move(session, to: project)
             }, done: { [weak self] in
                 Haptics.play(.success)
@@ -757,24 +764,27 @@ extension AppModel: SessionsServices {}
         }
     }
 
-    /// [sessions-m9] Filter › Project › New Project… (docs/spec/3x-sessions.md §8): the same alert; the project is the
+    /// [sessions-m9] Filter › Project › New Project… (docs/spec/3x-sessions.md §8): the project is the
     /// picked chip's bot's, else (with more than one bot) the bot chosen first. It is only created, never turned on as
     /// a filter.
     func newProjectFromFilter(profile: String?) {
         if let profile { newProject(profile: profile) } else { chooseBot { [weak self] profile in self?.newProject(profile: profile) } }
     }
 
-    /// `name`, `folder`: what was typed before a failure (Try Again brings it back).
+    /// `name`, `folder`, `look`: what was chosen before a failure (Try Again brings it back).
     /// `startsChat`: the New Chat sheet's New Project…: a new chat opens in the project once it is made.
-    func newProject(profile: String, name: String = "", folder: String = "", startsChat: Bool = false) {
+    func newProject(profile: String, name: String = "", folder: String = "", look: ProjectLook = ProjectLook(), startsChat: Bool = false) {
         guard let store else { return }
-        askNewProject(profile: profile, name: name, folder: folder) { [weak self] name, folder in
+        askNewProject(profile: profile, name: name, folder: folder, look: look) { [weak self] name, folder, look in
             // A slow gateway: "Creating Project…" once the call has taken 400 ms, until it answers (30 s at most).
             let hud = self?.slowHUD("Creating Project…") ?? {}
             Task { [weak self] in
                 defer { hud() }
                 do {
                     let project = try await store.createProject(name: name, folder: folder, profile: profile)
+                    if !look.isEmpty {
+                        store.setProjectLook(SessionProjects.key(project, profile: profile), look)
+                    }
                     hud()
                     // The bot it was made for is read again whether or not it owns a listed chat.
                     store.loadProjects(force: true, also: [profile])
@@ -787,7 +797,7 @@ extension AppModel: SessionsServices {}
                     let reason = SessionActionText.reason(error)
                     // A gateway without projects cannot be asked again to any use.
                     let retry: (() -> Void)? = reason == SessionActionText.projectsUnsupported ? nil : { [weak self] in
-                        self?.newProject(profile: profile, name: name, folder: folder, startsChat: startsChat)
+                        self?.newProject(profile: profile, name: name, folder: folder, look: look, startsChat: startsChat)
                     }
                     FailureAlert.present(title: "Couldn’t Create Project", reason: reason, detail: SessionActionText.detail(error),
                                          from: self.host, retry: retry)
@@ -796,84 +806,11 @@ extension AppModel: SessionsServices {}
         }
     }
 
-    /// The New Project alert: Create is off until the name has text. The folder is optional: left empty, the app makes
-    /// one named after the project (its placeholder says where, as the name is typed).
-    /// [new-project-folder] Choose Folder… browses `profile`'s folders on the gateway's computer and comes back here
-    /// with the pick in Folder (and, with no name typed yet, the folder's own name in Name).
-    private func askNewProject(profile: String, name: String = "", folder: String = "",
-                               create made: @escaping (_ name: String, _ folder: String) -> Void) {
-        guard let host = FailureAlert.topmost(host) else { return }
-        let alert = UIAlertController(title: "New Project",
-                                      message: "A project holds the chats in its folder on \(HostWord.phrase). Leave Folder empty to make a new one.",
-                                      preferredStyle: .alert)
-        func trimmed(_ field: UITextField?) -> String { (field?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
-        func autoPlaceholder(_ name: String) -> String {
-            name.isEmpty ? "Folder (optional)" : SessionProject.autoFolder(name: name)
-        }
-        alert.addTextField { field in
-            field.placeholder = "Name"
-            field.text = name
-            field.autocapitalizationType = .words
-            field.accessibilityIdentifier = "project.name"
-        }
-        alert.addTextField { field in
-            field.placeholder = autoPlaceholder(name.trimmingCharacters(in: .whitespacesAndNewlines))
-            field.text = folder
-            field.autocapitalizationType = .none
-            field.autocorrectionType = .no
-            field.accessibilityIdentifier = "project.folder"
-        }
-        let create = UIAlertAction(title: "Create", style: .default) { [weak alert] _ in
-            made(alert?.textFields?[0].text ?? "", alert?.textFields?[1].text ?? "")
-        }
-        create.isEnabled = !trimmed(alert.textFields?.first).isEmpty
-        alert.textFields?.first?.addAction(UIAction { [weak alert, weak create] _ in
-            let name = trimmed(alert?.textFields?.first)
-            create?.isEnabled = !name.isEmpty
-            alert?.textFields?.last?.placeholder = autoPlaceholder(name)
-        }, for: .editingChanged)
-        let browse = UIAlertAction(title: "Choose Folder…", style: .default) { [weak self, weak alert] _ in
-            let typedName = alert?.textFields?.first?.text ?? "", typedFolder = alert?.textFields?.last?.text ?? ""
-            self?.chooseProjectFolder(profile: profile, typed: typedFolder) { [weak self] picked in
-                let named = typedName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    ? picked.map(ProjectFolderWords.suggestedName(folder:)) ?? typedName : typedName
-                self?.askNewProject(profile: profile, name: named, folder: picked ?? typedFolder, create: made)
-            }
-        }
-        browse.accessibilityIdentifier = "project.choose-folder"
-        alert.addAction(browse)
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        alert.addAction(create)
-        alert.preferredAction = create
-        host.present(alert, animated: true)
-    }
-
-    /// [new-project-folder] The folder browser, as a sheet. `done`: the picked folder, or nil when the sheet was
-    /// closed without one. Delivered once, after the sheet has gone (the alert that follows needs a free presenter).
-    private func chooseProjectFolder(profile: String, typed: String, done: @escaping (String?) -> Void) {
-        guard let store, let host = FailureAlert.topmost(host) else { done(nil); return }
-        let workspace = ChatWorkspace(client: store.client, profile: profile.isEmpty || profile == "default" ? nil : profile)
-        final class Box { weak var sheet: UINavigationController?; var delivered = false; var picked: String? }
-        let box = Box()
-        // Whichever notices the sheet gone first (the dismissal's completion, the page's own disappearance, the
-        // timer for a completion UIKit dropped) delivers the same answer: the pick, or nil for a plain close.
-        let deliver: () -> Void = {
-            guard !box.delivered else { return }
-            box.delivered = true
-            done(box.picked)
-        }
-        let picker = ProjectFolderPickerHost(rootView: ProjectFolderPickerView(
-            browser: ProjectFolderBrowser(workspace: workspace, typed: typed)) { picked in
-                Haptics.play(.selection)
-                box.picked = picked
-                guard let sheet = box.sheet, sheet.presentingViewController != nil else { deliver(); return }
-                sheet.dismiss(animated: true) { deliver() }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { deliver() }
-            })
-        picker.closed = deliver
-        let sheet = ChatSheet.wrap(picker, title: "Choose Folder")
-        box.sheet = sheet
-        host.present(sheet, animated: true)
+    /// Presents the SwiftUI New Project sheet (Name, Folder with inline Choose Folder…, and optional Icon & Color).
+    private func askNewProject(profile: String, name: String = "", folder: String = "", look: ProjectLook = ProjectLook(),
+                               create made: @escaping (_ name: String, _ folder: String, _ look: ProjectLook) -> Void) {
+        guard let store, let host = FailureAlert.topmost(host) else { return }
+        NewProjectSheet.present(from: host, store: store, profile: profile, name: name, folder: folder, look: look, onCreate: made)
     }
 
     /// Branch in New Chat: the gateway copies the chat into a new one, which opens.
@@ -1034,6 +971,7 @@ struct NewChatSheetView: View {
     static let newProjectTag = "\u{1F}new-project"
     var bots: [Bot]
     var projects: [SessionProjectEntry]
+    var looks: [String: ProjectLook] = [:]
     @State var bot: String
     /// The lit bot's recent projects, newest first.
     var recent: (String) -> [String] = { _ in [] }
@@ -1060,7 +998,7 @@ struct NewChatSheetView: View {
     private func entryRow(_ key: String, last: String?) -> some View {
         Group {
             if let entry = projects.first(where: { $0.key == key }) {
-                NewChatProjectRow(title: entry.label, last: NewChatLast.marks(stored: last, row: key)) { start(bot, key) }
+                NewChatProjectRow(title: entry.label, look: looks[key] ?? ProjectLook(), last: NewChatLast.marks(stored: last, row: key)) { start(bot, key) }
                     .listRowInsets(Self.rowInsets)
                     .accessibilityIdentifier("new-chat-\(entry.isFolder ? "folder" : "project")-\(entry.label)")
             }
@@ -1183,9 +1121,10 @@ struct NewChatSheetView: View {
     }
 }
 
-/// One project in the New Chat sheet: its name, and "Last used" on the one the lit bot started in last.
+/// One project in the New Chat sheet: its icon, name, and "Last used" on the one the lit bot started in last.
 private struct NewChatProjectRow: View {
     var title: String
+    var look = ProjectLook()
     var last: Bool
     /// The sheet keeps a name to one line (it is as tall as its rows); All Projects, which scrolls, gives it two.
     var lines = 1
@@ -1194,7 +1133,8 @@ private struct NewChatProjectRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 12) {
-                Image(systemName: "folder").foregroundStyle(Color.hqLabel2).frame(width: HQFont.scaled(24))
+                ProjectLookMark(look: look, size: 17, defaultFilled: false)
+                    .frame(width: HQFont.scaled(24))
                 // A long name is cut in the middle, so two that start alike ("acme-platform-…-web", "…-api") still
                 // read apart (owner 2026-11-11: "Test for very long project titles"). VoiceOver reads it whole.
                 Text(title).foregroundStyle(Color.hqLabel).lineLimit(lines).truncationMode(.middle)
@@ -1219,6 +1159,7 @@ private struct NewChatProjectRow: View {
 /// All Projects: every project A to Z with a search field; a tap starts the chat there with the sheet's lit bot.
 struct NewChatAllProjectsView: View {
     var projects: [SessionProjectEntry]
+    var looks: [String: ProjectLook] = [:]
     var botName: String
     var last: String?
     var start: (String) -> Void
@@ -1234,7 +1175,7 @@ struct NewChatAllProjectsView: View {
     private var mixed: Bool { projects.contains(where: \.isFolder) }
 
     private func row(_ entry: SessionProjectEntry) -> some View {
-        NewChatProjectRow(title: entry.label, last: NewChatLast.marks(stored: last, row: entry.key), lines: 2) { start(entry.key) }
+        NewChatProjectRow(title: entry.label, look: looks[entry.key] ?? ProjectLook(), last: NewChatLast.marks(stored: last, row: entry.key), lines: 2) { start(entry.key) }
             .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
             .accessibilityIdentifier("new-chat-all-\(entry.label)")
     }

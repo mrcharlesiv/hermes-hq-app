@@ -832,6 +832,10 @@ struct SessionDateHeaderView: View {
     var title: String
     /// A project's header (Group By Project): its + starts a new chat in the project.
     var onNewChat: (() -> Void)? = nil
+    /// [project-look] A project's header: Icon & Color… opens the visual look picker directly.
+    var onLook: (() -> Void)? = nil
+    /// [project-settings] A project's header: Project Settings… opens the project's settings sheet directly.
+    var onSettings: (() -> Void)? = nil
     /// A project's header: a hold (a right click on the Mac) offers Rename Project…, and VoiceOver the same action.
     var onRename: (() -> Void)? = nil
     /// A saved project's header: the hold menu's Delete Project… (after a confirmation).
@@ -887,7 +891,7 @@ struct SessionDateHeaderView: View {
     /// A group's + (never a project's: [project-cards] New Chat is the foot of its card, and stays in its hold menu).
     private var showsNewChat: Bool { onNewChat != nil && summary == nil }
     /// [header-menus] A header with a hold menu shows a ⋯ with the same menu (owner 2026-11-03).
-    private var hasMenu: Bool { ProjectHeaderMenu.offered(onRename: onRename, order: order) }
+    private var hasMenu: Bool { ProjectHeaderMenu.offered(onLook: onLook, onSettings: onSettings, onRename: onRename, order: order) }
     /// [header-menus] A caption's ⋯ beside its + (a project's row has its own place for it, `HeaderMenuSpot`).
     private var showsCaptionMenu: Bool { hasMenu && summary == nil }
 
@@ -940,6 +944,8 @@ struct SessionDateHeaderView: View {
             .accessibilityAddTraits(fold == nil ? .isHeader : [.isHeader, .isButton])
             .accessibilityAction { fold?.toggle() }
             .accessibilityActions {
+                if let onLook { Button("Icon & Color…", action: onLook) }
+                if let onSettings { Button("Project Settings…", action: onSettings) }
                 if let onRename { Button("Rename Project…", action: onRename) }
                 if let onNewChat { Button("New Chat in \(title)", action: onNewChat) }
                 if let order {
@@ -955,7 +961,7 @@ struct SessionDateHeaderView: View {
                 }
                 if let onDelete { Button("Delete Project…", action: onDelete) }
             }
-            .modifier(ProjectHeaderMenu(onRename: onRename, onNewChat: onNewChat, onDelete: onDelete, order: order))
+            .modifier(ProjectHeaderMenu(onLook: onLook, onSettings: onSettings, onRename: onRename, onNewChat: onNewChat, onDelete: onDelete, order: order))
             .accessibilityIdentifier("sessions.header")        // [sessions-m9] UI tests read the groups in order
             // [header-menus] A project's ⋯ where its row kept a place for it, past the time: over the row, not in it, so
             // the row's tap still opens and closes the project and VoiceOver finds the ⋯ on its own.
@@ -1020,7 +1026,7 @@ struct SessionDateHeaderView: View {
     private func menuButton(height: CGFloat, above: CGFloat) -> some View {
         HeaderMoreButton(label: "Actions for \(title)", identifier: "sessions.header.menu", glyph: desk ? 13 : 15,
                          cap: desk ? 18 : 22, height: height, above: above) {
-            ProjectHeaderMenuItems(onRename: onRename, onNewChat: onNewChat, onDelete: onDelete, order: order)
+            ProjectHeaderMenuItems(onLook: onLook, onSettings: onSettings, onRename: onRename, onNewChat: onNewChat, onDelete: onDelete, order: order)
         }
     }
 
@@ -1280,18 +1286,22 @@ extension SessionDateHeaderView {
 /// then Delete Project… (red). Home's and a bot's (Group By Bot) hold only the order rows. Other headers get no menu
 /// (not even an empty one).
 private struct ProjectHeaderMenu: ViewModifier {
+    var onLook: (() -> Void)?
+    var onSettings: (() -> Void)?
     var onRename: (() -> Void)?
     var onNewChat: (() -> Void)?
     var onDelete: (() -> Void)?
     var order: SessionHeaderOrder?
 
     /// [header-menus] Which headers have the menu (and so the ⋯).
-    static func offered(onRename: (() -> Void)?, order: SessionHeaderOrder?) -> Bool { onRename != nil || order != nil }
+    static func offered(onLook: (() -> Void)?, onSettings: (() -> Void)?, onRename: (() -> Void)?, order: SessionHeaderOrder?) -> Bool {
+        onLook != nil || onSettings != nil || onRename != nil || order != nil
+    }
 
     func body(content: Content) -> some View {
-        if Self.offered(onRename: onRename, order: order) {
+        if Self.offered(onLook: onLook, onSettings: onSettings, onRename: onRename, order: order) {
             content.contextMenu {
-                ProjectHeaderMenuItems(onRename: onRename, onNewChat: onNewChat, onDelete: onDelete, order: order)
+                ProjectHeaderMenuItems(onLook: onLook, onSettings: onSettings, onRename: onRename, onNewChat: onNewChat, onDelete: onDelete, order: order)
             }
         } else {
             content
@@ -1301,12 +1311,22 @@ private struct ProjectHeaderMenu: ViewModifier {
 
 /// [header-menus] The hold menu's items, for the hold and for the header's ⋯ alike.
 private struct ProjectHeaderMenuItems: View {
+    var onLook: (() -> Void)?
+    var onSettings: (() -> Void)?
     var onRename: (() -> Void)?
     var onNewChat: (() -> Void)?
     var onDelete: (() -> Void)?
     var order: SessionHeaderOrder?
 
     var body: some View {
+        if let onLook {
+            Button(action: onLook) { Label("Icon & Color…", systemImage: "paintbrush") }
+                .accessibilityIdentifier("sessions.header.look")
+        }
+        if let onSettings {
+            Button(action: onSettings) { Label("Project Settings…", systemImage: "gearshape") }
+                .accessibilityIdentifier("sessions.header.settings")
+        }
         if let onRename {
             Button(action: onRename) { Label("Rename Project…", systemImage: "pencil") }
                 .accessibilityIdentifier("sessions.header.rename")

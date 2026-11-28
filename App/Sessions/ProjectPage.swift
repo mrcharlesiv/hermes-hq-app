@@ -51,8 +51,10 @@ struct ProjectPageHeader: View {
     /// [project-settings] ⋯ › Project Settings…: the project's own settings, on one page (Pins Stay in Project moved
     /// there from this menu).
     var onSettings: () -> Void = {}
-    /// [project-look] The project's emoji and colour, before its name.
+    /// [project-look] The project's emoji or symbol and colour, before its name.
     var look = ProjectLook()
+    /// [project-look] Tapping the project's icon before its name opens the Icon & Color picker directly (nil for Home).
+    var onLook: (() -> Void)? = nil
     /// [pr-manage] The ⋯'s Repository… (the project's repository on the computer running Hermes); nil on a gateway
     /// that takes no links, and it shows only while Coding Project is on.
     var onRepository: (() -> Void)? = nil
@@ -208,7 +210,25 @@ struct ProjectPageHeader: View {
             // away, starts the chat in this project (and says so: "New Chat in <project>"); the capsule beside the
             // name was a second button for the same thing.
             HStack(spacing: 4) {
-                if !look.isEmpty {
+                if let onLook {
+                    Button(action: onLook) {
+                        ProjectLookMark(look: look, size: 18, defaultFilled: false)
+                            .frame(width: HQFont.scaled(carded ? 26 : 30), height: HQFont.scaled(carded ? 26 : 30))
+                            .background {
+                                if look.isEmpty {
+                                    RoundedRectangle(cornerRadius: HQShape.radius(8, .control), style: .continuous)
+                                        .fill(Color(uiColor: carded ? ProjectCard.box : HQPalette.fill3))
+                                }
+                            }
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 2)
+                    .help("Change Icon & Color")
+                    .accessibilityLabel("Change Icon and Color")
+                    .accessibilityValue(look.summaryLabel)
+                    .accessibilityIdentifier("sessions.projectPage.look")
+                } else if !look.isEmpty {
                     ProjectLookMark(look: look, size: 18)
                         .padding(.trailing, 2)
                         .accessibilityIdentifier("sessions.projectPage.look")
@@ -503,14 +523,58 @@ extension SessionsViewController {
         present(ChatSheet.wrap(UIHostingController(rootView: page), title: "Repository", detents: [.large()]), animated: true)
     }
 
+    /// Presents a project sheet safely even when invoked from a dismissing SwiftUI popover (e.g. a project pill's hold menu).
+    private func presentProjectSheet(_ sheet: UIViewController) {
+        let active = presentedViewController
+            ?? children.compactMap(\.presentedViewController).first
+            ?? navigationController?.presentedViewController
+        guard let existing = active else {
+            present(sheet, animated: true)
+            return
+        }
+        let show: @MainActor () -> Void = { [weak self] in
+            guard let self, self.presentedViewController == nil else { return }
+            self.present(sheet, animated: true)
+        }
+        if existing.isBeingDismissed {
+            if let coordinator = existing.transitionCoordinator {
+                coordinator.animate(alongsideTransition: nil) { _ in show() }
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { show() }
+            }
+        } else {
+            existing.dismiss(animated: true) { show() }
+        }
+    }
+
+    /// [project-look] Opens the standalone visual Icon & Color picker sheet for a project.
+    func presentProjectLook(_ key: String, name: String) {
+        guard let store, key != SessionProjects.homeKey else { return }
+        let page = StoreProjectLookPickerView(project: key, projectName: name, store: store) { [weak self] in
+            self?.reload(animated: false)
+        }
+        presentProjectSheet(ChatSheet.wrap(UIHostingController(rootView: page), title: "Icon & Color", detents: [.large()]))
+    }
+
     /// [project-settings] ⋯ › Project Settings…: the project's settings as a sheet titled with its name. The page
     /// behind redraws as each setting changes.
     func presentProjectSettings(_ key: String, name: String) {
         guard let store else { return }
         let usual = organizer?.projectDefaultBot(key: key) ?? store.projectHolders(key: key).first?.profile ?? "default"
         let botName = owners[usual]?.name ?? Self.readableProfileName(usual)
+        let refresh = ProjectSettingsRefresh()
         // [coding-pr-review] The icon guide is the page's last row (it left the header's ⓘ): pushed in this sheet.
         weak var sheet: UINavigationController?
+        let openLook: (() -> Void)? = key == SessionProjects.homeKey ? nil : { [weak self, weak store] in
+            guard let store else { return }
+            let picker = UIHostingController(rootView: StoreProjectLookPickerView(project: key, projectName: name, store: store) { [weak self] in
+                refresh.tick += 1
+                self?.reload(animated: false)
+            })
+            picker.title = "Icon & Color"
+            picker.navigationItem.largeTitleDisplayMode = .never
+            sheet?.pushViewController(picker, animated: true)
+        }
         let openRepository: (() -> Void)? = store.prManageAvailable ? { [weak store] in
             guard let store else { return }
             let repo = UIHostingController(rootView: ProjectRepositoryPage(project: key, store: store))
@@ -518,17 +582,17 @@ extension SessionsViewController {
             repo.navigationItem.largeTitleDisplayMode = .never
             sheet?.pushViewController(repo, animated: true)
         } : nil
-        let page = ProjectSettingsPage(project: key, store: store, bot: (usual, botName), onChange: { [weak self] in
+        let page = ProjectSettingsPage(project: key, projectName: name, store: store, bot: (usual, botName), onChange: { [weak self] in
             self?.reload(animated: false)
-        }, onRepository: openRepository, onIconGuide: { [weak store] in
+        }, onLook: openLook, onRepository: openRepository, onIconGuide: { [weak store] in
             let guide = UIHostingController(rootView: ProjectIconGuide(coding: store?.isCodingProject(key) ?? false))
             guide.title = "Icon Guide"
             guide.navigationItem.largeTitleDisplayMode = .never
             sheet?.pushViewController(guide, animated: true)
-        })
+        }, refresh: refresh)
         let wrapped = ChatSheet.wrap(UIHostingController(rootView: page), title: name, detents: [.large()])
         sheet = wrapped
-        present(wrapped, animated: true)
+        presentProjectSheet(wrapped)
     }
 
     /// [coding-pr-review] A coding row's PR mark: the PR card for its chat (its lead first). Ask to Merge opens the
@@ -609,7 +673,7 @@ extension SessionsViewController {
     func projectSettingsSign(_ key: String) -> String {
         guard let store else { return "" }
         let look = store.projectLook(key)
-        return "\(look.emoji ?? "")/\(look.color.map(String.init) ?? "")/\(store.isProjectBranchRows(key))"
+        return "\(look.emoji ?? "")/\(look.symbol ?? "")/\(look.color.map(String.init) ?? "")/\(store.isProjectBranchRows(key))"
     }
 
     /// All loaded rows that the project page can display for `key`, matching `SessionListPipeline.projectPage` 1-to-1

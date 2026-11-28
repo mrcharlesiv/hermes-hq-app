@@ -163,8 +163,10 @@ struct BotMenuNode: Identifiable {
     var destructive = false
     var disabled = false
     var checked = false
-    /// Drawn as a filled circle of this colour instead of `image` (palette swatches).
+    /// Drawn as a filled circle of this colour (or tinting `image` when set).
     var color: UIColor? = nil
+    /// Pre-rendered menu image (e.g., an emoji badge), taking priority over `image`/`color`.
+    var customImage: UIImage? = nil
     /// The menu stays open when picked (UIKit menus only).
     var keepsOpen = false
     var identifier: String? = nil
@@ -173,8 +175,9 @@ struct BotMenuNode: Identifiable {
     var kind: Kind
 
     static func action(_ title: String, _ image: String?, destructive: Bool = false, disabled: Bool = false, checked: Bool = false,
-                       _ run: @escaping () -> Void) -> BotMenuNode {
-        BotMenuNode(title: title, image: image, destructive: destructive, disabled: disabled, checked: checked, kind: .action(run))
+                       color: UIColor? = nil, customImage: UIImage? = nil, _ run: @escaping () -> Void) -> BotMenuNode {
+        BotMenuNode(title: title, image: image, destructive: destructive, disabled: disabled, checked: checked,
+                    color: color, customImage: customImage, kind: .action(run))
     }
 
     static func uiMenu(_ nodes: [BotMenuNode], title: String = "") -> UIMenuBuilderResult {
@@ -186,10 +189,11 @@ import SwiftUI
 import UIKit
 
 extension BotMenuNode {
-    /// The node's picture: its colour as a filled circle, else its symbol.
+    /// The node's picture: its pre-rendered image, its colour tinting `image` (or a filled circle when `image` is nil), else its symbol.
     var uiImage: UIImage? {
+        if let customImage { return customImage }
         if let color {
-            return UIImage(systemName: "circle.fill")?.withTintColor(color, renderingMode: .alwaysOriginal)
+            return UIImage(systemName: image ?? "circle.fill")?.withTintColor(color, renderingMode: .alwaysOriginal)
         }
         return image.flatMap { UIImage(systemName: $0) }
     }

@@ -272,11 +272,11 @@ extension SessionsTests {
         tapChip(app, "default")
         openFilter(app)
         tapFilter(app, "project", "project.new")
-        let alert = app.alerts["New Project"]
-        XCTAssertTrue(alert.waitForExistence(timeout: 5))
-        fill(alert.textFields["project.name"], "Site")
-        fill(alert.textFields["project.folder"], "~/site")
-        press(alert.buttons["Create"])
+        let nav = app.navigationBars["New Project"]
+        XCTAssertTrue(nav.waitForExistence(timeout: 5))
+        fill(app.textFields["project.name"], "Site")
+        fill(app.textFields["project.folder"], "~/site")
+        app.buttons["project.create"].tap()
         let failed = app.alerts["Couldn’t Create Project"]
         XCTAssertTrue(failed.waitForExistence(timeout: 8))
         XCTAssertTrue(failed.staticTexts["This gateway doesn’t have projects yet. Update Hermes on the computer running Hermes, then try again."].exists,

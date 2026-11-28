@@ -653,6 +653,9 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
                 },
                 onSettings: { [weak self] in self?.presentProjectSettings(key, name: group.latestTitle ?? key) },
                 look: self.store?.projectLook(key) ?? ProjectLook(),
+                onLook: key == SessionProjects.homeKey ? nil : { [weak self] in
+                    self?.presentProjectLook(key, name: group.latestTitle ?? key)
+                },
                 onRepository: self.store?.prManageAvailable == true ? { [weak self] in
                     self?.presentProjectRepository(key)
                 } : nil,
@@ -755,6 +758,12 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
         let onNewChat: (() -> Void)? = key.flatMap { key in
             key == SessionProjects.homeKey ? nil : { [weak self] in self?.organizer?.newChat(inProject: key, profile: self?.pickedBot) }
         }
+        let onLook: (() -> Void)? = key.flatMap { key in
+            key == SessionProjects.homeKey ? nil : { [weak self] in self?.presentProjectLook(key, name: title) }
+        }
+        let onSettings: (() -> Void)? = key.flatMap { key in
+            key == SessionProjects.homeKey && freshLayout ? nil : { [weak self] in self?.presentProjectSettings(key, name: title) }
+        }
         let onRename: (() -> Void)? = key.flatMap { key in
             key == SessionProjects.homeKey ? nil : { [weak self] in self?.organizer?.renameProject(key: key, title: title) }
         }
@@ -810,7 +819,8 @@ final class SessionsViewController: UIViewController, UICollectionViewDelegate, 
         headerCardPads[ObjectIdentifier(header)] = summary.map { ProjectCardHeader.topPad(open: !$0.collapsed) }
         // [project-sections] A project page's section: its state's mark and its count.
         let pageSection = !searching && SessionListPipeline.isPageSection(id)
-        let view = SessionDateHeaderView(title: title, onNewChat: onNewChat, onRename: onRename, onDelete: onDelete, fold: fold,
+        let view = SessionDateHeaderView(title: title, onNewChat: onNewChat, onLook: onLook, onSettings: onSettings,
+                                         onRename: onRename, onDelete: onDelete, fold: fold,
                                          order: order, dropTarget: dropTarget, summary: summary, badge: badge,
                                          // [three-piles] the piles have no state of their own (each row says its own);
                                          // [project-by-status] By Status's sections do.
@@ -2777,6 +2787,12 @@ extension SessionsViewController {
             Haptics.play(.selection)
             self?.store?.setArchivedProject(key, on)
             self?.reload(animated: true)
+        }
+        headerModel.onLookProject = { [weak self] key, label in
+            self?.presentProjectLook(key, name: label)
+        }
+        headerModel.onSettingsProject = { [weak self] key, label in
+            self?.presentProjectSettings(key, name: label)
         }
         headerModel.onMoveProject = { [weak self] source, target, shown in
             guard let self, let store = self.store,

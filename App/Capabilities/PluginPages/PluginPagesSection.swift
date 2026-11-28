@@ -19,6 +19,7 @@ extension PluginCatalogEntry {
     /// [plugin-pages] Whether the listing says it adds a page to the Hermes dashboard (the catalog has no field for
     /// it, so its words decide: "dashboard tab", "Dashboard and Desktop plugin", "from the Hermes dashboard"…).
     var addsDashboardPage: Bool {
+        if addsPage { return true }   // [hq-plugins] the app's own list says so outright
         let words = description.lowercased()
         let phrases = ["dashboard tab", "dashboard page", "dashboard-only", "dashboard only", "dashboard plugin", "dashboard and desktop plugin",
                        "from the hermes dashboard", "for the hermes dashboard", "in the hermes dashboard", "hermes dashboard and desktop"]

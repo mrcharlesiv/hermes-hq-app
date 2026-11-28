@@ -83,6 +83,7 @@ extension SessionsTests {
         shot(app, "PS0-menu")
         settings.tap()
         XCTAssertTrue(app.navigationBars["Website"].waitForExistence(timeout: 8), "the sheet is titled with the project's name")
+        XCTAssertTrue(app.buttons["sessions.projectSettings.look"].waitForExistence(timeout: 5), "Look: Icon & Color at top")
         let keep = app.switches["sessions.projectSettings.keep"], pins = app.switches["sessions.projectPage.localPins"]
         XCTAssertTrue(keep.waitForExistence(timeout: 5) && pins.exists, "Chats: Keep Chats in This Project, Pins Stay in Project")
         let keepHelp = "Its chats leave Recent and Pinned. Chats that need you still show in New for You. To keep a shortcut under a bot, choose Show Under in the chat’s menu."
@@ -93,8 +94,6 @@ extension SessionsTests {
         XCTAssertTrue(projectSetting(app, "sessions.projectSettings.notify").exists, "Notifications")
         XCTAssertTrue(projectSetting(app, "sessions.projectSettings.model").exists, "New Chats: Model")
         XCTAssertTrue(projectSetting(app, "sessions.projectSettings.reasoning").exists, "New Chats: Reasoning")
-        XCTAssertTrue(projectSetting(app, "sessions.projectSettings.emoji").exists, "Look: Icon")
-        XCTAssertTrue(projectSetting(app, "sessions.projectSettings.color.0").exists, "Look: Color")
         XCTAssertFalse(app.switches["sessions.projectSettings.branchRows"].exists, "Show Branch on Rows is a coding project's")
         XCTAssertFalse(app.switches["sessions.projectSettings.autoDoneMerged"].exists, "When the Pull Request Merges is a coding project's")
         shot(app, "PS0-page-bottom")
@@ -400,57 +399,148 @@ extension SessionsTests {
 
     // MARK: Step 5: Look
 
-    /// Website gets an emoji and a colour: its page's header draws them before its name, its pill carries the emoji,
-    /// and so does its row under Group By Recent's Projects; cleared, the folder is back.
+    /// [project-look] Tapping the project page header icon opens the visual Icon & Color picker directly;
+    /// curated emojis, custom emoji typing, SF Symbols, color swatches, live preview, Reset to Default Folder,
+    /// row/pill menus, New Chat, Reorder Projects, and New Project sheet all reflect the project's look.
     @MainActor func test40p_ProjectLook() throws {
         let app = launch(projectPages: true)
         XCTAssertTrue(row(app, "s-garden").waitForExistence(timeout: 15))
         openWebsitePage(app)
-        XCTAssertFalse(app.descendants(matching: .any)["sessions.projectPage.look"].exists, "no mark before the name yet")
+        let headerLook = app.buttons["sessions.projectPage.look"]
+        XCTAssertTrue(headerLook.waitForExistence(timeout: 5), "the project header always shows a tappable icon button")
+        XCTAssertEqual(headerLook.value as? String, "Default Folder")
         shot(app, "PS5-before")
-        openProjectSettings(app)
-        let field = projectSetting(app, "sessions.projectSettings.emoji")
-        XCTAssertTrue(field.waitForExistence(timeout: 5), "Look: Icon")
-        focus(field)
-        field.typeText("🚀🌊")
-        XCTAssertTrue(waitUntil(4) { (field.value as? String) == "🌊" }, "one character: the last typed (\(String(describing: field.value)))")
+
+        // Tap the project page header icon directly to open Icon & Color sheet.
+        headerLook.tap()
+        XCTAssertTrue(app.navigationBars["Icon & Color"].waitForExistence(timeout: 6), "tapping header icon opens Icon & Color")
+        XCTAssertTrue(app.descendants(matching: .any)["project.look.preview"].waitForExistence(timeout: 5), "live preview is shown")
         let teal = projectSetting(app, "sessions.projectSettings.color.6")
         XCTAssertTrue(teal.waitForExistence(timeout: 5), "Look: Color")
         teal.tap()
         XCTAssertTrue(waitUntil(4) { teal.isSelected }, "the colour is picked")
         XCTAssertEqual(teal.label, "Teal")
-        shot(app, "PS5-setting")
-        closeProjectSettings(app)
-        XCTAssertTrue(app.descendants(matching: .any)["sessions.projectPage.look"].waitForExistence(timeout: 6), "the header draws the look before the name")
+
+        // Type custom emoji (two characters: last typed wins).
+        let field = projectSetting(app, "sessions.projectSettings.emoji")
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "Look: Custom Emoji field")
+        focus(field)
+        field.typeText("🚀🌊")
+        XCTAssertTrue(waitUntil(4) { (field.value as? String) == "🌊" }, "one character: the last typed (\(String(describing: field.value)))")
+        // Dismiss keyboard and tap curated rocket emoji for the visual showcase.
+        app.navigationBars["Icon & Color"].tap()
+        let rocket = projectSetting(app, "project.look.emoji.0")
+        XCTAssertTrue(rocket.waitForExistence(timeout: 5), "curated emoji grid is present")
+        rocket.tap()
+        XCTAssertTrue(waitUntil(4) { (field.value as? String) == "🚀" }, "curated emoji tap selects it")
+        shot(app, "PS5-picker-emoji")
+
+        // Switch to Symbols tab and check SF Symbols picker.
+        let symbolsSegment = app.buttons["Symbols"].firstMatch
+        XCTAssertTrue(symbolsSegment.waitForExistence(timeout: 5), "Symbols segment exists")
+        symbolsSegment.tap()
+        let hammer = projectSetting(app, "project.look.symbol.hammer.fill")
+        XCTAssertTrue(hammer.waitForExistence(timeout: 5), "curated SF Symbols grid is present")
+        hammer.tap()
+        XCTAssertTrue(waitUntil(4) { hammer.isSelected }, "SF Symbol selected")
+        shot(app, "PS5-picker-symbols")
+
+        // Switch back to Emoji and pick rocket + Teal so Website has 🚀 + Teal.
+        app.buttons["Emoji"].firstMatch.tap()
+        let rocketAgain = projectSetting(app, "project.look.emoji.0")
+        XCTAssertTrue(rocketAgain.waitForExistence(timeout: 5))
+        rocketAgain.tap()
+        app.buttons["sheet.close"].firstMatch.tap()
+        XCTAssertTrue(waitUntil(6) { !app.navigationBars["Icon & Color"].exists })
+
+        XCTAssertTrue(waitUntil(6) { (app.buttons["sessions.projectPage.look"].value as? String) == "🚀 · Teal" },
+                      "the header draws the look before the name (\(String(describing: app.buttons["sessions.projectPage.look"].value)))")
         XCTAssertTrue(app.buttons["sessions.chip.project.0"].isHittable, "the pill keeps its touch")
         XCTAssertGreaterThanOrEqual(app.buttons["sessions.chip.project.0"].frame.height, 43.5, "44 pt touch")
         shot(app, "PS5-page-and-pill")
-        // The pill let go: the Projects side lists every project, Website's row with its emoji in the folder's place,
-        // and its pill (not picked) carries it too.
-        let pill = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'sessions.chip.project.' AND label BEGINSWITH 'Website project'")).firstMatch
-        XCTAssertTrue(pill.waitForExistence(timeout: 5), "Website's pill")
-        onScreen(app, pill).tap()
+
+        // Open Project Settings to verify Look is promoted to the top with live summary.
+        openProjectSettings(app)
+        let lookRow = app.buttons["sessions.projectSettings.look"]
+        XCTAssertTrue(lookRow.waitForExistence(timeout: 5), "Look row at top of Project Settings")
+        shot(app, "PS5-settings-top")
+        closeProjectSettings(app)
+
+        // Tap selected Website pill to return to Projects overview; give App an SF Symbol + Blue via pill hold menu!
+        let websitePill = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'sessions.chip.project.' AND label BEGINSWITH 'Website project'")).firstMatch
+        XCTAssertTrue(websitePill.waitForExistence(timeout: 5), "Website's pill")
+        onScreen(app, websitePill).tap()
         XCTAssertTrue(waitUntil(6) { !app.cells["sessions.projectPage"].exists }, "the Projects side")
-        Thread.sleep(forTimeInterval: 1.0)
+
+        let appPill = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'sessions.chip.project.' AND label BEGINSWITH 'App project'")).firstMatch
+        XCTAssertTrue(appPill.waitForExistence(timeout: 5), "App's pill")
+        onScreen(app, appPill).press(forDuration: 1.0)
+        let pillLook = app.buttons["sessions.chip.project.look"]
+        XCTAssertTrue(pillLook.waitForExistence(timeout: 5), "pill hold popover offers Icon & Color…")
+        XCTAssertTrue(app.buttons["sessions.chip.project.settings"].exists, "pill hold popover offers Project Settings…")
+        shot(app, "PS5-pill-menu")
+        pillLook.tap()
+        XCTAssertTrue(app.navigationBars["Icon & Color"].waitForExistence(timeout: 6), "pill menu opens Icon & Color")
+        projectSetting(app, "sessions.projectSettings.color.8").tap()
+        app.buttons["Symbols"].firstMatch.tap()
+        let phone = projectSetting(app, "project.look.symbol.iphone")
+        XCTAssertTrue(phone.waitForExistence(timeout: 5))
+        phone.tap()
+        app.buttons["sheet.close"].firstMatch.tap()
+        XCTAssertTrue(waitUntil(6) { !app.navigationBars["Icon & Color"].exists })
+        Thread.sleep(forTimeInterval: 0.6)
         shot(app, "PS5-projects-side")
-        onScreen(app, pill).tap()
-        XCTAssertTrue(app.cells["sessions.projectPage"].waitForExistence(timeout: 6), "Website's page again")
-        // Colour alone: the folder in that colour.
+
+        // Open a project row's ⋯ menu to verify Icon & Color… & Project Settings… appear there too.
+        let headerMenu = app.buttons["sessions.header.menu"].firstMatch
+        if headerMenu.waitForExistence(timeout: 3) {
+            headerMenu.tap()
+            XCTAssertTrue(app.buttons["Icon & Color…"].waitForExistence(timeout: 5), "row menu has Icon & Color…")
+            XCTAssertTrue(app.buttons["Project Settings…"].exists, "row menu has Project Settings…")
+            shot(app, "PS5-row-menu")
+            // Open Reorder Projects… right from the row menu to verify icons appear there too.
+            app.buttons["Reorder Projects…"].tap()
+            XCTAssertTrue(app.navigationBars["Reorder Projects"].waitForExistence(timeout: 6))
+            shot(app, "PS5-reorder")
+            app.buttons["sheet.close"].firstMatch.tap()
+            XCTAssertTrue(waitUntil(6) { !app.navigationBars["Reorder Projects"].exists })
+        }
+
+        // Open New Chat sheet to verify project icons appear there too, plus New Project sheet.
+        let compose = app.buttons["sessions.compose"].firstMatch
+        if compose.waitForExistence(timeout: 4) {
+            compose.tap()
+            XCTAssertTrue(app.navigationBars["New Chat"].waitForExistence(timeout: 6))
+            shot(app, "PS5-new-chat")
+            let newProjectBtn = app.buttons["new-chat-project-new"]
+            if newProjectBtn.waitForExistence(timeout: 4) {
+                newProjectBtn.tap()
+                XCTAssertTrue(app.navigationBars["New Project"].waitForExistence(timeout: 6))
+                fill(app.textFields["project.name"], "Design System")
+                app.navigationBars["New Project"].tap()
+                let purple = app.buttons["project.new.color.9"]
+                if purple.waitForExistence(timeout: 3) { purple.tap() }
+                shot(app, "PS5-new-project")
+                app.buttons["project.cancel"].tap()
+                XCTAssertTrue(waitUntil(6) { !app.navigationBars["New Project"].exists })
+            } else {
+                app.buttons["sheet.close"].firstMatch.tap()
+            }
+        }
+
+        // Reopen Website page, open Project Settings → Icon & Color, test Reset to Default Folder.
+        onScreen(app, websitePill).tap()
+        XCTAssertTrue(app.cells["sessions.projectPage"].waitForExistence(timeout: 6))
         openProjectSettings(app)
-        let again = projectSetting(app, "sessions.projectSettings.emoji")
-        let clear = projectSetting(app, "sessions.projectSettings.emojiClear")
-        XCTAssertTrue(clear.waitForExistence(timeout: 5), "a set icon can be cleared")
-        clear.tap()
-        XCTAssertTrue(waitUntil(4) { ((again.value as? String) ?? "") != "🌊" }, "the emoji is cleared (\(String(describing: again.value)))")
-        shot(app, "PS5-colour-only-setting")
+        app.buttons["sessions.projectSettings.look"].tap()
+        XCTAssertTrue(app.navigationBars["Icon & Color"].waitForExistence(timeout: 6))
+        let reset = projectSetting(app, "project.look.reset")
+        XCTAssertTrue(reset.waitForExistence(timeout: 5), "Reset to Default Folder button exists")
+        reset.tap()
+        XCTAssertTrue(waitUntil(4) { !reset.exists }, "Reset hides once default")
+        app.navigationBars["Icon & Color"].buttons.firstMatch.tap()
         closeProjectSettings(app)
-        XCTAssertTrue(app.descendants(matching: .any)["sessions.projectPage.look"].exists, "a colour alone still marks the header")
-        shot(app, "PS5-colour-only")
-        // None: back to the plain folder, nothing before the name.
-        openProjectSettings(app)
-        projectSetting(app, "sessions.projectSettings.color.none").tap()
-        closeProjectSettings(app)
-        XCTAssertTrue(waitUntil(6) { !app.descendants(matching: .any)["sessions.projectPage.look"].exists }, "cleared")
+        XCTAssertTrue(waitUntil(6) { (app.buttons["sessions.projectPage.look"].value as? String) == "Default Folder" }, "cleared back to default folder")
         shot(app, "PS5-cleared")
     }
 

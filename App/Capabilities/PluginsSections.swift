@@ -567,7 +567,11 @@ nonisolated enum PluginRepo {
         let lower = value.lowercased()
         if lower.hasPrefix("https://") { return URL(string: value)?.host == nil ? .invalid : .ok }
         if JSRegex(#"^git@[A-Za-z0-9.-]+:[\w.~/-]+$"#).test(value) { return .ok }
-        if JSRegex(#"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"#).test(value) { return .ok }
+        // owner/repo, and a plugin in a folder of it as Hermes takes one: owner/repo/folder or owner/repo#folder
+        // (2026-11-27: "acme/plugins/notes" was refused here though `hermes plugins install` accepts it).
+        if JSRegex(#"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*(#[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*)?$"#).test(value) {
+            return value.split(whereSeparator: { $0 == "/" || $0 == "#" }).contains { $0.allSatisfy { $0 == "." } } ? .invalid : .ok
+        }
         if JSRegex(#"^[a-z][a-z0-9+.-]*:"#, "i").test(value) { return .insecure }
         return .invalid
     }
@@ -688,6 +692,8 @@ struct PluginInstallView: View {
                         .accessibilityIdentifier("plugins.install.insecure")
                 } else if let already = state.already {
                     Text(already).foregroundStyle(.red).accessibilityIdentifier("plugins.install.already")
+                } else {
+                    Text("owner/repo and owner/repo/folder work too.")
                 }
             } }
             Section {

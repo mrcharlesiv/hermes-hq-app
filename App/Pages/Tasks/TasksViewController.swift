@@ -2061,7 +2061,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         updateAsked = true
         reload(animated: false)
         Task { [weak self] in
-            _ = await PushSetupOffer.shared.check(model: model, fromSettings: true, confirm: false, needsIdeas: true, from: self)
+            _ = await PushSetupOffer.shared.check(model: model, fromSettings: true, confirm: true, needsIdeas: true, from: self)
             self?.updateAsked = false
             // Read the whole list whatever the sheet said: "Up to Date" (the add-on was already new) left the list's
             // `?since=` answer "unchanged", and the page kept asking for the update (owner 2026-11-05).

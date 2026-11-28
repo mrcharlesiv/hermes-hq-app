@@ -176,8 +176,8 @@ import UIKit
 
     /// Under the row: which ones.
     var footer: String? {
-        // [tiles] The names as Marketplace shows them ("Web Clipper", not the folder name web-clipper).
-        let names = names.map(DisplayName.title)
+        // [tiles] Friendly names ("Web Clipper", "Proactivity (Beta)"), not folder slugs.
+        let names = names.map(AddOnChanges.displayTitle)
         guard !names.isEmpty else { return nil }
         return names.count == 1 ? "\(names[0]) has a newer version." : "\(AddOnReminder.names(names)) have newer versions."
     }
@@ -531,12 +531,47 @@ nonisolated enum PluginUpdateWords {
         let several = model.bots.count > 1
         let cards = plugins.map { name -> AddOnUpdate.Changing in
             let copies = items.filter { $0.plugin.name == name }
-            let from = copies.first?.plugin.version ?? ""
-            return AddOnUpdate.Changing(plugin: name, title: DisplayName.title(name), from: from.isEmpty ? nil : from, to: copies.first?.plugin.newVersion,
-                                        loading: false, note: several ? "For " + AddOnReminder.names(copies.map(\.bot)) : nil)
+            let rawFrom = copies.first?.plugin.version ?? ""
+            let from = rawFrom.isEmpty ? nil : rawFrom
+            let rawTo = copies.first?.plugin.newVersion
+            let note = several ? "For " + AddOnReminder.names(copies.map(\.bot)) : nil
+            let description = copies.first?.plugin.description
+            if AddOnChanges.isHQPlugin(name) {
+                let builtIn = AddOnChanges.builtInChanges(plugin: name, after: from, limit: 25)
+                let bestTo = AddOnChanges.bestTargetVersion(liveNewest: AddOnChanges.newest(builtIn), fallbackTo: rawTo, plugin: name)
+                return AddOnUpdate.Changing(
+                    plugin: name,
+                    title: AddOnChanges.displayTitle(for: name),
+                    from: from,
+                    to: bestTo,
+                    lines: builtIn,
+                    loading: true,
+                    note: note,
+                    fallback: AddOnChanges.fallbackSummary(plugin: name, from: from, to: bestTo, setUp: false, botsNote: note, description: description)
+                )
+            }
+            return AddOnUpdate.Changing(
+                plugin: name,
+                title: DisplayName.title(name),
+                from: from,
+                to: rawTo,
+                loading: false,
+                note: note,
+                fallback: description.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+            )
         }
-        let titles = plugins.map(DisplayName.title)   // [tiles] the sheet's words say "Web Clipper", not the folder name
+        let titles = plugins.map(AddOnChanges.displayTitle)   // [tiles] friendly names ("Web Clipper", "Proactivity (Beta)")
         update.foundPlugins(titles, why: PluginUpdateWords.why(titles), bot: mainBot?.name ?? "the main bot", installNote: nil, cards: cards)
+        for name in plugins where AddOnChanges.isHQPlugin(name) {
+            let copies = items.filter { $0.plugin.name == name }
+            let rawFrom = copies.first?.plugin.version ?? ""
+            update.loadPluginChanges(
+                for: name,
+                from: rawFrom.isEmpty ? nil : rawFrom,
+                targetVersion: copies.first?.plugin.newVersion,
+                description: copies.first?.plugin.description
+            )
+        }
         let go = await update.ask()
         AppLog.note("plugins", go ? "update asked: \(items.count) cop\(items.count == 1 ? "y" : "ies") of \(plugins.count) plugin(s)" : "update declined")
         guard go else { return }

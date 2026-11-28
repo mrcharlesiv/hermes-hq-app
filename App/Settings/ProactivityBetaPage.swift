@@ -354,6 +354,28 @@ struct ProactivityBetaView: View {
 
     @ViewBuilder
     private func readySections(_ status: ProactivityBeta.Status) -> some View {
+        if let app = model.services as? AppModel,
+           PluginUpdateReminder.shared.saved.items[model.profile]?.contains(where: { $0.name == ProactivityBeta.pluginName }) == true {
+            let updating = AddOnUpdate.shared.busy && AddOnUpdate.shared.pluginRun
+            Section {
+                Button {
+                    PluginUpdateFlow.shared.run(model: app, only: .init(profile: model.profile, name: ProactivityBeta.pluginName), from: router.presenter)
+                } label: {
+                    HStack(spacing: 12) {
+                        SettingsRowLabel(title: updating ? "Updating Proactivity (Beta)…" : "Update Available", systemImage: "arrow.down.circle")
+                        Spacer(minLength: 16)
+                        if updating { ProgressView().controlSize(.small) } else { CountBadgeView(count: 1) }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .accessibilityIdentifier("proactivity.update")
+            } footer: {
+                HQSectionFooter {
+                    Text("A newer version of Proactivity (Beta) is available for \(model.botName). \(DeviceWord.Tap) to see what’s changing before updating.")
+                }
+            }
+        }
+
         Section {
             Toggle(isOn: Binding(
                 get: { status.enabled },

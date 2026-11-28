@@ -59,5 +59,78 @@ import Testing
         #expect(AddOnChanges.tidy("works on 0.22.6 (and newer) and older") == "Works on 0.22.6 (and newer) and older")
         // Mac polish #145's leftover: an aside that opens the line takes its space with it.
         #expect(AddOnChanges.tidy("(browser_exec only) pages open faster") == "Pages open faster")
+        // Internal tags like (owner ...) and (issue #11) are stripped while plain wording stays.
+        #expect(AddOnChanges.tidy("1Password logins never fill on a sibling host (issue #11)") == "1Password logins never fill on a sibling host")
+        #expect(AddOnChanges.tidy("goal tasks keep their files (owner 2026-11-23)") == "Goal tasks keep their files")
+    }
+
+    @Test func preReleaseSemverAndAliasesAndCompoundCommits() {
+        #expect((AddOnChanges.compareVersions("0.4.0", "0.4.0-beta.2") ?? 0) > 0, "stable beats pre-release")
+        #expect((AddOnChanges.compareVersions("0.4.0-beta.10", "0.4.0-beta.2") ?? 0) > 0, "numeric pre-release order")
+        #expect((AddOnChanges.compareVersions("0.4.0-beta.1", "0.3.0-beta.3") ?? 0) > 0)
+        #expect(AddOnChanges.versionAtLeast("0.4.0-beta.2", "0.4.0-beta.1"))
+        #expect(!AddOnChanges.versionAtLeast("0.3.0-beta.3", "0.4.0-beta.1"))
+
+        let mixed = [
+            "Proactivity 0.4.0-beta.2: a hand-off says the date once",
+            "hermes-hq-proactive 0.4.0-beta.1: finds are said in the bot's chat",
+            "hermes-hq-proactive 0.3.0-beta.3: a closed item takes its suggestion with it",
+            "hermes-hq-push 0.9.89 & hermes-hq-browser 3.13.1: fix vault fill and alert on browser ask",
+            "unrelated commit message",
+        ]
+        let proactive = AddOnChanges.changes(subjects: mixed, plugin: "hermes-hq-proactive", after: "0.3.0-beta.3", limit: 10)
+        #expect(proactive.map(\.version) == ["0.4.0-beta.2", "0.4.0-beta.1"])
+        #expect(proactive[0].line == "A hand-off says the date once")
+        #expect(proactive[1].line == "Finds are said in the bot's chat")
+
+        let push = AddOnChanges.changes(subjects: mixed, plugin: "hermes-hq-push", after: "0.9.88", limit: 10)
+        #expect(push == [AddOnChanges.Change(version: "0.9.89", line: "Fix vault fill and alert on browser ask")])
+
+        let browser = AddOnChanges.changes(subjects: mixed, plugin: "hermes-hq-browser", after: "3.13.0", limit: 10)
+        #expect(browser == [AddOnChanges.Change(version: "3.13.1", line: "Fix vault fill and alert on browser ask")])
+    }
+
+    @Test func mergeKeepsFutureReleasesAndFillsOfflineGaps() {
+        // Offline / rate-limited: built-in curated notes still explain what's changing.
+        let offlinePush = AddOnChanges.merge(live: [], plugin: "hermes-hq-push", after: "0.9.85")
+        #expect(offlinePush.map(\.version).contains("0.9.91"))
+        #expect(offlinePush.map(\.version).contains("0.9.86"))
+        #expect(offlinePush.count > 3, "does not silently truncate at 3")
+
+        let offlineProactive = AddOnChanges.merge(live: [], plugin: "hermes-hq-proactive", after: "0.3.0-beta.3")
+        #expect(offlineProactive.map(\.version) == ["0.4.0-beta.2", "0.4.0-beta.1"])
+
+        // Future release from live GitHub appears first, above built-in notes.
+        let future = [AddOnChanges.Change(version: "0.9.95", line: "Adds brand new notification grouping")]
+        let merged = AddOnChanges.merge(live: future, plugin: "hermes-hq-push", after: "0.9.89")
+        #expect(merged.first == future[0])
+        #expect(merged.map(\.version).prefix(3) == ["0.9.95", "0.9.91", "0.9.90"])
+    }
+
+    @Test func bestTargetVersionReplacesCommitSHAAndFallsBackCleanly() {
+        #expect(AddOnChanges.isCommitSHA("0e31cd2"))
+        #expect(!AddOnChanges.isCommitSHA("0.4.0-beta.2"))
+        #expect(AddOnChanges.bestTargetVersion(liveNewest: "0.4.0-beta.2", fallbackTo: "0e31cd2", plugin: "hermes-hq-proactive") == "0.4.0-beta.2")
+        #expect(AddOnChanges.bestTargetVersion(liveNewest: nil, fallbackTo: "0e31cd2", plugin: "hermes-hq-proactive") == "0.4.0-beta.2")
+        #expect(AddOnChanges.bestTargetVersion(liveNewest: nil, fallbackTo: nil, plugin: "hermes-hq-push") == PushPolicy.wantedVersion)
+        #expect(AddOnChanges.bestTargetVersion(liveNewest: nil, fallbackTo: nil, plugin: "hermes-hq-browser") == BrowserAddOn.wantedVersion)
+    }
+
+    @Test func hqPluginHelpersAndGuaranteedFallbackCopy() {
+        #expect(AddOnChanges.isHQPlugin("hermes-hq-push"))
+        #expect(AddOnChanges.isHQPlugin("hermes-hq-browser"))
+        #expect(AddOnChanges.isHQPlugin("hermes-hq-proactive"))
+        #expect(AddOnChanges.isHQPlugin("hermes-hq-future"))
+        #expect(!AddOnChanges.isHQPlugin("web-clipper"))
+
+        #expect(AddOnChanges.displayTitle(for: "hermes-hq-push") == "Hermes HQ Add-on")
+        #expect(AddOnChanges.displayTitle(for: "hermes-hq-browser") == "Browser Add-on")
+        #expect(AddOnChanges.displayTitle(for: "hermes-hq-proactive") == "Proactivity (Beta)")
+        #expect(AddOnChanges.displayTitle(for: "web-clipper") == "Web Clipper")
+
+        #expect(!AddOnChanges.fallbackSummary(plugin: "hermes-hq-push", from: "0.9.91", to: "0.9.91", setUp: false, botsNote: "For Finance").isEmpty)
+        #expect(AddOnChanges.fallbackSummary(plugin: "hermes-hq-push", from: "0.9.91", to: "0.9.91", setUp: false, botsNote: "For Finance").contains("remaining bots"))
+        #expect(AddOnChanges.fallbackSummary(plugin: "hermes-hq-browser", from: nil, to: "3.13.1", setUp: true).contains("Browser Add-on"))
+        #expect(AddOnChanges.fallbackSummary(plugin: "hermes-hq-proactive", from: "0.3.0-beta.3", to: "0.4.0-beta.2", setUp: false).contains("Proactivity (Beta)"))
     }
 }

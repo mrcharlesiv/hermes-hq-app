@@ -248,7 +248,8 @@ import UserNotifications
             if !without.isEmpty { state = .outdated }
         }
         // [browser-update] The browser add-on's own answer (not asked when Hermes didn't answer the first read).
-        let browserRead = answer.state == .unknown ? BrowserRead.unknown : await Self.readBrowser(model.browser)
+        let browserCheck: (read: BrowserRead, version: String?) = answer.state == .unknown ? (.unknown, nil) : await Self.readBrowserWithVersion(model.browser)
+        let browserRead = browserCheck.read
         // [cloud-hosted] `browserSetup` (Settings › Browser Use Cloud › Set Up the Browser Add-on): a browser add-on that
         // isn't there goes in the way its update does. Never on its own: Hermes Cloud's first setup leaves it out.
         let browserAbsent = browserSetup && browserRead == .absent
@@ -303,7 +304,7 @@ import UserNotifications
             : browserNeed.map { AddOnUpdate.why(need, browser: $0) } ?? need.map { AddOnUpdate.why($0, both: browser) } ?? ""
         update.found(setUp: (pushWork && !outdated) || (browserAbsent && !pushWork), why: why, bot: bot.name, both: browser || (pushWork && browserUpdate), browserOnly: !pushWork,
                      installNote: AddOnUpdate.installPlan(bots: without.map(\.name), all: model.bots.count, browser: pushWork && browserUpdate))
-        update.loadChanges(store: store)   // [addon-whats-new] which versions, and what they bring
+        update.loadChanges(store: store, bots: without, browserInstalled: browserCheck.version)   // [addon-whats-new] which versions, and what they bring
         if confirm {
             let go = await update.ask(presenting: fromSettings ? nil : host)
             AppLog.note("push", go ? "setup asked" : "setup declined")
@@ -497,9 +498,17 @@ import UserNotifications
     }
 
     static func readBrowser(_ service: BrowserService?) async -> BrowserRead {
-        guard let service else { return .unknown }
-        do { return .from(try await service.plugin(fresh: true)) } catch {
-            return BrowserService.isMissing(error) ? .absent : .unknown
+        await readBrowserWithVersion(service).read
+    }
+
+    static func readBrowserWithVersion(_ service: BrowserService?) async -> (read: BrowserRead, version: String?) {
+        guard let service else { return (.unknown, nil) }
+        do {
+            let plugin = try await service.plugin(fresh: true)
+            let version = BrowserAddOn.version(plugin.health)
+            return (.from(plugin), version.isEmpty ? nil : version)
+        } catch {
+            return (BrowserService.isMissing(error) ? .absent : .unknown, nil)
         }
     }
 

@@ -75,6 +75,9 @@ import Testing
         #expect(reminder.names == ["web-clipper"], "the main bot's copy still has its update")
         reminder.report(account: "A", profile: "default", list: [])
         #expect(reminder.count == 0 && reminder.title == nil)
+        // HQ plugins outside ownAddOns (like Proactivity Beta) show their friendly title in the reminder footer.
+        reminder.report(account: "A", profile: "default", list: [Self.plugin(ProactivityBeta.pluginName, version: "0.3.0-beta.3", to: "0e31cd2")])
+        #expect(reminder.count == 1 && reminder.footer == "Proactivity (Beta) has a newer version.")
     }
 
     @Test func keptPerGatewayAndForgottenOnSignOut() throws {

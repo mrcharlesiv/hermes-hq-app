@@ -125,9 +125,8 @@ final class NotificationsSettingsModel {
         guard let app else { return }
         Task { @MainActor in
             asking = true
-            // UX study #139: the button already asks for this, so no second "Turn On Notifications?" alert; the
-            // section's footer says what that alert would have (the restart, the bot's chat).
-            await PushSetupOffer.shared.check(model: app, fromSettings: true, confirm: false, from: host)
+            // Always show the update sheet's What's Changing confirmation before applying an HQ plugin update.
+            await PushSetupOffer.shared.check(model: app, fromSettings: true, confirm: true, from: host)
             asking = false
         }
     }

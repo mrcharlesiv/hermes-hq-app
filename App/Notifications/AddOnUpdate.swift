@@ -100,6 +100,8 @@ import UIKit
         var loading = true
         /// [plugin-updates] A quiet line under the name ("For Hermes and Finance").
         var note: String? = nil
+        /// Guaranteed plain-English summary shown when no per-version lines apply.
+        var fallback: String? = nil
     }
 
     /// [plugin-updates] This run updates other plugins (PluginUpdateFlow), not the app's add-ons.
@@ -115,6 +117,7 @@ import UIKit
     @ObservationIgnored private var answer: CheckedContinuation<Bool, Never>?
     @ObservationIgnored private weak var sheet: UIViewController?
     @ObservationIgnored private weak var model: AppModel?
+    @ObservationIgnored private var changesGeneration = 0
 
     /// An update (or the check before it) is under way: a tap brings the sheet back instead of starting another.
     var busy: Bool {
@@ -143,6 +146,7 @@ import UIKit
         addOns = .push
         pluginRun = false
         plugins = []
+        changesGeneration &+= 1
         steps = [Step(id: .check, title: Self.checkTitle, state: .active, started: Date())]
         changes = []
     }
@@ -226,35 +230,136 @@ import UIKit
         PushSetupOffer.shared.askBotInstead()
     }
 
-    /// [addon-whats-new] Reads what the update brings while the sheet asks: the versions Hermes has (the main bot's
-    /// add-on list) and each add-on's newer releases from GitHub. The sheet shows the names at once and fills in.
-    func loadChanges(store: CapabilitiesStore?) {
+    /// [addon-whats-new] Reads what the update brings while the sheet asks: the versions Hermes has (the affected bots'
+    /// add-on lists) and each add-on's newer releases from GitHub, merged with built-in curated release notes so every
+    /// HQ add-on update clearly explains what is changing even offline or when rate-limited.
+    func loadChanges(store: CapabilitiesStore?, bots: [Bot] = [], browserInstalled: String? = nil) {
+        changesGeneration &+= 1
+        let generation = changesGeneration
+        let isSetUp = setUp
+        let botsNote = bots.isEmpty ? nil : "For " + AddOnReminder.names(bots.map(\.name))
         var items: [Changing] = []
-        if addOns != .browser { items.append(Changing(plugin: PushPolicy.pluginName, title: Self.pushName)) }
-        if addOns != .push { items.append(Changing(plugin: PushSetupOffer.browserPlugin, title: Self.browserName)) }
+        if addOns != .browser {
+            let plugin = PushPolicy.pluginName
+            let target = AddOnChanges.defaultTargetVersion(for: plugin)
+            items.append(Changing(
+                plugin: plugin,
+                title: Self.pushName,
+                to: target,
+                loading: true,
+                note: botsNote,
+                fallback: AddOnChanges.fallbackSummary(plugin: plugin, from: nil, to: target, setUp: isSetUp, botsNote: botsNote)
+            ))
+        }
+        if addOns != .push {
+            let plugin = PushSetupOffer.browserPlugin
+            let knownFrom = browserInstalled.flatMap { AddOnChanges.isValidVersion($0) ? $0 : nil }
+            let initialLines = AddOnChanges.builtInChanges(plugin: plugin, after: knownFrom, limit: isSetUp && knownFrom == nil ? 5 : 25)
+            let target = AddOnChanges.bestTargetVersion(liveNewest: AddOnChanges.newest(initialLines), fallbackTo: nil, plugin: plugin)
+            items.append(Changing(
+                plugin: plugin,
+                title: Self.browserName,
+                from: knownFrom,
+                to: target,
+                lines: initialLines,
+                loading: true,
+                fallback: AddOnChanges.fallbackSummary(plugin: plugin, from: knownFrom, to: target, setUp: isSetUp)
+            ))
+        }
         changes = items
         Task { @MainActor [weak self] in
             var installed: [String: String] = [:]
-            if let store, let list = try? await store.plugins("default") {
-                for plugin in list where items.contains(where: { $0.plugin == plugin.name }) { installed[plugin.name] = plugin.version }
+            if let browserInstalled, AddOnChanges.isValidVersion(browserInstalled) {
+                installed[PushSetupOffer.browserPlugin] = browserInstalled
+            }
+            if let store {
+                // When only specific bots need the notification add-on, inspect those bots' installed versions
+                // (lowest installed version, or nil if a bot lacks it) instead of reading the already-current main bot.
+                if !bots.isEmpty, items.contains(where: { $0.plugin == PushPolicy.pluginName }) {
+                    var versions: [String] = []
+                    var anyMissing = false
+                    for bot in bots {
+                        if let list = try? await store.plugins(bot.id),
+                           let copy = list.first(where: { $0.name == PushPolicy.pluginName }),
+                           AddOnChanges.isValidVersion(copy.version) {
+                            versions.append(copy.version)
+                        } else {
+                            anyMissing = true
+                        }
+                    }
+                    if !anyMissing, let lowest = versions.min(by: { (AddOnChanges.compareVersions($0, $1) ?? 0) < 0 }) {
+                        installed[PushPolicy.pluginName] = lowest
+                    }
+                }
+                if let list = try? await store.plugins("default") {
+                    for plugin in list where items.contains(where: { $0.plugin == plugin.name }) {
+                        if plugin.name == PushPolicy.pluginName, !bots.isEmpty { continue }
+                        if AddOnChanges.isValidVersion(plugin.version) { installed[plugin.name] = plugin.version }
+                    }
+                }
             }
             for item in items {
-                var filled = item
-                filled.from = installed[item.plugin].flatMap { PushPolicy.versionAtLeast($0, "0") ? $0 : nil }
+                guard let self, self.changesGeneration == generation else { return }
+                let from = installed[item.plugin]
+                let limit = isSetUp && from == nil ? 5 : 25
+                // Apply curated built-in notes right away so the user sees what is changing immediately.
+                let builtIn = AddOnChanges.builtInChanges(plugin: item.plugin, after: from, limit: limit)
+                let initialTo = AddOnChanges.bestTargetVersion(liveNewest: AddOnChanges.newest(builtIn), fallbackTo: item.to, plugin: item.plugin)
+                if let index = self.changes.firstIndex(where: { $0.plugin == item.plugin }) {
+                    var prelim = self.changes[index]
+                    prelim.from = from
+                    prelim.to = initialTo
+                    if !builtIn.isEmpty { prelim.lines = builtIn }
+                    prelim.fallback = AddOnChanges.fallbackSummary(plugin: item.plugin, from: from, to: initialTo, setUp: isSetUp, botsNote: prelim.note)
+                    self.changes[index] = prelim
+                }
+                var live: [AddOnChanges.Change] = []
                 if let url = AddOnChanges.url(plugin: item.plugin) {
                     var request = URLRequest(url: url, timeoutInterval: 10)
                     request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
                     if let (data, response) = try? await URLSession.shared.data(for: request), (response as? HTTPURLResponse)?.statusCode == 200 {
-                        filled.lines = AddOnChanges.parse(data, plugin: item.plugin, after: filled.from)
+                        live = AddOnChanges.parse(data, plugin: item.plugin, after: from, limit: limit)
                     } else {
                         AppLog.note("push", "update sheet: what's new for \(item.plugin) not read")
                     }
                 }
-                filled.to = AddOnChanges.newest(filled.lines)
+                guard self.changesGeneration == generation,
+                      let index = self.changes.firstIndex(where: { $0.plugin == item.plugin }) else { return }
+                var filled = self.changes[index]
+                filled.from = from
+                filled.lines = AddOnChanges.merge(live: live, plugin: item.plugin, after: from, limit: limit)
+                filled.to = AddOnChanges.bestTargetVersion(liveNewest: AddOnChanges.newest(filled.lines), fallbackTo: item.to, plugin: item.plugin)
+                filled.fallback = AddOnChanges.fallbackSummary(plugin: item.plugin, from: filled.from, to: filled.to, setUp: isSetUp, botsNote: filled.note)
                 filled.loading = false
-                guard let self, let index = self.changes.firstIndex(where: { $0.plugin == item.plugin }) else { return }
                 self.changes[index] = filled
             }
+        }
+    }
+
+    /// [plugin-updates] Loads live + built-in release notes for an HQ plugin updated through `PluginUpdateFlow`
+    /// (e.g. `hermes-hq-proactive` or any future `hermes-hq-*` plugin), replacing raw commit SHAs with real versions.
+    func loadPluginChanges(for plugin: String, from: String?, targetVersion: String?, description: String? = nil) {
+        let generation = changesGeneration
+        Task { @MainActor [weak self] in
+            var live: [AddOnChanges.Change] = []
+            if let url = AddOnChanges.url(plugin: plugin) {
+                var request = URLRequest(url: url, timeoutInterval: 10)
+                request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+                if let (data, response) = try? await URLSession.shared.data(for: request), (response as? HTTPURLResponse)?.statusCode == 200 {
+                    live = AddOnChanges.parse(data, plugin: plugin, after: from, limit: 25)
+                } else {
+                    AppLog.note("plugins", "update sheet: what's new for \(plugin) not read")
+                }
+            }
+            guard let self, self.changesGeneration == generation,
+                  let index = self.changes.firstIndex(where: { $0.plugin == plugin }) else { return }
+            var filled = self.changes[index]
+            let merged = AddOnChanges.merge(live: live, plugin: plugin, after: from, limit: 25)
+            filled.lines = merged
+            filled.to = AddOnChanges.bestTargetVersion(liveNewest: AddOnChanges.newest(merged), fallbackTo: targetVersion, plugin: plugin)
+            filled.fallback = AddOnChanges.fallbackSummary(plugin: plugin, from: filled.from, to: filled.to, setUp: false, botsNote: filled.note, description: description)
+            filled.loading = false
+            self.changes[index] = filled
         }
     }
 
@@ -802,7 +907,9 @@ struct AddOnUpdateView: View {
                 .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
                 .hqDesktopBareRow()
                 if update.showsChanges {
-                    ForEach(update.changes) { AddOnChangesSection(item: $0, setUp: update.setUp) }
+                    ForEach(Array(update.changes.enumerated()), id: \.element.id) { index, item in
+                        AddOnChangesSection(item: item, setUp: update.setUp, isFirst: index == 0)
+                    }
                 }
                 if update.showsSteps {
                     Section {
@@ -1071,53 +1178,125 @@ extension View {
     }
 }
 
-/// [addon-whats-new] One add-on in the update: its name and versions ("0.9.33 → 0.9.40"), then a line per newer version.
+/// [addon-whats-new] One add-on in the update: its name and versions ("0.9.33 → 0.9.40"), then a line per newer version
+/// (expandable past 3), a loading note while fetching, or a clear fallback summary when no per-version lines exist.
 private struct AddOnChangesSection: View {
     var item: AddOnUpdate.Changing
     var setUp: Bool
+    var isFirst = false
+    @State private var expanded = false
+
+    private static let previewLimit = 3
+
+    private var shownLines: [AddOnChanges.Change] {
+        expanded ? item.lines : Array(item.lines.prefix(Self.previewLimit))
+    }
+
+    private var hiddenCount: Int { max(0, item.lines.count - Self.previewLimit) }
 
     var body: some View {
         Section {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(item.title)
+                            .font(Font.hq(.body).weight(.semibold))
+                            .foregroundStyle(Color.hqLabel)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                        if let note = item.note {   // [plugin-updates] which bots get it
+                            Text(note)
+                                .font(Font.hq(.footnote))
+                                .foregroundStyle(Color.hqLabel2)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    Spacer(minLength: 8)
+                    if let versions = AddOnUpdate.versions(from: item.from, to: item.to, setUp: setUp) {
+                        Text(versions)
+                            .font(Font.hq(.subheadline))
+                            .monospacedDigit()
+                            .foregroundStyle(Color(uiColor: HQPalette.glassInk2))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .accessibilityIdentifier("addon-update.versions")
+                    } else if item.loading {
+                        ProgressView().controlSize(.small)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 3) {
                     Text(item.title)
                         .font(Font.hq(.body).weight(.semibold))
                         .foregroundStyle(Color.hqLabel)
-                    if let note = item.note {   // [plugin-updates] which bots get it
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let versions = AddOnUpdate.versions(from: item.from, to: item.to, setUp: setUp) {
+                        Text(versions)
+                            .font(Font.hq(.subheadline))
+                            .monospacedDigit()
+                            .foregroundStyle(Color(uiColor: HQPalette.glassInk2))
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("addon-update.versions")
+                    } else if item.loading {
+                        ProgressView().controlSize(.small)
+                    }
+                    if let note = item.note {
                         Text(note)
                             .font(Font.hq(.footnote))
                             .foregroundStyle(Color.hqLabel2)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                Spacer(minLength: 8)
-                if let versions = AddOnUpdate.versions(from: item.from, to: item.to, setUp: setUp) {
-                    Text(versions)
-                        .font(Font.hq(.subheadline))
-                        .monospacedDigit()
-                        .foregroundStyle(Color(uiColor: HQPalette.glassInk2))
-                        .accessibilityIdentifier("addon-update.versions")
-                } else if item.loading {
-                    ProgressView().controlSize(.small)
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .accessibilityElement(children: .combine)
-            ForEach(item.lines, id: \.version) { change in
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text(change.version)
-                        .font(Font.hq(.caption).weight(.semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(Color(uiColor: HQPalette.glassInk2))
-                        // [Mac AAA 2026-11-16] Room for "0.9.40": at 44 pt a five-character version ("3.8.0") started its
-                        // line 3 pt left of the card above's (one column across the cards).
-                        .frame(minWidth: 52, alignment: .leading)
-                    Text(change.line)
+            if item.loading && item.lines.isEmpty {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Checking what’s new…")
                         .font(Font.hq(.subheadline))
-                        .foregroundStyle(Color.hqLabel)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .foregroundStyle(Color(uiColor: HQPalette.glassInk2))
                 }
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("addon-update.change")
+                .accessibilityIdentifier("addon-update.loading-changes")
+            } else if item.lines.isEmpty, let fallback = item.fallback, !fallback.isEmpty {
+                Text(fallback)
+                    .font(Font.hq(.subheadline))
+                    .foregroundStyle(Color.hqLabel)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("addon-update.fallback")
+            } else {
+                ForEach(shownLines, id: \.version) { change in
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Text(change.version)
+                            .font(Font.hq(.caption).weight(.semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(Color(uiColor: HQPalette.glassInk2))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            // [Mac AAA 2026-11-16] Room for "0.9.40": at 44 pt a five-character version ("3.8.0") started its
+                            // line 3 pt left of the card above's (one column across the cards).
+                            .frame(minWidth: 52, alignment: .leading)
+                        Text(change.line)
+                            .font(Font.hq(.subheadline))
+                            .foregroundStyle(Color.hqLabel)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("addon-update.change")
+                }
+                if hiddenCount > 0 {
+                    Button {
+                        withAnimation(HQMotion.swiftUI(.smooth(duration: HQMotion.move))) { expanded.toggle() }
+                    } label: {
+                        Text(expanded ? "Show Fewer" : "Show \(hiddenCount) Earlier \(hiddenCount == 1 ? "Update" : "Updates")")
+                            .font(Font.hq(.subheadline).weight(.medium))
+                            .foregroundStyle(Color.hqTint)
+                    }
+                    .accessibilityIdentifier("addon-update.more-changes")
+                }
+            }
+        } header: {
+            if isFirst {
+                HQSectionLabel { Text(setUp ? "What’s Included" : "What’s Changing") }
             }
         }
         .hqSheetRows()
@@ -1201,7 +1380,8 @@ extension AddOnUpdate {
         self.model = model
         pluginRun = false
         plugins = []
-        // [plugin-updates] `plugin-<state>`: one plugin's update; `plugins-<state>`: three plugins'.
+        // [plugin-updates] `plugin-<state>`: one plugin's update; `plugins-<state>`: three plugins'; `proactive-asking`: Proactivity (Beta) HQ plugin update.
+        if state == "proactive-asking" { return demoProactive(bot: bot) }
         if state.hasPrefix("plugin-") || state.hasPrefix("plugins-") { return demoPlugins(state, bot: bot) }
         // [manual-restart] `yours`: installed, waiting for the owner's restart; `asking-mine`: the question with
         // the switch on.
@@ -1241,25 +1421,20 @@ extension AddOnUpdate {
             steps[index].finished = to.map(at)
         }
         watching = false
-        // [addon-whats-new] The update's add-ons, versions and lines, as GitHub gives them.
-        let pushLines = AddOnChanges.changes(subjects: [
-            "hermes-hq-push 0.9.40: after an update the app reads the whole task list again; the add-on says its own version",
-            "hermes-hq-push 0.9.39: Task ideas",
-            "hermes-hq-push 0.9.38: every task has a Task Page",
-            "hermes-hq-push 0.9.37: a task is a workspace — its own chat, what a bot watches for, a check an hour before it's due",
-            "hermes-hq-push 0.9.35: Tasks can be turned off entirely (tools hidden, no note, no prep jobs; the list is kept)",
-        ], plugin: PushPolicy.pluginName, after: first ? nil : "0.9.34", limit: first ? 2 : 3)
-        let browserLines = AddOnChanges.changes(subjects: [
-            "hermes-hq-browser 3.8.0: works on Hermes 0.22.6 and newer (browser_exec only) and still on 0.22.5 and older; a plugin reload runs the changed code",
-        ], plugin: PushSetupOffer.browserPlugin, after: "3.7.0")
+        // [addon-whats-new] The update's add-ons, versions and lines, using curated HQ release notes.
+        let pushLines = AddOnChanges.builtInChanges(plugin: PushPolicy.pluginName, after: first ? nil : "0.9.85", limit: first ? 2 : 10)
+        let browserLines = AddOnChanges.builtInChanges(plugin: PushSetupOffer.browserPlugin, after: "3.11.0", limit: 10)
         changes = []
         if kind != .browser {
-            changes.append(Changing(plugin: PushPolicy.pluginName, title: Self.pushName, from: first ? nil : "0.9.34", to: "0.9.40",
-                                    lines: pushLines, loading: false))
+            changes.append(Changing(plugin: PushPolicy.pluginName, title: Self.pushName, from: first ? nil : "0.9.85", to: AddOnChanges.newest(pushLines) ?? "0.9.91",
+                                    lines: pushLines, loading: false,
+                                    note: bots ? "For Finance and Gym" : nil,
+                                    fallback: AddOnChanges.fallbackSummary(plugin: PushPolicy.pluginName, from: first ? nil : "0.9.85", to: "0.9.91", setUp: first)))
         }
         if kind != .push {
-            changes.append(Changing(plugin: PushSetupOffer.browserPlugin, title: Self.browserName, from: "3.7.0", to: "3.8.0",
-                                    lines: browserLines, loading: false))
+            changes.append(Changing(plugin: PushSetupOffer.browserPlugin, title: Self.browserName, from: "3.11.0", to: AddOnChanges.newest(browserLines) ?? "3.13.1",
+                                    lines: browserLines, loading: false,
+                                    fallback: AddOnChanges.fallbackSummary(plugin: PushSetupOffer.browserPlugin, from: "3.11.0", to: "3.13.1", setUp: false)))
         }
         switch state {
         case "asking", "bots", "setup":
@@ -1395,6 +1570,30 @@ extension AddOnUpdate {
         default:
             return false
         }
+        return true
+    }
+
+    private func demoProactive(bot: String) -> Bool {
+        canChooseRestart = true
+        byHand = false
+        let now = Date()
+        beginPluginsForDemo()
+        let lines = AddOnChanges.builtInChanges(plugin: ProactivityBeta.pluginName, after: "0.2.0-beta.2", limit: 10)
+        let card = Changing(
+            plugin: ProactivityBeta.pluginName,
+            title: AddOnChanges.displayTitle(for: ProactivityBeta.pluginName),
+            from: "0.2.0-beta.2",
+            to: AddOnChanges.newest(lines) ?? "0.4.0-beta.2",
+            lines: lines,
+            loading: false,
+            note: "For \(bot) and Finance",
+            fallback: AddOnChanges.fallbackSummary(plugin: ProactivityBeta.pluginName, from: "0.2.0-beta.2", to: "0.4.0-beta.2", setUp: false)
+        )
+        let titles = [card.title]
+        foundPlugins(titles, why: PluginUpdateWords.why(titles), bot: bot, installNote: nil, cards: [card])
+        steps[0] = Step(id: .check, title: Self.checkTitle, state: .done, started: now.addingTimeInterval(-4), finished: now.addingTimeInterval(-1))
+        watching = false
+        phase = .asking
         return true
     }
 

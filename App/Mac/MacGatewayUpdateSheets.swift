@@ -181,7 +181,12 @@ struct MacAddOnUpdateView: View {
             }
         } middle: {
             if update.showsChanges {
-                ForEach(update.changes) { MacAddOnChangesCard(item: $0, setUp: update.setUp) }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(update.setUp ? "What’s Included" : "What’s Changing")
+                        .font(Font.hq(.footnote).weight(.semibold))
+                        .foregroundStyle(Color.hqLabel2)
+                    ForEach(update.changes) { MacAddOnChangesCard(item: $0, setUp: update.setUp) }
+                }
             }
             if update.showsSteps {
                 VStack(alignment: .leading, spacing: 8) {
@@ -281,10 +286,19 @@ struct MacAddOnUpdateView: View {
 }
 
 /// [addon-whats-new] One add-on in the update, on a card: its name and versions ("0.9.33 → 0.9.40"), then a line per
-/// newer version.
+/// newer version (expandable past 3), a loading note while fetching, or a clear fallback summary when no lines exist.
 private struct MacAddOnChangesCard: View {
     var item: AddOnUpdate.Changing
     var setUp: Bool
+    @State private var expanded = false
+
+    private static let previewLimit = 3
+
+    private var shownLines: [AddOnChanges.Change] {
+        expanded ? item.lines : Array(item.lines.prefix(Self.previewLimit))
+    }
+
+    private var hiddenCount: Int { max(0, item.lines.count - Self.previewLimit) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -308,22 +322,53 @@ private struct MacAddOnChangesCard: View {
                 }
             }
             .accessibilityElement(children: .combine)
-            ForEach(item.lines, id: \.version) { change in
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text(change.version)
-                        .font(Font.hq(.caption).weight(.semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(Color.hqLabel2)
-                        // [Mac AAA 2026-11-16] Room for "0.9.40": one column across the cards.
-                        .frame(minWidth: 52, alignment: .leading)
-                    Text(change.line)
+            if item.loading && item.lines.isEmpty {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Checking what’s new…")
                         .font(Font.hq(.subheadline))
-                        .foregroundStyle(Color.hqLabel)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
+                        .foregroundStyle(Color.hqLabel2)
                 }
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("addon-update.change")
+                .accessibilityIdentifier("addon-update.loading-changes")
+            } else if item.lines.isEmpty, let fallback = item.fallback, !fallback.isEmpty {
+                Text(fallback)
+                    .font(Font.hq(.subheadline))
+                    .foregroundStyle(Color.hqLabel)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .accessibilityIdentifier("addon-update.fallback")
+            } else {
+                ForEach(shownLines, id: \.version) { change in
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Text(change.version)
+                            .font(Font.hq(.caption).weight(.semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(Color.hqLabel2)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            // [Mac AAA 2026-11-16] Room for "0.9.40": one column across the cards.
+                            .frame(minWidth: 52, alignment: .leading)
+                        Text(change.line)
+                            .font(Font.hq(.subheadline))
+                            .foregroundStyle(Color.hqLabel)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("addon-update.change")
+                }
+                if hiddenCount > 0 {
+                    Button {
+                        withAnimation(HQMotion.swiftUI(.smooth(duration: HQMotion.move))) { expanded.toggle() }
+                    } label: {
+                        Text(expanded ? "Show Fewer" : "Show \(hiddenCount) Earlier \(hiddenCount == 1 ? "Update" : "Updates")")
+                            .font(Font.hq(.footnote).weight(.medium))
+                            .foregroundStyle(Color.hqTint)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 2)
+                    .accessibilityIdentifier("addon-update.more-changes")
+                }
             }
         }
         .padding(14)

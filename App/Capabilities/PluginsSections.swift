@@ -339,10 +339,15 @@ final class PluginPageModel {
     }
 
     /// [plugin-updates] The same update sheet the app's own add-on gets (AddOnUpdate, run by PluginUpdateFlow), for this
-    /// bot's copy of this plugin: its steps, the question when the new version asks for more, and the restart. It used
-    /// to update with nothing on screen but "Updating…" and end on "Restart your gateway to apply."
+    /// bot's copy of this plugin: its steps, the question when the new version asks for more, and the restart. For the
+    /// app's own add-ons (hermes-hq-push, hermes-hq-browser), opens the add-on update sheet directly so it shows their
+    /// full changelog and updates properly instead of being filtered out.
     func update() {
         guard let app = (parent.services as? AppModel) ?? M2Wiring.model else { return }
+        if PluginUpdateReminder.ownAddOns.contains(name) {
+            Task { @MainActor in _ = await PushSetupOffer.shared.check(model: app, fromSettings: true, confirm: true, from: presenter) }
+            return
+        }
         PluginUpdateFlow.shared.run(model: app, only: .init(profile: profile, name: name), from: presenter)
     }
 
@@ -440,8 +445,16 @@ struct PluginPageView: View {
                     Section {
                         if plugin.updateAvailable {
                             // [plugin-updates] While its update runs a tap brings the sheet back.
-                            let updating = AddOnUpdate.shared.busy && AddOnUpdate.shared.pluginRun
-                            Button(updating ? "Updating…" : "Update to \(plugin.newVersion ?? "the Latest Version")") { page.update() }
+                            let isOwnAddOn = PluginUpdateReminder.ownAddOns.contains(plugin.name)
+                            let updating = AddOnUpdate.shared.busy && (isOwnAddOn ? !AddOnUpdate.shared.pluginRun : AddOnUpdate.shared.pluginRun)
+                            let versionLabel: String = {
+                                if let target = plugin.newVersion, !AddOnChanges.isCommitSHA(target) { return target }
+                                if AddOnChanges.isHQPlugin(plugin.name),
+                                   let known = AddOnChanges.defaultTargetVersion(for: plugin.name),
+                                   !AddOnChanges.versionAtLeast(plugin.version, known) { return known }
+                                return plugin.newVersion ?? "the Latest Version"
+                            }()
+                            Button(updating ? "Updating…" : "Update to \(versionLabel)") { page.update() }
                                 .disabled(page.busy)
                                 .accessibilityIdentifier("plugin.update")
                         }

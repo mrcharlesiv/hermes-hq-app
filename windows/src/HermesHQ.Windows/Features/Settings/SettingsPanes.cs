@@ -2,6 +2,7 @@ using Hermes.Core.Gateways;
 using Hermes.Core.Settings;
 using Hermes.Core.Shell;
 using Hermes.Core.Transcripts;
+using Hermes.Core.Updates;
 using HermesHQ.Features.Attachments;
 using HermesHQ.Features.Gateways;
 using HermesHQ.Features.Transcript;
@@ -876,6 +877,7 @@ internal static class SettingsPanes
             host.Content = Kit.Page(
                 Kit.Section("Hermes HQ", SettingsWords.AboutFooter,
                     Kit.Value("Version", SettingsFeature.AppVersion, "about.version"),
+                    UpdatesRow(),
                     Kit.Row(null, "Hermes on Your Gateway", null, gateway)),
                 Kit.Section(null, null,
                     LinkRow("Support", SettingsWords.SupportUrl),
@@ -890,8 +892,96 @@ internal static class SettingsPanes
                         on => DetailedLogging.Set(Prefs, on, AppLog.Note), "about.detailed-log"),
                     markRow));
         }
+        Action onUpdateChanged = () => host.DispatcherQueue?.TryEnqueue(() =>
+        {
+            if (host.IsLoaded) Draw();
+        });
+        host.Loaded += (_, _) => WindowsUpdateService.Changed += onUpdateChanged;
+        host.Unloaded += (_, _) => WindowsUpdateService.Changed -= onUpdateChanged;
         Draw();
         return host;
+    }
+
+    private static Grid UpdatesRow()
+    {
+        var state = WindowsUpdateService.State;
+        var release = WindowsUpdateService.AvailableRelease;
+        var detail = WindowsUpdateService.StatusDetail;
+
+        static Button ActionButton(string label, string id, string a11yName, Action click, bool enabled = true)
+        {
+            var b = Kit.Push(label, click);
+            b.IsEnabled = enabled;
+            AutomationProperties.SetAutomationId(b, id);
+            AutomationProperties.SetName(b, a11yName);
+            return b;
+        }
+
+        switch (state)
+        {
+            case WindowsUpdateUiState.Checking:
+                return Kit.Row(null, "Software Update", detail ?? "Checking GitHub Releases…",
+                    ActionButton("Checking…", "about.updates", "Checking for Updates", () => { }, enabled: false),
+                    "about.updates.row");
+
+            case WindowsUpdateUiState.Available when release != null:
+            {
+                var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+                buttons.Children.Add(ActionButton(
+                    "Install & Restart",
+                    "about.updates.install",
+                    $"Install Hermes HQ {release.Version.ToString(3)} and restart",
+                    () => _ = WindowsUpdateService.InstallAvailableAsync()));
+                buttons.Children.Add(ActionButton(
+                    "Release Notes",
+                    "about.updates.notes",
+                    "Open Release Notes in Browser",
+                    async () =>
+                    {
+                        try { await Windows.System.Launcher.LaunchUriAsync(new Uri(release.HtmlUrl)); }
+                        catch (Exception ex) { AppLog.Error("update", ex); }
+                    }));
+                return Kit.Row(null, "Update Available",
+                    detail ?? $"Version {release.Version.ToString(3)} is ready to install.",
+                    buttons, "about.updates.row");
+            }
+
+            case WindowsUpdateUiState.Downloading:
+            case WindowsUpdateUiState.Applying:
+                return Kit.Row(null, "Updating Hermes HQ",
+                    detail ?? "Downloading update…",
+                    ActionButton("Updating…", "about.updates", "Updating Hermes HQ", () => { }, enabled: false),
+                    "about.updates.row");
+
+            case WindowsUpdateUiState.Failed:
+            {
+                var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+                buttons.Children.Add(ActionButton(
+                    "Try Again",
+                    "about.updates",
+                    "Try Checking for Updates Again",
+                    () => _ = WindowsUpdateService.CheckAsync(silent: false)));
+                buttons.Children.Add(ActionButton(
+                    "GitHub Releases",
+                    "about.updates.releases",
+                    "Open GitHub Releases in Browser",
+                    async () =>
+                    {
+                        try { await Windows.System.Launcher.LaunchUriAsync(new Uri(release?.HtmlUrl ?? WindowsAppUpdater.ReleasesPageUrl)); }
+                        catch (Exception ex) { AppLog.Error("update", ex); }
+                    }));
+                return Kit.Row(null, "Software Update",
+                    detail ?? "Couldn’t check for updates.",
+                    buttons, "about.updates.row");
+            }
+
+            default:
+                return Kit.Row(null, "Software Update",
+                    detail ?? "Checks GitHub Releases for newer Windows builds.",
+                    ActionButton("Check for Updates", "about.updates", "Check for Updates",
+                        () => _ = WindowsUpdateService.CheckAsync(silent: false)),
+                    "about.updates.row");
+        }
     }
 
     /// Settings › About › Open-Source Licenses (AboutView.swift `LicensesView`): the intro, then one row per notice (name

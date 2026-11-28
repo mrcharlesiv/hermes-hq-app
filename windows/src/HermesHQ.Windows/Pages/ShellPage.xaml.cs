@@ -44,6 +44,8 @@ public sealed partial class ShellPage : Page
     private bool _gripping;
     private double _gripStartX, _gripStartWidth;
     private bool _detached;
+    private MenuFlyoutItem? _updateMenuItem;
+    private Action? _onUpdateChanged;
 
     public ShellPage()
     {
@@ -117,6 +119,40 @@ public sealed partial class ShellPage : Page
             catch (Exception ex) { AppLog.Error("shell", ex); }
         };
         AccountMenu.Items.Insert(AccountMenu.Items.Count - 1, support);
+
+        _updateMenuItem = new MenuFlyoutItem { Text = "Check for Updates…", Icon = new FontIcon { Glyph = "\uE895" } };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(_updateMenuItem, "shell.updates");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(_updateMenuItem, "Check for Updates");
+        _updateMenuItem.Click += (_, _) =>
+        {
+            SettingsWindows.Show("about");
+            if (WindowsUpdateService.State is WindowsUpdateUiState.Idle or WindowsUpdateUiState.UpToDate or WindowsUpdateUiState.Failed)
+                _ = WindowsUpdateService.CheckAsync(silent: false);
+        };
+        AccountMenu.Items.Insert(AccountMenu.Items.Count - 1, _updateMenuItem);
+        _onUpdateChanged = RefreshUpdateMenuItem;
+        WindowsUpdateService.Changed += _onUpdateChanged;
+        RefreshUpdateMenuItem();
+    }
+
+    private void RefreshUpdateMenuItem()
+    {
+        if (_updateMenuItem is not { } item) return;
+        DispatcherQueue?.TryEnqueue(() =>
+        {
+            if (_detached) return;
+            if (WindowsUpdateService.State == WindowsUpdateUiState.Available && WindowsUpdateService.AvailableRelease is { } rel)
+            {
+                var label = $"Update Available ({rel.Version.ToString(3)})…";
+                item.Text = label;
+                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(item, label);
+            }
+            else
+            {
+                item.Text = "Check for Updates…";
+                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(item, "Check for Updates");
+            }
+        });
     }
 
     private void AddShortcut(KeyChord chord, Action run) => AddShortcut(chord, () => { run(); return true; });
@@ -208,6 +244,11 @@ public sealed partial class ShellPage : Page
         WorkingRing.Changed -= OnWorkingRing;
         DensitySizes.Changed -= OnDensity;
         SidebarLayout.Changed -= OnSidebarChanged;
+        if (_onUpdateChanged != null)
+        {
+            WindowsUpdateService.Changed -= _onUpdateChanged;
+            _onUpdateChanged = null;
+        }
         if (_client != null)
         {
             _client.Rpc.StateChanged -= OnConnection;

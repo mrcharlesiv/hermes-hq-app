@@ -45,6 +45,7 @@ public sealed partial class MainWindow : Window
             RootGrid.Background = Automation.ShotBackground();
             return Automation.RunAsync(this);
         }
+        WindowsUpdateService.StartBackgroundCheckIfAllowed();
         return LaunchFlow.StartAsync();
     }
 

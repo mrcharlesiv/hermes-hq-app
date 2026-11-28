@@ -1,6 +1,7 @@
 import Foundation
 import Synchronization
 import Testing
+import UIKit
 @testable import HermesHQNative
 
 // Acceptance checks 6, 8 and 9 of docs/spec/1x-attachments.md §15.1: the upload queue against a scripted transfers
@@ -594,5 +595,69 @@ struct AttachmentPipelineTests {
         second.send(taken.text, attachments: taken.attachments)
         #expect(second.draftScope == "\(account.id)|ivy|ephemeral-2")
         #expect(center.draft("\(account.id)|ivy|new").text.isEmpty)
+    }
+
+    // MARK: - Inline Camera Sheet (#513)
+
+    @Test func inlineCameraOnlyActivatesOnIPhoneWithCamera() {
+        #expect(InlineCameraLogic.shouldUseInlineCamera(isMac: false, isPad: false, hasCamera: true))
+        #expect(!InlineCameraLogic.shouldUseInlineCamera(isMac: true, isPad: false, hasCamera: true))
+        #expect(!InlineCameraLogic.shouldUseInlineCamera(isMac: false, isPad: true, hasCamera: true))
+        #expect(!InlineCameraLogic.shouldUseInlineCamera(isMac: false, isPad: false, hasCamera: false))
+    }
+
+    @Test func inlineCameraFlashModeCyclesAndMapsToAVCapture() {
+        #expect(InlineCameraLogic.FlashMode.auto.next == .on)
+        #expect(InlineCameraLogic.FlashMode.on.next == .off)
+        #expect(InlineCameraLogic.FlashMode.off.next == .auto)
+
+        #expect(InlineCameraLogic.FlashMode.auto.title == "Auto")
+        #expect(InlineCameraLogic.FlashMode.on.title == "On")
+        #expect(InlineCameraLogic.FlashMode.off.title == "Off")
+
+        #expect(InlineCameraLogic.FlashMode.auto.avFlashMode == .auto)
+        #expect(InlineCameraLogic.FlashMode.on.avFlashMode == .on)
+        #expect(InlineCameraLogic.FlashMode.off.avFlashMode == .off)
+    }
+
+    @Test func inlineCameraZoomPresetsHandleMultiCamSingleCamAndFront() {
+        // Virtual triple/dual-wide camera: 1.0 = ultra-wide (.5), 2.0 = wide (1×), 4.0 = 2×
+        let multi = InlineCameraLogic.zoomPresets(minFactor: 1.0, maxFactor: 15.0, wideFactor: 2.0, isFront: false)
+        #expect(multi.map(\.label) == [".5", "1×", "2"])
+        #expect(multi.map(\.deviceFactor) == [1.0, 2.0, 4.0])
+
+        // Single back lens: 1× and 2× only (no .5 ultra-wide)
+        let single = InlineCameraLogic.zoomPresets(minFactor: 1.0, maxFactor: 5.0, wideFactor: 1.0, isFront: false)
+        #expect(single.map(\.label) == ["1×", "2"])
+        #expect(single.map(\.deviceFactor) == [1.0, 2.0])
+
+        // Front camera hides zoom pills
+        let front = InlineCameraLogic.zoomPresets(minFactor: 1.0, maxFactor: 5.0, wideFactor: 1.0, isFront: true)
+        #expect(front.isEmpty)
+
+        // Zoom clamping respects device bounds and 8× ceiling
+        #expect(InlineCameraLogic.clampedZoom(0.2, min: 1.0, max: 12.0) == 1.0)
+        #expect(InlineCameraLogic.clampedZoom(3.5, min: 1.0, max: 12.0) == 3.5)
+        #expect(InlineCameraLogic.clampedZoom(20.0, min: 1.0, max: 12.0) == 8.0)
+    }
+
+    @Test func inlineCameraSheetLoadsExpectedControls() {
+        let sheet = InlineCameraSheet(onCaptured: { _ in }, onOpenFullCamera: {}, onError: { _ in })
+        sheet.loadViewIfNeeded()
+        #expect(sheet.view.accessibilityIdentifier == "inline-camera.sheet")
+        func find(id: String, in view: UIView) -> UIView? {
+            if view.accessibilityIdentifier == id { return view }
+            for sub in view.subviews {
+                if let hit = find(id: id, in: sub) { return hit }
+            }
+            return nil
+        }
+        #expect(find(id: "inline-camera.viewfinder", in: sheet.view) != nil)
+        #expect(find(id: "inline-camera.close", in: sheet.view) != nil)
+        #expect(find(id: "inline-camera.flash", in: sheet.view) != nil)
+        #expect(find(id: "inline-camera.more", in: sheet.view) != nil)
+        #expect(find(id: "inline-camera.full", in: sheet.view) != nil)
+        #expect(find(id: "inline-camera.shutter", in: sheet.view) != nil)
+        #expect(find(id: "inline-camera.flip", in: sheet.view) != nil)
     }
 }

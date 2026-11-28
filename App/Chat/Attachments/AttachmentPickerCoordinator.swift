@@ -63,17 +63,57 @@ import UniformTypeIdentifiers
         guard UIImagePickerController.isSourceTypeAvailable(.camera) else { return }
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .denied, .restricted:
-            AppLog.note("attach", "camera access alert shown: not authorized")
-            // [mac] Mac polish #11: System Settings › Privacy & Security › Camera on the Mac (`PrivacySettingsLink`).
-            let alert = UIAlertController(title: "Camera Access", message: "Allow camera access for \(AppIdentity.current.displayName) in \(PrivacySettingsLink.place).",
-                                          preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: PrivacySettingsLink.openTitle, style: .default) { _ in PrivacySettingsLink.open(.camera) })
-            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-            presenter?.present(alert, animated: true)
+            presentCameraAccessAlert()
             return
+        case .notDetermined:
+            // Request camera permission cleanly before opening the inline live viewfinder on iPhone.
+            if InlineCameraLogic.shouldUseInlineCamera(isMac: DeviceWord.isMac,
+                                                       isPad: UIDevice.current.userInterfaceIdiom == .pad,
+                                                       hasCamera: true) {
+                Task { @MainActor [weak self] in
+                    let granted = await AVCaptureDevice.requestAccess(for: .video)
+                    guard let self else { return }
+                    if granted {
+                        self.presentInlineCamera()
+                    } else {
+                        self.presentCameraAccessAlert()
+                    }
+                }
+                return
+            }
         default:
             break
         }
+        if InlineCameraLogic.shouldUseInlineCamera(isMac: DeviceWord.isMac,
+                                                   isPad: UIDevice.current.userInterfaceIdiom == .pad,
+                                                   hasCamera: true) {
+            presentInlineCamera()
+        } else {
+            presentFullScreenCamera()
+        }
+    }
+
+    private func presentCameraAccessAlert() {
+        AppLog.note("attach", "camera access alert shown: not authorized")
+        // [mac] Mac polish #11: System Settings › Privacy & Security › Camera on the Mac (`PrivacySettingsLink`).
+        let alert = UIAlertController(title: "Camera Access", message: "Allow camera access for \(AppIdentity.current.displayName) in \(PrivacySettingsLink.place).",
+                                      preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: PrivacySettingsLink.openTitle, style: .default) { _ in PrivacySettingsLink.open(.camera) })
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        presenter?.present(alert, animated: true)
+    }
+
+    private func presentInlineCamera() {
+        let sheet = InlineCameraSheet(
+            onCaptured: { [weak self] image in self?.onPicked?([.camera(image)]) },
+            onOpenFullCamera: { [weak self] in self?.presentFullScreenCamera() },
+            onError: { [weak self] message in self?.onError?(message) }
+        )
+        presenter?.present(sheet, animated: true)
+    }
+
+    func presentFullScreenCamera() {
+        guard UIImagePickerController.isSourceTypeAvailable(.camera) else { return }
         let picker = UIImagePickerController()
         picker.sourceType = .camera
         picker.mediaTypes = [UTType.image.identifier]

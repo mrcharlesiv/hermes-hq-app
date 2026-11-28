@@ -18,18 +18,23 @@ internal static class MediaActions
         WinRT.Interop.WindowNative.GetWindowHandle(window ?? App.Window!);
 
     private static readonly Dictionary<(string, int), WeakReference<BitmapImage>> Bitmaps = [];
+    private static readonly object BitmapsGate = new();
 
-    /// A picture decoded at about `decodeWidth` pixels wide (never the full original on screen), shared while alive.
+    /// A picture decoded at about `decodeWidth` pixels wide (never the full original on screen), cached while alive.
+    /// [WIN-BUG1] The cache is read from several threads (tray tiles, bubbles, viewers fire LoadThumb together), so
+    /// its dictionary is guarded; and every caller gets its own BitmapImage — one shared instance handed to
+    /// multiple `Image.Source` slots while two decodes complete is a known XAML fail-fast, not a managed error.
     public static async Task<BitmapImage> BitmapAsync(string path, int decodeWidth)
     {
         if (string.IsNullOrEmpty(path)) throw new FileNotFoundException("Empty image path.");
-        if (Bitmaps.TryGetValue((path, decodeWidth), out var weak) && weak.TryGetTarget(out var known)) return known;
+        lock (BitmapsGate)
+            if (Bitmaps.TryGetValue((path, decodeWidth), out var weak) && weak.TryGetTarget(out var known)) return known;
         await using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 4096, useAsync: true);
         using var stream = fs.AsRandomAccessStream();
         var bitmap = new BitmapImage();
         if (decodeWidth > 0) bitmap.DecodePixelWidth = decodeWidth;
         await bitmap.SetSourceAsync(stream);
-        Bitmaps[(path, decodeWidth)] = new WeakReference<BitmapImage>(bitmap);
+        lock (BitmapsGate) Bitmaps[(path, decodeWidth)] = new WeakReference<BitmapImage>(bitmap);
         return bitmap;
     }
 

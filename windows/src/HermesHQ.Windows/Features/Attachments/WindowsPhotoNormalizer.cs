@@ -17,6 +17,9 @@ internal sealed class WindowsPhotoNormalizer : IPhotoNormalizer
         using var input = sourceStream.AsRandomAccessStream();
         var decoder = await BitmapDecoder.CreateAsync(input);
         ct.ThrowIfCancellationRequested();
+        // [WIN-BUG1] Some codecs answer with no decoder information; dereferencing it is a managed crash the
+        // prepare path catches, but the refusal message names the real reason only if we throw one of our own.
+        if (decoder.DecoderInformation == null) throw new InvalidDataException("No Windows codec could read this image.");
         if (decoder.DecoderInformation.CodecId == BitmapDecoder.GifDecoderId && decoder.FrameCount > 1)
         {
             var gif = Path.Combine(folder, stem + ".gif");
@@ -41,6 +44,10 @@ internal sealed class WindowsPhotoNormalizer : IPhotoNormalizer
             ExifOrientationMode.RespectExifOrientation, ColorManagementMode.ColorManageToSRgb);
         var bytes = pixels.DetachPixelData();
         ct.ThrowIfCancellationRequested();
+        // [WIN-BUG1] The encoder refuses a buffer that doesn't match the size it is told; an absurd input guarded
+        // here dies as a visible couldn't-attach instead of a mystery downstream.
+        if ((double)outW * outH > 0 && bytes.Length != (int)(outW * outH * 4))
+            throw new InvalidDataException("The decoded picture's buffer didn't match its size.");
         var png = decoder.BitmapAlphaMode != BitmapAlphaMode.Ignore && HasTransparency(bytes);
         var name = stem + (png ? ".png" : ".jpg");
         var target = Path.Combine(folder, name);

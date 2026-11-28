@@ -57,7 +57,19 @@ public sealed partial class PhoneHistoryPage : Page
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         root.Children.Add(bar);
-        var scroller = new ScrollViewer { Content = _list, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        var scroller = new ScrollViewer
+        {
+            Content = _list,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollMode = ScrollMode.Disabled,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+        };
+        scroller.SizeChanged += (_, _) =>
+        {
+            if (scroller.ViewportWidth > 0)
+                _list.Width = scroller.ViewportWidth;
+        };
         Grid.SetRow(scroller, 1);
         root.Children.Add(scroller);
         Content = root;

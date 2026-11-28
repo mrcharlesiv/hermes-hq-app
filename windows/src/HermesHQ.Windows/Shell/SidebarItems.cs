@@ -173,7 +173,7 @@ public static class SidebarRowView
 
     private static UIElement Header(SidebarHeader h)
     {
-        var g = new Grid { Padding = new Thickness(2, 0, 4, 0) };
+        var g = new Grid { Padding = new Thickness(2, 6, 4, 2) };
         g.Children.Add(new TextBlock { Text = h.Title, FontSize = Tokens.SidebarSmall, FontWeight = FontWeights.SemiBold, Foreground = Res("TextFillColorSecondaryBrush") });
         g.Children.Add(new FontIcon
         {

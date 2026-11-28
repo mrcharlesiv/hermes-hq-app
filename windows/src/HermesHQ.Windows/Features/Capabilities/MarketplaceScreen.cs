@@ -56,6 +56,7 @@ internal sealed class MarketplaceScreen : Screen
 
     public override string Title => "Marketplace";
     public override string? SearchPrompt => MarketplaceWords.SearchPrompt;
+    public override double? MaxContentWidth => null;
 
     public override IEnumerable<MenuFlyoutItemBase> Menu()
     {
@@ -102,8 +103,9 @@ internal sealed class MarketplaceScreen : Screen
 
     private static int LayoutBucket(double width) => width switch
     {
+        >= 960 => 4,
         >= 900 => 3,
-        >= 640 => 2,
+        >= 720 => 2,
         >= 420 => 1,
         _ => 0,
     };
@@ -144,8 +146,8 @@ internal sealed class MarketplaceScreen : Screen
         var hostWidth = Host.ActualWidth;
         var wide = hostWidth >= 900;
         var contentWidth = wide
-            ? Math.Max(300, Math.Min(712, hostWidth - 48) - 224)
-            : Math.Max(260, hostWidth > 0 ? Math.Min(712, hostWidth - 48) : 680);
+            ? Math.Max(300, (hostWidth - 48) - 224)
+            : Math.Max(260, hostWidth > 0 ? hostWidth - 48 : 680);
 
         var main = new StackPanel();
         if (wide)
@@ -292,27 +294,26 @@ internal sealed class MarketplaceScreen : Screen
             }
             else if (featured.Count > 1)
             {
-                if (contentWidth >= 600)
+                if (contentWidth >= 680)
                     main.Children.Add(SplitStoreHero(featured));
                 else
                     main.Children.Add(FeaturedCarousel(featured));
             }
 
-            var quality = WholeRows(MarketplaceFeatured.QualityOfLife(entries), contentWidth, wide: wide);
+            var quality = MarketplaceFeatured.QualityOfLife(entries);
             if (quality.Count > 0)
                 main.Children.Add(Shelf("Quality of Life Improvements", MarketplaceWords.QualityBlurb, quality.Select(PluginCard),
                     ("See All", () => Choose(MarketplaceKind.Plugins, PluginCatalogCategory.Tools.Raw()))));
             if (MarketplaceFeatured.Spotlight(entries) is var (maker, picks))
             {
-                var aligned = WholeRows(picks, contentWidth, wide: wide);
                 main.Children.Add(Shelf($"Spotlight: {maker}", $"{picks.Count} picks from the community maintainer with the most plugins in the catalog.",
-                    aligned.Select(PluginCard), ("See All", () => { _state.Choose(MarketplaceKind.Plugins); Query = maker; Host.Render(this); })));
+                    picks.Select(PluginCard), ("See All", () => { _state.Choose(MarketplaceKind.Plugins); Query = maker; Host.Render(this); })));
             }
         }
         else Loading(main, "plugins", plugins.Error, () => plugins.LoadAsync(force: true));
         if (skills.Entries is { } skillEntries)
         {
-            var nous = WholeRows(skillEntries.Where(s => s.IsOfficial).Take(6).ToList(), contentWidth, wide: wide);
+            var nous = skillEntries.Where(s => s.IsOfficial).Take(6).ToList();
             if (nous.Count > 0)
                 main.Children.Add(Shelf("Skills from Nous", MarketplaceWords.SkillsBlurb, nous.Select(SkillCard),
                     ($"See All {skillEntries.Count:N0} Skills", () => Choose(MarketplaceKind.Skills))));
@@ -599,7 +600,12 @@ internal sealed class MarketplaceScreen : Screen
         words.Children.Add(Kit.Text(about, 12, secondary: true));
         head.Children.Add(words);
         if (seeAll is var (t, run)) { var l = Kit.Link(t, run); Grid.SetColumn(l, 1); head.Children.Add(l); }
-        var wrap = new VariableSizedWrapGrid { Orientation = Orientation.Horizontal, ItemWidth = 250, ItemHeight = 120 };
+        var wrap = new FlowWrapPanel
+        {
+            HorizontalSpacing = 12,
+            VerticalSpacing = 12,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
         foreach (var c in cards) wrap.Children.Add(c);
         var s = new StackPanel { Spacing = 8, Margin = new Thickness(0, 0, 0, 22) };
         s.Children.Add(head);

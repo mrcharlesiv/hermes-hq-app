@@ -50,11 +50,11 @@ public sealed class SidebarLayout
         return (Order ?? all.Where(p => !p.IsTool).Select(p => p.Id).ToList()).Where(known.Contains).Distinct().ToList();
     }
 
-    /// The tools: every tool not moved up to the places.
+    /// The tools: every tool not moved up to the places (Settings has its own footer button and Ctrl+, window).
     public List<string> Tools(IReadOnlyList<PlaceInfo> all)
     {
         var shown = Shown(all).ToHashSet();
-        return all.Where(p => p.IsTool && !shown.Contains(p.Id)).Select(p => p.Id).ToList();
+        return all.Where(p => p.IsTool && p.Id != SettingsPlaceId && !shown.Contains(p.Id)).Select(p => p.Id).ToList();
     }
 
     /// Add to Sidebar ▸: the places in neither the places nor Tools (a removed one).
@@ -144,4 +144,43 @@ public sealed class SidebarLayout
 
     public static SidebarLayout Load(IDeviceStore store) => DeviceJson.Load<SidebarLayout>(store, "sidebar");
     public void Save(IDeviceStore store) => DeviceJson.Save(store, "sidebar", this);
+}
+
+/// Groups sidebar tools into collapsible categories so the Windows sidebar does not render one flat 20-item wall.
+public static class SidebarToolGroups
+{
+    public sealed record Group(string Key, string Title, IReadOnlyList<string> PlaceIds);
+
+    private static readonly (string Key, string Title, string[] Ids)[] Definitions =
+    [
+        ("tools:work", "Productivity", ["quick-actions", "tasks", "kanban", "tiles"]),
+        ("tools:workspace", "Workspace", ["files", "review", "terminal", "coding-pipeline", "project-repo"]),
+        ("tools:monitor", "Monitor", ["command-center", "usage", "spawn-tree", "star-map"]),
+        ("tools:setup", "Integrations", ["marketplace", "profiles", "messaging", "capabilities", "webhooks", "phone-calls", "import-sessions"]),
+    ];
+
+    public static bool IsToolsHeaderKey(string key) =>
+        key == "tools" || key.StartsWith("tools:", StringComparison.Ordinal);
+
+    public static List<Group> Partition(IReadOnlyList<string> toolIds)
+    {
+        var available = toolIds.ToHashSet(StringComparer.Ordinal);
+        var assigned = new HashSet<string>(StringComparer.Ordinal);
+        var groups = new List<Group>();
+        foreach (var (key, title, ids) in Definitions)
+        {
+            var members = new List<string>();
+            foreach (var id in ids)
+            {
+                if (available.Contains(id) && assigned.Add(id))
+                    members.Add(id);
+            }
+            if (members.Count > 0)
+                groups.Add(new Group(key, title, members));
+        }
+        var rest = toolIds.Where(id => !assigned.Contains(id)).ToList();
+        if (rest.Count > 0)
+            groups.Add(new Group("tools:other", "More Tools", rest));
+        return groups;
+    }
 }

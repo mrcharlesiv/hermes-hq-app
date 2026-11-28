@@ -47,6 +47,9 @@ public sealed partial class ShellPage : Page
     private bool _gripping;
     private double _gripStartX, _gripStartWidth;
     private bool _detached;
+    private readonly System.Collections.ObjectModel.ObservableCollection<ListViewItem> _sidebarRows = [];
+    private List<string> _lastRowSignatures = [];
+    private string? _lastModeSignature;
     // Top open-chats-only workspace bar, tabs, navigation history, and Hide/Show List toggle (App/Mac/MacWorkspaceBar.swift).
     private readonly WorkspaceBar _workspaceBar = new();
     private WorkspaceTabList _tabList = new();
@@ -236,6 +239,10 @@ public sealed partial class ShellPage : Page
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
         _detached = false;
+        _lastModeSignature = null;
+        _lastRowSignatures = [];
+        _sidebarRows.Clear();
+        Sidebar.ItemsSource = _sidebarRows;
         Current = this;
         _client = AppState.Client;
         _hub = ListsHub.Current;
@@ -410,9 +417,12 @@ public sealed partial class ShellPage : Page
         }
         else
         {
-            var toolsClosed = store.Device.Collapsed.Contains("tools");
-            items.Add(new SidebarHeader("Tools", "tools", toolsClosed));
-            if (!toolsClosed) items.AddRange(tools.Select(id => new SidebarPlace(Places.Get(id), true)));
+            foreach (var group in SidebarToolGroups.Partition(tools))
+            {
+                var closed = store.Device.Collapsed.Contains(group.Key);
+                items.Add(new SidebarHeader(group.Title, group.Key, closed));
+                if (!closed) items.AddRange(group.PlaceIds.Select(id => new SidebarPlace(Places.Get(id), true)));
+            }
         }
         return items;
     }
@@ -437,7 +447,11 @@ public sealed partial class ShellPage : Page
         if (_detached || AppShutdown.Stopping) return;
         DispatcherQueue.TryEnqueue(() =>
         {
-            if (!_detached && !AppShutdown.Stopping) Rebuild();
+            if (!_detached && !AppShutdown.Stopping)
+            {
+                _lastModeSignature = null;
+                Rebuild();
+            }
         });
     }
     /// Theme, Window Transparency, or App Background changed: restyle the floating canvas, sidebar veil, and top bar.
@@ -456,9 +470,8 @@ public sealed partial class ShellPage : Page
         var appBackdrop = BackdropPainter.CreateBrush(BackdropPlace.App);
         GlassShell.StyleCanvas(CanvasBorder, appBackdrop, CanvasShadowReceiver);
         GlassShell.StyleSidebar(SidebarPane);
-        if (Sidebar.ItemsSource is List<ListViewItem> rows)
-            foreach (var row in rows)
-                if (row.Tag is not SidebarDivider) SelectionMark.Shape(row);
+        foreach (var row in _sidebarRows)
+            if (row.Tag is not SidebarDivider) SelectionMark.Shape(row);
         _workspaceBar.Recolor();
     }
     /// [taborder] Settings › Appearance › Sidebar saved a change (or this page did): the places again from disk, as the
@@ -474,32 +487,108 @@ public sealed partial class ShellPage : Page
         });
     }
 
+    private string ModeSignature(bool rail) =>
+        $"{(rail ? 'R' : 'O')}|{(_layout.RailNamed ? 'N' : 'C')}|{(HermesHQ.Features.Settings.ThemeService.State.Compact ? '1' : '0')}|{(WorkingRing.IsOn ? '1' : '0')}";
+
+    private static string RowSignature(SidebarItem item, bool rail) => item switch
+    {
+        SidebarHeader h => $"H|{h.Key}|{h.Title}|{(h.Collapsed ? '1' : '0')}|{h.SectionId}",
+        SidebarBot b => BotRowSignature(b, rail),
+        SidebarRoom r => $"R|{r.Room.Id}|{r.Room.Name}|{BotListRooms.Status(r.Room)}|{(r.Room.Unread ? '1' : '0')}|{(r.Room.Muted ? '1' : '0')}|{(r.Room.Hidden ? '1' : '0')}|{(int)BotListRooms.Mark(r.Room)}|{(int)r.Block}|{r.SectionId}",
+        SidebarChat c => $"C|{c.Chat.Profile}/{c.Chat.Id}|{c.Chat.Title}|{SessionRowWords.StatusWords(c.Chat.Status, c.Chat.Step) ?? ListTime.Format(c.Chat.LastActive)}|{(c.Chat.Unread ? '1' : '0')}|{(WorkingRing.ShowsChatRing(c.Chat, WorkingRing.IsOn) ? '1' : '0')}|{(c.Last ? '1' : '0')}|{(c.First ? '1' : '0')}|{(c.ShowsPin ? '1' : '0')}",
+        SidebarMore m => $"M|{m.Bot}|{m.Count}|{(m.First ? '1' : '0')}",
+        SidebarPlace p => $"P|{p.Place.Id}|{p.Title}|{(p.IsTool ? '1' : '0')}|{p.Place.BadgeAccessibility?.Invoke() ?? p.Count}",
+        SidebarAction a => $"A|{a.Title}|{a.Glyph}",
+        _ => "D",
+    };
+
+    private static string BotRowSignature(SidebarBot b, bool rail)
+    {
+        var bot = b.Bot;
+        var (prefix, statusText, tone) = BotList.SecondLine(bot);
+        return $"B|{bot.Id}|{bot.Name}|{(int)BotList.StatusOf(bot)}|{prefix}|{statusText}|{(int)tone}|{(BotList.ShowsUnread(bot) ? '1' : '0')}|{(b.Muted ? '1' : '0')}|{(bot.Hidden ? '1' : '0')}|{(BotList.RowShowsSpinner(bot) ? '1' : '0')}|{(int)BotList.FaceBadgeOf(bot, rail, WorkingRing.IsOn, presence: true)}|{(bot.Model.HasAvatar ? '1' : '0')}|{bot.Model.HeadRevision}|{bot.Model.BotsRevision}|{(int)b.Block}|{b.SectionId}";
+    }
+
+    private ListViewItem MakeContainer(SidebarItem item, bool rail)
+    {
+        var c = SidebarRowView.Make(item, rail, _layout.RailNamed);
+        c.CanDrag = item is SidebarBot || (item is SidebarPlace p && !rail && !p.IsTool);
+        if (item is not SidebarDivider and not SidebarAction && (item is not SidebarRoom || ShellExtensions.RoomMenu != null))
+        {
+            var menu = new MenuFlyout();
+            menu.Opening += (_, _) => FillMenu(menu, item);
+            c.ContextFlyout = menu;
+        }
+        return c;
+    }
+
     private void Rebuild()
     {
         if (_hub == null || _detached || AppShutdown.Stopping) return;
-        App.Window?.DismissToolTips();
-        var sidebarFocused = XamlRoot != null
-            && FocusManager.GetFocusedElement(XamlRoot) is DependencyObject focused && Inside(focused, Sidebar);
         var rail = Rail;
-        var containers = Items().Select(item =>
+        var items = Items();
+        var mode = ModeSignature(rail);
+        var nextSigs = items.Select(item => RowSignature(item, rail)).ToList();
+
+        var modeChanged = mode != _lastModeSignature;
+        if (!modeChanged && nextSigs.Count == _lastRowSignatures.Count && nextSigs.SequenceEqual(_lastRowSignatures))
         {
-            var c = SidebarRowView.Make(item, rail, _layout.RailNamed);
-            c.CanDrag = item is SidebarBot || (item is SidebarPlace p && !rail && !p.IsTool);
-            if (item is not SidebarDivider and not SidebarAction && (item is not SidebarRoom || ShellExtensions.RoomMenu != null))
+            ListLoading.IsActive = !_hub.Bots.HasRoster;
+            SyncWorkspaceBar();
+            TryAutoOpenFirstBot();
+            return;
+        }
+
+        if (!ReferenceEquals(Sidebar.ItemsSource, _sidebarRows))
+            Sidebar.ItemsSource = _sidebarRows;
+
+        var changedCount = 0;
+        if (modeChanged || _sidebarRows.Count == 0)
+        {
+            _sidebarRows.Clear();
+            foreach (var item in items) _sidebarRows.Add(MakeContainer(item, rail));
+            changedCount = items.Count;
+        }
+        else
+        {
+            var common = Math.Min(_sidebarRows.Count, items.Count);
+            for (var i = 0; i < common; i++)
             {
-                var menu = new MenuFlyout();
-                menu.Opening += (_, _) => FillMenu(menu, item);
-                c.ContextFlyout = menu;
+                if (_lastRowSignatures[i] != nextSigs[i])
+                {
+                    _sidebarRows[i] = MakeContainer(items[i], rail);
+                    changedCount++;
+                }
             }
-            return c;
-        }).ToList();
-        Sidebar.ItemsSource = containers;
-        Sidebar.SelectedItem = containers.FirstOrDefault(c => KeyOf((SidebarItem)c.Tag) is { } k && k == SelectedKey());
-        if (sidebarFocused) Sidebar.Focus(FocusState.Programmatic);
+            while (_sidebarRows.Count > items.Count)
+            {
+                _sidebarRows.RemoveAt(_sidebarRows.Count - 1);
+                changedCount++;
+            }
+            for (var i = _sidebarRows.Count; i < items.Count; i++)
+            {
+                _sidebarRows.Add(MakeContainer(items[i], rail));
+                changedCount++;
+            }
+        }
+
+        _lastModeSignature = mode;
+        _lastRowSignatures = nextSigs;
+        AppLog.Note("sidebar", $"diffed {changedCount}/{items.Count} rows (modeChanged={modeChanged})");
+
+        var targetSelected = _sidebarRows.FirstOrDefault(c => KeyOf((SidebarItem)c.Tag) is { } k && k == SelectedKey());
+        if (!ReferenceEquals(Sidebar.SelectedItem, targetSelected))
+            Sidebar.SelectedItem = targetSelected;
+
         ListLoading.IsActive = !_hub.Bots.HasRoster;
         SyncWorkspaceBar();
+        TryAutoOpenFirstBot();
+    }
+
+    private void TryAutoOpenFirstBot()
+    {
         // At launch the first bot's chat opens, once.
-        if (!_autoOpened && _hub.Bots.HasRoster && _openKey == null && _hub.Bots.Layout.Flat.FirstOrDefault() is { } first)
+        if (!_autoOpened && _hub != null && _hub.Bots.HasRoster && _openKey == null && _hub.Bots.Layout.Flat.FirstOrDefault() is { } first)
         {
             _autoOpened = true;
             // [gateways] The last chat, reopened at launch, when there was one.
@@ -514,8 +603,9 @@ public sealed partial class ShellPage : Page
     private void Mark(string? key)
     {
         _selectedKey = key;
-        if (Sidebar.ItemsSource is List<ListViewItem> items)
-            Sidebar.SelectedItem = items.FirstOrDefault(c => KeyOf((SidebarItem)c.Tag) is { } k && k == key);
+        var target = _sidebarRows.FirstOrDefault(c => KeyOf((SidebarItem)c.Tag) is { } k && k == key);
+        if (!ReferenceEquals(Sidebar.SelectedItem, target))
+            Sidebar.SelectedItem = target;
     }
 
     private void Sidebar_ItemClick(object sender, ItemClickEventArgs e)
@@ -684,7 +774,7 @@ public sealed partial class ShellPage : Page
             case SidebarHeader { SectionId: { } id }:
                 _actions.FillSectionMenu(menu.Items, id);
                 break;
-            case SidebarHeader { Key: "tools" }:
+            case SidebarHeader h when SidebarToolGroups.IsToolsHeaderKey(h.Key):
                 FillSpaceMenu(menu.Items);
                 break;
             case SidebarHeader:
@@ -775,12 +865,17 @@ public sealed partial class ShellPage : Page
     private void ShowToolsMenu()
     {
         var menu = new MenuFlyout();
-        foreach (var id in _layout.Tools(PlaceInfos()))
+        var groups = SidebarToolGroups.Partition(_layout.Tools(PlaceInfos()));
+        for (var i = 0; i < groups.Count; i++)
         {
-            var place = Places.Get(id);
-            menu.Items.Add(Item(place.Title, place.Glyph, () => Navigator.Open(place.Id)));
+            if (i > 0) menu.Items.Add(new MenuFlyoutSeparator());
+            foreach (var id in groups[i].PlaceIds)
+            {
+                var place = Places.Get(id);
+                menu.Items.Add(Item(place.Title, place.Glyph, () => Navigator.Open(place.Id)));
+            }
         }
-        if (Sidebar.ItemsSource is List<ListViewItem> rows && rows.FirstOrDefault(r => r.Tag is SidebarAction { Title: "Tools" }) is { } anchor)
+        if (_sidebarRows.FirstOrDefault(r => r.Tag is SidebarAction { Title: "Tools" }) is { } anchor)
             menu.ShowAt(anchor);
     }
 
@@ -819,7 +914,7 @@ public sealed partial class ShellPage : Page
                 var infos = PlaceInfos();
                 var shown = _layout.Shown(infos);
                 var before = target is SidebarPlace tp && shown.Contains(tp.Place.Id) ? tp.Place.Id : null;
-                if (target is SidebarPlace or SidebarHeader { Key: "tools" } || target == null) { _layout.MoveBefore(p.Place.Id, before, infos); SaveLayout(); }
+                if (target is SidebarPlace || (target is SidebarHeader th && SidebarToolGroups.IsToolsHeaderKey(th.Key)) || target == null) { _layout.MoveBefore(p.Place.Id, before, infos); SaveLayout(); }
                 break;
             }
             case SidebarBot b:
@@ -839,8 +934,7 @@ public sealed partial class ShellPage : Page
 
     private SidebarItem? RowAt(Windows.Foundation.Point point)
     {
-        if (Sidebar.ItemsSource is not List<ListViewItem> rows) return null;
-        foreach (var row in rows)
+        foreach (var row in _sidebarRows)
         {
             var top = row.TransformToVisual(Sidebar).TransformPoint(new Windows.Foundation.Point(0, 0)).Y;
             if (point.Y >= top && point.Y < top + row.ActualHeight) return row.Tag as SidebarItem;
@@ -1197,16 +1291,14 @@ public sealed partial class ShellPage : Page
     internal bool PaneEmpty => _openChat == null && ContentPlaceholder.Visibility == Visibility.Visible && ChatPage.Current == null;
 
     /// [groups] The sidebar's rows top to bottom as the group chats walk reads them (`WalkProof.SidebarGroupChats`).
-    internal IReadOnlyList<string> SidebarKeys() => Sidebar.ItemsSource is List<ListViewItem> rows
-        ? [.. rows.Select(r => r.Tag switch
+    internal IReadOnlyList<string> SidebarKeys() => [.. _sidebarRows.Select(r => r.Tag switch
         {
             SidebarHeader h => "header:" + h.Title,
             SidebarDivider => "divider",
             SidebarBot b => b.Bot.Id,
             SidebarRoom room => Hermes.Core.Bots.BotListHead.RoomKey(room.Room.Id),
             _ => "",
-        })]
-        : [];
+        })];
 
     /// The key of the row the sidebar marks (null: none).
     /// [WIN-49] The sidebar's chosen row (the walk measures its mark).

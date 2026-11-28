@@ -25,8 +25,8 @@ public static class Kit
     public static Brush Orange => new SolidColorBrush(ColorHelper.FromArgb(255, 0xF0, 0x8A, 0x00));
     public static Brush Green => new SolidColorBrush(ColorHelper.FromArgb(255, 0x30, 0xB9, 0x4D));
 
-    /// The Mac form's readable width (MacForm.readableWidth).
-    public const double ReadableWidth = 680;
+    /// Desktop readable width for Windows forms and lists.
+    public const double ReadableWidth = 1120;
 
     public static TextBlock Text(string text, double size = 14, Brush? color = null, bool bold = false, bool wrap = true,
         int maxLines = 0) => new()
@@ -152,11 +152,24 @@ public static class Kit
         return s;
     }
 
-    /// The page body: a scrolling column at the readable width.
+    /// The page body: a scrolling column that tracks the ScrollViewer's live ViewportWidth so resizing sideways never offsets or clips cards.
     public static ScrollViewer Column(out StackPanel content, double width = ReadableWidth)
     {
-        content = new StackPanel { MaxWidth = width, Padding = new Thickness(20, 8, 20, 28), HorizontalAlignment = HorizontalAlignment.Stretch };
-        return new ScrollViewer { Content = content, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+        var panel = new StackPanel { Padding = new Thickness(24, 8, 24, 28), HorizontalAlignment = HorizontalAlignment.Stretch };
+        content = panel;
+        var scroll = new ScrollViewer
+        {
+            Content = panel,
+            HorizontalScrollMode = ScrollMode.Disabled,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+        };
+        scroll.SizeChanged += (_, _) =>
+        {
+            if (scroll.ViewportWidth > 0)
+                panel.Width = scroll.ViewportWidth;
+        };
+        return scroll;
     }
 
     // ------------------------------------------------------------------ page states

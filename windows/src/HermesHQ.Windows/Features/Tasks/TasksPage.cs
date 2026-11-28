@@ -197,7 +197,13 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
             if (_store != null) _ = _store.RescheduleAsync([taskId], day, preserveTime: true, zone: Zone);
         };
 
-        var listScroll = new ScrollViewer { Content = _list, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollMode = ScrollMode.Disabled };
+        var listScroll = new ScrollViewer
+        {
+            Content = _list,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollMode = ScrollMode.Disabled,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        };
         var center = new Grid();
         center.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         center.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -953,7 +959,6 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
         {
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         }
         else
         {
@@ -961,7 +966,7 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
         }
         grid.Children.Add(_selection.Active ? PickCircle(task) : Circle(task, () => ToggleDone(task)));
         var middle = new StackPanel { Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
-        var name = new TextBlock { FontSize = wide ? 13.5 : 15, TextWrapping = wide ? TextWrapping.NoWrap : TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis };
+        var name = new TextBlock { FontSize = wide ? 14 : 15, TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis };
         if (!task.IsDone && TodoViews.PriorityMark(task.Priority) is { } mark)
         {
             name.Inlines.Add(new Run
@@ -976,34 +981,39 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
         if (words.Repeats) name.Inlines.Add(new Run { Text = "  ↻", FontSize = 12, Foreground = Secondary });
         foreach (var tag in words.Tags) name.Inlines.Add(new Run { Text = "  #" + tag, FontSize = 12, Foreground = Accent });
         middle.Children.Add(name);
-        if (!wide && words.Note is { } noteNarrow) middle.Children.Add(Text(noteNarrow, 12, color: HermesHQ.Features.Settings.ThemeService.Ink(ToneColor(words.Tone)), wrap: false));
-        Grid.SetColumn(middle, 1);
-        grid.Children.Add(middle);
 
         var markGoal = _store is { } s0 ? GoalViews.MarkGoal(task, s0.Goals) : null;
         if (wide)
         {
             var statusLabel = CalmStatusLabel(task, words);
-            var statusBlock = new TextBlock
-            {
-                Text = statusLabel ?? "",
-                FontSize = 12.5,
-                MinWidth = statusLabel != null ? 92 : 0,
-                VerticalAlignment = VerticalAlignment.Center,
-                Foreground = HermesHQ.Features.Settings.ThemeService.Ink(ToneColor(words.Tone)),
-            };
-            Grid.SetColumn(statusBlock, 2);
-            grid.Children.Add(statusBlock);
-
-            var detailPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, VerticalAlignment = VerticalAlignment.Center };
             var detailText = CalmDetailText(task, words);
-            if (detailText.Length > 0) detailPanel.Children.Add(Text(detailText, 12.5, color: Secondary, wrap: false));
-            if (words.When is { } when) detailPanel.Children.Add(Text(when, 12.5, color: words.Late ? Critical : Secondary, wrap: false));
-            if (markGoal != null) detailPanel.Children.Add(GoalMarkView(markGoal, task.IsDone));
-            Grid.SetColumn(detailPanel, 3);
-            grid.Children.Add(detailPanel);
+            if (statusLabel != null || detailText.Length > 0)
+            {
+                var sub = new TextBlock { FontSize = 12.5, TextWrapping = TextWrapping.NoWrap, TextTrimming = TextTrimming.CharacterEllipsis };
+                if (statusLabel != null)
+                {
+                    sub.Inlines.Add(new Run
+                    {
+                        Text = statusLabel,
+                        FontWeight = FontWeights.SemiBold,
+                        Foreground = HermesHQ.Features.Settings.ThemeService.Ink(ToneColor(words.Tone)),
+                    });
+                    if (detailText.Length > 0) sub.Inlines.Add(new Run { Text = "  ·  ", Foreground = Tertiary });
+                }
+                if (detailText.Length > 0)
+                    sub.Inlines.Add(new Run { Text = detailText, Foreground = Secondary });
+                middle.Children.Add(sub);
+            }
+            Grid.SetColumn(middle, 1);
+            grid.Children.Add(middle);
 
-            var who = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center, MinWidth = 104 };
+            var metaPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right };
+            if (words.When is { } when) metaPanel.Children.Add(Text(when, 12.5, color: words.Late ? Critical : Secondary, wrap: false));
+            if (markGoal != null) metaPanel.Children.Add(GoalMarkView(markGoal, task.IsDone));
+            Grid.SetColumn(metaPanel, 2);
+            grid.Children.Add(metaPanel);
+
+            var who = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Right, MinWidth = 96 };
             if (task.Helper is { } helper)
             {
                 who.Children.Add(Face(helper, 18));
@@ -1014,11 +1024,15 @@ public sealed partial class TasksPage : Page, IKeyRefreshing
             {
                 who.Children.Add(Text("You", 12.5, color: Secondary, wrap: false));
             }
-            Grid.SetColumn(who, 4);
+            Grid.SetColumn(who, 3);
             grid.Children.Add(who);
         }
         else
         {
+            if (words.Note is { } noteNarrow) middle.Children.Add(Text(noteNarrow, 12, color: HermesHQ.Features.Settings.ThemeService.Ink(ToneColor(words.Tone)), wrap: false));
+            Grid.SetColumn(middle, 1);
+            grid.Children.Add(middle);
+
             var end = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, VerticalAlignment = VerticalAlignment.Center };
             if (words.When is { } when) end.Children.Add(Text(when, 12, color: words.Late ? Critical : Secondary, wrap: false));
             if (markGoal != null) end.Children.Add(GoalMarkView(markGoal, task.IsDone));

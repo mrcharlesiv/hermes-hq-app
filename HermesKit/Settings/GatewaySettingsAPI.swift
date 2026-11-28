@@ -84,6 +84,13 @@ nonisolated struct GatewaySettingsAPI: Sendable {
         return (answer["providers"]?.array ?? []).compactMap(ModelProviderOption.init)
     }
 
+    /// [sidebar-usage] The same catalog as the chat's model menu reads it (`model.options`): each row's plan usage and
+    /// limits too, with no chat open. The gateway answers from what it last heard and asks the providers again behind
+    /// the read, so a second read a few seconds on often knows more (`UsageLimitsModel.worthAskingAgain`).
+    func modelCatalog() async throws -> ModelOptions {
+        ModelOptions(json: try await json("GET", "/api/model/options", query: [URLQueryItem(name: "explicit_only", value: "1")] + profileQuery))
+    }
+
     func auxiliary() async throws -> [AuxiliaryAssignment] {
         try await json("GET", "/api/model/auxiliary", query: profileQuery)["tasks"]?.array?.compactMap(AuxiliaryAssignment.init) ?? []
     }

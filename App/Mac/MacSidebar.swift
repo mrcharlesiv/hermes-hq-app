@@ -257,6 +257,13 @@ final class MacSidebar: UIView {
     private let footEdge = UIView()
     private var footEdgeHeight: NSLayoutConstraint!
     private var footBottom: NSLayoutConstraint!
+    /// [sidebar-usage] What is left on each plan, between the foot's rows and its buttons (`MacSidebarUsage`): bars
+    /// open, rings folded. No height at all with nothing to show.
+    private let usage = MacSidebarUsage()
+    private var usageGap: NSLayoutConstraint!
+    private var usageEmpty: NSLayoutConstraint!
+    /// The window is tall enough for the block beside everything else at the foot.
+    private var usageFits = true
     private var heads: [String: MacRailHead] = [:]
     /// [spring-drop] Files dragged in from the Finder: a bot's row (its own chat) or a chat under it, held under them,
     /// opens beside the sidebar.
@@ -301,17 +308,14 @@ final class MacSidebar: UIView {
     private weak var toolsHeading: MacSidebarHeading?
     /// When the sidebar came on show: its lists glide to a row only once it has been up a moment (`glidesScroll`).
     private var shownAt: CFTimeInterval = .greatestFiniteMagnitude
-    private var tools: MacSidebarTools?
     /// HeroSpace-inspired open sidebar header: traffic-light-aligned Search/Compose icons + Workspace/Gateway Switcher pill.
     private var openHeader: MacSidebarHeader?
-    /// Scroll top constraint anchored to either `openHeader` (open) or `tools` (collapsed rail).
+    /// Scroll top constraint anchored to `openHeader` (open) or `topAnchor` (collapsed rail).
     private var scrollTop: NSLayoutConstraint?
     /// The head whose chat is on show beside the rail, by `MacBotsRail.Item.key` (`MainTabController.paneSelectionChanged`).
     private var openHead: String?
     /// Watch on the saved gateways for the foot's gateway line and switcher.
     private var gatewayWatch: (token: UUID, gateways: any GatewayAccounts)?
-    /// Where Search and New Chat sit: `topRoom` down (`placeTopTools`).
-    private var toolsTop: NSLayoutConstraint?
     private var badgeWatch: [NSKeyValueObservation] = []
     /// [sidebar-light] The watch on the panes beside the strip (`neighbourMayChange`).
     private var neighbourToken: NSObjectProtocol?
@@ -452,6 +456,9 @@ final class MacSidebar: UIView {
         footEdge.isUserInteractionEnabled = false
         footEdge.clipsToBounds = true
         addSubview(footEdge)
+        usage.translatesAutoresizingMaskIntoConstraints = false
+        usage.onOpen = { [weak self] source in self?.openUsage(from: source) }
+        addSubview(usage)
         edge.isUserInteractionEnabled = false
         edge.translatesAutoresizingMaskIntoConstraints = false
         addSubview(edge)
@@ -533,7 +540,10 @@ final class MacSidebar: UIView {
             gatewayButton.heightAnchor.constraint(equalTo: toggle.heightAnchor),
         ])
         connectionToken = NotificationCenter.default.addObserver(forName: Self.connectionChanged, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.showGateway() }
+            MainActor.assumeIsolated {
+                self?.showGateway()
+                SidebarUsageStore.shared.refresh(reason: .initial)   // signed in, or another gateway: its own plans
+            }
         }
         railGrip.accessibilityIdentifier = "mac-sidebar.rail-edge"
         railGrip.addGestureRecognizer(MacGripPan(target: self, action: #selector(railDragged(_:))))
@@ -551,13 +561,16 @@ final class MacSidebar: UIView {
         // [mac-audit #12] Owner 2026-11-02: one pixel of the window's own display (traitCollection), not the main
         // screen's: a Mac window on a 1x external display next to a 2x built-in one drew a blurred two-pixel line.
         edgeWidth = edge.widthAnchor.constraint(equalToConstant: HQShape.pixel(traitCollection.displayScale))
-        footBottom = footScroll.bottomAnchor.constraint(equalTo: toggle.topAnchor, constant: -6)
+        // [sidebar-usage] The usage block ends where the foot's rows did, and the rows end at its top.
+        footBottom = usage.bottomAnchor.constraint(equalTo: toggle.topAnchor, constant: -6)
+        usageGap = footScroll.bottomAnchor.constraint(equalTo: usage.topAnchor)
+        usageEmpty = usage.heightAnchor.constraint(equalToConstant: 0)
         // The gear: beside the + open, centred above the toggle folded (the foot's rows then end above the gear).
         settingsBesideAdd = [settingsButton.trailingAnchor.constraint(equalTo: addButton.leadingAnchor, constant: -2),
                              settingsButton.centerYAnchor.constraint(equalTo: toggle.centerYAnchor)]
         settingsAboveToggle = [settingsButton.centerXAnchor.constraint(equalTo: toggle.centerXAnchor),
                                settingsButton.bottomAnchor.constraint(equalTo: toggle.topAnchor, constant: -2)]
-        footAboveSettings = footScroll.bottomAnchor.constraint(equalTo: settingsButton.topAnchor, constant: -6)
+        footAboveSettings = usage.bottomAnchor.constraint(equalTo: settingsButton.topAnchor, constant: -6)
         // Mac polish #5: the foot is drawn whole when it fits (its own height, short of required), and the bots keep
         // their least (all but required, so a window shorter than every minimum breaks nothing).
         footWhole = footScroll.heightAnchor.constraint(equalTo: foot.heightAnchor)
@@ -566,7 +579,9 @@ final class MacSidebar: UIView {
         botsRoom.priority = .required - 1
         footEdgeHeight = footEdge.heightAnchor.constraint(equalToConstant: 0)
         NSLayoutConstraint.activate([
-            footBottom, footEdgeHeight,
+            footBottom, footEdgeHeight, usageGap, usageEmpty,
+            usage.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
+            usage.trailingAnchor.constraint(equalTo: scroll.trailingAnchor),
             toggleBottom, stackLeading, stackTrailing, addTrailing,
             addButton.centerYAnchor.constraint(equalTo: toggle.centerYAnchor),
             scroll.bottomAnchor.constraint(equalTo: footEdge.topAnchor),
@@ -621,6 +636,17 @@ final class MacSidebar: UIView {
         sceneTokens.append(NotificationCenter.default.addObserver(forName: Self.pinnedOnlyChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.botsChanged() }
         })
+        // [sidebar-usage] The plans' numbers changed, or Settings › Tabs turned the block on or off.
+        for name in [SidebarUsageStore.changed, SidebarUsageStore.shownChanged] {
+            sceneTokens.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.showUsage(animated: true) }
+            })
+        }
+        // The window came forward: refresh only when stale (>= 5 min) so quick app switches make zero network traffic.
+        sceneTokens.append(NotificationCenter.default.addObserver(forName: UIScene.didActivateNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { SidebarUsageStore.shared.refresh(reason: .foreground) }
+        })
+        SidebarUsageStore.shared.attach(tabs.services)
         #if DEBUG
         // `-HQDebugBotsInSidebarFlip <s>`: Bots in Sidebar flips that many seconds after the sidebar is made, as the
         // menu's item does (pair it with `-HQDebugMacShots <name> -HQDebugMacShotsWait <more s>` for the picture after).
@@ -660,6 +686,7 @@ final class MacSidebar: UIView {
         super.didMoveToWindow()
         shownAt = window == nil ? .greatestFiniteMagnitude : CACurrentMediaTime()
         if window != nil { followNeighbourSoon() }
+        SidebarUsageStore.shared.setVisible(usageFits && window != nil)
         windowActiveChanged()
         #if DEBUG
         // `-HQDebugSlowMotion 0.1`: the window's animations at a tenth of their speed, to photograph one part-way.
@@ -712,23 +739,16 @@ final class MacSidebar: UIView {
         // at the bottom of a sidebar").
         // [Mac UI check 2026-11-13] Search and New Chat stay put over the bots' list, not as its first row: revealing a
         // low bot or group chat scrolled them half off the top (Mac polish #27 only kept the foot's offset off this list).
-        self.tools?.removeFromSuperview()
-        self.tools = nil
         self.openHeader?.removeFromSuperview()
         self.openHeader = nil
         scrollTop?.isActive = false
         if folded {
-            let tools = MacSidebarTools(folded: true, named: named)
-            tools.translatesAutoresizingMaskIntoConstraints = false
-            self.tools = tools
-            addSubview(tools)
-            let top = scroll.topAnchor.constraint(equalTo: tools.bottomAnchor, constant: stack.spacing)
+            // [rail-top-bar] Owner 2026-11-28: Search and New Chat no longer stand side by side at the rail's top ("now
+            // we have more room on the top that maybe something could go to"): Search leads the bar over the page
+            // (`MacWorkspaceBar`), where New Chat already is (its +). The rail starts with its places or bots.
+            let top = scroll.topAnchor.constraint(equalTo: topAnchor, constant: Self.topRoom)
             scrollTop = top
-            NSLayoutConstraint.activate([
-                tools.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
-                tools.trailingAnchor.constraint(equalTo: scroll.trailingAnchor),
-                top,
-            ])
+            top.isActive = true
         } else {
             let header = MacSidebarHeader()
             header.translatesAutoresizingMaskIntoConstraints = false
@@ -744,6 +764,7 @@ final class MacSidebar: UIView {
                 top,
             ])
         }
+        tabs.split?.macWorkspaceBar.setNeedsLayout()   // [rail-top-bar] Search is in the bar only while this is the rail
         var placeRows: [Row] = []
         var toolRows: [Row] = []
         let places = tabs.placedTabs   // [mac-sidebar] every place, the ones the tab controller doesn't hold now too
@@ -851,6 +872,7 @@ final class MacSidebar: UIView {
         if showsBots { botsChanged() }
         placeTopTools()
         showGateway()
+        showUsage()
         // A gap above the button, rows at the foot or not. [sidebar-intent] Open, a section's break more: the bar is
         // not one of the rows above it.
         footBottom.constant = -6 - (folded ? 0 : Self.sectionBreak)
@@ -1234,6 +1256,7 @@ final class MacSidebar: UIView {
     func markOpen(bot: String?, room: String? = nil, chat: String? = nil) {
         setOpenHead(bot ?? room.map(MacBotsRail.Item.roomKey) ?? chat)
         markHeads()
+        syncUsageProfile()
     }
 
     /// [pinned-only] The chat on show changed: under Pinned Bots Only its bot is listed while it is (and no longer).
@@ -1338,15 +1361,9 @@ final class MacSidebar: UIView {
 
     // MARK: Top tools & gateway watch
 
-    /// Search and New Chat start at `topRoom` (no top-of-sidebar globe gateway switcher; switching stays in the
-    /// open sidebar's foot and the folded rail's context menu).
+    /// Syncs the gateway watch for the foot's gateway line and switcher.
     private func placeTopTools() {
         watchGateways()
-        toolsTop?.isActive = false
-        if let tools {
-            toolsTop = tools.topAnchor.constraint(equalTo: topAnchor, constant: Self.topRoom - tools.levelShift)
-            toolsTop?.isActive = true
-        }
         gatewaysChanged()
     }
 
@@ -1362,6 +1379,53 @@ final class MacSidebar: UIView {
 
     /// More than one gateway saved: the Bots title's switcher (and so the foot's) is on.
     private var switcherActive: Bool { tabs?.botsViewController.gatewaySwitcher?.isActive ?? false }
+
+    // MARK: Plan usage ([sidebar-usage])
+
+    /// The sidebar's height under which the usage block is left out (in the sidebar's own points, 77 % of them on the
+    /// screen; the smallest window is 600 tall there, about 780 here). Open, the bars take a bot or two's room, so
+    /// they go under about 640 pt of window; the rail's rings are small and stay to the smallest window.
+    static var usageLeastHeight: CGFloat { ((isCollapsed ? 700 : 830) * max(1, chrome)).rounded() }
+    /// The folded rail has room for fewer plans than the open sidebar.
+    static let usageRings = 2
+
+    /// The plans' block at the foot: bars open, rings folded; gone when turned off, when no plan reports an
+    /// allowance, and in a short window.
+    private func showUsage(animated: Bool = false) {
+        let folded = Self.isCollapsed
+        let store = SidebarUsageStore.shared
+        store.setVisible(usageFits && window != nil)
+        var listed = SidebarUsageStore.shown && usageFits ? store.rows : (rows: [], more: 0)
+        if folded, listed.rows.count > Self.usageRings {
+            listed = (Array(listed.rows.prefix(Self.usageRings)), listed.more + listed.rows.count - Self.usageRings)
+        }
+        let was = usage.isEmpty
+        usage.show(listed.rows, more: listed.more, folded: folded)
+        usageEmpty.isActive = usage.isEmpty
+        // A section's break above the block open (it is not one of the rows); the rail's own step folded.
+        usageGap.constant = usage.isEmpty ? 0 : -(folded ? 6 : Self.sectionBreak + 2)
+        guard animated, was != usage.isEmpty, window != nil, !HQMotion.reduced else { return }
+        UIView.animate(withDuration: 0.2) { self.layoutIfNeeded() }
+    }
+
+    /// Keeps `SidebarUsageStore` aligned with the active bot's profile so bots signed in to different accounts show
+    /// their own plan usage.
+    private func syncUsageProfile() {
+        if let chat = tabs?.split?.detail.viewControllers.last as? ChatViewController {
+            SidebarUsageStore.shared.setProfile(chat.session.profile)
+        } else if let openHead, !openHead.hasPrefix(MacBotsRail.Item.roomKey("")) {
+            let botId = openHead.split(separator: "\u{1F}", maxSplits: 1).first.map(String.init) ?? openHead
+            SidebarUsageStore.shared.setProfile(botId)
+        }
+    }
+
+    /// A click on a plan: every plan in full, hung from it, with the way on to the open chat's Usage & Limits.
+    private func openUsage(from source: UIView) {
+        guard let tabs else { return }
+        let host = tabs.split ?? tabs as UIViewController
+        let chat = tabs.split?.detail.viewControllers.last as? ChatViewController
+        SidebarUsagePanel.present(from: source, in: host, openPage: chat?.menus.map { menus in { menus.presentUsage() } })
+    }
 
     /// [sidebar-tidy] The foot's gateway line: the current gateway's name and a dot for the connection (green
     /// connected, orange while it connects, red offline or signed out), and the gateway switcher dropdown when multiple gateways exist.
@@ -1532,7 +1596,7 @@ final class MacSidebar: UIView {
     var debugFootGateway: String {
         let items = gatewayButton.isHidden ? [] : (tabs?.botsViewController.gatewaySwitcher?.menu([]).children.flatMap { ($0 as? UIMenu)?.children ?? [$0] } ?? [])
         return "collapsed \(Self.isCollapsed) top-switcher none"
-            + " tools-top \(tools.map { "\($0.frame.minY)" } ?? "-")\n"
+            + " header-top \(openHeader.map { "\($0.frame.minY)" } ?? "-")\n"
             + "foot line hidden \(gatewayLine.isHidden) text \"\(gatewayName.text ?? "")\" arrows \(!gatewayArrows.isHidden) news \(!gatewayNews.isHidden)\n"
             + "foot switcher hidden \(gatewayButton.isHidden) enabled \(gatewayButton.isEnabled) frame \(gatewayButton.frame.integral) label \"\(gatewayButton.accessibilityLabel ?? "")\": "
             + items.compactMap { ($0 as? UIAction).map { $0.title + ($0.state == .on ? " ✓" : "") } }.joined(separator: ", ")
@@ -1744,6 +1808,7 @@ final class MacSidebar: UIView {
         // [bots-rail] a head is marked only while Bots is on show. [pinned-only] And the chat on show keeps its bot
         // listed only while Bots is: the bots again (which marks them).
         if Self.pinnedOnly, showsBots { botsChanged() } else { markHeads() }
+        syncUsageProfile()
         // [mac-sidebar] A place picked by ⌘9 or a link, below the fold of a long list, scrolls into view (in its own list:
         // Mac polish #27). A Tool on the folded rail is its Tools button.
         let marked = rows.first(where: { $0.isMarked && !$0.isHidden }) ?? foldedTools.flatMap({ $0.isMarked ? $0 : nil })
@@ -1788,6 +1853,12 @@ final class MacSidebar: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        // [sidebar-usage] A short window keeps its rows: the block goes first.
+        let fits = bounds.height >= Self.usageLeastHeight
+        if fits != usageFits {
+            usageFits = fits
+            showUsage()
+        }
         let panel = CGRect(x: Self.glassInset, y: Self.glassTop, width: max(0, bounds.width - 2 * Self.glassInset),
                            height: max(0, bounds.height - Self.glassInset - Self.glassTop))
         if glass.frame != panel { glass.frame = panel }
@@ -1807,7 +1878,7 @@ final class MacSidebar: UIView {
             // list takes that much less, so the foot keeps the room it had (the folded rail in a short window lost
             // its Tools button to the bots' list, and "+" showed where it hadn't).
             let startedAt = Self.glassTop + 8
-            let headerEnd = openHeader?.frame.maxY ?? tools?.frame.maxY ?? startedAt
+            let headerEnd = openHeader?.frame.maxY ?? startedAt
             let lead = max(0, headerEnd + stack.spacing - startedAt)
             var room = max(Self.botsMinHeight - lead, min(content, (bounds.height * 0.5).rounded() - lead))
             // [Mac AAA 2026-11-16] Open, a list too long for its room ends on a whole bot's row, not part way into the
@@ -1950,7 +2021,6 @@ final class MacSidebar: UIView {
         (stack.arrangedSubviews + botsStack.arrangedSubviews + foot.arrangedSubviews + footEdge.subviews).compactMap { $0 as? MacRailLine }.forEach { $0.recolor() }
         botsStack.arrangedSubviews.compactMap { $0 as? MacSidebarHeading }.forEach { $0.recolor() }
         botsStack.arrangedSubviews.compactMap { $0 as? MacSidebarEmptyHint }.forEach { $0.recolor() }
-        tools?.recolor()
         openHeader?.recolor()
     }
 
@@ -2415,6 +2485,11 @@ private final class Row: UIControl {
     private let folded: Bool
     /// [rail-names] In the named rail: the icon with its name under it.
     private let named: Bool
+    /// [rail-tile] Owner 2026-11-28 (the sidebar "closer to" a slim icon rail's): on the folded rail a place's mark is
+    /// the bots' heads' own, a soft rounded square fitted to the icon, not a box the rail's whole width. One kind of
+    /// mark down the rail.
+    private let tile = UIView()
+    private var tiled: Bool { folded && !named }
     let item: UITabBarItem
     private var hovered = false
     #if DEBUG
@@ -2459,6 +2534,18 @@ private final class Row: UIControl {
         count.textAlignment = .right
         let dotSize = (7 * MacSidebar.chrome).rounded()
         dot.layer.cornerRadius = dotSize / 2
+        if tiled {
+            let side = min(MacSidebar.rowHeight - 2, MacBotsRail.tileSide)
+            tile.translatesAutoresizingMaskIntoConstraints = false
+            tile.isUserInteractionEnabled = false
+            tile.layer.cornerRadius = MacBotsRail.tileRadius
+            tile.layer.cornerCurve = .continuous
+            addSubview(tile)
+            NSLayoutConstraint.activate([
+                tile.centerXAnchor.constraint(equalTo: centerXAnchor), tile.centerYAnchor.constraint(equalTo: centerYAnchor),
+                tile.widthAnchor.constraint(equalToConstant: side), tile.heightAnchor.constraint(equalToConstant: side),
+            ])
+        }
         // Folded, the name and count stay out (their constraints don't fit a 72 pt row); the tip names the tab.
         for view in (named ? [icon, label, dot] : folded ? [icon, dot] : [icon, label, count, dot]) as [UIView] {
             view.translatesAutoresizingMaskIntoConstraints = false
@@ -2551,7 +2638,13 @@ private final class Row: UIControl {
         count.textColor = HQPalette.label.withAlphaComponent(dark ? 0.56 : 0.52)
         dot.backgroundColor = tintColor
         // [mac] Stress test 2026-10-28 #54: the window's one source-list mark (`MacSelection`), its corners too.
-        backgroundColor = MacSelection.fill(selected: isMarked, pressed: isHighlighted, in: .sidebar) ?? (hovered ? MacSidebar.rowHover : .clear)   // [Mac AAA 2026-11-16] one hover fill (four copies of it before)
+        if tiled {
+            // [rail-tile] The heads' tile and its three states (`MacRailHead.recolor`).
+            tile.backgroundColor = isMarked ? MacBotsRail.tileFill : isHighlighted ? MacSelection.grey : hovered ? MacSidebar.rowHover : .clear
+            backgroundColor = .clear
+        } else {
+            backgroundColor = MacSelection.fill(selected: isMarked, pressed: isHighlighted, in: .sidebar) ?? (hovered ? MacSidebar.rowHover : .clear)   // [Mac AAA 2026-11-16] one hover fill (four copies of it before)
+        }
         layer.cornerRadius = MacSelection.radius
         accessibilityTraits = isMarked ? [.button, .selected] : .button
     }

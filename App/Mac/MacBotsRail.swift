@@ -22,6 +22,10 @@ enum MacBotsRail {
     static var namedRowHeight: CGFloat { (80 * MacSidebar.chrome).rounded() }
     /// [rail-tile] The tile behind the open head: the face's own box (4 pt round it), Slack's rounded square.
     static var tileSide: CGFloat { face + 8 }
+    /// [rail-tile] Neutral, a step lighter than the glass in dark and darker in light (Slack's), whatever the accent: the
+    /// head's own colours stay the loudest thing in it. The folded rail's places wear it too (`MacSidebar`'s rows).
+    static let tileFill = UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 1, alpha: 0.14) : UIColor(white: 0, alpha: 0.09) }
+    static let tileRadius: CGFloat = 10
     /// [mac-layout] The open sidebar's bot row (owner 2026-11-03 "I like the bots in the sidebar"): a face and its name
     /// on one line, Slack's channel rows, at the places' own row height.
     /// [density] Theme › Density › Compact (the iOS look) makes them smaller, as it does the iPhone's Bots rows.
@@ -187,7 +191,7 @@ final class MacRailHead: UIControl {
         face.backgroundColor = .clear
         tile.translatesAutoresizingMaskIntoConstraints = false
         tile.isUserInteractionEnabled = false
-        tile.layer.cornerRadius = 10
+        tile.layer.cornerRadius = MacBotsRail.tileRadius
         tile.layer.cornerCurve = .continuous
         addSubview(tile)
         addSubview(face)
@@ -430,9 +434,7 @@ final class MacRailHead: UIControl {
         }
     }
 
-    /// [rail-tile] Neutral, a step lighter than the glass in dark and darker in light (Slack's), whatever the accent: the
-    /// head's own colours stay the loudest thing in it.
-    private static let tileFill = UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 1, alpha: 0.14) : UIColor(white: 0, alpha: 0.09) }
+    private static var tileFill: UIColor { MacBotsRail.tileFill }   // [rail-tile]
     private static var hoverFill: UIColor { MacHover.rowFill }   // [Mac AAA 2026-11-16] the shared hover (was 6 % / 4 % of its own)
 
     @objc private func botColourChanged() { recolor() }
@@ -716,159 +718,6 @@ final class MacSidebarHeading: UIControl {
     }
 }
 
-/// [mac-layout] The sidebar's top: Search (⌘K, Open Quickly) and New Chat (⌘N), where Slack, Mail, ChatGPT and Claude
-/// put them (owner 2026-11-03, the layout study: "things are where people would expect for them to be"). Open, a
-/// field-like button beside a compose button; folded, the two as icons one above the other.
-final class MacSidebarTools: UIView {
-    private let search = UIButton(type: .system)
-    private let compose = UIButton(type: .system)
-    private let folded: Bool
-    /// [Mac AAA 2026-11-16] How much taller the open sidebar's Search row is than at 100 %: the sidebar starts it that
-    /// much higher, so its foot stays level with the chat's bar and the inspector's rule beside it at every UI Scale
-    /// (at 150 % it ended 17 pt under them).
-    private(set) var levelShift: CGFloat = 0
-
-    /// `named`: the folded rail wide enough for names puts Search and New Chat side by side, one line instead of two.
-    init(folded: Bool, named: Bool = false) {
-        self.folded = folded
-        super.init(frame: .zero)
-        accessibilityIdentifier = "mac-sidebar.tools"
-        search.accessibilityIdentifier = "mac-sidebar.search"
-        search.accessibilityLabel = "Search"
-        search.toolTip = "Search or jump to… (⌘K)"
-        compose.accessibilityIdentifier = "mac-sidebar.compose"
-        compose.accessibilityLabel = "New Chat"
-        compose.toolTip = "New Chat (⌘N)"
-        // To the app itself, not the first responder: just after a click in the sidebar nothing holds the keys, and an
-        // action sent to nobody went nowhere (owner 2026-11-08: "The new chat button … doesn't do anything").
-        search.addAction(UIAction { _ in UIApplication.shared.sendAction(KeyCommands.openQuickly, to: UIApplication.shared.delegate, from: nil, for: nil) }, for: .touchUpInside)
-        compose.addAction(UIAction { _ in UIApplication.shared.sendAction(KeyCommands.newChat, to: UIApplication.shared.delegate, from: nil, for: nil) }, for: .touchUpInside)
-        for button in [search, compose] {
-            button.translatesAutoresizingMaskIntoConstraints = false
-            button.isPointerInteractionEnabled = true
-            addSubview(button)
-            // [sidebar-feel] Open, each is a well, and the well lightens under the pointer (Search was too wide for the
-            // app's own hover and showed nothing; New Chat got a disc inside its rounded square).
-            if !folded {
-                MacHover.drawsOwnHover(button)
-                button.addGestureRecognizer(UIHoverGestureRecognizer(target: self, action: #selector(hover(_:))))
-            }
-        }
-        // [rail-actions] Owner 2026-11-19: folded, Search and New Chat read as two more places. They are actions, so
-        // they sit small and quiet side by side on one line, a hairline under them before the places (owner, after
-        // trying the shared box: "side by side with like the line underneath it").
-        let side = ((folded ? 24 : 34) * MacSidebar.chrome).rounded()
-        levelShift = folded ? 0 : side - 34
-        if folded {
-            rule.translatesAutoresizingMaskIntoConstraints = false
-            rule.isUserInteractionEnabled = false
-            addSubview(rule)
-            NSLayoutConstraint.activate([
-                search.topAnchor.constraint(equalTo: topAnchor),
-                search.trailingAnchor.constraint(equalTo: centerXAnchor, constant: -1),
-                compose.leadingAnchor.constraint(equalTo: centerXAnchor, constant: 1),
-                compose.centerYAnchor.constraint(equalTo: search.centerYAnchor),
-                search.widthAnchor.constraint(equalToConstant: side), search.heightAnchor.constraint(equalToConstant: side),
-                compose.widthAnchor.constraint(equalToConstant: side), compose.heightAnchor.constraint(equalToConstant: side),
-                rule.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 7),
-                rule.leadingAnchor.constraint(equalTo: search.leadingAnchor, constant: 2),
-                rule.trailingAnchor.constraint(equalTo: compose.trailingAnchor, constant: -2),
-                rule.heightAnchor.constraint(equalToConstant: 1 / max(UIScreen.main.scale, 1)),
-                rule.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
-            ])
-        } else {
-            NSLayoutConstraint.activate([
-                search.topAnchor.constraint(equalTo: topAnchor, constant: 2), search.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
-                search.leadingAnchor.constraint(equalTo: leadingAnchor),
-                compose.leadingAnchor.constraint(equalTo: search.trailingAnchor, constant: 6),
-                compose.trailingAnchor.constraint(equalTo: trailingAnchor),
-                compose.centerYAnchor.constraint(equalTo: search.centerYAnchor),
-                search.heightAnchor.constraint(equalToConstant: side),
-                compose.widthAnchor.constraint(equalToConstant: side), compose.heightAnchor.constraint(equalToConstant: side),
-            ])
-        }
-        recolor()
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
-
-    private static let well = UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 1, alpha: 0.08) : UIColor(white: 0, alpha: 0.06) }
-    private static let wellHover = UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 1, alpha: 0.13) : UIColor(white: 0, alpha: 0.1) }
-
-    @objc private func hover(_ recognizer: UIHoverGestureRecognizer) {
-        guard let button = recognizer.view as? UIButton else { return }
-        let over = recognizer.state == .began || recognizer.state == .changed
-        button.configuration?.background.backgroundColor = over ? Self.wellHover : Self.well
-    }
-
-    func recolor() {
-        let well = Self.well
-        var find = UIButton.Configuration.plain()
-        let glassIcon = UIImage(systemName: "magnifyingglass", withConfiguration: UIImage.SymbolConfiguration(pointSize: 13 * MacSidebar.chrome, weight: .medium))
-        if folded { rule.backgroundColor = Self.ruleInk }
-        find.baseForegroundColor = HQPalette.label2
-        if !folded {
-            // [sidebar-intent] The glass and "Search" are views of this box's own, on the sidebar's two columns: the
-            // glass in the icon column, the word where every name under it starts. As the button's own image and
-            // title they sat 3 px and 10 px short of them, a third and a fourth left edge down the one sidebar.
-            find.background.backgroundColor = well
-            find.background.cornerRadius = 9
-            search.configuration = find
-            // At the size the button drew its own image (a button's symbols are a scale up).
-            glass.image = glassIcon?.applyingSymbolConfiguration(UIImage.SymbolConfiguration(scale: .large))
-            glass.tintColor = HQPalette.label2
-            glass.contentMode = .center
-            word.text = "Search"
-            word.font = MacSidebar.font(MacSidebar.sized(15.5, MacSidebar.scheme.search))
-            word.textColor = HQPalette.label2
-            shortcut.text = "⌘K"
-            shortcut.font = MacSidebar.font(MacSidebar.sized(13, MacSidebar.scheme.shortcut))
-            shortcut.textColor = MacSidebar.quietInk   // [Mac AAA 2026-11-16] label 3 was 2.1:1 in light
-            if shortcut.superview == nil {
-                for view in [glass, word, shortcut] as [UIView] {
-                    view.translatesAutoresizingMaskIntoConstraints = false
-                    view.isUserInteractionEnabled = false
-                    search.addSubview(view)
-                }
-                wordLeading = word.leadingAnchor.constraint(equalTo: search.leadingAnchor)
-                NSLayoutConstraint.activate([
-                    glass.centerXAnchor.constraint(equalTo: search.leadingAnchor, constant: MacSidebar.iconLeading + MacSidebar.iconColumn / 2),
-                    glass.centerYAnchor.constraint(equalTo: search.centerYAnchor),
-                    wordLeading!, word.centerYAnchor.constraint(equalTo: search.centerYAnchor),
-                    shortcut.leadingAnchor.constraint(greaterThanOrEqualTo: word.trailingAnchor, constant: 6),
-                    shortcut.trailingAnchor.constraint(equalTo: search.trailingAnchor, constant: -10),
-                    shortcut.centerYAnchor.constraint(equalTo: search.centerYAnchor),
-                ])
-                shortcut.setContentCompressionResistancePriority(.required, for: .horizontal)
-                // A press dims them, as it dimmed the button's own image and title.
-                search.configurationUpdateHandler = { [weak self] button in
-                    let ink: CGFloat = button.isHighlighted ? 0.5 : 1
-                    self?.glass.alpha = ink
-                    self?.word.alpha = ink
-                    self?.shortcut.alpha = ink   // [Mac AAA 2026-11-16] the ⌘K stayed lit while the rest dimmed
-                }
-            }
-            wordLeading?.constant = MacBotsRail.nameLeading   // UI Scale moves the column
-        } else {
-            find.image = glassIcon
-            search.configuration = find
-        }
-        var write = UIButton.Configuration.plain()
-        write.image = UIImage(systemName: "square.and.pencil", withConfiguration: UIImage.SymbolConfiguration(pointSize: (folded ? 13 : 15) * MacSidebar.chrome, weight: .medium))
-        write.baseForegroundColor = folded ? HQPalette.label2 : HQPalette.label   // [rail-actions] quieter than the places
-        if !folded { write.background.backgroundColor = well; write.background.cornerRadius = 9 }
-        compose.configuration = write
-    }
-
-    /// [rail-actions] Folded: the hairline under Search and New Chat.
-    private let rule = UIView()
-    private static let ruleInk = UIColor { $0.userInterfaceStyle == .dark ? UIColor(white: 1, alpha: 0.14) : UIColor(white: 0, alpha: 0.12) }
-
-    private let shortcut = UILabel()
-    private let glass = UIImageView()
-    private let word = UILabel()
-    private var wordLeading: NSLayoutConstraint?
-}
 /// [chats-under] [mac] One of a bot's chats under its row in the open sidebar (Filter › Chats Under Bots, which the Mac
 /// offers on the sidebar's right click, or the bot's own choice), or the "N more" after them, which opens Sessions with
 /// the bot picked. The iPhone's Bots rows drawn at the sidebar's sizes: the title where the bot's name starts, the line

@@ -1436,8 +1436,12 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     /// it is all that shows round the box. Nothing is laid over the rows, so nothing there can take their colour (the
     /// owner's dark band), and whatever floats above the box (the activity pill, its card, the arrow, banners) is drawn
     /// whole over it.
+    /// [soft-chat-bar] Owner 2026-11-28 ("this top bar in the chat looks a little out of place"): in the Mac's iOS look
+    /// the rows thin out under the bar the same way (`macBarFoot`), so the bar is the page itself, as the list pane's
+    /// header beside it is, with no band or line of its own.
     private func fadeTranscriptAtBox() {
-        guard let gone = macFadeTop() else {
+        let gone = macFadeTop(), foot = macBarFoot()
+        guard gone != nil || foot != nil else {
             if edgeHost.layer.mask != nil { edgeHost.layer.mask = nil }
             return
         }
@@ -1457,13 +1461,40 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         fade.frame = edgeHost.bounds
         // An eased ramp (smoothstep), not a straight one: a straight fade reads as a band with edges. Gone 2 pt before
         // the box's line, so no trace of a word touches it.
-        let start = gone - ChatMetrics.composerContentGap, end = gone - 2
         let steps: [CGFloat] = [0, 0.2, 0.4, 0.6, 0.8, 1]
-        fade.colors = [UIColor.black.cgColor] + steps.map { t in UIColor.black.withAlphaComponent(1 - t * t * (3 - 2 * t)).cgColor }
-            + [UIColor.clear.cgColor]
-        fade.locations = [0] + steps.map { t in NSNumber(value: Double(max(0, min(1, (start + (end - start) * t) / height)))) } + [1]
+        func eased(_ t: CGFloat) -> CGColor { UIColor.black.withAlphaComponent(t * t * (3 - 2 * t)).cgColor }
+        func place(_ y: CGFloat) -> NSNumber { NSNumber(value: Double(max(0, min(1, y / height)))) }
+        var colors: [CGColor] = [], locations: [NSNumber] = []
+        if let foot {
+            // Gone by the bar's foot, whole again `macBarFade` under it.
+            colors += [UIColor.clear.cgColor] + steps.map(eased)
+            locations += [0] + steps.map { place(foot + ChatMetrics.macBarFade * $0) }
+        } else {
+            colors.append(UIColor.black.cgColor)
+            locations.append(0)
+        }
+        if let gone {
+            let start = max(gone - ChatMetrics.composerContentGap, (foot ?? 0) + (foot == nil ? 0 : ChatMetrics.macBarFade)), end = max(start, gone - 2)
+            colors += steps.map { eased(1 - $0) } + [UIColor.clear.cgColor]
+            locations += steps.map { place(start + (end - start) * $0) } + [1]
+        } else {
+            colors.append(UIColor.black.cgColor)
+            locations.append(1)
+        }
+        fade.colors = colors
+        fade.locations = locations
         CATransaction.commit()
         if edgeHost.layer.mask !== fade { edgeHost.layer.mask = fade }
+    }
+
+    /// [soft-chat-bar] Where the rows are gone by at the top (edge host coordinates): the foot of the bar, of the
+    /// other-chats strip under it, and of a title that outgrew the bar. Nil off the Mac and in the Desktop Look, whose
+    /// bar is a frosted band with a straight foot (`barBlur`).
+    private func macBarFoot() -> CGFloat? {
+        guard DeviceWord.isMac, !Theme.isDesktop else { return nil }
+        let foot = view.safeAreaLayoutGuide.layoutFrame.minY + macTitleOverhang
+        guard foot > 1 else { return nil }
+        return view.convert(CGPoint(x: 0, y: foot), to: edgeHost).y
     }
 
     /// [Mac AAA 2026-11-17] Where the transcript is gone by (edge host coordinates): the top of the topmost full-width
@@ -2232,6 +2263,8 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         // after the host's first size change (nothing scrolls it, so nothing brings it back). The chat takes the list
         // pane's own bar instead (the look's frost, no hairline, `ListBarAppearance`), and that edge stays off.
         edgeHost.topEdgeEffect.isHidden = true   // [Mac AAA 2026-11-17] in both looks (see `viewDidLoad`'s still view)
+        view.setNeedsLayout()   // [soft-chat-bar] the rows' fade under the bar is the iOS look's alone
+        updateBarBacking()
         if desktop { clear = ThemeChrome.solidBar(frosted: true) }
         // [mac] Stress test 2026-10-28 #57 (round 2): in the iOS look the chat pane's bar drew a hairline under it and
         // the list pane's bar beside it none. The system's own bar, without its line, so the two pane headers match.
@@ -2239,7 +2272,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
             // [Mac AAA 2026-11-16] Chosen by the chat (`updateTopBand`), not left to the system's guess: the system's
             // own background showed its frosted band (ending in a line at the bar's foot) in some short chats with
             // nothing under the bar and not in others, as it judged the flipped list's edge.
-            topBandState = nil
+            topBandCleared = false
             updateTopBand()
             return
         }
@@ -2282,36 +2315,12 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     #endif
 
     #if targetEnvironment(macCatalyst)
-    /// [Mac AAA 2026-11-16] The iOS look's chat bar on the Mac: a light frost ending in the panes' line only while a
-    /// message runs under the bar, as the list pane's bar takes its line once rows scroll under it; clear otherwise. Its foot is the
-    /// bar's, where the inspector's rule beside it stands. Nil: not chosen yet.
-    /// [bot-tabs-seamless] When the bot chat's strip sits under the bar, `barBandNoLine` drops the mid-bar rule so
-    /// the bar and strip share one continuous surface down to the strip's bottom rule.
-    private var topBandState: (under: Bool, noLine: Bool)?
-    private static let barBand: UINavigationBarAppearance = {
-        let band = UINavigationBarAppearance()
-        band.configureWithTransparentBackground()
-        band.backgroundEffect = UIBlurEffect(style: .systemUltraThinMaterial)
-        // [Mac AAA 2026-11-17] The canvas's veil over the frost: matches the softly lifted Mac glass canvas
-        // tone while keeping scrolled messages blurred cleanly behind the bar.
-        band.backgroundColor = MacGlassShell.canvasBarVeilColor
-        band.shadowColor = HQPalette.paneLine   // the panes' own line, at the bar's foot, level with the inspector's rule
-        // [Mac AAA 2026-11-17] …drawn solid, as it shows on the page: the line lies just under the band, over the rows,
-        // and see-through it went dark green across the width under the owner's green message (93,142,109 against its
-        // 198 grey on the page).
-        band.shadowColor = UIColor { traits in
-            let line = HQPalette.paneLine.resolvedColor(with: traits), page = MacGlassShell.canvasBaseColor.resolvedColor(with: traits)
-            var lr: CGFloat = 0, lg: CGFloat = 0, lb: CGFloat = 0, la: CGFloat = 0, pr: CGFloat = 0, pg: CGFloat = 0, pb: CGFloat = 0, pa: CGFloat = 0
-            guard line.getRed(&lr, green: &lg, blue: &lb, alpha: &la), page.getRed(&pr, green: &pg, blue: &pb, alpha: &pa) else { return line }
-            return UIColor(red: lr * la + pr * (1 - la), green: lg * la + pg * (1 - la), blue: lb * la + pb * (1 - la), alpha: 1)
-        }
-        return band
-    }()
-    private static let barBandNoLine: UINavigationBarAppearance = {
-        let band = barBand.copy()
-        band.shadowColor = .clear
-        return band
-    }()
+    /// [soft-chat-bar] The iOS look's chat bar on the Mac is clear: no frost, no line. Until 2026-11-28 it took a light
+    /// frost ending in the panes' line whenever a message ran under it ([Mac AAA 2026-11-16]), which is nearly always,
+    /// so the chat's header read as a grey slab beside the list pane's plain one (the owner: "looks a little out of
+    /// place"). The rows fade out under it instead (`fadeTranscriptAtBox`, `macBarFoot`), and the other-chats strip
+    /// under it stays clear down to its own bottom rule. False: not set yet.
+    private var topBandCleared = false
     private static let barClear: UINavigationBarAppearance = {
         let clear = UINavigationBarAppearance()
         clear.configureWithTransparentBackground()
@@ -2320,21 +2329,14 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     }()
 
     private func updateTopBand() {
-        guard isViewLoaded, !Theme.isDesktop else { return }
-        let foot = view.safeAreaLayoutGuide.layoutFrame.minY
-        let under = tableView.visibleCells.contains { cell in
-            !cell.isHidden && cell.bounds.height > 1 && cell.convert(cell.bounds, to: view).minY < foot - 0.5
-        }
-        let hasStrip = visibleSessionStripHeight > 0
-        let next = (under: under, noLine: hasStrip)
-        guard topBandState?.under != next.under || topBandState?.noLine != next.noLine else { return }
-        topBandState = next
-        let look = under ? (hasStrip ? Self.barBandNoLine : Self.barBand) : Self.barClear
+        guard isViewLoaded, !Theme.isDesktop, !topBandCleared else { return }
+        topBandCleared = true
+        let look = Self.barClear
         navigationItem.standardAppearance = look
         navigationItem.scrollEdgeAppearance = look
         navigationItem.compactAppearance = look
         navigationItem.compactScrollEdgeAppearance = look
-        (topAccessory as? SessionStripController)?.setTopBandShown(under)
+        (topAccessory as? SessionStripController)?.setTopBandShown(false)
     }
     #endif
 
@@ -3837,7 +3839,8 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         // The table is flipped: the end of its content is the transcript's top on screen.
         let contentTop = tableView.convert(CGPoint(x: 0, y: tableView.contentSize.height), to: view).y
         let under = barBottom - contentTop
-        let alpha = min(max(under / 10, 0), 1)
+        // [soft-chat-bar] The Desktop Look's alone: the iOS look's bar is clear and the rows fade out under it.
+        let alpha = Theme.isDesktop ? min(max(under / 10, 0), 1) : 0
         // Straight across at the bar's foot, no fade (the hard edge).
         let blurFrame = CGRect(x: 0, y: 0, width: view.bounds.width, height: barBottom)
         if barBlur.frame != blurFrame {

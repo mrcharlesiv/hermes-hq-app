@@ -391,8 +391,8 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
     private weak var screen: ChatViewController?
     private weak var app: AppModel?
     /// [bot-tabs-seamless] The Mac's strip shares the top bar's exact surface: Desktop Look's 94 % page frost
-    /// (`DesktopFrostView`), and in the iOS look `ChatViewController.barBand`'s `systemUltraThinMaterial` + `popupVeil`
-    /// while messages scroll under it (clear at rest).
+    /// (`DesktopFrostView`). In the iOS look it is clear, as the bar is ([soft-chat-bar] 2026-11-28: the rows fade out
+    /// under both, `ChatViewController.macBarFoot`); `macIOSBand` is kept for `setTopBandShown`, which nothing turns on.
     private let macDesktopFrost = DesktopFrostView()
     private let macIOSBand = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
     private let macIOSVeil = UIView()
@@ -533,7 +533,7 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
     private let fade = CAGradientLayer()
 
     /// [bot-tabs-seamless] Solid bottom hairline: composites the pane divider over `ChatPalette.page` so messages
-    /// scrolling underneath never tint it, matching `ChatViewController.barBand` and `MacInspector.rule`.
+    /// scrolling underneath never tint it, matching `MacInspector.rule`.
     private static var ruleColor: UIColor {
         UIColor { traits in
             #if targetEnvironment(macCatalyst)
@@ -875,16 +875,16 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
         reload(animated: false)
     }
 
-    /// [bot-tabs-seamless] The Mac's iOS look bar switches between clear and frosted (`ChatViewController.updateTopBand`):
-    /// the strip's backing follows in lockstep so both read as one continuous surface.
+    /// [bot-tabs-seamless] The strip's backing follows the Mac's iOS look bar so both read as one surface. The bar is
+    /// always clear since [soft-chat-bar] (`ChatViewController.updateTopBand`), so this is only ever told false.
     func setTopBandShown(_ shown: Bool) {
         guard tabs, topBandShown != shown else { return }
         topBandShown = shown
         if isViewLoaded { applyLook() }
     }
 
-    /// Mac: exact match to `ThemeChrome.solidBar(frosted: true)` in Desktop Look, and `ChatViewController.barBand` /
-    /// `barClear` in iOS Look.
+    /// Mac: exact match to `ThemeChrome.solidBar(frosted: true)` in Desktop Look, and `ChatViewController.barClear`
+    /// in iOS Look.
     /// iPhone/iPad: transparent over `ChatViewController.edgeStandIn` down to its bottom hairline in both looks.
     private func applyLook() {
         let desktop = Theme.isDesktop

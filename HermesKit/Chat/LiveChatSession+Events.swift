@@ -703,8 +703,16 @@ extension LiveChatSession {
         changes.markState()
         scheduleTurnEndRead()
         scheduleQueueDrain(after: turn.idleConfirmed ? .zero : queueDrainFallback)
-        if !isError, status != "interrupted" { shortenTitleIfNeeded() }
+        if !isError, status != "interrupted" {
+            shortenTitleIfNeeded()
+            NotificationCenter.default.post(name: Self.turnCompleted, object: self,
+                                            userInfo: ["account": account.id, "profile": profileParam ?? ""])
+        }
     }
+
+    /// Posted on main when a chat turn finishes normally so listeners (such as the Mac sidebar's plan usage) can
+    /// refresh from the gateway's post-turn cache without background polling.
+    static let turnCompleted = Notification.Name("hqn.chat.turn.completed")
 
     /// The stopped turn reached its end. A send held behind it (04 §5.4) keeps its own busy state.
     func settleStoppedTurn() {

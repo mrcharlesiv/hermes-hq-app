@@ -188,6 +188,10 @@ import UIKit
                 })
             }
         }
+        // [sidebar-usage] What is left on each plan, at the sidebar's foot.
+        view.append(UIAction(title: "Plan Usage", state: SidebarUsageStore.shown ? .on : .off) { _ in
+            SidebarUsageStore.shown.toggle()
+        })
         return UIMenu(children: [UIMenu(options: .displayInline, children: [add]), UIMenu(options: .displayInline, children: view),
                                  UIMenu(options: .displayInline, children: [settings])])
     }

@@ -33,6 +33,11 @@ final class MacWorkspaceBar: UIView {
     private let forwardButton = BarIconButton(symbol: "chevron.right", pointSize: 13, weight: .semibold, label: "Forward", tip: "Forward (⌘])")
     private let listToggleButton = BarIconButton(symbol: "sidebar.leading", pointSize: 14, weight: .regular, label: "Hide List", tip: "Hide List (⇧⌘L)")
 
+    /// [rail-top-bar] Owner 2026-11-28: "we also can probably not have the search and new message next to each other
+    /// like this bc now we have more room on the top". While the sidebar is folded to its rail, Search is here, first
+    /// in the bar (New Chat is the bar's own + at its far end); open, the sidebar's header has both.
+    private let searchButton = BarIconButton(symbol: "magnifyingglass", pointSize: 13.5, weight: .medium, label: "Search", tip: "Search or jump to… (⌘K)")
+
     // Center scrollable workspace tab strip
     private let scroll = UIScrollView()
     /// Holds `scroll` and carries the edge fade: a mask on the scroll view itself would move with its content.
@@ -98,9 +103,13 @@ final class MacWorkspaceBar: UIView {
             strip.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
         ])
 
-        for view in [backButton, forwardButton, listToggleButton, scrollHost, addButton] as [UIView] {
+        for view in [searchButton, backButton, forwardButton, listToggleButton, scrollHost, addButton] as [UIView] {
             addSubview(view)
         }
+        searchButton.accessibilityIdentifier = "mac-sidebar.search"   // the same button, wherever it stands
+        searchButton.addAction(UIAction { _ in
+            UIApplication.shared.sendAction(KeyCommands.openQuickly, to: UIApplication.shared.delegate, from: nil, for: nil)
+        }, for: .touchUpInside)
 
         backButton.addAction(UIAction { [weak self] _ in self?.goBack() }, for: .touchUpInside)
         forwardButton.addAction(UIAction { [weak self] _ in self?.goForward() }, for: .touchUpInside)
@@ -153,6 +162,14 @@ final class MacWorkspaceBar: UIView {
         let btnSize: CGFloat = 28
 
         var x: CGFloat = 4
+        // [rail-top-bar] Search leads the bar while the sidebar is its rail (the open sidebar's header holds it).
+        searchButton.isHidden = !MacSidebar.isCollapsed
+        if searchButton.isHidden {
+            searchButton.frame = .zero
+        } else {
+            searchButton.frame = CGRect(x: x, y: (midY - btnSize / 2).rounded(), width: btnSize, height: btnSize)
+            x += btnSize + 8
+        }
         backButton.frame = CGRect(x: x, y: (midY - btnSize / 2).rounded(), width: btnSize, height: btnSize)
         x += btnSize + 2
         forwardButton.frame = CGRect(x: x, y: (midY - btnSize / 2).rounded(), width: btnSize, height: btnSize)
@@ -662,6 +679,7 @@ final class MacWorkspaceBar: UIView {
     }
 
     func recolor() {
+        searchButton.recolor()
         backButton.recolor()
         forwardButton.recolor()
         listToggleButton.recolor()

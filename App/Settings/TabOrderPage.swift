@@ -15,6 +15,7 @@ struct TabOrderPage: View {
     #if targetEnvironment(macCatalyst)
     @State private var botsInSidebar = MacSidebar.botsInSidebar   // [bots-place]
     @State private var pinnedOnly = MacSidebar.pinnedOnly         // [pinned-only]
+    @State private var planUsage = SidebarUsageStore.shown        // [sidebar-usage]
     #endif
     /// [kanban-tab-one] The Kanban Tab choice; nil while there is none to make (`kanbanChoice`).
     @State private var kanban: KanbanTabOverride?
@@ -54,6 +55,7 @@ struct TabOrderPage: View {
                     Text(barFooter)
                 } }
                 botsInSidebarSection
+                planUsageSection
                 kanbanSection
                 jobsBadgeSection
                 if !more.isEmpty {
@@ -150,6 +152,25 @@ struct TabOrderPage: View {
                 } }
             }
         }
+        #endif
+    }
+
+    /// [sidebar-usage] Owner 2026-11-28: what is left on each plan, at the sidebar's foot. This Mac only.
+    @ViewBuilder
+    private var planUsageSection: some View {
+        #if targetEnvironment(macCatalyst)
+        Section {
+            SwitchRow(title: "Plan Usage in Sidebar", isOn: Binding(get: { planUsage }, set: { on in
+                Haptics.play(.selection)
+                planUsage = on
+                SidebarUsageStore.shown = on
+            }))
+            .accessibilityIdentifier("tab-order.plan-usage")
+            // The sidebar's own menu has the same switch: this one follows it.
+            .onReceive(NotificationCenter.default.publisher(for: SidebarUsageStore.shownChanged)) { _ in planUsage = SidebarUsageStore.shown }
+        } footer: { HQSectionFooter {
+            Text("Shows what is left on your plans (Claude, Codex and others that report it) at the bottom of the sidebar. Click it for every plan and when each one resets.")
+        } }
         #endif
     }
 

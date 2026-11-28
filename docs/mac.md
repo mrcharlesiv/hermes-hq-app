@@ -291,7 +291,7 @@ Activity place / "I'd like to see it all built". Mac only; the iPhone and iPad k
   sessions, excluding tasks and group rooms), a slim seamless tab sub-row under the bar (`SessionStrip`,
   Settings › Chat › Other Chats at the Top, on unless turned off on the Mac; on iPhone and iPad the mobile Live Tabs
   are opt-in and appear only on the bot’s own chat) that shares the top bar's exact surface (Desktop Look's 94 % page
-  frost `DesktopFrostView`, and in the iOS look `barBand` without a mid-bar rule, with `RootSplitController` extending
+  frost `DesktopFrostView`; in the iOS look both are clear and the rows fade out under them, `macBarFoot`), with `RootSplitController` extending
   `MacInspector.bandBottom` to meet the strip's bottom `paneLine` rule on one unbroken horizon). The bot's own chat
   stays pinned on the left (robot glyph + bot name, separated by a subtle vertical tick) while the bot's live session
   tabs (working, unread, pinned, on screen, and the ones shown before this run) scroll beside it separated by subtle

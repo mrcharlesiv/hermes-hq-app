@@ -228,6 +228,9 @@ nonisolated enum ChatMetrics {
     static let macFloatGap: CGFloat = 8
     /// [Mac AAA 2026-11-17] The fade under the stack under the chat's title (the page band's and the rows' own).
     static let macTopFade: CGFloat = 16
+    /// [soft-chat-bar] How far under the chat's bar the rows are whole again in the Mac's iOS look: they thin out over
+    /// this and are gone by the bar's foot (`ChatViewController.macBarFoot`).
+    static let macBarFade: CGFloat = 24
     /// Space between the newest row and the composer's top. [mac-ui-issues] 16 on the Mac: its box rises 3 pt above the
     /// row, so at 8 the newest bubble sat 4 px above the box on the screen and read as stuck to it. [mac-top-glass] 32
     /// since 2026-11-15: the words fade out over this space as they scroll toward the box

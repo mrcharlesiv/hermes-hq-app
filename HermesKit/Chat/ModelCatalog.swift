@@ -163,6 +163,8 @@ nonisolated enum ModelSheetModel {
 
 @MainActor final class ModelCatalogCache {
     static let shared = ModelCatalogCache()
+    /// Posted on main whenever any chat or menu stores a freshly fetched catalog (`userInfo`: account, profile, scope).
+    static let didStore = Notification.Name("hqn.modelCatalog.didStore")
 
     struct Key: Hashable {
         var account: String
@@ -219,7 +221,12 @@ nonisolated enum ModelSheetModel {
         return shown(e, key)
     }
 
-    func store(_ options: ModelOptions, for key: Key) { entries[key] = Entry(options: options, at: .now); applied[key] = nil }
+    func store(_ options: ModelOptions, for key: Key) {
+        entries[key] = Entry(options: options, at: .now)
+        applied[key] = nil
+        NotificationCenter.default.post(name: Self.didStore, object: self,
+                                        userInfo: ["account": key.account, "profile": key.profile, "scope": key.scope])
+    }
 
     private var applied: [Key: (version: Int, model: String, provider: String, options: ModelOptions)] = [:]
 

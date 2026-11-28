@@ -203,6 +203,50 @@ extension QuestionsScreenTests {
         dock.sending = .none
         #expect(minimize.isEnabled)
     }
+
+    @Test func explainFirstSendsContextRequestAndTallDockLeavesTranscriptRoom() async throws {
+        let longChoices = (1...6).map { i in
+            "Option \(i): Run canary checks across cluster-\(i) with health probes, smoke verification, and automatic rollback on error spikes"
+        }
+        deliver("srq-exp", "clarify", [
+            "questions": [[
+                "qid": "q0",
+                "question": "Otto and I see different ways to stage the rollout. Which approach should we run?",
+                "choices": .array(longChoices.map(JSONValue.string)),
+            ]]
+        ])
+        let (chat, window, _) = try onScreen(PromptSheetStore())
+        defer { window.isHidden = true; window.rootViewController = nil }
+        #expect(await waitUntil { chat.promptsUI?.dockView != nil })
+        chat.view.layoutIfNeeded()
+
+        let ui = try #require(chat.promptsUI)
+        let dock = try #require(ui.dockView)
+        #expect(ui.rowsInput?.clarifyDockExpanded == true)
+        #expect(ui.rowsInput?.hidesAskedNote == true)
+
+        // Even with 6 multi-line choices, the dock caps its height when the keyboard is down so chat context stays visible.
+        let maxRatio: CGFloat = DeviceWord.isMac ? 0.62 : 0.56
+        #expect(dock.frame.height <= round(chat.view.bounds.height * maxRatio) + 2)
+
+        // Minimizing reveals the in-place transcript note (`clarifyDockExpanded == false`); resuming hides it again.
+        ui.dockMinimize(dock)
+        #expect(ui.rowsInput?.clarifyDockExpanded == false)
+        #expect(ui.rowsInput?.hidesAskedNote == false)
+        let resume: UIButton = try #require(questionControl("question.resume", in: chat.view))
+        resume.sendActions(for: .primaryActionTriggered)
+        #expect(await waitUntil { dock.window != nil && !dock.draft.minimized })
+        #expect(ui.rowsInput?.clarifyDockExpanded == true)
+
+        // Tapping "Explain first" locks a plain-language request for context in chat rather than cancelling with `{}`.
+        let explain: UIButton = try #require(questionControl("question.explain", in: dock))
+        #expect(!explain.isHidden && explain.isEnabled)
+        explain.sendActions(for: .primaryActionTriggered)
+        #expect(await waitUntil { self.client.calls("clarify.lock").count == 1 })
+        let lockCall = try #require(client.calls("clarify.lock").first)
+        #expect(lockCall.params["question_id"]?.string == "q0")
+        #expect(lockCall.params["answer"]?.string == QuestionDockView.explainFirstAnswer)
+    }
 }
 
 @MainActor @Suite struct QuestionMinimizeLayoutTests {

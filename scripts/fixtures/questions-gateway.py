@@ -318,8 +318,18 @@ OFFER_JUST_ADD = 'Just add it to my list'
 OFFER = [{'qid': 'q0', 'question': f'Want help with “{OFFER_TITLE}”?',
           'choices': ['Rank them, flagged ones first (Recommended)', 'Draft replies to the no’s', 'List who to call back',
                       OFFER_JUST_ADD], 'multi_select': True}]
+CONTEXT_LOOP = [{
+    'qid': 'q0',
+    'question': 'Otto and I see different ways to stage the fast runner. Which setup do you want?',
+    'choices': [
+        f'Option {i}: Route traffic across runner pool {i} with health probes, canary checks, and automatic rollback'
+        + (' (Recommended)' if i == 1 else '')
+        for i in range(1, 7)
+    ],
+    'multi_select': False,
+}]
 
-KEYWORDS = ['two-approvals', 'approve-once', 'approve-rule', 'sudo-blank', 'approve', 'ask', 'one', 'text', 'long', 'sudo',
+KEYWORDS = ['two-approvals', 'approve-once', 'approve-rule', 'sudo-blank', 'context-loop', 'approve', 'ask', 'one', 'text', 'long', 'sudo',
             'secret', 'unlock', 'login', 'code', 'setup', 'terminal', 'tour']
 
 
@@ -343,7 +353,7 @@ def plan(kind):
         second = dict(FORCE_PUSH, command='git push --force origin release')
         return [('terminal', {'command': FORCE_PUSH['command']}, 'approval', FORCE_PUSH, approvals),
                 ('terminal', {'command': second['command']}, 'approval', second, approvals)]
-    questions = {'ask': ASK, 'one': ONE, 'text': TEXT, 'long': LONG, 'offer': OFFER}.get(kind)
+    questions = {'ask': ASK, 'one': ONE, 'text': TEXT, 'long': LONG, 'offer': OFFER, 'context-loop': CONTEXT_LOOP}.get(kind)
     if questions is not None:
         return [('clarify', {'questions': [{k: v for k, v in q.items() if k != 'qid'} for q in questions]}, 'clarify',
                  {'questions': questions}, CONFIG['clarify_timeout'])]
@@ -416,7 +426,11 @@ def run_ask(profile, kind, cancel):
     if cancel.wait(0.15):
         return
     emit(profile, 'message.start')
-    lead = 'Got it, that’s a lot to read cold. ' if kind == 'offer' else ''
+    lead = (
+        'Got it, that’s a lot to read cold. ' if kind == 'offer'
+        else 'Option 1 keeps the shared runner with zero setup; Option 2 spins up a dedicated fast worker. ' if kind == 'context-loop'
+        else ''
+    )
     for chunk in re.findall(r'\S+\s*', lead):
         emit(profile, 'message.delta', {'text': chunk})
     if lead and cancel.wait(1.5):   # the card comes after the line, as Hermes writes it (and after the sender's checks)
@@ -463,8 +477,13 @@ def run_ask(profile, kind, cancel):
                 words.append(said)
             elif method == 'clarify':
                 reply = req.result if req.answered else {'answers': dict(req.locked), 'outcome': 'cancelled'}
-                result = json.dumps(clarify_result(params['questions'], reply), ensure_ascii=False)
-                words.append('Thanks, I have your answers.' if (reply or {}).get('outcome') == 'submitted' else 'Questions skipped.')
+                parsed_res = clarify_result(params['questions'], reply)
+                result = json.dumps(parsed_res, ensure_ascii=False)
+                first_ans = ((parsed_res.get('responses') or [{}])[0].get('user_response') or '')
+                if kind == 'context-loop' and 'explain' in str(first_ans).lower():
+                    words.append('Here is the full breakdown: Option 1 reuses the current pool with zero downtime; Option 2 adds a dedicated fast worker. Tell me in chat when you want to pick one.')
+                else:
+                    words.append('Thanks, I have your answers.' if (reply or {}).get('outcome') == 'submitted' else 'Questions skipped.')
             elif method in ('sudo', 'secret', 'vault.unlock_prompt', 'vault.save_login', 'vault.code'):
                 value = (req.result or {}).get('value', '') if req.answered else ''
                 result = {'stdout': f'Received {len(value) if isinstance(value, str) else 0} characters.', 'exit_code': 0}

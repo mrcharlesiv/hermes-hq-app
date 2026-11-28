@@ -25,11 +25,17 @@ import UIKit
     func dockSend(_ dock: QuestionDockView)
     func dockSkip(_ dock: QuestionDockView)
     func dockMinimize(_ dock: QuestionDockView)
+    func dockExplain(_ dock: QuestionDockView)
     /// Page or picks changed (saved to the centre by request id).
     func dockDraftChanged(_ dock: QuestionDockView)
 }
 
+extension QuestionDockDelegate {
+    func dockExplain(_ dock: QuestionDockView) {}
+}
+
 final class QuestionDockView: UIView, KeepsKeyboardOnTap {
+    static let explainFirstAnswer = "Please explain the context and options in chat first before asking me to choose."
     let prompt: ClarifyPrompt
     private(set) var draft: ClarifyDraft
     weak var delegate: QuestionDockDelegate?
@@ -70,6 +76,7 @@ final class QuestionDockView: UIView, KeepsKeyboardOnTap {
     /// The shown page's bottom is the pages' bottom: only that page sets the dock's height.
     private var pageFits: [NSLayoutConstraint] = []
     private let backButton = UIButton(type: .system)
+    private let explainButton = UIButton(type: .system)
     private let primaryButton = UIButton(type: .system)
     private var bottomPadding: NSLayoutConstraint!
     private var keyboardDown: Bool?
@@ -229,12 +236,19 @@ final class QuestionDockView: UIView, KeepsKeyboardOnTap {
 
         backButton.accessibilityIdentifier = "question.back"
         backButton.addAction(UIAction { [weak self] _ in self?.go(by: -1) }, for: .primaryActionTriggered)
+        explainButton.accessibilityIdentifier = "question.explain"
+        explainButton.accessibilityLabel = "Explain first"
+        explainButton.accessibilityHint = "Asks for the context in chat before choosing."
+        explainButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        explainButton.addAction(UIAction { [weak self] _ in self.map { $0.delegate?.dockExplain($0) } }, for: .primaryActionTriggered)
         primaryButton.accessibilityIdentifier = "question.primary"
         primaryButton.addAction(UIAction { [weak self] _ in self?.primaryTapped() }, for: .primaryActionTriggered)
         foot.translatesAutoresizingMaskIntoConstraints = false
         backButton.translatesAutoresizingMaskIntoConstraints = false
+        explainButton.translatesAutoresizingMaskIntoConstraints = false
         primaryButton.translatesAutoresizingMaskIntoConstraints = false
         foot.addSubview(backButton)
+        foot.addSubview(explainButton)
         foot.addSubview(primaryButton)
         card.contentView.addSubview(foot)
 
@@ -286,6 +300,10 @@ final class QuestionDockView: UIView, KeepsKeyboardOnTap {
             backButton.leadingAnchor.constraint(equalTo: foot.leadingAnchor),
             backButton.centerYAnchor.constraint(equalTo: foot.centerYAnchor),
             backButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+            explainButton.leadingAnchor.constraint(equalTo: foot.leadingAnchor),
+            explainButton.centerYAnchor.constraint(equalTo: foot.centerYAnchor),
+            explainButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+            explainButton.trailingAnchor.constraint(lessThanOrEqualTo: primaryButton.leadingAnchor, constant: -8),
             primaryButton.trailingAnchor.constraint(equalTo: foot.trailingAnchor),
             primaryButton.topAnchor.constraint(equalTo: foot.topAnchor),
             primaryButton.bottomAnchor.constraint(equalTo: foot.bottomAnchor),
@@ -330,6 +348,7 @@ final class QuestionDockView: UIView, KeepsKeyboardOnTap {
         textCard.isHidden = desktop
         textCard.backgroundColor = DockFill.textCard(traitCollection, solid: Self.wantsSolidTextCard)
         configureBack(desktop: desktop)
+        configureExplain(desktop: desktop)
         updateChrome()
         updateHairline()
     }
@@ -356,6 +375,46 @@ final class QuestionDockView: UIView, KeepsKeyboardOnTap {
             var a = a; a.font = HQFont.preferred(.body); return a
         }
         backButton.configuration = back
+    }
+
+    /// Explain first: sits on the leading side of the foot on page 1 when Back is hidden, giving a one-tap way to ask
+    /// the bot for the missing context in chat instead of getting stuck in Skip.
+    private func configureExplain(desktop: Bool) {
+        var explain = desktop ? UIButton.Configuration.plain() : UIButton.Configuration.filled()
+        explain.title = "Explain first"
+        explain.baseForegroundColor = ChatPalette.tintText
+        if desktop {
+            explain.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 12)
+        } else {
+            explain.baseBackgroundColor = DockFill.answers
+            explain.cornerStyle = .capsule
+            explain.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16)
+        }
+        explain.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { a in
+            var a = a
+            a.font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(for: HQFont.system(ofSize: 15, weight: .medium), maximumPointSize: 22)
+            return a
+        }
+        explainButton.configuration = explain
+        PointerEffects.surface(explainButton)
+    }
+
+    /// Stages a plain-language request for context on the first question so `dockSend` locks and records it cleanly.
+    func stageExplainFirst() {
+        guard let first = prompt.questions.first else { return }
+        autoAdvance?.cancel()
+        autoAdvance = nil
+        let stage = ClarifyStage(choices: [], draft: Self.explainFirstAnswer, other: true)
+        draft.stages = [first.qid: stage]
+        draft.page = 0
+        if pages.indices.contains(0) { pages[0].showReplayed(stage) }
+        updateChrome()
+    }
+
+    var showsExplain: Bool {
+        guard !later, draft.page == 0, !footHidden, let first = prompt.questions.first else { return false }
+        guard !(first.choices ?? []).isEmpty, !VerificationCodePrompt.asksForCode(first.question) else { return false }
+        return prompt.questions.count == 1 || answeredCount == 0
     }
 
     /// Whether the text section sits on its card now (tests).
@@ -554,6 +613,8 @@ final class QuestionDockView: UIView, KeepsKeyboardOnTap {
         updateFoot()
         backButton.isHidden = draft.page == 0
         backButton.isEnabled = sending == .none
+        explainButton.isHidden = !showsExplain
+        explainButton.isEnabled = sending == .none && !isDictating
         skipButton.isEnabled = sending == .none
         minimizeButton.isEnabled = sending == .none
         pages.forEach { $0.isLocked = sending != .none }
@@ -909,7 +970,7 @@ final class QuestionPageView: UIView, UITextViewDelegate, UITextFieldDelegate {
     /// "Something else…" becomes an inline field, focused in the same frame (the keyboard rises once).
     private func showOtherField(focus: Bool) {
         guard let other = otherRow, field == nil else { return }
-        let f = DockTextField(placeholder: asksCode ? "Verification code" : "Something else",
+        let f = DockTextField(placeholder: asksCode ? "Verification code" : "Type an answer or ask a question…",
                               accessibility: "Something else", inline: true, multi: question.multiSelect,
                               oneTimeCode: asksCode)
         f.text = stage.draft

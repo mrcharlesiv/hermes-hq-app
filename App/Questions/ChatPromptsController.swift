@@ -115,7 +115,11 @@ import UIKit
                 leaving: first.leaving, clockKey: first.clockKey, firstSeen: first.firstSeen, asker: asker, botName: chat?.botName)
         }
         if let clarify = prompts.clarify {
-            out.clarifyNote = .asked(count: clarify.questions.count, first: clarify.questions.first?.question ?? "", asker: asker)
+            out.clarifyNote = .asked(count: clarify.questions.count,
+                                     first: clarify.questions.first?.question ?? "",
+                                     asker: asker,
+                                     questions: clarify.questions.map(\.question))
+            out.clarifyDockExpanded = dock?.prompt.id == clarify.id && dock?.draft.minimized == false
         } else if prompts.clarifyUndelivered {
             out.clarifyNote = .undelivered
         } else if let sent = prompts.sentClarify {
@@ -330,6 +334,7 @@ import UIKit
         if dock.draft.minimized {
             dock.setMinimized(false)
             showQuestionDock(dock, animated: true)
+            chat?.promptsDidChange()
         }
         dictation.retry { [weak dock] in dock?.fieldForDictation() }
     }
@@ -368,6 +373,7 @@ import UIKit
                 dock.setMinimized(false)
                 Haptics.play(.selection)
                 self.showQuestionDock(dock, animated: true)
+                self.chat?.promptsDidChange()
                 UIAccessibility.post(notification: .layoutChanged, argument: dock)
             }
         }
@@ -383,7 +389,15 @@ import UIKit
         dock.setMinimized(true)
         Haptics.play(.selection)
         showQuestionDock(dock, animated: true)
+        chat?.promptsDidChange()
         resumeDock.announce()
+    }
+
+    func dockExplain(_ dock: QuestionDockView) {
+        guard self.dock === dock, dock.sending == .none, !dock.later else { return }
+        Haptics.play(.selection)
+        dock.stageExplainFirst()
+        dockSend(dock)
     }
 
     func dockSend(_ dock: QuestionDockView) {

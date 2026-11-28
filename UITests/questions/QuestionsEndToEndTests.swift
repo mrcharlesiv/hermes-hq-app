@@ -492,6 +492,53 @@ final class QuestionsEndToEndTests: XCTestCase {
         attach("offer-skipped" + name)
     }
 
+    // MARK: 24. Context stays visible above a tall question card, and Explain first breaks the loop
+
+    @MainActor func test24_ContextStaysVisibleAboveTallDockAndExplainFirstRepliesInChat() throws {
+        launch(["-hq.voice.tip.talk", "YES", "-hq.voice.tip.holdToRecord", "YES", "-hq.voice.tip.nowHold", "YES"])
+        openChat()
+        send("please run context-loop")
+        let dock = app.otherElements["question.dock"]
+        XCTAssertTrue(dock.waitForExistence(timeout: 15), "the tall question dock shows")
+        let dockFrame = settledFrame(dock)
+
+        // No duplicate "A question for you" card sits above the expanded dock stealing vertical space.
+        XCTAssertFalse(noteCard().exists, "no duplicate asked-note card while the dock is expanded")
+
+        // Even with 6 multi-line choices, the dock caps its height and keeps the preceding context bubble visible above it.
+        let windowFrame = app.windows.firstMatch.frame
+        XCTAssertLessThanOrEqual(dockFrame.height, round(windowFrame.height * 0.56) + 4,
+                                 "tall choice lists scroll inside the dock so chat context stays visible")
+        let contextBubble = app.tables["chat.table"].cells.containing(
+            NSPredicate(format: "label CONTAINS %@", "Option 1 keeps the shared runner")
+        ).firstMatch
+        XCTAssertTrue(contextBubble.waitForExistence(timeout: 5), "the bot's context bubble is in the transcript")
+        XCTAssertLessThanOrEqual(contextBubble.frame.maxY, dockFrame.minY + 4,
+                                 "the context bubble sits visibly above the dock (\(contextBubble.frame) vs \(dockFrame))")
+        XCTAssertGreaterThan(contextBubble.frame.maxY, 120,
+                             "the context bubble is not pushed off the top of the screen")
+        attach("context-loop-visible-above-dock")
+
+        // One-tap "Explain first" answers the card with an explanation request instead of cancelling with `{}`,
+        // and the bot replies in plain chat text with the composer uncovered.
+        let explain = app.buttons["question.explain"]
+        XCTAssertTrue(explain.exists && explain.isHittable, "Explain first is directly reachable on the dock")
+        tapWhenSettled(explain)
+        XCTAssertTrue(waitUntil(timeout: 10) { !dock.exists }, "the dock closes after Explain first")
+        XCTAssertTrue(app.textViews["composer.text"].waitForExistence(timeout: 5), "the composer returns uncovered")
+        XCTAssertTrue(waitUntil(timeout: 15) {
+            self.app.tables["chat.table"].cells.containing(
+                NSPredicate(format: "label CONTAINS %@", "Here is the full breakdown")
+            ).firstMatch.exists
+        }, "the bot replies in plain chat text without opening another card")
+        XCTAssertFalse(dock.exists, "no follow-up question card covers the explanation")
+        let rpc = try account.control("/__fixture/requests")["rpc"] as? [[String: Any]] ?? []
+        let lock = try XCTUnwrap(rpc.last { $0["method"] as? String == "clarify.lock" })
+        let answer = (lock["params"] as? [String: Any])?["answer"] as? String ?? ""
+        XCTAssertTrue(answer.lowercased().contains("explain the context"), "clarify.lock sent the Explain first request: \(answer)")
+        attach("context-loop-explained-in-chat")
+    }
+
     // MARK: Helpers
 
     @MainActor private func launch(_ arguments: [String] = []) {

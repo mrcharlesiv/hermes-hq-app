@@ -348,12 +348,33 @@ nonisolated enum ClarifyLate {
     static func hasLaterHumanTurn(after messageId: String, in messages: [ChatMessage]) -> Bool {
         guard let at = messages.lastIndex(where: { $0.id == messageId }), at + 1 < messages.count else { return false }
         for m in messages[(at + 1)...] {
-            if DraftCards.isNormalHumanTurn(m) { return true }
+            if isUserTurn(m) { return true }
             if m.role == .assistant, m.parts.contains(where: { if case .tool(let c) = $0, c.name == "clarify" { return true } else { return false } }) {
                 return true
             }
         }
         return false
+    }
+
+    /// [calm-chat] True once the user sends a new normal message after `messageId` (and after any late answer `lateIndex`
+    /// filling this card). Answered clarify cards stay open throughout the turn they belong to — across follow-up prose,
+    /// chained clarify calls, and bot-to-bot exchanges — and fold only once the user moves on with a new turn.
+    static func hasMovedPastTurn(after messageId: String, answeredAt lateIndex: Int? = nil, in messages: [ChatMessage]) -> Bool {
+        if lateIndex == .max { return false }
+        guard let at = messages.lastIndex(where: { $0.id == messageId }) else { return false }
+        let anchor = max(at, lateIndex ?? at)
+        guard anchor + 1 < messages.count else { return false }
+        return messages[(anchor + 1)...].contains(where: isUserTurn)
+    }
+
+    private static func isUserTurn(_ message: ChatMessage) -> Bool {
+        guard DraftCards.isNormalHumanTurn(message) else { return false }
+        let text = message.parts.compactMap { if case .text(let t) = $0 { return t } else { return nil } }
+            .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.hasPrefix("Message from 🤖 ") || text.contains("[INTERNAL NOTIFICATION") || text.hasPrefix("[Cronjob \"") {
+            return false
+        }
+        return true
     }
 
     /// [calm-chat] Lookback for `ChatRowModel.rebuildNewest`: when a later human turn, clarify call, or late answer
@@ -362,16 +383,13 @@ nonisolated enum ClarifyLate {
         guard from > floor, from < messages.count else { return from }
         var triggers = false
         for m in messages[from...] {
-            if DraftCards.isNormalHumanTurn(m) { triggers = true; break }
+            if isUserTurn(m) { triggers = true; break }
             if m.role == .user, m.parts.contains(where: { if case .text(let t) = $0 { return answer(in: t) != nil } else { return false } }) {
                 triggers = true; break
             }
             if m.role == .assistant, m.parts.contains(where: { part in
-                switch part {
-                case .text(let t): return !ReasoningTags.isBlank(t)
-                case .tool(let c): return c.name == "clarify"
-                case .reasoning: return false
-                }
+                if case .tool(let c) = part { return c.name == "clarify" }
+                return false
             }) {
                 triggers = true; break
             }

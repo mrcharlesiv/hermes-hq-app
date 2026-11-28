@@ -10,12 +10,20 @@ import UIKit
 nonisolated struct PromptRowsInput: Sendable, Equatable {
     var approval: ApprovalCardRow?
     var clarifyNote: ClarifyNote?
+    /// True while `QuestionDockView` is expanded on screen for the open clarify prompt: suppresses the duplicate
+    /// `"A question for you"` transcript card above the dock while still marking the turn as waiting on the user.
+    var clarifyDockExpanded: Bool = false
+
+    var hidesAskedNote: Bool {
+        if clarifyDockExpanded, case .asked? = clarifyNote { return true }
+        return false
+    }
 }
 
 nonisolated enum ClarifyNote: Sendable, Equatable, Hashable {
-    /// "A question for you" / "N questions for you" + the first question.
+    /// "A question for you" / "N questions for you" + the questions (shown in place when the dock is minimized).
     /// [groups] `asker`: in a room, the member who asks ("Ivy asks").
-    case asked(count: Int, first: String, asker: String? = nil)
+    case asked(count: Int, first: String, asker: String? = nil, questions: [String] = [])
     case undelivered
     case sent([SentClarifyRow])
 }
@@ -88,13 +96,15 @@ nonisolated enum PromptRows {
     /// The message id of rows drawn after the newest message (ChatRowModel rebuilds them with the newest end).
     static let tailMessageId = "prompts"
     static let commandClampLines = 8
+    static let foldedQuestionClampLines = 6
+    static let foldedAnswerClampLines = 2
 
     /// The rows after the newest message: the approval card, and the question note when no running clarify part
     /// holds it (a reopened chat).
     static func tail(_ input: ChatRowBuilder.Input) -> [ChatRow] {
         guard let prompts = input.prompts else { return [] }
         var rows: [ChatRow] = []
-        if let note = prompts.clarifyNote, runningClarifyId(input.messages) == nil {
+        if let note = prompts.clarifyNote, !prompts.hidesAskedNote, runningClarifyId(input.messages) == nil {
             rows.append(row(id: "\(tailMessageId)|note", messageId: tailMessageId, kind: .note(note), scope: input.scope))
         }
         if let approval = prompts.approval {
@@ -103,13 +113,23 @@ nonisolated enum PromptRows {
         return rows
     }
 
+    /// True when the running clarify tool part is already represented on screen by the expanded `QuestionDockView`
+    /// (so neither a duplicate `"A question for you"` card nor a generic tool step row should steal transcript space).
+    static func hidesRunningClarify(_ call: ToolCall, input: ChatRowBuilder.Input) -> Bool {
+        guard call.name == "clarify", call.state == .running,
+              input.prompts?.hidesAskedNote == true,
+              runningClarifyId(input.messages) == call.id else { return false }
+        return true
+    }
+
     /// A clarify tool part's row: the note while it runs (and a note exists), the settled card once its result has
     /// `responses`, else nil (the generic tool row).
     static func clarifyRow(_ call: ToolCall, message: ChatMessage, input: ChatRowBuilder.Input) -> ChatRow? {
         guard call.name == "clarify" else { return nil }
         let id = "\(message.id)|q\(call.id)"
         if call.state == .running {
-            guard let note = input.prompts?.clarifyNote, runningClarifyId(input.messages) == call.id else { return nil }
+            guard let note = input.prompts?.clarifyNote, !hidesRunningClarify(call, input: input),
+                  runningClarifyId(input.messages) == call.id else { return nil }
             return row(id: id, messageId: message.id, kind: .note(note), scope: input.scope)
         }
         guard let rows = ClarifySettled.rows(fromSummary: call.summary), !rows.isEmpty else { return nil }
@@ -127,14 +147,8 @@ nonisolated enum PromptRows {
         let blank = shown.contains { $0.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         let rowId = "\(message.id)|q\(call.id)"
         let staleUnanswered = blank && ClarifyLate.hasLaterHumanTurn(after: message.id, in: input.messages)
-        let hasProseAfter = !message.isStreaming && {
-            guard let callIndex = message.parts.firstIndex(where: { if case .tool(let c) = $0 { return c.id == call.id } else { return false } }) else { return false }
-            return message.parts[(callIndex + 1)...].contains { part in
-                if case .text(let t) = part { return !ReasoningTags.isBlank(t) }
-                return false
-            }
-        }()
-        let folded = staleUnanswered || (!blank && (hasProseAfter || ActivityRows.hasLaterConversation(after: message, in: input.messages)))
+        let movedPastTurn = !blank && ClarifyLate.hasMovedPastTurn(after: message.id, answeredAt: found?.index, in: input.messages)
+        let folded = staleUnanswered || movedPastTurn
         return SettledClarifyCard(rows: shown, key: key, messageId: message.id, multi: multiSelect(call.argsText),
                                   answerable: blank && input.room == nil && !staleUnanswered, answeredLater: later,
                                   rowId: rowId, folded: folded, expanded: input.expanded.contains(rowId),
@@ -551,11 +565,13 @@ nonisolated enum PromptLayout {
 
     static func note(_ note: ClarifyNote, gap: CGFloat, width: CGFloat, category: UIContentSizeCategory) -> RowLayout {
         switch note {
-        case .asked(let count, let first, let asker):
+        case .asked(let count, let first, let asker, let questions):
             var title = count > 1 ? "\(count) questions for you" : "A question for you"
             if let asker, !asker.isEmpty { title = count > 1 ? "\(asker) has \(count) questions for you" : "\(asker) asks" }   // [groups]
-            return noteCard(title: title, glyph: "questionmark.circle.fill", detail: first, detailColor: ChatPalette.label,
-                            gap: gap, width: width, category: category)
+            let full = questions.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+            let detail = full.isEmpty ? first : full.joined(separator: "\n\n")
+            return noteCard(title: title, glyph: "questionmark.circle.fill", detail: detail, detailColor: ChatPalette.label,
+                            gap: gap, width: width, category: category, detailLines: 8)
         case .undelivered:
             return noteCard(title: "A question for you", glyph: "exclamationmark.circle.fill",
                             detail: "This question didn’t reach the app, so it can’t be answered here. Press Stop to end the turn, then reply in chat.",
@@ -567,88 +583,139 @@ nonisolated enum PromptLayout {
     }
 
     static func settled(_ card: SettledClarifyCard, gap: CGFloat, width: CGFloat, category: UIContentSizeCategory) -> RowLayout {
+        let title = card.answeredLater ? (card.rows.count == 1 ? "Answered later" : "Your answers, some later") : nil
         if card.folded {
+            if card.expanded {
+                return qa(card.rows.map { ($0.question, $0.answer.trimmingCharacters(in: .whitespacesAndNewlines), $0.unanswered) },
+                          gap: gap, width: width, category: category, answerNow: card.answerable,
+                          title: title, collapseRowId: card.rowId)
+            }
             return settledFolded(card, gap: gap, width: width, category: category)
         }
         return qa(card.rows.map { ($0.question, $0.answer.trimmingCharacters(in: .whitespacesAndNewlines), $0.unanswered) },
-                  gap: gap, width: width, category: category, answerNow: card.answerable,
-                  title: card.answeredLater ? (card.rows.count == 1 ? "Answered later" : "Your answers, some later") : nil)
+                  gap: gap, width: width, category: category, answerNow: card.answerable, title: title)
     }
 
-    /// [calm-chat] Quiet one-line disclosure for settled clarify Q&A cards once answered or left behind;
-    /// tapping expands the full Q&A card directly beneath the disclosure line.
+    /// [calm-chat] Quiet compact disclosure for settled clarify Q&A cards once a later human turn moves past them.
+    /// Questions always lead so they are never cut off behind the answer: a short Q&A that fits on one line stays
+    /// one line ("Which branch? · main"); longer questions wrap naturally with the answer beneath them.
     private static func settledFolded(_ card: SettledClarifyCard, gap: CGFloat, width: CGFloat, category: UIContentSizeCategory) -> RowLayout {
         let side = cardSide
         let cardW = cardWidth(for: width)
         let font = PromptFonts.font(.footnote, category, cap: 22)
         let strongFont = PromptFonts.font(.footnote, category, weight: .semibold, cap: 22)
+        let lineH = ceil(font.lineHeight)
         let iconSide = ceil(min(22, max(15, font.pointSize * 1.1)))
         let chevW = ceil(min(18, max(11, font.pointSize * 0.85)))
-        let rowH = max(32, ceil(font.lineHeight) + 10)
         let top = max(0, gap)
 
         let answeredRows = card.rows.filter { !$0.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         let allSkipped = answeredRows.isEmpty
-        let lead: String
-        let detail: String
-        if allSkipped {
-            lead = card.rows.count == 1 ? "Question skipped" : "\(card.rows.count) questions skipped"
-            detail = card.rows.first.map { " · \(ClarifyLate.flat($0.question))" } ?? ""
-        } else if card.rows.count == 1, let only = answeredRows.first {
-            lead = only.answer.trimmingCharacters(in: .whitespacesAndNewlines)
-            detail = " · \(ClarifyLate.flat(only.question))"
-        } else {
-            lead = "Answered \(answeredRows.count) questions"
-            detail = answeredRows.first.map { " · \($0.answer.trimmingCharacters(in: .whitespacesAndNewlines))" } ?? ""
-        }
-
-        let attr = NSMutableAttributedString(attributedString: text(lead, strongFont, allSkipped ? ChatPalette.label2 : ChatPalette.label))
-        if !detail.isEmpty { attr.append(text(detail, font, ChatPalette.label2)) }
-
         let textX = side + iconSide + 7
         let maxTextW = max(60, cardW - iconSide - 7 - 6 - chevW)
-        let (lineLayout, _) = clamped(attr, width: maxTextW, maxLines: 1)
-        let lineY = top + ((rowH - lineLayout.size.height) / 2).rounded()
-        let textFrame = CGRect(x: textX, y: lineY, width: lineLayout.size.width, height: lineLayout.size.height)
+
+        struct Block {
+            var question: TextKitLayout
+            var answer: TextKitLayout?
+        }
+        var blocks: [Block] = []
+        blocks.reserveCapacity(card.rows.count)
+        for r in card.rows {
+            let qFlat = ClarifyLate.flat(r.question)
+            let ans = r.answer.trimmingCharacters(in: .whitespacesAndNewlines)
+            let isBlank = ans.isEmpty
+            let ansWords = isBlank ? (r.unanswered ? "No answer" : "Skipped") : ans
+            let ansColor = isBlank ? ChatPalette.label2 : ChatPalette.label
+
+            if !category.isAccessibilityCategory {
+                let inline = NSMutableAttributedString(attributedString: text(qFlat, font, ChatPalette.label2))
+                inline.append(text(" · ", font, ChatPalette.label3))
+                inline.append(text(ansWords, strongFont, ansColor))
+                let inlineLayout = TextKitLayout(inline, width: maxTextW)
+                if lineCount(inlineLayout) <= 1 {
+                    blocks.append(Block(question: inlineLayout, answer: nil))
+                    continue
+                }
+            }
+            let (qLayout, _) = clamped(text(qFlat, font, ChatPalette.label2), width: maxTextW,
+                                       maxLines: PromptRows.foldedQuestionClampLines)
+            let (aLayout, _) = clamped(text(ansWords, strongFont, ansColor), width: maxTextW,
+                                       maxLines: PromptRows.foldedAnswerClampLines)
+            blocks.append(Block(question: qLayout, answer: aLayout))
+        }
+
+        let singleInline = blocks.count == 1 && blocks[0].answer == nil && lineCount(blocks[0].question) <= 1
+        var texts: [PromptPlacedText] = []
+        let rowH: CGFloat
+        let leadY: CGFloat
+        let chevY: CGFloat
+        var widestText: CGFloat = 0
+
+        if singleInline, let only = blocks.first {
+            let singleH = max(32, ceil(only.question.size.height) + 10)
+            let lineY = top + ((singleH - only.question.size.height) / 2).rounded()
+            texts.append(PromptPlacedText(text: only.question,
+                                          frame: CGRect(x: textX, y: lineY, width: only.question.size.width, height: only.question.size.height)))
+            widestText = only.question.size.width
+            rowH = singleH
+            leadY = top + ((singleH - iconSide) / 2).rounded()
+            chevY = top + ((singleH - chevW) / 2).rounded()
+        } else {
+            let padV: CGFloat = 6
+            let firstLineH = max(lineH, iconSide)
+            var y = top + padV + max(0, (iconSide - lineH) / 2).rounded()
+            for (idx, block) in blocks.enumerated() {
+                if idx > 0 { y += 6 }
+                texts.append(PromptPlacedText(text: block.question,
+                                              frame: CGRect(x: textX, y: y, width: block.question.size.width, height: block.question.size.height)))
+                widestText = max(widestText, block.question.size.width)
+                y += block.question.size.height
+                if let ans = block.answer {
+                    y += 2
+                    texts.append(PromptPlacedText(text: ans,
+                                                  frame: CGRect(x: textX, y: y, width: ans.size.width, height: ans.size.height)))
+                    widestText = max(widestText, ans.size.width)
+                    y += ans.size.height
+                }
+            }
+            leadY = top + padV + max(0, (lineH - iconSide) / 2).rounded()
+            chevY = top + padV + ((firstLineH - chevW) / 2).rounded()
+            let bottom = max(leadY + iconSide, y) + padV
+            rowH = max(32, ceil(bottom - top))
+        }
+
         let leadSymbol = PromptSymbol(
-            frame: CGRect(x: side, y: top + ((rowH - iconSide) / 2).rounded(), width: iconSide, height: iconSide),
+            frame: CGRect(x: side, y: leadY, width: iconSide, height: iconSide),
             name: allSkipped ? "minus.circle" : "checkmark.circle.fill",
             style: allSkipped ? .blank : .success
         )
+        let chevX = min(side + cardW - chevW, textX + widestText + 6)
         let chevSymbol = PromptSymbol(
-            frame: CGRect(x: textFrame.maxX + 6, y: top + ((rowH - chevW) / 2).rounded(), width: chevW, height: chevW),
-            name: card.expanded ? "chevron.up" : "chevron.down",
+            frame: CGRect(x: chevX, y: chevY, width: chevW, height: chevW),
+            name: "chevron.down",
             style: .blank
         )
         let rowWidth = min(cardW, chevSymbol.frame.maxX - side)
         let tapH = max(44, rowH)
         let toggleFrame = CGRect(x: side - 6, y: top + (rowH - tapH) / 2, width: rowWidth + 12, height: tapH)
-        let pillH = min(rowH, ceil(max(font.lineHeight, iconSide)) + 8)
+        let pillH = singleInline ? min(rowH, ceil(max(lineH, iconSide)) + 8) : max(24, rowH - 2)
         let backingFrame = CGRect(x: side - 8, y: top + ((rowH - pillH) / 2).rounded(), width: rowWidth + 16, height: pillH)
+
+        let spokenLead: String = {
+            if allSkipped { return card.rows.count == 1 ? "Question skipped" : "\(card.rows.count) questions skipped" }
+            return card.rows.count == 1 ? "Answered question" : "Answered \(answeredRows.count) questions"
+        }()
         let spoken = card.rows.map { r -> String in
             let ans = r.answer.trimmingCharacters(in: .whitespacesAndNewlines)
             return "\(r.question): \(ans.isEmpty ? (r.unanswered ? "No answer" : "Skipped") : ans)"
         }.joined(separator: ". ")
-        let accessibility = "\(lead). \(spoken)"
-        let toggle = PromptFoldToggle(rowId: card.rowId, frame: toggleFrame, label: accessibility, expanded: card.expanded,
+        let accessibility = "\(spokenLead). \(spoken)"
+        let toggle = PromptFoldToggle(rowId: card.rowId, frame: toggleFrame, label: accessibility, expanded: false,
                                       backingFrame: backingFrame)
-
-        guard card.expanded else {
-            var layout = PromptRowLayout(cardFrame: nil, texts: [PromptPlacedText(text: lineLayout, frame: textFrame)],
-                                         approval: nil, symbols: [leadSymbol, chevSymbol], rules: [], accessibility: accessibility)
-            layout.foldToggle = toggle
-            return RowLayout(height: ceil(top + rowH + 2), content: .prompt(layout))
-        }
-
-        // Expanded: draw the full Q&A card directly below the quiet disclosure toggle.
-        let inner = qa(card.rows.map { ($0.question, $0.answer.trimmingCharacters(in: .whitespacesAndNewlines), $0.unanswered) },
-                       gap: top + rowH, width: width, category: category, answerNow: card.answerable,
-                       title: card.answeredLater ? (card.rows.count == 1 ? "Answered later" : "Your answers, some later") : nil)
-        guard case .prompt(var full) = inner.content else { return inner }
-        full.texts.insert(PromptPlacedText(text: lineLayout, frame: textFrame), at: 0)
-        full.symbols.insert(contentsOf: [leadSymbol, chevSymbol], at: 0)
-        full.foldToggle = toggle
-        return RowLayout(height: inner.height, content: .prompt(full))
+        var layout = PromptRowLayout(cardFrame: nil, texts: texts, approval: nil,
+                                     symbols: [leadSymbol, chevSymbol], rules: [], accessibility: accessibility)
+        layout.foldToggle = toggle
+        return RowLayout(height: ceil(top + rowH + 2), content: .prompt(layout))
     }
 
     static let answerNowTitle = "Answer Now"
@@ -698,15 +765,24 @@ nonisolated enum PromptLayout {
     /// answer reads "Skipped" or "No answer" in italic label-3 beside a hollow mark. Hairlines between the questions.
     /// `answerNow`: a trailing Answer Now button under the questions (a question left without an answer).
     private static func qa(_ rows: [(question: String, answer: String, unanswered: Bool)], gap: CGFloat, width: CGFloat,
-                           category: UIContentSizeCategory, answerNow: Bool = false, title shownTitle: String? = nil) -> RowLayout {
+                           category: UIContentSizeCategory, answerNow: Bool = false, title shownTitle: String? = nil,
+                           collapseRowId: String? = nil) -> RowLayout {
         let side = cardSide
         let cardW = cardWidth(for: width), innerW = cardW - 2 * notePadH
-        let top = gap + 6, x = side + notePadH
+        let top = max(0, gap) + 6, x = side + notePadH
         var (title, glyph) = answersTitle(rows)
         if let shownTitle { title = shownTitle }
-        let head = noteHeader(title, glyph: glyph, dim: glyph.hasPrefix("minus"), x: x, y: top + notePadV, width: innerW, category: category)
+        let headFont = PromptFonts.font(.subheadline, category, weight: .semibold, cap: 26)
+        let chevW: CGFloat = collapseRowId != nil ? ceil(min(18, max(12, headFont.pointSize * 0.8))) : 0
+        let headW = chevW > 0 ? max(60, innerW - chevW - 8) : innerW
+        let head = noteHeader(title, glyph: glyph, dim: glyph.hasPrefix("minus"), x: x, y: top + notePadV, width: headW, category: category)
         var texts = [head.text]
         var symbols = [head.symbol]
+        if chevW > 0 {
+            let headH = head.maxY - (top + notePadV)
+            symbols.append(PromptSymbol(frame: CGRect(x: x + innerW - chevW, y: top + notePadV + ((headH - chevW) / 2).rounded(), width: chevW, height: chevW),
+                                        name: "chevron.up", style: .blank))
+        }
         var rules: [CGRect] = []
         var spoken: [String] = []
         let answerFont = PromptFonts.font(.body, category, weight: .semibold)
@@ -758,9 +834,17 @@ nonisolated enum PromptLayout {
             }
         }
         let card = CGRect(x: side, y: top, width: cardW, height: ceil(y + notePadV - top))
-        return RowLayout(height: ceil(card.maxY + 6), content: .prompt(PromptRowLayout(
+        let accessibility = ([title] + spoken).joined(separator: ". ")
+        var layout = PromptRowLayout(
             cardFrame: card, texts: texts, approval: nil, symbols: symbols, rules: rules,
-            accessibility: ([title] + spoken).joined(separator: ". "), answerNow: answerFrame, answerNowFont: buttonFont)))
+            accessibility: accessibility, answerNow: answerFrame, answerNowFont: buttonFont)
+        if let collapseRowId {
+            let headerBandH = max(44, head.maxY - top + notePadV)
+            layout.foldToggle = PromptFoldToggle(rowId: collapseRowId,
+                                                 frame: CGRect(x: side, y: top, width: cardW, height: headerBandH),
+                                                 label: accessibility, expanded: true, backingFrame: nil)
+        }
+        return RowLayout(height: ceil(card.maxY + 6), content: .prompt(layout))
     }
 }
 

@@ -517,4 +517,47 @@ struct BotExchangeFoldTests {
             #expect(rows[..<note].contains { $0.isBubble } && rows[note...].filter(\.isBubble).isEmpty)
         }
     }
+
+    /// Context written before or after a clarify card stays visible in the chat instead of folding into "With … · N messages",
+    /// even when the reply opens by naming the other bot or another bot exchange follows.
+    @Test func contextAroundClarifyQuestionsNeverFoldsIntoBotTalk() throws {
+        func you(_ id: String, _ text: String, _ s: Double) -> ChatMessage {
+            ChatMessage(id: id, role: .user, parts: [.text(text)], timestamp: now.addingTimeInterval(s), rowId: nil)
+        }
+        func bot(_ id: String, _ parts: [ChatPart], _ s: Double) -> ChatMessage {
+            ChatMessage(id: id, role: .assistant, parts: parts, timestamp: now.addingTimeInterval(s), rowId: nil)
+        }
+        func to(_ id: String, _ target: String, _ text: String) -> ChatPart {
+            .tool(ToolCall(id: id, name: "message_agent", title: "message_agent",
+                           argsText: #"{"target":"\#(target)","message":"\#(text)"}"#,
+                           summary: "Queued", state: .done, durationSeconds: 1))
+        }
+        func clarify(_ id: String, _ question: String, _ answer: String) -> ChatPart {
+            let qa = [ClarifyQA(question: question, answer: answer, unanswered: false)]
+            return .tool(ToolCall(id: id, name: "clarify", title: "clarify", argsText: nil,
+                                  summary: ClarifySettled.summary(qa), state: .done, durationSeconds: nil))
+        }
+
+        let chat = [
+            you("u1", "Can we put the staging rollout on a faster runner?", 0),
+            bot("a1", [to("t1", "home", "Check runner options"), .text("Checking with Home.")], 5),
+            you("d1", "Message from 🤖 Home (@home): Option A keeps the shared queue; Option B spins up a dedicated worker.", 20),
+            bot("a2", [
+                .text("Home — we see two trade-offs: Option A has zero setup, while Option B cuts latency in half."),
+                clarify("c1", "Which runner setup do you want?", "Explain both to me"),
+                .text("Option A reuses your existing pool; Option B adds one small worker process."),
+                clarify("c2", "Ready to pick one?", "Not now"),
+            ], 35),
+            bot("a3", [to("t2", "home", "Hold off for now"), .text("Told Home to wait.")], 50),
+            you("d2", "Message from 🤖 Home (@home): Standing by.", 65),
+            bot("a4", [.text("Okay, leaving the runner setup unchanged for now.")], 80),
+        ]
+
+        let rows = ChatRowBuilder.build(input(chat))
+        let shownBubbles = bubbles(rows)
+        // Both explanation bubbles in `a2` stay open right above their clarify cards rather than folding into "With Home".
+        #expect(shownBubbles.contains("a2|b0"), "context before clarify stays visible: \(rows.map(\.id))")
+        #expect(shownBubbles.contains("a2|b2"), "explanation between clarify calls stays visible: \(rows.map(\.id))")
+        #expect(shownBubbles.contains("a4|b0"))
+    }
 }

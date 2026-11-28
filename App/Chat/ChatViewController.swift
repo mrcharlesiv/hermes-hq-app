@@ -5040,8 +5040,9 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
                 let height = dock.systemLayoutSizeFitting(CGSize(width: width, height: UIView.layoutFittingCompressedSize.height),
                                                           withHorizontalFittingPriority: .required,
                                                           verticalFittingPriority: .fittingSizeLevel).height
+                let cap = dock is QuestionDockView ? round(view.bounds.height * (DeviceWord.isMac ? 0.62 : 0.56)) : view.bounds.height
                 dock.translatesAutoresizingMaskIntoConstraints = true
-                dock.frame = CGRect(x: side, y: view.bounds.maxY + 16, width: width, height: min(height, view.bounds.height))
+                dock.frame = CGRect(x: side, y: view.bounds.maxY + 16, width: width, height: min(height, cap))
                 dock.layoutIfNeeded()
             }
             dock.translatesAutoresizingMaskIntoConstraints = false
@@ -5070,7 +5071,7 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
             stackTop.priority = .required - 1
             promptStackTop?.isActive = false
             promptStackTop = stackTop
-            NSLayoutConstraint.activate([
+            var dockConstraints: [NSLayoutConstraint] = [
                 dock.leadingAnchor.constraint(equalTo: columnGuide.leadingAnchor, constant: side),
                 dock.trailingAnchor.constraint(equalTo: columnGuide.trailingAnchor, constant: -side),
                 dock.bottomAnchor.constraint(lessThanOrEqualTo: view.bottomAnchor, constant: -bottom),
@@ -5080,7 +5081,16 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
                                           constant: ChatMetrics.statusLineHeight + 30),
                 gap,
                 stackTop,
-            ])
+            ]
+            if dock is QuestionDockView {
+                // Leave room above the dock while the keyboard is down so preceding messages stay readable;
+                // internal PagesScrollView scrolls tall choice lists cleanly.
+                let maxDockHeight = dock.heightAnchor.constraint(lessThanOrEqualTo: view.heightAnchor,
+                                                                 multiplier: DeviceWord.isMac ? 0.62 : 0.56)
+                maxDockHeight.priority = UILayoutPriority(998)
+                dockConstraints.append(maxDockHeight)
+            }
+            NSLayoutConstraint.activate(dockConstraints)
             dock.alpha = 1
         } else {
             promptQueueGap?.isActive = false

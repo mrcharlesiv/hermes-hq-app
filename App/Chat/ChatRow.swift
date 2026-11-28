@@ -1011,7 +1011,12 @@ nonisolated enum ChatRowBuilder {
                 }
                 if ChatRunSummary.isSilent(call.name) && call.state != .failed { continue }
                 workedSinceWords = true
-                // [questions] A clarify part: the question note while it runs, the settled Q&A once answered.
+                // [questions] A clarify part: hidden while the expanded dock already shows it, the question note when
+                // minimized, and the settled Q&A once answered.
+                if PromptRows.hidesRunningClarify(call, input: input) {
+                    flushRun(endingAt: i - 1)
+                    continue
+                }
                 if let prompt = PromptRows.clarifyRow(call, message: m, input: input) {
                     flushRun(endingAt: i - 1)
                     rows.append(prompt)

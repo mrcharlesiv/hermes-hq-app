@@ -227,7 +227,7 @@ final class ChatPromptCell: ChatBaseCell {
             draftDivider.isHidden = true
         }
         let backing = l.draft?.backingFrame ?? l.ask?.backingFrame ?? l.foldToggle?.backingFrame
-        placeBacking(backing, radius: (backing?.height ?? 0) / 2)
+        placeBacking(backing, radius: min(16, (backing?.height ?? 0) / 2))
         placeSymbols(l.symbols)
         placeRules(l.rules)
         baseAccessibility = l.accessibility

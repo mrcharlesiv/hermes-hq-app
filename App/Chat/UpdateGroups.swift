@@ -192,7 +192,7 @@ nonisolated enum UpdateGroups {
             let maxAhead = min(input.messages.count, m.message + UpdateGroups.reach + 1)
             for i in (m.message + 1)..<maxAhead {
                 for row in at(i) {
-                    if case .bubble(let b) = row.kind, b.mine { return false }
+                    if UpdateGroups.endsTalk(row) { return false }
                     if let key = cronJobKey(row), key == jobKey {
                         sawLaterSameJob = true
                         continue
@@ -242,6 +242,7 @@ nonisolated enum UpdateGroups {
                     // such replies after it, this is the last thing the bot said to you.
                     if talked, UpdateGroups.isBotsReply(row), !writesToBot(i) { answered = true; break ahead }
                 }
+                if hasHiddenRunningClarify(i) { break ahead }
             }
             guard answered else { return false }
             for i in stride(from: m.message, through: max(0, m.message - UpdateGroups.reach), by: -1) {
@@ -272,8 +273,27 @@ nonisolated enum UpdateGroups {
             return found
         }
 
+        private func hasHiddenRunningClarify(_ message: Int) -> Bool {
+            let m = input.messages[message]
+            guard m.role == .assistant else { return false }
+            return m.parts.contains { part in
+                if case .tool(let call) = part { return PromptRows.hidesRunningClarify(call, input: input) }
+                return false
+            }
+        }
+
+        private func messageAsksUser(_ message: Int) -> Bool {
+            let m = input.messages[message]
+            guard m.role == .assistant else { return false }
+            if at(message).contains(where: { if case .prompt = $0.kind { return true } else { return false } }) { return true }
+            return m.parts.contains { part in
+                guard case .tool(let call) = part else { return false }
+                return call.name == "clarify" || call.name == AskCards.tool || call.name == DraftCards.tool
+            }
+        }
+
         private func findWritesToBot(_ message: Int) -> Bool {
-            guard !input.messages[message].isStreaming,
+            guard !input.messages[message].isStreaming, !messageAsksUser(message),
                   let first = at(message).first(where: UpdateGroups.isBotsReply), case .bubble(let b) = first.kind else { return false }
             for i in stride(from: message - 1, through: max(0, message - 8), by: -1) {
                 for (r, row) in at(i).enumerated().reversed() {
@@ -341,11 +361,13 @@ nonisolated enum UpdateGroups {
         }
     }
 
-    /// [exchange] A bubble of yours, or a scheduled job's report: either ends a talk between bots.
+    /// [exchange] A bubble of yours, an interactive prompt/question to you, or a scheduled job's report: each ends a
+    /// talk between bots so context around questions never folds away into "With … · N messages".
     static func endsTalk(_ row: ChatRow) -> Bool {
         switch row.kind {
         case .bubble(let b): return b.mine
         case .backgroundResult(let b): return b.cron
+        case .prompt: return true
         default: return false
         }
     }

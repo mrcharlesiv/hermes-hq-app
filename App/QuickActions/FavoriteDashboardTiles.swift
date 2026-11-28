@@ -1,11 +1,6 @@
-// [favorites-live-tiles] A Dashboard tile on Favorites (docs/spec/3x-morepages.md §25 Q15–Q21). A public-beta tester,
-// 2026-11-22: "it would be cool if for the new Favourites feature that you could add actual tiles instead of just a
-// link to tiles." The owner: "I like this. Let's do it."
-//
-// The tile itself, not a link to the Dashboard: the same `PinTileView` the Dashboard draws (soft card, picture, health
-// mark), its picture from `PinPictures` (as Bot Info's On Tiles reuses them), and a page whose head says live running
-// live through the Favorites page's own `LiveTiles`. Small is one column and square, as a Dashboard Small tile; Wide is
-// both columns and as tall as a Small one, as a Dashboard Medium tile.
+// [favorites-live-tiles] A Dashboard tile on Favorites (docs/spec/3x-morepages.md §25 Q15–Q21).
+// Drawn as the Dashboard draws it (`PinTileView` + `PinPictures` + `LiveTiles`), now supporting Small (1×1),
+// Wide (2×1), Vertical (1×2), Large (2×2), Banner, and Extra Large sizes on responsive grids.
 
 import SwiftUI
 import UIKit
@@ -50,8 +45,7 @@ import WebKit
 }
 
 extension ArtifactPin {
-    /// [favorites-live-tiles] A pin that is gone, drawn from its id (`<profile>\u{1F}<value>`) and the name it had:
-    /// its type's glyph, the missing mark and its name.
+    /// [favorites-live-tiles] A pin that is gone, drawn from its id (`<profile>\u{1F}<value>`) and the name it had.
     static func standIn(id: String?, name: String) -> ArtifactPin {
         let parts = (id ?? "").split(separator: "\u{1F}", maxSplits: 1).map(String.init)
         let value = parts.count == 2 ? parts[1] : (id ?? "")
@@ -63,16 +57,31 @@ extension ArtifactPin {
     }
 }
 
-/// [favorites-live-tiles] How big a Dashboard tile is on Favorites, from the grid's width (the collection view's).
-/// The rule for a row holding a Dashboard tile and an action tile: the row is as tall as the taller of the two (the
-/// tile's square, or an action tile's words at a large text size), and both fill it, so neither is ever cut.
+/// [favorites-live-tiles] How big a Dashboard tile is on Favorites, from the grid's width.
 nonisolated enum FavoriteTileSize {
-    /// The card's width and the picture's height. `side`: the section's side room; `gap`: between the columns.
+    /// The card's width and the picture's height (Small 1×1, Wide 2×1; kept for existing tests & Set Up).
     static func picture(width: CGFloat, side: CGFloat, gap: CGFloat, wide: Bool, stacked: Bool) -> CGSize {
         let whole = max(0, width - 2 * side)
         let column = max(0, (whole - gap) / 2)
-        // Small: one column, square. Wide (and every tile in the one-column grid): both columns, a Small tile's height.
         return wide || stacked ? CGSize(width: whole, height: column) : CGSize(width: column, height: column)
+    }
+
+    /// Picture size for any `QuickTileSize` (Small, Wide, Vertical 1×2, Large 2×2, Banner, Extra Large).
+    static func picture(width: CGFloat, side: CGFloat, gap: CGFloat, size: QuickTileSize, stacked: Bool, scale: CGFloat = 1) -> CGSize {
+        let whole = max(0, width - 2 * side)
+        let cols = QuickTileLayout.columns(width: whole, gap: gap, stacked: stacked, scale: scale)
+        if stacked || cols <= 1 {
+            let unit = max(0, (whole - gap) / 2)
+            let rows = CGFloat(size.rowSpan)
+            return CGSize(width: whole, height: rows * unit + (rows - 1) * gap)
+        }
+        let colW = max(0, floor((whole - CGFloat(cols - 1) * gap) / CGFloat(cols)))
+        let unitH = cols <= 2 ? colW : min(colW, floor(220 * max(1, scale)))
+        let cSpan = CGFloat(size.colSpan(in: cols))
+        let rSpan = CGFloat(size.rowSpan)
+        let w = cSpan == CGFloat(cols) ? whole : cSpan * colW + (cSpan - 1) * gap
+        let h = rSpan * unitH + (rSpan - 1) * gap
+        return CGSize(width: w, height: h)
     }
 
     /// The tile's height on the page: its picture, and the name's line under it while Show Names is on.
@@ -81,8 +90,7 @@ nonisolated enum FavoriteTileSize {
     }
 }
 
-/// [favorites-live-tiles] The Dashboard's tile on Favorites: `PinTileView` as the Dashboard draws it, at least its own
-/// height and filling a taller row. A gone pin is its stand-in at 40 %.
+/// [favorites-live-tiles] The Dashboard's tile on Favorites: `PinTileView` as the Dashboard draws it.
 struct FavoriteTileFace: View {
     var pin: ArtifactPin
     var picture: UIImage?
@@ -102,8 +110,7 @@ struct FavoriteTileFace: View {
     }
 }
 
-/// [favorites-live-tiles] Pictures for Add Action's rows and Set Up's preview: its own `FavoriteTiles` (the Favorites
-/// page keeps its own), and a tick when one lands so SwiftUI draws it.
+/// [favorites-live-tiles] Pictures for Add Action's rows and Set Up's preview.
 @MainActor @Observable final class FavoriteTilePictures {
     @ObservationIgnored let source: FavoriteTiles
     private(set) var tick = 0
@@ -120,7 +127,6 @@ struct FavoriteTileFace: View {
         return source.pictures.picture(pin, dark: dark, highContrast: highContrast, pixels: max(size.width, size.height) * 3, shape: FavoriteTiles.shape(size))
     }
 
-    /// A small square of it, for a row (as Bot Info's grid asks).
     func thumb(_ pin: ArtifactPin, dark: Bool, highContrast: Bool = false, side: CGFloat) -> UIImage? {
         _ = tick
         Theme.touch()
@@ -156,8 +162,7 @@ struct DashboardTileThumb: View {
     }
 }
 
-/// [favorites-live-tiles] Set Up's preview of a Dashboard tile: the real tile at the size it will have on Favorites
-/// (Small: half the row, square; Wide: the whole row, as tall as a Small one), its name the one being typed.
+/// [favorites-live-tiles] Set Up's preview of a Dashboard tile at its real size (Small, Wide, Vertical, Large…).
 struct DashboardTilePreview: View {
     var tile: QuickTile
     var pictures: FavoriteTilePictures?
@@ -168,7 +173,11 @@ struct DashboardTilePreview: View {
 
     var body: some View {
         let _ = Theme.touch()
-        let size = FavoriteTileSize.picture(width: width > 0 ? width : 360, side: 0, gap: HQFont.scaled(12), wide: tile.wide, stacked: stacked)
+        let raw = FavoriteTileSize.picture(width: width > 0 ? width : 360, side: 0, gap: HQFont.scaled(12),
+                                           size: tile.effectiveSize, stacked: stacked, scale: HQFont.scale)
+        // Cap preview height so Large / Vertical stay comfortable inside the Set Up form.
+        let scaleDown = raw.height > 260 ? 260 / raw.height : 1
+        let size = CGSize(width: floor(raw.width * scaleDown), height: floor(raw.height * scaleDown))
         let height = FavoriteTileSize.height(picture: size, names: ArtifactPins.showsNames, nameHeight: PinTileView.nameHeight)
         let kept = pictures?.source.pin(tile.pin)
         let pin: ArtifactPin = {

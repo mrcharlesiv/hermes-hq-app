@@ -12,6 +12,7 @@ import UIKit
     private weak var bots: BotStore?
     private weak var sessions: SessionStore?
     private weak var providers: ProviderPrefsStore?
+    private var favorites: FavoritesSync?
 
     static var deviceName: String {
         #if targetEnvironment(macCatalyst)
@@ -39,6 +40,9 @@ import UIKit
         hidden.syncChanged = { [weak sync] in sync?.changed("hidden") }
         bots.syncChanged = { [weak sync] in sync?.changed("bots") }
         sessions.syncChanged = { [weak sync] in sync?.changed("sessions") }
+        let favorites = FavoritesSync()
+        favorites.syncChanged = { [weak sync] in sync?.changed("favorites") }
+        QuickTileStore.onLocalSave = { [weak favorites] in favorites?.localChanged() }
         settings = [false, true].map { library in
             let document = SettingsSync(library: library, accountId: account.id)
             let name = document.syncName
@@ -46,13 +50,14 @@ import UIKit
             document.onAdopted = { keys in SettingsAdopted.refresh(keys: keys) }
             return document
         }
-        for document in [pins, hidden, bots, sessions, providers] as [GatewaySynced] + settings { sync.register(document) }
+        for document in [pins, hidden, bots, sessions, providers, favorites] as [GatewaySynced] + settings { sync.register(document) }
         self.sync = sync
         self.pins = pins
         self.hidden = hidden
         self.bots = bots
         self.sessions = sessions
         self.providers = providers
+        self.favorites = favorites
     }
 
     func tearDown() {
@@ -63,6 +68,9 @@ import UIKit
         bots?.syncChanged = nil
         sessions?.syncChanged = nil
         providers?.syncChanged = nil
+        favorites?.syncChanged = nil
+        favorites = nil
+        QuickTileStore.onLocalSave = nil
         for document in settings { document.close() }
         settings = []
     }

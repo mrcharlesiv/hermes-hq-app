@@ -71,6 +71,7 @@ extension AppModel: SessionsServices {}
         let main: [BotMenuNode] = [shortcut].compactMap { $0 } + [
             .action("Rename…", "pencil") { [weak self] in self?.rename(session) },
             .action("Branch in New Chat", "arrow.triangle.branch") { [weak self] in self?.branch(session) },
+            FavoritesPinAction.sessionNode(session, from: host),
         ] + (store?.project(of: session).map { project in
             [BotMenuNode.action("New Chat in \(project.label)", "square.and.pencil") { [weak self] in
                 self?.newChat(profile: session.profile, folder: project.root)

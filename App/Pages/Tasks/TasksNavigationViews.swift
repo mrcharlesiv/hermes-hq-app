@@ -315,7 +315,20 @@ struct TasksOverviewListsCard: View {
                     }
                     .buttonStyle(TasksOverviewRowButtonStyle())
                     .contextMenu {
+                        let key = TodoView.list(list.id).key
+                        let onFav = FavoritesPinAction.contains { $0.known == .tasks && ($0.taskView ?? "today") == key }
+                        Button {
+                            FavoritesPinAction.toggle(matching: { $0.known == .tasks && ($0.taskView ?? "today") == key }, make: {
+                                var tile = QuickTile(kind: .tasks, name: list.name, wide: true)
+                                tile.taskView = key
+                                tile.taskViewName = list.name
+                                return tile
+                            }, from: MainTabController.current)
+                        } label: {
+                            Label(onFav ? "Remove from Favorites" : "Add to Favorites", systemImage: onFav ? "star.slash" : "star")
+                        }
                         if editsLists {
+                            Divider()
                             Button { actions.edit(list.id) } label: { Label("Edit List…", systemImage: "slider.horizontal.3") }
                             Button { actions.rename(list.id) } label: { Label("Rename…", systemImage: "pencil") }
                             if list.index > 0 {

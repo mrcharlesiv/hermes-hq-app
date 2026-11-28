@@ -803,6 +803,7 @@ enum GoalMenu {
                     guard let presenter else { return }
                     edit(goalID: goalID, store: store, from: presenter)
                 },
+                FavoritesPinAction.goalAction(goal, from: presenter),
             ]),
             UIMenu(options: .displayInline, children: states),
             UIAction(title: "Delete Goal…", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak presenter, weak source] _ in

@@ -242,10 +242,11 @@ final class JobActions {
             guard let self, let controller else { return }
             self.edit(self.store.job(key: job.key) ?? job, from: controller)
         }
+        let favorite = FavoritesPinAction.jobAction(job, title: store.title(job), from: controller)
         let delete = UIAction(title: "Delete Job", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self, weak controller] _ in
             guard let self, let controller else { return }
             self.delete(job, from: controller, source: source())
         }
-        return UIMenu(children: [run, toggle, edit, UIMenu(options: .displayInline, children: [delete])])
+        return UIMenu(children: [run, toggle, edit, favorite, UIMenu(options: .displayInline, children: [delete])])
     }
 }

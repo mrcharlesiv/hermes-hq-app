@@ -121,6 +121,7 @@ import UIKit
         // [manualorder] A row's place in its block without the drag; picks Sort By › Manual.
         more += rowMoves(for: bot).map { move in .action(move.title, move.image) { [weak self] in self?.moveRow(bot, by: move.delta) } }
         if let item = BotMenuHooks.item(.addToGroup, bot, host) { more.append(item) }
+        more.append(FavoritesPinAction.botNode(bot, from: host))
         if let item = BotMenuHooks.item(.duplicate, bot, host) { more.append(item) }
         var status: [BotMenuNode] = []
         if let mute = BotMenuHooks.item(.mute, bot, host) { status.append(mute) }
@@ -144,6 +145,7 @@ import UIKit
         place += pinMoves(for: bot).map { move in .action(move.title, move.image) { [weak self] in self?.movePin(bot, by: move.delta) } }
         place += rowMoves(for: bot).map { move in .action(move.title, move.image) { [weak self] in self?.moveRow(bot, by: move.delta) } }
         if let item = BotMenuHooks.item(.addToGroup, bot, host) { place.append(item) }
+        place.append(FavoritesPinAction.botNode(bot, from: host))
         if let item = BotMenuHooks.item(.duplicate, bot, host) { place.append(item) }
         var hide: [BotMenuNode] = []
         if bot.hidden { status.append(readToggle) } else {

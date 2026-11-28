@@ -2846,6 +2846,7 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
             tile.append(stop)
         }
         tile.append(TileUpdates.renameAction(pin, pins: pins, from: self))
+        tile.append(FavoritesPinAction.dashboardTileAction(pin, displayName: pins.name(pin), from: self))
         if let home = addToHomeScreenAction(pin) { tile.append(home) }   // [tile-widgets]
         groups.append(UIMenu(options: .displayInline, children: tile))
         // [dashboard] Move to Page (on the Dashboard).

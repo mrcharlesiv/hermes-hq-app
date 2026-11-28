@@ -39,6 +39,7 @@ import UIKit
             .action(room.hidden ? "Show in Bots" : "Hide", room.hidden ? "eye" : "eye.slash") { [weak host] in
                 hide(key, !room.hidden, services: services, host: host)
             },
+            FavoritesPinAction.roomNode(room, from: host),
         ]
         var delete = BotMenuNode.action("Delete Group Chat", "trash", destructive: true, disabled: !services.groupsWritable) { [weak host] in
             if let host { confirmDelete(key, services: services, from: host, source: source()) }

@@ -115,8 +115,10 @@
     cursor: pointer; -webkit-user-select: none; user-select: none;
     transition: opacity 0.15s, background-color 0.15s;
   }
-  .hq-button:active { opacity: 0.6; }
   .hq-button:disabled { opacity: 0.4; pointer-events: none; }
+  @media (hover: none) {
+    .hq-button:active { opacity: 0.6; }
+  }
   .hq-button-filled { background: var(--hq-tint); color: var(--hq-on-tint); }
   .hq-button-outlined { background: var(--hq-fill); color: var(--hq-tint); }
   .hq-button-ghost { background: transparent; color: var(--hq-tint); }
@@ -204,4 +206,21 @@
     font-size: 14px; font-weight: 500; color: var(--hq-label);
   }
   .hq-toast-error { color: var(--hq-red); }
+
+  /* [mac] Pointer hover and press feedback for desktop users in plugin web pages. */
+  @media (hover: hover) {
+    .hq-button-filled:not(:disabled):hover,
+    .hq-button-destructive:not(:disabled):hover { filter: brightness(0.94); }
+    .hq-button-filled:not(:disabled):active,
+    .hq-button-destructive:not(:disabled):active { filter: brightness(0.86); }
+    .hq-button-outlined:not(:disabled):hover { background: color-mix(in srgb, var(--hq-label) 8%, var(--hq-fill)); }
+    .hq-button-outlined:not(:disabled):active { background: color-mix(in srgb, var(--hq-label) 14%, var(--hq-fill)); }
+    .hq-button-ghost:not(:disabled):hover,
+    .hq-button-destructive-plain:not(:disabled):hover { background: var(--hq-fill); }
+    .hq-button-ghost:not(:disabled):active,
+    .hq-button-destructive-plain:not(:disabled):active { background: color-mix(in srgb, var(--hq-label) 12%, var(--hq-fill)); }
+    .hq-tabs-trigger:not([data-state="active"]):hover { background: color-mix(in srgb, var(--hq-label) 6%, transparent); }
+    .hq-checkbox:not(:disabled):hover { border-color: var(--hq-tint); }
+    .hq-dialog-x:hover { background: color-mix(in srgb, var(--hq-label) 14%, var(--hq-fill)); }
+  }
 }

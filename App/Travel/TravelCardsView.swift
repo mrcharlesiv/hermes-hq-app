@@ -21,39 +21,58 @@ nonisolated struct TravelCardType {
     var chip: UIFont { PromptFonts.font(.footnote, category, weight: .medium, cap: 24) }
     /// Lines a note above the cards may take.
     var noteLines: Int { big ? 4 : 3 }
-    var chipHeight: CGFloat { Self.line(chip) + 14 }
+    var chipHeight: CGFloat { max(32, Self.line(chip) + 14) }
 
     static func line(_ font: UIFont) -> CGFloat { ceil(font.lineHeight) }
 
     /// Whole lines `text` takes in `font` at `width`, capped at `maxLines`.
+    /// Measured with TextKit (`NSLayoutManager` + `NSTextContainer`) so line wrapping matches `UILabel` on both iOS and Mac.
     static func lineCount(_ text: String, _ font: UIFont, width: CGFloat, maxLines: Int) -> Int {
         guard !text.isEmpty, maxLines > 0 else { return 0 }
-        let p = NSMutableParagraphStyle()
-        p.lineBreakMode = .byWordWrapping
         let measureW = max(40, width - 2)
-        let box = (text as NSString).boundingRect(with: CGSize(width: measureW, height: .greatestFiniteMagnitude),
-                                                  options: [.usesLineFragmentOrigin, .usesFontLeading],
-                                                  attributes: [.font: font, .paragraphStyle: p], context: nil)
-        let raw = Int(ceil((box.height - 0.5) / max(1, font.lineHeight)))
-        return max(1, min(maxLines, raw))
+        let attributed = PromptLayout.text(text, font, ChatPalette.label)
+        let (layout, _) = PromptLayout.clamped(attributed, width: measureW, maxLines: maxLines)
+        return max(1, min(maxLines, PromptLayout.lineCount(layout)))
     }
 
     /// The height of `text` in `font` at `width`: whole lines, at most `maxLines` of them.
     static func height(_ text: String, _ font: UIFont, width: CGFloat, maxLines: Int) -> CGFloat {
-        CGFloat(lineCount(text, font, width: width, maxLines: maxLines)) * line(font)
+        guard !text.isEmpty, maxLines > 0 else { return 0 }
+        let measureW = max(40, width - 2)
+        let attributed = PromptLayout.text(text, font, ChatPalette.label)
+        let (layout, _) = PromptLayout.clamped(attributed, width: measureW, maxLines: maxLines)
+        let count = max(1, min(maxLines, PromptLayout.lineCount(layout)))
+        return max(ceil(layout.size.height), CGFloat(count) * line(font))
     }
 
-    /// A row of follow-up chips that scrolls sideways.
-    @MainActor static func chips(_ texts: [String], type: TravelCardType, action: @escaping (String) -> Void) -> UIView {
-        let scroll = UIScrollView()
-        scroll.showsHorizontalScrollIndicator = false
-        scroll.heightAnchor.constraint(equalToConstant: type.chipHeight).isActive = true
-        let row = UIStackView()
-        row.axis = .horizontal
-        row.spacing = 8
-        row.translatesAutoresizingMaskIntoConstraints = false
+    /// Multi-line wrapped layout for follow-up chips so chips never clip off-edge on Mac or narrow panes.
+    static func chipLayout(_ texts: [String], width: CGFloat, type: TravelCardType) -> (frames: [(text: String, frame: CGRect)], height: CGFloat) {
+        guard !texts.isEmpty else { return ([], 0) }
+        let chipH = type.chipHeight
         let font = type.chip
+        let gap: CGFloat = 6
+        let maxW = max(80, width)
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var placed: [(String, CGRect)] = []
         for text in texts {
+            let w = min(maxW, ceil((text as NSString).size(withAttributes: [.font: font]).width) + 28)
+            if x > 0, x + w > maxW {
+                x = 0
+                y += chipH + gap
+            }
+            placed.append((text, CGRect(x: x, y: y, width: w, height: chipH)))
+            x += w + gap
+        }
+        return (placed, y + chipH)
+    }
+
+    /// Wrapped rows of follow-up chips with Mac pointer feedback.
+    @MainActor static func chips(_ texts: [String], width: CGFloat, type: TravelCardType, action: @escaping (String) -> Void) -> UIView {
+        let laid = chipLayout(texts, width: width, type: type)
+        let container = UIView(frame: CGRect(x: 0, y: 0, width: width, height: laid.height))
+        let font = type.chip
+        for (text, frame) in laid.frames {
             let btn = UIButton(type: .system)
             var cfg = UIButton.Configuration.tinted()
             cfg.title = text
@@ -64,24 +83,54 @@ nonisolated struct TravelCardType {
                 var out = a; out.font = font; return out
             }
             btn.configuration = cfg
-            btn.addAction(UIAction { _ in action(text) }, for: .primaryActionTriggered)
-            row.addArrangedSubview(btn)
+            btn.frame = frame
+            btn.addAction(UIAction { _ in
+                Haptics.play(.selection)
+                action(text)
+            }, for: .primaryActionTriggered)
+            #if targetEnvironment(macCatalyst)
+            PointerEffects.button(btn)
+            #endif
+            container.addSubview(btn)
         }
-        scroll.addSubview(row)
-        NSLayoutConstraint.activate([
-            row.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor),
-            row.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor),
-            row.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
-            row.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
-            row.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor),
-        ])
-        return scroll
+        return container
     }
 
     /// `view` at exactly `height` in a card's stack.
     @MainActor static func pinned(_ view: UIView, _ height: CGFloat) -> UIView {
         view.heightAnchor.constraint(equalToConstant: height).isActive = true
         return view
+    }
+}
+
+/// Interactive card tile control used for flight rows and hotel tiles: dims on iOS press, keeps crisp hover/press fill on Mac.
+private final class TravelCardControl: UIControl {
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (control: TravelCardControl, _) in
+            control.applyCardChrome()
+        }
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    override var isHighlighted: Bool {
+        didSet { alpha = PointerEffects.dim(isHighlighted, to: 0.6) }
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil { applyCardChrome() }
+    }
+
+    func applyCardChrome(traits: UITraitCollection? = nil) {
+        let resolved = traits ?? traitCollection
+        backgroundColor = ChatPalette.promptCard
+        layer.cornerRadius = ChatMetrics.insetCardRadius
+        layer.cornerCurve = .continuous
+        let edge = ChatPalette.promptEdge.resolvedColor(with: resolved)
+        layer.borderColor = edge.cgColor
+        layer.borderWidth = edge.cgColor.alpha > 0 ? max(HQShape.pixel(resolved.displayScale), 1) : 0
     }
 }
 
@@ -133,7 +182,7 @@ nonisolated enum FlightsCardLayout {
         p.rows = card.expanded ? f.flights.count : min(shown, f.flights.count)
         p.row = rowHeight(type)
         if f.flights.count > shown { p.more = max(30, TravelCardType.line(type.bodyStrong) + 10) }
-        if !f.followUps.isEmpty { p.chips = type.chipHeight }
+        if !f.followUps.isEmpty { p.chips = TravelCardType.chipLayout(f.followUps, width: width, type: type).height }
         return p
     }
 
@@ -161,23 +210,33 @@ final class FlightsCardView: UIView {
 
     private let stack = UIStackView()
     private var row: FlightsCardRow?
+    private var flightControls: [TravelCardControl] = []
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         stack.axis = .vertical
         stack.spacing = FlightsCardLayout.cardGap
         addSubview(stack)
+        registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (view: FlightsCardView, _) in
+            view.restyleCards()
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
     func reset() {
         row = nil
+        flightControls.removeAll()
         for view in stack.arrangedSubviews { stack.removeArrangedSubview(view); view.removeFromSuperview() }
+    }
+
+    private func restyleCards() {
+        for control in flightControls { control.applyCardChrome(traits: traitCollection) }
     }
 
     func configure(_ card: FlightsCardRow, _ g: FlightsCardGeometry) {
         row = card
+        flightControls.removeAll()
         stack.frame = CGRect(x: FlightsCardLayout.side, y: g.gapAbove, width: g.width, height: g.height)
         for view in stack.arrangedSubviews { stack.removeArrangedSubview(view); view.removeFromSuperview() }
 
@@ -186,9 +245,10 @@ final class FlightsCardView: UIView {
         let p = FlightsCardLayout.pieces(card, width: g.width, category: g.category)
         if !f.step.isEmpty {
             let pill = UILabel()
-            pill.text = "  \(f.step)  "
+            pill.text = f.step
             pill.font = type.smallStrong
             pill.textColor = ChatPalette.tintText
+            pill.lineBreakMode = .byTruncatingTail
             pill.accessibilityIdentifier = "travel.flights.step"
             stack.addArrangedSubview(TravelCardType.pinned(pill, p.step))
         }
@@ -198,6 +258,7 @@ final class FlightsCardView: UIView {
             note.font = type.body
             note.textColor = ChatPalette.label2
             note.numberOfLines = type.noteLines
+            note.lineBreakMode = .byTruncatingTail
             stack.addArrangedSubview(TravelCardType.pinned(note, p.note))
         }
         if !f.relaxedFilters.isEmpty {
@@ -222,7 +283,9 @@ final class FlightsCardView: UIView {
         }
 
         for idx in 0..<p.rows {
-            stack.addArrangedSubview(TravelCardType.pinned(makeFlightRow(f.flights[idx], index: idx, card: card, type: type), p.row))
+            let control = makeFlightRow(f.flights[idx], index: idx, card: card, type: type)
+            flightControls.append(control)
+            stack.addArrangedSubview(TravelCardType.pinned(control, p.row))
         }
 
         if f.flights.count > FlightsCardLayout.shown {
@@ -238,22 +301,25 @@ final class FlightsCardView: UIView {
             more.configuration = cfg
             more.contentHorizontalAlignment = .leading
             more.accessibilityIdentifier = "travel.flights.toggle"
-            more.addAction(UIAction { [weak self] _ in self?.onToggle?() }, for: .primaryActionTriggered)
+            more.addAction(UIAction { [weak self] _ in
+                Haptics.play(.selection)
+                self?.onToggle?()
+            }, for: .primaryActionTriggered)
+            #if targetEnvironment(macCatalyst)
+            PointerEffects.button(more)
+            #endif
             stack.addArrangedSubview(TravelCardType.pinned(more, p.more))
         }
 
         if !f.followUps.isEmpty {
-            stack.addArrangedSubview(TravelCardType.chips(f.followUps, type: type) { [weak self] text in self?.onFollowUp?(text) })
+            let chips = TravelCardType.chips(f.followUps, width: g.width, type: type) { [weak self] text in self?.onFollowUp?(text) }
+            stack.addArrangedSubview(TravelCardType.pinned(chips, p.chips))
         }
     }
 
-    private func makeFlightRow(_ flight: TravelCards.Flight, index: Int, card: FlightsCardRow, type: TravelCardType) -> UIView {
-        let control = UIControl()
-        control.backgroundColor = ChatPalette.botBubble
-        control.layer.cornerRadius = ChatMetrics.insetCardRadius
-        control.layer.cornerCurve = .continuous
-        control.layer.borderWidth = HQShape.hairline
-        control.layer.borderColor = ChatPalette.separator.resolvedColor(with: traitCollection).cgColor
+    private func makeFlightRow(_ flight: TravelCards.Flight, index: Int, card: FlightsCardRow, type: TravelCardType) -> TravelCardControl {
+        let control = TravelCardControl()
+        control.applyCardChrome(traits: traitCollection)
         control.isAccessibilityElement = true
         control.accessibilityTraits = .button
         control.accessibilityLabel = "\(flight.airline), \(flight.routeLabel), \(flight.departTime) to \(flight.arriveTime), \(flight.stopsLabel), \(ShoppingCards.price(flight.price, currency: flight.currency))"
@@ -323,7 +389,7 @@ final class FlightsCardView: UIView {
             let leftStack = UIStackView(arrangedSubviews: [
                 label("\(times)  ·  \(flight.routeLabel)", type.title, ChatPalette.label),
                 label(details, type.body, ChatPalette.label2),
-                label(bagSummary.isEmpty ? "Tap for bags, changes & refund rules" : bagSummary, type.small, ChatPalette.label2),
+                label(bagSummary.isEmpty ? "\(DeviceWord.Tap) for bags, changes & refund rules" : bagSummary, type.small, ChatPalette.label2),
             ])
             leftStack.axis = .vertical
             leftStack.spacing = 2
@@ -366,6 +432,7 @@ nonisolated struct HotelsCardGeometry: @unchecked Sendable {
 nonisolated enum HotelsCardLayout {
     static let side: CGFloat = 16
     static let photoHeight: CGFloat = 118
+    static let tileSpacing: CGFloat = 10
 
     /// The height of each piece of the card, top to bottom (0: not there). The view pins each piece to the same number.
     struct Pieces {
@@ -385,7 +452,7 @@ nonisolated enum HotelsCardLayout {
     }
 
     /// Lines the metadata header above the cards may take.
-    static func metaLines(_ type: TravelCardType) -> Int { type.big ? 4 : 2 }
+    static func metaLines(_ type: TravelCardType) -> Int { type.big ? 4 : 3 }
 
     /// Lines a hotel's name may take on its tile.
     static func nameLines(_ type: TravelCardType) -> Int { type.big ? 3 : 2 }
@@ -422,12 +489,31 @@ nonisolated enum HotelsCardLayout {
         count == 1 ? width : min(type.big ? 300 : 224, max(180, width * (type.big ? 0.8 : 0.68)))
     }
 
-    /// True on phone/narrow columns where the card spans the full row width so the carousel can bleed edge-to-edge.
-    static func bleedsCarousel(rowWidth: CGFloat, cardWidth: CGFloat) -> Bool {
-        rowWidth <= cardWidth + 2 * side + 1
+    /// Carousel viewport & whole-tile sizing: bleeds edge-to-edge on narrow phones; fits exact whole tiles on Mac wide panes.
+    static func carouselMetrics(count: Int, rowWidth: CGFloat, cardWidth: CGFloat, type: TravelCardType,
+                                wholeTiles: Bool = DeviceWord.isMac) -> ChatCarouselMetrics {
+        let phoneTile = min(type.big ? 300 : 224, max(180, cardWidth * (type.big ? 0.8 : 0.68)))
+        return ChatCarouselMetrics.compute(
+            count: count,
+            rowWidth: rowWidth,
+            cardWidth: cardWidth,
+            side: side,
+            spacing: tileSpacing,
+            phoneTileWidth: phoneTile,
+            minWideTile: type.big ? 280 : 200,
+            maxWideTile: type.big ? 340 : 260,
+            singleWideCap: type.big ? 420 : 360,
+            wholeTiles: wholeTiles
+        )
     }
 
-    static func pieces(_ card: HotelsCardRow, width: CGFloat, category: UIContentSizeCategory) -> Pieces {
+    /// True on phone/narrow columns where the card spans the full row width so the carousel can bleed edge-to-edge.
+    static func bleedsCarousel(rowWidth: CGFloat, cardWidth: CGFloat) -> Bool {
+        ChatCarouselMetrics.bleeds(rowWidth: rowWidth, cardWidth: cardWidth, side: side)
+    }
+
+    static func pieces(_ card: HotelsCardRow, width: CGFloat, rowWidth: CGFloat? = nil, category: UIContentSizeCategory,
+                       wholeTiles: Bool = DeviceWord.isMac) -> Pieces {
         let type = TravelCardType(category: category)
         let model = card.hotels
         var p = Pieces()
@@ -435,18 +521,19 @@ nonisolated enum HotelsCardLayout {
         let meta = metaWords(model)
         if !meta.isEmpty { p.meta = TravelCardType.height(meta, type.smallStrong, width: width, maxLines: metaLines(type)) }
         if !model.note.isEmpty { p.note = TravelCardType.height(model.note, type.body, width: width, maxLines: type.noteLines) }
-        let itemW = tileWidth(count: model.hotels.count, width: width, type: type)
+        let metrics = carouselMetrics(count: model.hotels.count, rowWidth: rowWidth ?? (width + 2 * side), cardWidth: width, type: type, wholeTiles: wholeTiles)
+        let itemW = metrics.tileWidth > 0 ? metrics.tileWidth : tileWidth(count: model.hotels.count, width: width, type: type)
         p.nameLines = measuredNameLines(model.hotels, itemWidth: itemW, type: type)
         p.hasSubtitle = model.hotels.contains { !subtitle($0).isEmpty }
         p.carousel = tileHeight(type, nameLines: p.nameLines, hasSubtitle: p.hasSubtitle)
-        if !model.followUps.isEmpty { p.chips = type.chipHeight }
+        if !model.followUps.isEmpty { p.chips = TravelCardType.chipLayout(model.followUps, width: width, type: type).height }
         return p
     }
 
     static func make(_ card: HotelsCardRow, gap: CGFloat, width: CGFloat, category: UIContentSizeCategory) -> RowLayout {
         let cardW = PromptLayout.cardWidth(for: width)
         let hModel = card.hotels
-        let inner = ceil(pieces(card, width: cardW, category: category).height)
+        let inner = ceil(pieces(card, width: cardW, rowWidth: width, category: category).height)
         let geo = HotelsCardGeometry(width: cardW, rowWidth: width, height: inner, gapAbove: gap + 6, category: category)
         let layout = PromptRowLayout(
             cardFrame: nil,
@@ -459,14 +546,35 @@ nonisolated enum HotelsCardLayout {
     }
 }
 
-final class HotelsCardView: UIView {
+final class HotelsCardView: UIView, UIScrollViewDelegate {
     var onOpenHotel: ((Int) -> Void)?
     var onFollowUp: ((String) -> Void)?
 
     private var managedSubviews: [UIView] = []
+    private var tileControls: [TravelCardControl] = []
+    private let carousel = UIScrollView()
+    private var arrows: ChatCarouselArrows?
+    private var carouselMetrics: ChatCarouselMetrics?
+    private var rowId = ""
+    private var isConfiguring = false
+    /// Where each hotel strip was scrolled to, by row: cell reuse keeps its place.
+    private static var offsets: [String: CGFloat] = [:]
 
     override init(frame: CGRect) {
         super.init(frame: frame)
+        carousel.showsHorizontalScrollIndicator = false
+        carousel.clipsToBounds = true
+        carousel.delegate = self
+        #if targetEnvironment(macCatalyst)
+        carousel.delaysContentTouches = false
+        #endif
+        addSubview(carousel)
+        arrows = ChatCarouselArrows(in: self, identifier: "travel.hotels", itemNoun: "hotels") { [weak self] forward in
+            self?.stepCarousel(forward: forward)
+        }
+        registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (view: HotelsCardView, _) in
+            view.restyleTiles()
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
@@ -474,14 +582,40 @@ final class HotelsCardView: UIView {
     func reset() {
         for view in managedSubviews { view.removeFromSuperview() }
         managedSubviews.removeAll()
+        for tile in tileControls { tile.removeFromSuperview() }
+        tileControls.removeAll()
+        carouselMetrics = nil
+        arrows?.hide()
+    }
+
+    private func restyleTiles() {
+        for tile in tileControls { tile.applyCardChrome(traits: traitCollection) }
+        arrows?.restyle()
+    }
+
+    private func stepCarousel(forward: Bool) {
+        guard let metrics = carouselMetrics else { return }
+        let targetX = metrics.steppedOffset(from: carousel.contentOffset.x, forward: forward)
+        carousel.setContentOffset(CGPoint(x: targetX, y: 0), animated: !HQMotion.reduced)
+        if HQMotion.reduced { arrows?.update() }
     }
 
     func configure(_ card: HotelsCardRow, _ g: HotelsCardGeometry) {
-        reset()
+        isConfiguring = true
+        defer { isConfiguring = false }
+        let sameRow = rowId == card.rowId
+        rowId = card.rowId
+
+        for view in managedSubviews { view.removeFromSuperview() }
+        managedSubviews.removeAll()
+        for tile in tileControls { tile.removeFromSuperview() }
+        tileControls.removeAll()
 
         let model = card.hotels
         let type = TravelCardType(category: g.category)
-        let p = HotelsCardLayout.pieces(card, width: g.width, category: g.category)
+        let p = HotelsCardLayout.pieces(card, width: g.width, rowWidth: g.rowWidth, category: g.category)
+        let metrics = HotelsCardLayout.carouselMetrics(count: model.hotels.count, rowWidth: g.rowWidth, cardWidth: g.width, type: type)
+        carouselMetrics = metrics
         let side = HotelsCardLayout.side
         var y = g.gapAbove
 
@@ -497,6 +631,7 @@ final class HotelsCardView: UIView {
             lbl.text = model.step
             lbl.font = type.smallStrong
             lbl.textColor = ChatPalette.tintText
+            lbl.lineBreakMode = .byTruncatingTail
             place(lbl, x: side, width: g.width, height: p.step)
         }
         let meta = HotelsCardLayout.metaWords(model)
@@ -519,44 +654,56 @@ final class HotelsCardView: UIView {
             place(lbl, x: side, width: g.width, height: p.note)
         }
 
-        let bleeds = HotelsCardLayout.bleedsCarousel(rowWidth: g.rowWidth, cardWidth: g.width)
-        let carousel = UIScrollView()
-        carousel.showsHorizontalScrollIndicator = false
-        carousel.alwaysBounceHorizontal = model.hotels.count > 1
-        let rowStack = UIStackView()
-        rowStack.axis = .horizontal
-        rowStack.spacing = 10
-        rowStack.translatesAutoresizingMaskIntoConstraints = false
-        let itemW = HotelsCardLayout.tileWidth(count: model.hotels.count, width: g.width, type: type)
+        let stripFrame = CGRect(x: metrics.stripX, y: y, width: metrics.stripWidth, height: p.carousel)
+        carousel.frame = stripFrame
+        carousel.alwaysBounceHorizontal = metrics.isScrollable
         for (idx, hotel) in model.hotels.enumerated() {
-            rowStack.addArrangedSubview(makeHotelTile(hotel, index: idx, width: itemW, nameLines: p.nameLines, asked: card.asks(hotel), type: type))
+            let tile = makeHotelTile(hotel, index: idx, width: metrics.tileWidth, nameLines: p.nameLines, asked: card.asks(hotel), type: type)
+            tile.frame = CGRect(
+                x: metrics.contentInset + CGFloat(idx) * metrics.stride,
+                y: 0,
+                width: metrics.tileWidth,
+                height: p.carousel
+            )
+            carousel.addSubview(tile)
+            tileControls.append(tile)
         }
-        carousel.addSubview(rowStack)
-        let inset: CGFloat = bleeds ? side : 0
-        NSLayoutConstraint.activate([
-            rowStack.leadingAnchor.constraint(equalTo: carousel.contentLayoutGuide.leadingAnchor, constant: inset),
-            rowStack.trailingAnchor.constraint(equalTo: carousel.contentLayoutGuide.trailingAnchor, constant: -inset),
-            rowStack.topAnchor.constraint(equalTo: carousel.contentLayoutGuide.topAnchor),
-            rowStack.bottomAnchor.constraint(equalTo: carousel.contentLayoutGuide.bottomAnchor),
-            rowStack.heightAnchor.constraint(equalTo: carousel.frameLayoutGuide.heightAnchor),
-        ])
-        place(carousel, x: bleeds ? 0 : side, width: bleeds ? g.rowWidth : g.width, height: p.carousel)
+        carousel.contentSize = CGSize(width: metrics.contentWidth, height: p.carousel)
+        let savedX = Self.offsets[card.rowId] ?? (sameRow ? carousel.contentOffset.x : 0)
+        carousel.contentOffset = CGPoint(x: metrics.snappedOffset(for: savedX), y: 0)
+        arrows?.configure(scrollView: carousel, stripFrame: stripFrame, yCenter: HotelsCardLayout.photoHeight / 2, metrics: metrics)
+        y += p.carousel + 8
 
         if p.chips > 0 {
-            let chips = TravelCardType.chips(model.followUps, type: type) { [weak self] text in self?.onFollowUp?(text) }
+            let chips = TravelCardType.chips(model.followUps, width: g.width, type: type) { [weak self] text in self?.onFollowUp?(text) }
             place(chips, x: side, width: g.width, height: p.chips)
         }
     }
 
-    private func makeHotelTile(_ hotel: TravelCards.Hotel, index: Int, width: CGFloat, nameLines: Int, asked: Set<TravelCards.Ask>, type: TravelCardType) -> UIView {
-        let tile = UIControl()
-        tile.backgroundColor = ChatPalette.botBubble
-        tile.layer.cornerRadius = ChatMetrics.insetCardRadius
-        tile.layer.cornerCurve = .continuous
-        tile.layer.borderWidth = HQShape.hairline
-        tile.layer.borderColor = ChatPalette.separator.resolvedColor(with: traitCollection).cgColor
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        guard scrollView === carousel, !isConfiguring, !rowId.isEmpty else { return }
+        Self.offsets[rowId] = scrollView.contentOffset.x
+        if Self.offsets.count > 200 { Self.offsets = [rowId: scrollView.contentOffset.x] }
+        arrows?.update()
+    }
+
+    func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint, targetContentOffset: UnsafeMutablePointer<CGPoint>) {
+        guard scrollView === carousel, let metrics = carouselMetrics, metrics.wholeTiles, metrics.isScrollable else { return }
+        targetContentOffset.pointee.x = metrics.snappedOffset(for: targetContentOffset.pointee.x)
+    }
+
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        guard scrollView === carousel, let metrics = carouselMetrics, metrics.wholeTiles, metrics.isScrollable else { return }
+        let snapped = metrics.snappedOffset(for: scrollView.contentOffset.x)
+        if abs(snapped - scrollView.contentOffset.x) > 0.5 {
+            scrollView.setContentOffset(CGPoint(x: snapped, y: 0), animated: !HQMotion.reduced)
+        }
+    }
+
+    private func makeHotelTile(_ hotel: TravelCards.Hotel, index: Int, width: CGFloat, nameLines: Int, asked: Set<TravelCards.Ask>, type: TravelCardType) -> TravelCardControl {
+        let tile = TravelCardControl()
+        tile.applyCardChrome(traits: traitCollection)
         tile.clipsToBounds = true
-        tile.widthAnchor.constraint(equalToConstant: width).isActive = true
         tile.isAccessibilityElement = true
         tile.accessibilityTraits = .button
         let priceWords = hotel.pricePerNight.map { ShoppingCards.price($0, currency: hotel.currency) + " per night" } ?? ""
@@ -566,15 +713,15 @@ final class HotelsCardView: UIView {
             Haptics.play(.selection)
             self?.onOpenHotel?(index)
         }, for: .touchUpInside)
-        #if targetEnvironment(macCatalyst)
-        PointerEffects.surface(tile)
-        #endif
 
         let photo = ShoppingPhotoView()
         photo.translatesAutoresizingMaskIntoConstraints = false
         photo.isUserInteractionEnabled = false
         photo.set(hotel.image, maxPoints: max(width, 220))
         tile.addSubview(photo)
+        #if targetEnvironment(macCatalyst)
+        PointerEffects.surface(tile, above: photo)
+        #endif
 
         let nameLabel = UILabel()
         nameLabel.text = hotel.name

@@ -279,7 +279,7 @@ nonisolated enum ModelFallbackCardLayout {
     static func layout(_ row: ModelFallbackRow, width: CGFloat, gap: CGFloat, style: ChatStyle) -> RowLayout {
         switch row.presentation {
         case .card:
-            let cardWidth = max(0, width - 2 * ChatMetrics.sideInset)
+            let cardWidth = PromptLayout.cardWidth(for: width)
             let (titleH, subH) = cardWordHeights(row, width: cardWidth, style: style)
             let textH = titleH + (subH > 0 ? 3 + subH : 0)
             let height = 2 * inset + max(icon, textH)
@@ -426,7 +426,7 @@ private final class ModelFallbackCardControl: UIButton {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    override var isHighlighted: Bool { didSet { alpha = isHighlighted ? 0.72 : 1 } }
+    override var isHighlighted: Bool { didSet { alpha = PointerEffects.dim(isHighlighted, to: 0.72) } }
 
     private func applyChrome() {
         backgroundColor = ChatPalette.promptCard
@@ -515,7 +515,7 @@ private final class ModelFallbackPillControl: UIButton {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    override var isHighlighted: Bool { didSet { alpha = (interactive && isHighlighted) ? 0.72 : 1 } }
+    override var isHighlighted: Bool { didSet { alpha = interactive ? PointerEffects.dim(isHighlighted, to: 0.72) : 1 } }
 
     private func applyChrome() {
         backgroundColor = ChatPalette.promptCard.resolvedColor(with: traitCollection)

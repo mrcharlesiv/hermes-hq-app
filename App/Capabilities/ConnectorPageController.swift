@@ -726,21 +726,33 @@ struct ConnectorPageView: View {
                 .accessibilityIdentifier("mcp-tools-search")
         }
         if levels, page.tools.count > 3 || page.tools.contains(where: { page.permission(for: $0.name) != .alwaysAllow }) {
+            let filterChips = Group {
+                filterChip(title: "All (\(page.tools.count))", active: page.permissionFilter == nil, id: "mcp-filter-all") {
+                    page.permissionFilter = nil
+                }
+                ForEach(McpToolPermission.allCases, id: \.self) { level in
+                    let c = page.count(for: level)
+                    filterChip(title: "\(level.shortTitle) (\(c))", active: page.permissionFilter == level, id: "mcp-filter-\(level.rawValue)") {
+                        page.permissionFilter = page.permissionFilter == level ? nil : level
+                    }
+                }
+            }
+            #if targetEnvironment(macCatalyst)
+            PagesFlowLayout(spacing: 8, lineSpacing: 8) {
+                filterChips
+            }
+            .padding(.vertical, 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+            #else
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    filterChip(title: "All (\(page.tools.count))", active: page.permissionFilter == nil, id: "mcp-filter-all") {
-                        page.permissionFilter = nil
-                    }
-                    ForEach(McpToolPermission.allCases, id: \.self) { level in
-                        let c = page.count(for: level)
-                        filterChip(title: "\(level.shortTitle) (\(c))", active: page.permissionFilter == level, id: "mcp-filter-\(level.rawValue)") {
-                            page.permissionFilter = page.permissionFilter == level ? nil : level
-                        }
-                    }
+                    filterChips
                 }
                 .padding(.vertical, 2)
             }
             .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+            #endif
         }
         if editable, page.search.isEmpty, page.permissionFilter == nil, !page.tools.isEmpty {
             if levels {
@@ -845,6 +857,7 @@ struct ConnectorPageView: View {
                 .foregroundStyle(active ? Color.hqOnTint : Color.hqLabel2)
                 .padding(.horizontal, 10).padding(.vertical, 5)
                 .background(active ? Color.hqTint : Color.hqFill3, in: .capsule)
+                .hqPointerFill(Capsule())
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(id)

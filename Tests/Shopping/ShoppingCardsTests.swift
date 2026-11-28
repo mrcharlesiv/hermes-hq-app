@@ -479,4 +479,54 @@ struct ShoppingCardsTests {
         #expect(PushPolicy.shoppingCardsKnown(["shoppingCards": false]))
         #expect(!PushPolicy.shoppingCardsKnown(["draftCards": true]))
     }
+
+    @Test func widePaneProductsCapToCardRailAndAvoidMidCardCutoff() throws {
+        let wideWidth: CGFloat = 1000
+        let cardW = PromptLayout.cardWidth(for: wideWidth)
+        let twelve = (1...12).map { product("Item \($0)", url: "https://example.com/\($0)") }
+
+        // Single, pair, and list cap cleanly to the card rail instead of stretching across the wide pane.
+        let (_, singleRow) = try #require(productsRow([bot([productsCall(Array(twelve.prefix(1)))])]))
+        let single = ProductCardsLayout.geometry(singleRow, gap: 6, width: wideWidth, category: .large)
+        #expect(single.cards[0].width == cardW)
+
+        let (_, pairRow) = try #require(productsRow([bot([productsCall(Array(twelve.prefix(2)))])]))
+        let pair = ProductCardsLayout.geometry(pairRow, gap: 6, width: wideWidth, category: .large)
+        #expect(pair.cards[1].maxX == ProductCardsLayout.side + cardW)
+        #expect(pair.photo <= 200)
+
+        let (_, listRow) = try #require(productsRow([bot([productsCall(twelve)])]))
+        let list = ProductCardsLayout.geometry(listRow, gap: 6, width: wideWidth, category: .large)
+        #expect(list.listCard?.width == cardW)
+
+        // Row carousel on a Mac wide pane (wholeTiles: true) fits exact whole tiles inside the rail and clips cleanly.
+        let (_, fiveRowA) = try #require(productsRow([bot([productsCall(Array(twelve.prefix(5)), id: "c-wide-a")], id: "m-wide-a")]))
+        let (_, fiveRowB) = try #require(productsRow([bot([productsCall(Array(twelve.prefix(5)), id: "c-wide-b")], id: "m-wide-b")]))
+        let macRow = ProductCardsLayout.geometry(fiveRowA, gap: 6, width: wideWidth, category: .large, wholeTiles: true)
+        let carousel = try #require(macRow.carousel)
+        let strip = try #require(macRow.strip)
+        #expect(!carousel.bleeds && carousel.wholeTiles)
+        #expect(strip.minX == ProductCardsLayout.side)
+        #expect(strip.width <= cardW)
+        let exactViewport = CGFloat(carousel.visibleColumns) * carousel.tileWidth
+            + CGFloat(carousel.visibleColumns - 1) * carousel.spacing
+        #expect(abs(strip.width - exactViewport) < 0.01)
+
+        // Wide iPad pane (wholeTiles: false) stays inset on the rail and peeks the next product as a scroll cue.
+        let ipadRow = ProductCardsLayout.geometry(fiveRowA, gap: 6, width: wideWidth, category: .large, wholeTiles: false)
+        let ipadCarousel = try #require(ipadRow.carousel)
+        #expect(!ipadCarousel.bleeds && !ipadCarousel.wholeTiles && ipadCarousel.isScrollable)
+
+        // Scroll offset for row A survives cell reuse for row B and re-snaps cleanly.
+        let view = ProductCardsView(frame: CGRect(x: 0, y: 0, width: wideWidth, height: 600))
+        view.configure(fiveRowA, macRow)
+        let scroll = try #require(view.subviews.compactMap { $0 as? UIScrollView }.first)
+        #expect(scroll.clipsToBounds)
+        scroll.contentOffset.x = carousel.stride
+        view.scrollViewDidScroll(scroll)
+        view.configure(fiveRowB, macRow)
+        #expect(abs(scroll.contentOffset.x) < 0.5)
+        view.configure(fiveRowA, macRow)
+        #expect(abs(scroll.contentOffset.x - carousel.stride) < 0.5)
+    }
 }

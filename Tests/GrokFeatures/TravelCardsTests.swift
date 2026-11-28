@@ -285,4 +285,112 @@ import UIKit
         #expect(scroll?.frame.minX == 0)
         #expect(scroll?.frame.width == width)
     }
+
+    @Test func widePaneHotelsCarouselFitsWholeTilesWrapsChipsAndPersistsOffset() throws {
+        let hotels: [JSONValue] = (1...5).map { idx in
+            .object([
+                "name": .string("Harborview Suites North Terminal #\(idx)"),
+                "price_per_night": .number(Double(120 + idx * 15)),
+                "currency": .string("USD"),
+                "url": .string("https://example.com/hotels/stay-\(idx)"),
+            ])
+        }
+        let call = ToolCall(
+            id: "t-h-wide",
+            name: TravelCards.hotelsTool,
+            title: "Hotels",
+            argsText: ChatJSON.stringify(.object([
+                "location": .string("North Harbor · Terminal & Waterfront District"),
+                "check_in": .string("Sat, Nov 14, 2026"),
+                "check_out": .string("Sun, Nov 15, 2026"),
+                "guests": .string("2 adults + 1 guest"),
+                "note": .string("Three terminal-area stays and two waterfront suites. Cash rates shown before tax."),
+                "follow_ups": .array([
+                    .string("Filter by free breakfast"),
+                    .string("Show suites with two bedrooms"),
+                    .string("Compare total with parking"),
+                ]),
+                "hotels": .array(hotels),
+            ])),
+            summary: nil, state: .done, durationSeconds: nil
+        )
+        let parsed = try #require(TravelCards.hotels(call))
+        let rowA = HotelsCardRow(hotels: parsed, rowId: "r-wide-hotels-a", messageId: "m-wide-a", asked: [:], expanded: false)
+        let rowB = HotelsCardRow(hotels: parsed, rowId: "r-wide-hotels-b", messageId: "m-wide-b", asked: [:], expanded: false)
+
+        let rowWidth: CGFloat = 1000
+        let macCardW: CGFloat = 660
+        let type = TravelCardType(category: .large)
+
+        // 1. Mac 660 pt rail (wholeTiles: true): exact whole-tile viewport, never chops the next card mid-tile at rest.
+        let macMetrics = HotelsCardLayout.carouselMetrics(count: parsed.hotels.count, rowWidth: rowWidth, cardWidth: macCardW, type: type, wholeTiles: true)
+        #expect(!macMetrics.bleeds && macMetrics.wholeTiles)
+        #expect(macMetrics.stripX == HotelsCardLayout.side)
+        #expect(macMetrics.stripWidth <= macCardW)
+        #expect(macMetrics.visibleColumns == 3)
+        let exactViewport = CGFloat(macMetrics.visibleColumns) * macMetrics.tileWidth + CGFloat(macMetrics.visibleColumns - 1) * macMetrics.spacing
+        #expect(abs(macMetrics.stripWidth - exactViewport) < 0.01)
+        #expect(macMetrics.isScrollable)
+        #expect(abs(macMetrics.maxOffset - CGFloat(5 - macMetrics.visibleColumns) * macMetrics.stride) < 0.01)
+
+        // Stepping forward & backward and snapping always land on whole-tile boundaries.
+        let next = macMetrics.steppedOffset(from: 0, forward: true)
+        #expect(next > 0 && next <= macMetrics.maxOffset)
+        #expect(abs(next.truncatingRemainder(dividingBy: macMetrics.stride)) < 0.01)
+        #expect(macMetrics.steppedOffset(from: next, forward: false) == 0)
+        #expect(abs(macMetrics.snappedOffset(for: macMetrics.stride * 0.7) - macMetrics.stride) < 0.01)
+
+        // 2. Wide iPad touch pane (wholeTiles: false): stays inset on the rail and keeps a peeking tile as a scroll cue.
+        let ipadMetrics = HotelsCardLayout.carouselMetrics(count: parsed.hotels.count, rowWidth: rowWidth, cardWidth: 560, type: type, wholeTiles: false)
+        #expect(!ipadMetrics.bleeds && !ipadMetrics.wholeTiles)
+        #expect(ipadMetrics.stripX == HotelsCardLayout.side && ipadMetrics.stripWidth == 560)
+        #expect(ipadMetrics.isScrollable)
+
+        // 3. Narrow bleed mode stepping returns cleanly to 0 when stepping back.
+        let phoneMetrics = HotelsCardLayout.carouselMetrics(count: parsed.hotels.count, rowWidth: 390, cardWidth: 358, type: type, wholeTiles: true)
+        #expect(phoneMetrics.bleeds && !phoneMetrics.wholeTiles)
+        let phoneNext = phoneMetrics.steppedOffset(from: 0, forward: true)
+        #expect(phoneNext > 0)
+        #expect(phoneMetrics.steppedOffset(from: phoneNext, forward: false) == 0)
+
+        // Single hotel on wide pane does not stretch into a narrow panoramic banner.
+        let singleMetrics = HotelsCardLayout.carouselMetrics(count: 1, rowWidth: rowWidth, cardWidth: macCardW, type: type, wholeTiles: true)
+        #expect(singleMetrics.tileWidth <= 360 && !singleMetrics.isScrollable)
+
+        // Long metadata wraps cleanly at Mac 660 pt rail in both standard and accessibility text sizes.
+        for cat in [UIContentSizeCategory.large, .accessibilityLarge] {
+            let t = TravelCardType(category: cat)
+            let p = HotelsCardLayout.pieces(rowA, width: macCardW, rowWidth: rowWidth, category: cat, wholeTiles: true)
+            let metaProbe = UILabel()
+            metaProbe.font = t.smallStrong
+            metaProbe.numberOfLines = HotelsCardLayout.metaLines(t)
+            metaProbe.text = HotelsCardLayout.metaWords(parsed)
+            #expect(metaProbe.sizeThatFits(CGSize(width: macCardW, height: .greatestFiniteMagnitude)).height <= p.meta)
+        }
+
+        // Follow-up chips wrap onto multiple rows on narrow width without overflowing.
+        let narrowChips = TravelCardType.chipLayout(parsed.followUps, width: 320, type: type)
+        #expect(narrowChips.height > type.chipHeight)
+        #expect(narrowChips.frames.allSatisfy { $0.frame.maxX <= 320.5 })
+
+        // Carousel clips to its viewport and preserves row A's offset even after cell reuse for row B.
+        let cardW = PromptLayout.cardWidth(for: rowWidth)
+        let activeMetrics = HotelsCardLayout.carouselMetrics(count: parsed.hotels.count, rowWidth: rowWidth, cardWidth: cardW, type: type)
+        let pieces = HotelsCardLayout.pieces(rowA, width: cardW, rowWidth: rowWidth, category: .large)
+        let view = HotelsCardView(frame: CGRect(x: 0, y: 0, width: rowWidth, height: 500))
+        let geo = HotelsCardGeometry(width: cardW, rowWidth: rowWidth, height: ceil(pieces.height), gapAbove: 8, category: .large)
+        view.configure(rowA, geo)
+        let scroll = try #require(view.subviews.compactMap { $0 as? UIScrollView }.first)
+        #expect(scroll.clipsToBounds)
+        #expect(scroll.frame.minX == HotelsCardLayout.side)
+        #expect(abs(scroll.frame.width - activeMetrics.stripWidth) < 0.01)
+
+        scroll.contentOffset.x = activeMetrics.stride
+        view.scrollViewDidScroll(scroll)
+        // Reuse cell for row B (starts at 0), then return to row A — row A's saved offset must survive.
+        view.configure(rowB, geo)
+        #expect(abs(scroll.contentOffset.x) < 0.5)
+        view.configure(rowA, geo)
+        #expect(abs(scroll.contentOffset.x - activeMetrics.stride) < 0.5)
+    }
 }

@@ -143,6 +143,15 @@ final class ChatPromptCell: ChatBaseCell {
         #if targetEnvironment(macCatalyst)
         // [Mac AAA 2026-11-16] The card's buttons answer the pointer: the transcript is left out of `PointerEffects`' sweep.
         PointerEffects.button(answerNow)
+        // [hover-shape] Tight outline around the drawn link line, never the full 44 pt touch target.
+        for linkControl in [showAll, threadToggle] {
+            PointerEffects.outline(linkControl) { [weak linkControl] in
+                guard let box = linkControl?.bounds, box.width > 0, box.height > 0 else { return nil }
+                let h = min(box.height, 24)
+                let rect = CGRect(x: 0, y: ((box.height - h) / 2).rounded(), width: box.width, height: h)
+                return PointerEffects.Outline(rect: rect, radius: HQShape.radius(6, .control), strong: false)
+            }
+        }
         #endif
         registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (cell: ChatPromptCell, _) in
             cell.updateBorder()
@@ -295,6 +304,7 @@ final class ChatPromptCell: ChatBaseCell {
         expiry.textAlignment = al.expiryLeading ? .natural : .right
         showAll.isHidden = al.showAllFrame == nil
         showAll.frame = al.showAllFrame ?? .zero
+        PointerEffects.outlineDidLayout(showAll)
         var shown = Set<ApprovalButton>()
         var ordered: [UIButton] = []
         for (kind, frame) in al.buttons {
@@ -521,9 +531,11 @@ final class ChatPromptCell: ChatBaseCell {
         showAll.isHidden = dl.showAllFrame == nil
         showAll.frame = dl.showAllFrame ?? .zero
         showAll.accessibilityLabel = dl.showAllTitle
+        PointerEffects.outlineDidLayout(showAll)
         threadToggle.isHidden = dl.threadFrame == nil
         threadToggle.frame = dl.threadFrame ?? .zero
         threadToggle.accessibilityLabel = dl.threadTitle
+        PointerEffects.outlineDidLayout(threadToggle)
         if let toggle = dl.toggleFrame {
             toggleRowId = d.rowId
             draftToggle.isHidden = false

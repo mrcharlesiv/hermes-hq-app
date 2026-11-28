@@ -32,7 +32,7 @@ final class PluginWebPageState {
     var trouble: String?
 }
 
-final class PluginWebPageController: UIViewController, WKNavigationDelegate, WKScriptMessageHandlerWithReply, WKScriptMessageHandler,
+final class PluginWebPageController: UIViewController, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandlerWithReply, WKScriptMessageHandler,
                                      KeyRefreshing {
     static let scheme = "hqplugin"
 
@@ -211,6 +211,7 @@ final class PluginWebPageController: UIViewController, WKNavigationDelegate, WKS
         content.add(proxy, name: "hqNote")
         let web = WKWebView(frame: .zero, configuration: config)
         web.navigationDelegate = self
+        web.uiDelegate = self
         web.isOpaque = false
         web.backgroundColor = HQPalette.groupedPage
         web.scrollView.backgroundColor = HQPalette.groupedPage
@@ -415,6 +416,46 @@ final class PluginWebPageController: UIViewController, WKNavigationDelegate, WKS
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         AppLog.note("plugin-pages", "\(page.name) web content process ended; reloading")
         load()
+    }
+
+    // MARK: JavaScript panels & new windows (alert / confirm / prompt / target="_blank")
+
+    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+                 for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        if let url = navigationAction.request.url,
+           ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") {
+            UIApplication.shared.open(url)
+        }
+        return nil
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo) async {
+        _ = await runConfirmPanel(message, cancel: false)
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo) async -> Bool {
+        await runConfirmPanel(message, cancel: true)
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?, initiatedByFrame frame: WKFrameInfo) async -> String? {
+        await withCheckedContinuation { done in
+            let alert = UIAlertController(title: page.label, message: prompt, preferredStyle: .alert)
+            alert.addTextField { field in field.text = defaultText }
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in done.resume(returning: nil) })
+            alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in done.resume(returning: alert.textFields?.first?.text ?? "") })
+            guard let host = FailureAlert.topmost(self) else { done.resume(returning: nil); return }
+            host.present(alert, animated: true)
+        }
+    }
+
+    private func runConfirmPanel(_ message: String, cancel: Bool) async -> Bool {
+        await withCheckedContinuation { done in
+            let alert = UIAlertController(title: page.label, message: message, preferredStyle: .alert)
+            if cancel { alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in done.resume(returning: false) }) }
+            alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in done.resume(returning: true) })
+            guard let host = FailureAlert.topmost(self) else { done.resume(returning: false); return }
+            host.present(alert, animated: true)
+        }
     }
 
     // MARK: Restart

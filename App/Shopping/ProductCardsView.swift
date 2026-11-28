@@ -38,9 +38,10 @@ nonisolated struct ProductCardsGeometry: @unchecked Sendable {
     var note: (text: String, placed: PromptPlacedText)?
     /// Each shown product's frame: in the row (single, pair), in the strip's content (row), or in the list card (list).
     var cards: [CGRect]
-    /// The sideways strip (row): its frame in the row and its content's width.
+    /// The sideways strip (row): its frame in the row, its content's width, and carousel paging metrics.
     var strip: CGRect?
     var stripContent: CGFloat = 0
+    var carousel: ChatCarouselMetrics? = nil
     /// The soft card the list's rows sit in (list), in the row.
     var listCard: CGRect?
     /// The list's last line, "7 more ›" / "Show Less" (list), in the list card: as short as its words.
@@ -107,9 +108,10 @@ nonisolated enum ProductCardsLayout {
         expanded ? "Show Less" : "\(count - listFirst) more ›"
     }
 
-    static func geometry(_ card: ProductsCardRow, gap: CGFloat, width: CGFloat, category: UIContentSizeCategory) -> ProductCardsGeometry {
+    static func geometry(_ card: ProductsCardRow, gap: CGFloat, width: CGFloat, category: UIContentSizeCategory,
+                         wholeTiles: Bool = DeviceWord.isMac) -> ProductCardsGeometry {
         let fonts = ProductFonts(category)
-        let inner = max(120, width - 2 * side)
+        let inner = PromptLayout.cardWidth(for: width)
         let mode = mode(card.count)
         let buttonH = max(36, ceil(fonts.button.lineHeight) + 14)
         var y = gap + 6
@@ -142,18 +144,33 @@ nonisolated enum ProductCardsLayout {
             y = g.cards[0].maxY
         case .pair:
             let w = floor((inner - gapBetween) / 2)
-            g.photo = round(w * 0.62)   // a landscape photo: the pair stays short
+            g.photo = min(200, round(w * 0.62))   // a landscape photo: the pair stays short even on wide Mac panes
             let h = g.photo + pad + textH + pad
             g.cards = [CGRect(x: side, y: y, width: w, height: h), CGRect(x: side + inner - w, y: y, width: w, height: h)]
             y += h
         case .row:
-            // Wide enough for "$64.99  $79.99  ★ 4.4" on one line, narrow enough that the third card peeks in.
-            let w = max(164, ceil(fonts.name.pointSize * 10.9))
+            // On narrow phones: wide enough for "$64.99  $79.99  ★ 4.4" on one line, narrow enough that the third card
+            // peeks in. On wide panes (Mac / wide iPad): fit exact whole cards within the card rail with zero cutoff.
+            let phoneTile = max(164, ceil(fonts.name.pointSize * 10.9))
+            let carousel = ChatCarouselMetrics.compute(
+                count: card.count,
+                rowWidth: width,
+                cardWidth: inner,
+                side: side,
+                spacing: gapBetween,
+                phoneTileWidth: phoneTile,
+                minWideTile: phoneTile,
+                maxWideTile: max(240, phoneTile + 40),
+                singleWideCap: inner,
+                wholeTiles: wholeTiles
+            )
+            let w = carousel.tileWidth
             g.photo = round(w * 0.66)
             let h = g.photo + pad + textH + pad
-            g.cards = (0..<card.count).map { CGRect(x: side + CGFloat($0) * (w + gapBetween), y: 0, width: w, height: h) }
-            g.stripContent = side * 2 + CGFloat(card.count) * w + CGFloat(card.count - 1) * gapBetween
-            g.strip = CGRect(x: 0, y: y, width: width, height: h)
+            g.cards = (0..<card.count).map { CGRect(x: carousel.contentInset + CGFloat($0) * carousel.stride, y: 0, width: w, height: h) }
+            g.stripContent = carousel.contentWidth
+            g.strip = CGRect(x: carousel.stripX, y: y, width: carousel.stripWidth, height: h)
+            g.carousel = carousel
             y += h
         case .list:
             g.photo = max(44, ceil(fonts.line(fonts.name) + fonts.line(fonts.meta) + 4))
@@ -375,12 +392,19 @@ final class ProductCardsView: UIView, UIScrollViewDelegate {
     /// VoiceOver's stop for the bot's line (the cell draws its words).
     private lazy var note = UIAccessibilityElement(accessibilityContainer: self)
     private let strip = UIScrollView()
+    private var arrows: ChatCarouselArrows?
+    private var carouselMetrics: ChatCarouselMetrics?
     private let listCard = UIView()
     private let seeAll = UIButton(type: .system)
     private let seeAllRule = UIView()
     private var cards: [ProductCardView] = []
     private var chips: [UIButton] = []
+    private var lastShownCount = 0
+    private var lastHasNote = false
+    private var lastHasSeeAll = false
+    private var lastFollowUpCount = 0
     private var rowId = ""
+    private var isConfiguring = false
     /// Where each strip was scrolled to, by row: a cell drawn again keeps its place.
     private static var offsets: [String: CGFloat] = [:]
 
@@ -389,8 +413,14 @@ final class ProductCardsView: UIView, UIScrollViewDelegate {
         strip.showsHorizontalScrollIndicator = false
         strip.alwaysBounceHorizontal = true
         strip.delegate = self
-        strip.clipsToBounds = false
+        strip.clipsToBounds = true
+        #if targetEnvironment(macCatalyst)
+        strip.delaysContentTouches = false
+        #endif
         addSubview(strip)
+        arrows = ChatCarouselArrows(in: self, identifier: "shopping.products", itemNoun: "products") { [weak self] forward in
+            self?.stepStrip(forward: forward)
+        }
         listCard.layer.cornerRadius = ChatMetrics.insetCardRadius
         listCard.layer.cornerCurve = .continuous
         listCard.clipsToBounds = true
@@ -400,15 +430,26 @@ final class ProductCardsView: UIView, UIScrollViewDelegate {
             Haptics.play(.selection)
             self?.onToggle?()
         }, for: .primaryActionTriggered)
+        #if targetEnvironment(macCatalyst)
+        PointerEffects.button(seeAll)
+        #endif
         listCard.addSubview(seeAll)
         seeAllRule.isUserInteractionEnabled = false
         listCard.addSubview(seeAllRule)
         registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (view: ProductCardsView, _) in
             view.styleListCard()
+            view.arrows?.restyle()
         }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    private func stepStrip(forward: Bool) {
+        guard let metrics = carouselMetrics else { return }
+        let targetX = metrics.steppedOffset(from: strip.contentOffset.x, forward: forward)
+        strip.setContentOffset(CGPoint(x: targetX, y: 0), animated: !HQMotion.reduced)
+        if HQMotion.reduced { arrows?.update() }
+    }
 
     private func styleListCard() {
         listCard.layer.cornerRadius = ChatMetrics.insetCardRadius
@@ -419,7 +460,9 @@ final class ProductCardsView: UIView, UIScrollViewDelegate {
     }
 
     func configure(_ row: ProductsCardRow, _ g: ProductCardsGeometry) {
-        if rowId != row.rowId { strip.contentOffset = .zero }
+        isConfiguring = true
+        defer { isConfiguring = false }
+        let sameRow = rowId == row.rowId
         rowId = row.rowId
         accessibilityIdentifier = "shopping.products"
         if let n = g.note {
@@ -449,10 +492,21 @@ final class ProductCardsView: UIView, UIScrollViewDelegate {
             card.frame = g.cards[i]
             card.configure(products[i], asks: row.asks(products[i]), geometry: g, first: i == 0)
         }
+        carouselMetrics = g.carousel
         if let s = g.strip {
             strip.frame = s
             strip.contentSize = CGSize(width: g.stripContent, height: s.height)
-            strip.contentOffset.x = min(Self.offsets[row.rowId] ?? strip.contentOffset.x, max(0, g.stripContent - s.width))
+            strip.alwaysBounceHorizontal = g.carousel?.isScrollable ?? (g.stripContent > s.width + 1)
+            let savedX = Self.offsets[row.rowId] ?? (sameRow ? strip.contentOffset.x : 0)
+            let clampedX = g.carousel?.snappedOffset(for: savedX) ?? min(max(0, savedX), max(0, g.stripContent - s.width))
+            strip.contentOffset.x = clampedX
+            if let metrics = g.carousel {
+                arrows?.configure(scrollView: strip, stripFrame: s, yCenter: g.photo / 2, metrics: metrics)
+            } else {
+                arrows?.hide()
+            }
+        } else {
+            arrows?.hide()
         }
         if let l = g.listCard { listCard.frame = l }
         seeAll.isHidden = g.seeAll == nil
@@ -505,20 +559,46 @@ final class ProductCardsView: UIView, UIScrollViewDelegate {
             chip.isHidden = false
             chip.frame = item.frame
         }
-        var elements: [Any] = g.note == nil ? [] : [note]
-        elements += cards.prefix(shown).map { $0 as Any }
-        if g.seeAll != nil { elements.append(seeAll) }
-        elements += chips.prefix(g.followUps.count).map { $0 as Any }
+        lastShownCount = shown
+        lastHasNote = g.note != nil
+        lastHasSeeAll = g.seeAll != nil
+        lastFollowUpCount = g.followUps.count
+        refreshAccessibilityElements()
+    }
+
+    private func refreshAccessibilityElements() {
+        var elements: [Any] = lastHasNote ? [note] : []
+        elements += cards.prefix(lastShownCount).map { $0 as Any }
+        elements += arrows?.visibleButtons.map { $0 as Any } ?? []
+        if lastHasSeeAll { elements.append(seeAll) }
+        elements += chips.prefix(lastFollowUpCount).map { $0 as Any }
         accessibilityElements = elements
     }
 
     func reset() {
         cards.forEach { $0.reset() }
+        carouselMetrics = nil
+        arrows?.hide()
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        guard !isConfiguring, !rowId.isEmpty else { return }
         Self.offsets[rowId] = scrollView.contentOffset.x
         if Self.offsets.count > 200 { Self.offsets = [rowId: scrollView.contentOffset.x] }
+        if arrows?.update() == true { refreshAccessibilityElements() }
+    }
+
+    func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint, targetContentOffset: UnsafeMutablePointer<CGPoint>) {
+        guard scrollView === strip, let metrics = carouselMetrics, metrics.wholeTiles, metrics.isScrollable else { return }
+        targetContentOffset.pointee.x = metrics.snappedOffset(for: targetContentOffset.pointee.x)
+    }
+
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        guard scrollView === strip, let metrics = carouselMetrics, metrics.wholeTiles, metrics.isScrollable else { return }
+        let snapped = metrics.snappedOffset(for: scrollView.contentOffset.x)
+        if abs(snapped - scrollView.contentOffset.x) > 0.5 {
+            scrollView.setContentOffset(CGPoint(x: snapped, y: 0), animated: !HQMotion.reduced)
+        }
     }
 }
 
@@ -562,6 +642,7 @@ final class ProductCardView: UIControl {
         }, for: .primaryActionTriggered)
         addSubview(button)
         #if targetEnvironment(macCatalyst)
+        PointerEffects.surface(self)
         PointerEffects.button(button)
         #endif
         isAccessibilityElement = true
@@ -589,7 +670,7 @@ final class ProductCardView: UIControl {
     }
 
     override var isHighlighted: Bool {
-        didSet { alpha = isHighlighted ? 0.6 : 1 }
+        didSet { alpha = PointerEffects.dim(isHighlighted, to: 0.6) }
     }
 
     func configure(_ p: ShoppingCards.Product, asks: Set<ShoppingCards.Ask>, geometry g: ProductCardsGeometry, first: Bool) {

@@ -55,6 +55,7 @@ private struct HotelDetailView: View {
     let onOpenSite: () -> Void
     @State private var copiedAddress = false
     @State private var mapCommand: HotelMapCommand?
+    @State private var photoAnchor: Int? = 0
     @State private var submitted = false
 
     private func submit(_ ask: TravelCards.Ask) {
@@ -82,7 +83,12 @@ private struct HotelDetailView: View {
     }
 
     private var photosStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        let count = hotel.images.count
+        let visibleSlots = count <= 1 ? 1 : 2
+        let current = min(max(0, photoAnchor ?? 0), max(0, count - 1))
+        let maxAnchor = max(0, count - visibleSlots)
+        let cardRadius = HQShape.radius(14, .card)
+        return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
                 ForEach(Array(hotel.images.enumerated()), id: \.offset) { idx, url in
                     Button {
@@ -93,17 +99,23 @@ private struct HotelDetailView: View {
                         // (only the "1 / 3" badge did), so the whole picture is the button.
                         HotelRemotePhoto(url: url)
                             .allowsHitTesting(false)
-                            // One photo spans the sheet's card width (owner 2026-11-27: a 320 pt photo stopped short
-                            // of the cards under it); several keep the 240 pt peeking strip.
+                            // One photo spans the sheet's card width; on Mac, multiple photos fit whole pairs cleanly
+                            // without slicing a 3rd photo mid-frame, while iOS keeps its 240 pt peeking strip.
                             .containerRelativeFrame(.horizontal) { width, _ in
-                                hotel.images.count == 1 ? width : 240
+                                if count == 1 { return width }
+                                #if targetEnvironment(macCatalyst)
+                                return max(220, floor((width - 10) / 2))
+                                #else
+                                return 240
+                                #endif
                             }
-                            .frame(height: 168)
-                            .clipShape(.rect(cornerRadius: HQShape.radius(14, .card)))
+                            .frame(height: DeviceWord.isMac && count == 1 ? 200 : 168)
+                            .clipShape(.rect(cornerRadius: cardRadius))
                             .contentShape(.rect)
+                            .hqPointerFill(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
                             .overlay(alignment: .bottomTrailing) {
-                                if idx == 0 && hotel.images.count > 1 {
-                                    Text("1 / \(hotel.images.count)")
+                                if idx == 0 && count > 1 {
+                                    Text("1 / \(count)")
                                         .font(Font.hq(.caption2).weight(.semibold))
                                         .foregroundStyle(.white)
                                         .padding(.horizontal, 8).padding(.vertical, 4)
@@ -113,12 +125,60 @@ private struct HotelDetailView: View {
                             }
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("View photo \(idx + 1) of \(hotel.images.count)")
+                    .id(idx)
+                    .accessibilityLabel("View photo \(idx + 1) of \(count)")
                     .accessibilityIdentifier("travel.hotel.photo.\(idx)")
                 }
             }
+            .scrollTargetLayout()
+        }
+        .scrollTargetBehavior(.viewAligned)
+        .scrollPosition(id: $photoAnchor, anchor: .leading)
+        .overlay {
+            #if targetEnvironment(macCatalyst)
+            if count > visibleSlots {
+                HStack {
+                    photoArrow(symbol: "chevron.left", label: "Previous photos", enabled: current > 0) {
+                        let target = max(0, current - visibleSlots)
+                        HQMotion.withAnimation(.snappy) { photoAnchor = target }
+                    }
+                    Spacer()
+                    photoArrow(symbol: "chevron.right", label: "Next photos", enabled: current < maxAnchor) {
+                        let target = min(maxAnchor, current + visibleSlots)
+                        HQMotion.withAnimation(.snappy) { photoAnchor = target }
+                    }
+                }
+                .padding(.horizontal, 8)
+            }
+            #endif
         }
     }
+
+    #if targetEnvironment(macCatalyst)
+    private func photoArrow(symbol: String, label: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button {
+            Haptics.play(.selection)
+            action()
+        } label: {
+            Image(systemName: symbol)
+                .font(Font.hq(.footnote).weight(.semibold))
+                .foregroundStyle(Color.hqLabel)
+                .frame(width: 30, height: 30)
+                .background(.regularMaterial, in: Circle())
+                .overlay { Circle().strokeBorder(Color(uiColor: HQPalette.separator)) }
+                .shadow(color: .black.opacity(0.18), radius: 4, y: 1)
+                .contentShape(Circle())
+                .hqPointerFill(Circle())
+        }
+        .buttonStyle(.plain)
+        .opacity(enabled ? 1 : 0)
+        .disabled(!enabled)
+        .allowsHitTesting(enabled)
+        .accessibilityHidden(!enabled)
+        .hqIconLabel(label)
+        .accessibilityIdentifier("travel.hotel.photos.\(symbol == "chevron.left" ? "previous" : "next")")
+    }
+    #endif
 
     private var summaryCard: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -160,13 +220,12 @@ private struct HotelDetailView: View {
                 }
             }
             if !hotel.cancellation.isEmpty || !hotel.breakfast.isEmpty || !hotel.badge.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        if !hotel.badge.isEmpty { pill(hotel.badge, tint: true) }
-                        if !hotel.cancellation.isEmpty { pill(hotel.cancellation, tint: false) }
-                        if !hotel.breakfast.isEmpty { pill(hotel.breakfast, tint: false) }
-                    }
+                PagesFlowLayout(spacing: 8, lineSpacing: 8) {
+                    if !hotel.badge.isEmpty { pill(hotel.badge, tint: true) }
+                    if !hotel.cancellation.isEmpty { pill(hotel.cancellation, tint: false) }
+                    if !hotel.breakfast.isEmpty { pill(hotel.breakfast, tint: false) }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(14)
@@ -177,9 +236,10 @@ private struct HotelDetailView: View {
         Text(text)
             .font(Font.hq(.caption).weight(.medium))
             .foregroundStyle(tint ? Color.hqTint : Color.hqLabel2)
-            .padding(.horizontal, 8).padding(.vertical, 4)
-            .background(tint ? Color.hqTint.opacity(0.14) : Color.hqFill3, in: .capsule)
-            .lineLimit(1)
+            .padding(.horizontal, 9).padding(.vertical, 5)
+            .background(tint ? Color.hqTint.opacity(0.14) : Color.hqFill3, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .lineLimit(3)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder
@@ -228,9 +288,10 @@ private struct HotelDetailView: View {
                 .foregroundStyle(Color.hqLabel)
                 .frame(width: 34, height: 34)
                 .hqGlassEffect(in: .circle)
+                .hqPointerFill(Circle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(label)
+        .hqIconLabel(label)
         .accessibilityIdentifier(id)
     }
 
@@ -429,7 +490,7 @@ private struct HotelRemotePhoto: UIViewRepresentable {
 
 // MARK: - Full-Screen Hotel Photo Gallery Viewer (Name, Counter, Thumbnails, Zoom, Navigation)
 
-final class HotelPhotoGalleryController: UIViewController, UIScrollViewDelegate {
+final class HotelPhotoGalleryController: UIViewController, UIScrollViewDelegate, UIGestureRecognizerDelegate {
     private let hotelName: String
     private let urls: [URL]
     private(set) var index: Int
@@ -438,6 +499,8 @@ final class HotelPhotoGalleryController: UIViewController, UIScrollViewDelegate 
     private let thumbScroll = UIScrollView()
     private var thumbButtons: [UIButton] = []
     private var arrows: PhotoPagerArrows?
+    private var lastScrollSize: CGSize = .zero
+    private var didScrollInitialThumb = false
 
     init(hotelName: String, urls: [URL], index: Int) {
         self.hotelName = hotelName
@@ -472,20 +535,28 @@ final class HotelPhotoGalleryController: UIViewController, UIScrollViewDelegate 
 
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.delegate = self
+        PhotoViewerChrome.prepare(scroll)
         scroll.minimumZoomScale = 1
         scroll.maximumZoomScale = 4
         scroll.showsHorizontalScrollIndicator = false
         scroll.showsVerticalScrollIndicator = false
+        scroll.contentInsetAdjustmentBehavior = .never
         view.addSubview(scroll)
 
-        imageView.translatesAutoresizingMaskIntoConstraints = false
-        imageView.fits = true   // the whole photo, on black; pinch zooms in
+        imageView.fits = true   // the whole photo, on black; pinch or double-click zooms in
         imageView.backgroundColor = .black
         scroll.addSubview(imageView)
+
+        let doubleTap = UITapGestureRecognizer(target: self, action: #selector(doubleTapped(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        scroll.addGestureRecognizer(doubleTap)
 
         thumbScroll.translatesAutoresizingMaskIntoConstraints = false
         thumbScroll.showsHorizontalScrollIndicator = false
         thumbScroll.accessibilityIdentifier = "travel.hotel.gallery.thumbnails"
+        #if targetEnvironment(macCatalyst)
+        thumbScroll.delaysContentTouches = false
+        #endif
         view.addSubview(thumbScroll)
 
         NSLayoutConstraint.activate([
@@ -493,11 +564,6 @@ final class HotelPhotoGalleryController: UIViewController, UIScrollViewDelegate 
             scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: thumbScroll.topAnchor, constant: -10),
-
-            imageView.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor),
-            imageView.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor),
-            imageView.topAnchor.constraint(equalTo: scroll.frameLayoutGuide.topAnchor),
-            imageView.bottomAnchor.constraint(equalTo: scroll.frameLayoutGuide.bottomAnchor),
 
             thumbScroll.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
             thumbScroll.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
@@ -512,12 +578,30 @@ final class HotelPhotoGalleryController: UIViewController, UIScrollViewDelegate 
             }
             let leftSwipe = UISwipeGestureRecognizer(target: self, action: #selector(swipedLeft))
             leftSwipe.direction = .left
+            leftSwipe.delegate = self
             view.addGestureRecognizer(leftSwipe)
             let rightSwipe = UISwipeGestureRecognizer(target: self, action: #selector(swipedRight))
             rightSwipe.direction = .right
+            rightSwipe.delegate = self
             view.addGestureRecognizer(rightSwipe)
         }
         showCurrent()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        let size = scroll.bounds.size
+        if size.width > 0, size.height > 0, size != lastScrollSize {
+            lastScrollSize = size
+            if scroll.zoomScale > 1.01 { scroll.setZoomScale(1, animated: false) }
+            imageView.frame = CGRect(origin: .zero, size: size)
+            scroll.contentSize = size
+        }
+        centerZoomedImage()
+        if !didScrollInitialThumb, thumbScroll.bounds.width > 0, thumbButtons.indices.contains(index) {
+            didScrollInitialThumb = true
+            thumbScroll.scrollRectToVisible(thumbButtons[index].frame.insetBy(dx: -12, dy: 0), animated: false)
+        }
     }
 
     override var canBecomeFirstResponder: Bool { true }
@@ -525,13 +609,49 @@ final class HotelPhotoGalleryController: UIViewController, UIScrollViewDelegate 
         super.viewDidAppear(animated)
         becomeFirstResponder()
     }
-    override var keyCommands: [UIKeyCommand]? { urls.count > 1 ? UIKeyCommand.photoPaging(#selector(pageKey(_:))) : [] }
+    override var keyCommands: [UIKeyCommand]? {
+        var cmds = urls.count > 1 ? UIKeyCommand.photoPaging(#selector(pageKey(_:))) : []
+        cmds.append(UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(closeKey)))
+        return cmds
+    }
 
+    @objc private func closeKey() { dismiss(animated: true) }
     @objc private func pageKey(_ command: UIKeyCommand) { step(forward: command.pagesForward) }
     @objc private func swipedLeft() { step(forward: true) }
     @objc private func swipedRight() { step(forward: false) }
 
+    @objc private func doubleTapped(_ tap: UITapGestureRecognizer) {
+        if scroll.zoomScale > 1.01 {
+            scroll.setZoomScale(1, animated: !HQMotion.reduced)
+        } else {
+            let point = tap.location(in: imageView)
+            let size = CGSize(width: scroll.bounds.width / 2.5, height: scroll.bounds.height / 2.5)
+            scroll.zoom(to: CGRect(x: point.x - size.width / 2, y: point.y - size.height / 2, width: size.width, height: size.height),
+                        animated: !HQMotion.reduced)
+        }
+    }
+
+    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer is UISwipeGestureRecognizer {
+            return scroll.zoomScale <= 1.01
+        }
+        return true
+    }
+
     func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+
+    func scrollViewDidZoom(_ scrollView: UIScrollView) { centerZoomedImage() }
+
+    private func centerZoomedImage() {
+        let bounds = scroll.bounds.size
+        let content = imageView.frame.size
+        scroll.contentInset = UIEdgeInsets(
+            top: max(0, (bounds.height - content.height) / 2),
+            left: max(0, (bounds.width - content.width) / 2),
+            bottom: 0,
+            right: 0
+        )
+    }
 
     private func buildThumbnails() {
         guard urls.count > 1 else { return }
@@ -552,6 +672,9 @@ final class HotelPhotoGalleryController: UIViewController, UIScrollViewDelegate 
             btn.addAction(UIAction { [weak self] _ in
                 self?.select(index: i)
             }, for: .primaryActionTriggered)
+            #if targetEnvironment(macCatalyst)
+            PointerEffects.surface(btn, radius: 8, above: thumb)
+            #endif
             thumbScroll.addSubview(btn)
             thumbButtons.append(btn)
             x += 64
@@ -580,6 +703,9 @@ final class HotelPhotoGalleryController: UIViewController, UIScrollViewDelegate 
             btn.layer.borderWidth = i == index ? 2.5 : 0
             btn.layer.borderColor = UIColor.white.cgColor
             btn.alpha = i == index ? 1.0 : 0.6
+        }
+        if thumbButtons.indices.contains(index), thumbScroll.bounds.width > 0 {
+            thumbScroll.scrollRectToVisible(thumbButtons[index].frame.insetBy(dx: -12, dy: 0), animated: !HQMotion.reduced)
         }
     }
 }

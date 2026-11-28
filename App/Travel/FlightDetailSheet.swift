@@ -163,6 +163,7 @@ private struct FlightDetailView: View {
                         .foregroundStyle(Color.hqLabel2)
                 }
                 .contentShape(Rectangle())
+                .hqPointerFill(8)
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("travel.flight.rulesToggle")

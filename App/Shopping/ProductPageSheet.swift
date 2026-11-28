@@ -15,6 +15,8 @@ final class ProductPageSheet: UIViewController, UIScrollViewDelegate {
     private let pager = UIScrollView()
     private let dots = UIPageControl()
     private var photos: [ShoppingPhotoView] = []
+    private var lastPagerWidth: CGFloat = 0
+    private var isLayingOutPager = false
     private var submitted = false
     private static let photoHeight: CGFloat = 260
 
@@ -40,6 +42,7 @@ final class ProductPageSheet: UIViewController, UIScrollViewDelegate {
             return min(context.maximumDetentValue, max(220, wanted))
         }
         let sheet = ChatSheet.wrap(page, title: product.store, detents: [fit, .large()])
+        ChatSheet.wrapTitle(page)
         host.present(sheet, animated: true)
     }
 
@@ -66,10 +69,12 @@ final class ProductPageSheet: UIViewController, UIScrollViewDelegate {
         build()
     }
 
-    #if DEBUG
-    /// Screenshots: `-HQDemoShoppingPageScroll <points>` opens the sheet at large and scrolls the page that far.
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        // [mac] Claim first responder so ← and → keyboard photo paging works when multiple photos exist.
+        if photos.count > 1 { becomeFirstResponder() }
+        #if DEBUG
+        // Screenshots: `-HQDemoShoppingPageScroll <points>` opens the sheet at large and scrolls the page that far.
         guard let y = ChatDemo.argument("-HQDemoShoppingPageScroll").flatMap(Double.init) else { return }
         if let sheet = (navigationController ?? self).sheetPresentationController {
             sheet.animateChanges { sheet.selectedDetentIdentifier = .large }
@@ -80,8 +85,8 @@ final class ProductPageSheet: UIViewController, UIScrollViewDelegate {
             let most = max(0, self.scroll.contentSize.height + self.scroll.adjustedContentInset.bottom - self.scroll.bounds.height)
             self.scroll.contentOffset.y = min(CGFloat(y) - self.scroll.adjustedContentInset.top, most)
         }
+        #endif
     }
-    #endif
 
     /// The height the page needs at `width` (its own detent reads it).
     func fittedHeight(width: CGFloat) -> CGFloat {
@@ -180,6 +185,9 @@ final class ProductPageSheet: UIViewController, UIScrollViewDelegate {
         pager.isPagingEnabled = true
         pager.showsHorizontalScrollIndicator = false
         pager.delegate = self
+        #if targetEnvironment(macCatalyst)
+        pager.delaysContentTouches = false
+        #endif
         pager.frame = box.bounds
         pager.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         box.addSubview(pager)
@@ -234,15 +242,22 @@ final class ProductPageSheet: UIViewController, UIScrollViewDelegate {
         super.viewDidLayoutSubviews()
         let size = pager.bounds.size
         guard size.width > 0 else { return }
+        let widthChanged = abs(size.width - lastPagerWidth) > 0.5
+        lastPagerWidth = size.width
+        isLayingOutPager = true
+        defer { isLayingOutPager = false }
         for (i, photo) in photos.enumerated() {
             photo.frame = CGRect(x: CGFloat(i) * size.width, y: 0, width: size.width, height: size.height)
             photo.set(i < product.images.count ? product.images[i] : nil, maxPoints: max(size.width, size.height))
         }
         pager.contentSize = CGSize(width: size.width * CGFloat(photos.count), height: size.height)
+        if widthChanged, photos.indices.contains(dots.currentPage) {
+            pager.contentOffset.x = CGFloat(dots.currentPage) * size.width
+        }
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        guard scrollView === pager, pager.bounds.width > 0 else { return }
+        guard scrollView === pager, !isLayingOutPager, pager.bounds.width > 0 else { return }
         let page = max(0, min(photos.count - 1, Int((pager.contentOffset.x / pager.bounds.width).rounded())))
         dots.currentPage = page
         photoArrows?.update(index: page, count: photos.count, hidden: false)
@@ -428,6 +443,9 @@ final class ProductPageSheet: UIViewController, UIScrollViewDelegate {
         control.isAccessibilityElement = true
         control.accessibilityTraits = .link
         control.accessibilityLabel = ([offer.store, offer.price.map { ShoppingCards.price($0, currency: currency) }].compactMap { $0 } + under).joined(separator: ", ")
+        #if targetEnvironment(macCatalyst)
+        PointerEffects.surface(control, radius: 10)
+        #endif
         return control
     }
 }

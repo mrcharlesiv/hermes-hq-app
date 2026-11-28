@@ -15,8 +15,9 @@ nonisolated struct AskCardGeometry: @unchecked Sendable {
     var titles: [String]
     var font: UIFont
     var stacked: Bool
-    /// "Something else…" (its touch frame) and the link ("Open in Slack ↗"), when shown.
+    /// "Something else…" (its touch frame & tight drawn text rect) and the link ("Open in Slack ↗"), when shown.
     var other: CGRect?
+    var otherVisual: CGRect? = nil
     var link: CGRect?
     var linkTitle: String
     /// The bar beside their words.
@@ -162,6 +163,7 @@ nonisolated enum AskCardLayout {
         let font = PromptFonts.button(category)
         var stacked = false
         var otherFrame: CGRect?
+        var otherVisual: CGRect?
         var block: ReplyBlock?
         if let answer = card.answer {
             // Expanded answered ask: status + full sent reply.
@@ -212,6 +214,7 @@ nonisolated enum AskCardLayout {
             let oFrame = CGRect(x: x + (innerW - o.size.width) / 2, y: y, width: o.size.width, height: o.size.height)
             texts.append(PromptPlacedText(text: o, frame: oFrame))
             otherFrame = CGRect(x: x, y: oFrame.midY - 22, width: innerW, height: 44)
+            otherVisual = oFrame.insetBy(dx: -8, dy: -4)
             y = oFrame.maxY
         }
         // What happens next, while it waits.
@@ -225,7 +228,7 @@ nonisolated enum AskCardLayout {
 
         let cardFrame = CGRect(x: side, y: top, width: cardW, height: ceil(y + padV - top))
         let accessibility = spoken.joined(separator: ". ")
-        var geometry = AskCardGeometry(buttons: placed, titles: a.choices, font: font, stacked: stacked, other: otherFrame, link: linkFrame,
+        var geometry = AskCardGeometry(buttons: placed, titles: a.choices, font: font, stacked: stacked, other: otherFrame, otherVisual: otherVisual, link: linkFrame,
                                        linkTitle: linkTitle, quote: quote, chips: chips, disabled: card.answering || card.editingReply)
         geometry.picked = card.picked
         if card.answer != nil {
@@ -493,6 +496,7 @@ final class AskCardView: UIView {
     private var replyButtons: [DraftButton: UIButton] = [:]
     private let showAll = UIControl()
     private let other = UIControl()
+    private var otherVisualFrame: CGRect?
     private let link = UIControl()
     private let toggle = UIControl()
     private let bar = UIView()
@@ -529,6 +533,22 @@ final class AskCardView: UIView {
             control.accessibilityLabel = label
             addSubview(control)
         }
+        #if targetEnvironment(macCatalyst)
+        // [hover-shape] Tight outline around the drawn text link, never the full 44 pt touch target.
+        PointerEffects.outline(other) { [weak self] in
+            guard let self, let visual = self.otherVisualFrame else { return nil }
+            let rect = visual.offsetBy(dx: -self.other.frame.minX, dy: -self.other.frame.minY)
+            return PointerEffects.Outline(rect: rect, radius: HQShape.radius(6, .control), strong: false)
+        }
+        for linkControl in [link, showAll] {
+            PointerEffects.outline(linkControl) { [weak linkControl] in
+                guard let box = linkControl?.bounds, box.width > 0, box.height > 0 else { return nil }
+                let h = min(box.height, 26)
+                let rect = CGRect(x: 0, y: ((box.height - h) / 2).rounded(), width: box.width, height: h)
+                return PointerEffects.Outline(rect: rect, radius: HQShape.radius(6, .control), strong: false)
+            }
+        }
+        #endif
         other.addAction(UIAction { [weak self] _ in self?.onOther?() }, for: .touchUpInside)
         link.addAction(UIAction { [weak self] _ in self?.onLink?() }, for: .touchUpInside)
         showAll.addAction(UIAction { [weak self] _ in self?.onShowAll?() }, for: .touchUpInside)
@@ -596,6 +616,7 @@ final class AskCardView: UIView {
             link.isHidden = false
             link.frame = frame
             link.accessibilityLabel = g.linkTitle.replacingOccurrences(of: " ↗", with: "")
+            PointerEffects.outlineDidLayout(link)
             ordered.append(link)
         } else {
             link.isHidden = true
@@ -615,6 +636,7 @@ final class AskCardView: UIView {
         showAll.isHidden = g.showAll == nil
         showAll.frame = g.showAll ?? .zero
         showAll.accessibilityLabel = g.showAllTitle
+        PointerEffects.outlineDidLayout(showAll)
         if g.showAll != nil { ordered.append(showAll) }
         var shown = Set<DraftButton>()
         for (kind, frame) in g.replyButtons {
@@ -629,7 +651,9 @@ final class AskCardView: UIView {
         for (kind, button) in replyButtons where !shown.contains(kind) { button.isHidden = true }
         other.isHidden = g.other == nil
         other.frame = g.other ?? .zero
+        otherVisualFrame = g.otherVisual
         other.isEnabled = !g.disabled
+        PointerEffects.outlineDidLayout(other)
         if g.other != nil { ordered.append(other) }
         recolor()
     }

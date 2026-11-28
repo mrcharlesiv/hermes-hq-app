@@ -709,7 +709,7 @@ nonisolated enum TextLayout {
             if b.senderInset && !b.mine { return senderBubble(b, row: row, width: width, style: style, keep: keep) }   // [groups]
             return bubble(b, row: row, width: width, style: style, keep: keep)
         case .phoneResult(let result, _):
-            let cardWidth = max(0, width - 2 * ChatMetrics.sideInset)
+            let cardWidth = PromptLayout.cardWidth(for: width)
             let height = PhoneChatCardLayout.height(for: .result(result), width: cardWidth, style: style)
             return RowLayout(height: gap + height, content: .phoneResult(CGRect(x: ChatMetrics.sideInset, y: gap,
                                                                                 width: cardWidth, height: height)))
@@ -1064,7 +1064,7 @@ nonisolated enum TextLayout {
         if let memo = b.memo { return MemoBubbleLayout.make(b, memo: memo, row: row, width: width, style: style) }   // VOICE
         let rendered = rendered(b, row: row, style: style)
         if rendered.blocks.count == 1, let block = rendered.blocks.first, case .phoneProposal(_, let proposal) = block {
-            let w = max(0, width - 2 * ChatMetrics.sideInset)
+            let w = PromptLayout.cardWidth(for: width)
             let h = PhoneChatCardLayout.height(for: .proposal(proposal), width: w, style: style)
             let bounds = CGRect(x: 0, y: 0, width: w, height: h)
             let placed = PlacedBlock(block: block, frame: bounds, textFrame: .zero, contentWidth: w, contentHeight: h,

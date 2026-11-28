@@ -105,6 +105,9 @@ final class PhoneChatCardControl: UIButton {
         isAccessibilityElement = true
         accessibilityTraits = .button
         addAction(UIAction { [weak self] _ in self?.open?() }, for: .primaryActionTriggered)
+        #if targetEnvironment(macCatalyst)
+        PointerEffects.surface(self)
+        #endif
         registerForTraitChanges([UITraitUserInterfaceStyle.self, ThemeGenerationTrait.self]) { (view: PhoneChatCardControl, _) in
             view.styleCard()
         }
@@ -121,7 +124,7 @@ final class PhoneChatCardControl: UIButton {
         layer.borderWidth = edge.cgColor.alpha > 0 ? max(HQShape.pixel(traitCollection.displayScale), 1) : 0
     }
 
-    override var isHighlighted: Bool { didSet { alpha = isHighlighted ? 0.72 : 1 } }
+    override var isHighlighted: Bool { didSet { alpha = PointerEffects.dim(isHighlighted, to: 0.72) } }
 
     func configure(_ card: PhoneChatCardContent, style: ChatStyle) {
         self.card = card

@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Hermes.Core.Jobs;
 using Hermes.Core.Net;
 
 namespace Hermes.Core.Insights;
@@ -11,6 +12,9 @@ public sealed class TileUpdates(GatewaySession session)
     public static readonly TimeSpan Fresh = TimeSpan.FromSeconds(30);
 
     private readonly Dictionary<string, (List<TileCronJob> Jobs, DateTimeOffset At)> _lists = [];
+    /// The shared list cache keyed by the session; a session-less instance (tests) keeps its own.
+    private JobsListCache? _ownCache;
+    private JobsListCache Cache => session is { } s ? JobsListCache.For(s) : (_ownCache ??= new JobsListCache());
     private readonly Dictionary<string, TileJobs.Health> _healths = [];
     private readonly Dictionary<string, string> _lastRuns = [];
     private readonly HashSet<string> _updating = [];
@@ -20,9 +24,10 @@ public sealed class TileUpdates(GatewaySession session)
 
     private static List<KeyValuePair<string, string>> ProfileQuery(string profile) => [new("profile", profile)];
 
-    /// `GET /api/cron/jobs?profile=`.
+    /// `GET /api/cron/jobs?profile=` — through the session's shared cache so the Tiles page and Jobs store share one read per 15 s.
     public async Task<List<TileCronJob>> ReadListAsync(string profile, CancellationToken ct = default) =>
-        TileCronJob.List(await session.GetJsonAsync("/api/cron/jobs", ProfileQuery(profile), TimeSpan.FromSeconds(60), ct));
+        TileCronJob.List(await Cache.ReadAsync(JobsApi.ListKey(profile),
+            async () => (JsonNode?)await session.GetJsonAsync("/api/cron/jobs", ProfileQuery(profile), TimeSpan.FromSeconds(60)).ConfigureAwait(false), ct).ConfigureAwait(false));
 
     /// The job keeping `pin` up to date; `Known` false when the jobs couldn't be read.
     public async Task<(TileCronJob? Job, bool Known)> LookupAsync(TilePin pin, TimeSpan? fresh = null, CancellationToken ct = default)
@@ -86,7 +91,11 @@ public sealed class TileUpdates(GatewaySession session)
 
     public bool AnyUpdating { get { lock (_lock) return _updating.Count > 0; } }
 
-    public void Forget(string profile) { lock (_lock) _lists.Remove(profile); }
+    public void Forget(string profile)
+    {
+        lock (_lock) _lists.Remove(profile);
+        Cache.Forget(JobsApi.ListKey(profile));
+    }
 
     /// How Often: `PUT /api/cron/jobs/<id>?profile=<owner>` with `{"updates": {"schedule": cron}}`.
     public async Task SetFrequencyAsync(TileCronJob job, TileJobs.Frequency f, CancellationToken ct = default)

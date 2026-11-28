@@ -47,14 +47,22 @@ struct RecordVoiceNoteIntent: AppIntent {
     /// DECISION I2: the app comes forward at once (what `openAppWhenRun = true` did before the iOS 26 SDK).
     static let supportedModes: IntentModes = .foreground(.immediate)
 
-    @Parameter(title: "Bot") var bot: VoiceNoteBot
+    @Parameter(title: "Bot") var bot: VoiceNoteBot?
 
     static var parameterSummary: some ParameterSummary { Summary("Record a voice memo for \(\.$bot)") }
 
     @MainActor func perform() async throws -> some IntentResult {
-        IntentsEvents.note("perform RecordVoiceNoteIntent " + (VoiceBotCatalog.profile(key: bot.key) ?? bot.key))
+        let target: VoiceNoteBot
+        if let bot {
+            target = bot
+        } else if let fallback = ShortcutDefaultBot.resolved() {
+            target = VoiceNoteBot(fallback)
+        } else {
+            target = try await $bot.requestValue("Which bot?")
+        }
+        IntentsEvents.note("perform RecordVoiceNoteIntent " + (VoiceBotCatalog.profile(key: target.key) ?? target.key))
         // The stored catalog decides, not what the shortcut remembers of the bot.
-        guard let selected = VoiceBotCatalog.resolve(id: bot.id) else {
+        guard let selected = VoiceBotCatalog.resolve(id: target.id) else {
             AppLog.note("intents", "Record Voice Memo shortcut: bot not in the catalog")
             throw VoiceNoteError.unavailableBot
         }
@@ -78,14 +86,22 @@ struct OpenBotChatIntent: AppIntent {
     static let description: IntentDescription? = IntentDescription("Open your selected bot’s chat.")
     static let supportedModes: IntentModes = .foreground(.immediate)
 
-    @Parameter(title: "Bot") var bot: VoiceNoteBot
+    @Parameter(title: "Bot") var bot: VoiceNoteBot?
 
     static var parameterSummary: some ParameterSummary { Summary("Open the chat with \(\.$bot)") }
 
     @MainActor func perform() async throws -> some IntentResult {
-        IntentsEvents.note("perform OpenBotChatIntent " + (VoiceBotCatalog.profile(key: bot.key) ?? bot.key))
+        let target: VoiceNoteBot
+        if let bot {
+            target = bot
+        } else if let fallback = ShortcutDefaultBot.resolved() {
+            target = VoiceNoteBot(fallback)
+        } else {
+            target = try await $bot.requestValue("Which bot?")
+        }
+        IntentsEvents.note("perform OpenBotChatIntent " + (VoiceBotCatalog.profile(key: target.key) ?? target.key))
         // The stored catalog decides, in this sign-in only (the legacy id carries the epoch and the account rule).
-        guard let selected = VoiceBotCatalog.resolve(id: bot.id), Self.open(selected) else {
+        guard let selected = VoiceBotCatalog.resolve(id: target.id), Self.open(selected) else {
             AppLog.note("intents", "Open Bot Chat shortcut: unavailable")
             throw VoiceNoteError.unavailableBot
         }

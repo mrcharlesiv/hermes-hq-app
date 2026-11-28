@@ -21,6 +21,7 @@ enum ChatSettingsRows {
     static let newChatMode = "row:new-chat-mode"
     static let newChatKey = "row:new-chat-key"
     static let newChatProject = "row:new-chat-project"
+    static let shortcutDefaultBot = "row:shortcut-default-bot"
     static let resumeLastChat = "row:resume-last-chat"
     static let tips = "row:tips"
     static let introSplash = "row:intro-splash"
@@ -31,7 +32,7 @@ enum ChatSettingsRows {
     static func contains(_ row: String) -> Bool {
         switch row {
         case fewerTimestamps, showFileChanges, newChatAsksProject, waitForModels, attachmentLimit,
-             sendWhileBusy, openLinksIn, newChatMode, newChatKey, newChatProject,
+             sendWhileBusy, openLinksIn, newChatMode, newChatKey, newChatProject, shortcutDefaultBot,
              resumeLastChat, tips, introSplash, fileBrowser, sessionStrip, messageReactions:
             true
         default:
@@ -329,6 +330,21 @@ struct ChatSections: View {
                     }
                     .revealRow(ChatSettingsRows.newChatProject, revealed)
                 }
+            } else {
+                Picker(selection: Binding(get: { model.shortcutDefaultBot }, set: { id in
+                    Haptics.play(.selection)
+                    ShortcutDefaultBot.setProfile(id.isEmpty ? nil : id)
+                    model.shortcutDefaultBot = id
+                })) {
+                    ForEach(model.shortcutDefaultBotOptions, id: \.self) { id in
+                        Text(model.shortcutDefaultBotTitle(id)).tag(id)
+                    }
+                } label: {
+                    SettingsRowLabel(title: "Side Button Bot", systemImage: "button.programmable",
+                                     subtitle: notes ? "Default bot for Action Button and Shortcuts. Ask Every Time keeps the picker." : nil)
+                }
+                .accessibilityIdentifier("settings.shortcut-default-bot")
+                .revealRow(ChatSettingsRows.shortcutDefaultBot, revealed)
             }
         } header: { HQSectionLabel { Text("Sending & New Chats") } }
     }

@@ -49,7 +49,7 @@ struct NewChatIntent: AppIntent {
         categoryName: "Chat")
     static let supportedModes: IntentModes = .foreground(.immediate)
 
-    @Parameter(title: "Bot") var bot: VoiceNoteBot
+    @Parameter(title: "Bot") var bot: VoiceNoteBot?
     @Parameter(title: "Project") var project: ShortcutProject?
     // [shortcuts] Owner 2026-11-20 picked "First message for New Chat": the chat opens with these words sent.
     @Parameter(title: "Message", inputOptions: String.IntentInputOptions(multiline: true)) var message: String?
@@ -63,8 +63,16 @@ struct NewChatIntent: AppIntent {
     }
 
     @MainActor func perform() async throws -> some IntentResult {
-        IntentsEvents.note("perform NewChatIntent " + (VoiceBotCatalog.profile(key: bot.key) ?? bot.key))
-        guard let selected = VoiceBotCatalog.resolve(id: bot.id), let profile = VoiceBotCatalog.profile(key: selected.key) else {
+        let target: VoiceNoteBot
+        if let bot {
+            target = bot
+        } else if let fallback = ShortcutDefaultBot.resolved() {
+            target = VoiceNoteBot(fallback)
+        } else {
+            target = try await $bot.requestValue("Which bot?")
+        }
+        IntentsEvents.note("perform NewChatIntent " + (VoiceBotCatalog.profile(key: target.key) ?? target.key))
+        guard let selected = VoiceBotCatalog.resolve(id: target.id), let profile = VoiceBotCatalog.profile(key: selected.key) else {
             AppLog.note("intents", "New Chat shortcut: bot not in the catalog")
             throw VoiceNoteError.unavailableBot
         }
@@ -89,13 +97,21 @@ struct TalkToBotIntent: AppIntent {
                                                                    categoryName: "Chat")
     static let supportedModes: IntentModes = .foreground(.immediate)
 
-    @Parameter(title: "Bot") var bot: VoiceNoteBot
+    @Parameter(title: "Bot") var bot: VoiceNoteBot?
 
     static var parameterSummary: some ParameterSummary { Summary("Talk to \(\.$bot)") }
 
     @MainActor func perform() async throws -> some IntentResult {
-        IntentsEvents.note("perform TalkToBotIntent " + (VoiceBotCatalog.profile(key: bot.key) ?? bot.key))
-        guard let selected = VoiceBotCatalog.resolve(id: bot.id), let profile = VoiceBotCatalog.profile(key: selected.key) else {
+        let target: VoiceNoteBot
+        if let bot {
+            target = bot
+        } else if let fallback = ShortcutDefaultBot.resolved() {
+            target = VoiceNoteBot(fallback)
+        } else {
+            target = try await $bot.requestValue("Which bot?")
+        }
+        IntentsEvents.note("perform TalkToBotIntent " + (VoiceBotCatalog.profile(key: target.key) ?? target.key))
+        guard let selected = VoiceBotCatalog.resolve(id: target.id), let profile = VoiceBotCatalog.profile(key: selected.key) else {
             AppLog.note("intents", "Talk to Bot shortcut: bot not in the catalog")
             throw VoiceNoteError.unavailableBot
         }

@@ -117,3 +117,34 @@ nonisolated enum VoiceBotCatalog {
 
     static func clear(_ defaults: UserDefaults = .standard) { defaults.removeObject(forKey: botsKey) }
 }
+
+/// [#559] Optional default bot for iPhone Action Button / Side Button & Shortcuts (`nil` / `""` = Ask Every Time).
+/// Read off the main thread by AppIntents so Talk to Bot, Open Bot Chat, Record Voice Memo, and New Chat can skip the
+/// bot picker when the user configured a default bot.
+nonisolated enum ShortcutDefaultBot {
+    static let key = "hqn.shortcutDefaultBot"
+    static let ask = ""
+
+    /// Stored profile ID, or `nil` when set to Ask Every Time.
+    static func profile(_ defaults: UserDefaults = .standard) -> String? {
+        guard let raw = defaults.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else { return nil }
+        return raw
+    }
+
+    static func setProfile(_ profile: String?, _ defaults: UserDefaults = .standard) {
+        let clean = profile?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if clean.isEmpty {
+            defaults.removeObject(forKey: key)
+        } else {
+            defaults.set(clean, forKey: key)
+        }
+    }
+
+    /// Resolves the configured default bot against the stored `VoiceBotCatalog`, returning `nil` if unset or gone.
+    static func resolved(_ defaults: UserDefaults = .standard) -> VoiceBotRecord? {
+        guard let profile = profile(defaults) else { return nil }
+        let wantedKey = VoiceBotCatalog.key(profile: profile)
+        return VoiceBotCatalog.bots(defaults).first { $0.key == wantedKey }
+    }
+}

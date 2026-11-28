@@ -88,4 +88,28 @@ import Testing
         #expect(ShortcutGateway.refusal(ShareRESTAnswer(status: 500, data: Data("<html>".utf8)), what: "the task")
                 == "Your gateway didn’t accept the task (500).")
     }
+
+    @Test func shortcutDefaultBotDefaultsToAskAndResolvesConfiguredBot() {
+        let box = IntentsDefaults()
+        let key1 = VoiceBotCatalog.key(profile: "default")
+        let key2 = VoiceBotCatalog.key(profile: "chief")
+        let records = [
+            VoiceBotRecord(id: VoiceBotCatalog.id(account: account, key: key1), name: "Hermes", key: key1, account: account),
+            VoiceBotRecord(id: VoiceBotCatalog.id(account: account, key: key2), name: "Chief", key: key2, account: account),
+        ]
+        VoiceBotCatalog.store(records, box.defaults)
+        // Default: nil (Ask Every Time).
+        #expect(ShortcutDefaultBot.profile(box.defaults) == nil)
+        #expect(ShortcutDefaultBot.resolved(box.defaults) == nil)
+        // Set to a bot in the catalog: resolves cleanly.
+        ShortcutDefaultBot.setProfile("chief", box.defaults)
+        #expect(ShortcutDefaultBot.profile(box.defaults) == "chief")
+        #expect(ShortcutDefaultBot.resolved(box.defaults)?.name == "Chief")
+        // Bot no longer in catalog: falls back to nil (Ask Every Time).
+        ShortcutDefaultBot.setProfile("removed", box.defaults)
+        #expect(ShortcutDefaultBot.resolved(box.defaults) == nil)
+        // Clear back to Ask Every Time.
+        ShortcutDefaultBot.setProfile(nil, box.defaults)
+        #expect(ShortcutDefaultBot.profile(box.defaults) == nil)
+    }
 }

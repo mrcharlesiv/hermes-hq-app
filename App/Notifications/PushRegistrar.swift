@@ -14,6 +14,16 @@ import UserNotifications
 
     /// Authenticated gateway call for the signed-in account; nil while nobody is signed in. 0 = no answer.
     var call: Call?
+    /// [#595] Cold background fallback (e.g. approving/denying from Apple Watch while the iPhone app was terminated and
+    /// `call` is still nil): resolves the saved Keychain account matching `owner` and posts directly via `AccountREST`.
+    var headlessCall: (@MainActor (_ owner: String) -> Call?)? = { owner in
+        let vault = AccountVault.app
+        guard let saved = try? vault.load() else { return nil }
+        guard let stored = saved.accounts.first(where: {
+            $0.hasSession && PushPolicy.owner(url: $0.url, username: $0.username) == owner
+        }) else { return nil }
+        return AppModel.pushCall(stored, vault: vault)
+    }
     /// The signed-in account (PushPolicy.owner), set after each sign-in and cleared on sign-out.
     private(set) var owner: String?
     /// Asked by Settings (`pluginState`) and the setup offer; the latest answer.
@@ -368,14 +378,23 @@ import UserNotifications
         }
         for answer in answers.pending {
             guard answers.pending.contains(answer) else { continue }
-            let decision = answers.decision(answer, owner: owner, ready: call != nil, now: Date())
+            let activeCall: Call?
+            if let call, owner == answer.owner {
+                activeCall = call
+            } else if owner == nil, call == nil {
+                activeCall = headlessCall?(answer.owner)
+            } else {
+                activeCall = nil
+            }
+            let effectiveOwner = owner ?? (activeCall != nil ? answer.owner : nil)
+            let decision = answers.decision(answer, owner: effectiveOwner, ready: activeCall != nil, now: Date())
             if decision == .waiting { continue }
             if decision == .expired || decision == .stale {
                 save()
                 await failure(answer.request, session: answer.session, outcome: decision, about: About(answer)); continue
             }
-            guard let call else { continue }
-            let result = await send(call, account: answer.owner, "/approvals/" + answer.request, "POST",
+            guard let activeCall else { continue }
+            let result = await send(activeCall, account: answer.owner, "/approvals/" + answer.request, "POST",
                                     ["session_key": answer.sessionKey, "choice": answer.choice, "token": answer.token])
             guard answers.pending.contains(answer) else { continue }
             let resolved = (result.body?["resolved"] as? NSNumber)?.intValue
@@ -458,6 +477,15 @@ import UserNotifications
         try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
     }
 
+    /// [#595] Follow-up alert when a local approval answered from Apple Watch / background fails or already expired.
+    func postLocalApprovalFeedback(request: String, title: String, body: String) async {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        let id = PushPolicy.validRequest(request) ? Self.notice(request) : UUID().uuidString
+        try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+    }
+
     /// An Approve/Deny tapped on a pushed alert. The token binds the answer to that one request; it goes only to the
     /// account whose registration the alert came from. Returns within about 20 s (a background launch is short).
     func answer(_ remote: [String: Any], choice: String, about: About = About()) async {
@@ -478,7 +506,8 @@ import UserNotifications
                                             profile: about.profile))
         AppLog.trace("push", "approval answer enqueue: \(outcome.rawValue)")
         if outcome == .queued { save() }
-        if call != nil {
+        let canFlush = call != nil || (self.owner == nil && headlessCall?(owner) != nil)
+        if canFlush {
             Task { @MainActor in await self.flush() }
             let deadline = ProcessInfo.processInfo.systemUptime + 20
             while answers.pending.contains(where: { $0.request == request }), ProcessInfo.processInfo.systemUptime < deadline {

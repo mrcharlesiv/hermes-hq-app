@@ -25,7 +25,7 @@ import UIKit
     /// Opens a chat (stored id, bot profile). Nil until the signed-in app is up: a tap that cold-launched waits in `pending`.
     var openChat: ((_ stored: String, _ profile: String?) -> Void)? { didSet { deliverPending() } }
     /// Answers an approval the app holds (a local alert's Approve/Deny): entry id, choice.
-    var answerLocal: ((_ request: String, _ approve: Bool) -> Void)? { didSet { deliverPending() } }
+    var answerLocal: ((_ request: String, _ approve: Bool) async -> Void)? { didSet { deliverPending() } }
     /// The bot's face for a profile (for the peek and Communication Notifications), and whether it is the bot's photo
     /// ([photoheads] the peek draws a photo as an app-icon tile and cuts only a head round).
     var face: ((_ profile: String) -> BotFaces.Face?)?
@@ -82,15 +82,16 @@ import UIKit
     }
 
     static func categories() -> [UNNotificationCategory] {
-        // Approving runs a command on the gateway computer, so it needs an unlocked phone; Deny doesn't. A pushed alert
-        // answers through the push plugin without opening the app; a local one opens the app to answer.
+        // Approving runs a command on the gateway computer, so it requires device/wrist authentication; Deny doesn't.
+        // [#595] Neither category uses `.foreground` so both pushed and local approval alerts mirror their Approve Once
+        // and Deny buttons directly onto a paired Apple Watch and run in the background without opening the iPhone app.
         // UX study #147: title case, as iOS's own action buttons are.
         let approve = UNNotificationAction(identifier: "approve", title: "Approve Once", options: [.authenticationRequired])
         let deny = UNNotificationAction(identifier: "deny", title: "Deny", options: [.destructive])
-        let approveHere = UNNotificationAction(identifier: "approve", title: "Approve Once", options: [.authenticationRequired, .foreground])
-        let denyHere = UNNotificationAction(identifier: "deny", title: "Deny", options: [.destructive, .foreground])
+        let approveLocal = UNNotificationAction(identifier: "approve", title: "Approve Once", options: [.authenticationRequired])
+        let denyLocal = UNNotificationAction(identifier: "deny", title: "Deny", options: [.destructive])
         return [UNNotificationCategory(identifier: approvalCategory, actions: [approve, deny], intentIdentifiers: [], options: []),
-                UNNotificationCategory(identifier: localApprovalCategory, actions: [approveHere, denyHere], intentIdentifiers: [], options: [])]
+                UNNotificationCategory(identifier: localApprovalCategory, actions: [approveLocal, denyLocal], intentIdentifiers: [], options: [])]
     }
 
     /// [tasks] A task push reached the app: the Tasks list reads again.
@@ -120,7 +121,10 @@ import UIKit
                 openTask(pendingTask.id, pendingTask.profile)
             }
         }
-        if let pendingAnswer, let answerLocal { self.pendingAnswer = nil; answerLocal(pendingAnswer.request, pendingAnswer.approve) }
+        if let pendingAnswer, let answerLocal {
+            self.pendingAnswer = nil
+            Task { @MainActor in await answerLocal(pendingAnswer.request, pendingAnswer.approve) }
+        }
         if let pendingOther, let otherGateway { self.pendingOther = nil; otherGateway(pendingOther.account, pendingOther.chat) }
         if let pendingDraft, let openDraft { self.pendingDraft = nil; openDraft(pendingDraft) }
     }
@@ -540,8 +544,14 @@ import UIKit
             return
         }
         if action == "approve" || action == "deny", let request = info["request"] as? String, !request.isEmpty {
-            // A local approval alert: the app answers it (it opened for that), in the chat it belongs to.
-            if let answerLocal { answerLocal(request, action == "approve") } else { pendingAnswer = (request, action == "approve") }
+            // [#595] Await the local approval answer so background taps (including Apple Watch) complete before iOS
+            // finishes the notification response handler.
+            if let answerLocal {
+                await answerLocal(request, action == "approve")
+            } else {
+                pendingAnswer = (request, action == "approve")
+            }
+            return
         }
         // [tasks] A task's alert opens its sheet (a pushed one in `dispatch`, this phone's own due reminder at the top).
         let taskInfo: [AnyHashable: Any] = remote.map { $0.reduce(into: [AnyHashable: Any]()) { $0[$1.key] = $1.value } } ?? info

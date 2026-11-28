@@ -291,24 +291,33 @@ struct DictationTests {
         #expect(!KeepAwake.isHeld(.dictation))
     }
 
-    @Test func leavingTheAppOrACallCancelsWithoutACard() async {
+    @Test func backgroundKeepsRecordingAndCallInterruptionCancelsWithoutACard() async {
         let (dictation, recorder, seen) = make()
         dictation.start(in: FakeTalkChat()) { seen.words.append($0) }
         #expect(await waitUntil { dictation.phase == .recording })
+        // [#602] Switching to another app keeps an active dictation recording running.
         NotificationCenter.default.post(name: UIScene.didEnterBackgroundNotification, object: nil)
-        #expect(await waitUntil { !dictation.isActive })
-        #expect(recorder.cancelled == 1)
+        try? await Task.sleep(for: .milliseconds(60))
+        #expect(dictation.phase == .recording && dictation.isActive)
+        #expect(recorder.cancelled == 0)
+        // Done still finishes and delivers the words after backgrounding.
+        dictation.done()
+        #expect(await waitUntil { seen.words == ["Buy oat milk"] })
+        #expect(!dictation.isActive)
+
+        // An audio interruption (phone call / Siri) still cancels cleanly without a card.
         dictation.start(in: FakeTalkChat()) { seen.words.append($0) }
         #expect(await waitUntil { dictation.phase == .recording })
         NotificationCenter.default.post(name: AVAudioSession.interruptionNotification, object: nil,
                                         userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue])
         #expect(await waitUntil { !dictation.isActive })
+        #expect(recorder.cancelled == 1)
         // The interruption ending starts nothing.
         NotificationCenter.default.post(name: AVAudioSession.interruptionNotification, object: nil,
                                         userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.ended.rawValue])
         try? await Task.sleep(for: .milliseconds(80))
         #expect(!dictation.isActive)
-        #expect(seen.words.isEmpty && seen.notices.isEmpty)
+        #expect(seen.words == ["Buy oat milk"] && seen.notices.isEmpty)
         #expect(!KeepAwake.isHeld(.dictation))
     }
 

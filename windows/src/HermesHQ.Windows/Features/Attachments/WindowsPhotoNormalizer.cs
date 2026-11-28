@@ -17,6 +17,7 @@ internal sealed class WindowsPhotoNormalizer : IPhotoNormalizer
         using var input = sourceStream.AsRandomAccessStream();
         var decoder = await BitmapDecoder.CreateAsync(input);
         ct.ThrowIfCancellationRequested();
+        if (decoder.DecoderInformation == null) throw new InvalidDataException("No Windows codec could read this image.");
         if (decoder.DecoderInformation.CodecId == BitmapDecoder.GifDecoderId && decoder.FrameCount > 1)
         {
             var gif = Path.Combine(folder, stem + ".gif");
@@ -41,6 +42,9 @@ internal sealed class WindowsPhotoNormalizer : IPhotoNormalizer
             ExifOrientationMode.RespectExifOrientation, ColorManagementMode.ColorManageToSRgb);
         var bytes = pixels.DetachPixelData();
         ct.ThrowIfCancellationRequested();
+        var expectedBytes = (long)outW * outH * 4L;
+        if (expectedBytes > 0 && bytes.LongLength != expectedBytes)
+            throw new InvalidDataException("The decoded picture's buffer didn't match its size.");
         var png = decoder.BitmapAlphaMode != BitmapAlphaMode.Ignore && HasTransparency(bytes);
         var name = stem + (png ? ".png" : ".jpg");
         var target = Path.Combine(folder, name);

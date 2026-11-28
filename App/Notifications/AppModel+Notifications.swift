@@ -40,26 +40,36 @@ extension AppModel {
         hub.openTask = { [weak self] id, _ in self?.openNotifiedTask(id) }
         hub.answerLocal = { [weak self] request, approve in
             guard let center = self?.serverRequests else { return }
-            Task {
-                do {
-                    // [#256] Waits for the request on a cold launch; one already answered or expired is said, and a
-                    // sent answer is confirmed, so the alert's button never does nothing in silence.
-                    switch try await center.answerApprovalFromAlert(request, approve ? .once : .deny) {
-                    case .sent:
+            let active = UIApplication.shared.applicationState == .active
+            do {
+                // [#256, #595] Waits for the request on a cold launch and awaits completion so Apple Watch / background
+                // taps deliver reliably before the notification response handler returns.
+                switch try await center.answerApprovalFromAlert(request, approve ? .once : .deny) {
+                case .sent:
+                    if active {
                         Haptics.play(.success)
                         MenusHUD.show(LocalApprovalWords.sent(approve: approve), in: MainTabController.current?.view.window)
-                    case .gone:
-                        guard let host = FailureAlert.topmost(MainTabController.current) else { return }
+                    }
+                case .gone:
+                    if active, let host = FailureAlert.topmost(MainTabController.current) {
                         Haptics.play(.warning)
                         let alert = UIAlertController(title: LocalApprovalWords.title(approve: approve), message: LocalApprovalWords.gone,
                                                       preferredStyle: .alert)
                         alert.addAction(UIAlertAction(title: "OK", style: .default))
                         host.present(alert, animated: true)
+                    } else {
+                        await PushRegistrar.shared.postLocalApprovalFeedback(request: request, title: LocalApprovalWords.title(approve: approve),
+                                                                             body: LocalApprovalWords.gone)
                     }
-                } catch {
-                    // [#138] Said, not swallowed: the chat opens with the card answerable again, and this says so.
+                }
+            } catch {
+                // [#138] Said, not swallowed: foreground shows an alert; background/Watch posts a follow-up alert.
+                if active {
                     FailureAlert.present(title: LocalApprovalWords.title(approve: approve), reason: LocalApprovalWords.reason(for: error),
                                          detail: "\(error)", from: MainTabController.current, whole: true)
+                } else {
+                    await PushRegistrar.shared.postLocalApprovalFeedback(request: request, title: LocalApprovalWords.title(approve: approve),
+                                                                         body: LocalApprovalWords.reason(for: error))
                 }
             }
         }

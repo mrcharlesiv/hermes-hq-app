@@ -40,6 +40,8 @@ public sealed class RpcConnection : IAsyncDisposable
     private string? _epoch;
     private DateTimeOffset _lastInbound = DateTimeOffset.UtcNow;
     private Task? _loop;
+    // [WIN-HEARTBEAT-RESILIENT] gateway.ping frames sent with no reply yet (Swift `heartbeatsOutstanding`).
+    private int _heartbeatsOutstanding;
     // [questions] The socket generation (an answer's epoch), its capabilities call, and its declines_not_shown.
     private int _socketEpoch;
     private long _capabilitiesId = -1;
@@ -234,7 +236,11 @@ public sealed class RpcConnection : IAsyncDisposable
                 var ticket = await _session.MintTicketAsync(TimeSpan.FromSeconds(attempt switch { 0 => 8, 1 => 15, _ => 20 }), _life.Token);
                 var url = _session.Address.SocketUrl(ticket);
                 using var ws = new ClientWebSocket();
-                ws.Options.KeepAliveInterval = TimeSpan.Zero; // our own heartbeat
+                // [WIN-HEARTBEAT-BACKSTOP] Protocol-level PING/PONG floor (matching ScreenSocket.cs) so idle
+                // NAT/firewall/tunnel mappings stay warm even if app-level liveness degrades. Our own gateway.ping
+                // heartbeat still runs above it.
+                ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(15);
+                ws.Options.KeepAliveTimeout = TimeSpan.FromSeconds(45);
                 if (_session.CookieHeader(url) is { } cookie) ws.Options.SetRequestHeader("Cookie", cookie);
                 using (var t = CancellationTokenSource.CreateLinkedTokenSource(_life.Token))
                 {
@@ -437,6 +443,10 @@ public sealed class RpcConnection : IAsyncDisposable
                         pending.Tcs.TrySetResult(result);
                     }
                 }
+                else if (obj.Get("id") is JsonValue hbId && hbId.TryGetValue(out string? hb) && hb?.StartsWith("heartbeat-") == true)
+                {
+                    NoteHeartbeatAnswer();
+                }
             }
         }
         finally
@@ -455,15 +465,21 @@ public sealed class RpcConnection : IAsyncDisposable
         }
     }
 
-    /// gateway.ping every 15 s; fail the socket after 45 s with no inbound frame of any kind.
+    /// gateway.ping every 15 s; fail the socket after 45 s with no inbound frame of any kind, or more than 8 unanswered
+    /// pings (matching Swift `livenessTick` / `heartbeatsOutstanding`). A single transient send error must not terminate
+    /// liveness — the 1 s loop and 45 s silence check stay active for the life of the socket.
     private async Task HeartbeatAsync(ClientWebSocket ws, CancellationTokenSource socketLife)
     {
         var n = 0;
-        try
+        Interlocked.Exchange(ref _heartbeatsOutstanding, 0);
+        var lastSent = DateTimeOffset.UtcNow;
+        while (!socketLife.IsCancellationRequested)
         {
-            while (!socketLife.IsCancellationRequested)
+            try { await Task.Delay(TimeSpan.FromSeconds(1), socketLife.Token); }
+            catch (OperationCanceledException) { return; }
+            catch (Exception) { continue; }
+            try
             {
-                await Task.Delay(TimeSpan.FromSeconds(15), socketLife.Token);
                 if (DateTimeOffset.UtcNow - _lastInbound > TimeSpan.FromSeconds(45))
                 {
                     _heartbeatLapsed = true;
@@ -471,13 +487,43 @@ public sealed class RpcConnection : IAsyncDisposable
                     await socketLife.CancelAsync();
                     return;
                 }
-                await SendFrameAsync(new JsonObject
+                if (Volatile.Read(ref _heartbeatsOutstanding) > 8)
                 {
-                    ["jsonrpc"] = "2.0", ["id"] = $"heartbeat-{++n}", ["method"] = "gateway.ping", ["params"] = new JsonObject(),
-                }, socketLife.Token);
+                    _heartbeatLapsed = true;
+                    ws.Abort();
+                    await socketLife.CancelAsync();
+                    return;
+                }
+                if (DateTimeOffset.UtcNow - lastSent >= TimeSpan.FromSeconds(15))
+                {
+                    lastSent = DateTimeOffset.UtcNow;
+                    Interlocked.Increment(ref _heartbeatsOutstanding);
+                    try
+                    {
+                        await SendFrameAsync(new JsonObject
+                        {
+                            ["jsonrpc"] = "2.0", ["id"] = $"heartbeat-{++n}", ["method"] = "gateway.ping", ["params"] = new JsonObject(),
+                        }, socketLife.Token);
+                    }
+                    catch (Exception)
+                    {
+                        // One failed ping must not end liveness: the 45 s silence check and outstanding counter still guard.
+                    }
+                }
             }
+            catch (Exception) { /* keep ticking */ }
         }
-        catch { }
+    }
+
+    /// A heartbeat reply came in (ReadLoop calls this for string id "heartbeat-…"): one ping less outstanding, floored at 0.
+    private void NoteHeartbeatAnswer()
+    {
+        while (true)
+        {
+            var current = Volatile.Read(ref _heartbeatsOutstanding);
+            if (current <= 0) return;
+            if (Interlocked.CompareExchange(ref _heartbeatsOutstanding, current - 1, current) == current) return;
+        }
     }
 
     /// After a reconnect with the same epoch: fetch what each followed session missed, two at a time.

@@ -104,6 +104,7 @@ final class SettingsRootModel {
     var newChatKeyBot = NewChatKeyBot.chosen   // [cmd-n]
     var newChatKeyMode = NewChatKeyBot.mode     // [cmd-n] a tester: New Session or Bot Chat
     var newChatKeyProject = NewChatKeyBot.project ?? ""   // [cmd-n] "" is No Project
+    var shortcutDefaultBot = ShortcutDefaultBot.profile() ?? ShortcutDefaultBot.ask   // [#559] "" is Ask Every Time
     /// §4 Largest Attachment, in MB (1…32).
     var attachmentLimit = AttachmentLimit.megabytes
     var soundName = CompletionSoundVariant.preset(CompletionCue.variant).name
@@ -158,6 +159,19 @@ final class SettingsRootModel {
 
     func newChatKeyTitle(_ id: String) -> String {
         if id == NewChatKeyBot.ask { return "Ask Every Time" }
+        return services.bots.first { $0.id == id }?.name ?? (id == "default" ? "Hermes" : id)
+    }
+
+    /// [#559] Side Button / Shortcuts default bot options: Ask Every Time, then Hermes and visible bots.
+    var shortcutDefaultBotOptions: [String] {
+        let bots = services.bots.filter { !$0.hidden || $0.id == "default" }.map(\.id)
+        var ids = [ShortcutDefaultBot.ask] + (bots.contains("default") ? ["default"] : []) + bots.filter { $0 != "default" }
+        if !shortcutDefaultBot.isEmpty, !ids.contains(shortcutDefaultBot) { ids.append(shortcutDefaultBot) }
+        return ids
+    }
+
+    func shortcutDefaultBotTitle(_ id: String) -> String {
+        if id.isEmpty { return "Ask Every Time" }
         return services.bots.first { $0.id == id }?.name ?? (id == "default" ? "Hermes" : id)
     }
     var gatewaySettings: (any GatewaySettingsServices)? { services as? GatewaySettingsServices }
@@ -299,6 +313,7 @@ final class SettingsRootModel {
         appIconTitle = AppIcons.wornTitle          // [app-icons]
         kanbanTabShown = TabOrderPage.kanbanChoice(services.account) != nil
         autoPluginUpdateChecks = PluginUpdateReminder.isAutomatic(account: services.account?.id)
+        shortcutDefaultBot = ShortcutDefaultBot.profile() ?? ShortcutDefaultBot.ask
     }
 
     func setAutoPluginUpdateChecks(_ on: Bool) {

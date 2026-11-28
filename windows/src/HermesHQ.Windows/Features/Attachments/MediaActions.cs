@@ -17,19 +17,16 @@ internal static class MediaActions
     public static IntPtr WindowHandle(Window? window = null) =>
         WinRT.Interop.WindowNative.GetWindowHandle(window ?? App.Window!);
 
-    private static readonly Dictionary<(string, int), WeakReference<BitmapImage>> Bitmaps = [];
-
-    /// A picture decoded at about `decodeWidth` pixels wide (never the full original on screen), shared while alive.
+    /// A picture decoded at about `decodeWidth` pixels wide (never the full original on screen). Each caller gets its
+    /// own `BitmapImage` so one XAML `BitmapImage` instance is never shared across multiple `Image.Source` slots.
     public static async Task<BitmapImage> BitmapAsync(string path, int decodeWidth)
     {
         if (string.IsNullOrEmpty(path)) throw new FileNotFoundException("Empty image path.");
-        if (Bitmaps.TryGetValue((path, decodeWidth), out var weak) && weak.TryGetTarget(out var known)) return known;
         await using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 4096, useAsync: true);
         using var stream = fs.AsRandomAccessStream();
         var bitmap = new BitmapImage();
         if (decodeWidth > 0) bitmap.DecodePixelWidth = decodeWidth;
         await bitmap.SetSourceAsync(stream);
-        Bitmaps[(path, decodeWidth)] = new WeakReference<BitmapImage>(bitmap);
         return bitmap;
     }
 

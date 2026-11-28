@@ -148,6 +148,7 @@ nonisolated enum SettingsSearch {
         .init(id: "app:new-chat-mode", label: "⌘N Opens", context: "Chat", keywords: ["command n", "cmd n", "shortcut", "keyboard", "bot chat", "new session", "persistent", "existing chat", "focus", ChatRowNotes.newChatMode(botChat: true), ChatRowNotes.newChatMode(botChat: false)], target: .root("row:new-chat-mode")),
         .init(id: "app:new-chat-key", label: "⌘N Bot", context: "Chat", keywords: ["command n", "cmd n", "shortcut", "keyboard", "new chat", "new session", "default bot", "default profile", "new chat here"], target: .root("row:new-chat-key")),
         .init(id: "app:new-chat-project", label: "⌘N Project", context: "Chat", keywords: ["command n", "cmd n", "shortcut", "default project", "folder", "workspace"], target: .root("row:new-chat-project")),   // [cmd-n] Mac only (filtered in `index`)
+        .init(id: "app:shortcut-default-bot", label: "Side Button Bot", context: "Chat", keywords: ["side button", "action button", "power button", "shortcut", "shortcuts", "default bot", "live talk", "siri"], target: .root("row:shortcut-default-bot")),   // [#559] iOS only (filtered in `index`)
         .init(id: "app:resume", label: "Reopen Last Chat on Launch", context: DeviceWord.isMac ? "General" : "Chat", keywords: ["resume", "restore", "last session", "startup", "launch", ChatRowNotes.resumeLastChat], target: .root("row:resume-last-chat")),
         .init(id: "app:tips", label: "In-App Tips", context: DeviceWord.isMac ? "General" : "Chat", keywords: ["tips", "hints", "help"], target: .root("row:tips")),
         .init(id: "app:appearance", label: "Light or Dark", context: "Appearance", keywords: ["appearance", "dark", "light", "theme", "mode"], target: .root("row:appearance")),
@@ -267,6 +268,6 @@ nonisolated enum SettingsSearch {
     }
 
     static func index(schema: [String: ConfigFieldSchema] = [:]) -> [SettingsSearchEntry] {
-        rootPages + configEntries(schema: schema) + appRows.filter { (hasHaptics || $0.id != "app:haptics") && (liveActivities || ($0.id != "app:live-activities" && $0.id != "app:live-activities-group")) && (!hasHaptics || !$0.id.hasPrefix("app:new-chat-")) } + actions
+        rootPages + configEntries(schema: schema) + appRows.filter { (hasHaptics || $0.id != "app:haptics") && (liveActivities || ($0.id != "app:live-activities" && $0.id != "app:live-activities-group")) && (!hasHaptics || !$0.id.hasPrefix("app:new-chat-")) && (hasHaptics || $0.id != "app:shortcut-default-bot") } + actions
     }
 }

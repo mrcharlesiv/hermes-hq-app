@@ -98,6 +98,10 @@ public sealed class JobsStore : IDisposable
     private int _showing;
     private DateTimeOffset? _lastRead, _lastStart;
     private CancellationTokenSource? _backstop, _due, _throttle;
+    /// When the add-on's working map was last read.
+    private DateTimeOffset? _botWorkingAt;
+    /// A stale working map is never trusted longer than this even when the list is quiet.
+    public static readonly TimeSpan BotWorkingKeep = TimeSpan.FromMinutes(10);
     private readonly Dictionary<string, DateTimeOffset> _blueprintsReadAt = [];
     private readonly Dictionary<string, (DateTimeOffset Started, Task<List<CronRun>> Task)> _runReads = [];
 
@@ -385,32 +389,38 @@ public sealed class JobsStore : IDisposable
         var scope = Scope;
         _ = LoadBlueprintsIfStaleAsync(ListProfile);
         Loading = true;
-        Notify();
+        var changed = true;   // an early exit (a superseded read) always renders
         try
         {
-            var askWorking = !_botWorkingMissing;
-            var working = askWorking ? BotWorkingAnswer() : Task.FromResult<(bool Ok, Dictionary<string, string>? Map)>((true, null));
             var list = await ReadWithRetryAsync(() => Api.ListAsync(scope)).ConfigureAwait(false);
-            var answer = await working.ConfigureAwait(false);
             if (generation != _readGeneration || scope != Scope) return;
+            var firstLoad = !HasList;
+            changed = firstLoad || Differs(list);
+            // Ask the add-on's working map only when the list moved (floor 60 s) or the cached map is stale.
+            var sinceAsk = _botWorkingAt is { } a ? DateTimeOffset.UtcNow - a : TimeSpan.MaxValue;
+            var askWorking = !_botWorkingMissing &&
+                (changed ? sinceAsk >= TimeSpan.FromSeconds(60) : sinceAsk >= BotWorkingKeep);
+            var (answerOk, answerMap) = askWorking ? await BotWorkingAnswer().ConfigureAwait(false) : (true, _botWorking);
             lock (_lock)
             {
-                if (!askWorking) { _botWorking = []; }
-                else if (answer.Ok && answer.Map == null) { _botWorkingMissing = true; _botWorking = []; }
-                else if (answer.Ok) { _botWorking = answer.Map!; _botWorkingFailed = false; }
-                else
+                if (_botWorkingMissing) { _botWorking = []; }
+                else if (askWorking && answerOk && answerMap == null) { _botWorkingMissing = true; _botWorking = []; _botWorkingAt = null; }
+                else if (askWorking && answerOk) { _botWorking = answerMap!; _botWorkingFailed = false; _botWorkingAt = DateTimeOffset.UtcNow; }
+                else if (askWorking)
                 {
                     if (_botWorkingFailed) _botWorking = [];
                     _botWorkingFailed = true;
+                    _botWorkingAt = null;
                 }
                 SetJobs(list);
             }
+            var hadError = LoadError != null;
             var out_ = Jobs.Any(JobWords.WorkIsOut);
-            if (out_ != _runOut) { _runOut = out_; StartBackstop(); }
+            if (out_ != _runOut) { _runOut = out_; changed = true; StartBackstop(); }
             HasList = true;
             LoadError = null;
             _lastRead = DateTimeOffset.Now;
-            SettleStillRunning();
+            if (SettleStillRunning()) changed = true;
             ListReads++;
             ArmDueRead();
             if (_cache != null)
@@ -418,19 +428,41 @@ public sealed class JobsStore : IDisposable
                 if (FittingJobs(list, DateTimeOffset.Now.ToUnixTimeMilliseconds(), CacheLimit) is { } text) _cache.Write(CacheName(scope), text);
                 else _cache.Delete(CacheName(scope));
             }
+            if (hadError || askWorking) changed = true;
         }
         catch (GatewayException e)
         {
-            if (generation != _readGeneration || scope != Scope) return;
+            if (generation != _readGeneration || scope != Scope) { changed = true; return; }
             var reason = JobErrors.Reason(e);
+            changed = reason != LoadError;
             LoadError = reason;
             if (HasList) RefreshFailed?.Invoke(reason);
         }
         finally
         {
             if (generation == _readGeneration) Loading = false;
-            Notify();
+            if (changed) Notify();
         }
+    }
+
+    /// Whether the freshly read list differs from what shows, in any rendered job field.
+    private bool Differs(List<CronJob> list)
+    {
+        var old = Jobs;
+        if (old.Count != list.Count) return true;
+        for (var i = 0; i < list.Count; i++)
+        {
+            var a = old[i];
+            var b = list[i];
+            if (a.Id != b.Id || a.Name != b.Name || a.Prompt != b.Prompt || a.Script != b.Script
+                || a.NoAgent != b.NoAgent || a.Schedule != b.Schedule || a.ScheduleDisplay != b.ScheduleDisplay
+                || a.Enabled != b.Enabled || a.State != b.State || a.NextRunAt != b.NextRunAt
+                || a.LastRunAt != b.LastRunAt || a.LastStatus != b.LastStatus || a.LastError != b.LastError
+                || a.Deliver != b.Deliver || a.Origin != b.Origin || a.Model != b.Model || a.Provider != b.Provider
+                || a.Profile != b.Profile || a.ProfileName != b.ProfileName
+                || a.LatestRunStatus != b.LatestRunStatus || a.LatestRunClaimedAt != b.LatestRunClaimedAt) return true;
+        }
+        return false;
     }
 
     /// One quick retry, none after a timeout or while the gateway can't be reached.
@@ -540,6 +572,7 @@ public sealed class JobsStore : IDisposable
     {
         if (ReadOnlyGateway) return new(WriteKind.Refused);
         var token = Mark(job.Key);
+        ForgetList();
         try
         {
             var fresh = CronJob.Parse(await Api.PauseAsync(job.Id, job.Owner, pause).ConfigureAwait(false));
@@ -560,6 +593,7 @@ public sealed class JobsStore : IDisposable
     {
         if (ReadOnlyGateway) return new(WriteKind.Refused);
         var token = Mark(job.Key);
+        ForgetList();
         try
         {
             await Api.DeleteAsync(job.Id, job.Owner).ConfigureAwait(false);
@@ -583,6 +617,7 @@ public sealed class JobsStore : IDisposable
         if (ReadOnlyGateway) return new(RunKind.Refused);
         if (IsBusy(job)) return new(RunKind.AlreadyRunning, "Job is already running or was claimed by another scheduler");
         var token = Mark(job.Key);
+        ForgetList();
         lock (_lock) _runInFlight.Add(job.Key);
         try
         {
@@ -632,9 +667,11 @@ public sealed class JobsStore : IDisposable
 
     /// A run that outlived the wait ends when a read shows a newer last run; or, with no new run time, when a read that
     /// had shown it out shows it out no more, or `StillRunningGiveUp` after the wait.
-    public void SettleStillRunning(DateTimeOffset? now = null)
+    /// Returns true when something stopped showing Running.
+    public bool SettleStillRunning(DateTimeOffset? now = null)
     {
         var n = now ?? DateTimeOffset.Now;
+        var any = false;
         lock (_lock)
         {
             foreach (var (key, before) in _stillRunning.ToList())
@@ -652,8 +689,10 @@ public sealed class JobsStore : IDisposable
                 _stillRunning.Remove(key);
                 _stillRunningSince.Remove(key);
                 _stillRunningSeenOut.Remove(key);
+                any = true;
             }
         }
+        return any;
     }
 
     // ------------------------------------------------------------------ the editor's writes and reads
@@ -665,6 +704,7 @@ public sealed class JobsStore : IDisposable
     public async Task<JobEditResult> CreateAsync(JsonNode body, string profile)
     {
         if (ReadOnlyGateway) return new(EditKind.Refused);
+        ForgetList();
         try
         {
             var made = CronJob.Parse(await Api.CreateAsync(body, profile).ConfigureAwait(false));
@@ -683,6 +723,7 @@ public sealed class JobsStore : IDisposable
     public async Task<JobEditResult> UpdateAsync(CronJob job, JsonNode updates)
     {
         if (ReadOnlyGateway) return new(EditKind.Refused);
+        ForgetList();
         try
         {
             var fresh = CronJob.Parse(await Api.UpdateAsync(job.Id, job.Owner, updates).ConfigureAwait(false));
@@ -711,6 +752,7 @@ public sealed class JobsStore : IDisposable
     public async Task<JobEditResult> InstantiateAsync(string key, IReadOnlyDictionary<string, string> values, string profile)
     {
         if (ReadOnlyGateway) return new(EditKind.Refused);
+        ForgetList();
         try
         {
             var made = CronJob.Parse(await Api.InstantiateAsync(key, values, profile).ConfigureAwait(false));
@@ -772,13 +814,16 @@ public sealed class JobsStore : IDisposable
         })]),
     })]);
 
+    /// A write is about to change what the list says: its scope's cached answer goes, so the write's follow-up refresh is real.
+    private void ForgetList() { Api.ForgetList(Scope); }
+
     /// Sign-out: forget what this store holds in memory.
     public void Reset()
     {
         Stop();
         Interlocked.Increment(ref _readGeneration);
         Jobs = [];
-        lock (_lock) _botWorking = [];
+        lock (_lock) { _botWorking = []; _botWorkingAt = null; }
         HasList = false;
     }
 }

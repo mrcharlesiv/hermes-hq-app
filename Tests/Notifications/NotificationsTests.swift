@@ -179,11 +179,13 @@ enum UIImageForTests {
     @Test func categoriesOfferApproveOnceWithUnlockAndDeny() {
         let categories = NotificationHub.categories()
         #expect(categories.map(\.identifier) == ["DISPATCH_APPROVAL", "DISPATCH_APPROVAL_LOCAL"])
-        let pushed = categories[0].actions
-        #expect(pushed.map(\.identifier) == ["approve", "deny"] && pushed[0].title == "Approve Once")
-        #expect(pushed[0].options.contains(.authenticationRequired) && pushed[1].options.contains(.destructive))
-        #expect(!pushed[0].options.contains(.foreground), "a pushed approval answers without opening the app")
-        #expect(categories[1].actions.allSatisfy { $0.options.contains(.foreground) }, "a local one opens the app to answer")
+        for category in categories {
+            let actions = category.actions
+            #expect(actions.map(\.identifier) == ["approve", "deny"] && actions[0].title == "Approve Once")
+            #expect(actions[0].options.contains(.authenticationRequired) && actions[1].options.contains(.destructive))
+            #expect(actions.allSatisfy { !$0.options.contains(.foreground) },
+                    "both pushed and local approvals run without foreground launch so Apple Watch mirrors Approve Once / Deny")
+        }
     }
 }
 
@@ -803,6 +805,40 @@ enum UIImageForTests {
         await push.answer(other, choice: "once")
         #expect(plugin.calls.filter { $0.method == "POST" }.count == 1, "another account's alert is never answered here")
         #expect(PushAnswers.decode(defaults.data(forKey: "hermes.push.answers")).pending.isEmpty)
+    }
+
+    @Test func approveFromWatchColdBackgroundUsesHeadlessCallWithoutActiveClient() async throws {
+        // First register so the ledger records `owner` in UserDefaults, as a previously signed-in phone has.
+        let (seed, defaults) = registrar("watchCold")
+        let regPlugin = FakePlugin()
+        seed.call = regPlugin.call
+        seed.setOwner(owner)
+        defer { PushSealKeys.remove(owner) }
+        await seed.register()
+
+        // Simulate cold background launch from an Apple Watch tap: fresh PushRegistrar with `owner == nil` and `call == nil`.
+        let cold = PushRegistrar(defaults: defaults)
+        cold.availableOverride = true
+        let watchPlugin = FakePlugin()
+        cold.headlessCall = { askedOwner in askedOwner == self.owner ? watchPlugin.call : nil }
+        #expect(cold.owner == nil && cold.call == nil)
+
+        let remote: [String: Any] = ["kind": "approval", "session": "s_watch", "request": "req_watch_1",
+                                     "sessionKey": "agent:main:desktop:dm:1",
+                                     "token": String(repeating: "a", count: 64), "account": owner]
+        await cold.answer(remote, choice: "once")
+        let post = try #require(watchPlugin.calls.first { $0.method == "POST" })
+        #expect(post.path == PushPolicy.route + "/approvals/req_watch_1")
+        #expect(post.body?["choice"] as? String == "once")
+        #expect(PushAnswers.decode(defaults.data(forKey: "hermes.push.answers")).pending.isEmpty)
+
+        // Deny from Apple Watch on cold launch also goes through immediately.
+        var denyRemote = remote
+        denyRemote["request"] = "req_watch_2"
+        await cold.answer(denyRemote, choice: "deny")
+        let denyPost = try #require(watchPlugin.calls.last { $0.method == "POST" })
+        #expect(denyPost.path == PushPolicy.route + "/approvals/req_watch_2")
+        #expect(denyPost.body?["choice"] as? String == "deny")
     }
 }
 

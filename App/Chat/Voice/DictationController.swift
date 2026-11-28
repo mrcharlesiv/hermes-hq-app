@@ -109,9 +109,10 @@ import UIKit
 
     init() {
         let center = NotificationCenter.default
-        // The app left the screen: the audio is thrown away, no card (§8).
+        // [#602] Keep an active recording running when switching to another app (UIBackgroundModes includes audio).
+        // Only cancel if the app left the screen before recording actually started (iOS won't start new mic input in background).
         observers.append(center.addObserver(forName: UIScene.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.cancelRecording(why: "the app left the screen") }
+            MainActor.assumeIsolated { self?.handleDidEnterBackground() }
         })
         observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
             let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
@@ -281,6 +282,19 @@ import UIKit
     }
 
     private func finish(_ take: Take) async {
+        // [#602] Hold a short background task so hitting the limit while in another app still finishes transcribing.
+        var backgroundTask = UIBackgroundTaskIdentifier.invalid
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "hq.dictation.finish") {
+            let expired = backgroundTask
+            backgroundTask = .invalid
+            if expired != .invalid { UIApplication.shared.endBackgroundTask(expired) }
+        }
+        defer {
+            if backgroundTask != .invalid {
+                UIApplication.shared.endBackgroundTask(backgroundTask)
+                backgroundTask = .invalid
+            }
+        }
         // [live words] The words settle while the file closes (a moment at most).
         let heard = take.listener
         let settling = Task { await Self.settledWords(heard) }
@@ -355,9 +369,26 @@ import UIKit
         cancel(why: why)
     }
 
-    /// A call, Siri, the audio services or the app leaving: a take still starting or recording is thrown away (§8).
-    /// One that is Transcribing has finished with the microphone, and the words the person asked for (Done) were thrown
-    /// away with no card: it goes on, and its words land in the field (or its card says why) when they come back.
+    /// [#602] Entering background keeps an active recording (or transcribing take) alive under UIBackgroundModes=audio,
+    /// so the user can keep dictating while switching to another app. A take still starting before the mic opened is cancelled.
+    private func handleDidEnterBackground() {
+        guard let take else { return }
+        switch take.phase {
+        case .starting:
+            cancel(why: "the app left the screen before recording started")
+        case .recording:
+            VoiceEvents.note("dictation continuing in background")
+            AppLog.trace("talk", "dictation \(AppLog.tag(take.chat.memoScope)) continuing in background")
+        case .transcribing:
+            VoiceEvents.note("dictation kept: the app left the screen after it finished recording")
+            AppLog.trace("talk", "dictation \(AppLog.tag(take.chat.memoScope)) kept while transcribing in background")
+        case .idle:
+            break
+        }
+    }
+
+    /// A call, Siri, or the audio services reset: a take still starting or recording is thrown away (§8).
+    /// One that is Transcribing has finished with the microphone, so it goes on and delivers its words when they return.
     private func cancelRecording(why: String) {
         if let take, take.phase == .transcribing {
             VoiceEvents.note("dictation kept: \(why) after it finished recording")

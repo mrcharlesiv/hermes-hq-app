@@ -35,30 +35,38 @@ internal sealed class AttachmentTray
     }
 
     /// The tray's items, in order; tiles are kept by id so a state change redraws only its tile.
+    /// Deactivates active ProgressRings before removing tiles from the visual tree (matching UiTree.DeactivateProgressRings)
+    /// and isolates per-tile updates so one tile error does not tear down the tray pass.
     public void Show(IReadOnlyList<DraftAttachment> items)
     {
         var ids = items.Select(a => a.Id).ToHashSet();
         foreach (var gone in _tiles.Keys.Where(id => !ids.Contains(id)).ToList())
         {
-            _tiles[gone].Dispose();
-            _row.Children.Remove(_tiles[gone].Root);
+            var tile = _tiles[gone];
+            UiTree.DeactivateProgressRings(tile.Root);
+            tile.Dispose();
+            _row.Children.Remove(tile.Root);
             _tiles.Remove(gone);
         }
         for (var i = 0; i < items.Count; i++)
         {
             var a = items[i];
-            if (!_tiles.TryGetValue(a.Id, out var tile))
+            try
             {
-                tile = new Tile(this);
-                _tiles[a.Id] = tile;
+                if (!_tiles.TryGetValue(a.Id, out var tile))
+                {
+                    tile = new Tile(this);
+                    _tiles[a.Id] = tile;
+                }
+                tile.Update(a, i);
+                var at = _row.Children.IndexOf(tile.Root);
+                if (at != i)
+                {
+                    if (at >= 0) _row.Children.RemoveAt(at);
+                    _row.Children.Insert(Math.Min(i, _row.Children.Count), tile.Root);
+                }
             }
-            tile.Update(a, i);
-            var at = _row.Children.IndexOf(tile.Root);
-            if (at != i)
-            {
-                if (at >= 0) _row.Children.RemoveAt(at);
-                _row.Children.Insert(Math.Min(i, _row.Children.Count), tile.Root);
-            }
+            catch (Exception e) { AppLog.Error("attachments", e); }
         }
         View.Visibility = items.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
@@ -210,6 +218,7 @@ internal sealed class AttachmentTray
 
         private void BuildFace(DraftAttachment a)
         {
+            ClearOverlay();
             _face.Children.Clear();
             _fileDetail = null;
             if (_thumb.Parent is Border old) old.Child = null;

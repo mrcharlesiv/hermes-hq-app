@@ -12,6 +12,11 @@ public class JobsApi(GatewaySession session)
 
     public GatewaySession Session { get; } = session;
 
+    /// The shared cache keyed by the session; a session-less instance (tests) keeps its own, so two tests'
+    /// fakes can never hand each other a stale answer.
+    private JobsListCache? _ownCache;
+    internal JobsListCache Cache => Session is { } s ? JobsListCache.For(s) : (_ownCache ??= new JobsListCache());
+
     public static string JobPath(string id) => ListPath + "/" + Uri.EscapeDataString(id);
 
     private static List<KeyValuePair<string, string>> Profile(string? profile) =>
@@ -26,8 +31,18 @@ public class JobsApi(GatewaySession session)
         return a.Body.Trim().Length == 0 ? null : a.Json;
     }
 
-    public async Task<List<CronJob>> ListAsync(string scope, CancellationToken ct = default) =>
-        CronJob.List(await SendAsync(HttpMethod.Get, ListPath, Profile(scope), timeout: TimeSpan.FromSeconds(60), ct: ct).ConfigureAwait(false));
+    /// The list read's cache key: one per scope, shared with the Tiles page's reads of the same session (BUG-3).
+    public static string ListKey(string scope) => ListPath + "?profile=" + scope;
+
+    public async Task<List<CronJob>> ListAsync(string scope, CancellationToken ct = default)
+    {
+        var json = await Cache.ReadAsync(ListKey(scope),
+            () => SendAsync(HttpMethod.Get, ListPath, Profile(scope), timeout: TimeSpan.FromSeconds(60), ct: CancellationToken.None), ct).ConfigureAwait(false);
+        return CronJob.List(json);
+    }
+
+    /// A write's follow-up refresh must not be served the answer read before it.
+    public void ForgetList(string scope) => Cache.Forget(ListKey(scope));
 
     public async Task<JsonNode?> JobAsync(string id, string? profile, TimeSpan? timeout = null, CancellationToken ct = default) =>
         await SendAsync(HttpMethod.Get, JobPath(id), Profile(profile), timeout: timeout, ct: ct).ConfigureAwait(false);

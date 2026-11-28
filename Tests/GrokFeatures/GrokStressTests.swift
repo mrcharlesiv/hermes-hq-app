@@ -718,8 +718,9 @@ nonisolated struct StressRNG: RandomNumberGenerator {
                 hView.layoutIfNeeded()
                 let tiles = controls(hView, "travel.hotel.")
                 #expect(tiles.count == 3, "\(note)")
+                let expectedTileHeight = HotelsCardLayout.pieces(hRow, width: hg.width, category: category).carousel
                 for tile in tiles {
-                    #expect(abs(tile.bounds.height - HotelsCardLayout.tileHeight(type)) < 0.6, "tile \(tile.bounds.height) \(note)")
+                    #expect(abs(tile.bounds.height - expectedTileHeight) < 0.6, "tile \(tile.bounds.height) \(note)")
                     for label in labels(tile) where !(label.text ?? "").isEmpty {
                         let frame = label.convert(label.bounds, to: tile)
                         let lines = CGFloat(max(1, label.numberOfLines))

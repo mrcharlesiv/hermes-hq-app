@@ -123,59 +123,94 @@ nonisolated final class TransferTask: NSObject, URLSessionDataDelegate, URLSessi
     private let ceiling: Int64
     private let target: URL?
     private let progress: (@Sendable (Int64, Int64) -> Void)?
+    private weak var transport: HTTPTransport?
 
-    private init(ceiling: Int64, target: URL?, progress: (@Sendable (Int64, Int64) -> Void)?) {
+    private init(ceiling: Int64, target: URL?, progress: (@Sendable (Int64, Int64) -> Void)?, transport: HTTPTransport) {
         self.ceiling = ceiling
         self.target = target
         self.progress = progress
+        self.transport = transport
+    }
+
+    private func failUpload(_ error: any Error) {
+        let taken = state.withLock { s -> CheckedContinuation<(Data, HTTPURLResponse), Error>? in
+            defer { s.uploadContinuation = nil }
+            return s.uploadContinuation
+        }
+        taken?.resume(throwing: error)
+    }
+
+    private func failDownload(_ error: any Error) {
+        let (taken, moved) = state.withLock { s -> (CheckedContinuation<(HTTPURLResponse, Data?), Error>?, Bool) in
+            defer { s.downloadContinuation = nil }
+            return (s.downloadContinuation, s.moved)
+        }
+        guard let taken else { return }
+        if let target, !moved { try? FileManager.default.removeItem(at: target) }
+        taken.resume(throwing: error)
     }
 
     static func upload(_ request: URLRequest, file: URL, transport: HTTPTransport, priority: Float, ceiling: Int,
                        progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> (Data, HTTPURLResponse) {
-        let delegate = TransferTask(ceiling: Int64(ceiling), target: nil, progress: progress)
+        let delegate = TransferTask(ceiling: Int64(ceiling), target: nil, progress: progress, transport: transport)
         let task = try transport.uploadTask(with: request, fromFile: file)
         task.delegate = delegate
         task.priority = priority
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(Data, HTTPURLResponse), Error>) in
                 delegate.state.withLock { $0.uploadContinuation = continuation }
-                if Task.isCancelled {
-                    // Cancelled before it started: settle here (whoever takes the continuation resumes it).
-                    if let taken = delegate.state.withLock({ s -> CheckedContinuation<(Data, HTTPURLResponse), Error>? in
-                        defer { s.uploadContinuation = nil }
-                        return s.uploadContinuation
-                    }) { taken.resume(throwing: CancellationError()) }
+                let started = transport.startTransferTask(task) { error in
+                    delegate.failUpload(error)
+                }
+                if !started {
                     task.cancel()
+                    delegate.failUpload(Task.isCancelled ? CancellationError() : GatewayFailure.connectionChanged)
                     return
                 }
-                task.resume()
+                if Task.isCancelled {
+                    task.cancel()
+                    transport.finishTransferTask(task)
+                    delegate.failUpload(CancellationError())
+                }
             }
         } onCancel: {
             task.cancel()
+            if transport.isInvalidated {
+                transport.finishTransferTask(task)
+                delegate.failUpload(CancellationError())
+            }
         }
     }
 
     static func download(_ request: URLRequest, to file: URL, transport: HTTPTransport, priority: Float, ceiling: Int64,
                          progress: (@Sendable (Int64, Int64) -> Void)?) async throws -> (HTTPURLResponse, Data?) {
-        let delegate = TransferTask(ceiling: ceiling, target: file, progress: progress)
+        let delegate = TransferTask(ceiling: ceiling, target: file, progress: progress, transport: transport)
         let task = try transport.downloadTask(with: request)
         task.delegate = delegate
         task.priority = priority
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(HTTPURLResponse, Data?), Error>) in
                 delegate.state.withLock { $0.downloadContinuation = continuation }
-                if Task.isCancelled {
-                    if let taken = delegate.state.withLock({ s -> CheckedContinuation<(HTTPURLResponse, Data?), Error>? in
-                        defer { s.downloadContinuation = nil }
-                        return s.downloadContinuation
-                    }) { taken.resume(throwing: CancellationError()) }
+                let started = transport.startTransferTask(task) { error in
+                    delegate.failDownload(error)
+                }
+                if !started {
                     task.cancel()
+                    delegate.failDownload(Task.isCancelled ? CancellationError() : GatewayFailure.connectionChanged)
                     return
                 }
-                task.resume()
+                if Task.isCancelled {
+                    task.cancel()
+                    transport.finishTransferTask(task)
+                    delegate.failDownload(CancellationError())
+                }
             }
         } onCancel: {
             task.cancel()
+            if transport.isInvalidated {
+                transport.finishTransferTask(task)
+                delegate.failDownload(CancellationError())
+            }
         }
     }
 
@@ -236,6 +271,7 @@ nonisolated final class TransferTask: NSObject, URLSessionDataDelegate, URLSessi
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
+        transport?.finishTransferTask(task)
         let (upload, download, s) = state.withLock { s -> (CheckedContinuation<(Data, HTTPURLResponse), Error>?,
                                                             CheckedContinuation<(HTTPURLResponse, Data?), Error>?, State) in
             let u = s.uploadContinuation, d = s.downloadContinuation

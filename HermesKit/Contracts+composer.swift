@@ -136,6 +136,17 @@ extension LiveChatSession {
         typedSteerChain = Task { [weak self] in
             await previous?.value
             guard let self else { return }
+            if self.stopEpoch != epoch {
+                AppLog.note("send", "steer \(AppLog.tag(steer.localId)) on \(self.logIds) cancelled by Stop before sending; kept in the paused queue")
+                self.turn.correctionIds.remove(steer.localId)
+                self.removeMessage(steer.localId)
+                self.unsealSteer(steer)
+                self.queuedMessages.append(QueuedMessage(id: self.nextQueuedId(), text: text, attachments: [], display: nil))
+                self.parkQueue()
+                self.changes.markState()
+                self.scheduleFlush()
+                return
+            }
             guard await self.finishSteer(steer, text: text) == .failed else { return }
             // Stop came while the steer was out: Stop halts the queue, so the words wait in it, paused, and nothing
             // queued before them goes out either (spec 3x-composer §19.6: "back as a paused queue row").

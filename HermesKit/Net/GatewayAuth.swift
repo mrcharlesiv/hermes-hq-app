@@ -93,22 +93,19 @@ actor GatewayAuth {
         guard refreshFlight != nil || pendingCollector != nil else { return }
         let began = ContinuousClock.now
         let deadline = began + limit
-        while true {
-            let work: Task<Void, Never>
+        while ContinuousClock.now < deadline {
             if let flight = refreshFlight {
-                work = Task { _ = try? await flight.value }
+                let done = (try? await untilDeadline(deadline, late: { GatewayFailure.timeout }) {
+                    _ = try? await flight.value
+                }) != nil
+                if !done { break }
             } else if let pending = pendingCollector {
-                work = pending
+                let done = (try? await untilDeadline(deadline, late: { GatewayFailure.timeout }) {
+                    await pending.value
+                }) != nil
+                if !done { break }
             } else {
                 break
-            }
-            let left = ContinuousClock.now.duration(to: deadline)
-            guard left > .zero else { break }
-            await withChildTasks(of: Void.self) { group in
-                group.addTask { await work.value }
-                group.addTask { try? await Task.sleep(for: left) }
-                _ = await group.next()
-                group.cancelAll()
             }
         }
         let what = logContext.map { ", \($0)" } ?? ""
@@ -198,7 +195,7 @@ actor GatewayAuth {
                 try await flight.value
                 self.alongsideRestsUntil = nil
                 // Content-free: a duration and the measured lifetime (settles spec 01 §21.1 from the phone's log).
-                let lifetime = self.stored.nous?.lifetime.map { ", lifetime \(Int($0)) s" } ?? ""
+                let lifetime = self.stored.nous?.lifetime.map { ", lifetime \(SafeInt.clamped($0)) s" } ?? ""
                 AppLog.note("net", "auth renewed alongside: \(ConnectSteps.ms(began.duration(to: .now))) ms\(lifetime)")
             } catch {
                 let failure = GatewayFailure.from(error)
@@ -270,7 +267,7 @@ actor GatewayAuth {
     func refresh(sentAccess: String?, trigger: String = "401") async throws {
         if let rejection { throw rejection }
         await adoptLatestInProcess()
-        if kind == .nous, let sentAccess, let current = stored.nous?.accessToken, current != sentAccess { return }
+        if kind == .nous, let sentAccess, let current = stored.nous, current.accessToken != sentAccess, !current.needsRenewal() { return }
         if refreshFlight == nil, let rest = refreshRest, let pair = stored.nous, rest.pair.samePair(pair), ContinuousClock.now < rest.until {
             AppLog.trace("auth", "refresh (\(trigger)) waits: \(rest.misses) unfinished, \(ConnectSteps.ms(ContinuousClock.now.duration(to: rest.until))) ms left")
             throw rest.failure
@@ -286,7 +283,7 @@ actor GatewayAuth {
         // [kept-session] `.blocked` spent nothing, but asking again on every request would only meet the same wall.
         guard let failure, let pair, [.unavailable, .timeout, .rateLimited, .blocked].contains(failure) else { refreshRest = nil; return }
         let misses = (refreshRest?.pair.samePair(pair) == true ? refreshRest?.misses ?? 0 : 0) + 1
-        let wait = after.map { Duration.milliseconds(Int(min(max($0, 1), 60) * 1000)) }
+        let wait = after.flatMap { $0.isFinite ? Duration.milliseconds(SafeInt.clamped(min(max($0, 1), 60) * 1000)) : nil }
             ?? Self.refreshRests[min(misses, Self.refreshRests.count) - 1]
         refreshRest = (pair, .now + wait, misses, failure)
         AppLog.note("auth", "refresh unfinished (\(failure.code)) \(misses)×: the same pair waits \(ConnectSteps.ms(wait)) ms")
@@ -333,7 +330,8 @@ actor GatewayAuth {
             let release = await self.renewals.beginHold("Hermes HQ sign-in renewal")
             var wait = after
             for _ in 0..<Self.pendingMaxAttempts {
-                let delay = Duration.milliseconds(Int(min(max(wait, 1), 10) * 1000) + 50)
+                let safeWait = wait.isFinite ? min(max(wait, 1), 10) : 2
+                let delay = Duration.milliseconds(SafeInt.clamped(safeWait * 1000) + 50)
                 try? await Task.sleep(for: delay)
                 guard !Task.isCancelled else { break }
                 await self.adoptLatestInProcess()
@@ -453,7 +451,7 @@ actor GatewayAuth {
             case .tokens(let renewed):
                 guard renewed.userId == tokens.userId else { throw GatewayFailure.sessionEnded } // never another account's
                 stored.nous = renewed
-                if let lifetime = renewed.lifetime { AppLog.note("auth", "nous access token lifetime \(Int(lifetime)) s (renewed)") }
+                if let lifetime = renewed.lifetime { AppLog.note("auth", "nous access token lifetime \(SafeInt.clamped(lifetime)) s (renewed)") }
                 return attempt > 0 ? "rotated the pair another process saved after a refusal"
                     : adopted ? "rotated a pair saved by another process" : "rotated"
             case .refused:
@@ -697,7 +695,17 @@ actor GatewayAuth {
         pendingCollector = nil
         AppLog.note("auth", "session refused by the gateway (\(failure.code))")
         if kind == .password { transport.clearCookies() }
-        if persisted { vault.forgetSession(key) }
+        if persisted {
+            if kind == .nous {
+                vault.forgetSession(key, expectedCookies: nil, expectedNous: stored.nous)
+            } else {
+                let ledgerCookies = cookieLedger.value
+                if !vault.forgetSession(key, expectedCookies: ledgerCookies, expectedNous: nil),
+                   let currentCookies = stored.cookies, !SavedCookie.same(currentCookies, ledgerCookies) {
+                    vault.forgetSession(key, expectedCookies: currentCookies, expectedNous: nil)
+                }
+            }
+        }
         stored = stored.withoutSession
         onRejected?(failure)
     }

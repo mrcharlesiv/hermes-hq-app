@@ -66,7 +66,7 @@ nonisolated struct PhoneSetupCheck: Equatable, Sendable {
             if app.active == false {
                 rows.append(Row(id: "connection", state: .fail, sentence: "The voice connection is turned off.",
                                 fix: "\(DeviceWord.Tap) Fix voice connection below, or turn it on in the samplehost portal (Voice › Programmable Voice)."))
-            } else if app.webhook_event_url != nil && !samplehostHasValidWebhookURL(app.webhook_event_url) {
+            } else if !samplehostHasValidWebhookURL(app.webhook_event_url) {
                 rows.append(Row(id: "connection", state: .fail,
                                 sentence: "The voice connection has no valid https:// webhook URL, so samplehost won't place calls on it.",
                                 fix: "\(DeviceWord.Tap) Fix voice connection below, or set an https:// webhook URL in the samplehost portal (Voice › Programmable Voice › Voice API)."))
@@ -77,7 +77,7 @@ nonisolated struct PhoneSetupCheck: Equatable, Sendable {
                 rows.append(Row(id: "profile", state: .fail, sentence: "The connection has no outbound voice profile, so it can't call out.",
                                 fix: "\(DeviceWord.Tap) Fix voice connection below, or attach an outbound voice profile in the samplehost portal."))
             }
-        case .failure(.unexpected(404))?:
+        case .failure(let err)? where err.isNotFound:
             rows.append(Row(id: "connection", state: .fail,
                             sentence: "The voice connection isn't a Voice API (Call Control) application — TeXML and SIP connections can't place calls here.",
                             fix: "\(DeviceWord.Tap) Fix voice connection below, or choose a Voice API application in Phone Calls settings."))
@@ -137,7 +137,7 @@ nonisolated struct PhoneSetupCheck: Equatable, Sendable {
                                 sentence: "Assistant call settings can be tuned for smoother conversations (\(voiceIssues.joined(separator: "; "))).",
                                 fix: "\(DeviceWord.Tap) Optimize assistant below or in Phone Calls settings."))
             }
-        case .failure(.unexpected(404))?:
+        case .failure(let err)? where err.isNotFound:
             rows.append(Row(id: "assistant", state: .fail, sentence: "The chosen assistant isn't on this samplehost account.",
                             fix: "Choose another assistant above."))
         default:

@@ -303,6 +303,8 @@ final class TasksStore {
     /// Persisted offline write queue (FIFO).
     @ObservationIgnored private var pendingOps: [TodoPendingOp] = []
     @ObservationIgnored private var flushingPending = false
+    /// ID of the pending op currently in flight in `flushPending()`, so `enqueueOffline` never folds a newer edit into it.
+    @ObservationIgnored private var flushingOpID: String?
     /// Throttle timer for live `tasks.changed` socket events.
     @ObservationIgnored private var changedRefreshTask: Task<Void, Never>?
     /// Background task replaying queued offline changes after `gateway.ready`.
@@ -381,14 +383,17 @@ final class TasksStore {
                                 quiet: Bool = false, about taskID: String? = nil) {
         switch kind {
         case .patch(let id, let fields, let touch):
-            // Fold into an existing queued `.add` for a local task, or coalesce into the last queued `.patch` for `id`.
+            // Fold into an existing queued `.add` for a local task, or coalesce into the last queued `.patch` for `id`,
+            // skipping whichever op is currently in flight so removing it by ID never drops newer edits.
             if let idx = pendingOps.lastIndex(where: {
+                guard $0.id != flushingOpID else { return false }
                 if case .add(let localID, _) = $0.kind { return localID == id }
                 return false
             }), case .add(let localID, var addFields) = pendingOps[idx].kind {
                 for (k, v) in fields { addFields[k] = v }
                 pendingOps[idx].kind = .add(localID: localID, fields: addFields)
             } else if let idx = pendingOps.lastIndex(where: {
+                guard $0.id != flushingOpID else { return false }
                 if case .patch(let existingID, _, _) = $0.kind { return existingID == id }
                 return false
             }), case .patch(_, var existingFields, let existingTouch) = pendingOps[idx].kind {
@@ -432,16 +437,29 @@ final class TasksStore {
     func flushPending() async {
         guard !closed, !flushingPending, !pendingOps.isEmpty, !readOnlyGateway else { return }
         flushingPending = true
-        defer { flushingPending = false }
+        defer {
+            flushingPending = false
+            flushingOpID = nil
+        }
         var idMap: [String: String] = [:]
         var replayedAny = false
 
         while !closed, let op = pendingOps.first {
+            let opID = op.id
+            flushingOpID = opID
+            defer { if flushingOpID == opID { flushingOpID = nil } }
             do {
                 switch op.kind {
                 case .add(let localID, let fields):
                     let made = try await api.create(fields)
                     guard !closed else { break }
+                    // If the user deleted `localID` while `api.create` was in flight, the `.add` op was removed from
+                    // `pendingOps`: do not resurrect `made` locally and best-effort remove the server orphan.
+                    guard pendingOps.contains(where: { $0.id == opID }) else {
+                        try? await api.delete(made.id)
+                        replayedAny = true
+                        continue
+                    }
                     idMap[localID] = made.id
                     tasks.removeAll { $0.id == localID }
                     put(made)
@@ -449,13 +467,14 @@ final class TasksStore {
                 case .patch(let rawID, let fields, let touch):
                     let id = idMap[rawID] ?? rawID
                     guard let current = task(id), !TodoIDs.isLocal(id) else {
-                        pendingOps.removeFirst(); savePending(); continue
+                        pendingOps.removeAll { $0.id == opID }; savePending(); continue
                     }
                     let rawBase = serverTask[id] ?? current
                     let base = op.baseFields.flatMap { TodoEdits.applying($0, to: rawBase) } ?? rawBase
                     do {
                         let answer = try await api.patch(id, rev: current.rev, fields: fields)
                         guard !closed else { break }
+                        guard pendingOps.contains(where: { $0.id == opID }) else { continue }
                         serverTask[id] = answer
                         put(answer)
                         reconcilePrep(TodoEdits.prepBots(before: base, after: answer, fields: Set(fields.keys)))
@@ -466,30 +485,35 @@ final class TasksStore {
                                 do {
                                     let answer = try await api.patch(id, rev: resolved.rev, fields: resolved.fields)
                                     guard !closed else { break }
+                                    guard pendingOps.contains(where: { $0.id == opID }) else { continue }
                                     serverTask[id] = answer
                                     put(answer)
                                     reconcilePrep(TodoEdits.prepBots(before: base, after: answer, fields: Set(resolved.fields.keys)))
                                 } catch let retryError {
                                     guard !closed else { break }
                                     if Self.isOfflineError(retryError) {
-                                        serverTask[id] = latest
-                                        let shown = TodoEdits.applying(resolved.fields, to: latest) ?? latest
-                                        put(shown)
-                                        pendingOps[0].kind = .patch(id: rawID, fields: resolved.fields, touch: touch)
-                                        pendingOps[0].baseFields = Self.baselineFields(for: resolved.fields, from: latest)
-                                        savePending()
+                                        if let idx = pendingOps.firstIndex(where: { $0.id == opID }) {
+                                            serverTask[id] = latest
+                                            let shown = TodoEdits.applying(resolved.fields, to: latest) ?? latest
+                                            put(shown)
+                                            pendingOps[idx].kind = .patch(id: rawID, fields: resolved.fields, touch: touch)
+                                            pendingOps[idx].baseFields = Self.baselineFields(for: resolved.fields, from: latest)
+                                            savePending()
+                                        }
                                         throw retryError
                                     } else if let newer = TasksAPI.conflict(retryError) {
-                                        serverTask[id] = newer
-                                        put(newer)
-                                        notice("This task changed somewhere else. Showing the latest.", about: id)
+                                        if pendingOps.contains(where: { $0.id == opID }) {
+                                            serverTask[id] = newer
+                                            put(newer)
+                                            notice("This task changed somewhere else. Showing the latest.", about: id)
+                                        }
                                     } else if PagesREST.status(retryError) == 404 {
                                         tasks.removeAll { $0.id == id }
                                     } else {
                                         throw retryError
                                     }
                                 }
-                            } else {
+                            } else if pendingOps.contains(where: { $0.id == opID }) {
                                 serverTask[id] = latest
                                 put(latest)
                                 notice("This task changed somewhere else. Showing the latest.", about: id)
@@ -511,7 +535,9 @@ final class TasksStore {
                 case .saveSections(let next):
                     let saved = try await api.saveSections(next)
                     guard !closed else { break }
-                    sections = saved
+                    if pendingOps.contains(where: { $0.id == opID }) {
+                        sections = saved
+                    }
                 case .answerOffer(let id, let action, let list, let plan, let inGoal):
                     let goal: (plan: Bool, inGoal: Bool)? = (plan != nil && inGoal != nil) ? (plan!, inGoal!) : nil
                     do {
@@ -519,7 +545,7 @@ final class TasksStore {
                         guard !closed else { break }
                         if let now = offers.firstIndex(where: { $0.id == id }) { offers[now] = answer.offer }
                         noteOffers(whole: false)
-                        sections = answer.sections
+                        if !hasPendingSections { sections = answer.sections }
                         if let goals = answer.goals { adoptGoals(goals) }
                     } catch {
                         guard !closed else { break }
@@ -527,7 +553,7 @@ final class TasksStore {
                     }
                 }
                 guard !closed else { break }
-                pendingOps.removeFirst()
+                pendingOps.removeAll { $0.id == opID }
                 replayedAny = true
                 savePending()
                 save()
@@ -536,9 +562,12 @@ final class TasksStore {
                 guard !closed else { break }
                 if Self.isOfflineError(error) { break }
                 // Permanent server refusal: drop this op and notify so the rest of the queue isn't blocked forever.
-                pendingOps.removeFirst()
+                let wasPresent = pendingOps.contains { $0.id == opID }
+                pendingOps.removeAll { $0.id == opID }
                 savePending()
-                notice("Couldn’t sync an offline change. \(PagesREST.reason(error))")
+                if wasPresent {
+                    notice("Couldn’t sync an offline change. \(PagesREST.reason(error))")
+                }
             }
         }
         if replayedAny { lastReadAt = nil }

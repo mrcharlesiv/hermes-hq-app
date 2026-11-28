@@ -204,33 +204,35 @@ final class NewTodoModel {
             if let starts { fields["starts"] = .string(TodoDates.wire(starts, hasTime: false)) }
         }
         if let section { fields["section"] = .string(section) }
-        Task {
+        let store = self.store
+        Task { [weak self] in
             let made = await store.add(fields)
-            saving = false
-            controller?.isModalInPresentation = false
+            guard let self else { return }
+            self.saving = false
+            self.controller?.isModalInPresentation = false
             guard let made else {
                 PagesHaptics.error()
                 // The gateway's own reason (it refused, read-only, …); the connection only when there's none.
-                failure = store.addFailure ?? "Check your connection, then try again."
+                self.failure = store.addFailure ?? "Check your connection, then try again."
                 return
             }
             PagesHaptics.success()
-            let done = onCreated
+            let done = self.onCreated
             if made.helper != nil {
                 // A bot is on it: the task opens with that bot's chat.
-                if let controller { controller.dismiss(animated: true) { done?(made) } } else { done?(made) }
+                if let controller = self.controller { controller.dismiss(animated: true) { done?(made) } } else { done?(made) }
                 return
             }
             // Your own: the sheet stays for the next one.
             done?(made)
-            startOver()
-            addedCount += 1
+            self.startOver()
+            self.addedCount += 1
             let words = "Added “\(made.title)”"
-            added = words
+            self.added = words
             HQAnnounce.say(words)
-            addedWork?.cancel()
+            self.addedWork?.cancel()
             let work = DispatchWorkItem { [weak self] in self?.added = nil }
-            addedWork = work
+            self.addedWork = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: work)
         }
     }

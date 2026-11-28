@@ -49,6 +49,8 @@ import UIKit
     private var pendingAnswer: (request: String, approve: Bool)?
     private var pendingDraft: String?
     private var pendingTask: (id: String, profile: String?)?
+    /// Push account tag of a task alert tapped during cold launch before `PushRegistrar.shared.owner` was set.
+    private var pendingTaskAccount: String?
     private(set) var epoch = 0
     private var seen = Set<String>()
     private var order: [String] = []
@@ -107,10 +109,20 @@ import UIKit
                 openChat(pending.stored, pending.profile)
             }
         }
+        if let pendingTask, let openTask {
+            self.pendingTask = nil
+            let account = pendingTaskAccount
+            pendingTaskAccount = nil
+            if let account, let owner = PushRegistrar.shared.owner, account != owner {
+                AppLog.note("notify", "task alert from another gateway (launch)")
+                pendingOther = (account, nil)
+            } else {
+                openTask(pendingTask.id, pendingTask.profile)
+            }
+        }
         if let pendingAnswer, let answerLocal { self.pendingAnswer = nil; answerLocal(pendingAnswer.request, pendingAnswer.approve) }
         if let pendingOther, let otherGateway { self.pendingOther = nil; otherGateway(pendingOther.account, pendingOther.chat) }
         if let pendingDraft, let openDraft { self.pendingDraft = nil; openDraft(pendingDraft) }
-        if let pendingTask, let openTask { self.pendingTask = nil; openTask(pendingTask.id, pendingTask.profile) }
     }
 
     // MARK: Directory
@@ -260,6 +272,10 @@ import UIKit
         }
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
+        guard NotificationText.mayPost(observed: observed, current: self.epoch) else {
+            AppLog.trace("notify", "\(kind) \(AppLog.tag(session)) skipped: sign-out epoch changed mid-post")
+            return false
+        }
         let active = UIApplication.shared.applicationState == .active
         let entry = entry ?? directory[session]
         // Per-bot Mute on this iPhone: a muted bot's finished replies neither alert nor peek; approvals still do.
@@ -307,10 +323,6 @@ import UIKit
             let name = !who.group.isEmpty ? who.group : copy.subtitle
             final = PushFaces.message(content, sender: who.sender, profile: entry.profile, face: png, chat: name, conversation: stored)
         }
-        guard NotificationText.mayPost(observed: observed, current: self.epoch) else {
-            AppLog.trace("notify", "\(kind) \(AppLog.tag(session)) skipped: sign-out epoch changed mid-post")
-            return false
-        }
         donateConversation(kind: kind, entry: entry, subtitle: copy.subtitle, stored: stored, face: png)   // [intents] not waited for
         do {
             try await center.add(UNNotificationRequest(identifier: id, content: final, trigger: nil))
@@ -340,7 +352,7 @@ import UIKit
     func clear() {
         epoch += 1
         seen.removeAll(); order.removeAll(); directory.removeAll(); directoryOrder.removeAll(); savedFaces.removeAll()
-        badge = NotificationBadge(); badgeCount = 0; pending = nil; pendingAccount = nil; pendingAnswer = nil; pendingOther = nil; pendingDraft = nil; pendingTask = nil; viewing = nil; viewingStored = nil
+        badge = NotificationBadge(); badgeCount = 0; pending = nil; pendingAccount = nil; pendingAnswer = nil; pendingOther = nil; pendingDraft = nil; pendingTask = nil; pendingTaskAccount = nil; viewing = nil; viewingStored = nil
         ReplyPeek.shared.dismiss(up: true)
         INInteraction.deleteAll { _ in }
         let center = UNUserNotificationCenter.current()
@@ -538,7 +550,11 @@ import UIKit
         if taskInfo["kind"] as? String == "task", let id = (taskInfo["task_id"] as? String) ?? (taskInfo["request"] as? String), !id.isEmpty {
             let profile = taskInfo["profile"] as? String
             AppLog.note("notify", "response task")
-            if let openTask { openTask(id, profile) } else { pendingTask = (id, profile) }
+            if let openTask { openTask(id, profile) }
+            else {
+                pendingTask = (id, profile)
+                pendingTaskAccount = PushRegistrar.shared.owner == nil ? account : nil
+            }
             return
         }
         // No owner yet (a cold launch): the account goes with the waiting tap and is checked when the app is up.
@@ -556,7 +572,10 @@ import UIKit
 
     #if DEBUG
     /// A task's alert tapped before the app was up (AlertDebugHooks): kept, as `respond` keeps one.
-    func queueTask(_ id: String, profile: String?) { pendingTask = (id, profile) }
+    func queueTask(_ id: String, profile: String?, account: String? = nil) {
+        pendingTask = (id, profile)
+        pendingTaskAccount = account
+    }
     #endif
 }
 

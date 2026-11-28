@@ -700,7 +700,8 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
         TextPrompt.present(title: "Rename Board", text: current, placeholder: current, action: "Rename", maxLength: 80,
                            requireChange: true, identifier: "kanban.board.rename.field", selectText: true, from: self) { [weak self] name in
             guard let self else { return }
-            Task {
+            Task { [weak self] in
+                guard let self else { return }
                 guard let reason = await self.store.renameBoard(slug, to: name) else { PagesHaptics.success(); return }
                 self.boardWriteFailed("Couldn’t Rename Board", reason) { [weak self] in self?.renameBoard(slug) }
             }
@@ -715,7 +716,8 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
         TextPrompt.confirm(title: "Delete “\(title)”?", message: KanbanModel.deleteBoardMessage(title: title, total: meta?.total),
                            action: "Delete Board", from: self) { [weak self] in
             guard let self else { return }
-            Task {
+            Task { [weak self] in
+                guard let self else { return }
                 guard let reason = await self.store.deleteBoard(slug) else { PagesHaptics.success(); return }
                 self.boardWriteFailed("Couldn’t Delete Board", reason) { [weak self] in self?.deleteBoard(slug) }
             }
@@ -1075,7 +1077,7 @@ final class KanbanViewController: UIViewController, UICollectionViewDelegate, UI
 
     /// A failed delete is an alert with Try Again (the card comes back), not a line that fades (UX study #134).
     private func delete(_ task: KanbanTask) {
-        Task { [store] in
+        Task { [store, weak self] in
             _ = await store.delete(task) { [weak self] reason in
                 KanbanFeedback.failed("delete", reason: reason, from: self) { self?.delete(task) }
             }

@@ -66,6 +66,11 @@ nonisolated protocol ParakeetHearing: Sendable {
     private static var letGoAt: Date?
     /// Counts loads asked for, so one that was let go or switched off while it ran isn't kept.
     private static var loadGeneration = 0
+    /// Generation of the currently installed `loadTask` so an older task's `defer` never clears a newer one.
+    private static var activeLoadGeneration = 0
+    /// Serializes model loads and cache removals so rapid off/on toggles never run two Core ML loads at once.
+    private static var loadTask: Task<Void, Never>?
+    private static var deleteTask: Task<Void, Never>?
 
     /// Whether a chat opening should load the model: the mic was used lately, and memory wasn't just short.
     nonisolated static func loadsOnOpen(lastUsed: Date?, letGo: Date?, now: Date = Date()) -> Bool {
@@ -108,6 +113,7 @@ nonisolated protocol ParakeetHearing: Sendable {
     static func languageChanged() {
         hearing = nil
         loadGeneration += 1
+        loadTask?.cancel()
         set(.unknown)
     }
 
@@ -120,40 +126,87 @@ nonisolated protocol ParakeetHearing: Sendable {
             guard loadsOnOpen(lastUsed: UserDefaults.standard.object(forKey: usedKey) as? Date, letGo: letGoAt) else { return }
         }
         #if targetEnvironment(simulator)
-        set(.unavailable("not in the simulator"))
+        let hasDebugLoader: Bool
+        #if DEBUG
+        hasDebugLoader = debugLoader != nil
         #else
+        hasDebugLoader = false
+        #endif
+        if !hasDebugLoader {
+            set(.unavailable("not in the simulator"))
+            return
+        }
+        #endif
         guard speaksEnglish else { return set(.unavailable("English only")) }
         set(.checking)
+        let previousLoad = loadTask
+        let previousDelete = deleteTask
         loadGeneration += 1
         let generation = loadGeneration
-        Task {
-            if opened { try? await Task.sleep(for: openDelay) }
+        activeLoadGeneration = generation
+        loadTask = Task {
+            defer { if activeLoadGeneration == generation { loadTask = nil } }
+            await previousLoad?.value
+            await previousDelete?.value
+            guard isOn, !Task.isCancelled, generation == loadGeneration else { return }
+            if opened {
+                try? await Task.sleep(for: openDelay)
+                guard isOn, !Task.isCancelled, generation == loadGeneration else { return }
+            }
             let started = Date(), before = MemoryFootprint.sample()?.mb
-            let here = AsrModels.modelsExist(at: AsrModels.defaultCacheDirectory(for: .v2), version: .v2)
-            if !here, await onMeteredNetwork() { return set(.waitingForWiFi) }
+            let here = modelsExistOnDisk()
+            if !here {
+                let metered = await checkMeteredNetwork()
+                guard isOn, !Task.isCancelled, generation == loadGeneration else { return }
+                if metered { return set(.waitingForWiFi) }
+            }
+            guard isOn, !Task.isCancelled, generation == loadGeneration else { return }
             set(here ? .loading : .downloading(0))
             do {
-                let models = try await AsrModels.downloadAndLoad(version: .v2) { progress in
-                    let percent = Int((progress.fractionCompleted * 100).rounded(.down))
-                    Task { @MainActor in noteDownload(percent) }
-                }
-                let manager = AsrManager(config: .default)
-                try await manager.loadModels(models)
-                let engine = ParakeetEngine(manager: manager)
+                let engine = try await loadEngine(generation: generation)
+                guard isOn, !Task.isCancelled, generation == loadGeneration else { return }
                 // The first pass after a load is slow (Core ML warms up): spent here, not on the first words.
                 _ = await engine.words([Float](repeating: 0, count: ParakeetCut.rate))
+                guard isOn, !Task.isCancelled, generation == loadGeneration else { return }
                 keepOutOfBackups()
-                guard isOn, generation == loadGeneration else { return }   // switched off while it loaded
                 hearing = engine
                 // [diagnostics] What the load cost: the logs showed 800 MB to over 2 GB with nothing to say why.
                 let after = MemoryFootprint.sample()
                 AppLog.note("voice", "more accurate words loaded in \(Int(Date().timeIntervalSince(started))) s (\(opened ? "chat opened" : "in use")\(here ? "" : ", downloaded")): app \(before.map(String.init) ?? "?") → \(after.map { String($0.mb) } ?? "?") MB")
                 set(.ready)
             } catch {
+                guard isOn, !Task.isCancelled, generation == loadGeneration else { return }
                 set(.unavailable("model didn’t load (\((error as NSError).domain) \((error as NSError).code))"))
             }
         }
+    }
+
+    private static func modelsExistOnDisk() -> Bool {
+        #if DEBUG
+        if let debugModelsExist { return debugModelsExist() }
         #endif
+        return AsrModels.modelsExist(at: AsrModels.defaultCacheDirectory(for: .v2), version: .v2)
+    }
+
+    private static func checkMeteredNetwork() async -> Bool {
+        #if DEBUG
+        if let debugMeteredNetwork { return await debugMeteredNetwork() }
+        #endif
+        return await onMeteredNetwork()
+    }
+
+    private static func loadEngine(generation: Int) async throws -> any ParakeetHearing {
+        #if DEBUG
+        if let debugLoader { return try await debugLoader() }
+        #endif
+        let models = try await AsrModels.downloadAndLoad(version: .v2) { progress in
+            let percent = Int((progress.fractionCompleted * 100).rounded(.down))
+            Task { @MainActor in noteDownload(percent, generation: generation) }
+        }
+        guard isOn, !Task.isCancelled, generation == loadGeneration else { throw CancellationError() }
+        let manager = AsrManager(config: .default)
+        try await manager.loadModels(models)
+        return ParakeetEngine(manager: manager)
     }
 
     /// A new listening, or nil when the model isn't ready (Apple's engine listens then).
@@ -176,8 +229,13 @@ nonisolated protocol ParakeetHearing: Sendable {
         } else {
             hearing = nil
             loadGeneration += 1
+            loadTask?.cancel()
+            let previousDelete = deleteTask
             let folder = AsrModels.defaultCacheDirectory(for: .v2)
-            Task.detached(priority: .utility) { try? FileManager.default.removeItem(at: folder) }
+            deleteTask = Task.detached(priority: .utility) {
+                await previousDelete?.value
+                try? FileManager.default.removeItem(at: folder)
+            }
             set(.unknown)
         }
     }
@@ -196,7 +254,8 @@ nonisolated protocol ParakeetHearing: Sendable {
         }
     }
 
-    private static func noteDownload(_ percent: Int) {
+    private static func noteDownload(_ percent: Int, generation: Int) {
+        guard isOn, generation == loadGeneration else { return }
         if case .downloading(let now) = readiness, percent > now, percent < 100 { set(.downloading(percent)) }
     }
 
@@ -239,11 +298,24 @@ nonisolated protocol ParakeetHearing: Sendable {
     }
 
     #if DEBUG
+    /// Tests: injectable async loader & network/disk probes so `prepare` can be exercised on Simulator.
+    static var debugLoader: (@MainActor () async throws -> any ParakeetHearing)?
+    static var debugModelsExist: (() -> Bool)?
+    static var debugMeteredNetwork: (() async -> Bool)?
+
     /// The bench: a whole recording through the model (FluidAudio cuts a long one into overlapping windows itself).
     static func hearWhole(_ samples: [Float]) async -> String? { await hearing?.words(samples) }
 
     /// Tests: a stand-in model, ready at once (nil: start from scratch).
     static func resetForTests(_ stand: (any ParakeetHearing)? = nil) {
+        loadGeneration += 1
+        activeLoadGeneration = loadGeneration
+        loadTask?.cancel()
+        loadTask = nil
+        deleteTask = nil
+        debugLoader = nil
+        debugModelsExist = nil
+        debugMeteredNetwork = nil
         hearing = stand
         readiness = stand == nil ? .unknown : .ready
         letGoAt = nil

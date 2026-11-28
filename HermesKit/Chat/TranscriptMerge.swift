@@ -157,7 +157,7 @@ nonisolated enum TranscriptMerge {
         if !replaceAll, let anchor = fresh.first(where: { $0.rowId != nil }), let anchorRow = anchor.rowId {
             let storedPrevious = previous.filter { !$0.isLocal }
             if let p = previous.firstIndex(where: { canonical($0.id) == anchor.id }) {
-                prefix = previous[..<p].filter { !$0.isLocal }
+                prefix = previous[..<p].filter { !$0.isLocal && !freshIds.contains(canonical($0.id)) }
                 keptOlder = true
                 if logging { notes.append("page meets screen at row \(anchorRow) (shown index \(p)), keeps \(prefix.count) older") }
             } else if storedPrevious.contains(where: { freshIds.contains(canonical($0.id)) }) {

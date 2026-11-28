@@ -132,6 +132,11 @@ enum OfflineDebug {
     private static weak var powerView: UIView?
     private static var powerWatch: NSObjectProtocol?
 
+    private static func writePower() {
+        powerView?.accessibilityValue = (PowerState.shared.saving ? "saving" : "normal")
+            + (HeadMotionSettings.shared.isStill && HQMotion.decorativeStill ? " still" : " moving")
+    }
+
     static func notePower(in window: UIWindow?) {
         guard exposesStatus, let window else { return }
         let view = powerView ?? {
@@ -143,15 +148,15 @@ enum OfflineDebug {
             return view
         }()
         if view.superview !== window { window.addSubview(view) }
-        func write() {
-            powerView?.accessibilityValue = (PowerState.shared.saving ? "saving" : "normal")
-                + (HeadMotionSettings.shared.isStill && HQMotion.decorativeStill ? " still" : " moving")
-        }
-        write()
+        writePower()
         if powerWatch == nil {
             // After the heads' own observer (registered when the first head was made), so the value is the settled one.
             powerWatch = NotificationCenter.default.addObserver(forName: PowerState.changed, object: nil, queue: .main) { _ in
-                MainActor.assumeIsolated { DispatchQueue.main.async { MainActor.assumeIsolated { write() } } }
+                MainActor.assumeIsolated {
+                    DispatchQueue.main.async {
+                        MainActor.assumeIsolated { Self.writePower() }
+                    }
+                }
             }
         }
     }

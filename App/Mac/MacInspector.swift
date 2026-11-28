@@ -268,6 +268,11 @@ final class MacInspector: UIViewController {
         tabsOnBar.isActive = onBar
     }
     private let empty = InspectorEmptyView(symbol: "info.circle", title: "", hint: "")
+    private(set) var themeObserver: NSObjectProtocol?
+
+    isolated deinit {
+        if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
+    }
 
     /// The inspector beside `screen`, when the window has room for one (two panes, the chat in the right one).
     static func beside(_ screen: UIViewController) -> MacInspector? {
@@ -414,7 +419,7 @@ final class MacInspector: UIViewController {
         alignTabs()
         placeRule()
         followLook()
-        NotificationCenter.default.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
+        themeObserver = NotificationCenter.default.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.followLook() }
         }
         fill()

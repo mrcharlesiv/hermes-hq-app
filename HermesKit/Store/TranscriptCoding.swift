@@ -75,8 +75,7 @@ nonisolated struct BinaryReader {
 
     mutating func int() throws -> Int {
         let raw = try varint()
-        let v = Int64(bitPattern: raw)
-        return Int((v >> 1) ^ -(v & 1))
+        return Int(Int64(bitPattern: (raw >> 1) ^ (0 &- (raw & 1))))
     }
 
     mutating func double() throws -> Double {

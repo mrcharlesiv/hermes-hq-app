@@ -114,6 +114,12 @@ final class Backdrop {
     @ObservationIgnored private let defaults: UserDefaults
     /// Chats: the app's background, which they may draw instead of their own.
     @ObservationIgnored private let app: Backdrop?
+    /// Monotonically incremented on every source change so an in-flight `setPhoto` can never adopt a superseded file.
+    @ObservationIgnored private var generation: UInt64 = 0
+    /// Serial queue ordering all backdrop photo writes and removals in `folder`.
+    private nonisolated static let ioQueue = DispatchQueue(label: "ai.hermes.hq.backdrop-io", qos: .userInitiated)
+    /// Test seam overriding the disk write step inside `setPhoto`.
+    @ObservationIgnored var photoWriter: @Sendable (CGImage, URL) throws -> String = Backdrop.write
 
     init(place: Place, app: Backdrop? = nil, defaults: UserDefaults = .standard, folder: URL? = nil) {
         self.place = place
@@ -198,6 +204,7 @@ final class Backdrop {
 
     /// One of the app's own pictures becomes the background. A photo kept before is deleted.
     func setPreset(_ preset: BackdropPreset) {
+        generation &+= 1
         source = .preset(preset)
         defaults.set(preset.rawValue, forKey: keys.preset)
         defaults.removeObject(forKey: keys.photo)
@@ -210,6 +217,7 @@ final class Backdrop {
 
     /// A custom solid color (`#RRGGBB`, auto-adapted for Light and Dark in Studio Matte) becomes the background.
     func setColor(_ hex: UInt32) {
+        generation &+= 1
         let masked = hex & 0xFFFFFF
         source = .color(masked)
         defaults.set(Self.hexString(masked), forKey: keys.color)
@@ -222,11 +230,30 @@ final class Backdrop {
     }
 
     /// A picked photo (read at `maxPixel` by `PhotoLoad`) becomes the background, written off the main thread.
-    /// Throws when it couldn't be kept.
+    /// Throws when it couldn't be kept. If a newer choice (clear, preset, color, or another photo) landed while
+    /// writing, the stale file is discarded instead of adopted.
     func setPhoto(_ photo: PickedPhoto) async throws {
+        generation &+= 1
+        let expected = generation
         let folder = folder
-        let name = try await Task.detached(priority: .userInitiated) { try Self.write(photo.image, into: folder) }.value
-        adopt(name, decoded: photo.image)
+        let image = photo.image
+        let writer = photoWriter
+        let name: String = try await withCheckedThrowingContinuation { continuation in
+            Self.ioQueue.async {
+                do {
+                    continuation.resume(returning: try writer(image, folder))
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+        guard generation == expected else {
+            Self.ioQueue.async {
+                try? FileManager.default.removeItem(at: folder.appending(path: name))
+            }
+            return
+        }
+        applyAdopted(name, decoded: photo.image)
     }
 
     /// The JPEG the background is kept as, in `folder`, every older one removed. Returns its file name.
@@ -257,11 +284,23 @@ final class Backdrop {
 
     private func removeFiles(keeping: String?) {
         let folder = folder
-        DispatchQueue.global(qos: .utility).async { Self.removeFiles(in: folder, keeping: keeping) }
+        Self.ioQueue.async { Self.removeFiles(in: folder, keeping: keeping) }
+    }
+
+    /// Waits for queued file writes/removals on `ioQueue` to finish (used by tests to inspect disk deterministically).
+    func flushIOForTests() async {
+        await withCheckedContinuation { continuation in
+            Self.ioQueue.async { continuation.resume() }
+        }
     }
 
     /// The stored photo is `name` from now on. `decoded`: the picture as just picked, so the views needn't read it back.
     func adopt(_ name: String, decoded: CGImage? = nil) {
+        generation &+= 1
+        applyAdopted(name, decoded: decoded)
+    }
+
+    private func applyAdopted(_ name: String, decoded: CGImage?) {
         source = .photo(name)
         defaults.set(name, forKey: keys.photo)
         defaults.removeObject(forKey: keys.preset)
@@ -276,6 +315,7 @@ final class Backdrop {
 
     /// None: nothing is drawn here (chats also stop using the app's). Dim and Blur stay for the next picture.
     func clear() {
+        generation &+= 1
         source = nil
         defaults.removeObject(forKey: keys.photo)
         defaults.removeObject(forKey: keys.preset)
@@ -288,6 +328,7 @@ final class Backdrop {
 
     /// Everything back to the start: no picture, the standard Dim, no Blur, chats on Use App Background.
     func reset() {
+        generation &+= 1
         source = nil
         keys.all.forEach(defaults.removeObject(forKey:))
         dim = Self.defaultDim(place)

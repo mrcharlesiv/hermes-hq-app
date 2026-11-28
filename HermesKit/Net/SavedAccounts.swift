@@ -4,6 +4,30 @@
 
 import Foundation
 
+/// Safe `Double` -> `Int` conversions for remote/untrusted numbers (prevents Swift's fatal float-to-int traps on
+/// NaN, infinity, or out-of-range finite magnitudes).
+nonisolated enum SafeInt {
+    // 2^62 is exact in IEEE 754 Double and strictly inside 64-bit Int (unlike Double(Int.max) which rounds to 2^63).
+    static let maxBound: Int = 1 << 62
+    static let minBound: Int = -(1 << 62)
+    static let maxSafeDouble = Double(maxBound)
+    static let minSafeDouble = Double(minBound)
+
+    static func clamped(_ value: Double, min lower: Int = minBound, max upper: Int = maxBound, fallback: Int = 0) -> Int {
+        guard value.isFinite else { return fallback }
+        let safeLower = Swift.max(lower, minBound)
+        let safeUpper = Swift.min(upper, maxBound)
+        if value <= Double(safeLower) { return safeLower }
+        if value >= Double(safeUpper) { return safeUpper }
+        return Int(value)
+    }
+
+    static func exact(_ value: Double) -> Int? {
+        guard value.isFinite, value >= minSafeDouble, value <= maxSafeDouble else { return nil }
+        return Int(value)
+    }
+}
+
 /// A gateway session cookie as saved (never leaves native code).
 nonisolated struct SavedCookie: Codable, Sendable, Hashable {
     var name: String
@@ -65,17 +89,23 @@ nonisolated struct NousTokens: Codable, Sendable, Hashable {
     /// The provider name renewals send: "nous" unless the pair says otherwise.
     var providerName: String { provider ?? NousGatewayProtocol.nous }
 
-    /// Seconds the access token lives, measured on this phone (nil without `obtainedAt`).
-    var lifetime: Double? { obtainedAt.map { expiresAt - $0 } }
+    /// Seconds the access token lives, measured on this phone (nil without `obtainedAt` or with non-finite values).
+    var lifetime: Double? {
+        obtainedAt.flatMap {
+            guard expiresAt.isFinite, $0.isFinite else { return nil }
+            let diff = expiresAt - $0
+            return diff.isFinite ? diff : nil
+        }
+    }
 
     /// D6 (spec 01 §7.1): renew once max(lifetime − 60 s, lifetime / 2) has passed since the pair arrived. No proactive
     /// renewal when `expires_at` is missing or the lifetime is not positive (the 401 → renew → retry path covers it).
     /// Without `obtainedAt`, the web rule: renew within 60 s of expiry (and, as above, never ahead of time without one).
     func needsRenewal(now: Double = Date().timeIntervalSince1970) -> Bool {
-        guard canRenew else { return false }
-        guard let obtainedAt else { return expiresAt > 0 && expiresAt - now < Self.renewBefore }
+        guard canRenew, expiresAt.isFinite else { return false }
+        guard let obtainedAt, obtainedAt.isFinite else { return expiresAt > 0 && expiresAt - now < Self.renewBefore }
         let lifetime = expiresAt - obtainedAt
-        guard expiresAt > 0, lifetime > 0 else { return false }
+        guard expiresAt > 0, lifetime.isFinite, lifetime > 0 else { return false }
         return now >= obtainedAt + max(lifetime - Self.renewBefore, lifetime / 2)
     }
 
@@ -83,9 +113,9 @@ nonisolated struct NousTokens: Codable, Sendable, Hashable {
     /// before it, which still goes out with this token. Callers test `needsRenewal` first (that one blocks). False
     /// without a known issue time or a positive lifetime (then only `needsRenewal` and the 401 path renew).
     func renewsAlongside(now: Double = Date().timeIntervalSince1970) -> Bool {
-        guard canRenew, let obtainedAt, expiresAt > 0 else { return false }
+        guard canRenew, let obtainedAt, obtainedAt.isFinite, expiresAt.isFinite, expiresAt > 0 else { return false }
         let lifetime = expiresAt - obtainedAt
-        guard lifetime > 0 else { return false }
+        guard lifetime.isFinite, lifetime > 0 else { return false }
         return now >= obtainedAt + lifetime / 2
     }
 
@@ -93,8 +123,8 @@ nonisolated struct NousTokens: Codable, Sendable, Hashable {
     /// 24 h rotating refresh token expires (e.g. a parked gateway with no cached chats, or a background refresh wake-up).
     func needsKeepAlive(after interval: TimeInterval = 4 * 3600, now: Double = Date().timeIntervalSince1970) -> Bool {
         guard canRenew else { return false }
-        if let obtainedAt { return now - obtainedAt >= interval }
-        return expiresAt > 0 && now >= expiresAt
+        if let obtainedAt, obtainedAt.isFinite { return now - obtainedAt >= interval }
+        return expiresAt.isFinite && expiresAt > 0 && now >= expiresAt
     }
 
     /// The same pair (what compare-and-swap compares; `obtainedAt` is bookkeeping).
@@ -106,16 +136,18 @@ nonisolated struct NousTokens: Codable, Sendable, Hashable {
     /// expired". A launch that reads a pair already due right after the last run renewed has read a stale copy (two
     /// copies of the app sharing one Keychain item: the Mac sign-out after updating). Never a token.
     func ageNote(now: Double = Date().timeIntervalSince1970) -> String {
-        guard let obtainedAt else { return expiresAt > 0 ? (now >= expiresAt ? "no issue time, expired" : "no issue time") : "no expiry" }
-        let state = expiresAt > 0 && now >= expiresAt ? "expired" : needsRenewal(now: now) ? "renewal due"
+        guard let obtainedAt, obtainedAt.isFinite else {
+            return expiresAt.isFinite && expiresAt > 0 ? (now >= expiresAt ? "no issue time, expired" : "no issue time") : "no expiry"
+        }
+        let state = expiresAt.isFinite && expiresAt > 0 && now >= expiresAt ? "expired" : needsRenewal(now: now) ? "renewal due"
             : renewsAlongside(now: now) ? "renews alongside" : "fresh"
-        let life = lifetime.map { " of \(Int($0.rounded())) s" } ?? ""
+        let life = lifetime.map { " of \(SafeInt.clamped($0.rounded())) s" } ?? ""
         return "\(Self.age(now - obtainedAt)) old\(life), \(state)"
     }
 
     /// "47 s", "12 min", "3 h", "2 d" (a clock that ran back reads as 0 s).
     static func age(_ seconds: Double) -> String {
-        let s = max(0, Int(seconds.rounded()))
+        let s = SafeInt.clamped(seconds.rounded(), min: 0)
         if s < 120 { return "\(s) s" }
         if s < 7200 { return "\(s / 60) min" }
         if s < 172_800 { return "\(s / 3600) h" }

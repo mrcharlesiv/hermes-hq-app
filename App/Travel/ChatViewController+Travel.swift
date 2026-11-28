@@ -27,8 +27,11 @@ extension ChatViewController {
     func travelOpenFlight(_ card: FlightsCardRow, index: Int) {
         guard card.flights.flights.indices.contains(index) else { return }
         let flight = card.flights.flights[index]
+        let live = TravelCards.answers(session.messages, queued: travelQueuedTexts)
+        let asks = card.asks(flight).union(live.asked[flight.id] ?? [])
+        let bookingLocked = card.bookingInFlight || card.flights.flights.contains { live.asked[$0.id]?.contains(.book) == true }
         AppLog.trace("travel", "flight \(AppLog.tag(flight.id)) opened \(logTag)")
-        FlightDetailSheet.present(flight, asks: card.asks(flight), bookingLocked: card.bookingInFlight, from: self) { [weak self] ask in
+        FlightDetailSheet.present(flight, asks: asks, bookingLocked: bookingLocked, from: self) { [weak self] ask in
             self?.travelAskFlight(card, index: index, ask: ask)
         }
     }
@@ -36,8 +39,11 @@ extension ChatViewController {
     func travelAskFlight(_ card: FlightsCardRow, index: Int, ask: TravelCards.Ask) {
         guard card.flights.flights.indices.contains(index) else { return }
         let flight = card.flights.flights[index]
-        guard !card.asks(flight).contains(ask) else { return }
-        if ask == .book && card.bookingInFlight { return }
+        let live = TravelCards.answers(session.messages, queued: travelQueuedTexts)
+        let asks = card.asks(flight).union(live.asked[flight.id] ?? [])
+        guard !asks.contains(ask) else { return }
+        let bookingLocked = card.bookingInFlight || card.flights.flights.contains { live.asked[$0.id]?.contains(.book) == true }
+        if ask == .book && bookingLocked { return }
         AppLog.trace("travel", "flight \(AppLog.tag(flight.id)) \(ask.rawValue) \(logTag)")
         Haptics.play(.selection)
         let text = TravelCards.message(ask, flight: flight)
@@ -48,8 +54,11 @@ extension ChatViewController {
     func travelOpenHotel(_ card: HotelsCardRow, index: Int) {
         guard card.hotels.hotels.indices.contains(index) else { return }
         let hotel = card.hotels.hotels[index]
+        let live = TravelCards.answers(session.messages, queued: travelQueuedTexts)
+        let asks = card.asks(hotel).union(live.asked[hotel.id] ?? [])
+        let bookingLocked = card.bookingInFlight || card.hotels.hotels.contains { live.asked[$0.id]?.contains(.book) == true }
         AppLog.trace("travel", "hotel \(AppLog.tag(hotel.id)) opened \(logTag)")
-        HotelDetailSheet.present(hotel, asks: card.asks(hotel), bookingLocked: card.bookingInFlight, from: self) { [weak self] ask in
+        HotelDetailSheet.present(hotel, asks: asks, bookingLocked: bookingLocked, from: self) { [weak self] ask in
             self?.travelAskHotel(card, index: index, ask: ask)
         }
     }
@@ -57,8 +66,11 @@ extension ChatViewController {
     func travelAskHotel(_ card: HotelsCardRow, index: Int, ask: TravelCards.Ask) {
         guard card.hotels.hotels.indices.contains(index) else { return }
         let hotel = card.hotels.hotels[index]
-        guard !card.asks(hotel).contains(ask) else { return }
-        if ask == .book && card.bookingInFlight { return }
+        let live = TravelCards.answers(session.messages, queued: travelQueuedTexts)
+        let asks = card.asks(hotel).union(live.asked[hotel.id] ?? [])
+        guard !asks.contains(ask) else { return }
+        let bookingLocked = card.bookingInFlight || card.hotels.hotels.contains { live.asked[$0.id]?.contains(.book) == true }
+        if ask == .book && bookingLocked { return }
         AppLog.trace("travel", "hotel \(AppLog.tag(hotel.id)) \(ask.rawValue) \(logTag)")
         Haptics.play(.selection)
         let text = TravelCards.message(ask, hotel: hotel)

@@ -237,6 +237,7 @@ nonisolated final class ScreenStream: Sendable {
         var serial = 0
         var decodeTime = 0.0
         var handshaken = false
+        var pendingResized = false
         while !Task.isCancelled {
             let frame: ScreenSocketFrame
             do { frame = try await socket.receive() } catch {
@@ -290,12 +291,15 @@ nonisolated final class ScreenStream: Sendable {
                     state.pacing.probe = probe
                 }
             }
+            pendingResized = pendingResized || out.resized
             if out.ready {
                 AppLog.note("screen", "live \(size.0)x\(size.1)")
                 let onReady = stream.onReady
                 await MainActor.run { onReady(size.0, size.1) }
             }
             guard out.updates > 0 else { continue }
+            let resized = pendingResized
+            pendingResized = false
             decodeTime = 0
             serial += 1
             if let image {
@@ -308,7 +312,7 @@ nonisolated final class ScreenStream: Sendable {
                 state.live = true
             }
             // Only now that the frame is on the main actor: ask for the next one (the whole picture after a resize).
-            stream.send(RFBMessage.updateRequest(incremental: !out.resized, width: size.0, height: size.1))
+            stream.send(RFBMessage.updateRequest(incremental: !resized, width: size.0, height: size.1))
         }
     }
 }

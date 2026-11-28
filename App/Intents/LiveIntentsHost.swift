@@ -248,9 +248,10 @@ import UIKit
     var botKey: String? { screen.flatMap(Self.botProfile).map(VoiceBotCatalog.key(profile:)) }
 
     var isTop: Bool {
-        guard let screen, screen.viewIfLoaded?.window != nil, let navigation = screen.navigationController,
-              navigation.topViewController === screen else { return false }
-        return MainTabController.current?.selectedViewController === navigation
+        guard let screen else { return false }
+        let window = screen.viewIfLoaded?.window ?? screen.navigationController?.viewIfLoaded?.window
+        guard let window else { return false }
+        return (AppRoot.tabs(window) ?? MainTabController.current)?.chatOnShow === screen
     }
 
     var composerReady: Bool {

@@ -454,6 +454,7 @@ final class LiveChatSession: ChatSessionModel {
     var stopEpoch = 0                     // bumped by Stop; a send started before it never goes out (04 §5)
     var reconnectGeneration = 0
     var refreshGeneration = 0
+    var historyEpoch = 0                  // bumped whenever history resets; stale older-page loads drop their results
     var tailReadSerial = 0                // each tail read's start order (`refreshTail`)
     var tailReadApplied = 0               // the newest-started tail read applied so far
     var lastSeq: Int?
@@ -731,6 +732,7 @@ final class LiveChatSession: ChatSessionModel {
         started = true
         openError = nil
         chatGone = false
+        cancelOlderHistory()
         firstPageTask?.cancel(); firstPageTask = nil
         firstPageOwed = false
         firstPageTries = 0
@@ -779,10 +781,7 @@ final class LiveChatSession: ChatSessionModel {
         // A turn that ended on screen still has its end read owed (or in flight): what it reads was seen here.
         let endReadRunning = refreshTask != nil && (lastTurnEndReadAt.map { Date().timeIntervalSince($0) < 5 } ?? false)
         seenOwedAfterLeave = !turn.busy && (turnEndTask != nil || endReadRunning)
-        if olderTask != nil {
-            olderTask?.cancel(); olderTask = nil
-            isLoadingOlder = false
-        }
+        cancelOlderHistory()
         // An open, a refresh or a turn-end read still in flight finishes and saves the cache; the invalidated ticker
         // keeps their completions from scheduling frames for a screen that is gone (a draining chat keeps its frames:
         // they report the turns it starts to the app model).
@@ -2189,11 +2188,11 @@ final class LiveChatSession: ChatSessionModel {
         return messages.lastIndex { $0.role == .user && !turn.correctionIds.contains($0.id) } ?? -1
     }
 
-    private func waitForStopTerminal(_ limit: Duration) async -> Bool {
+    func waitForStopTerminal(_ limit: Duration) async -> Bool {
         guard turn.stopTerminalPending else { return true }
         let timeout = Task { [weak self] in
             try? await Task.sleep(for: limit)
-            guard let self else { return }
+            guard !Task.isCancelled, let self else { return }
             let waiters = self.stopTerminalWaiters
             self.stopTerminalWaiters = []
             waiters.forEach { $0.resume() }

@@ -38,6 +38,11 @@ import UIKit
         stage.onFaceTap = { [weak self] in self?.stage.boop() }
     }
 
+    isolated deinit {
+        stage.onFaceTap = nil
+        stage.stop()
+    }
+
     /// Called once the stack has its first screens: the one on top comes on.
     func start() {
         guard let top = navigation?.topViewController else { return }

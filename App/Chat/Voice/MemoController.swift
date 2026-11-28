@@ -445,9 +445,15 @@ struct MemoNotice: Equatable {
                 return
             }
             let target = self.target
+            // [live words] Take the listener before `input(.nativeStopped)` runs `settle()` -> `dropWords()`, so a draft
+            // keeps what this device already heard.
+            let heard: (any LiveWordsListening)? = if case .draft = disposition { takeWords(keep: true) } else { nil }
             takeId = nil
             input(.nativeStopped)
-            guard let target else { return }
+            guard let target else {
+                heard?.cancel()
+                return
+            }
             let length = MemoPolicy.total(seconds)
             switch disposition {
             case .failed(let error):
@@ -460,7 +466,7 @@ struct MemoNotice: Equatable {
                 AppLog.trace("talk", "memo \(AppLog.tag(scope: target.scope)) stopped natively (\(reason)), kept as a draft: \(Int(file.seconds))s")
                 MemoAccountStores.shared.shapes?.remember(file.path, peaks: file.peaks, seconds: file.seconds)
                 // [live words] The draft carries what was heard (settled first: a moment at most).
-                if let heard = takeWords(keep: true) {
+                if let heard {
                     Task {
                         file.words = await Self.settledWords(heard)
                         self.deliverDraft(file, target)

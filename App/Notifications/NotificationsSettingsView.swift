@@ -192,8 +192,17 @@ final class NotificationsSettingsController: UIHostingController<HQScaledRoot<No
     private var observer: NSObjectProtocol?
     private var registeredObserver: NSObjectProtocol?
 
+    private func removeObservers() {
+        for o in [observer, registeredObserver].compactMap({ $0 }) { NotificationCenter.default.removeObserver(o) }
+        observer = nil
+        registeredObserver = nil
+    }
+
+    isolated deinit { removeObservers() }
+
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        removeObservers()
         Task { await model.refresh() }
         // Back from iOS Settings: what it allows may have changed.
         observer = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
@@ -206,9 +215,7 @@ final class NotificationsSettingsController: UIHostingController<HQScaledRoot<No
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
-        for o in [observer, registeredObserver].compactMap({ $0 }) { NotificationCenter.default.removeObserver(o) }
-        observer = nil
-        registeredObserver = nil
+        removeObservers()
     }
 }
 

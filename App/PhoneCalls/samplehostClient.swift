@@ -43,6 +43,8 @@ nonisolated enum samplehostError: Error, Equatable, Sendable, CustomStringConver
     case badKey
     /// samplehost's own readable words (`errors[].detail`), with the key removed if it was ever echoed.
     case provider(String)
+    /// HTTP 404 (empty or JSON error body): preserves 404 distinction even when samplehost returns a JSON error detail.
+    case notFound(String?)
     /// Call Control error 90018 "Call has already ended" (hangup-call reference).
     case callEnded
     case network
@@ -52,6 +54,13 @@ nonisolated enum samplehostError: Error, Equatable, Sendable, CustomStringConver
     /// The app's own words for why it stopped (shown as they are).
     case refused(String)
 
+    var isNotFound: Bool {
+        switch self {
+        case .notFound, .unexpected(404): true
+        default: false
+        }
+    }
+
     var description: String { phoneMessage(self) }
 }
 
@@ -60,6 +69,9 @@ nonisolated func phoneMessage(_ error: Error) -> String {
     switch error as? samplehostError {
     case .badKey: return "samplehost didn't accept this API key. Check it in the samplehost portal and try again."
     case .provider(let detail): return friendlysamplehostProviderMessage(detail)
+    case .notFound(let detail):
+        if let detail, !detail.isEmpty { return friendlysamplehostProviderMessage(detail) }
+        return "samplehost answered with an unexpected error (404). Try again."
     case .callEnded: return "This call has already ended."
     case .network: return "Couldn't reach samplehost. Check your connection and try again."
     case .unexpected(let status): return "samplehost answered with an unexpected error (\(status)). Try again."
@@ -350,9 +362,15 @@ nonisolated enum PhoneConnectionResolver {
         if let id = matchedNumber?.connection_id, validIDs.contains(id) { return id }
         if !current.isEmpty, validIDs.contains(current) { return current }
         if apps.count == 1, !apps[0].id.isEmpty { return apps[0].id }
-        let readyApps = apps.filter { $0.webhook_event_url == nil || samplehostHasValidWebhookURL($0.webhook_event_url) }
+        let readyApps = apps.filter { samplehostHasValidWebhookURL($0.webhook_event_url) }
         if readyApps.count == 1, !readyApps[0].id.isEmpty { return readyApps[0].id }
         return ""
+    }
+
+    /// True when a Call Control app is missing a valid `https://` webhook URL or an attached outbound voice profile.
+    static func needsFix(_ app: samplehostCallControlAppSummary) -> Bool {
+        !samplehostHasValidWebhookURL(app.webhook_event_url)
+            || (app.outbound?.outbound_voice_profile_id ?? "").isEmpty
     }
 
     /// True when `connectionID` is known to NOT be an active Call Control application (for example, a TeXML app).
@@ -951,7 +969,7 @@ nonisolated struct samplehostAPI: Sendable, CustomStringConvertible, CustomDebug
     /// `call_duration`. nil on 404 (samplehost forgot the call).
     func callStatus(callControlID: String) async throws -> samplehostCallStatus? {
         let result = await Result.of { try await send("GET", ["calls", callControlID]) }
-        if case .failure(samplehostError.unexpected(404)) = result { return nil }
+        if case .failure(let error as samplehostError) = result, error.isNotFound { return nil }
         return try decode(DataOne<samplehostCallStatus>.self, result.get()).data
     }
 
@@ -1177,7 +1195,15 @@ nonisolated struct samplehostAPI: Sendable, CustomStringConvertible, CustomDebug
             } else {
                 profileID = try await ensureVoiceProfile(country: country)
             }
-            let effectiveWebhook = samplehostHasValidWebhookURL(existing.webhook_event_url) ? (existing.webhook_event_url ?? webhookURL) : webhookURL
+            let hasCustomWebhook = webhookURL != PhoneLimits.voiceWebhookURL && samplehostHasValidWebhookURL(webhookURL)
+            let effectiveWebhook: String
+            if hasCustomWebhook {
+                effectiveWebhook = webhookURL
+            } else if let existingURL = existing.webhook_event_url, samplehostHasValidWebhookURL(existingURL) {
+                effectiveWebhook = existingURL
+            } else {
+                effectiveWebhook = webhookURL
+            }
             let name = existing.application_name.flatMap { $0.isEmpty ? nil : $0 } ?? PhoneLimits.voiceAppName
             _ = try await updateCallControlApp(id: id, name: name, webhookURL: effectiveWebhook, outboundProfileID: profileID)
             var updatedNumber: samplehostNumber? = nil
@@ -1268,7 +1294,7 @@ nonisolated struct samplehostAPI: Sendable, CustomStringConvertible, CustomDebug
         if words.isEmpty, let detail = object?["detail"] as? String { words = [detail] }
         if words.isEmpty, let details = object?["detail"] as? [[String: Any]] { words = details.compactMap { $0["msg"] as? String } }
         let text = redact(words.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }.joined(separator: " "))
-        if status == 404, text.isEmpty { return .unexpected(404) }
+        if status == 404 { return .notFound(text.isEmpty ? nil : String(text.prefix(300))) }
         guard !text.isEmpty else { return .unexpected(status) }
         return .provider(String(text.prefix(300)))
     }

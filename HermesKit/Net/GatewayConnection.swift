@@ -866,15 +866,23 @@ actor GatewayConnection {
         let deadline = ContinuousClock.now + .seconds(10)
         var index = 0
         while index < sessions.count, epoch == socketEpoch, ContinuousClock.now < deadline {
-            let batch = sessions[index..<min(index + 2, sessions.count)]
-            index += 2
+            let end = min(index + 2, sessions.count)
+            let batch = sessions[index..<end]
+            index = end
             await withChildTasks(of: Void.self) { group in
                 for session in batch { group.addTask { await self.replayOne(session, epoch: epoch) } }
             }
         }
         guard epoch == socketEpoch, socketReady else { return }
-        book.releaseAll().forEach(out.events.yield)
-        openAllBarriers()
+        // Only release sessions this reconnect replay owned and never started (e.g. after the 10 s deadline).
+        // Sessions already passed to `replayOne` released themselves in its `defer`, and any session parked
+        // concurrently by a live gap repair (`deliverLive`) owns its own park and barrier.
+        if index < sessions.count {
+            for session in sessions[index...] {
+                book.release(session).forEach(out.events.yield)
+                openBarrier(session)
+            }
+        }
     }
 
     private func replayOne(_ session: String, epoch: Int) async {

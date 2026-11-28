@@ -85,12 +85,22 @@ actor AsyncLimiter {
     /// few seconds and never arrived (owner, Mac, 2026-10-30).
     private final class Flight {
         let id = UUID()
+        let accountId: String
         let task: Task<URL, Error>
         let started: FlightStarted
         var waiters: Set<UUID> = []
         /// Counts the times its last waiter went, so only the newest grace period can end it.
         var orphaned = 0
-        init(task: Task<URL, Error>, started: FlightStarted) { self.task = task; self.started = started }
+        init(accountId: String, task: Task<URL, Error>, started: FlightStarted) {
+            self.accountId = accountId
+            self.task = task
+            self.started = started
+        }
+    }
+    private struct FileFlight {
+        let id = UUID()
+        let accountId: String
+        let task: Task<URL, Error>
     }
     /// Set once a flight has its download slot (still waiting in line, it goes at once when nobody wants it).
     nonisolated final class FlightStarted: Sendable {
@@ -101,9 +111,14 @@ actor AsyncLimiter {
     /// How long a started download nobody waits for keeps going.
     static var orphanGrace: Duration = .seconds(10)
     private var inflight: [String: Flight] = [:]
-    private var fileFlights: [String: Task<URL, Error>] = [:]
+    private var fileFlights: [String: FileFlight] = [:]
+    private nonisolated let purgeGenerations = Mutex<[String: Int]>([:])
     /// Gateway keys whose original was seeded from a phone copy this run (your sent photos).
     private var seeded: Set<String> = []
+
+    private nonisolated func purgeGeneration(for accountId: String) -> Int {
+        purgeGenerations.withLock { $0[accountId] ?? 0 }
+    }
 
     func markSeeded(_ key: String) { seeded.insert(key) }
 
@@ -124,8 +139,17 @@ actor AsyncLimiter {
     /// Sign-out: this account's media goes (originals, previews and decoded inline parts: they all live under its
     /// folder), and so does anything the older shared inline folder still holds.
     func purge(accountId: String) {
-        for (_, flight) in inflight { flight.task.cancel() }
-        inflight = [:]
+        purgeGenerations.withLock { $0[accountId, default: 0] += 1 }
+        for (key, flight) in inflight where flight.accountId == accountId {
+            flight.task.cancel()
+            inflight[key] = nil
+        }
+        for (key, flight) in fileFlights where flight.accountId == accountId {
+            flight.task.cancel()
+            fileFlights[key] = nil
+        }
+        let prefix = "g|\(accountId)|"
+        seeded = seeded.filter { !$0.hasPrefix(prefix) }
         store(for: accountId).purge()
         stores[accountId] = nil
         InlineMediaStore.shared.purge()
@@ -134,13 +158,13 @@ actor AsyncLimiter {
 
     /// Joins (or starts, with `make`) the flight for `key`; the caller's cancellation leaves it, and the last one to
     /// leave cancels it (after `orphanGrace` once it has started).
-    private func join(_ key: String, make: (FlightStarted) -> Task<URL, Error>) async throws -> URL {
+    private func join(_ key: String, accountId: String, make: (FlightStarted) -> Task<URL, Error>) async throws -> URL {
         let flight: Flight
         if let known = inflight[key] {
             flight = known
         } else {
             let started = FlightStarted()
-            flight = Flight(task: make(started), started: started)
+            flight = Flight(accountId: accountId, task: make(started), started: started)
             inflight[key] = flight
             let task = flight.task, flightId = flight.id
             Task { [weak self] in
@@ -177,6 +201,8 @@ actor AsyncLimiter {
     }
 
     var debugInflight: Int { inflight.count }
+    var debugFileFlights: Int { fileFlights.count }
+    func debugIsSeeded(_ key: String) -> Bool { seeded.contains(key) }
 
     // MARK: Keys
 
@@ -264,12 +290,18 @@ actor AsyncLimiter {
             let store = store(for: context.accountId)
             let key = MediaStore.remoteKey(url)
             if let hit = store.cachedOriginal(key) { return hit }
-            return try await join(key) { started in
+            let accountId = context.accountId
+            let purgeGen = purgeGeneration(for: accountId)
+            return try await join(key, accountId: accountId) { started in
                 started.mark()
                 let target = store.partialURL(key)
-                return Task.detached(priority: visible ? .userInitiated : .utility) { () async throws -> URL in
+                return Task.detached(priority: visible ? .userInitiated : .utility) { [self] () async throws -> URL in
                     do {
                         let got = try await RemoteImageFetcher.shared.fetch(url, to: target)
+                        if Task.isCancelled || self.purgeGeneration(for: accountId) != purgeGen {
+                            try? FileManager.default.removeItem(at: got)
+                            throw CancellationError()
+                        }
                         guard let adopted = store.adoptDownloaded(got, as: key) else { throw MediaLoadError.unreachable }
                         return adopted
                     } catch let error as RemoteImageError {
@@ -316,14 +348,16 @@ actor AsyncLimiter {
         if inflight[key] == nil, !(AttachmentCenter.existing(context.accountId)?.client is GatewayFileTransfers) {
             throw MediaLoadError.unavailable
         }
-        return try await join(key) { started in
-            let client = AttachmentCenter.existing(context.accountId)?.client as? GatewayFileTransfers
-            let limiter = limiter(for: context.accountId)
+        let accountId = context.accountId
+        let purgeGen = purgeGeneration(for: accountId)
+        return try await join(key, accountId: accountId) { started in
+            let client = AttachmentCenter.existing(accountId)?.client as? GatewayFileTransfers
+            let limiter = limiter(for: accountId)
             let query = Self.downloadQuery(path: path, profile: context.profile, sessionId: context.storedSessionId)
             let partial = store.partialURL(key)
             let priority = visible ? URLSessionTask.highPriority : URLSessionTask.lowPriority
             // Off the main thread (the store's moves are file work); cancelled by its flight, never by the caller.
-            return Task.detached(priority: visible ? .userInitiated : .utility) { () async throws -> URL in
+            return Task.detached(priority: visible ? .userInitiated : .utility) { [self] () async throws -> URL in
                 guard let client else { throw MediaLoadError.unavailable }
                 // Waiting for one of the account's 3 slots; a load nobody wants any more leaves the line.
                 try await limiter.acquire()
@@ -338,7 +372,7 @@ actor AsyncLimiter {
                         break
                     } catch {
                         try? FileManager.default.removeItem(at: partial)     // a cancelled partial file never stays
-                        if Task.isCancelled { throw CancellationError() }
+                        if error is CancellationError || Task.isCancelled { throw CancellationError() }
                         // [reconnect] Right after app-active the network may not be up yet: the bulk session fails at once
                         // (no waitsForConnectivity). One retry ~400 ms later usually lands; server errors never retry.
                         if !retried, MediaLoader.retriesOnce(error) {
@@ -351,6 +385,10 @@ actor AsyncLimiter {
                         if mapped == .unreachable { AppLog.swallowed("media", "download a gateway image", error) }
                         throw mapped
                     }
+                }
+                if Task.isCancelled || self.purgeGeneration(for: accountId) != purgeGen {
+                    try? FileManager.default.removeItem(at: partial)
+                    throw CancellationError()
                 }
                 guard let adopted = store.adoptDownloaded(partial, as: key) else { throw MediaLoadError.unreachable }
                 return adopted
@@ -396,33 +434,42 @@ actor AsyncLimiter {
 
     private func download(path: String, name: String, context: MediaContext, progressKey: String, key: String,
                           store: MediaStore) async throws -> URL {
-        if let flight = fileFlights[key] { return try await flight.value }
+        if let flight = fileFlights[key] { return try await flight.task.value }
         guard let client = AttachmentCenter.existing(context.accountId)?.client as? GatewayFileTransfers else { throw MediaLoadError.unavailable }
         let query = Self.downloadQuery(path: path, profile: context.profile, sessionId: context.storedSessionId)
         let partial = store.partialURL(key)
-        let task = Task<URL, Error> {
+        let accountId = context.accountId
+        let purgeGen = purgeGeneration(for: accountId)
+        let task = Task<URL, Error> { [self] in
             defer { TransferProgressCenter.finish(progressKey) }
             do {
+                try Task.checkCancellation()
                 _ = try await client.download("/api/fs/download", query: query, to: partial, ceiling: Self.fileCeiling,
                                               priority: URLSessionTask.highPriority,
                                               progress: { got, expected in TransferProgressCenter.report(progressKey, sent: got, total: expected) })
             } catch {
                 try? FileManager.default.removeItem(at: partial)
+                if error is CancellationError || Task.isCancelled { throw CancellationError() }
                 let mapped = Self.map(error)
                 if mapped == .unreachable { AppLog.swallowed("media", "download a gateway file", error) }
                 throw mapped
             }
+            if Task.isCancelled || self.purgeGeneration(for: accountId) != purgeGen {
+                try? FileManager.default.removeItem(at: partial)
+                throw CancellationError()
+            }
             guard let adopted = store.adoptDownloadedFile(partial, as: key, name: name) else { throw MediaLoadError.unreachable }
             return adopted
         }
-        fileFlights[key] = task
-        defer { fileFlights[key] = nil }
+        let flight = FileFlight(accountId: accountId, task: task)
+        fileFlights[key] = flight
+        defer { if fileFlights[key]?.id == flight.id { fileFlights[key] = nil } }
         return try await task.value
     }
 
     func cancelFile(path: String, context: MediaContext) {
         let key = MediaStore.gatewayKey(accountId: context.accountId, profile: context.profile, path: path)
-        fileFlights[key]?.cancel()
+        fileFlights[key]?.task.cancel()
         fileFlights[key] = nil
     }
 

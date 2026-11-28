@@ -36,7 +36,10 @@ import UserNotifications
     private var absentUntil = Date.distantPast
     private var token: String?
     private var tokenWaiters: [CheckedContinuation<String?, Never>] = []
-    private var syncing = false, syncAgain = false, removing = false, putting = false
+    private var syncing = false, syncAgain = false
+    private var removingCount = 0, puttingCount = 0
+    private var removing: Bool { removingCount > 0 }
+    private var putting: Bool { puttingCount > 0 }
     /// A registration asked for while a removal ran (a switch whose DELETE outlived its 4 s): it runs once that ends.
     private var registerAfterRemoval = false
     private var putWaiters: [CheckedContinuation<Void, Never>] = []
@@ -237,6 +240,12 @@ import UserNotifications
         liveStepsOffered = status.status == 200 && PushPolicy.liveSteps(status.body)
         onStateChange?()
         guard status.status == 200 else {
+            // Transient offline / 5xx / 429 must not trigger the 10-minute absence lockout: retry on next foreground/sync.
+            if status.status == 0 || status.status >= 500 || status.status == 429 {
+                retry = true
+                AppLog.note("push", "plugin status transient (\(status.status))")
+                return
+            }
             absentUntil = Date().addingTimeInterval(600); ledger.unavailable(); save(); retry = ledger.needsRemoval(owner)
             AppLog.note("push", "plugin absent (\(status.status))")
             return
@@ -254,10 +263,12 @@ import UserNotifications
                                    "previews": prefs.previews]
         if PushPolicy.seals(status.body), let key = PushSealKeys.key(for: owner) { body["seal"] = key.base64EncodedString() }
         ledger.attempt(owner); save()
-        putting = true
+        puttingCount += 1
         let result = await send(call, account: owner, "/devices/" + Self.deviceID, "PUT", body)
-        putting = false
-        let waiters = putWaiters; putWaiters.removeAll(); waiters.forEach { $0.resume() }
+        puttingCount -= 1
+        if puttingCount == 0 {
+            let waiters = putWaiters; putWaiters.removeAll(); waiters.forEach { $0.resume() }
+        }
         guard epoch == admitted else { return }
         if result.status == 200 { ledger.registered(owner, kinds: kinds); save() }
         retry = result.status != 200
@@ -289,22 +300,24 @@ import UserNotifications
         let admitted = epoch
         // This gateway's call, taken now: a switch made while an older PUT finishes sets the next gateway's.
         let call = self.call
-        removing = true
-        defer { removing = false }
+        removingCount += 1
+        defer {
+            removingCount -= 1
+            if removingCount == 0 { registerAfterRemovalIfAsked() }
+        }
         ledger.removal(owner, status: 0); save(); retry = true
         // An older PUT must finish before DELETE, or it could register this device again.
-        if putting { await withCheckedContinuation { putWaiters.append($0) } }
-        guard let call else { registerAfterRemovalIfAsked(); return }
+        while putting { await withCheckedContinuation { putWaiters.append($0) } }
+        guard let call else { return }
         let result = await send(call, account: owner, "/devices/" + Self.deviceID, "DELETE", nil)
         // Audit 14-1: the answer is kept even when it came after the sign-out or switch that asked for it (their 4 s
         // budget ends first on a slow connection): a removal that went through is no longer owed. No registration ran
         // meanwhile (`removing` holds it), so nothing newer is undone.
         ledger.removal(owner, status: result.status); save()
         AppLog.note("push", "unregistered (\(result.status))")
-        guard epoch == admitted else { registerAfterRemovalIfAsked(); return }
+        guard epoch == admitted else { return }
         retry = ledger.needsRemoval(owner)
         onStateChange?()
-        registerAfterRemovalIfAsked()
     }
 
     private func registerAfterRemovalIfAsked() {

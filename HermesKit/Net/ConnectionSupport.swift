@@ -307,7 +307,7 @@ nonisolated struct ReplayBook: Sendable {
     func hasGap(_ event: GatewayEvent) -> Bool {
         guard let seq = event.seq, !event.sessionId.isEmpty, parked[event.sessionId] == nil,
               let last = cursors[event.sessionId] else { return false }
-        return seq > last + 1
+        return last < Int.max && seq > last + 1
     }
 
     /// Starts holding one session's live frames (a gap repair replays it like a reconnect does).
@@ -469,7 +469,7 @@ nonisolated struct RetryLater: Error, Sendable {
     /// `Retry-After` as delta-seconds or an HTTP-date; nil when absent, unreadable or not in the future.
     static func parse(_ header: String?, now: Date = Date()) -> TimeInterval? {
         guard let text = header?.trimmingCharacters(in: .whitespaces), !text.isEmpty else { return nil }
-        if let seconds = Double(text) { return seconds > 0 ? seconds : nil }
+        if let seconds = Double(text) { return seconds.isFinite && seconds > 0 ? seconds : nil }
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(identifier: "GMT")

@@ -149,7 +149,7 @@ nonisolated enum SignInFlows {
         let (status, data) = try await control(base, "/auth/native/token", method: "POST", body: body, transport: transport)
         switch NousGatewayProtocol.answer(status: status, body: data, provider: provider) {
         case .tokens(let tokens):
-            if let lifetime = tokens.lifetime { AppLog.note("auth", "nous access token lifetime \(Int(lifetime)) s (sign-in)") }
+            if let lifetime = tokens.lifetime { AppLog.note("auth", "nous access token lifetime \(SafeInt.clamped(lifetime)) s (sign-in)") }
             return tokens
         case .refused(let reason): throw reason == "not_authorized" ? GatewayFailure.notOwner : GatewayFailure.nousFailed
         case .unavailable(let code):

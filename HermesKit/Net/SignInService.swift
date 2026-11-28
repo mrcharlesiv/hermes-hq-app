@@ -216,6 +216,12 @@ import UIKit
     /// The account the active client belongs to (tests).
     var activeAccountID: String? { activeClient.flatMap { $0.isShutDown ? nil : $0.account.id } }
 
+    /// True when `client` is still this service's current live client for `account` (never instantiates one).
+    func isActiveClient(_ client: LiveGatewayClient, for account: GatewayAccount) -> Bool {
+        guard let activeClient, !activeClient.isShutDown, !client.isShutDown else { return false }
+        return activeClient === client && activeClient.account.id == account.id
+    }
+
     // MARK: Sign out, switch, remove (spec 01 §17)
 
     /// Signs out of the current account at once: socket closed, Keychain entry gone (the next most recent account
@@ -256,17 +262,19 @@ import UIKit
         return true
     }
 
-    /// Forgets another saved account (not the current one); a password session is ended on its gateway first.
+    /// Forgets another saved account (not the current one); removes it from the store before ending its password
+    /// session on its gateway so a concurrent switch can never promote it while logout is in flight.
     func remove(_ account: GatewayAccount) async throws {
         guard account.id != store.current?.id else { throw GatewayFailure.accountCurrent }
         guard let stored = store.stored(account) else { throw GatewayFailure.accountMissing }
+        try store.remove(account)
+        await NousRenewals.shared.forgetUnsaved(stored.key)
         if account.kind == .password, let cookies = stored.cookies, !cookies.isEmpty {
             let transport = HTTPTransport(headers: stored.accessHeaders)
             transport.installCookies(cookies)
             _ = await withSignOutBudget { await SignInFlows.logout(base: account.baseURL, transport: transport) }
             transport.invalidate()
         }
-        try store.remove(account)
     }
 
     #if DEBUG && (targetEnvironment(simulator) || targetEnvironment(macCatalyst))

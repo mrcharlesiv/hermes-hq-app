@@ -15,6 +15,7 @@ final class ProductPageSheet: UIViewController, UIScrollViewDelegate {
     private let pager = UIScrollView()
     private let dots = UIPageControl()
     private var photos: [ShoppingPhotoView] = []
+    private var submitted = false
     private static let photoHeight: CGFloat = 260
 
     init(product: ShoppingCards.Product, asks: Set<ShoppingCards.Ask>, onAsk: @escaping (ShoppingCards.Ask) -> Void) {
@@ -288,6 +289,8 @@ final class ProductPageSheet: UIViewController, UIScrollViewDelegate {
     }
 
     private func ask(_ ask: ShoppingCards.Ask) {
+        guard !submitted else { return }
+        submitted = true
         let onAsk = onAsk   // the chat plays the tap when it sends
         // The sheet goes down first, so the message is seen landing in the chat.
         (navigationController ?? self).dismiss(animated: true) { onAsk(ask) }

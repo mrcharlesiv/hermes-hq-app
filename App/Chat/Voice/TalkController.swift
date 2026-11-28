@@ -1113,8 +1113,14 @@ extension TalkController {
         conversation.chat.onDelegationRefused = nil
         let transport = conversation.transport
         conversation.transport = nil
-        Task { [weak self, weak conversation] in
+        let previous = shuttingDown
+        let closeTask = Task {
+            await previous?.value
             await transport?.close()
+        }
+        shuttingDown = closeTask
+        Task { [weak self, weak conversation] in
+            await closeTask.value
             guard let self, let conversation, self.live === conversation else { return }
             let chat = conversation.chat
             conversation.state = TalkLoopState(now: self.now(), speaksReplies: self.speaksReplies(), clock: self.clock)

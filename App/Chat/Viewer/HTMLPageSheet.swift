@@ -1,3 +1,4 @@
+import CryptoKit
 import UIKit
 import WebKit
 
@@ -102,6 +103,7 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
     /// [tiles] The tile's page was read from the bot's computer (nil: not yet, or it failed with no copy to show).
     private var tileRead: (() -> Void)?
     private var statusClock: Task<Void, Never>?
+    private var sourceLoadTask: Task<Void, Never>?
 
     /// The page's buttons can send: opened from a chat, or as a tile.
     private var talks: Bool { source?.send != nil || source?.comment != nil || tile?.send != nil }
@@ -248,14 +250,20 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
     /// The tile's page from the bot's computer; drawn again only when it differs from the copy shown.
     private func readTile(path: String, name: String, context: MediaContext) {
         contentUnavailableConfiguration = nil
-        let shown = file.flatMap { try? Data(contentsOf: $0) }
+        let currentFile = file
         Task { [weak self] in
+            let shownFingerprint: FileFingerprint? = if let currentFile {
+                await Task.detached(priority: .utility) { Self.fileFingerprint(currentFile) }.value
+            } else {
+                nil
+            }
             do {
                 // A copy already showing stays on a failure, and says so (below): the loader's own fall-back to it was silent.
                 let url = try await MediaLoader.shared.file(path: path, name: name, context: context, progressKey: "page|" + path,
-                                                            fresh: true, keptOnFailure: shown == nil)
+                                                            fresh: true, keptOnFailure: currentFile == nil)
+                let freshFingerprint = await Task.detached(priority: .utility) { Self.fileFingerprint(url) }.value
                 guard let self else { return }
-                let changed = shown == nil || url != self.file || (try? Data(contentsOf: url)) != shown
+                let changed = shownFingerprint == nil || url != self.file || freshFingerprint != shownFingerprint
                 self.file = url
                 if changed { self.load() }
                 AppLog.trace("chatui", "tile page read again, \(changed ? "changed: drawn again" : "unchanged")")
@@ -300,7 +308,10 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
         super.init(nibName: nil, bundle: nil)
     }
 
-    deinit { statusClock?.cancel() }
+    deinit {
+        statusClock?.cancel()
+        sourceLoadTask?.cancel()
+    }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
@@ -671,10 +682,10 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
     /// "New updates available" pill instead of yanking the reader's view out from under them.
     private func checkForBackgroundUpdate() {
         guard !checkingUpdate, let source, let currentFile = file else { return }
-        let shownBytes = try? Data(contentsOf: currentFile)
         checkingUpdate = true
         Task { [weak self] in
             defer { self?.checkingUpdate = false }
+            let shownFingerprint = await Task.detached(priority: .utility) { Self.fileFingerprint(currentFile) }.value
             let freshURL: URL?
             if let read = source.read {
                 freshURL = try? await read()
@@ -684,8 +695,8 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
                                                               fresh: true, keptOnFailure: false)
             }
             guard let self, let freshURL else { return }
-            let freshBytes = try? Data(contentsOf: freshURL)
-            guard let freshBytes, freshBytes != shownBytes else { return }
+            let freshFingerprint = await Task.detached(priority: .utility) { Self.fileFingerprint(freshURL) }.value
+            guard let freshFingerprint, freshFingerprint != shownFingerprint else { return }
             self.noteExternalUpdateAvailable(url: freshURL)
         }
     }
@@ -905,11 +916,48 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
 
     /// The most of a file shown as text: past this the view says it shows the start (a page of a few megabytes of
     /// inlined data made the text view crawl).
-    private static let sourceLimit = 400_000
+    nonisolated static let sourceLimit = 400_000
+
+    /// Byte count + streaming SHA-256 digest so large pages are compared off the main thread without buffering whole files.
+    nonisolated struct FileFingerprint: Equatable, Sendable {
+        var size: Int64
+        var digest: Data
+    }
+
+    nonisolated static func fileFingerprint(_ url: URL) -> FileFingerprint? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        var total: Int64 = 0
+        while let chunk = try? handle.read(upToCount: 65_536), !chunk.isEmpty {
+            total += Int64(chunk.count)
+            hasher.update(data: chunk)
+        }
+        return FileFingerprint(size: total, digest: Data(hasher.finalize()))
+    }
+
+    /// Reads at most `limit` bytes from `file` (off-main), trimming any split UTF-8 codepoint at the boundary.
+    nonisolated static func readSourcePrefix(from file: URL, limit: Int = sourceLimit) -> (text: String, truncated: Bool) {
+        guard limit > 0, let handle = try? FileHandle(forReadingFrom: file) else { return ("", false) }
+        defer { try? handle.close() }
+        guard let raw = try? handle.read(upToCount: limit + 1), !raw.isEmpty else { return ("", false) }
+        let truncated = raw.count > limit
+        let slice = truncated ? raw.prefix(limit) : raw[...]
+        if let utf8 = String(data: slice, encoding: .utf8) {
+            return (utf8, truncated)
+        }
+        if truncated {
+            for drop in 1...min(3, slice.count) {
+                if let utf8 = String(data: slice.dropLast(drop), encoding: .utf8) {
+                    return (utf8, true)
+                }
+            }
+        }
+        return (String(data: slice, encoding: .isoLatin1) ?? "", truncated)
+    }
 
     private func fillSource(_ text: UITextView, from file: URL) {
-        let whole = (try? String(contentsOf: file, encoding: .utf8)) ?? (try? String(contentsOf: file, encoding: .isoLatin1)) ?? ""
-        let cut = whole.count > Self.sourceLimit
+        sourceLoadTask?.cancel()
         // The Mac draws the app at 77 %: 13 pt code came out near 10 pt on the screen (owner 2026-11-16: Mac text too small).
         #if targetEnvironment(macCatalyst)
         let size: CGFloat = 16
@@ -919,21 +967,21 @@ final class HTMLPageSheet: UIViewController, WKNavigationDelegate, WKScriptMessa
         let font = UIFontMetrics(forTextStyle: .body).scaledFont(for: HQFont.mono(ofSize: size, weight: .regular))
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineBreakMode = .byWordWrapping
-        text.attributedText = NSAttributedString(string: cut ? String(whole.prefix(Self.sourceLimit)) : whole,
-                                                 attributes: [.font: font, .foregroundColor: HQPalette.label, .paragraphStyle: paragraph])
-        if cut { show("Showing the start of this file", for: 4) }
-        // Coloured as code is in a reply, off the main thread (a big page takes a moment).
-        let code = text.attributedText.string
-        Task.detached(priority: .userInitiated) {
-            guard let tokens = SyntaxHighlighter.tokens(code, language: "html") else { return }
-            await MainActor.run { [weak text] in
-                guard let text, text.attributedText.string == code else { return }
-                let coloured = NSMutableAttributedString(attributedString: text.attributedText)
-                SyntaxHighlighter.apply(tokens, to: coloured)
-                let at = text.contentOffset
-                text.attributedText = coloured
-                text.setContentOffset(at, animated: false)
-            }
+        sourceLoadTask = Task { [weak self, weak text] in
+            let loaded = await Task.detached(priority: .userInitiated) { Self.readSourcePrefix(from: file) }.value
+            guard !Task.isCancelled, let self, let text, self.file == file else { return }
+            let code = loaded.text
+            text.attributedText = NSAttributedString(string: code,
+                                                     attributes: [.font: font, .foregroundColor: HQPalette.label, .paragraphStyle: paragraph])
+            if loaded.truncated { self.show("Showing the start of this file", for: 4) }
+            // Coloured as code is in a reply, off the main thread (a big page takes a moment).
+            let tokens = await Task.detached(priority: .userInitiated) { SyntaxHighlighter.tokens(code, language: "html") }.value
+            guard !Task.isCancelled, let tokens, text.attributedText.string == code else { return }
+            let coloured = NSMutableAttributedString(attributedString: text.attributedText)
+            SyntaxHighlighter.apply(tokens, to: coloured)
+            let at = text.contentOffset
+            text.attributedText = coloured
+            text.setContentOffset(at, animated: false)
         }
     }
 

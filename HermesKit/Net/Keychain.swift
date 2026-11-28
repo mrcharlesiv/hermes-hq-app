@@ -160,6 +160,28 @@ nonisolated struct AccountVault: Sendable {
         _ = try? update(key) { $0 = $0.withoutSession }
     }
 
+    /// Compare-and-swap session erasure: forgets the saved session only if Keychain still holds the same cookies or
+    /// Nous pair that was refused, so a stale auth/probe can never wipe a newer sign-in's credentials.
+    @discardableResult
+    func forgetSession(_ key: String, expectedCookies: [SavedCookie]?, expectedNous: NousTokens?) -> Bool {
+        do {
+            return try serialized { () throws(GatewayFailure) -> Bool in
+                var list = try editable()
+                guard let held = list.account(key) else { return false }
+                if let expectedNous {
+                    guard let heldNous = held.nous, heldNous.samePair(expectedNous) else { return false }
+                } else if let expectedCookies {
+                    guard let heldCookies = held.cookies, !heldCookies.isEmpty, SavedCookie.same(heldCookies, expectedCookies) else { return false }
+                } else {
+                    return false
+                }
+                list.update(key) { $0 = $0.withoutSession }
+                try store(list)
+                return true
+            }
+        } catch { return false }
+    }
+
     /// Forgets one account that is not the current one.
     func remove(_ key: String) throws(GatewayFailure) -> StoredAccount? {
         try serialized { () throws(GatewayFailure) -> StoredAccount? in

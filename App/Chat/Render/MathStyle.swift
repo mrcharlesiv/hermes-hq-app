@@ -27,7 +27,10 @@ nonisolated enum MathStyle {
     /// A slash after an italic letter needs more: the serif's slash leans the same way as the letter, into it.
     static let italicSlashCorrection: CGFloat = 0.14
 
-    static func attributed(_ readable: String, base: UIFont, color: UIColor, copy: String?) -> NSAttributedString {
+    /// Maximum nesting depth for big-operator limits to prevent stack overflow on pathological inputs.
+    static let maxLimitDepth = 16
+
+    static func attributed(_ readable: String, base: UIFont, color: UIColor, copy: String?, depth: Int = 0) -> NSAttributedString {
         let (upright, italic) = fonts(for: base)
         let out = NSMutableAttributedString()
         var run = ""
@@ -42,8 +45,8 @@ nonisolated enum MathStyle {
         /// A reduced-size, offset copy of a big operator's limit — its own letters still get the same styling, kern
         /// and all, since it is drawn by a recursive call.
         func limitPiece(_ inner: String, below: Bool) -> NSMutableAttributedString {
-            let small = base.withSize((base.pointSize * limitScale).rounded())
-            let piece = NSMutableAttributedString(attributedString: attributed(inner, base: small, color: color, copy: copy))
+            let small = base.withSize(max(1, (base.pointSize * limitScale).rounded()))
+            let piece = NSMutableAttributedString(attributedString: attributed(inner, base: small, color: color, copy: copy, depth: depth + 1))
             let full = NSRange(location: 0, length: piece.length)
             // A delta, not the final offset: `appendParagraph` adds this on top of the paragraph's own line-centring
             // baseline offset (which would otherwise overwrite a `.baselineOffset` set here directly).
@@ -51,15 +54,33 @@ nonisolated enum MathStyle {
             return piece
         }
         let chars = Array(readable)
+        func matchingLimitClose(from openIndex: Int) -> Int {
+            var level = 1
+            var idx = openIndex + 1
+            while idx < chars.count {
+                let ch = chars[idx]
+                if ch == MathText.limitBelowOpen || ch == MathText.limitAboveOpen {
+                    level += 1
+                } else if ch == MathText.limitClose {
+                    level -= 1
+                    if level == 0 { return idx }
+                }
+                idx += 1
+            }
+            return chars.count
+        }
         var i = 0
         while i < chars.count {
             let c = chars[i]
             // A big operator's limit: drawn separately (recursively, at a reduced size) with a real baseline offset.
             if c == MathText.limitBelowOpen || c == MathText.limitAboveOpen {
+                guard depth < Self.maxLimitDepth else {
+                    i += 1
+                    continue
+                }
                 flush()
                 let firstBelow = c == MathText.limitBelowOpen
-                var j = i + 1
-                while j < chars.count, chars[j] != MathText.limitClose { j += 1 }
+                let j = matchingLimitClose(from: i)
                 let firstInner = String(chars[(i + 1)..<min(j, chars.count)])
                 var k = j < chars.count ? j + 1 : chars.count
                 // A sum's two limits (`\sum_{i=1}^{n}`, in either order) sit back to back with nothing between them
@@ -70,8 +91,7 @@ nonisolated enum MathStyle {
                 var secondInner: String?
                 if k < chars.count, chars[k] == MathText.limitBelowOpen || chars[k] == MathText.limitAboveOpen {
                     secondBelow = chars[k] == MathText.limitBelowOpen
-                    var m = k + 1
-                    while m < chars.count, chars[m] != MathText.limitClose { m += 1 }
+                    let m = matchingLimitClose(from: k)
                     secondInner = String(chars[(k + 1)..<min(m, chars.count)])
                     k = m < chars.count ? m + 1 : chars.count
                 }

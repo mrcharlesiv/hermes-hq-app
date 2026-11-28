@@ -198,6 +198,7 @@ final class MacWorkspaceBar: UIView {
         historyIndex = -1
         loadedGatewayId = nil
         seededForDemo = false
+        closingTabId = nil
         tabList = WorkspaceTabList()
         sync()
     }
@@ -566,13 +567,20 @@ final class MacWorkspaceBar: UIView {
         return true
     }
 
+    /// Returns the tab id that must be suppressed in `recordCurrentDestinationIfNeeded()` during an async detail-pane
+    /// transition after closing tab(s): only set when `activeId` itself was removed (never when closing an inactive tab).
+    nonisolated static func closingGuardId(removedIds: Set<String>, activeId: String?) -> String? {
+        guard let activeId, removedIds.contains(activeId) else { return nil }
+        return activeId
+    }
+
     private func closeTab(id: String) {
         let activeId = currentDestination().flatMap(tabId(for:))
         let result = tabList.close(tabId: id, activeTabId: activeId)
         guard result.removed else { return }
         persistTabs()
-        closingTabId = id
-        if activeId == id {
+        if let guardId = Self.closingGuardId(removedIds: [id], activeId: activeId) {
+            closingTabId = guardId
             if let next = result.nextActive {
                 activate(destination(for: next))
                 return
@@ -585,8 +593,13 @@ final class MacWorkspaceBar: UIView {
 
     private func closeOtherTabs(keeping id: String) {
         let activeId = currentDestination().flatMap(tabId(for:))
+        let beforeIds = Set(tabList.tabs.map(\.tabId))
         guard tabList.closeOthers(keeping: id) else { return }
         persistTabs()
+        let removedIds = beforeIds.subtracting(tabList.tabs.map(\.tabId))
+        if let guardId = Self.closingGuardId(removedIds: removedIds, activeId: activeId) {
+            closingTabId = guardId
+        }
         if activeId != id, let kept = tabList.tabs.first(where: { $0.tabId == id }) {
             activate(destination(for: kept))
             return
@@ -597,24 +610,28 @@ final class MacWorkspaceBar: UIView {
 
     private func closeTabsToRight(of id: String) {
         let activeId = currentDestination().flatMap(tabId(for:))
+        let beforeIds = Set(tabList.tabs.map(\.tabId))
         guard tabList.closeToRight(of: id) else { return }
         persistTabs()
-        if let activeId, !tabList.tabs.contains(where: { $0.tabId == activeId }),
-           let anchor = tabList.tabs.first(where: { $0.tabId == id }) {
-            activate(destination(for: anchor))
-            return
+        let removedIds = beforeIds.subtracting(tabList.tabs.map(\.tabId))
+        if let guardId = Self.closingGuardId(removedIds: removedIds, activeId: activeId) {
+            closingTabId = guardId
+            if let anchor = tabList.tabs.first(where: { $0.tabId == id }) {
+                activate(destination(for: anchor))
+                return
+            }
         }
         rebuildTabStrip()
         recolor()
     }
 
     private func closeAllTabs() {
-        let hadActive = currentDestination().flatMap(tabId(for:)).map { id in
-            tabList.tabs.contains { $0.tabId == id }
-        } ?? false
+        let activeId = currentDestination().flatMap(tabId(for:))
+        let beforeIds = Set(tabList.tabs.map(\.tabId))
         guard tabList.closeAll() else { return }
         persistTabs()
-        if hadActive {
+        if let guardId = Self.closingGuardId(removedIds: beforeIds, activeId: activeId) {
+            closingTabId = guardId
             split?.closeDetail(animated: true)
         }
         rebuildTabStrip()

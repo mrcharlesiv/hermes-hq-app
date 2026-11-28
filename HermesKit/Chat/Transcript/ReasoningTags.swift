@@ -27,70 +27,98 @@ nonisolated enum ReasoningTags {
     static func strip(_ text: String, streaming: Bool = false) -> String {
         guard text.contains("<") else { return text }
         let ns = text as NSString
+        let length = ns.length
         let code = codeRanges(ns)
+        var codeIndex = 0
         var removals: [NSRange] = []
-        var from = 0
-        while from < ns.length,
-              let open = openTag.firstMatch(in: text, range: NSRange(location: from, length: ns.length - from)) {
-            if code.contains(where: { NSLocationInRange(open.range.location, $0) }) || inInlineCode(ns, at: open.range.location) {
-                from = open.range.location + open.range.length
-                continue
+        var skipUntil = 0
+        var noClose = Set<String>()
+        var scanPos = 0
+        var ticksOnLine = 0
+        var lineHasNonSpace = false
+        var firstNonSpace: Int?
+
+        func advanceLineScan(to target: Int) {
+            while scanPos < target {
+                let c = ns.character(at: scanPos)
+                if c == 0x0A {
+                    ticksOnLine = 0
+                    lineHasNonSpace = false
+                } else {
+                    if c == 0x60 { ticksOnLine += 1 }
+                    if c != 0x20 && c != 0x09 { lineHasNonSpace = true }
+                }
+                scanPos += 1
+            }
+        }
+
+        func startsText(at index: Int) -> Bool {
+            if firstNonSpace == nil {
+                var i = 0
+                while i < length {
+                    let u = ns.character(at: i)
+                    if u == 0x20 || u == 0x09 || u == 0x0A || u == 0x0D || u == 0x0B || u == 0x0C {
+                        i += 1
+                        continue
+                    }
+                    if u < 0x80 { break }
+                    if let scalar = UnicodeScalar(u), CharacterSet.whitespacesAndNewlines.contains(scalar) {
+                        i += 1
+                        continue
+                    }
+                    break
+                }
+                firstNonSpace = i
+            }
+            return index <= (firstNonSpace ?? 0)
+        }
+
+        openTag.enumerateMatches(in: text, options: [], range: NSRange(location: 0, length: length)) { match, _, stop in
+            guard let open = match else { return }
+            let loc = open.range.location
+            if loc < skipUntil { return }
+            while codeIndex < code.count && code[codeIndex].location + code[codeIndex].length <= loc {
+                codeIndex += 1
+            }
+            if codeIndex < code.count && NSLocationInRange(loc, code[codeIndex]) {
+                return
+            }
+            advanceLineScan(to: loc)
+            if ticksOnLine & 1 == 1 {
+                return
             }
             let tag = ns.substring(with: open.range(at: 1))
-            let afterOpen = open.range.location + open.range.length
-            let close = ns.range(of: "</\(tag)>", options: [.caseInsensitive],
-                                 range: NSRange(location: afterOpen, length: ns.length - afterOpen))
-            if close.location != NSNotFound {
-                var end = close.location + close.length
-                while end < ns.length, ns.character(at: end) == 0x20 || ns.character(at: end) == 0x09 { end += 1 }
-                if end < ns.length, ns.character(at: end) == 0x0A { end += 1 }
-                removals.append(NSRange(location: open.range.location, length: end - open.range.location))
-                from = end
-                continue
+            let tagLower = tag.lowercased()
+            let afterOpen = loc + open.range.length
+            if !noClose.contains(tagLower) {
+                let close = ns.range(of: "</\(tag)>", options: [.caseInsensitive],
+                                     range: NSRange(location: afterOpen, length: length - afterOpen))
+                if close.location != NSNotFound {
+                    var end = close.location + close.length
+                    while end < length, ns.character(at: end) == 0x20 || ns.character(at: end) == 0x09 { end += 1 }
+                    if end < length, ns.character(at: end) == 0x0D, end + 1 < length, ns.character(at: end + 1) == 0x0A {
+                        end += 2
+                    } else if end < length, ns.character(at: end) == 0x0A {
+                        end += 1
+                    }
+                    removals.append(NSRange(location: loc, length: end - loc))
+                    skipUntil = end
+                    return
+                }
+                noClose.insert(tagLower)
             }
-            if streaming ? startsLine(ns, at: open.range.location) : startsText(ns, at: open.range.location) {
+            if streaming ? !lineHasNonSpace : startsText(at: loc) {
                 // Keep the line break before it, as the web's `$1` does.
-                var start = open.range.location
+                var start = loc
                 while start > 0, ns.character(at: start - 1) == 0x20 || ns.character(at: start - 1) == 0x09 { start -= 1 }
-                removals.append(NSRange(location: start, length: ns.length - start))
-                break
+                removals.append(NSRange(location: start, length: length - start))
+                stop.pointee = true
             }
-            from = afterOpen
         }
         guard !removals.isEmpty else { return text }
         let out = NSMutableString(string: text)
         for range in removals.reversed() { out.deleteCharacters(in: range) }
         return out as String
-    }
-
-    /// Only white space before it.
-    private static func startsText(_ ns: NSString, at index: Int) -> Bool {
-        ns.substring(to: index).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    /// The tag sits at the start of its line, spaces or tabs before it at most.
-    private static func startsLine(_ ns: NSString, at index: Int) -> Bool {
-        var i = index
-        while i > 0 {
-            let c = ns.character(at: i - 1)
-            if c == 0x0A { return true }
-            if c != 0x20 && c != 0x09 { return false }
-            i -= 1
-        }
-        return true
-    }
-
-    /// An odd number of backticks before it on its line: it is inside an inline code span.
-    private static func inInlineCode(_ ns: NSString, at index: Int) -> Bool {
-        var ticks = 0
-        var i = index
-        while i > 0 {
-            let c = ns.character(at: i - 1)
-            if c == 0x0A { break }
-            if c == 0x60 { ticks += 1 }
-            i -= 1
-        }
-        return ticks % 2 == 1
     }
 
     /// The fenced code blocks (``` or ~~~, from the fence line to its closing line, or to the end when never closed).

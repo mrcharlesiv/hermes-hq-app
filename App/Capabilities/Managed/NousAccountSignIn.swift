@@ -30,6 +30,7 @@ final class NousAccountModel {
     @ObservationIgnored private let client: any GatewayClient
     @ObservationIgnored private var browser: (any NousBrowser)?
     @ObservationIgnored private var polling: Task<Void, Never>?
+    @ObservationIgnored private var pollGeneration = 0
     @ObservationIgnored private var session: String?
     @ObservationIgnored private var profile = "default"
 
@@ -58,11 +59,16 @@ final class NousAccountModel {
         Haptics.play(.light)
         state = .starting
         let profile = self.profile
+        pollGeneration += 1
+        let generation = pollGeneration
         polling = Task { [weak self] in
             guard let self else { return }
-            defer { self.polling = nil }
+            defer {
+                if self.pollGeneration == generation { self.polling = nil }
+            }
             do {
                 let raw = try await client.rest("POST", "/api/providers/oauth/nous/start", query: query(profile), body: Data("{}".utf8))
+                guard !Task.isCancelled, self.pollGeneration == generation else { return }
                 let started = try JSONValue.parse(raw)
                 guard let session = RosterText.trimmed(started["session_id"]),
                       let link = RosterText.trimmed(started["verification_url"]), let url = ManagedSignInBrowser.accepts(link) else {
@@ -73,10 +79,12 @@ final class NousAccountModel {
                 open(url)
                 let interval = max(2, started["poll_interval"]?.int ?? 5)
                 let deadline = Date().addingTimeInterval(TimeInterval(started["expires_in"]?.int ?? 900))
-                while !Task.isCancelled, Date() < deadline {
+                while !Task.isCancelled, self.pollGeneration == generation, Date() < deadline {
                     try await Task.sleep(for: .seconds(interval))
+                    guard !Task.isCancelled, self.pollGeneration == generation else { return }
                     let poll = try JSONValue.parse(try await client.rest("GET", "/api/providers/oauth/nous/poll/\(session)",
                                                                          query: query(profile), body: nil))
+                    guard !Task.isCancelled, self.pollGeneration == generation else { return }
                     switch RosterText.trimmed(poll["status"]) ?? "pending" {
                     case "pending": continue
                     case "approved":
@@ -91,9 +99,10 @@ final class NousAccountModel {
                     default: throw Failure(RosterText.trimmed(poll["error_message"]) ?? "Nous didn’t finish the sign-in. Try again.")
                     }
                 }
-                if !Task.isCancelled { throw Failure("The sign-in timed out. Try again.") }
+                if !Task.isCancelled, self.pollGeneration == generation { throw Failure("The sign-in timed out. Try again.") }
             } catch is CancellationError {
             } catch {
+                guard !Task.isCancelled, self.pollGeneration == generation else { return }
                 finish()
                 Haptics.play(.error)
                 state = .failed((error as? Failure)?.words ?? CapabilitiesStore.detail(error))
@@ -111,6 +120,7 @@ final class NousAccountModel {
 
     /// The person closed the Nous page: keep listening a little (they may have approved), then stop on Cancel.
     func cancel() {
+        pollGeneration += 1
         polling?.cancel(); polling = nil
         if let session {
             let profile = self.profile

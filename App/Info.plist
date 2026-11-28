@@ -12,7 +12,7 @@
 	<key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-	<!-- [mac] The Mac's app menu reads it (About / Hide / Quit Hermes HQ). -->
+	<!-- [mac] The Mac app menu reads it (About / Hide / Quit Hermes HQ). -->
 	<key>CFBundleName</key><string>$(HQ_DISPLAY_NAME)</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
 	<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
@@ -29,14 +29,14 @@
 	<key>HQAppGroup</key><string>$(HQ_APP_GROUP)</string>
 	<!-- Pushed alerts (and local ones) show as messages from the bot, with its face (Communication Notifications). -->
 	<key>NSUserActivityTypes</key><array><string>INSendMessageIntent</string></array>
-	<!-- The push plugin's silent "settled" update withdraws an approval answered elsewhere. -->
+	<!-- The push plugin silent "settled" update withdraws an approval answered elsewhere. -->
 	<!-- [talk-background] audio: a voice conversation goes on with the app away (docs/spec/3x-talk-background.md). -->
 	<key>UIBackgroundModes</key><array><string>audio</string><string>remote-notification</string><string>fetch</string></array>
-	<!-- [tile-widgets] The Home Screen widgets' background refresh (App/Widgets/WidgetRefresh.swift). -->
+	<!-- [tile-widgets] The Home Screen widget background refresh (App/Widgets/WidgetRefresh.swift). -->
 	<key>BGTaskSchedulerPermittedIdentifiers</key><array><string>ai.hermes.hq.widgets.refresh</string></array>
-	<!-- [talk-background] The conversation's Live Activity (Lock Screen, Dynamic Island). -->
+	<!-- [talk-background] The conversation Live Activity (Lock Screen, Dynamic Island). -->
 	<key>NSSupportsLiveActivities</key><true/>
-	<!-- [live-steps] A reply's card gets each step the gateway's add-on pushes (a larger budget of prompt updates). -->
+	<!-- [live-steps] A reply card gets each step the gateway add-on pushes (a larger budget of prompt updates). -->
 	<key>NSSupportsLiveActivitiesFrequentUpdates</key><true/>
 	<key>ITSAppUsesNonExemptEncryption</key><false/>
 	<!-- [links-browser] Settings › Open Links In asks which of these browsers are installed (PhoneBrowsers.probes). -->
@@ -83,7 +83,7 @@
 			<key>UISceneDelegateClassName</key><string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
 		</dict></array></dict>
 	</dict>
-	<!-- [offline] docs/spec/3x-offline.md §3.1: the system launch screen is the page colour alone, and the app's own launch screen draws the icon. Tester 2026-11-02: an icon here can't follow the one picked in Settings › App Icon, so it showed the Hermes head to everyone. -->
+	<!-- [offline] docs/spec/3x-offline.md §3.1: the system launch screen is the page colour alone, and the app own launch screen draws the icon. A tester 2026-11-02: an icon here cannot follow the one picked in Settings › App Icon, so it showed the Hermes head to everyone. -->
 	<key>UILaunchScreen</key><dict>
 		<key>UIColorName</key><string>LaunchBackground</string>
 	</dict>

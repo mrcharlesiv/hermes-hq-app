@@ -43,16 +43,30 @@ struct MediaSource {
     static func temporaryFile(_ data: Data, name: String, ext: String? = nil) throws -> URL {
         let folder = FileManager.default.temporaryDirectory.appending(path: "HQNViewer-" + UUID().uuidString, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        var file = AttachmentStaging.safeName(name.isEmpty ? "image" : name)
-        if let ext, (file as NSString).pathExtension.isEmpty { file += "." + ext }
-        let url = folder.appending(path: file)
-        try data.write(to: url, options: .atomic)
-        return url
+        do {
+            var file = AttachmentStaging.safeName(name.isEmpty ? "image" : name)
+            if let ext, (file as NSString).pathExtension.isEmpty { file += "." + ext }
+            let url = folder.appending(path: file)
+            try data.write(to: url, options: .atomic)
+            return url
+        } catch {
+            try? FileManager.default.removeItem(at: folder)
+            throw error
+        }
     }
 }
 
 @MainActor enum MediaActions {
     enum SaveOutcome { case saved, denied, failed(String) }
+
+    /// Removes a temporary `HQNViewer-*` folder created by `MediaSource.temporaryFile` once an action is done with it.
+    nonisolated static func removeViewerTempIfOwned(_ url: URL) {
+        let folder = url.deletingLastPathComponent()
+        let tempRoot = FileManager.default.temporaryDirectory.standardizedFileURL.resolvingSymlinksInPath()
+        let parent = folder.deletingLastPathComponent().standardizedFileURL.resolvingSymlinksInPath()
+        guard parent == tempRoot, folder.lastPathComponent.hasPrefix("HQNViewer-") else { return }
+        try? FileManager.default.removeItem(at: folder)
+    }
 
     /// The original's bytes on the phone (loaded or downloaded if needed).
     static func original(_ item: MediaItem) async throws -> URL {
@@ -71,6 +85,7 @@ struct MediaSource {
     static func save(_ source: MediaSource) async -> SaveOutcome {
         let url: URL
         do { url = try await source.fetch() } catch { return .failed(message(error, source)) }
+        defer { removeViewerTempIfOwned(url) }
         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
         guard status == .authorized || status == .limited else { return .denied }
         let named = namedCopy(url, name: source.name)
@@ -126,7 +141,9 @@ struct MediaSource {
         let named: URL?
         let failure: String?
         do {
-            named = namedCopy(try await source.fetch(), name: source.name)
+            let fetched = try await source.fetch()
+            defer { removeViewerTempIfOwned(fetched) }
+            named = namedCopy(fetched, name: source.name)
             failure = named == nil ? "A copy of the image to share couldn’t be made." : nil
         } catch {
             named = nil
@@ -160,7 +177,9 @@ struct MediaSource {
         let named: URL?
         let failure: String?
         do {
-            named = namedCopy(try await source.fetch(), name: source.name)
+            let fetched = try await source.fetch()
+            defer { removeViewerTempIfOwned(fetched) }
+            named = namedCopy(fetched, name: source.name)
             failure = named == nil ? "A copy of the image to save couldn’t be made." : nil
         } catch {
             named = nil
@@ -184,6 +203,7 @@ struct MediaSource {
     static func copy(_ source: MediaSource) async -> String? {
         let url: URL
         do { url = try await source.fetch() } catch { return message(error, source) }
+        defer { removeViewerTempIfOwned(url) }
         // The bytes keep their own type; a type many apps can't paste (WebP, HEIC) also carries a PNG (L1003).
         let payload = await Task.detached(priority: .userInitiated) { () -> (Data, String, Data?)? in
             guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return nil }
@@ -220,6 +240,7 @@ struct MediaSource {
             try FileManager.default.copyItem(at: url, to: target)
             return target
         } catch {
+            try? FileManager.default.removeItem(at: folder)
             return nil
         }
     }

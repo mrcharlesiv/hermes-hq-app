@@ -47,9 +47,12 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
     private var drawnThemeKey = ""
     private var drawnScale: CGFloat = HQFont.scale
     private var prewarmTask: Task<Void, Never>?
+    private(set) var observers: [NSObjectProtocol] = []
 
     isolated deinit {
         prewarmTask?.cancel()
+        seedWait?.cancel()
+        observers.forEach(NotificationCenter.default.removeObserver)
     }
 
     init(inSheet: Bool) {
@@ -178,18 +181,18 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
             }
             HQAnnounce.say("Moved")
         }
-
         liveModel.onChange = { [weak self] in
             guard let self, self.isViewLoaded, !self.moving else { return }
             self.reconfigureLiveCells()
         }
 
+        let center = NotificationCenter.default
         for name in [QuickTileStore.didChange, ServerIssues.didChange] {
-            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+            observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.reload() }
-            }
+            })
         }
-        NotificationCenter.default.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
+        observers.append(center.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 if self.viewIfLoaded?.window != nil { self.liveTiles?.updateTheme(self.traitCollection) }
@@ -197,13 +200,15 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
                     self.reload()
                 }
             }
-        }
+        })
+        // [favorites-live-tiles] A pin renamed, redrawn, unpinned, removed in Artifacts, or Show Names turned; its
+        // updates' mark or its bot working on it: the Dashboard tiles here follow.
         for name in [ArtifactPins.didChange, ArtifactHidden.didChange, ArtifactPins.viewChanged, TileUpdates.changed, TileMaker.changed] {
-            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+            observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.dashboardChanged() }
-            }
+            })
         }
-        NotificationCenter.default.addObserver(forName: TileMaker.tileChanged, object: nil, queue: .main) { [weak self] note in
+        observers.append(center.addObserver(forName: TileMaker.tileChanged, object: nil, queue: .main) { [weak self] note in
             let id = note.userInfo?["id"] as? String
             MainActor.assumeIsolated {
                 guard let self, let id, let pin = self.dashboard?.pin(id) else { return }
@@ -211,7 +216,7 @@ final class QuickActionsViewController: UIViewController, UICollectionViewDelega
                 self.liveTiles?.reload(id)
                 self.redraw(pin: id)
             }
-        }
+        })
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self, UITraitUserInterfaceStyle.self,
                                 ThemeGenerationTrait.self, UITraitAccessibilityContrast.self]) { (self: Self, previous) in
             let appearanceChanged = previous.userInterfaceStyle != self.traitCollection.userInterfaceStyle

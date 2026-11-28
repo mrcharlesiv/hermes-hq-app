@@ -118,8 +118,10 @@ nonisolated enum MemoDisk {
     private static let queue = DispatchQueue(label: "hq.memo.disk", qos: .utility)
 
     static func read<T: Decodable>(_ type: T.Type, from url: URL) -> T? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(type, from: data)
+        queue.sync {
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            return try? JSONDecoder().decode(type, from: data)
+        }
     }
 
     static func write<T: Encodable & Sendable>(_ value: T, to url: URL) {
@@ -459,8 +461,8 @@ nonisolated final class MemoPlaybackCache: Sendable {
     /// Sign-out or an account switch: forget the stores (and, on sign-out, the files).
     func deactivate(purge: Bool) {
         generation += 1
+        MemoDisk.flush()
         if purge, let accountId {
-            MemoDisk.flush()
             MemoPaths.purge(accountId: accountId)
         }
         accountId = nil

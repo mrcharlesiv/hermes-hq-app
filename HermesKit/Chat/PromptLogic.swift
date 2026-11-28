@@ -145,7 +145,10 @@ nonisolated enum ApprovalExpiry {
     /// (an `approvals.timeout` set that long) it counts hours, "Expires within 2 h", so it fits the card's space for
     /// "Expires within 99 min" instead of being cut.
     static func label(seenAt: Date, timeout: TimeInterval, now: Date = Date()) -> String {
-        let left = Int((seenAt.timeIntervalSince1970 + timeout - now.timeIntervalSince1970).rounded(.up))
+        let remaining = seenAt.timeIntervalSince1970 + timeout - now.timeIntervalSince1970
+        guard !remaining.isNaN, remaining > 0 else { return expired }
+        let capped = min(remaining, 365.0 * 100.0 * 86_400.0)
+        let left = Int(capped.rounded(.up))
         if left <= 0 { return expired }
         if left > 99 * 60 { return "Expires within \(Int((Double(left) / 3600).rounded(.up))) h" }
         if left > 90 { return "Expires within \(Int((Double(left) / 60).rounded(.up))) min" }

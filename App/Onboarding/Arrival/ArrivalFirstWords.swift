@@ -309,9 +309,10 @@ final class ArrivalStartersView: UIView {
             defer { ArrivalFirstWords.expected = nil }
             let began = Date(), until = began.addingTimeInterval(patience)
             while Date() < until {
-                let navigation = root.botsViewController.navigationController
-                if let chat = navigation?.topViewController as? ChatViewController, chat.session.profile == profile,
-                   chat.viewIfLoaded?.window != nil, navigation?.transitionCoordinator == nil {
+                if let chat = root.chatOnShow ?? root.botsViewController.navigationController?.paneChat,
+                   chat.session.profile == profile,
+                   chat.viewIfLoaded?.window != nil,
+                   chat.navigationController?.transitionCoordinator == nil {
                     current?.land(on: chat)
                     try? await Task.sleep(for: .milliseconds(current == nil ? 300 : 700))
                     ArrivalFirstWords.begin(in: chat)

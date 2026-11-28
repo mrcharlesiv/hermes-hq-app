@@ -35,6 +35,7 @@ final class GatewaySwitcherModel {
     @ObservationIgnored private var checking: Task<Void, Never>?
     @ObservationIgnored private var schedule: Task<Void, Never>?
     @ObservationIgnored private var active = true
+    @ObservationIgnored private var generation = 0
     /// A gateway that didn't answer is asked again after 6, 12, 24, then every 30 minutes instead of every check
     /// (owner, build 408: "the gateway timing out": a saved gateway that is off cost a 15 s sign-in renewal and a
     /// timeout every 3 minutes). Opening the title menu asks at once. Memory only.
@@ -110,6 +111,7 @@ final class GatewaySwitcherModel {
 
     /// The saved gateways changed (add, remove, rename, sign-out): parked reads are made again, removed counts go.
     func accountsChanged() {
+        generation += 1
         parked = [:]
         let ids = Set(store.accounts.map(\.id))
         counts = counts.filter { ids.contains($0.key) }
@@ -122,6 +124,7 @@ final class GatewaySwitcherModel {
 
     /// A switch landed on `id`: its news is now its own Bots list's dots (and its session was good enough to switch).
     func switched(to id: String) {
+        generation += 1
         counts[id] = nil
         expired.remove(id)
         unreachable.remove(id)
@@ -153,6 +156,7 @@ final class GatewaySwitcherModel {
         for account in store.accounts where account.id != current {
             if Task.isCancelled { return }
             guard let stored = store.stored(account) else { continue }
+            let accountGen = generation
             if !force, let next = nextTry[account.id], now() < next {
                 AppLog.trace("gateways", "news check \(AppLog.tag(Self.host(account))): can't reach, next try in \(Int(next.timeIntervalSince(now()) / 60) + 1) min")
                 continue
@@ -171,6 +175,7 @@ final class GatewaySwitcherModel {
                 } else {
                     needsNousKeepAlive = false
                 }
+                guard !Task.isCancelled, generation == accountGen, currentId() != account.id else { continue }
                 if chats.isEmpty && !needsNousKeepAlive {
                     count = 0
                     unreachable.remove(account.id)
@@ -205,6 +210,14 @@ final class GatewaySwitcherModel {
                         }
                     }
                     probe.finish()
+                    // A switch or re-sign-in occurred while this parked probe was in flight: drop its stale outcome
+                    // so we never mark the newly activated or newly signed-in account as expired or unreachable.
+                    guard !Task.isCancelled,
+                          generation == accountGen,
+                          currentId() != account.id,
+                          let latestStored = store.stored(account),
+                          latestStored.cookies == stored.cookies,
+                          latestStored.nous == stored.nous else { continue }
                     if unreachable {
                         let missed = (misses[account.id] ?? 0) + 1
                         misses[account.id] = missed
@@ -224,6 +237,7 @@ final class GatewaySwitcherModel {
                         if expired.insert(account.id).inserted { onChange?() }
                         // A refusal after renewal ended the session in Keychain itself (`GatewayAuth`): read it back.
                         _ = try? await store.reloadOffMain()
+                        guard !Task.isCancelled, generation == accountGen, currentId() != account.id else { continue }
                     } else if !unreachable {
                         count = GatewayNews.unreadCount(chats, live: live)
                         if expired.remove(account.id) != nil { onChange?() }
@@ -231,7 +245,8 @@ final class GatewaySwitcherModel {
                 }
             }
             AppLog.trace("gateways", "news check \(AppLog.tag(Self.host(account))): \(count.map(String.init) ?? "kept")")
-            guard let count, store.accounts.contains(where: { $0.id == account.id }) else { continue }
+            guard let count, generation == accountGen, currentId() != account.id,
+                  store.accounts.contains(where: { $0.id == account.id }) else { continue }
             if counts[account.id] != count {
                 counts[account.id] = count
                 onChange?()

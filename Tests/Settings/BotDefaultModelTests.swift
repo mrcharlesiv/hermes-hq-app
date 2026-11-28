@@ -235,7 +235,9 @@ private func modelSets(_ gateway: ModelGateway) -> [(query: [URLQueryItem], body
         #expect(!section.contains("your bots"), "it said “The models your bots use”, which read as every bot's")
         #expect(SettingsWords.modelSectionFooter(defaultBot: nil, otherBots: false).hasPrefix("The default profile’s models"))
         #expect(ConfigSectionView.footer("model", defaultBot: "Hermes", otherBots: true) == section, "Settings › Model shows it")
-        #expect(ConfigSectionView.footer("chat").hasSuffix("Saved on the computer running Hermes."), "the other sections keep theirs")
+        #expect(ConfigSectionView.footer("chat").hasSuffix("Saved on the computer running Hermes, except Largest Attachment, which is set on this \(DeviceWord.name)."),
+                "Chat notes Largest Attachment stays on this device")
+        #expect(ConfigSectionView.footer("safety").hasSuffix("Saved on the computer running Hermes."), "the other sections keep theirs")
     }
 
     /// [model-scope] Reasoning Effort and Fast Mode on Main Model are the default bot's too; a chat changes its own.

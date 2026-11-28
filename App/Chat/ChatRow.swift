@@ -1521,7 +1521,18 @@ nonisolated enum LocalDay {
     static func number(_ date: Date, zone fixed: TimeZone? = nil) -> Int {
         _ = zoneObserver
         let zone = fixed ?? .autoupdatingCurrent
-        let t = date.timeIntervalSince1970
+        let raw = date.timeIntervalSince1970
+        let maxSeconds = 6.4e10
+        let t: Double
+        if raw.isNaN {
+            t = 0
+        } else if raw > maxSeconds {
+            t = maxSeconds
+        } else if raw < -maxSeconds {
+            t = -maxSeconds
+        } else {
+            t = raw
+        }
         let utcDay = Int((t / 86_400).rounded(.down))
         lock.lock()
         let cached = fixed == nil ? days[utcDay] : nil

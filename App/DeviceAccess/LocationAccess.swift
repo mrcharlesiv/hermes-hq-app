@@ -141,16 +141,19 @@ enum LocationAccess: DeviceAccessHandler {
         return await waitForAuthorizationChange { self.manager.requestAlwaysAuthorization() }
     }
 
-    private func waitForAuthorizationChange(timeout: Double = 5, _ ask: @MainActor () -> Void) async -> CLAuthorizationStatus {
+    private func waitForAuthorizationChange(timeout: Double = 30, _ ask: @MainActor () -> Void) async -> CLAuthorizationStatus {
         await withCheckedContinuation { continuation in
             let pending = Pending(continuation)
+            if let previous = authPending {
+                previous.finish(self.manager.authorizationStatus)
+            }
             authPending = pending
             ask()
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(timeout))
                 guard !pending.done else { return }
                 pending.finish(self.manager.authorizationStatus)
-                self.authPending = nil
+                if self.authPending === pending { self.authPending = nil }
             }
         }
     }
@@ -158,7 +161,9 @@ enum LocationAccess: DeviceAccessHandler {
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         // Not `manager.authorizationStatus`: that parameter isn't Sendable, and `self.manager` is the same instance.
         Task { @MainActor in
-            self.authPending?.finish(self.manager.authorizationStatus)
+            let status = self.manager.authorizationStatus
+            guard status != .notDetermined else { return }
+            self.authPending?.finish(status)
             self.authPending = nil
         }
     }
@@ -168,6 +173,9 @@ enum LocationAccess: DeviceAccessHandler {
         guard CLLocationManager.locationServicesEnabled() else { return .failed("Location Services is off on this device.") }
         return await withCheckedContinuation { continuation in
             let pending = Pending(continuation)
+            if let previous = locationPending {
+                previous.finish(.failed("A newer location request replaced this one."))
+            }
             locationPending = pending
             manager.desiredAccuracy = kCLLocationAccuracyBest
             manager.requestLocation()
@@ -175,7 +183,7 @@ enum LocationAccess: DeviceAccessHandler {
                 try? await Task.sleep(for: .seconds(timeout))
                 guard !pending.done else { return }
                 pending.finish(.failed("The \(DeviceWord.name) took too long to get your location."))
-                self.locationPending = nil
+                if self.locationPending === pending { self.locationPending = nil }
             }
         }
     }

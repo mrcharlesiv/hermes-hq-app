@@ -636,11 +636,17 @@ struct ConfigFieldEditor: View {
         }
         invalid = nil
         guard let next, !ConfigRenderer.same(next, field.value) else { return }
-        if ConfigPath.clearsEnabledToolsets(.object(["toolsets": field.value ?? .null]), .object(["toolsets": next])) {
+        if Self.needsToolsetsWipeConfirmation(key: field.key, previous: field.value, next: next) {
             confirmToolsetsWipe(next)
             return
         }
         store.set(key, next)
+    }
+
+    /// Only clearing the `toolsets` key itself warrants the "Remove All Tool Groups?" confirmation.
+    nonisolated static func needsToolsetsWipeConfirmation(key: String, previous: JSONValue?, next: JSONValue) -> Bool {
+        key == "toolsets"
+            && ConfigPath.clearsEnabledToolsets(.object(["toolsets": previous ?? .null]), .object(["toolsets": next]))
     }
 
     /// Why what's typed can't be saved (nil when it can): a number that isn't one or is out of range, or bad JSON.

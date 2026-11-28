@@ -503,9 +503,8 @@ final class PluginPageSchemeHandler: NSObject, WKURLSchemeHandler {
                 serve(task, css, type: "text/css")
                 return
             }
-            let assets = PluginDashboardPage.assetPath(name: page.name, file: "", profile: owner.profile)
             let remote: String?
-            if path.hasPrefix(assets), !path.contains("/../") { remote = path + query }
+            if let asset = Self.allowedAssetPath(path, query: query, plugin: page.name, profile: owner.profile) { remote = asset }
             else if task.request.httpMethod ?? "GET" == "GET" { remote = PluginPageBridge.allowedPath(path + query, plugin: page.name, profile: owner.profile) }
             else { remote = nil }
             guard let remote else { fail(task, 404); return }
@@ -545,6 +544,26 @@ final class PluginPageSchemeHandler: NSObject, WKURLSchemeHandler {
         task.didReceive(response)
         task.didReceive(Data())
         task.didFinish()
+    }
+
+    /// Validates a plugin asset request path strictly inside `/dashboard-plugins/[@<profile>/]<plugin>/`,
+    /// rejecting percent-encoded traversal (`%2e%2e`, trailing `/..`, `.`), backslashes, and control/null bytes.
+    nonisolated static func allowedAssetPath(_ path: String, query: String = "", plugin: String, profile: String) -> String? {
+        let raw = path + query
+        guard path.hasPrefix("/"), !path.hasPrefix("//"), raw.count < 8192,
+              !raw.unicodeScalars.contains(where: { $0 == "\\" || $0.value < 0x20 || $0.value == 0x7F }) else { return nil }
+        let assets = PluginDashboardPage.assetPath(name: plugin, file: "", profile: profile)
+        guard path.hasPrefix(assets),
+              let decoded = path.removingPercentEncoding,
+              let decodedAssets = assets.removingPercentEncoding,
+              !decoded.unicodeScalars.contains(where: { $0 == "\\" || $0.value < 0x20 || $0.value == 0x7F }),
+              decoded.hasPrefix(decodedAssets),
+              !path.split(separator: "/").contains(where: { $0 == ".." || $0 == "." }),
+              !decoded.split(separator: "/").contains(where: { $0 == ".." || $0 == "." }),
+              let components = URLComponents(string: "https://page.invalid" + raw),
+              components.path.hasPrefix(decodedAssets),
+              !components.path.split(separator: "/").contains(where: { $0 == ".." || $0 == "." }) else { return nil }
+        return raw
     }
 
     static func type(of path: String) -> String {

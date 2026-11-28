@@ -254,7 +254,13 @@ extension AppModel: SessionsServices {}
         }
         add(nodes)
         sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        if let popover = sheet.popoverPresentationController { popover.sourceView = host.cell(forKey: key) ?? (surface ?? host).view }
+        if let popover = sheet.popoverPresentationController {
+            let cell = host.cell(forKey: key)
+            let source = cell ?? (surface ?? host).view
+            popover.sourceView = source
+            if let source { popover.sourceRect = source.bounds }
+            if cell == nil { popover.permittedArrowDirections = [] }
+        }
         top.present(sheet, animated: true)
     }
 

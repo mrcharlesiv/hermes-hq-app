@@ -21,7 +21,7 @@ import Foundation
     private var audio: GrokLiveAudio?
     private var muted = false
     private var finished = false
-    private var holdsSession = false
+    private var sessionGrant: Int?
     private var began = ContinuousClock.now
     private var openWaiter: CheckedContinuation<Bool, Never>?
     private var speaking = false
@@ -53,17 +53,21 @@ import Foundation
         default:
             break
         }
+        let coordinator = AudioSessionCoordinator.shared
+        let beforeGrant = coordinator.grant
         do {
-            try await AudioSessionCoordinator.shared.acquire(.conversation, mode: .voiceChat)
+            let grant = try await coordinator.acquire(.conversation, mode: .voiceChat)
             guard !finished else {
-                AudioSessionCoordinator.shared.release(.conversation)
+                coordinator.releaseAbandoned(.conversation, grant: grant)
                 throw CancellationError()
             }
-            holdsSession = true
+            sessionGrant = grant
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            AudioSessionCoordinator.shared.release(.conversation)
+            if coordinator.owner == .conversation, coordinator.grant == beforeGrant + 1 {
+                coordinator.releaseAbandoned(.conversation, grant: coordinator.grant)
+            }
             AppLog.note("voice", "grok-live start failed: audio session \(AppLog.scrub(String(describing: error)))")
             throw LiveVoiceError.failed(TalkEngineCapture.describe(error))
         }
@@ -339,9 +343,9 @@ import Foundation
             await AudioWork.perform { _ = audio.stop() }
         }
         if speaking { speaking = false; onSpeaking?(false) }
-        if holdsSession {
-            holdsSession = false
-            AudioSessionCoordinator.shared.release(.conversation)
+        if let grant = sessionGrant {
+            sessionGrant = nil
+            AudioSessionCoordinator.shared.releaseAbandoned(.conversation, grant: grant)
         }
     }
 
@@ -386,6 +390,9 @@ import Foundation
 /// The microphone and the speaker: one AVAudioEngine with voice processing on its input. Start and stop on
 /// `AudioWork.queue`; `play` and `flush` from anywhere.
 nonisolated final class GrokLiveAudio: @unchecked Sendable {
+    /// Serializes all `AVAudioEngine`/`AVAudioPlayerNode` mutations and calls. Lock order is always `audioLock` → `lock`
+    /// (buffer completion callbacks only acquire `lock`, never `audioLock`, so `player.stop()` cannot deadlock).
+    private let audioLock = NSLock()
     private var engine: AVAudioEngine?
     private var player: AVAudioPlayerNode?
     private let lock = NSLock()
@@ -397,6 +404,7 @@ nonisolated final class GrokLiveAudio: @unchecked Sendable {
     private var generation = 0
     /// When the queue last moved (a piece ended, or the first piece joined an empty queue).
     private var progressAt: TimeInterval = 0
+    private var _inputDescription = "not started"
     private let micFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: GrokLiveWire.sampleRate, channels: 1, interleaved: true)!
     private let voiceFormat = AVAudioFormat(standardFormatWithSampleRate: GrokLiveWire.sampleRate, channels: 1)!
 
@@ -415,38 +423,43 @@ nonisolated final class GrokLiveAudio: @unchecked Sendable {
         }
     }
 
-    /// Whether the engine still runs after a configuration change. On `AudioWork.queue`.
-    var isRunning: Bool { engine?.isRunning ?? false }
+    /// Whether the engine still runs after a configuration change.
+    var isRunning: Bool { audioLock.withLock { engine?.isRunning ?? false } }
 
     /// The microphone's format and whether voice processing took, for the log.
-    private(set) var inputDescription = "not started"
+    var inputDescription: String { lock.withLock { _inputDescription } }
 
     /// Starts the stopped engine again as it is (same tap, same voice processing). On `AudioWork.queue`.
     func resume() -> Bool {
-        guard let engine, let player else { return false }
-        // The player is emptied and started afresh with the engine: left as it was, it reports playing and plays nothing.
-        let keep = emptied()
-        player.stop()
-        engine.prepare()
-        do {
-            try engine.start()
-        } catch {
-            return false
+        audioLock.withLock {
+            guard let engine, let player, player.engine === engine else { return false }
+            // The player is emptied and started afresh with the engine: left as it was, it reports playing and plays nothing.
+            let keep = emptied()
+            player.stop()
+            engine.prepare()
+            do {
+                try engine.start()
+            } catch {
+                return false
+            }
+            guard player.engine === engine, engine.isRunning else { return false }
+            player.play()
+            schedule(keep, on: player, engine: engine)
+            return true
         }
-        player.play()
-        schedule(keep, on: player)
-        return true
     }
 
     /// The player is stopped and started, and given the queued pieces again. Answers how many.
     func revive() -> Int {
-        guard let player else { return 0 }
-        let keep = emptied()
-        player.stop()
-        player.play()
-        schedule(keep, on: player)
-        lock.withLock { revived += 1 }
-        return keep.count
+        audioLock.withLock {
+            guard let engine, let player, player.engine === engine else { return 0 }
+            let keep = emptied()
+            player.stop()
+            if engine.isRunning { player.play() }
+            schedule(keep, on: player, engine: engine)
+            lock.withLock { revived += 1 }
+            return keep.count
+        }
     }
 
     /// Takes everything queued out of the bookkeeping (their completions no longer count) and hands it back.
@@ -459,7 +472,9 @@ nonisolated final class GrokLiveAudio: @unchecked Sendable {
         }
     }
 
-    private func schedule(_ buffers: [AVAudioPCMBuffer], on player: AVAudioPlayerNode) {
+    /// Caller must hold `audioLock`.
+    private func schedule(_ buffers: [AVAudioPCMBuffer], on player: AVAudioPlayerNode, engine: AVAudioEngine) {
+        guard player.engine === engine else { return }
         for buffer in buffers {
             let (id, made) = lock.withLock { () -> (Int, Int) in
                 nextPiece += 1
@@ -491,7 +506,8 @@ nonisolated final class GrokLiveAudio: @unchecked Sendable {
             VoiceEvents.noteLater("grok-live voice processing unavailable: \(TalkEngineCapture.describe(error))")
         }
         let format = input.outputFormat(forBus: 0)
-        inputDescription = "\(Int(format.sampleRate)) Hz, \(format.channelCount) ch, \(processing)"
+        let description = "\(Int(format.sampleRate)) Hz, \(format.channelCount) ch, \(processing)"
+        lock.withLock { _inputDescription = description }
         guard format.sampleRate > 0, format.channelCount > 0 else { throw LiveVoiceError.noMicrophone }
         let target = micFormat
         guard let converter = AVAudioConverter(from: format, to: target) else {
@@ -524,8 +540,11 @@ nonisolated final class GrokLiveAudio: @unchecked Sendable {
             throw error
         }
         player.play()
-        self.engine = engine
-        self.player = player
+        audioLock.withLock {
+            self.engine = engine
+            self.player = player
+            self.speakerOnly = false
+        }
     }
 
     /// Tests: the speaker side alone (a simulator has no microphone to start with), so the queue, the reset and the
@@ -538,9 +557,11 @@ nonisolated final class GrokLiveAudio: @unchecked Sendable {
         engine.prepare()
         try engine.start()
         player.play()
-        self.engine = engine
-        self.player = player
-        speakerOnly = true
+        audioLock.withLock {
+            self.engine = engine
+            self.player = player
+            self.speakerOnly = true
+        }
     }
     private var speakerOnly = false
 
@@ -554,10 +575,14 @@ nonisolated final class GrokLiveAudio: @unchecked Sendable {
     private var revived = 0
 
     func play(_ pcm: Data) -> Double {
-        guard let player else { lock.withLock { dropped += 1 }; return 0 }
         let count = pcm.count / 2
         guard count > 0, let buffer = AVAudioPCMBuffer(pcmFormat: voiceFormat, frameCapacity: AVAudioFrameCount(count)),
-              let out = buffer.floatChannelData?[0] else { return 0 }
+              let out = buffer.floatChannelData?[0] else {
+            audioLock.withLock {
+                if player == nil { lock.withLock { dropped += 1 } }
+            }
+            return 0
+        }
         buffer.frameLength = AVAudioFrameCount(count)
         pcm.withUnsafeBytes { raw in
             for index in 0..<count {
@@ -565,43 +590,65 @@ nonisolated final class GrokLiveAudio: @unchecked Sendable {
                 out[index] = Float(sample) / 32_768
             }
         }
-        schedule([buffer], on: player)
-        // A player the engine left stopped takes buffers and plays none of them.
-        if engine?.isRunning == true, !player.isPlaying {
-            lock.withLock { revived += 1 }
-            player.play()
+        let level = TalkLevel.level(rms: TalkLevel.rms(UnsafeBufferPointer(start: out, count: count)))
+        let scheduled: Bool = audioLock.withLock {
+            guard let engine, let player, player.engine === engine else {
+                lock.withLock { dropped += 1 }
+                return false
+            }
+            schedule([buffer], on: player, engine: engine)
+            // A player the engine left stopped takes buffers and plays none of them.
+            if engine.isRunning, !player.isPlaying {
+                lock.withLock { revived += 1 }
+                player.play()
+            }
+            return true
         }
-        return TalkLevel.level(rms: TalkLevel.rms(UnsafeBufferPointer(start: out, count: count)))
+        return scheduled ? level : 0
     }
 
     /// Stops the voice now: everything queued is dropped, the player is ready for the next answer.
     func flush() {
-        guard let player else { return }
-        _ = emptied()
-        player.stop()
-        player.play()
+        audioLock.withLock {
+            guard let engine, let player, player.engine === engine else { return }
+            _ = emptied()
+            player.stop()
+            if engine.isRunning { player.play() }
+        }
     }
 
     /// Tests: the engine stops as it does for a hardware change (the loudspeaker switch just after a start).
-    func stopEngineAsAHardwareChangeDoes() { engine?.stop() }
+    func stopEngineAsAHardwareChangeDoes() { audioLock.withLock { engine?.stop() } }
 
     /// `keeping`: what is queued is handed back, for the engine that replaces this one (`requeue`).
     @discardableResult
     func stop(keeping: Bool = false) -> [AVAudioPCMBuffer] {
-        let keep = emptied()
-        guard let engine else { return [] }
-        player?.stop()
-        if !speakerOnly { engine.inputNode.removeTap(onBus: 0) }
-        engine.stop()
-        self.engine = nil
-        player = nil
-        return keeping ? keep : []
+        audioLock.withLock {
+            let keep = emptied()
+            let oldPlayer = self.player
+            let oldEngine = self.engine
+            let wasSpeakerOnly = self.speakerOnly
+            self.player = nil
+            self.engine = nil
+            self.speakerOnly = false
+            guard let oldEngine else { return [] }
+            if let oldPlayer, oldPlayer.engine === oldEngine {
+                oldPlayer.stop()
+                oldEngine.detach(oldPlayer)
+            }
+            if !wasSpeakerOnly { oldEngine.inputNode.removeTap(onBus: 0) }
+            oldEngine.stop()
+            return keeping ? keep : []
+        }
     }
 
     /// Queues pieces a stopped engine handed back.
     func requeue(_ buffers: [AVAudioPCMBuffer]) {
-        guard let player, !buffers.isEmpty else { return }
-        schedule(buffers, on: player)
+        guard !buffers.isEmpty else { return }
+        audioLock.withLock {
+            guard let engine, let player, player.engine === engine else { return }
+            schedule(buffers, on: player, engine: engine)
+        }
     }
 }
 

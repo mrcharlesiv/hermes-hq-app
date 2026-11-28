@@ -57,6 +57,7 @@ final class ArtifactTextViewController: UIViewController, UITextViewDelegate {
     private var text = ""
     private var loaded = false
     private var loadTask: Task<Void, Never>?
+    private var themeObserver: NSObjectProtocol?
     /// Rendered Markdown Preview per text size and appearance (switching Preview / Source never renders again).
     private var previews: [String: NSAttributedString] = [:]
     private var renderGeneration = 0
@@ -73,6 +74,11 @@ final class ArtifactTextViewController: UIViewController, UITextViewDelegate {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    isolated deinit {
+        loadTask?.cancel()
+        if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -120,7 +126,7 @@ final class ArtifactTextViewController: UIViewController, UITextViewDelegate {
         if hasModes {
             buildModes()
         }
-        NotificationCenter.default.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
+        themeObserver = NotificationCenter.default.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 if self.hasModes { self.buildModes() }

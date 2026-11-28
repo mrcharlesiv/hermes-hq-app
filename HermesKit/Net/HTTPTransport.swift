@@ -73,24 +73,56 @@ nonisolated final class HTTPTransport: Sendable {
         let session = pool == .control ? control : bulk
         let made: URLSessionDataTask? = invalidated.withLock { dead in dead ? nil : session.dataTask(with: request) }
         guard let task = made else { throw GatewayFailure.connectionChanged }
-        let collector = TransportDelegate.Collector(ceiling: ceiling)
+        let collector = TransportDelegate.Collector(ceiling: ceiling, session: session)
         let delegate = self.delegate
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(Data, HTTPURLResponse), Error>) in
                 collector.continuation = continuation
-                delegate.register(task, collector)
-                // Cancelled before the collector was registered: the cancel handler's `task.cancel()` may already have
-                // completed the task with nobody listening, so settle here (whoever takes the collector resumes it).
-                if Task.isCancelled, delegate.take(task) != nil {
+                // Atomically verify the transport has not been invalidated, register the collector, and resume the task
+                // under the same lock as `invalidate()`/`finishAndInvalidate()` so no task can ever be resumed onto an
+                // already-invalidated session with a dangling continuation.
+                let started: Bool = invalidated.withLock { dead in
+                    if dead || Task.isCancelled { return false }
+                    delegate.register(task, collector)
+                    task.resume()
+                    return true
+                }
+                if !started {
+                    collector.continuation = nil
                     task.cancel()
-                    continuation.resume(throwing: CancellationError())
+                    continuation.resume(throwing: Task.isCancelled ? CancellationError() : GatewayFailure.connectionChanged)
                     return
                 }
-                task.resume()
+                // Cancelled concurrently with registration/resume: settle immediately if we still own the collector.
+                if Task.isCancelled, let taken = delegate.take(task), let cont = taken.continuation {
+                    taken.continuation = nil
+                    task.cancel()
+                    cont.resume(throwing: CancellationError())
+                }
             }
         } onCancel: {
             task.cancel()
+            if invalidated.withLock({ $0 }), let taken = delegate.take(task), let cont = taken.continuation {
+                taken.continuation = nil
+                cont.resume(throwing: CancellationError())
+            }
         }
+    }
+
+    /// Atomically verifies the bulk pool is still live, registers an invalidation fallback for a per-task transfer
+    /// delegate, and resumes `task`. Returns false when invalidated or cancelled before starting.
+    func startTransferTask(_ task: URLSessionTask, onInvalidated: @escaping @Sendable (any Error) -> Void) -> Bool {
+        invalidated.withLock { dead in
+            if dead || Task.isCancelled { return false }
+            delegate.registerTransfer(task, session: bulk, onInvalidated: onInvalidated)
+            task.resume()
+            return true
+        }
+    }
+
+    /// Removes a completed or cancelled per-task transfer from the invalidation fallback registry.
+    func finishTransferTask(_ task: URLSessionTask) {
+        delegate.unregisterTransfer(task)
     }
 
     /// A WebSocket task on the bulk pool (its handshake carries the jar's cookies).
@@ -179,6 +211,7 @@ nonisolated final class TransportDelegate: NSObject, URLSessionDataDelegate, Sen
     /// Touched only on the sessions' serial delegate queue (and once before `resume`).
     final class Collector: @unchecked Sendable {
         let ceiling: Int
+        let sessionID: ObjectIdentifier
         var data = Data()
         var response: HTTPURLResponse?
         var tooLarge = false
@@ -186,7 +219,10 @@ nonisolated final class TransportDelegate: NSObject, URLSessionDataDelegate, Sen
         /// send it again on a fresh one first): its metrics, nil until they come.
         var reused: Bool?
         var continuation: CheckedContinuation<(Data, HTTPURLResponse), Error>?
-        init(ceiling: Int) { self.ceiling = ceiling }
+        init(ceiling: Int, session: URLSession) {
+            self.ceiling = ceiling
+            self.sessionID = ObjectIdentifier(session)
+        }
 
         /// Error bodies are capped at 1 MiB whatever the route allows.
         var limit: Int {
@@ -199,6 +235,9 @@ nonisolated final class TransportDelegate: NSObject, URLSessionDataDelegate, Sen
     /// its tasks 1, 2, 3… on its own, so a control and a bulk request routinely share a number. An entry leaves the map
     /// when its task completes (or is cancelled before it started), so an address reused by a later task is safe.
     private let collectors = Mutex<[ObjectIdentifier: Collector]>([:])
+    /// Per-task transfer delegates (upload/download) running on `bulk` that need to be settled if the session
+    /// invalidates without delivering `didCompleteWithError`.
+    private let transfers = Mutex<[ObjectIdentifier: (sessionID: ObjectIdentifier, fail: @Sendable (any Error) -> Void)]>([:])
 
     func register(_ task: URLSessionTask, _ collector: Collector) {
         collectors.withLock { $0[ObjectIdentifier(task)] = collector }
@@ -209,8 +248,43 @@ nonisolated final class TransportDelegate: NSObject, URLSessionDataDelegate, Sen
     }
     private func collector(_ task: URLSessionTask) -> Collector? { collectors.withLock { $0[ObjectIdentifier(task)] } }
 
+    func registerTransfer(_ task: URLSessionTask, session: URLSession, onInvalidated: @escaping @Sendable (any Error) -> Void) {
+        transfers.withLock { $0[ObjectIdentifier(task)] = (ObjectIdentifier(session), onInvalidated) }
+    }
+
+    func unregisterTransfer(_ task: URLSessionTask) {
+        _ = transfers.withLock { $0.removeValue(forKey: ObjectIdentifier(task)) }
+    }
+
     /// Requests still waiting for their task to finish (tests: nothing leaks).
     var inFlight: Int { collectors.withLock { $0.count } }
+
+    func urlSession(_ session: URLSession, didBecomeInvalidWithError error: (any Error)?) {
+        let sid = ObjectIdentifier(session)
+        let failure: any Error = error ?? GatewayFailure.connectionChanged
+        let remainingCollectors = collectors.withLock { map -> [Collector] in
+            var drained: [Collector] = []
+            for (key, value) in map where value.sessionID == sid {
+                drained.append(value)
+                map.removeValue(forKey: key)
+            }
+            return drained
+        }
+        for collector in remainingCollectors {
+            guard let continuation = collector.continuation else { continue }
+            collector.continuation = nil
+            continuation.resume(throwing: failure)
+        }
+        let remainingTransfers = transfers.withLock { map -> [@Sendable (any Error) -> Void] in
+            var drained: [@Sendable (any Error) -> Void] = []
+            for (key, value) in map where value.sessionID == sid {
+                drained.append(value.fail)
+                map.removeValue(forKey: key)
+            }
+            return drained
+        }
+        for fail in remainingTransfers { fail(failure) }
+    }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {

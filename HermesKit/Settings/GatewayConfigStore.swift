@@ -36,6 +36,7 @@ final class GatewayConfigStore {
     @ObservationIgnored private(set) var baseline: JSONValue = .object([:])
     @ObservationIgnored private var pending: Task<Void, Never>?
     @ObservationIgnored private var chain: Task<Void, Never>?
+    @ObservationIgnored private var saveGeneration = 0
     @ObservationIgnored private var loadedAt: Date?
     /// The read on its way, which a second load waits for instead of asking again.
     @ObservationIgnored private var inFlight: Task<Void, Never>?
@@ -154,11 +155,16 @@ final class GatewayConfigStore {
     }
 
     /// Chained after the save before it, so an older answer can never land after a newer one.
+    /// Retains `self` strongly until `saveDraft()` completes so an ephemeral per-bot store flushed on pop/dismiss
+    /// never drops its pending PATCH before it reaches the gateway.
     private func enqueueSave() {
         let previous = chain
-        chain = Task { [weak self] in
+        saveGeneration &+= 1
+        let generation = saveGeneration
+        chain = Task {
             await previous?.value
-            await self?.saveDraft()
+            await self.saveDraft()
+            if self.saveGeneration == generation { self.chain = nil }
         }
     }
 

@@ -50,7 +50,6 @@ struct PhoneCallScreen: View {
     @State private var confirmDelete = false
     @State private var hangUpGuard = PhoneHangUpGuard()
     @State private var hangUpDisarmTask: Task<Void, Never>?
-    @State private var sharing: String?
     @State private var message = ""
     @State private var answer = ""
     @State private var retryAction: Retry?
@@ -78,7 +77,10 @@ struct PhoneCallScreen: View {
                             if !call.active {
                                 if call.outcome == .voicemail && call.voicemailChoice == .hangUp {
                                     Button("Transcript", systemImage: "text.bubble") { perform(.transcript, call: call) }
-                                    Button("Share", systemImage: "square.and.arrow.up") { perform(.share, call: call) }
+                                    ShareLink(item: PhoneCallPresentation.share(call, redacting: controller.setup?.apiKey)) {
+                                        Label("Share", systemImage: "square.and.arrow.up")
+                                    }
+                                    .accessibilityIdentifier("phone.call.share")
                                 }
                                 Button("Delete this call", systemImage: "trash", role: .destructive) { confirmDelete = true }
                             }
@@ -92,6 +94,7 @@ struct PhoneCallScreen: View {
                     }
                     if !call.active {
                         PhoneCallSummary(call: call, sendsResults: controller.setup?.sendsResults != false,
+                                         shareText: PhoneCallPresentation.share(call, redacting: controller.setup?.apiKey),
                                          action: { perform($0, call: call) })
                     } else if call.state == .calling || (call.state == .ending && call.answeredAt == nil && call.liveAt == nil) {
                         ringing(call)
@@ -106,9 +109,6 @@ struct PhoneCallScreen: View {
                     Button("Cancel", role: .cancel) { }
                 } message: {
                     Text("The call and its transcript will be removed from this device.")
-                }
-                .sheet(isPresented: Binding(get: { sharing != nil }, set: { if !$0 { sharing = nil } })) {
-                    if let sharing { PhoneShareSheet(text: sharing) }
                 }
                 .onAppear { controller.sheetAppeared(call.sessionID) }
                 .onDisappear { controller.sheetDisappeared(call.sessionID) }
@@ -491,7 +491,7 @@ struct PhoneCallScreen: View {
         switch action {
         case .again, .leave: open(.again(id, leave: action == .leave))
         case .transcript: open(.transcript(id))
-        case .share: sharing = PhoneCallPresentation.share(call, redacting: controller.setup?.apiKey)
+        case .share: break
         }
     }
 
@@ -613,6 +613,7 @@ struct PhoneConversation: View {
 private struct PhoneCallSummary: View {
     let call: PhoneCallRecord
     let sendsResults: Bool
+    let shareText: String
     let action: (PhoneCallPresentation.Action) -> Void
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -678,7 +679,15 @@ private struct PhoneCallSummary: View {
                 let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 8))
                 layout {
                     ForEach(PhoneCallPresentation.actions(call), id: \.self) { item in
-                        Button(item.rawValue) { action(item) }.buttonStyle(PhoneActionStyle())
+                        if item == .share {
+                            ShareLink(item: shareText) {
+                                Text(item.rawValue)
+                            }
+                            .buttonStyle(PhoneActionStyle())
+                            .accessibilityIdentifier("phone.call.share")
+                        } else {
+                            Button(item.rawValue) { action(item) }.buttonStyle(PhoneActionStyle())
+                        }
                     }
                 }
                 card(nil) {
@@ -733,12 +742,4 @@ private struct PhoneCallSummary: View {
         }
         .padding(14).frame(maxWidth: .infinity, alignment: .leading).phoneCard(radius: 18)
     }
-}
-
-private struct PhoneShareSheet: UIViewControllerRepresentable {
-    let text: String
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: [text], applicationActivities: nil)
-    }
-    func updateUIViewController(_ controller: UIActivityViewController, context: Context) { }
 }

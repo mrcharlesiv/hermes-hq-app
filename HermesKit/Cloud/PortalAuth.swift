@@ -42,14 +42,15 @@ nonisolated struct PortalCredentials: Codable, Sendable, Equatable {
 
     /// Renew a minute early; a pair with no expiry is used until Portal answers 401.
     func needsRenewal(now: Double = Date().timeIntervalSince1970) -> Bool {
-        expiresAt > 0 && now >= expiresAt - 60
+        expiresAt.isFinite && expiresAt > 0 && now >= expiresAt - 60
     }
 
     /// The token endpoint's answer. `previous` keeps the refresh token when a renewal doesn't send a new one.
     static func read(_ value: JSONValue, clientId: String, previous: PortalCredentials? = nil,
                      now: Double = Date().timeIntervalSince1970) -> PortalCredentials? {
         guard let access = RosterText.trimmed(value["access_token"]) else { return nil }
-        let lifetime = value["expires_in"]?.double ?? 0
+        let rawLifetime = value["expires_in"]?.double ?? 0
+        let lifetime = rawLifetime.isFinite && rawLifetime > 0 && rawLifetime <= 1e10 ? rawLifetime : 0
         return PortalCredentials(clientId: clientId, accessToken: access,
                                  refreshToken: RosterText.trimmed(value["refresh_token"]) ?? previous?.refreshToken,
                                  expiresAt: lifetime > 0 ? now + lifetime : 0, obtainedAt: now)
@@ -97,7 +98,12 @@ nonisolated struct PortalAuth: Sendable {
     let base: URL
     let session: URLSession
 
-    init(base: URL = Portal.base, session: URLSession = PortalAuth.makeSession()) {
+    /// Shared ephemeral sessions (no cookies, no cache, no redirects) so production callers don't leak a fresh
+    /// un-invalidated `URLSession` + `PortalNoRedirects` delegate per instance.
+    static let sharedSession: URLSession = PortalAuth.makeSession()
+    static let sharedLongSession: URLSession = PortalAuth.makeSession(resourceTimeout: 330)
+
+    init(base: URL = Portal.base, session: URLSession = PortalAuth.sharedSession) {
         self.base = base; self.session = session
     }
 
@@ -257,14 +263,26 @@ actor PortalLogin {
 
     func adopt(_ credentials: PortalCredentials) {
         renewal?.cancel(); renewal = nil
-        unsaved = nil
-        keychain.save(credentials)
+        if keychain.save(credentials) {
+            unsaved = nil
+        } else {
+            unsaved = credentials
+            watchUnlock()
+            AppLog.note("auth", "portal: adopted login could not be saved yet; kept in memory")
+        }
     }
 
     func signOut() {
         renewal?.cancel(); renewal = nil
         unsaved = nil
         keychain.clear()
+    }
+
+    /// Signs out only if the current login still holds `accessToken` (so a late 401 on an older request can never
+    /// wipe a newer sign-in or freshly rotated token).
+    func signOutIfMatching(_ accessToken: String) {
+        guard current()?.accessToken == accessToken else { return }
+        signOut()
     }
 
     /// The login as it stands: a rotation the Keychain hasn't taken yet (tried again now), else the saved one.
@@ -297,7 +315,7 @@ actor PortalLogin {
     /// call renewed it meanwhile), the newer token is the answer and nothing is renewed again.
     func accessToken(force: Bool = false, refused: String? = nil) async throws -> String {
         guard let saved = current() else { throw PortalError.signedOut }
-        if force, let refused, refused != saved.accessToken { return saved.accessToken }
+        if force, let refused, refused != saved.accessToken, !saved.needsRenewal() { return saved.accessToken }
         if !force && !saved.needsRenewal() { return saved.accessToken }
         if let renewal { return try await renewal.value.accessToken }
         let auth = self.auth, keychain = self.keychain, hold = self.hold
@@ -327,7 +345,7 @@ actor PortalLogin {
             }
         }
         renewal = task
-        defer { renewal = nil }
+        defer { if renewal == task { renewal = nil } }
         return try await task.value.accessToken
     }
 }

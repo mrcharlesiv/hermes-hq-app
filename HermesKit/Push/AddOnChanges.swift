@@ -45,8 +45,23 @@ nonisolated enum AddOnChanges {
             if lines[version] == nil { order.append(version) }
             lines[version] = words   // older commits come later: the release's own words win
         }
-        let newestFirst = order.sorted { PushPolicy.versionAtLeast($0, $1) && $0 != $1 }
+        let newestFirst = order.sorted(by: Self.isNewer)
         return newestFirst.prefix(limit).map { Change(version: $0, line: lines[$0] ?? "") }
+    }
+
+    /// Strict weak ordering, newest version first: compares numeric dot-separated components (missing trailing parts
+    /// count as 0) and breaks numeric ties (e.g. "1.0" vs "1.0.0") deterministically by raw string order.
+    static func isNewer(_ lhs: String, than rhs: String) -> Bool {
+        func parts(_ text: String) -> [Int] {
+            text.trimmingCharacters(in: .whitespaces).split(separator: ".").compactMap { Int($0) }
+        }
+        let a = parts(lhs), b = parts(rhs)
+        for index in 0..<max(a.count, b.count) {
+            let av = index < a.count ? a[index] : 0
+            let bv = index < b.count ? b[index] : 0
+            if av != bv { return av > bv }
+        }
+        return lhs > rhs
     }
 
     /// The newest version the list names (the one an update gets), or nil.

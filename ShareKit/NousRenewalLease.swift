@@ -72,17 +72,21 @@ nonisolated enum NousRenewalLease {
     /// with no lease (nothing to send). After `longestWait` the lease is taken anyway (or a do-nothing one is given).
     static func acquireOrWait(account: String, in directory: URL? = directory, longestWait: TimeInterval = longestWait,
                               adopted: () async -> Bool) async -> (lease: Lease?, adopted: Bool) {
+        guard !Task.isCancelled else { return (nil, false) }
         if let lease = acquire(account: account, in: directory) { return (lease, false) }
         let end = Date().addingTimeInterval(longestWait)
-        while Date() < end {
-            try? await Task.sleep(nanoseconds: poll)
+        while Date() < end && !Task.isCancelled {
+            do { try await Task.sleep(nanoseconds: poll) } catch { return (nil, false) }
+            guard !Task.isCancelled else { return (nil, false) }
             if await adopted() { return (nil, true) }
+            guard !Task.isCancelled else { return (nil, false) }
             if let lease = acquire(account: account, in: directory) {
                 // The other process finished (or gave up) between two looks: its pair may have landed just now.
                 if await adopted() { lease.release(); return (nil, true) }
                 return (lease, false)
             }
         }
+        guard !Task.isCancelled else { return (nil, false) }
         return (Lease(url: nil, token: UUID().uuidString), false)
     }
 }

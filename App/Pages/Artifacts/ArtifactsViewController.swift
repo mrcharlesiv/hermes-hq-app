@@ -3087,27 +3087,31 @@ final class ArtifactsViewController: UIViewController, UICollectionViewDelegate,
         let host = presenter ?? self
         if !ArtifactFiles.isGatewayFile(record) {
             let sheet = UIActivityViewController(activityItems: [URL(string: record.value) ?? record.value], applicationActivities: nil)
-            point(sheet, item: item, anchor: anchor)
+            Self.point(sheet, item: item, anchor: anchor, in: host)
             host.present(sheet, animated: true)
             return
         }
-        fetchGatewayFile(record, presenter: presenter, verb: "Share") { [weak self, weak anchor] url, host in
+        fetchGatewayFile(record, presenter: presenter, verb: "Share") { [weak anchor] url, host in
             let sheet = UIActivityViewController(activityItems: [url], applicationActivities: nil)
-            self?.point(sheet, item: item, anchor: anchor)
+            Self.point(sheet, item: item, anchor: anchor, in: host)
             host.present(sheet, animated: true)
         }
     }
 
-    /// The share popover's arrow: the bar button, else the row (its whole frame), else the page.
-    func point(_ sheet: UIViewController, item: UIBarButtonItem?, anchor: UIView?) {
+    /// The share popover's arrow: the bar button, else the row (its whole frame) when inside `host`'s hierarchy, else `host`'s view.
+    func point(_ sheet: UIViewController, item: UIBarButtonItem?, anchor: UIView?, in host: UIViewController? = nil) {
+        Self.point(sheet, item: item, anchor: anchor, in: host ?? self)
+    }
+
+    static func point(_ sheet: UIViewController, item: UIBarButtonItem?, anchor: UIView?, in host: UIViewController) {
         guard let popover = sheet.popoverPresentationController else { return }
         if let item { popover.sourceItem = item; return }
-        if let anchor, anchor.window != nil {
+        if let anchor, anchor.window != nil, anchor.isDescendant(of: host.view) {
             popover.sourceView = anchor
             popover.sourceRect = anchor.bounds
         } else {
-            popover.sourceView = view
-            popover.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1)
+            popover.sourceView = host.view
+            popover.sourceRect = CGRect(x: host.view.bounds.midX, y: host.view.bounds.midY, width: 1, height: 1)
             popover.permittedArrowDirections = []
         }
     }

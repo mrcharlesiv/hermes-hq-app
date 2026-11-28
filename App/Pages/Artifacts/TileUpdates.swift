@@ -23,6 +23,12 @@ final class TileUpdates {
     private var lists: [String: (jobs: [CronJob], at: Date)] = [:]
     static let fresh: TimeInterval = 30
 
+    /// Returns the active `JobsStore` only when it belongs to `accountId` (never leaks or mutates across accounts).
+    private func store(for accountId: String) -> JobsStore? {
+        guard let store = JobsStore.current, store.account.id == accountId else { return nil }
+        return store
+    }
+
     /// The job keeping `pin` up to date, nil when none does (or the jobs can't be read).
     func job(for pin: ArtifactPin, accountId: String, client: (any GatewayClient)?, fresh: TimeInterval = TileUpdates.fresh) async -> CronJob? {
         await lookup(pin, accountId: accountId, client: client, fresh: fresh).job
@@ -43,11 +49,11 @@ final class TileUpdates {
             jobs = list
             lists[key] = (list, Date())
         } else {
-            jobs = JobsStore.current?.jobs ?? []
+            jobs = store(for: accountId)?.jobs ?? []
             read = false
         }
         // The Jobs page's copy is newer after a change made there.
-        if let store = JobsStore.current, store.account.id == accountId {
+        if let store = store(for: accountId) {
             jobs = jobs.map { store.job(key: $0.key) ?? $0 }
         }
         let job = TileJobs.match(path: path, profile: pin.profile, jobId: pin.jobId, jobs: jobs)
@@ -189,7 +195,7 @@ final class TileUpdates {
             return UIMenu(options: .displayInline, children: [unread])
         }
         guard let job else {
-            let store = JobsStore.current
+            let store = store(for: accountId)
             let writable = store != nil && store?.readOnlyGateway == false
             // [tiles-v2] Turn the dead-end "Not Kept Updated" row into an actionable "Keep Updated…" schedule picker.
             if writable, let onKeepUpdated {
@@ -208,7 +214,7 @@ final class TileUpdates {
             none.accessibilityIdentifier = "tile.updates.none"
             return UIMenu(options: .displayInline, children: [none])
         }
-        let store = JobsStore.current
+        let store = store(for: accountId)
         let writable = store != nil && store?.readOnlyGateway == false
         let current = TileJobs.frequency(of: job)
         var choices: [UIMenuElement] = TileJobs.frequencies.map { frequency in
@@ -349,7 +355,7 @@ final class TileUpdates {
     }
 
     private func setFrequency(_ frequency: TileJobs.Frequency, job: CronJob, pin: ArtifactPin, accountId: String, host: UIViewController?) {
-        guard let store = JobsStore.current else { return }
+        guard let store = store(for: accountId) else { return }
         PagesHaptics.selection()
         Task { [weak self, weak host] in
             let result = await store.update(job, updates: .object(["schedule": .string(frequency.cron)]))
@@ -368,7 +374,7 @@ final class TileUpdates {
     }
 
     private func setPaused(_ pause: Bool, job: CronJob, pin: ArtifactPin, accountId: String, host: UIViewController?) {
-        guard let store = JobsStore.current else { return }
+        guard let store = store(for: accountId) else { return }
         PagesHaptics.selection()
         Task { [weak self, weak host] in
             let result = await store.setPaused(job, pause)
@@ -384,17 +390,22 @@ final class TileUpdates {
         }
     }
 
-    private var activePolls: [String: Task<Void, Never>] = [:]
+    private var activePolls: [String: (token: UUID, task: Task<Void, Never>)] = [:]
 
     private func updateNow(_ job: CronJob, pin: ArtifactPin, accountId: String, client: (any GatewayClient)?,
                            host: UIViewController?, redraw: @escaping () -> Void) {
-        guard let store = JobsStore.current else { return }
+        guard let store = store(for: accountId) else { return }
         Haptics.play(.soft)
         if let host { PagesHUD.show("Updating…", symbol: "arrow.clockwise", from: host) }
         let priorRun = job.lastRunAt ?? ""
-        activePolls[pin.id]?.cancel()
-        activePolls[pin.id] = Task { [weak self, weak host] in
-            defer { self?.activePolls[pin.id] = nil }
+        let token = UUID()
+        activePolls[pin.id]?.task.cancel()
+        let task = Task { [weak self, weak host] in
+            defer {
+                if self?.activePolls[pin.id]?.token == token {
+                    self?.activePolls[pin.id] = nil
+                }
+            }
             let result = await store.runNow(job)
             self?.forget(pin, accountId: accountId)
             switch result {
@@ -426,12 +437,13 @@ final class TileUpdates {
                 if let host { PagesHUD.show("Couldn’t Update", symbol: "exclamationmark.triangle", from: host) }
             }
         }
+        activePolls[pin.id] = (token, task)
     }
 
     /// [tiles-v2] Page-level Update All Now: triggers every active (non-paused) scheduled job for `pins`.
     func updateAll(_ pins: [ArtifactPin], accountId: String, client: (any GatewayClient)?,
                    host: UIViewController?, redraw: @escaping (String) -> Void) {
-        guard let store = JobsStore.current, !store.readOnlyGateway else { return }
+        guard let store = store(for: accountId), !store.readOnlyGateway else { return }
         Haptics.play(.soft)
         Task { [weak self, weak host] in
             guard let self else { return }
@@ -467,7 +479,7 @@ final class TileUpdates {
     /// [tiles-v2] Batch pause or resume all scheduled tile jobs for `pins`.
     func setAllPaused(_ pause: Bool, pins: [ArtifactPin], accountId: String, client: (any GatewayClient)?,
                       host: UIViewController?) async -> Int {
-        guard let store = JobsStore.current, !store.readOnlyGateway else { return 0 }
+        guard let store = store(for: accountId), !store.readOnlyGateway else { return 0 }
         let jobs = await allJobs(for: pins, accountId: accountId, client: client)
         let targets = jobs.filter { TileJobs.isPaused($0) != pause }
         var changed = 0

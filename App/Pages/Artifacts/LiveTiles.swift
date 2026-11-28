@@ -292,6 +292,7 @@ final class LiveTiles: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
             guard let self else { return }
             self.waiting.remove(id)
             guard self.tiles[id]?.web === web else { ack(false, "undelivered"); return }
+            guard self.isWorking?(id) != true else { PagesHaptics.error(); ack(false, "busy"); return }
             self.deliver(id, prompt, ack: ack)
         }
     }

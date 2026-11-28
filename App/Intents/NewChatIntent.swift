@@ -113,26 +113,33 @@ nonisolated enum NewChatShortcutError: Error, LocalizedError, CustomLocalizedStr
 }
 
 @MainActor enum NewChatRouter {
-    /// A `new-chat` link. False: not one.
+    /// Test seam for confirming `<scheme>://talk` triggered by an external URL; nil uses the standard UIAlertController.
+    static var confirmExternalTalk: (@MainActor (_ botName: String, _ root: MainTabController) async -> Bool)?
+
+    /// A `new-chat` or `talk` link arriving via an external URL (`SceneDelegate.open`). False: not one.
+    /// External URLs NEVER auto-send messages, NEVER create projects on unknown paths, and ALWAYS ask before starting voice.
     static func handle(_ url: URL) -> Bool {
         let parsed = DeepLink.parse(url, scheme: AppIdentity.current.urlScheme)
-        // [shortcuts] <scheme>://talk?bot=<profile or name>: Talk to Bot as a link.
+        // [shortcuts] <scheme>://talk?bot=<profile or name>: Talk to Bot as an external link (must confirm mic first).
         if case .other(kind: "talk", _, let params)? = parsed,
            let bot = params.last(where: { $0.key == "bot" })?.value.trimmingCharacters(in: .whitespacesAndNewlines), !bot.isEmpty {
             AppLog.note("link", "talk")
-            Task { await talk(bot) }
+            Task { await talk(bot, confirmFirst: true) }
             return true
         }
         guard let link = NewChatLink.parse(parsed) else { return false }
         AppLog.note("link", "new chat")
-        Task { await open(link) }
+        Task { await open(link.forExternalURL, external: true) }
         return true
     }
 
     enum Outcome: Equatable { case opened, noTabs, noBot, kept }
 
     /// Opens the new chat once the tabs and the roster are up (a shortcut may have launched the app): up to 10 s each.
-    @discardableResult static func open(_ link: NewChatLink) async -> Outcome {
+    /// When `external` is true (invoked from a URL scheme outside the app), auto-sending is forced off (`send = false`)
+    /// so the message is only prefilled as a draft, and unknown project paths are skipped instead of calling `projects.create`.
+    @discardableResult static func open(_ link: NewChatLink, external: Bool = false) async -> Outcome {
+        let effective = external ? link.forExternalURL : link
         guard let root = await tabs() else {
             AppLog.note("intents", "new chat: no tabs (signed out?)")
             return .noTabs
@@ -140,9 +147,9 @@ nonisolated enum NewChatShortcutError: Error, LocalizedError, CustomLocalizedStr
         // A cold launch the shortcut ran on: the last chat is not reopened over (or instead of) this one.
         MainTabController.launchRestorePending = false
         root.launchChatWatch = nil
-        guard let profile = await bot(link.bot, root: root) else {
+        guard let profile = await bot(effective.bot, root: root) else {
             AppLog.note("intents", "new chat: no such bot")
-            notice("Hermes HQ has no bot named “\(link.bot)”.", root: root)
+            notice("Hermes HQ has no bot named “\(effective.bot)”.", root: root)
             return .noBot
         }
         guard await root.clearForRoute() else { return .kept }
@@ -150,15 +157,34 @@ nonisolated enum NewChatShortcutError: Error, LocalizedError, CustomLocalizedStr
         sessions.loadViewIfNeeded()
         guard let organizer = sessions.organizer else { return .noTabs }
         let before = root.chatOnShow
-        if let wanted = link.project {
-            let key = await projectKey(wanted, profile: profile, organizer: organizer)
-            organizer.newChat(inProject: key, profile: profile)
-            AppLog.note("intents", "new chat: opened in a project")
+        if let wanted = effective.project {
+            if external {
+                if let key = await existingProjectKey(wanted, profile: profile, organizer: organizer) {
+                    let holders = organizer.store?.projectHolders(key: key) ?? []
+                    if holders.contains(where: { $0.profile == profile })
+                        || (!holders.isEmpty && holders.allSatisfy({ $0.project.isAuto == true })) {
+                        organizer.newChat(inProject: key, profile: profile)
+                    } else if let existingRoot = holders.first?.project.root {
+                        // Match the existing saved project's folder without silently calling `projects.create`.
+                        organizer.newChat(profile: profile, folder: existingRoot)
+                    } else {
+                        organizer.newChat(profile: profile)
+                    }
+                    AppLog.note("intents", "new chat: external link opened in an existing project")
+                } else {
+                    AppLog.note("intents", "new chat: external link skipped unknown project")
+                    organizer.newChat(profile: profile)
+                }
+            } else {
+                let key = await projectKey(wanted, profile: profile, organizer: organizer)
+                organizer.newChat(inProject: key, profile: profile)
+                AppLog.note("intents", "new chat: opened in a project")
+            }
         } else {
             organizer.newChat(profile: profile)
             AppLog.note("intents", "new chat: opened")
         }
-        if let words = link.message { await deliver(words, send: link.send, root: root) { $0 !== before } }
+        if let words = effective.message { await deliver(words, send: effective.send, root: root) { $0 !== before } }
         return .opened
     }
 
@@ -206,7 +232,8 @@ nonisolated enum NewChatShortcutError: Error, LocalizedError, CustomLocalizedStr
     }
 
     /// [shortcuts] Talk to Bot: the tabs and the roster as a new chat waits for them, then the Talk tile's road.
-    @discardableResult static func talk(_ wanted: String) async -> Outcome {
+    /// When `confirmFirst` is true (external URL scheme), asks explicit user confirmation before activating the microphone.
+    @discardableResult static func talk(_ wanted: String, confirmFirst: Bool = false) async -> Outcome {
         guard let root = await tabs() else { return .noTabs }
         MainTabController.launchRestorePending = false
         root.launchChatWatch = nil
@@ -215,11 +242,35 @@ nonisolated enum NewChatShortcutError: Error, LocalizedError, CustomLocalizedStr
             return .noBot
         }
         guard await root.clearForRoute() else { return .kept }
+        if confirmFirst {
+            let allowed = await confirmTalk(botName: bot.name, root: root)
+            guard allowed else {
+                AppLog.note("intents", "talk: external link declined by user")
+                return .kept
+            }
+        }
         root.select(.bots)
         root.botsViewController.navigationController?.popToRootViewController(animated: false)
         TalkWiring.startTalking(with: bot, from: root.botsViewController)
         AppLog.note("intents", "talk: started")
         return .opened
+    }
+
+    static func externalTalkPrompt(botName: String) -> (title: String, message: String, action: String) {
+        ("Start voice conversation with \(botName)?",
+         "A link asked to open your microphone and start a live voice conversation with \(botName).",
+         "Start Talking")
+    }
+
+    private static func confirmTalk(botName: String, root: MainTabController) async -> Bool {
+        if let confirmExternalTalk { return await confirmExternalTalk(botName, root) }
+        let prompt = externalTalkPrompt(botName: botName)
+        return await withCheckedContinuation { continuation in
+            let alert = UIAlertController(title: prompt.title, message: prompt.message, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in continuation.resume(returning: false) })
+            alert.addAction(UIAlertAction(title: prompt.action, style: .default) { _ in continuation.resume(returning: true) })
+            (FailureAlert.topmost(root) ?? root).present(alert, animated: true)
+        }
     }
 
     /// The bot a link names: its profile, else its shown name (any case).
@@ -236,10 +287,8 @@ nonisolated enum NewChatShortcutError: Error, LocalizedError, CustomLocalizedStr
         return nil
     }
 
-    /// The project's key in the Sessions store: its folder or name as the store has it now. On a cold launch the
-    /// projects load after the list, so it waits up to 6 s for the one named; one never found is taken as a folder
-    /// (the organizer then gives it to the bot, named after the folder).
-    private static func projectKey(_ wanted: String, profile: String, organizer: SessionsOrganizer) async -> String {
+    /// Resolves `wanted` ONLY against existing saved projects (never fabricating a folder key for an unknown path).
+    private static func existingProjectKey(_ wanted: String, profile: String, organizer: SessionsOrganizer) async -> String? {
         organizer.store?.loadProjects(also: [profile])
         for _ in 0..<30 {
             if let store = organizer.store {
@@ -248,7 +297,14 @@ nonisolated enum NewChatShortcutError: Error, LocalizedError, CustomLocalizedStr
             }
             try? await Task.sleep(for: .milliseconds(200))
         }
-        if let hit = ProjectShortcutCatalog.resolve(wanted, in: ProjectShortcutCatalog.projects()) { return hit.key }
+        return ProjectShortcutCatalog.resolve(wanted, in: ProjectShortcutCatalog.projects())?.key
+    }
+
+    /// The project's key in the Sessions store: its folder or name as the store has it now. On a cold launch the
+    /// projects load after the list, so it waits up to 6 s for the one named; one never found is taken as a folder
+    /// (the organizer then gives it to the bot, named after the folder).
+    private static func projectKey(_ wanted: String, profile: String, organizer: SessionsOrganizer) async -> String {
+        if let existing = await existingProjectKey(wanted, profile: profile, organizer: organizer) { return existing }
         return SessionProjects.folderKey(wanted)
     }
 

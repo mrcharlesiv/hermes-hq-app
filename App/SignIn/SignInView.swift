@@ -46,6 +46,8 @@ final class SignInModel {
     private(set) var behindAccess = false
     var access: CloudflareAccess? { CloudflareAccess(clientId: accessId, clientSecret: accessSecret) }
     @ObservationIgnored private var fillingAccess = false
+    /// Normalized address key for which `accessId`/`accessSecret`/`behindAccess` were entered or loaded.
+    @ObservationIgnored private var lastNormalizedAddress = ""
     /// nil until the address has been asked about (only the field shows).
     private(set) var ways: SignInWays?
     /// [own-login] The browser button's words when this Hermes signs in with its own login provider (self-hosted
@@ -107,6 +109,7 @@ final class SignInModel {
     init(driver: any SignInDriving, address: String = "", onOutcome: @escaping (SignInOutcome) -> Void) {
         self.driver = driver
         self.address = address
+        self.lastNormalizedAddress = Self.normalizedAddressKey(address)
         self.onOutcome = onOutcome
         if !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { ask() }
         #if DEBUG
@@ -121,11 +124,31 @@ final class SignInModel {
     var debugError: String? { error }
     #endif
 
+    private static func normalizedAddressKey(_ raw: String) -> String {
+        let normalized = SignInAddress.normalize(raw)
+        return normalized.isEmpty ? "" : normalized.lowercased()
+    }
+
+    private func clearAccess() {
+        fillingAccess = true
+        accessId = ""
+        accessSecret = ""
+        accessOpen = false
+        behindAccess = false
+        fillingAccess = false
+        driver.useAccess(nil)
+    }
+
     /// [onboarding] An address handed to the form (a connect link, the guide's kept address): filled in and asked about.
     func fill(address new: String) {
         guard busy == nil else { return }
-        // A typed password belongs to the address it was typed for: another address never inherits it.
-        if SignInAddress.normalize(new) != SignInAddress.normalize(address) { password = ""; passwordInvalid = false }
+        // A typed password and Cloudflare Access token belong to the address they were entered for: another address
+        // never inherits them.
+        if Self.normalizedAddressKey(new) != Self.normalizedAddressKey(address) {
+            password = ""
+            passwordInvalid = false
+            clearAccess()
+        }
         address = new
         ask()
     }
@@ -171,6 +194,8 @@ final class SignInModel {
         debounce?.cancel()
         let text = address.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.isEmpty {
+            lastNormalizedAddress = ""
+            clearAccess()
             asked = ""; ways = nil; ownLoginTitle = nil; note = nil; checking = false; behindAccess = false; reachable = false
             return
         }
@@ -178,6 +203,11 @@ final class SignInModel {
         if let url = URL(string: text), case .connect(let inner)? = NotificationRules.link(url, scheme: AppIdentity.current.urlScheme) {
             address = inner
             return
+        }
+        let normalized = Self.normalizedAddressKey(text)
+        if normalized != lastNormalizedAddress {
+            lastNormalizedAddress = normalized
+            clearAccess()
         }
         debounce = Task { [weak self, delay] in
             try? await Task.sleep(for: delay)

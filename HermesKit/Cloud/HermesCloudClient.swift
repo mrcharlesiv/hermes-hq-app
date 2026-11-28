@@ -206,9 +206,13 @@ nonisolated struct CloudToolSchema: Sendable, Equatable {
             guard name != actionKey, !skip.contains(name), let prop = props[name] else { return nil }
             let detail = RosterText.text(prop["description"])
             if !branches.keys.contains(action), !Self.applies(detail, to: action, among: actions) { return nil }
-            var choices = (prop["enum"]?.array ?? prop["items"]?["enum"]?.array ?? []).compactMap { $0.string ?? $0.double.map { String(Int($0)) } }
+            var choices = (prop["enum"]?.array ?? prop["items"]?["enum"]?.array ?? []).compactMap {
+                $0.string ?? $0.double.flatMap(SafeInt.exact).map(String.init)
+            }
             var titles: [String: String] = [:]
-            var fallback = prop["default"].flatMap { $0.string ?? $0.double.map { String(Int($0)) } ?? $0.bool.map { $0 ? "true" : "false" } }
+            var fallback = prop["default"].flatMap {
+                $0.string ?? $0.double.flatMap(SafeInt.exact).map(String.init) ?? $0.bool.map { $0 ? "true" : "false" }
+            }
             let type = prop["type"]?.string ?? (prop["type"]?.array?.compactMap(\.string).first { $0 != "null" } ?? "string")
             if choices.isEmpty, type == "string", let described = Self.describedChoices(detail) {
                 // "e.g. 'standard' (default, 2 GB) or 'pro' (4 GB)": a free string the description lists the values of.
@@ -341,7 +345,7 @@ actor HermesCloudClient {
     private var nextId = 1
     private var tools: [String: JSONValue] = [:]
 
-    init(login: PortalLogin = .shared, session: URLSession = PortalAuth.makeSession(resourceTimeout: 330),
+    init(login: PortalLogin = .shared, session: URLSession = PortalAuth.sharedLongSession,
          endpoint: URL = HermesCloudClient.endpoint) {
         self.login = login; self.session = session; self.endpoint = endpoint
     }
@@ -491,7 +495,7 @@ actor HermesCloudClient {
         if let initializing { return try await initializing.value }
         let flight = Task { try await self.initialize() }
         initializing = flight
-        defer { initializing = nil }
+        defer { if initializing == flight { initializing = nil } }
         try await flight.value
     }
 
@@ -548,7 +552,7 @@ actor HermesCloudClient {
             AppLog.note("auth", "hermes cloud mcp answered 401 by a proxy wall: login kept")
             throw PortalError.problem
         case 401 where !retried: return try await post(message, retried: true, refused: token, timeout: timeout)
-        case 401: await login.signOut(); throw PortalError.signedOut
+        case 401: await login.signOutIfMatching(token); throw PortalError.signedOut
         case 404 where sessionId != nil: throw CloudSessionLost()
         case 403: throw PortalError(kind: .refused, message: "Your Nous account can’t manage Hermes Cloud agents.")
         case 429: throw PortalError(kind: .server, message: "Nous Portal is busy. Try again in a minute.")

@@ -36,9 +36,14 @@ nonisolated enum CloudPrices {
 
     /// "$0.56", "$2", "$17": cents only under $10, and only when there are any.
     static func dollars(_ amount: Double) -> String {
-        if amount >= 10 { return "$\(Int(amount.rounded()))" }
+        guard amount.isFinite else { return "$0" }
+        if amount >= 10 || amount <= -10 {
+            let rounded = amount.rounded()
+            if let whole = SafeInt.exact(rounded) { return "$\(whole)" }
+            return String(format: "$%.0f", rounded)
+        }
         let cents = (amount * 100).rounded()
-        return cents.truncatingRemainder(dividingBy: 100) == 0 ? "$\(Int(cents / 100))" : String(format: "$%.2f", cents / 100)
+        return cents.truncatingRemainder(dividingBy: 100) == 0 ? "$\(SafeInt.clamped(cents / 100))" : String(format: "$%.2f", cents / 100)
     }
 
     /// Running every day of a 30-day month.
@@ -114,9 +119,11 @@ nonisolated struct CloudSpend: Sendable, Equatable {
                 let next = path + key.lowercased().filter { $0.isLetter || $0.isNumber }
                 if let item = object[key] { collect(item, path: next, depth: depth + 1, into: &out) }
             }
-        } else if let number = value.double {
+        } else if let number = value.double, number.isFinite, abs(number) <= 1e12 {
             out.append((path, number))
-        } else if let text = value.string, text.hasPrefix("$"), let number = Double(text.dropFirst().replacingOccurrences(of: ",", with: "")) {
+        } else if let text = value.string, text.hasPrefix("$"),
+                  let number = Double(text.dropFirst().replacingOccurrences(of: ",", with: "")),
+                  number.isFinite, abs(number) <= 1e12 {
             out.append((path, number))
         }
     }

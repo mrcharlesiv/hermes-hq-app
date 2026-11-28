@@ -161,6 +161,14 @@ nonisolated struct LiveActivitySubject: Codable, Hashable, Sendable {
     nonisolated enum Kind: String, Codable, Hashable, Sendable { case turn, job }
     var kind: Kind
     var id: String
+
+    /// The session id carried in a turn Live Activity's deep link (`<scheme>://session/<id>`), or nil when absent/other.
+    static func sessionId(fromLink link: String?) -> String? {
+        guard let link, let url = URL(string: link), url.host?.lowercased() == "session" else { return nil }
+        let parts = url.pathComponents.filter { $0 != "/" }
+        guard parts.count == 1, !parts[0].isEmpty else { return nil }
+        return parts[0]
+    }
 }
 
 /// [island-fit] How far a running timer's text counts. A timer is as wide as the longest value in its range, so one
@@ -403,7 +411,7 @@ nonisolated struct LiveGroupedContent: Codable, Hashable, Sendable {
     func markingTurnDone(profile: String, session: String?, now: Date) -> LiveGroupedContent? {
         let index: Int? = if let session, !session.isEmpty {
             items.firstIndex { !$0.isOver && $0.subject.kind == .turn && ($0.session == session || $0.subject.id == "\(profile)/\(session)") }
-                ?? items.firstIndex { !$0.isOver && $0.subject.kind == .turn && $0.subject.id == profile }
+                ?? items.firstIndex { !$0.isOver && $0.subject.kind == .turn && $0.subject.id == profile && ($0.session == nil || $0.session == session) }
         } else {
             items.firstIndex { !$0.isOver && $0.subject.kind == .turn && $0.subject.id == profile }
         }
@@ -437,6 +445,9 @@ nonisolated struct HQLiveAttributes: ActivityAttributes {
     /// The app's accent (its theme's tint as a dark card draws it), red green blue 0…1: the extension has no theme of
     /// its own, so `.accentColor` drew system blue whatever theme the app wore.
     var accent: [Double]? = nil
+
+    /// The session id carried in `link` (`<scheme>://session/<id>`), when present.
+    var sessionId: String? { LiveActivitySubject.sessionId(fromLink: link) }
 }
 
 /// [live-grouped] Fixed attributes for the single grouped Live Activity combining active turns and jobs.

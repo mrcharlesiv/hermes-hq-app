@@ -2,6 +2,7 @@
 // through the same `TalkSpeaking` the conversation uses (the stream first, clips as the fallback), under the
 // `.speech` audio owner, so the silent switch does not mute it. One reply at a time; asking for another switches.
 
+import AVFAudio
 import UIKit
 
 @MainActor final class ReadAloudCenter {
@@ -88,6 +89,27 @@ import UIKit
                 self?.applyLease()
             }
         })
+        observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
+            let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+            MainActor.assumeIsolated {
+                guard raw == AVAudioSession.InterruptionType.began.rawValue else { return }
+                self?.stop()
+            }
+        })
+        observers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
+            let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+            MainActor.assumeIsolated {
+                guard raw == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue else { return }
+                self?.stop()
+            }
+        })
+        observers.append(center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.stop() }
+        })
+    }
+
+    isolated deinit {
+        observers.forEach(NotificationCenter.default.removeObserver)
     }
 
     // MARK: Reading

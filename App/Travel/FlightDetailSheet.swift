@@ -11,6 +11,7 @@ enum FlightDetailSheet {
                         bookingLocked: Bool,
                         from vc: UIViewController,
                         onAsk: @escaping (TravelCards.Ask) -> Void) -> UIViewController {
+        let box = WeakPresenterBox(vc: nil)
         let host = UIHostingController(rootView: HQScaledRoot(FlightDetailView(
             flight: flight,
             asks: asks,
@@ -19,9 +20,10 @@ enum FlightDetailSheet {
                 vc.dismiss(animated: true) { onAsk(ask) }
             },
             onOpenSite: {
-                LinkOpener.open(flight.url, from: vc)
+                LinkOpener.open(flight.url, from: box.vc ?? vc)
             }
         )))
+        box.vc = host
         let sheet = ChatSheet.wrap(host, title: flight.routeLabel, detents: [.medium(), .large()])
         ChatSheet.wrapTitle(host)
         #if targetEnvironment(macCatalyst)
@@ -32,6 +34,11 @@ enum FlightDetailSheet {
         vc.present(sheet, animated: true)
         return sheet
     }
+
+    private final class WeakPresenterBox {
+        weak var vc: UIViewController?
+        init(vc: UIViewController?) { self.vc = vc }
+    }
 }
 
 private struct FlightDetailView: View {
@@ -41,6 +48,13 @@ private struct FlightDetailView: View {
     let onAsk: (TravelCards.Ask) -> Void
     let onOpenSite: () -> Void
     @State private var rulesExpanded = true
+    @State private var submitted = false
+
+    private func submit(_ ask: TravelCards.Ask) {
+        guard !submitted else { return }
+        submitted = true
+        onAsk(ask)
+    }
 
     private var hasRules: Bool {
         !flight.carryOn.isEmpty || !flight.checkedBag.isEmpty || !flight.changeRule.isEmpty || !flight.refundRule.isEmpty
@@ -215,13 +229,14 @@ private struct FlightDetailView: View {
                     .accessibilityIdentifier("travel.flight.booked")
             } else if !bookingLocked {
                 Button {
-                    onAsk(.book)
+                    submit(.book)
                 } label: {
                     Text("Book Flight · \(ShoppingCards.price(flight.price, currency: flight.currency))")
                         .font(Font.hq(.body).weight(.semibold))
                         .frame(maxWidth: .infinity)
                 }
                 .hqProminentButtonStyle()
+                .disabled(submitted)
                 .accessibilityIdentifier("travel.flight.book")
             }
             HStack(spacing: 10) {
@@ -233,13 +248,14 @@ private struct FlightDetailView: View {
                         .background(Color(uiColor: HQPalette.sheetCard), in: .capsule)
                 } else {
                     Button {
-                        onAsk(.watchPrice)
+                        submit(.watchPrice)
                     } label: {
                         Label("Watch Fare", systemImage: "bell")
                             .font(Font.hq(.subheadline).weight(.medium))
                             .frame(maxWidth: .infinity)
                     }
                     .hqBorderedButtonStyle()
+                    .disabled(submitted)
                     .accessibilityIdentifier("travel.flight.watch")
                 }
                 Button {

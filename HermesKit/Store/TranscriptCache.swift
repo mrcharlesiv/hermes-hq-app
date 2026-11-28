@@ -38,6 +38,7 @@ nonisolated final class TranscriptCache: Sendable {
         var memoryOrder: [Key] = []              // most recent last
         var index: [String: IndexEntry] = [:]     // by relative path
         var indexLoaded = false
+        var indexDirty = false
         var pending: [Key: (entry: TranscriptEntry, generation: Int)] = [:]
         var generation = 0
         var visible: Set<Key> = []
@@ -104,10 +105,14 @@ nonisolated final class TranscriptCache: Sendable {
         let rel = relativePath(key)
         let now = Date().timeIntervalSince1970
         if let hit = state.withLock({ s -> TranscriptEntry? in
-            if let pending = s.pending[key] { touchMemory(&s, key, pending.entry); s.index[rel]?.used = now; return pending.entry }
+            if let pending = s.pending[key] {
+                touchMemory(&s, key, pending.entry)
+                if s.index[rel] != nil { s.index[rel]?.used = now; s.indexDirty = true }
+                return pending.entry
+            }
             guard let entry = s.memory[key] else { return nil }
             touchMemory(&s, key, entry)
-            s.index[rel]?.used = now
+            if s.index[rel] != nil { s.index[rel]?.used = now; s.indexDirty = true }
             return entry
         }) {
             return (hit.partial && !allowPartial) ? nil : hit
@@ -118,10 +123,12 @@ nonisolated final class TranscriptCache: Sendable {
             // Corrupt or truncated: drop it so every later open doesn't pay (or trip over) it again.
             // [diagnostics] §7: the chat opens without its saved copy; say so once (sizes only, never content).
             ScreenFault.report(screen: "chat", message: "saved chat could not be read (\(data.count) bytes)", path: ["TranscriptCache"])
-            state.withLock { s in s.index[rel] = nil }
+            state.withLock { s in s.index[rel] = nil; if s.indexLoaded { s.indexDirty = true } }
             io.async { [self] in
                 // Re-check on the writer queue: a save may have replaced the file meanwhile.
                 guard let again = try? Data(contentsOf: url), (try? TranscriptEntry.decode(again)) == nil else { return }
+                loadIndexIfNeeded()
+                state.withLock { s in s.index[rel] = nil; s.indexDirty = true }
                 try? FileManager.default.removeItem(at: url)
                 saveIndexIfNeeded(force: true)
             }
@@ -129,7 +136,7 @@ nonisolated final class TranscriptCache: Sendable {
         }
         state.withLock { s in
             touchMemory(&s, key, entry)
-            if s.index[rel] != nil { s.index[rel]?.used = now }
+            if s.index[rel] != nil { s.index[rel]?.used = now; s.indexDirty = true }
         }
         return (entry.partial && !allowPartial) ? nil : entry
     }
@@ -200,7 +207,7 @@ nonisolated final class TranscriptCache: Sendable {
         io.sync {
             let keys = state.withLock { Array($0.pending.keys) }
             for key in keys { write(key, generation: nil) }
-            saveIndexIfNeeded(force: true)
+            saveIndexIfNeeded(force: false)
         }
     }
 
@@ -231,7 +238,10 @@ nonisolated final class TranscriptCache: Sendable {
             guard state.withLock({ $0.purgeGeneration == purgeGeneration }) else { return }
             try data.write(to: url, options: [.atomic])
             let now = Date().timeIntervalSince1970
-            state.withLock { s in s.index[rel] = IndexEntry(bytes: data.count, used: now, saved: entry.savedAt.timeIntervalSince1970) }
+            state.withLock { s in
+                s.index[rel] = IndexEntry(bytes: data.count, used: now, saved: entry.savedAt.timeIntervalSince1970)
+                s.indexDirty = true
+            }
         } catch {
             AppLog.swallowed("store", "write transcript cache tail", error)
             return
@@ -345,6 +355,7 @@ nonisolated final class TranscriptCache: Sendable {
     private func loadIndexIfNeeded() {
         guard !state.withLock({ $0.indexLoaded }) else { return }
         var loaded: [String: IndexEntry] = [:]
+        var rebuilt = false
         if let data = try? Data(contentsOf: indexURL), let decoded = try? JSONDecoder().decode([String: IndexEntry].self, from: data) {
             loaded = decoded
         } else if let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]) {
@@ -355,11 +366,13 @@ nonisolated final class TranscriptCache: Sendable {
                 let t = values?.contentModificationDate?.timeIntervalSince1970 ?? 0
                 loaded[rel] = IndexEntry(bytes: values?.fileSize ?? 0, used: t, saved: t)
             }
+            rebuilt = !loaded.isEmpty
             AppLog.trace("store", "transcript cache: index missing, rebuilt \(loaded.count) entries from disk")
         }
         state.withLock { s in
             for (rel, e) in loaded where s.index[rel] == nil { s.index[rel] = e }
             s.indexLoaded = true
+            if rebuilt { s.indexDirty = true }
         }
     }
 
@@ -374,12 +387,17 @@ nonisolated final class TranscriptCache: Sendable {
     }
 
     private func saveIndexIfNeeded(force: Bool) {
-        let snapshot = state.withLock { $0.index }
-        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+        let snapshot: [String: IndexEntry]? = state.withLock { s in
+            guard s.indexLoaded, force || s.indexDirty else { return nil }
+            s.indexDirty = false
+            return s.index
+        }
+        guard let snapshot, let data = try? JSONEncoder().encode(snapshot) else { return }
         do {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             try data.write(to: indexURL, options: [.atomic])
         } catch {
+            state.withLock { $0.indexDirty = true }
             AppLog.swallowed("store", "save transcript cache index", error)
         }
     }
@@ -400,7 +418,12 @@ nonisolated final class TranscriptCache: Sendable {
         state.withLock { s in
             s.pending[key] = nil; s.memory[key] = nil; s.memoryOrder.removeAll { $0 == key }; s.index[rel] = nil
         }
-        io.async { [self] in try? FileManager.default.removeItem(at: fileURL(rel)); saveIndexIfNeeded(force: true) }
+        io.async { [self] in
+            loadIndexIfNeeded()
+            state.withLock { s in s.index[rel] = nil; s.indexDirty = true }
+            try? FileManager.default.removeItem(at: fileURL(rel))
+            saveIndexIfNeeded(force: true)
+        }
     }
 
     private static func deletedKey(_ account: String, _ storedId: String) -> String { account + "\n" + storedId }
@@ -420,7 +443,11 @@ nonisolated final class TranscriptCache: Sendable {
         io.async { [self] in
             // A write already under way when the lock was taken finished before this (one serial queue): its file and
             // its index line go too.
-            state.withLock { s in for rel in s.index.keys where matches(rel) { s.index[rel] = nil } }
+            loadIndexIfNeeded()
+            state.withLock { s in
+                for rel in s.index.keys where matches(rel) { s.index[rel] = nil }
+                s.indexDirty = true
+            }
             let profiles = (try? FileManager.default.contentsOfDirectory(at: accountDir, includingPropertiesForKeys: nil)) ?? []
             for dir in profiles { try? FileManager.default.removeItem(at: dir.appending(path: file)) }
             saveIndexIfNeeded(force: true)
@@ -440,7 +467,11 @@ nonisolated final class TranscriptCache: Sendable {
             s.index = s.index.filter { !$0.key.hasPrefix(prefix) }
         }
         io.async { [self] in
-            state.withLock { s in s.index = s.index.filter { !$0.key.hasPrefix(prefix) } }
+            loadIndexIfNeeded()
+            state.withLock { s in
+                s.index = s.index.filter { !$0.key.hasPrefix(prefix) }
+                s.indexDirty = true
+            }
             try? FileManager.default.removeItem(at: dir)
             saveIndexIfNeeded(force: true)
         }
@@ -448,24 +479,59 @@ nonisolated final class TranscriptCache: Sendable {
 
     /// Profile renamed: re-key its entries.
     func renameProfile(account: String, from old: String, to new: String) {
-        let accountDir = root.appending(path: Self.accountKey(account), directoryHint: .isDirectory)
-        let oldDir = accountDir.appending(path: Self.safeComponent(old), directoryHint: .isDirectory)
-        let newDir = accountDir.appending(path: Self.safeComponent(new), directoryHint: .isDirectory)
-        state.withLock { s in
-            for key in Array(s.memory.keys) where key.account == account && key.profile == old {
-                let entry = s.memory.removeValue(forKey: key)
-                s.memory[Key(account: account, profile: new, storedId: key.storedId)] = entry
+        let oldProfile = Self.key(account: account, profile: old, storedId: "").profile
+        let newProfile = Self.key(account: account, profile: new, storedId: "").profile
+        guard oldProfile != newProfile else { return }
+        let accountKey = Self.accountKey(account)
+        let accountDir = root.appending(path: accountKey, directoryHint: .isDirectory)
+        let oldDir = accountDir.appending(path: Self.safeComponent(oldProfile), directoryHint: .isDirectory)
+        let newDir = accountDir.appending(path: Self.safeComponent(newProfile), directoryHint: .isDirectory)
+        let oldPrefix = "\(accountKey)/\(Self.safeComponent(oldProfile))/"
+        let newPrefix = "\(accountKey)/\(Self.safeComponent(newProfile))/"
+        let movedPending: [(Key, Int)] = state.withLock { s in
+            var moved: [(Key, Int)] = []
+            for key in Array(s.pending.keys) where key.account == account && key.profile == oldProfile {
+                if let item = s.pending.removeValue(forKey: key) {
+                    let next = Key(account: account, profile: newProfile, storedId: key.storedId)
+                    s.pending[next] = item
+                    moved.append((next, item.generation))
+                }
             }
-            s.memoryOrder = s.memoryOrder.map { $0.account == account && $0.profile == old ? Key(account: account, profile: new, storedId: $0.storedId) : $0 }
-            let oldPrefix = "\(Self.accountKey(account))/\(Self.safeComponent(old))/"
+            for key in Array(s.visible) where key.account == account && key.profile == oldProfile {
+                s.visible.remove(key)
+                s.visible.insert(Key(account: account, profile: newProfile, storedId: key.storedId))
+            }
+            for key in Array(s.memory.keys) where key.account == account && key.profile == oldProfile {
+                let entry = s.memory.removeValue(forKey: key)
+                s.memory[Key(account: account, profile: newProfile, storedId: key.storedId)] = entry
+            }
+            s.memoryOrder = s.memoryOrder.map {
+                $0.account == account && $0.profile == oldProfile ? Key(account: account, profile: newProfile, storedId: $0.storedId) : $0
+            }
             for rel in Array(s.index.keys) where rel.hasPrefix(oldPrefix) {
                 let e = s.index.removeValue(forKey: rel)
-                s.index["\(Self.accountKey(account))/\(Self.safeComponent(new))/" + rel.dropFirst(oldPrefix.count)] = e
+                s.index[newPrefix + rel.dropFirst(oldPrefix.count)] = e
             }
+            if s.indexLoaded { s.indexDirty = true }
+            return moved
         }
         io.async { [self] in
-            if !FileManager.default.fileExists(atPath: newDir.path) { try? FileManager.default.moveItem(at: oldDir, to: newDir) }
+            loadIndexIfNeeded()
+            state.withLock { s in
+                for rel in Array(s.index.keys) where rel.hasPrefix(oldPrefix) {
+                    let e = s.index.removeValue(forKey: rel)
+                    s.index[newPrefix + rel.dropFirst(oldPrefix.count)] = e
+                }
+                s.indexDirty = true
+            }
+            if FileManager.default.fileExists(atPath: oldDir.path),
+               !FileManager.default.fileExists(atPath: newDir.path) {
+                try? FileManager.default.moveItem(at: oldDir, to: newDir)
+            }
             saveIndexIfNeeded(force: true)
+            for (newKey, gen) in movedPending {
+                write(newKey, generation: gen)
+            }
         }
     }
 
@@ -481,6 +547,11 @@ nonisolated final class TranscriptCache: Sendable {
             s.index = s.index.filter { !$0.key.hasPrefix(prefix) }
         }
         io.sync { [self] in
+            loadIndexIfNeeded()
+            state.withLock { s in
+                s.index = s.index.filter { !$0.key.hasPrefix(prefix) }
+                s.indexDirty = true
+            }
             try? FileManager.default.removeItem(at: root.appending(path: Self.accountKey(account), directoryHint: .isDirectory))
             saveIndexIfNeeded(force: true)
         }
@@ -495,7 +566,7 @@ nonisolated final class TranscriptCache: Sendable {
     func purgeAll() {
         state.withLock { s in
             s.purgeGeneration += 1
-            s.pending = [:]; s.memory = [:]; s.memoryOrder = []; s.index = [:]
+            s.pending = [:]; s.memory = [:]; s.memoryOrder = []; s.index = [:]; s.indexLoaded = false; s.indexDirty = false
         }
         io.sync { [self] in try? FileManager.default.removeItem(at: root) }
     }
@@ -538,6 +609,22 @@ nonisolated final class TranscriptCache: Sendable {
     var memoryCount: Int { state.withLock { $0.memory.count } }
 
     /// Total bytes on disk according to the index (tests / diagnostics).
-    var diskBytes: Int { flush(); return state.withLock { $0.index.values.reduce(0) { $0 + $1.bytes } } }
-    var entryCount: Int { flush(); return state.withLock { $0.index.count } }
+    var diskBytes: Int {
+        io.sync {
+            let keys = state.withLock { Array($0.pending.keys) }
+            for key in keys { write(key, generation: nil) }
+            loadIndexIfNeeded()
+            saveIndexIfNeeded(force: false)
+        }
+        return state.withLock { $0.index.values.reduce(0) { $0 + $1.bytes } }
+    }
+    var entryCount: Int {
+        io.sync {
+            let keys = state.withLock { Array($0.pending.keys) }
+            for key in keys { write(key, generation: nil) }
+            loadIndexIfNeeded()
+            saveIndexIfNeeded(force: false)
+        }
+        return state.withLock { $0.index.count }
+    }
 }

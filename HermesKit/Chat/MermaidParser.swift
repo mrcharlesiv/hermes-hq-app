@@ -233,12 +233,23 @@ nonisolated enum MermaidParser {
                     _ = subgraphStack.popLast()
                     continue
                 }
-                let chain = parseEdgeChain(s)
+                let chain = parseEdgeChain(s, edgeBudget: maxEdges - edges.count)
+                if chain.overflowed {
+                    return .flowchart(direction: direction, nodes: [], edges: [], subgraphs: [])
+                }
                 if chain.edges.isEmpty {
                     if let single = parseNodeToken(s) { upsertNode(single) }
                 } else {
-                    for node in chain.nodes { upsertNode(node) }
+                    for node in chain.nodes {
+                        upsertNode(node)
+                        if nodes.count > maxNodes {
+                            return .flowchart(direction: direction, nodes: [], edges: [], subgraphs: [])
+                        }
+                    }
                     edges.append(contentsOf: chain.edges)
+                }
+                if nodes.count > maxNodes || edges.count > maxEdges {
+                    return .flowchart(direction: direction, nodes: [], edges: [], subgraphs: [])
                 }
             }
         }
@@ -285,10 +296,10 @@ nonisolated enum MermaidParser {
     }
 
     /// Parses chained edges like `A[Start] --> B{Check} -->|Yes| C((Done))` and `&` fan-outs `A & B --> C`.
-    private static func parseEdgeChain(_ line: String) -> (nodes: [(id: String, label: String, shape: MermaidDiagram.NodeShape)], edges: [MermaidDiagram.FlowEdge]) {
+    private static func parseEdgeChain(_ line: String, edgeBudget: Int) -> (nodes: [(id: String, label: String, shape: MermaidDiagram.NodeShape)], edges: [MermaidDiagram.FlowEdge], overflowed: Bool) {
         // Tokenize by edge operators while ignoring text inside quotes or brackets.
         let ops = findEdgeOperators(in: line)
-        guard !ops.isEmpty else { return ([], []) }
+        guard !ops.isEmpty else { return ([], [], false) }
 
         var segments: [String] = []
         var cursor = line.startIndex
@@ -309,13 +320,21 @@ nonisolated enum MermaidParser {
         var edges: [MermaidDiagram.FlowEdge] = []
         for (i, op) in ops.enumerated() {
             guard i + 1 < segmentNodes.count else { break }
+            let leftCount = segmentNodes[i].count
+            let rightCount = segmentNodes[i + 1].count
+            if leftCount > 0 && rightCount > 0 {
+                let remaining = edgeBudget - edges.count
+                if remaining <= 0 || leftCount > remaining / rightCount {
+                    return ([], [], true)
+                }
+            }
             for lhs in segmentNodes[i] {
                 for rhs in segmentNodes[i + 1] {
                     edges.append(MermaidDiagram.FlowEdge(from: lhs.id, to: rhs.id, label: op.label, style: op.style, directed: op.directed))
                 }
             }
         }
-        return (allNodes, edges)
+        return (allNodes, edges, false)
     }
 
     private struct RawEdgeOp {

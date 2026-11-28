@@ -79,10 +79,15 @@ nonisolated final class ScreenFramebuffer {
         }
     }
 
-    /// false when the bytes are not a JPEG that decodes: the rect is left as it was.
+    /// false when the bytes are not a JPEG that decodes or exceed safe framebuffer/size caps: the rect is left as it was.
     func drawJPEG(_ data: Data, x: Int, y: Int, w: Int, h: Int) -> Bool {
         guard w > 0, h > 0, data.count > 3, data[data.startIndex] == 0xFF, data[data.startIndex + 1] == 0xD8,
               let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let imgW = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
+              let imgH = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
+              Self.allowed(width: imgW, height: imgH),
+              imgW <= width, imgH <= height,
               let image = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCache: false] as CFDictionary),
               image.width > 0, image.height > 0 else { return false }
         context.draw(image, in: CGRect(x: x, y: height - y - h, width: w, height: h))

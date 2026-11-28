@@ -71,9 +71,11 @@ extension LiveVoiceTransport {
     private var statsTimer: Timer?
     private var speaking = false
     private var lastLoud: TimeInterval = 0
-    private var holdsSession = false
+    private var sessionGrant: Int?
     private var finished = false
-    private var closedWaiter: CheckedContinuation<Void, Never>?
+    private var closing = false
+    private var confirmWaiters: [CheckedContinuation<Void, Never>] = []
+    private var closeDoneWaiters: [CheckedContinuation<Void, Never>] = []
     private var sawClosed = false
 
     /// The voice counts as speaking while its raw `audioLevel` is above this, and for `speakingHangover` after.
@@ -116,18 +118,22 @@ extension LiveVoiceTransport {
         let rtc = RTCAudioSession.sharedInstance()
         rtc.useManualAudio = true
         rtc.isAudioEnabled = false
+        let coordinator = AudioSessionCoordinator.shared
+        let beforeGrant = coordinator.grant
         do {
-            try await AudioSessionCoordinator.shared.acquire(.conversation, mode: .voiceChat)
+            let grant = try await coordinator.acquire(.conversation, mode: .voiceChat)
             guard !finished else {
                 // Closed while the session was being activated: `tearDown` already ran without it.
-                AudioSessionCoordinator.shared.release(.conversation)
+                coordinator.releaseAbandoned(.conversation, grant: grant)
                 throw CancellationError()
             }
-            holdsSession = true
+            sessionGrant = grant
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            AudioSessionCoordinator.shared.release(.conversation)
+            if coordinator.owner == .conversation, coordinator.grant == beforeGrant + 1 {
+                coordinator.releaseAbandoned(.conversation, grant: coordinator.grant)
+            }
             AppLog.note("voice", "gpt-live start failed: audio session \(AppLog.scrub(String(describing: error)))")
             throw LiveVoiceError.failed(TalkEngineCapture.describe(error))
         }
@@ -153,11 +159,19 @@ extension LiveVoiceTransport {
         self.core = core
         core.onMessage = { [weak self] raw in
             guard let self, !self.finished, let event = LiveServerEvent.parse(raw) else { return }
-            if case .closed = event { self.sawClosed = true; self.closedWaiter?.resume(); self.closedWaiter = nil }
+            if case .closed = event {
+                self.sawClosed = true
+                self.wakeConfirmWaiters()
+            }
             self.onEvent?(event)
         }
         core.onDropped = { [weak self] why in
             guard let self, !self.finished, !self.sawClosed else { return }
+            if self.closing {
+                AppLog.trace("voice", "gpt-live transport dropped while closing: \(why)")
+                self.wakeConfirmWaiters()
+                return
+            }
             AppLog.note("voice", "gpt-live transport dropped: \(why)")
             self.onDropped?(why)
         }
@@ -203,19 +217,29 @@ extension LiveVoiceTransport {
         send(LiveVoiceWire.mute(muted))
     }
 
+    private func wakeConfirmWaiters() {
+        let waiters = confirmWaiters
+        confirmWaiters = []
+        waiters.forEach { $0.resume() }
+    }
+
     func close() async {
         guard !finished else { return }
+        if closing {
+            await withCheckedContinuation { closeDoneWaiters.append($0) }
+            return
+        }
+        closing = true
         if let core, core.isOpen, !sawClosed {
             core.send(LiveVoiceWire.close)
             await withCheckedContinuation { (waiter: CheckedContinuation<Void, Never>) in
-                closedWaiter = waiter
+                confirmWaiters.append(waiter)
                 Task { @MainActor [weak self] in
                     try? await Task.sleep(for: .seconds(LiveVoiceWire.closeTimeout))
-                    self?.closedWaiter?.resume()
-                    self?.closedWaiter = nil
+                    self?.wakeConfirmWaiters()
                 }
             }
-            AppLog.trace("voice", "gpt-live close: \(sawClosed ? "the gateway confirmed" : "timed out waiting, closing anyway")")
+            AppLog.trace("voice", "gpt-live close: \(sawClosed ? "the gateway confirmed" : "ended waiting, closing anyway")")
         }
         tearDown()
     }
@@ -224,6 +248,8 @@ extension LiveVoiceTransport {
         guard !finished else { return }
         AppLog.trace("voice", "gpt-live transport stopped")
         finished = true
+        closing = false
+        wakeConfirmWaiters()
         statsTimer?.invalidate()
         statsTimer = nil
         track?.isEnabled = false
@@ -233,11 +259,14 @@ extension LiveVoiceTransport {
         if speaking { speaking = false; onSpeaking?(false) }
         let rtc = RTCAudioSession.sharedInstance()
         rtc.isAudioEnabled = false
-        if holdsSession {
-            holdsSession = false
+        if let grant = sessionGrant {
+            sessionGrant = nil
             rtc.audioSessionDidDeactivate(AVAudioSession.sharedInstance())
-            AudioSessionCoordinator.shared.release(.conversation)
+            AudioSessionCoordinator.shared.releaseAbandoned(.conversation, grant: grant)
         }
+        let doneWaiters = closeDoneWaiters
+        closeDoneWaiters = []
+        doneWaiters.forEach { $0.resume() }
     }
 
     // MARK: Levels

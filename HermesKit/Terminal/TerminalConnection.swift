@@ -131,11 +131,12 @@ import Foundation
         while !Task.isCancelled, !closed {
             var opened: (any TerminalSocketing)?
             do {
-                let socket = try await dial(TerminalWire.query(session: session, cols: size.cols, rows: size.rows, since: shown))
+                let dialedSize = size
+                let socket = try await dial(TerminalWire.query(session: session, cols: dialedSize.cols, rows: dialedSize.rows, since: shown))
                 opened = socket
                 guard !Task.isCancelled, !closed else { socket.close(); return }
                 self.socket = socket
-                sentSize = size
+                sentSize = dialedSize
                 heard = .now
                 let watchdog = Task { [weak self] in await self?.watch(socket) }
                 defer { watchdog.cancel() }

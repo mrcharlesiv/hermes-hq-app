@@ -209,7 +209,7 @@ struct CompleteTaskIntent: AppIntent {
             await store.refresh(force: true)
             _ = TasksWidgetWriter.shared.write(reason: "shortcut")
         } else {
-            TasksWidgetWriter.reload()
+            await TasksWidgetWriter.shared.refreshHeadless(reason: "shortcut")
         }
     }
 }

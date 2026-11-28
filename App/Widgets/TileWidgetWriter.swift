@@ -73,6 +73,9 @@ final class TileWidgetWriter {
     func attach(account: GatewayAccount, bots: @escaping () -> [Bot]) {
         guard Self.enabled else { return }
         detachObservers()
+        passTask?.cancel()
+        passTask = nil
+        again = false
         self.account = account
         pins = ArtifactPins.of(accountId: account.id)
         self.bots = bots
@@ -117,6 +120,7 @@ final class TileWidgetWriter {
         detachObservers()
         passTask?.cancel()
         passTask = nil
+        again = false
         account = nil
         pins = nil
         asked = []
@@ -185,8 +189,9 @@ final class TileWidgetWriter {
         if passTask != nil { again = true; return }
         passTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(600))
-            await self?.pass(drawing: drawing)
-            guard let self else { return }
+            guard let self, !Task.isCancelled, self.account != nil else { return }
+            await self.pass(drawing: drawing)
+            guard !Task.isCancelled, self.account != nil else { return }
             self.passTask = nil
             if self.again { self.again = false; self.schedule() }
         }
@@ -209,6 +214,15 @@ final class TileWidgetWriter {
 
     // MARK: The pass
 
+    /// Returns whether an in-flight widget pass still belongs to the active account (pure guard for sign-out / switch races).
+    nonisolated static func shouldPersist(cancelled: Bool, currentAccountId: String?, expectedAccountId: String) -> Bool {
+        !cancelled && currentAccountId == expectedAccountId
+    }
+
+    private func isStillCurrent(_ account: GatewayAccount) -> Bool {
+        Self.shouldPersist(cancelled: Task.isCancelled, currentAccountId: self.account?.id, expectedAccountId: account.id)
+    }
+
     /// Writes the index, draws what is wanted and stale, removes what isn't wanted; reloads the widgets once if any byte
     /// changed. Returns whether it did.
     @discardableResult
@@ -217,8 +231,9 @@ final class TileWidgetWriter {
         let index = Self.index(pins: pins, bots: bots(), account: account, scheme: AppIdentity.current.urlScheme,
                                tint: Self.tints())
         let prevWrittenAccount = writtenAccount
-        writtenAccount = index.account
         let placed = await Self.placed()
+        guard isStillCurrent(account) else { return false }
+        writtenAccount = index.account
         let sizes = Self.fallbackSizes(), now = Date(), askedSnapshot = asked
         let prep: (changed: Bool, live: [TilePictureSpec], specs: [TilePictureSpec], aheadOnly: Set<TilePictureSpec>, existingPictures: Set<String>) = await Self.onIO {
             var changed = false
@@ -238,7 +253,7 @@ final class TileWidgetWriter {
             let existingPictures = Set(WidgetVault.accounts(service: TileWidgetStore.pictureService))
             return (changed, live, specs, aheadOnly, existingPictures)
         }
-        guard !Task.isCancelled, self.account?.id == account.id else { return false }
+        guard isStillCurrent(account) else { return false }
         var changed = prep.changed
         var existingPictures = prep.existingPictures
         let live = prep.live, specs = prep.specs, aheadOnly = prep.aheadOnly
@@ -251,7 +266,7 @@ final class TileWidgetWriter {
             stale = []
             var freshened = Set<MediaContext>()
             for spec in due {
-                guard !Task.isCancelled, self.account?.id == account.id,
+                guard isStillCurrent(account),
                       let tile = index.tiles.first(where: { $0.id == spec.tile }),
                       let pin = pins.pins.first(where: { $0.id == tile.pin }), let path = pin.gatewayPath else { continue }
                 // Read again once a pass, for each bot: the bot may have rewritten its page.
@@ -262,8 +277,11 @@ final class TileWidgetWriter {
                     && existingPictures.contains(TileWidgetStore.pictureAccount(spec.tile, spec.family, dark: true))
                 var unchangedSkip = false
                 for dark in [false, true] {
+                    guard isStillCurrent(account) else { return false }
                     await Self.waitForTheScreen()
+                    guard isStillCurrent(account) else { return false }
                     guard let image = await Self.draw(pin, path: path, spec: spec, dark: dark, context: context) else { continue }
+                    guard isStillCurrent(account) else { return false }
                     if !dark, hadBoth,
                        let htmlHash = PageSnapshots.shared.lastHash(path: path, context: context),
                        drawnHashes[key] == "\(htmlHash)|\(themeSig)" {
@@ -272,11 +290,13 @@ final class TileWidgetWriter {
                     }
                     let tileId = spec.tile, family = spec.family
                     let saved = await Self.onIO { TileWidgetStore.savePicture(image, tile: tileId, family: family, dark: dark) }
+                    guard isStillCurrent(account) else { return false }
                     if saved != .refused { existingPictures.insert(TileWidgetStore.pictureAccount(tileId, family, dark: dark)) }
                     if saved == .written { changed = true }
                     AppLog.trace("widgets", "tile picture \(spec.family.rawValue) \(spec.width)x\(spec.height) pt \(dark ? "dark" : "light"): "
                                  + "\(Int(image.width * image.scale)) by \(Int(image.height * image.scale)) px drawn, \(image.jpeg.count / 1024) KB, \(saved)")
                 }
+                guard isStillCurrent(account) else { return false }
                 if let hash = PageSnapshots.shared.lastHash(path: path, context: context), !unchangedSkip {
                     drawnHashes[key] = "\(hash)|\(themeSig)"
                 }
@@ -287,13 +307,15 @@ final class TileWidgetWriter {
             // JPEGs for placed widgets with zero WKWebView work. Short-circuits on 404/501 for older gateways.
             let scale = Int(max(1, min(3, (UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.screen.scale }.first ?? 3).rounded())))
             for spec in live {
-                guard !Task.isCancelled, !remoteSnapshotUnsupported, self.account?.id == account.id,
+                guard isStillCurrent(account), !remoteSnapshotUnsupported,
                       let tile = index.tiles.first(where: { $0.id == spec.tile }),
                       let pin = pins.pins.first(where: { $0.id == tile.pin }), let path = pin.gatewayPath else { continue }
                 for dark in [false, true] {
+                    guard isStillCurrent(account) else { return false }
                     let outcome = await TileWidgetRemote.fetch(client: client, path: path, profile: pin.profile,
                                                                width: spec.width, height: spec.height, dark: dark,
                                                                scale: scale, maxBytes: TileWidgetStore.maxPictureBytes)
+                    guard isStillCurrent(account) else { return false }
                     switch outcome {
                     case .picture(let jpeg, let pxW, let pxH):
                         let points = CGSize(width: Double(pxW) / Double(scale), height: Double(pxH) / Double(scale))
@@ -305,6 +327,7 @@ final class TileWidgetWriter {
                         if await Self.onIO({ TileWidgetStore.savePicture(pic, tile: tileId, family: family, dark: dark) }) == .written {
                             changed = true
                         }
+                        guard isStillCurrent(account) else { return false }
                     case .unsupported:
                         remoteSnapshotUnsupported = true
                         AppLog.trace("widgets", "tile widgets: gateway has no remote widget snapshot route; skipping background fetch")
@@ -315,6 +338,7 @@ final class TileWidgetWriter {
                 }
             }
         }
+        guard isStillCurrent(account) else { return false }
         if changed { Self.reload() }
         AppLog.trace("widgets", "tile widgets: \(index.tiles.count) tile(s), \(specs.count) picture size(s)\(changed ? ", reloaded" : "")")
         #if DEBUG

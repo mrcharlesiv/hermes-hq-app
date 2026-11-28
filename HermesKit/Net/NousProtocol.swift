@@ -117,7 +117,7 @@ nonisolated enum NousGatewayProtocol {
     static func retryAfter(header: String?, body: Data) -> TimeInterval? {
         if let parsed = RetryLater.parse(header) { return parsed }
         guard let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any],
-              let seconds = (object["retry_after"] as? NSNumber)?.doubleValue, seconds > 0 else { return nil }
+              let seconds = (object["retry_after"] as? NSNumber)?.doubleValue, seconds.isFinite, seconds > 0 else { return nil }
         return seconds
     }
 
@@ -133,7 +133,8 @@ nonisolated enum NousGatewayProtocol {
                   let refresh = object["refresh_token"] as? String, !refresh.isEmpty || provider != nous,
                   let user = (object["user_id"] as? String) ?? (object["user_id"] as? NSNumber)?.stringValue, !user.isEmpty,
                   object["provider"] as? String == provider else { return .unavailable(502) }
-            let expires = (object["expires_at"] as? NSNumber)?.doubleValue ?? 0
+            let rawExpires = (object["expires_at"] as? NSNumber)?.doubleValue ?? 0
+            let expires = rawExpires.isFinite && rawExpires >= 0 && rawExpires <= 1e12 ? rawExpires : 0
             return .tokens(NousTokens(accessToken: access, refreshToken: refresh, expiresAt: expires, userId: user, obtainedAt: now,
                                       provider: provider == nous ? nil : provider))
         case 400, 401, 403:
@@ -160,7 +161,13 @@ actor NousRenewals {
         case failed(GatewayFailure)
     }
 
-    private var flights: [String: Task<Outcome, Never>] = [:]
+    private struct FlightKey: Hashable, Sendable {
+        let accountKey: String
+        let userId: String
+        let refreshToken: String
+    }
+
+    private var flights: [FlightKey: (id: UUID, task: Task<Outcome, Never>)] = [:]
     /// Each spent refresh token's successor, for this run of the app.
     private var successors: [String: NousTokens] = [:]
     /// Rotations Keychain couldn't take yet (locked): written again by `retryUnsaved`, with the `keep` that failed.
@@ -200,13 +207,13 @@ actor NousRenewals {
     /// Whether this refresh token was already spent by a rotation in this run.
     func isSpent(_ tokens: NousTokens) -> Bool { successors[tokens.refreshToken] != nil }
 
-    /// Renews `tokens` for `key`. Concurrent callers share one flight; a caller holding a spent pair gets the live one
-    /// without a request. `keep` persists the rotated pair (Keychain compare-and-swap) the moment it lands; false means
-    /// Keychain refused and the write is retried later.
+    /// Renews `tokens` for `key`. Concurrent callers sharing the same `(key, userId, refreshToken)` share one flight;
+    /// a caller holding a spent pair gets the live one without a request; a fresh sign-in with a different refresh
+    /// token never joins an older session's in-flight renewal. `keep` persists the rotated pair (Keychain
+    /// compare-and-swap) the moment it lands; false means Keychain refused and the write is retried later.
     func renew(_ key: String, _ tokens: NousTokens,
                post: @escaping @Sendable (NousTokens) async -> Outcome,
                keep: @escaping @Sendable (_ sent: NousTokens, _ renewed: NousTokens) -> Bool) async -> Outcome {
-        if let flight = flights[key] { return await flight.value }
         var tokens = tokens
         let live = latest(tokens)
         if !live.samePair(tokens) {
@@ -217,10 +224,13 @@ actor NousRenewals {
             guard live.needsRenewal() else { return .tokens(live) }
             tokens = live
         }
+        let flightKey = FlightKey(accountKey: key, userId: tokens.userId, refreshToken: tokens.refreshToken)
+        if let flight = flights[flightKey] { return await flight.task.value }
         // Hard guard: never post a refresh token this process already spent (even if a successor cycle existed).
         guard !isSpent(tokens) else { return .tokens(live) }
         let hold = self.hold
-        let priorUnsaved = unsaved[key]?.sent
+        let priorUnsaved = unsaved[key].flatMap { $0.renewed.samePair(tokens) ? $0.sent : nil }
+        let flightID = UUID()
         let task = Task<Outcome, Never> {
             let release = await hold("Hermes HQ sign-in renewal")
             let outcome = await post(tokens)
@@ -231,11 +241,11 @@ actor NousRenewals {
                 self.landed(key, sent: tokens, expectedInVault: expectedInVault, renewed: renewed, keep: keep,
                             saved: keep(expectedInVault, renewed))
             }
-            self.flightDone(key)
+            self.flightDone(flightKey, id: flightID)
             await release()
             return outcome
         }
-        flights[key] = task
+        flights[flightKey] = (flightID, task)
         return await task.value
     }
 
@@ -254,7 +264,9 @@ actor NousRenewals {
     /// Drops a pending unsaved rotation for `key` (after explicit sign-out or fresh sign-in replaces the saved pair).
     func forgetUnsaved(_ key: String) { unsaved[key] = nil }
 
-    private func flightDone(_ key: String) { flights[key] = nil }
+    private func flightDone(_ flightKey: FlightKey, id: UUID) {
+        if flights[flightKey]?.id == id { flights[flightKey] = nil }
+    }
 
     /// Retries Keychain writes that failed (the app going to the background, spec 01 §13.7).
     func retryUnsaved(_ keep: @Sendable (_ key: String, _ sent: NousTokens, _ renewed: NousTokens) -> Bool) {

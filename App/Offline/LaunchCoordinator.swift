@@ -163,7 +163,10 @@ import UIKit
                 self.model.adoptSignedInAccount(account)
             } else {
                 self.model.activate(account)
-                if typed { self.model.settingsHub.accountsChanged() }
+                if typed {
+                    self.model.settingsHub.switcher.switched(to: account.id)
+                    self.model.settingsHub.accountsChanged()
+                }
             }
             self.account = account
             // §3.2 DECISION: content at the first frame skips the wait entirely.
@@ -527,8 +530,10 @@ import UIKit
             self.signInShown()
         }) { [weak self] account in
             guard let self else { return }
-            // A retry underneath may have found the new sign-in while the sheet was still closing: once is enough.
-            if self.stage == .app, self.account?.id == account.id { return }
+            // A retry underneath may have found the new sign-in while the sheet was still closing: once is enough,
+            // as long as the active client is still live and matches this sign-in.
+            if self.stage == .app, self.account?.id == account.id,
+               let current = self.model.client, self.model.signIn.isActiveClient(current, for: account) { return }
             self.signedIn(account, typed: true, adopting: true)
         }
     }

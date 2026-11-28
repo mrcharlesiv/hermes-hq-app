@@ -86,6 +86,24 @@ nonisolated struct NewChatLink: Equatable, Sendable {
                            message: message?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? message : nil, send: send)
     }
 
+    /// External URLs (`<scheme>://new-chat`) from other apps or web pages must never auto-send a prompt:
+    /// force `send = false` so the composer draft is prefilled for the user to review and tap Send.
+    var forExternalURL: NewChatLink {
+        var copy = self
+        copy.send = false
+        return copy
+    }
+
+    /// External URL sanitization: disables auto-send and resolves `project` strictly against already-saved projects
+    /// (dropping unknown arbitrary filesystem paths so an external link cannot silently trigger `projects.create`).
+    func sanitizedForExternalURL(knownProjects: [ProjectShortcutRecord]) -> NewChatLink {
+        var copy = forExternalURL
+        if let wanted = project {
+            copy.project = ProjectShortcutCatalog.resolve(wanted, in: knownProjects)?.key
+        }
+        return copy
+    }
+
     func url(scheme: String) -> URL? {
         var parts = URLComponents()
         parts.scheme = scheme

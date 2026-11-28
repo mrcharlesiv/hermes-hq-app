@@ -156,7 +156,7 @@ nonisolated enum MarkdownRenderer {
             return RenderedMarkdown(blocks: [.text(plain(shown, style: style, theme: theme))], plainText: shown)
         }
         // [transcript] §3.5 / F17: formulas come out before Markdown can eat their `_`/`\`.
-        let math = MathText.extract(MarkdownPreprocess.run(markdown, streaming: streaming))
+        let math = MathText.extract(MarkdownPreprocess.run(shown, streaming: streaming, alreadyStripped: true))
         let source = math.text
         let formulas = math.formulas
         switch MarkdownComplexity.verdict(source) {
@@ -400,7 +400,7 @@ nonisolated private struct BlockBuilder {
                 }
                 return
             }
-            if let index = MathText.blockToken(p.plainText), index < formulas.count {   // [transcript] F17
+            if let index = MathText.blockToken(p.plainText), index >= 0, index < formulas.count {   // [transcript] F17
                 appendDisplayFormula(formulas[index])
                 return
             }
@@ -768,13 +768,14 @@ nonisolated private struct BlockBuilder {
                                                                                   copy: ctx.link == nil ? formula.source : nil))
         // Spaces aren't the only break points: TextKit also breaks after a slash ("n(n+1)/" then "2." on the next line,
         // owner review 2026-10-31). A word joiner after every character forbids a break anywhere inside the formula.
+        // Insert at Swift grapheme-cluster boundaries so surrogate pairs and combining marks are never split.
         // It carries no kern, so the stacked limits' and italic correction's spacing stays where MathStyle put it.
-        var at = out.length - 1
-        while at > 0 {
+        let string = out.string
+        let boundaries = string.indices.dropFirst().map { NSRange($0..<$0, in: string).location }
+        for at in boundaries.reversed() where at > 0 && at < out.length {
             var attrs = out.attributes(at: at - 1, effectiveRange: nil)
             attrs[.kern] = nil
             out.insert(NSAttributedString(string: "\u{2060}", attributes: attrs), at: at)
-            at -= 1
         }
         let full = NSRange(location: 0, length: out.length)
         out.addAttribute(.mathFormula, value: true, range: full)
@@ -892,7 +893,7 @@ nonisolated private struct BlockBuilder {
                 switch piece {
                 case .text(let words):
                     if ctx.link == nil { appendAutolinked(words, ctx, into: out) } else { out.append(styled(words, ctx)) }
-                case .formula(let i) where i < formulas.count:
+                case .formula(let i) where i >= 0 && i < formulas.count:
                     out.append(inlineFormula(formulas[i], ctx))
                 case .formula: break
                 }
@@ -1066,9 +1067,11 @@ nonisolated enum MarkdownPreprocess {
     private static let previewMarker = try! NSRegularExpression(pattern: #"\[Preview:[^\]\n]*\]\(#preview[^)\n]*\)"#)
     // swiftlint:enable force_try
 
-    static func run(_ text: String, streaming: Bool = false) -> String {
+    static func run(_ text: String, streaming: Bool = false, alreadyStripped: Bool = false) -> String {
         // Reasoning blocks go from the prose; a code block that shows such a tag keeps it (`ReasoningTags`).
-        let source = escapeURLMarkup(ReasoningTags.strip(text.replacingOccurrences(of: "\r\n", with: "\n"), streaming: streaming))
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+        let stripped = alreadyStripped ? normalized : ReasoningTags.strip(normalized, streaming: streaming)
+        let source = escapeURLMarkup(stripped)
         // Prose-only transforms: leave fenced code untouched. [transcript] F17: display math (`$$`/`\[`) is no longer
         // turned into a code block here — `MathText.extract` takes every formula out after this pass, and the
         // renderer draws it (or its source, when it can't).

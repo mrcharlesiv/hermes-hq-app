@@ -387,7 +387,7 @@ import UIKit
         d.ids = incoming + d.ids.filter { !incoming.contains($0) }
         for a in attachments {
             var b = items[a.id] ?? a
-            if case .uploading = b.upload { b.upload = .waiting }
+            if case .uploading = b.upload, current?.id != a.id { b.upload = .waiting }
             items[a.id] = b
             profiles[a.id] = profile
             if case .waiting = b.upload, !b.defersUpload { enqueue(b.id) }

@@ -348,9 +348,11 @@ extension CloudGatewayModel {
         actionTasks[agent.id] = nil
         switch action {
         case .destroy:
+            let destroyedURL = self.agent(agent.id)?.dashboardURL ?? agent.dashboardURL
             drop(agent.id)
             CloudEnvNames.save([], for: agent.id)
             if CloudPending.load()?.matches(agent) == true { CloudPending.clear() }
+            if let destroyedURL { CloudDesktopWeb.purgeDataStore(for: destroyedURL) }
             onRoute?(.root)
             forgetGateway(saved)
         case .rename:

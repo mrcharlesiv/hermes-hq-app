@@ -95,7 +95,7 @@ extension ArtifactsViewController {
             items = [image]
         }
         let sheet = UIActivityViewController(activityItems: items, applicationActivities: nil)
-        point(sheet, item: nil, anchor: anchor)
+        Self.point(sheet, item: nil, anchor: anchor, in: host)
         host.present(sheet, animated: true)
     }
 
@@ -129,7 +129,7 @@ extension ArtifactsViewController {
 
     /// [tiles-v2] Opens the tile's scheduled job in `JobDetailViewController` (from Updates › View Last Run / View Job).
     func openTileJob(_ job: CronJob, from presenter: UIViewController? = nil) {
-        guard let store = JobsStore.current, let services else { return }
+        guard let store = JobsStore.current, store.account.id == self.store.account.id, let services else { return }
         PagesHaptics.selection()
         let actions = JobActions(store: store)
         actions.services = services

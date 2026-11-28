@@ -175,6 +175,12 @@ extension LiveChatSession: ChatVoiceMemos {
         changes.markState()
         scheduleFlush()
         await previous?.value   // an earlier steer goes in first
+        guard memoSends[localId] != nil else { return }
+        if stopEpoch != epoch {
+            AppLog.note("send", "memo steer \(AppLog.tag(localId)) on \(logIds) cancelled by Stop before sending; kept in the paused queue")
+            memoSteerNotTaken(steer, context: context, epoch: epoch)
+            return
+        }
         AppLog.trace("send", "memo steer \(AppLog.tag(localId)) on \(logIds): \(Self.memoLogWords(context))")
         if await finishSteer(steer, text: prompt) != .failed {
             _ = memoSendFinished(localId, .acknowledged)

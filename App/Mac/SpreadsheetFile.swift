@@ -1,4 +1,5 @@
 #if targetEnvironment(macCatalyst)
+import Compression
 import UIKit
 
 /// [mac-ui-issues] Owner 2026-11-09 ("The agent sends you an Excel file and you open it, it just isn't good"): Quick Look
@@ -169,17 +170,65 @@ nonisolated enum SpreadsheetFile {
         private func u16(_ at: Int) -> Int { Int(data[at]) | Int(data[at + 1]) << 8 }
         private func u32(_ at: Int) -> Int { u16(at) | u16(at + 2) << 16 }
 
-        /// A file's bytes; nil when it isn't there, is too big to be a sheet, or is packed another way.
+        /// Maximum inflated XML entry size accepted (guards against ZIP bombs whose Central Directory lies about `size`).
+        static let maxInflatedBytes = 32_000_000
+
+        /// A file's bytes; nil when it isn't there, exceeds `maxInflatedBytes`, or is packed another way.
         func file(_ name: String) -> Data? {
-            guard let entry = entries[name], entry.size <= 96_000_000, entry.offset + 30 <= data.count,
+            guard let entry = entries[name], entry.size <= Self.maxInflatedBytes, entry.offset + 30 <= data.count,
                   u32(entry.offset) == 0x0403_4B50 else { return nil }
             let start = entry.offset + 30 + u16(entry.offset + 26) + u16(entry.offset + 28)
-            guard start + entry.packed <= data.count else { return nil }
+            guard start <= data.count, entry.packed <= data.count - start else { return nil }
             let packed = data.subdata(in: start..<(start + entry.packed))
             switch entry.method {
-            case 0: return packed
-            case 8: return try? (packed as NSData).decompressed(using: .zlib) as Data   // raw DEFLATE
+            case 0: return packed.count <= Self.maxInflatedBytes ? packed : nil
+            case 8: return Self.inflateRawDeflate(packed, maxBytes: Self.maxInflatedBytes)
             default: return nil
+            }
+        }
+
+        /// Streaming raw-DEFLATE decode with a hard output cap: aborts immediately if inflated bytes exceed `maxBytes`.
+        static func inflateRawDeflate(_ packed: Data, maxBytes: Int = maxInflatedBytes) -> Data? {
+            guard maxBytes >= 0 else { return nil }
+            if packed.isEmpty { return Data() }
+            let stream = UnsafeMutablePointer<compression_stream>.allocate(capacity: 1)
+            defer { stream.deallocate() }
+            UnsafeMutableRawPointer(stream).initializeMemory(as: UInt8.self, repeating: 0, count: MemoryLayout<compression_stream>.size)
+            guard compression_stream_init(stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB) == COMPRESSION_STATUS_OK else {
+                return nil
+            }
+            defer { compression_stream_destroy(stream) }
+
+            let chunkSize = 65_536
+            var chunk = [UInt8](repeating: 0, count: chunkSize)
+            var output = Data()
+            let flags = Int32(COMPRESSION_STREAM_FINALIZE.rawValue)
+
+            return packed.withUnsafeBytes { rawSrc -> Data? in
+                guard let base = rawSrc.bindMemory(to: UInt8.self).baseAddress else { return nil }
+                stream.pointee.src_ptr = base
+                stream.pointee.src_size = packed.count
+
+                while true {
+                    let status: compression_status = chunk.withUnsafeMutableBufferPointer { dst in
+                        stream.pointee.dst_ptr = dst.baseAddress!
+                        stream.pointee.dst_size = chunkSize
+                        return compression_stream_process(stream, flags)
+                    }
+                    let produced = chunkSize - stream.pointee.dst_size
+                    if produced > 0 {
+                        guard produced <= maxBytes - output.count else { return nil }
+                        output.append(contentsOf: chunk[0..<produced])
+                    }
+                    switch status {
+                    case COMPRESSION_STATUS_OK:
+                        if produced == 0 && stream.pointee.src_size == 0 { return nil }
+                    case COMPRESSION_STATUS_END:
+                        return output
+                    default:
+                        return nil
+                    }
+                }
             }
         }
     }
@@ -445,12 +494,19 @@ nonisolated enum SpreadsheetFile {
             self.formats = formats
         }
 
-        /// "AB12" is column 27 (from 0).
-        private static func column(of reference: String) -> Int? {
+        /// Excel's maximum column count (`XFD` = 16,384; 0-based index 16,383).
+        static let maxExcelColumns = 16_384
+
+        /// "AB12" is column 27 (from 0). Returns nil on overflow, past Excel's column limit, or with no leading letters.
+        static func column(of reference: String) -> Int? {
             var index = 0, any = false
             for scalar in reference.unicodeScalars {
                 guard scalar.value >= 65, scalar.value <= 90 else { break }
-                index = index * 26 + Int(scalar.value - 64)
+                let (mul, mulOverflow) = index.multipliedReportingOverflow(by: 26)
+                guard !mulOverflow else { return nil }
+                let (sum, addOverflow) = mul.addingReportingOverflow(Int(scalar.value - 64))
+                guard !addOverflow, sum <= maxExcelColumns else { return nil }
+                index = sum
                 any = true
             }
             return any ? index - 1 : nil
@@ -462,7 +518,9 @@ nonisolated enum SpreadsheetFile {
             case "row":
                 row = []; rowHasWords = false; column = 0
             case "c":
-                if let at = attributeDict["r"].flatMap(Self.column(of:)) { column = at }
+                if let ref = attributeDict["r"] {
+                    column = Self.column(of: ref) ?? SpreadsheetFile.maxColumns
+                }
                 kind = attributeDict["t"]
                 style = attributeDict["s"].flatMap { Int($0) }
                 words = ""

@@ -52,31 +52,56 @@ nonisolated final class BrowserFrameDecoder: Sendable {
 
     func close() { state.withLock { $0.closed = true; $0.waiting = nil } }
 
+    static let maxDimension = 8192
+    static let maxPixels = 33_554_432 // 32 MP cap against JPEG dimension bombs
+
     private func run(_ first: BrowserFrame) {
         var frame: BrowserFrame? = first
         while let current = frame {
             let image = Self.decode(current.jpeg)
-            let closed = state.withLock { s -> Bool in
+            enum Outcome { case closed, failed, ok(CGImage) }
+            let outcome = state.withLock { s -> Outcome in
                 if image != nil { s.stats.decoded += 1 } else { s.stats.failed += 1 }
                 if Thread.isMainThread { s.stats.mainThreadDecodes += 1 }
-                return s.closed
+                if s.closed {
+                    s.busy = false
+                    return .closed
+                }
+                guard let image else {
+                    s.closed = true
+                    s.waiting = nil
+                    s.busy = false
+                    return .failed
+                }
+                return .ok(image)
             }
-            if closed { break }
-            guard let image else { close(); failed(); break }
-            decoded(current, image)
-            frame = state.withLock { s -> BrowserFrame? in
-                let next = s.closed ? nil : s.waiting
-                s.waiting = nil
-                if next == nil { s.busy = false }
-                return next
+            switch outcome {
+            case .closed:
+                return
+            case .failed:
+                failed()
+                return
+            case .ok(let cgImage):
+                decoded(current, cgImage)
+                frame = state.withLock { s -> BrowserFrame? in
+                    let next = s.closed ? nil : s.waiting
+                    s.waiting = nil
+                    if next == nil { s.busy = false }
+                    return next
+                }
             }
         }
-        state.withLock { $0.busy = false }
     }
 
-    /// A JPEG decoded now (not lazily at first draw on the main thread).
+    /// A JPEG decoded now (not lazily at first draw on the main thread), capped against oversized headers.
     static func decode(_ jpeg: Data) -> CGImage? {
-        guard let source = CGImageSourceCreateWithData(jpeg as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+        guard let source = CGImageSourceCreateWithData(jpeg as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
+              let height = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
+              width > 0, height > 0,
+              width <= maxDimension, height <= maxDimension,
+              width <= maxPixels / height else { return nil }
         return CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
     }
 }

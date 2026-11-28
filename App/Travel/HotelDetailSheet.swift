@@ -25,7 +25,7 @@ enum HotelDetailSheet {
                 vc.dismiss(animated: true) { onAsk(ask) }
             },
             onOpenSite: {
-                LinkOpener.open(hotel.url, from: vc)
+                LinkOpener.open(hotel.url, from: box.vc ?? vc)
             }
         )))
         box.vc = host
@@ -55,6 +55,13 @@ private struct HotelDetailView: View {
     let onOpenSite: () -> Void
     @State private var copiedAddress = false
     @State private var mapCommand: HotelMapCommand?
+    @State private var submitted = false
+
+    private func submit(_ ask: TravelCards.Ask) {
+        guard !submitted else { return }
+        submitted = true
+        onAsk(ask)
+    }
 
     var body: some View {
         ScrollView {
@@ -308,7 +315,7 @@ private struct HotelDetailView: View {
                     .accessibilityIdentifier("travel.hotel.booked")
             } else if !bookingLocked {
                 Button {
-                    onAsk(.book)
+                    submit(.book)
                 } label: {
                     let rate = hotel.pricePerNight.map { " · \(ShoppingCards.price($0, currency: hotel.currency))/nt" } ?? ""
                     Text("Book Hotel\(rate)")
@@ -316,6 +323,7 @@ private struct HotelDetailView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .hqProminentButtonStyle()
+                .disabled(submitted)
                 .accessibilityIdentifier("travel.hotel.book")
             }
             HStack(spacing: 10) {
@@ -327,13 +335,14 @@ private struct HotelDetailView: View {
                         .background(Color(uiColor: HQPalette.sheetCard), in: .capsule)
                 } else {
                     Button {
-                        onAsk(.watchPrice)
+                        submit(.watchPrice)
                     } label: {
                         Label("Watch Rate", systemImage: "bell")
                             .font(Font.hq(.subheadline).weight(.medium))
                             .frame(maxWidth: .infinity)
                     }
                     .hqBorderedButtonStyle()
+                    .disabled(submitted)
                     .accessibilityIdentifier("travel.hotel.watch")
                 }
                 Button {

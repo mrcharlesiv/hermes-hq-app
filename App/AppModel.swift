@@ -426,16 +426,23 @@ final class AppModel: AppServices {
         // screen), it is torn down early and `account` reads nil, but its chats, drafts and memos still go.
         let asked = (account: account, bots: botStore, sessions: sessionStore)
         Task { @MainActor in
+            defer { signingOut = false }
             await screenLeaving()                 // [screen] control is handed back while the client can still ask
             await notificationsLeaving(signingOut: true)
-            signingOut = false
             switch Self.signOutDecision(asked: asked.account, current: account) {
             case .fullSignOut(let resolved):
                 let bots = account == nil ? asked.bots : botStore
                 let sessions = account == nil ? asked.sessions : sessionStore
                 finishSignOut(leaving: resolved, bots: bots, sessions: sessions)
             case .purgeOnly(let previousAccount):
-                // Another account became active while awaiting network teardown; only purge the prior account's caches.
+                // Another account became active while awaiting network teardown: never destroy local caches of an
+                // account that is still signed in in Keychain. Remove the leaving account first (it is no longer
+                // current) and only purge its caches once it is gone from Keychain.
+                if signIn.store.stored(previousAccount) != nil {
+                    guard (try? await signIn.remove(previousAccount)) != nil else { return }
+                    settingsHub.accountsChanged()
+                }
+                guard signIn.store.stored(previousAccount) == nil else { return }
                 let staleBots = asked.bots === botStore ? nil : asked.bots
                 let staleSessions = asked.sessions === sessionStore ? nil : asked.sessions
                 purgeAccountCaches(leaving: previousAccount, bots: staleBots, sessions: staleSessions)
@@ -494,6 +501,10 @@ final class AppModel: AppServices {
         }
         if let leaving {
             PagesCache.purge(account: leaving)
+            PagesTabs.forgetDefaults(leaving)
+            LogUploader.shared.forget(account: leaving.id)
+            GatewayLaunchPrefs.forget(accountId: leaving.id)
+            CloudDesktopWeb.purgeDataStore(for: leaving.baseURL)
             SoulDraftStore.standard.removeAll(account: leaving.id)   // [13-12] unsaved SOUL.md text, beside the page caches
             KeychainToolRuleVault(account: leaving.id).removeAll()   // [13-13] half-saved connectors' copies (may hold headers)
         }
@@ -504,7 +515,7 @@ final class AppModel: AppServices {
     /// Signed in (launch restore or a fresh sign-in): the client, the stores (painted from their caches at once), and
     /// the connection watch.
     func activate(_ account: GatewayAccount) {
-        if self.account?.id == account.id, client != nil { return }
+        if self.account?.id == account.id, let existing = client, signIn.isActiveClient(existing, for: account) { return }
         tearDown(shutdownClient: true)
         self.account = account
         TranscriptCache.shared.reopen(account: account.id)   // [13-7] a sign-out's purge stopped its saves

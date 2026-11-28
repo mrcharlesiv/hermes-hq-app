@@ -284,6 +284,6 @@ final class WebAuthAnchorProvider: NSObject {
         let credentials = try await auth.redeem(code: outcome.code, verifier: outcome.verifier, redirect: redirect, clientId: clientId)
         await login.adopt(credentials)
         NousSheetLogin.finished()
-        AppLog.note("auth", "portal signed in (token lifetime \(Int(max(0, credentials.expiresAt - credentials.obtainedAt))) s)")
+        AppLog.note("auth", "portal signed in (token lifetime \(SafeInt.clamped(max(0, credentials.expiresAt - credentials.obtainedAt), min: 0)) s)")
     }
 }

@@ -250,10 +250,11 @@ enum MacGlassShell {
         let bounds = (contentView.value(forKey: "bounds") as? NSValue)?.cgRectValue ?? .zero
         let allocSel = NSSelectorFromString("alloc")
         let initSel = NSSelectorFromString("initWithFrame:")
-        guard let allocated = effectClass.perform(allocSel)?.takeUnretainedValue() as? NSObject,
-              allocated.responds(to: initSel) else { return nil }
-        typealias InitFrameFn = @convention(c) (NSObject, Selector, CGRect) -> NSObject
-        let view = unsafeBitCast(allocated.method(for: initSel), to: InitFrameFn.self)(allocated, initSel, bounds)
+        guard let initMethod = class_getInstanceMethod(effectClass, initSel),
+              let allocated = (effectClass as AnyObject).perform(allocSel)?.takeUnretainedValue() else { return nil }
+        typealias InitFrameFn = @convention(c) (AnyObject, Selector, CGRect) -> Unmanaged<AnyObject>?
+        let initFn = unsafeBitCast(method_getImplementation(initMethod), to: InitFrameFn.self)
+        guard let view = initFn(allocated, initSel, bounds)?.takeRetainedValue() as? NSObject else { return nil }
         // NSViewWidthSizable (2) | NSViewHeightSizable (16) = 18
         setUInt(view, selector: "setAutoresizingMask:", value: 18)
         setBool(view, selector: "setWantsLayer:", value: true)

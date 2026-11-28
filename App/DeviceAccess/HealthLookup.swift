@@ -281,9 +281,17 @@ nonisolated enum HealthLookup {
             default: return nil
             }
         case .activityMoveMode:
-            return (try? store.activityMoveMode())?.activityMoveMode == .appleMoveTime ? "move time" : "active energy"
+            return Self.activityMoveModeName((try? store.activityMoveMode())?.activityMoveMode)
         default:
             return nil
+        }
+    }
+
+    nonisolated static func activityMoveModeName(_ mode: HKActivityMoveMode?) -> String? {
+        switch mode {
+        case .appleMoveTime: return "move time"
+        case .activeEnergy: return "active energy"
+        default: return nil
         }
     }
 

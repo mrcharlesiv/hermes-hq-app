@@ -116,9 +116,42 @@ extension Notification.Name {
     var fallback = PhoneVoiceFallback.shared
     var choice: @MainActor () -> PhoneVoiceChoice = { PhoneVoiceChoice.current() }
     var phoneVoiceAfter = VoiceWire.phoneVoiceAfter
+    /// How long `runPhone` tolerates `output.pending` making no progress before breaking out cleanly.
+    var phonePendingStallLimit: TimeInterval = 5.0
+    private var observers: [any NSObjectProtocol] = []
 
     init(output: any SpeechOutput) {
         self.output = output
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
+            let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+            MainActor.assumeIsolated {
+                guard let self, raw == AVAudioSession.InterruptionType.began.rawValue,
+                      let owner = self.owner, owner != .conversation else { return }
+                VoiceEvents.note("speech: stopped by audio interruption")
+                self.stop()
+            }
+        })
+        observers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
+            let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+            MainActor.assumeIsolated {
+                guard let self, raw == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue,
+                      let owner = self.owner, owner != .conversation else { return }
+                VoiceEvents.note("speech: stopped because the audio output disconnected")
+                self.stop()
+            }
+        })
+        observers.append(center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.session != nil else { return }
+                VoiceEvents.note("speech: stopped because audio services were reset")
+                self.stop()
+            }
+        })
+    }
+
+    isolated deinit {
+        observers.forEach(NotificationCenter.default.removeObserver)
     }
 
     var level: Double { if case .speaking = state { return output.level } else { return 0 } }
@@ -475,10 +508,21 @@ nonisolated enum PhoneVoiceStart: Sendable, Equatable { case gateway, chosen, re
     private func drain(then outcome: SpeechOutcome = .done) async {
         guard mode != .ended else { return }
         mode = .draining
-        // What is scheduled plays out. Bounded by the clock: a player whose engine was replaced under it (a route
-        // change) never reports its buffers played.
-        let deadline = CACurrentMediaTime() + (output?.pending ?? 0) + 1.0
-        while mode == .draining, (output?.pending ?? 0) > 0.01, CACurrentMediaTime() < deadline {
+        // What is scheduled plays out. Bounded by both the scheduled duration and a stall limit: a player whose engine
+        // was replaced under it (a route change) never reports its buffers played.
+        let limit = speaker?.phonePendingStallLimit ?? 5.0
+        var lastPending = output?.pending ?? 0
+        var stalledSince = CACurrentMediaTime()
+        let deadline = stalledSince + lastPending + 1.0
+        while mode == .draining, let pending = output?.pending, pending > 0.01 {
+            let now = CACurrentMediaTime()
+            if now >= deadline { break }
+            if pending < lastPending - 0.005 {
+                lastPending = pending
+                stalledSince = now
+            } else if now - stalledSince >= limit {
+                break
+            }
             try? await Task.sleep(for: .milliseconds(40))
         }
         if mode == .draining { complete(outcome) }
@@ -573,9 +617,21 @@ nonisolated enum PhoneVoiceStart: Sendable, Equatable { case gateway, chosen, re
             complete(.failed(reason: VoiceWire.failure(error, doing: "speak the reply").reason, fatal: false))
             return
         }
-        // What the computer already sent plays out first (bounded: a replaced engine never reports it played).
-        let deadline = CACurrentMediaTime() + (output?.pending ?? 0) + 1.0
-        while mode == .phone, (output?.pending ?? 0) > 0.01, CACurrentMediaTime() < deadline {
+        // What the computer already sent plays out first (bounded by both scheduled duration and stall limit: a
+        // replaced engine never reports it played).
+        let preDrainLimit = speaker.phonePendingStallLimit
+        var lastPending = output?.pending ?? 0
+        var stalledSince = CACurrentMediaTime()
+        let deadline = stalledSince + lastPending + 1.0
+        while mode == .phone, let pending = output?.pending, pending > 0.01 {
+            let now = CACurrentMediaTime()
+            if now >= deadline { break }
+            if pending < lastPending - 0.005 {
+                lastPending = pending
+                stalledSince = now
+            } else if now - stalledSince >= preDrainLimit {
+                break
+            }
             try? await Task.sleep(for: .milliseconds(40))
         }
         let renderer = speaker.makePhoneRenderer()
@@ -605,7 +661,8 @@ nonisolated enum PhoneVoiceStart: Sendable, Equatable { case gateway, chosen, re
                     guard mode == .phone else { return }
                     if format?.rate != piece.sampleRate || format?.channels != piece.channels {
                         if format != nil {
-                            while mode == .phone, (output?.pending ?? 0) > 0.01 { try? await Task.sleep(for: .milliseconds(30)) }
+                            _ = await waitForPending(below: 0.01, poll: .milliseconds(30))
+                            guard mode == .phone else { return }
                         }
                         try await output?.begin(sampleRate: piece.sampleRate, channels: piece.channels, host: host)
                         guard mode == .phone else { return }
@@ -626,8 +683,32 @@ nonisolated enum PhoneVoiceStart: Sendable, Equatable { case gateway, chosen, re
                 return
             }
             // Never far ahead of the voice: Stop and barge-in stay cheap.
-            while mode == .phone, (output?.pending ?? 0) > 3 { try? await Task.sleep(for: .milliseconds(50)) }
+            if !(await waitForPending(below: 3, poll: .milliseconds(50))) {
+                if mode == .phone {
+                    complete(.failed(reason: "The speaker stopped playing.", fatal: false))
+                }
+                return
+            }
         }
+    }
+
+    /// Waits until `output.pending` drops to or below `threshold`, bailing if `pending` makes no progress for
+    /// `phonePendingStallLimit` (e.g., an audio route change or interrupted engine stopped draining buffers).
+    private func waitForPending(below threshold: TimeInterval, poll: Duration) async -> Bool {
+        let limit = speaker?.phonePendingStallLimit ?? 5.0
+        var lastPending = output?.pending ?? 0
+        var stalledSince = CACurrentMediaTime()
+        while mode == .phone, let pending = output?.pending, pending > threshold {
+            if pending < lastPending - 0.005 {
+                lastPending = pending
+                stalledSince = CACurrentMediaTime()
+            } else if CACurrentMediaTime() - stalledSince >= limit {
+                VoiceEvents.note("speech: phone voice output stalled with \(String(format: "%.1f", pending)) s pending")
+                return false
+            }
+            try? await Task.sleep(for: poll)
+        }
+        return mode == .phone
     }
 
     // MARK: End
@@ -803,28 +884,42 @@ nonisolated enum PCMCarry {
             case .data(let hint):
                 player = try AVAudioPlayer(data: clip.data, fileTypeHint: hint)
             case .file(let ext, let reactivate):
-                if reactivate { await AudioSessionCoordinator.shared.reactivate() }
+                if reactivate {
+                    await AudioSessionCoordinator.shared.reactivate()
+                    guard self.clipGeneration == generation else { throw CancellationError() }
+                }
                 let url = try file ?? Self.write(clip.data, fileExtension: ext)
                 file = url
                 player = try AVAudioPlayer(contentsOf: url)
             }
-            guard await start(player) else { throw ClipNotStarted() }
+            guard await start(player, generation: generation) else { throw ClipNotStarted() }
             return player
         }
-        guard let player = started, clipPlayer === player else { return }   // stopped while it was starting
+        guard clipGeneration == generation, let player = started, clipPlayer === player else { return }   // stopped while it was starting
+        if let previous = clipWaiter {
+            clipWaiter = nil
+            previous.resume()
+        }
         await withCheckedContinuation { clipWaiter = $0 }
     }
 
     /// Makes `player` the clip that is playing and starts it. False: it would not start (nothing is left playing).
-    private func start(_ player: AVAudioPlayer) async -> Bool {
-        let delegate = ClipDelegate { [weak self] in self?.clipEnded() }
+    private func start(_ player: AVAudioPlayer, generation: Int) async -> Bool {
+        guard clipGeneration == generation else { return false }
+        let delegate = ClipDelegate { [weak self, weak player] in self?.clipEnded(for: player) }
         player.delegate = delegate
         if Self.silent.withLock({ $0 }) { player.volume = 0 }
+        if let previous = clipWaiter {
+            clipWaiter = nil
+            previous.resume()
+        }
         clipPlayer = player
         clipDelegate = delegate
         clipStarted = CACurrentMediaTime()
         let boxed = UncheckedPlayer(player)
-        guard await AudioWork.perform({ boxed.value.prepareToPlay() && boxed.value.play() }) else {
+        let played = await AudioWork.perform { boxed.value.prepareToPlay() && boxed.value.play() }
+        guard played, clipGeneration == generation, clipPlayer === player else {
+            if played { AudioWork.later { boxed.value.stop() } }
             if clipPlayer === player {
                 clipPlayer = nil
                 clipDelegate = nil
@@ -841,7 +936,8 @@ nonisolated enum PCMCarry {
         return url
     }
 
-    private func clipEnded() {
+    private func clipEnded(for player: AVAudioPlayer? = nil) {
+        if let player, let current = clipPlayer, current !== player { return }
         clipPlayer = nil
         clipDelegate = nil
         let waiter = clipWaiter
@@ -857,8 +953,8 @@ nonisolated enum PCMCarry {
         if let player = clipPlayer {
             let boxed = UncheckedPlayer(player)
             AudioWork.later { boxed.value.stop() }
-            clipEnded()
         }
+        clipEnded()
     }
 }
 

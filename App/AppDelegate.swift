@@ -357,13 +357,17 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate, LaunchHost {
             Task { await QuickActionsRouter.present(from: "link") }
             return
         }
-        // [shortcut-new-chat] <scheme>://new-chat?bot=…&project=…: a new chat with that bot in that project.
+        // [shortcut-new-chat] <scheme>://new-chat?bot=…&project=… and <scheme>://talk?bot=… (external URL guards apply).
         if NewChatRouter.handle(url) { return }
         // [live] <scheme>://job/<owner|id>: a job's Lock Screen progress opens its page in Jobs.
-        // Signed out (no tabs): nothing to open, and it is not an unknown link, so no "isn't available" notice.
+        // On a cold launch (tabs not up yet), queue the key so `showApp` drains it once the tabs show.
         if case .other(kind: "job", let key, _)? = DeepLink.parse(url, scheme: AppIdentity.current.urlScheme), !key.isEmpty {
             AppLog.note("link", "job")
-            MainTabController.current?.openJob(key)
+            if let tabs = MainTabController.current, AppRoot.signedIn(window) {
+                tabs.openJob(key)
+            } else {
+                pendingJobKey = key
+            }
             return
         }
         // [marketplace] The Marketplace website's Install in Hermes: the plugin's or skill's page in a sheet, once signed in.
@@ -415,6 +419,8 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate, LaunchHost {
     private var pendingConnect: String?
     /// [marketplace] An install link that arrived before the tabs did: opened once they show.
     private var pendingMarketplace: MarketplaceLinks.Target?
+    /// [live] A `<scheme>://job/<key>` link that arrived on cold launch before the tabs were ready.
+    private var pendingJobKey: String?
 
     func sceneDidBecomeActive(_ scene: UIScene) {
         // [offline] §6.8: only the first activation and one that follows the background is a return; an activation after
@@ -551,6 +557,12 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate, LaunchHost {
                     MarketplaceLinks.open(target, services: model, from: tabs)
                 }
             }
+            if let jobKey = pendingJobKey {
+                pendingJobKey = nil
+                DispatchQueue.main.async {
+                    MainTabController.current?.openJob(jobKey)
+                }
+            }
         }
         let root = MainTabController(services: model) { [weak model] chat in
             model?.makeChatScreen(chat) ?? ChatViewController(session: chat)
@@ -568,6 +580,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate, LaunchHost {
 
     func showSignIn(prefill: SignInService.Prefill?) {
         guard let model else { return }
+        pendingJobKey = nil
         launch?.signInShown()                         // [offline] the launch and offline screens stand down
         #if targetEnvironment(macCatalyst)
         MacSettingsWindow.close()                     // [mac-ui-issues] signed out: Settings has no gateway to show

@@ -16,6 +16,7 @@ import UIKit
     private var versionFor: String?
     private var listeners: [UUID: @MainActor () -> Void] = [:]
     private(set) var switchingTo: String?
+    private var switchEpoch = 0
     /// Gateways being removed (their logout can take up to 6 s): their rows say "Removing…" and can't be switched to.
     private(set) var removing: Set<String> = []
 
@@ -29,6 +30,7 @@ import UIKit
     // MARK: Lifecycle (from AppModel)
 
     func activated(_ model: AppModel, account: GatewayAccount, client: LiveGatewayClient) {
+        switchEpoch += 1
         self.model = model
         switcher.currentId = { [weak model] in model?.account?.id }
         let store = CapabilitiesStore(client: client)
@@ -124,22 +126,32 @@ import UIKit
     /// Switches the app to another saved gateway (§4.4). A gateway with no session throws `.needsSignIn`.
     func switchTo(_ id: String) async throws {
         guard switchingTo == nil, let model, let signIn else { return }
-        guard id != model.account?.id, !removing.contains(id) else { return }
+        guard let leavingId = model.account?.id, id != leavingId, !removing.contains(id) else { return }
         guard let account = signIn.store.accounts.first(where: { $0.id == id }) else { throw GatewayFailure.accountMissing }
         guard switcher.hasUsableSession(account) else { throw GatewaySwitchError.needsSignIn(account) }
         let tag = AppLog.tag(id)
         let start = ContinuousClock.now
+        switchEpoch += 1
+        let op = switchEpoch
         switchingTo = id
         notify()
         defer { switchingTo = nil; notify() }
         // Let the "Switching…" line draw before the lists repaint.
         try? await Task.sleep(for: .milliseconds(60))
+        guard switchEpoch == op, model.account?.id == leavingId else { return }
         do {
             // [offline] §3.4: this phone's saved app data must open for the account, or the switch is not made.
             try await AccountStorage.checkOffMain(account, switching: true)
+            guard switchEpoch == op, model.account?.id == leavingId else { return }
             // [notifications] Push comes from one gateway: this device leaves the one it is on first (<= 4 s).
             await model.screenLeaving()               // [screen] an open Screen in control hands back before the client ends
+            guard switchEpoch == op, model.account?.id == leavingId else { return }
             await model.notificationsLeaving(signingOut: false)
+            guard switchEpoch == op, model.account?.id == leavingId else { return }
+            guard !removing.contains(id), signIn.store.accounts.contains(where: { $0.id == id }) else {
+                model.notificationsResume()
+                throw GatewayFailure.accountMissing
+            }
             // A switch that can't be made leaves push with the gateway still in use (review: it stayed dead until relaunch).
             let switched: Bool
             do { switched = try signIn.switchTo(account) } catch { model.notificationsResume(); throw error }
@@ -197,7 +209,7 @@ import UIKit
     static func purge(_ account: GatewayAccount) {
         TranscriptCache.shared.purge(account: account.id)
         AttachmentCenter.signedOut(accountId: account.id)                 // [attachments] drafts, phone copies, media
-        MemoPaths.purge(accountId: account.id)                            // VOICE: recordings, drafts, played memos
+        MemoDisk.flush(); MemoPaths.purge(accountId: account.id)          // VOICE: recordings, drafts, played memos
         ModelPrefs.forget(accountId: account.id)                          // MENUS: favourites, recents, presets
         CommandFavorites.forget(accountId: account.id)                    // starred commands
         ManualChatTitles.forget(accountId: account.id)
@@ -215,6 +227,7 @@ import UIKit
         SideResultStash.shared.purge(accountId: account.id)               // /btw and /bg results kept for the launch
         LogUploader.shared.forget(account: account.id)                   // [13-9] log lines that waited for it
         GatewayLaunchPrefs.forget(accountId: account.id)                  // [m7/settings] Reopen Last Chat on Launch
+        CloudDesktopWeb.purgeDataStore(for: account.baseURL)              // [cloud-desktop] persistent WebKit login
         let directory = AppModel.listsCacheDirectory
         for kind in [RosterDisk.rosterKind, RosterDisk.botStateKind, RosterDisk.sessionsKind, RosterDisk.sessionStateKind,
                      RosterDisk.sessionMarksKind] {
@@ -227,6 +240,8 @@ import UIKit
         GroupStore.removeFiles(directory: directory, account: account)
         LaunchChatMemory.shared.forget(account: account.id)
         ServerIssues.shared.signOut(account: account.id)
+        AddOnReminder.shared.signOut(account: account.id)
+        PluginUpdateReminder.shared.signOut(account: account.id)
     }
 
     func checkSoon() { switcher.checkSoon() }

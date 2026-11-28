@@ -61,6 +61,16 @@ enum CloudDesktopWeb {
         WKWebsiteDataStore(forIdentifier: storeID(host))
     }
 
+    /// Removes the persistent WebKit data store kept for a Hermes Cloud agent (cookies, local storage, session),
+    /// invoked on gateway sign-out, gateway removal, and agent destruction.
+    static func purgeDataStore(for baseURL: URL) {
+        guard CloudGatewayFlow.isCloud(baseURL), let host = baseURL.host, !host.isEmpty else { return }
+        let id = storeID(host)
+        WKWebsiteDataStore.remove(forIdentifier: id) { error in
+            if let error { AppLog.swallowed("cloud-desktop", "remove data store", error) }
+        }
+    }
+
     static func storeID(_ host: String) -> UUID {
         // A stable UUID from the host: the first 16 bytes of its SHA-256, shaped as a name-based (v5) UUID.
         var bytes = Array(SHA256.hash(data: Data("hq-cloud-desktop:\(host.lowercased())".utf8)).prefix(16))
@@ -81,6 +91,7 @@ final class CloudDesktopWebController: UIViewController, WKNavigationDelegate, W
     private let messageTitle = UILabel()
     private let messageBody = UILabel()
     private var observers: [NSKeyValueObservation] = []
+    private var pendingAnswers: [WeakBox<AlertAnswer<Bool>>] = []
 
     init(url: URL, agentName: String) {
         self.url = url
@@ -89,7 +100,22 @@ final class CloudDesktopWebController: UIViewController, WKNavigationDelegate, W
         title = agentName.isEmpty ? CloudDesktopWeb.title : agentName
     }
 
+    isolated deinit { cancelPendingAnswers() }
+
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        if isBeingDismissed || isMovingFromParent || navigationController?.isBeingDismissed == true {
+            cancelPendingAnswers()
+        }
+    }
+
+    private func cancelPendingAnswers() {
+        let pending = pendingAnswers
+        pendingAnswers.removeAll()
+        for box in pending { box.value?.answer(false) }
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -273,12 +299,23 @@ final class CloudDesktopWebController: UIViewController, WKNavigationDelegate, W
         await ask(text, cancel: true)
     }
 
-    private func ask(_ text: String, cancel: Bool) async -> Bool {
+    func ask(_ text: String, cancel: Bool) async -> Bool {
         await withCheckedContinuation { done in
+            let answer = AlertAnswer(done, unanswered: false)
+            guard let host = FailureAlert.topmost(self),
+                  host.viewIfLoaded?.window != nil,
+                  host.presentedViewController == nil,
+                  !host.isBeingDismissed else {
+                answer.answer(false)
+                return
+            }
             let alert = UIAlertController(title: nil, message: text, preferredStyle: .alert)
-            if cancel { alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in done.resume(returning: false) }) }
-            alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in done.resume(returning: true) })
-            guard let host = FailureAlert.topmost(self) else { done.resume(returning: false); return }
+            if cancel {
+                alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in answer.answer(false) })
+            }
+            alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in answer.answer(true) })
+            pendingAnswers.removeAll { $0.value == nil }
+            pendingAnswers.append(WeakBox(answer))
             host.present(alert, animated: true)
         }
     }

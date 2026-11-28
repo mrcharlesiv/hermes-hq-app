@@ -270,7 +270,8 @@ nonisolated enum PromptFonts {
         let base = HQFont.preferred(style, compatibleWith: traits(category))
         let size = cap.map { min($0, base.pointSize) } ?? base.pointSize
         if let weight { return HQFont.face(ofSize: size, weight: weight) }
-        return size == base.pointSize ? base : base.withSize(size)
+        if cap != nil { return HQFont.face(ofSize: size, weight: style == .headline ? .semibold : .regular) }
+        return base
     }
 
     static func italic(_ style: UIFont.TextStyle, _ category: UIContentSizeCategory) -> UIFont {

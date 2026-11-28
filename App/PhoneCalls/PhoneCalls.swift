@@ -47,9 +47,7 @@ struct PhoneSettingsView: View {
     }
     private var selectedAppNeedsFix: Bool {
         guard let selectedApp else { return false }
-        let missingWebhook = selectedApp.webhook_event_url != nil && !samplehostHasValidWebhookURL(selectedApp.webhook_event_url)
-        let missingProfile = selectedApp.outbound != nil && (selectedApp.outbound?.outbound_voice_profile_id ?? "").isEmpty
-        return missingWebhook || missingProfile
+        return PhoneConnectionResolver.needsFix(selectedApp)
     }
     private var nonCallControlWarning: String? {
         guard loaded else { return nil }
@@ -283,7 +281,7 @@ struct PhoneSettingsView: View {
                 connection = result.app.id
                 needsCustomWebhookURL = false
                 notice = "Created Voice API connection “\(result.app.application_name ?? PhoneLimits.voiceAppName)”."
-                if !number.isEmpty, !connection.isEmpty, !assistant.isEmpty { busy = false; save() }
+                if !number.isEmpty, !connection.isEmpty, !assistant.isEmpty { await saveAndPrepare() }
             } catch {
                 handleWebhookRejectionIfNeeded(error)
                 self.error = phoneMessage(error)
@@ -302,7 +300,13 @@ struct PhoneSettingsView: View {
             do {
                 let api = samplehostAPI(key: stored.apiKey)
                 let repaired = try await api.repairVoiceConnection(connectionID: currentConn, for: targetNumber, webhookURL: webhook)
-                apps = (try? await api.callControlApps()) ?? [samplehostCallControlAppSummary(id: repaired.connectionID, application_name: repaired.connectionName, active: true, webhook_event_url: webhook)]
+                apps = (try? await api.callControlApps()) ?? [samplehostCallControlAppSummary(
+                    id: repaired.connectionID,
+                    application_name: repaired.connectionName,
+                    active: true,
+                    webhook_event_url: webhook,
+                    outbound: .init(outbound_voice_profile_id: "configured")
+                )]
                 if let updated = repaired.updatedNumber, let idx = numbers.firstIndex(where: { $0.id == updated.id }) {
                     numbers[idx] = updated
                 }
@@ -310,7 +314,7 @@ struct PhoneSettingsView: View {
                 connection = repaired.connectionID
                 needsCustomWebhookURL = false
                 notice = "Updated Voice API connection “\(repaired.connectionName)”."
-                if !number.isEmpty, !connection.isEmpty, !assistant.isEmpty { busy = false; save() }
+                if !number.isEmpty, !connection.isEmpty, !assistant.isEmpty { await saveAndPrepare() }
             } catch {
                 handleWebhookRejectionIfNeeded(error)
                 self.error = phoneMessage(error)
@@ -348,7 +352,7 @@ struct PhoneSettingsView: View {
                 if !assistants.contains(made) { assistants.append(made) }
                 assistant = made.id
                 if !number.isEmpty, !connection.isEmpty, !PhoneConnectionResolver.isInvalidSavedConnection(connection, apps: apps) {
-                    busy = false; save()
+                    await saveAndPrepare()
                 }
             } catch { self.error = phoneMessage(error) }
         }
@@ -388,7 +392,7 @@ struct PhoneSettingsView: View {
                 if numbers.count != 1 { number = "" }
                 assistants = try await api.assistants()
                 pickOnlyAssistant()
-                if fresh.ready == false, !number.isEmpty, !connection.isEmpty, !assistant.isEmpty { busy = false; save() }
+                if fresh.ready == false, !number.isEmpty, !connection.isEmpty, !assistant.isEmpty { await saveAndPrepare() }
             } catch {
                 self.error = (error as? PhoneKeyStoreError) != nil ? "Couldn't save the key in the Keychain." : phoneMessage(error)
             }
@@ -399,7 +403,16 @@ struct PhoneSettingsView: View {
     /// assistant's recording match the switch (wire fact 9). A failed recording match is shown; the choices stay saved
     /// and the next dial tries again (and won't dial if it fails).
     private func save() {
-        guard !busy, var next = setup else { return }
+        guard !busy else { return }
+        busy = true
+        Task {
+            defer { busy = false }
+            await saveAndPrepare()
+        }
+    }
+
+    private func saveAndPrepare() async {
+        guard var next = setup else { return }
         next.fromNumber = number; next.connectionID = connection; next.assistantID = assistant
         next.assistantName = assistants.first { $0.id == assistant }?.name
         let name = ownerName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -411,20 +424,16 @@ struct PhoneSettingsView: View {
             return
         }
         guard next.ready, let assistantID = next.assistantID else { return }
-        busy = true
         let api = samplehostAPI(key: next.apiKey), on = next.records
         let numberToLink = selectedNumber.flatMap { $0.connection_id != connection && !$0.id.isEmpty ? $0 : nil }
         let targetConnection = connection
-        Task {
-            defer { busy = false }
-            if let numberToLink, let updated = try? await api.assignNumberConnection(numberID: numberToLink.id, connectionID: targetConnection),
-               let idx = numbers.firstIndex(where: { $0.id == updated.id }) {
-                numbers[idx] = updated
-            }
-            let matched = await Result.of { try await api.prepareAssistantForCall(assistantID: assistantID, recording: on) }
-            if case .failure(let failure) = matched {
-                error = "Saved, but the assistant's recording couldn't be set to \(on ? "on" : "off"). Calls won't go out until it can. " + phoneMessage(failure)
-            }
+        if let numberToLink, let updated = try? await api.assignNumberConnection(numberID: numberToLink.id, connectionID: targetConnection),
+           let idx = numbers.firstIndex(where: { $0.id == updated.id }) {
+            numbers[idx] = updated
+        }
+        let matched = await Result.of { try await api.prepareAssistantForCall(assistantID: assistantID, recording: on) }
+        if case .failure(let failure) = matched {
+            error = "Saved, but the assistant's recording couldn't be set to \(on ? "on" : "off"). Calls won't go out until it can. " + phoneMessage(failure)
         }
     }
 

@@ -750,7 +750,11 @@ final class PreviewTabController: UIViewController, WKNavigationDelegate, WKUIDe
         removed.observers.removeAll()
         removed.webView.stopLoading()
         removed.webView.removeFromSuperview()
-        if selectedIndex >= tabs.count { selectedIndex = max(0, tabs.count - 1) }
+        if index < selectedIndex {
+            selectedIndex -= 1
+        } else if selectedIndex >= tabs.count {
+            selectedIndex = max(0, tabs.count - 1)
+        }
     }
 
     private func closeTab(at index: Int) {
@@ -1528,17 +1532,21 @@ final class PreviewTabController: UIViewController, WKNavigationDelegate, WKUIDe
         (FailureAlert.topmost(self) ?? self).present(alert, animated: true)
     }
 
+    private final class WeakPresenterBox {
+        weak var vc: UIViewController?
+    }
+
     private func presentOnePasswordMove(origin: String) {
         let model = OnePasswordMoveModel(origin: origin)
-        var holder: UIViewController?
+        let box = WeakPresenterBox()
         let view = OnePasswordMoveView(
             model: model,
             done: { [weak self] in
-                holder?.dismiss(animated: true)
+                box.vc?.dismiss(animated: true)
                 self?.showAgentActivity("Moved login from 1Password — tap the key icon to fill")
             },
             typeInstead: {
-                holder?.dismiss(animated: true)
+                box.vc?.dismiss(animated: true)
             }
         )
         let host = UIHostingController(rootView: HQScaledRoot(view))
@@ -1547,7 +1555,7 @@ final class PreviewTabController: UIViewController, WKNavigationDelegate, WKUIDe
         host.navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .close, primaryAction: UIAction { [weak nav] _ in
             nav?.dismiss(animated: true)
         })
-        holder = nav
+        box.vc = nav
         SheetStyle.apply(nav, from: self)
         (FailureAlert.topmost(self) ?? self).present(nav, animated: true)
     }
@@ -1721,17 +1729,37 @@ final class PreviewTabController: UIViewController, WKNavigationDelegate, WKUIDe
         if webView === activeWeb { syncChrome() }
     }
 
+    /// External schemes allowed only on explicit user main-frame link taps (blocks app-own schemes, file, javascript, shortcuts).
+    nonisolated static let allowedExternalSchemes: Set<String> = [
+        "mailto", "tel", "sms", "facetime", "facetime-audio", "maps", "itms-apps",
+    ]
+
+    nonisolated static func canOpenExternally(_ url: URL, navigationType: WKNavigationType, isMainFrame: Bool) -> Bool {
+        guard navigationType == .linkActivated, isMainFrame,
+              let scheme = url.scheme?.lowercased(),
+              allowedExternalSchemes.contains(scheme) else { return false }
+        let blocked: Set<String> = [AppIdentity.current.urlScheme.lowercased(), "hermes", "hermeshq-native", "file", "javascript", "shortcuts"]
+        return !blocked.contains(scheme)
+    }
+
+    nonisolated static func allowsPopupURL(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased() else { return false }
+        return scheme == "http" || scheme == "https"
+    }
+
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction) async -> WKNavigationActionPolicy {
         guard let target = action.request.url, let scheme = target.scheme?.lowercased() else { return .cancel }
         if ["http", "https", "about", "blob", "data"].contains(scheme) { return .allow }
-        _ = await UIApplication.shared.open(target)
+        if Self.canOpenExternally(target, navigationType: action.navigationType, isMainFrame: action.targetFrame?.isMainFrame == true) {
+            _ = await UIApplication.shared.open(target)
+        }
         return .cancel
     }
 
     /// `target=_blank` and `window.open` open in a new tab inside this browser.
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for action: WKNavigationAction,
                  windowFeatures: WKWindowFeatures) -> WKWebView? {
-        if action.targetFrame == nil, let url = action.request.url {
+        if action.targetFrame == nil, let url = action.request.url, Self.allowsPopupURL(url) {
             addTab(url: url, select: true)
         }
         return nil
@@ -1743,6 +1771,22 @@ final class PreviewTabController: UIViewController, WKNavigationDelegate, WKUIDe
 
     #if DEBUG
     var debugActiveWebView: WKWebView? { activeWeb }
+    var debugTabCount: Int { tabs.count }
+    var debugSelectedIndex: Int { selectedIndex }
+    var debugActiveURL: URL? { activeTab?.currentURL }
+
+    func debugAddTab(url: URL?, label: String = "", select: Bool = true) {
+        loadViewIfNeeded()
+        addTab(url: url, label: label, select: select)
+    }
+
+    func debugSelectTab(at index: Int) {
+        selectTab(at: index)
+    }
+
+    func debugRemoveTab(at index: Int) {
+        removeTabView(at: index)
+    }
 
     func debugOpenDemoTab(html: String, baseURL: URL, label: String, select: Bool = true) {
         loadViewIfNeeded()

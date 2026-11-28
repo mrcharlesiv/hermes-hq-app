@@ -53,6 +53,7 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
     private var updateAsked = false
     private var leftAt: ContinuousClock.Instant?
     private var observers: [NSObjectProtocol] = []
+    private var themeObserver: NSObjectProtocol?
     /// [mac] The pane width the card's margins were set for.
     private var noticeWidth: CGFloat = 0
     /// The keyboard was asked for (the ⌨ button) and hasn't been put away since.
@@ -124,6 +125,7 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
     isolated deinit {
         tabs.forEach { $0.connection?.stop() }
         observers.forEach(NotificationCenter.default.removeObserver)
+        if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
     }
 
     // MARK: Views
@@ -140,7 +142,7 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
             traits.userInterfaceStyle == .dark ? shell : page.resolvedColor(with: traits)
         }
         applyMacBarAppearance()
-        NotificationCenter.default.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
+        themeObserver = NotificationCenter.default.addObserver(forName: Theme.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.applyMacBarAppearance()
@@ -604,7 +606,8 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
             // The next open starts a fresh shell rather than dialling one that's gone.
             tab.session = TerminalWire.newSession()
             saveTabs()
-            if tab.closing { return remove(tab) }
+            if tab.closing, tabs.count > 1 { return remove(tab) }
+            tab.closing = false
             if tab.newAfterEnd {
                 tab.newAfterEnd = false
                 tab.clearScreen()
@@ -761,12 +764,13 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
     private func closeTab(at index: Int) {
         guard tabs.count > 1, tabs.indices.contains(index) else { return }
         let tab = tabs[index]
+        guard !tab.closing, tabs.filter({ !$0.closing }).count > 1 else { return }
         guard tab.phase == .live else { Haptics.play(.light); return remove(tab) }
         let alert = UIAlertController(title: "Close This Tab?", message: "Its shell ends, with anything still running in it.",
                                       preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in self?.focus() })
         alert.addAction(UIAlertAction(title: "Close Tab", style: .destructive) { [weak self, weak tab] _ in
-            guard let self, let tab else { return }
+            guard let self, let tab, !tab.closing, self.tabs.filter({ !$0.closing }).count > 1 else { return }
             Haptics.play(.rigid)   // a running shell stopped, as Stop
             tab.closing = true
             tab.connection?.endShell()
@@ -781,7 +785,10 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
     }
 
     private func remove(_ tab: TerminalTab) {
-        guard let index = tabs.firstIndex(where: { $0 === tab }) else { return }
+        guard tabs.count > 1, let index = tabs.firstIndex(where: { $0 === tab }) else {
+            tab.closing = false
+            return
+        }
         tab.commandTask?.cancel()
         tab.commandTask = nil
         tab.pendingCommand = nil
@@ -1510,7 +1517,7 @@ final class TerminalViewController: UIViewController, TerminalViewDelegate {
 
     /// A program in the shell copied (OSC 52: tmux, vim, `pbcopy` stand-ins): onto this device's clipboard.
     func clipboardCopy(source: TerminalView, content: Data) {
-        guard source === terminal else { return }
+        guard !relocked, source === terminal else { return }
         guard let text = String(data: content, encoding: .utf8), !text.isEmpty else { return }
         UIPasteboard.general.string = text
         AppLog.trace("terminal", "a program copied \(content.count) bytes")

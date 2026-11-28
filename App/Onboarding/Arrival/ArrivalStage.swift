@@ -100,7 +100,9 @@ private let easeInOut = ArrivalWorld.Ease.inOut
     private var tweens: [Tween] = []
     private(set) var token = 0
     private var script: Task<Void, Never>?
-    private var side: [Task<Void, Never>] = []
+    private var side: [UUID: Task<Void, Never>] = [:]
+    private static let maxArcs = 16
+    private static let maxRings = 32
 
     private var link: CADisplayLink?
     private var attached = false, active = true, shown = false
@@ -108,6 +110,23 @@ private let easeInOut = ArrivalWorld.Ease.inOut
     private var stillUntil = 0.0
     /// Sounds are on (a test can turn them off).
     var sounds = true
+
+    /// Test-visible counts for verifying zero leaked continuations or unbounded growth.
+    var activeTweenCount: Int { tweens.count }
+    var activeSideTaskCount: Int { side.count }
+    var activeArcCount: Int { arcs.count }
+
+    isolated deinit {
+        NotificationCenter.default.removeObserver(self)
+        link?.invalidate()
+        link = nil
+        script?.cancel()
+        for task in side.values { task.cancel() }
+        for tween in tweens {
+            tween.done?.resume(throwing: CancellationError())
+            tween.done = nil
+        }
+    }
 
     init(place: ArrivalWorld.Place = .current) {
         self.place = place
@@ -188,11 +207,15 @@ private let easeInOut = ArrivalWorld.Ease.inOut
     // MARK: - Showing and resting
 
     /// The stage on show (an arrival screen) or standing down (any screen this first run doesn't redraw): it fades,
-    /// and rests once gone.
+    /// and rests once gone. Leaving drawn screens cancels in-flight beats/side loops and drains pending tweens.
     func setShown(_ on: Bool, animated: Bool) {
         guard on != shown else { return }
         shown = on
-        if on { startIfDue() }
+        if on {
+            startIfDue()
+        } else {
+            cancelWork()
+        }
         applyAlpha(animated: animated)
     }
 
@@ -215,7 +238,7 @@ private let easeInOut = ArrivalWorld.Ease.inOut
         if inWindow { startIfDue() } else { stop() }
     }
 
-    @objc private func wentAway() { active = false; stop() }
+    @objc private func wentAway() { active = false; pauseLink() }
     @objc private func cameBack() { active = true; startIfDue() }
 
     private var running: Bool { link != nil }
@@ -230,9 +253,32 @@ private let easeInOut = ArrivalWorld.Ease.inOut
         lastT = Self.ms()
     }
 
-    private func stop() {
+    private func pauseLink() {
         link?.invalidate()
         link = nil
+    }
+
+    /// Stops animation and tears down all running scripts, side tasks, suspended tween continuations, and transient effects
+    /// so `ArrivalStage` (and its Metal buffers) can never be retained by a suspended continuation.
+    func stop() {
+        pauseLink()
+        cancelWork()
+    }
+
+    private func cancelWork() {
+        token += 1
+        script?.cancel()
+        script = nil
+        for task in side.values { task.cancel() }
+        side.removeAll()
+        let old = tweens
+        tweens.removeAll()
+        for tween in old {
+            tween.done?.resume(throwing: CancellationError())
+            tween.done = nil
+        }
+        rings.removeAll()
+        arcs.removeAll()
     }
 
     private func stopIfIdle() {
@@ -300,7 +346,7 @@ private let easeInOut = ArrivalWorld.Ease.inOut
     func begin(_ body: @escaping @MainActor (ArrivalStage) async throws -> Void) {
         token += 1
         script?.cancel()
-        for task in side { task.cancel() }
+        for task in side.values { task.cancel() }
         side.removeAll()
         // As the mock's `tw`: the old beat's tweens stop where they are, and their waiters are let go.
         let old = tweens
@@ -314,9 +360,13 @@ private let easeInOut = ArrivalWorld.Ease.inOut
         }
     }
 
-    /// Something to run beside the beat (the mock's un-awaited chains); stops with the beat.
+    /// Something to run beside the beat (the mock's un-awaited chains); stops with the beat and prunes itself on finish.
     func spawn(_ body: @escaping @MainActor () async throws -> Void) {
-        side.append(Task { @MainActor in try? await body() })
+        let id = UUID()
+        side[id] = Task { @MainActor [weak self] in
+            defer { self?.side.removeValue(forKey: id) }
+            try? await body()
+        }
     }
 
     func sleep(_ ms: Double) async throws {
@@ -355,15 +405,23 @@ private let easeInOut = ArrivalWorld.Ease.inOut
 
     func ring(_ cx: Double, _ cy: Double, _ r0: Double, _ r1: Double, _ length: Double, _ a: Double,
               _ col: SIMD3<Double>? = nil, shock: Bool = false) {
-        guard !still else { return }
-        rings.append(Ring(cx: cx, cy: cy, r0: r0, r1: r1, dur: length, a: a, col: col ?? mono, shock: shock, t0: Self.ms()))
+        guard !still, active, shown else { return }
+        let now = Self.ms()
+        rings.removeAll { now >= $0.t0 + $0.dur }
+        if rings.count >= Self.maxRings { rings.removeFirst(rings.count - Self.maxRings + 1) }
+        rings.append(Ring(cx: cx, cy: cy, r0: r0, r1: r1, dur: length, a: a, col: col ?? mono, shock: shock, t0: now))
     }
 
     /// A message crossing the globe: a great circle, lifted off the ground in the middle, gone where the globe hides it.
     func arc(_ a: SIMD3<Double>, _ b: SIMD3<Double>, _ length: Double, alpha: Double = 1) async throws {
         guard !still else { return }
-        let dot = ArrivalWorld.clamp(a.x * b.x + a.y * b.y + a.z * b.z, -1, 1)
-        arcs.append(Arc(a: a, b: b, dur: length, alpha: alpha, om: acos(dot), t0: Self.ms()))
+        if active && shown {
+            let now = Self.ms()
+            arcs.removeAll { now >= $0.t0 + $0.dur * 1.4 }
+            if arcs.count >= Self.maxArcs { arcs.removeFirst(arcs.count - Self.maxArcs + 1) }
+            let dot = ArrivalWorld.clamp(a.x * b.x + a.y * b.y + a.z * b.z, -1, 1)
+            arcs.append(Arc(a: a, b: b, dur: length, alpha: alpha, om: acos(dot), t0: now))
+        }
         try await sleep(length)
     }
 
@@ -456,7 +514,7 @@ private let easeInOut = ArrivalWorld.Ease.inOut
 
     fileprivate func tick() {
         let now = Self.ms()
-        if still && now > stillUntil && tweens.isEmpty { draw(now); stop(); return }
+        if still && now > stillUntil && tweens.isEmpty { draw(now); pauseLink(); return }
         draw(now)
     }
 

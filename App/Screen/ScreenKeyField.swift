@@ -141,6 +141,10 @@ final class ScreenKeyField: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
+    isolated deinit {
+        stopRepeat()
+    }
+
     override var canBecomeFirstResponder: Bool { true }
 
     override func becomeFirstResponder() -> Bool {
@@ -228,11 +232,16 @@ final class ScreenKeyField: UIView {
         let delay = Double(defaults.object(forKey: "InitialKeyRepeat") as? Int ?? 25) * 0.015
         let rate = max(Double(defaults.object(forKey: "KeyRepeat") as? Int ?? 6) * 0.015, 0.015)
         // A key-up lost to another app (the window gave up the keyboard mid-hold) ends the repeat too.
-        let timer = Timer(fire: Date().addingTimeInterval(delay), interval: rate, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, self.isFirstResponder, self.window?.isKeyWindow == true else { self?.stopRepeat(); return }
+        let timer = Timer(fire: Date().addingTimeInterval(delay), interval: rate, repeats: true) { [weak self] timer in
+            let keep = MainActor.assumeIsolated { () -> Bool in
+                guard let self, self.isFirstResponder, self.window?.isKeyWindow == true else {
+                    self?.stopRepeat()
+                    return false
+                }
                 self.held?.send()
+                return true
             }
+            if !keep { timer.invalidate() }
         }
         RunLoop.main.add(timer, forMode: .common)
         held = (code, timer, send)

@@ -335,7 +335,7 @@ actor LinkPreviews {
     }
 
     private func enter() async {
-        if active >= Self.maxInFlight { await withCheckedContinuation { waiters.append($0) } }
+        while active >= Self.maxInFlight { await withCheckedContinuation { waiters.append($0) } }
         active += 1
     }
 

@@ -42,7 +42,7 @@ struct PhoneCallView: View {
                         VStack(spacing: 8) {
                             let who = [call.name, phoneShown(call.to)].compactMap { $0 }.joined(separator: " · ")
                             PhoneScreenHeader(title: "Transcript", subtitle: who,
-                                              back: { path.removeLast() })
+                                              back: { if !path.isEmpty { path.removeLast() } })
                             PhoneConversation(lines: call.shownLines, catchingUp: false, readOnly: true,
                                               botName: call.botName, calleeName: call.name,
                                               callingOwner: call.callingOwner == true)
@@ -73,7 +73,7 @@ struct PhoneCallView: View {
         PhoneNewCallView(controller: controller, sessionID: session ?? sessionID, profile: profile ?? self.profile,
                          botName: botName ?? self.botName, chatContext: chatContext,
                          recent: mine.filter { !$0.active }.reversed(), prefill: prefill, suggested: suggested,
-                         close: { dismiss() }, back: canGoBack ? { path.removeLast() } : nil,
+                         close: { dismiss() }, back: canGoBack ? { if !path.isEmpty { path.removeLast() } } : nil,
                          open: { path.append(.call($0)) })
             .toolbar(.hidden, for: .navigationBar)
     }

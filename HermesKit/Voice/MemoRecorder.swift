@@ -41,6 +41,7 @@ import os
     private(set) var startLatencyMs: Double?
 
     private(set) var token: String?
+    private var sessionGrant: Int?
     /// Touched only on the audio queue.
     private var recorder: RecorderBox?
     /// Finishes once the recorder's `stop` ran on the audio queue (the file is complete): the save waits for it.
@@ -111,14 +112,15 @@ import os
         #if DEBUG && targetEnvironment(simulator)
         if let fixture {
             AudioSessionCoordinator.shared.simulated = true
-            try? await AudioSessionCoordinator.shared.acquire(.memoRecording)
+            let grant = try? await AudioSessionCoordinator.shared.acquire(.memoRecording)
             try? await Task.sleep(for: .seconds(fixture.startDelay))
             guard token == id, elapsedAtStop == nil else {
                 if token == id { token = nil }
-                AudioSessionCoordinator.shared.release(.memoRecording)
+                if let grant { AudioSessionCoordinator.shared.releaseAbandoned(.memoRecording, grant: grant) }
                 endStartInterval()
                 throw MemoBeginError.canceled
             }
+            sessionGrant = grant
             url = FileManager.default.temporaryDirectory.appending(path: id + ".wav")
             mime = "audio/wav"
             didStart(asked: asked)
@@ -128,24 +130,33 @@ import os
 
         let coordinator = AudioSessionCoordinator.shared
         let file = FileManager.default.temporaryDirectory.appending(path: id + ".m4a")
+        let beforeGrant = coordinator.grant
+        var acquiredGrant: Int?
         let box: RecorderBox
         do {
-            try await coordinator.acquire(.memoRecording)
+            acquiredGrant = try await coordinator.acquire(.memoRecording)
             // Speech: AAC mono 24 kHz at 48 kbps (V2). Made on the audio queue, and only ever touched there.
             box = try await AudioWork.run { [self] in try MemoRecorder.makeRecorder(file, delegate: self) }
         } catch {
             if token == id { token = nil }
-            coordinator.release(.memoRecording)
+            if let grant = acquiredGrant {
+                coordinator.releaseAbandoned(.memoRecording, grant: grant)
+            } else if coordinator.owner == .memoRecording, coordinator.grant == beforeGrant + 1 {
+                coordinator.releaseAbandoned(.memoRecording, grant: coordinator.grant)
+            }
             endStartInterval()
             throw MemoBeginError.startFailed(Self.startReason(error))
         }
         mime = "audio/x-m4a"
         if await AudioWork.perform({ box.value.record(forDuration: seconds) }) {
-            return try finishStart(box, file: file, id: id, seconds: seconds, asked: asked)
+            return try finishStart(box, file: file, id: id, seconds: seconds, asked: asked, grant: acquiredGrant)
         }
         // A capture that was just released (a call's, another app's) can leave the input busy for a moment: one fresh
         // activation and a second try. The pause suspends; it never blocks the main thread (touches keep flowing).
-        coordinator.release(.memoRecording)
+        if let grant = acquiredGrant {
+            coordinator.releaseAbandoned(.memoRecording, grant: grant)
+            acquiredGrant = nil
+        }
         let backgrounded = RetryFlag()
         let watch = NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil,
                                                            queue: .main) { _ in backgrounded.raised = true }
@@ -159,29 +170,34 @@ import os
             throw MemoBeginError.canceled
         }
         var again = false
-        if (try? await coordinator.acquire(.memoRecording)) != nil {
+        let retryBeforeGrant = coordinator.grant
+        if let retryGrant = try? await coordinator.acquire(.memoRecording) {
+            acquiredGrant = retryGrant
             again = await AudioWork.perform { box.value.prepareToRecord() && box.value.record(forDuration: seconds) }
+        } else if coordinator.owner == .memoRecording, coordinator.grant == retryBeforeGrant + 1 {
+            coordinator.releaseAbandoned(.memoRecording, grant: coordinator.grant)
         }
         guard again else {
             if token == id { token = nil }
             Self.discardRecorder(box, file: file)
-            coordinator.release(.memoRecording)
+            if let grant = acquiredGrant { coordinator.releaseAbandoned(.memoRecording, grant: grant) }
             endStartInterval()
             throw MemoBeginError.startFailed("the microphone did not start recording")
         }
-        return try finishStart(box, file: file, id: id, seconds: seconds, asked: asked)
+        return try finishStart(box, file: file, id: id, seconds: seconds, asked: asked, grant: acquiredGrant)
     }
 
     /// The recorder runs: unless the take was dropped, or the app left the screen, while it started.
-    private func finishStart(_ box: RecorderBox, file: URL, id: String, seconds: Double, asked: CFTimeInterval) throws -> (id: String, limit: Double) {
+    private func finishStart(_ box: RecorderBox, file: URL, id: String, seconds: Double, asked: CFTimeInterval, grant: Int?) throws -> (id: String, limit: Double) {
         guard token == id, elapsedAtStop == nil, UIApplication.shared.applicationState == .active else {
             let background = UIApplication.shared.applicationState != .active
             if token == id { token = nil }
             Self.discardRecorder(box, file: file)
-            AudioSessionCoordinator.shared.release(.memoRecording)
+            if let grant { AudioSessionCoordinator.shared.releaseAbandoned(.memoRecording, grant: grant) }
             endStartInterval()
             throw background ? MemoBeginError.background : MemoBeginError.canceled
         }
+        sessionGrant = grant
         recorder = box
         url = file
         didStart(asked: asked)
@@ -363,7 +379,12 @@ import os
             recorderStopped = stopped
         }
         teardown()
-        AudioSessionCoordinator.shared.release(.memoRecording)
+        if let grant = sessionGrant {
+            sessionGrant = nil
+            AudioSessionCoordinator.shared.releaseAbandoned(.memoRecording, grant: grant)
+        } else {
+            AudioSessionCoordinator.shared.release(.memoRecording)
+        }
         if let hold = keepAwakeHeld { KeepAwake.release(hold) }   // [talk]
         keepAwakeHeld = nil
         return seconds

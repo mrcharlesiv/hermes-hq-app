@@ -56,14 +56,19 @@ nonisolated enum AttachmentDrop {
         guard let type = fileType(provider.registeredTypeIdentifiers) else { throw AttachmentPrepareError.unreadableFile }
         let folder = FileManager.default.temporaryDirectory.appending(path: "HQNDrop-" + UUID().uuidString, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        if type == UTType.fileURL.identifier {
-            if let url = try? await loadURL(provider), let copy = try? copy(url, into: folder, name: url.lastPathComponent) { return copy }
-            // No access to the file itself: its contents, when the provider has them as a type of their own.
-            let others = provider.registeredTypeIdentifiers.filter { $0 != UTType.fileURL.identifier }
-            guard let content = fileType(others) else { throw AttachmentPrepareError.unreadableFile }
-            return try await loadFile(provider, type: content, into: folder)
+        do {
+            if type == UTType.fileURL.identifier {
+                if let url = try? await loadURL(provider), let copy = try? copy(url, into: folder, name: url.lastPathComponent) { return copy }
+                // No access to the file itself: its contents, when the provider has them as a type of their own.
+                let others = provider.registeredTypeIdentifiers.filter { $0 != UTType.fileURL.identifier }
+                guard let content = fileType(others) else { throw AttachmentPrepareError.unreadableFile }
+                return try await loadFile(provider, type: content, into: folder)
+            }
+            return try await loadFile(provider, type: type, into: folder)
+        } catch {
+            try? FileManager.default.removeItem(at: folder)
+            throw error
         }
-        return try await loadFile(provider, type: type, into: folder)
     }
 
     private static func loadURL(_ provider: NSItemProvider) async throws -> URL {

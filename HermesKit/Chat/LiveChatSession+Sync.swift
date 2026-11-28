@@ -22,9 +22,25 @@ extension LiveChatSession {
 
     // MARK: Pages
 
+    /// Cancels any in-flight older-page load and invalidates its results so a stale page can never prepend onto a
+    /// replaced transcript.
+    func cancelOlderHistory() {
+        historyEpoch += 1
+        if olderTask != nil {
+            olderTask?.cancel()
+            olderTask = nil
+        }
+        if isLoadingOlder {
+            isLoadingOlder = false
+            changes.markState()
+            scheduleFlush()
+        }
+    }
+
     /// `keepCached` (the open's own reads): the saved copy's messages older than the page stay above it.
     /// `savedOlder` ([right-open]): the saved messages the caller already knows lie right before the page.
     func applyFirstPage(_ page: HistoryPage, _ folded: HydratedPage, keepCached: Bool = false, savedOlder: [ChatMessage]? = nil) {
+        cancelOlderHistory()
         let older = savedOlder ?? (keepCached ? cachedOlderMessages(before: page) : [])
         heldPaint = nil
         noteStoredRows(page.rows)
@@ -219,6 +235,7 @@ extension LiveChatSession {
             rows = max(rows, loadedRowIds.lazy.filter { $0 >= floor && $0 < top }.count)
         }
         AppLog.trace("history", "release \(logIds): \(cut) oldest messages (\(rows) rows) let go, \(messages.count - cut) kept, offset \(nextOffset) → \(max(1, nextOffset - rows))")
+        cancelOlderHistory()
         headRows = []
         for m in messages[..<cut] {
             metaById[m.id] = nil
@@ -255,12 +272,13 @@ extension LiveChatSession {
     /// One older page joined on the oldest loaded row (03 §5.2: `limit+1`, `offset = nextOffset-1`, keep rows strictly
     /// before the join). `fill` = the background read that completes the first 120 rows.
     func loadOlderPage(fill: Bool) async {
-        // A cancelled load (the screen went away) leaves the bookkeeping to whoever cancelled it.
-        defer { if !Task.isCancelled { olderTask = nil } }
+        let epoch = historyEpoch
+        // A cancelled or superseded load leaves the bookkeeping to whoever cancelled it.
+        defer { if !Task.isCancelled && epoch == historyEpoch { olderTask = nil } }
         guard let stored = readSessionId, hasOlder, !isLoadingOlder else { return }
         isLoadingOlder = true
         changes.markState(); scheduleFlush()
-        defer { if !Task.isCancelled { isLoadingOlder = false; changes.markState(); scheduleFlush() } }
+        defer { if !Task.isCancelled && epoch == historyEpoch { isLoadingOlder = false; changes.markState(); scheduleFlush() } }
         let rows = fill ? max(1, LiveChatSession.fullPageRows - nextOffset) : LiveChatSession.fullPageRows
         var offset = max(0, nextOffset - 1)
         let olderStart = ContinuousClock.now
@@ -273,7 +291,7 @@ extension LiveChatSession {
                 AppLog.swallowed("history", "older page \(lids) at offset \(offset)", error)
                 fetched = nil
             }
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, epoch == historyEpoch else { return }
             // [transcript] §4.2: the read failed (no answer, or not a 2xx): say so; paging waits for "Try again".
             guard let (page, _) = fetched else {
                 AppLog.note("history", "older page \(lids) failed at offset \(offset); \"Try again\" shown")
@@ -308,7 +326,7 @@ extension LiveChatSession {
                     continue
                 }
                 AppLog.trace("history", "older page \(lids): joined on row \(join) at \(at), \(at) older rows to add")
-                await prependOlder(rows: Array(page.rows[..<at]), page: page)
+                await prependOlder(rows: Array(page.rows[..<at]), page: page, epoch: epoch)
                 return
             }
             if ids.compactMap({ $0 }).allSatisfy({ $0 > join }) {
@@ -321,7 +339,7 @@ extension LiveChatSession {
             let older = page.rows.filter { (HistoryPage.rowId($0) ?? Int.max) < join }
             AppLog.trace("history", "older page \(lids): join row \(join) not in page (rows rewritten/thinned), \(older.count) strictly older kept")
             if older.isEmpty { hasOlder = false; dropCachedOlder(); return }
-            await prependOlder(rows: older, page: page)
+            await prependOlder(rows: older, page: page, epoch: epoch)
             return
         }
         // Rows saved while the chat stayed open moved the window newer than the offset: the reads above stepped over
@@ -334,7 +352,7 @@ extension LiveChatSession {
     /// Reads an older page makes looking for its join row before it stops for now.
     static let olderReads = 6
 
-    private func prependOlder(rows: [JSONValue], page: HistoryPage) async {
+    private func prependOlder(rows: [JSONValue], page: HistoryPage, epoch: Int) async {
         var kept = rows
         // Same turn rule as the first page: don't split a turn when the cut keeps ≥ half (03 §4.4).
         var dropped = 0
@@ -363,7 +381,7 @@ extension LiveChatSession {
         let head = headRows
         let joint = kept + head
         let folded = await LiveChatSession.foldOffMain(joint, accountId: account.id)
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, epoch == historyEpoch else { return }
         // [smooth-open] The saved messages on top give way to the gateway's own for the rows just read (the same ids, so
         // nothing on screen moves); one older than every row read waits for the next page, when there is one.
         let saved = cachedOlderCount
@@ -661,7 +679,8 @@ extension LiveChatSession {
         settleLostSends()                               // [sessions-m9] a marked send the page now holds did arrive
         AppLog.trace("history", "tail read applied \(lids): \(before) → \(messages.count) rows, \(keptOlder ? "older rows kept" : "page replaced the screen, paging restarts at offset \(page.nextOffset)")")
         if !keptOlder {
-            // The page replaced what was shown: paging continues from its oldest row.
+            // The page replaced what was shown: cancel any stale older-page load and restart paging from its oldest row.
+            cancelOlderHistory()
             cachedOlderIds = []
             nextOffset = page.nextOffset
             oldestRowId = pageRowIds.first
@@ -1158,7 +1177,7 @@ extension LiveChatSession {
             await Task.yield()
             guard current() else { return }
             let replayed = parked.filter { $0.sessionId == rid }.compactMap(\.seq)
-            if let first = replayed.min(), first <= cursor + 1 { coveredByReplay = true }
+            if let first = replayed.min(), cursor == Int.max || first <= cursor + 1 { coveredByReplay = true }
             // The connection asked from at or before our cursor and handed over everything after it, even when that was
             // nothing (an empty replay leaves nothing parked).
             // Only for the socket that just came up: a chat back on screen may have missed frames the connection

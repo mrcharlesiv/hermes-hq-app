@@ -112,12 +112,23 @@ final class NotificationService: UNNotificationServiceExtension {
             }
         }
 
-        // 2. Individual Live Activity (ungrouped mode): match side chat (`profile/session`) first, then main bot chat (`profile`).
+        // 2. Individual Live Activity (ungrouped mode): match side chat (`profile/session`) first, then main bot chat (`profile`)
+        // only when it has no session id or matches `session` (never clobbering an active main chat on an untracked side-chat push).
         let cards = Activity<HQLiveAttributes>.activities
-        let sideSubject = session.map { LiveActivitySubject(kind: .turn, id: "\(profile)/\($0)") }
+        let nonEmptySession = session.flatMap { $0.isEmpty ? nil : $0 }
+        let sideSubject = nonEmptySession.map { LiveActivitySubject(kind: .turn, id: "\(profile)/\($0)") }
         let mainSubject = LiveActivitySubject(kind: .turn, id: profile)
-        if let activity = (sideSubject.flatMap { s in cards.first { $0.attributes.subject == s } }
-                           ?? cards.first { $0.attributes.subject == mainSubject }) {
+        let activity: Activity<HQLiveAttributes>? = if let nonEmptySession {
+            sideSubject.flatMap { s in cards.first { $0.attributes.subject == s } }
+                ?? cards.first { card in
+                    guard card.attributes.subject == mainSubject else { return false }
+                    let cardSession = card.attributes.sessionId
+                    return cardSession == nil || cardSession == nonEmptySession
+                }
+        } else {
+            cards.first { $0.attributes.subject == mainSubject }
+        }
+        if let activity {
             var content = activity.content.state
             guard !content.isOver else {
                 if !handled { PushAlertDiagnostics.record("liveEnd.over") }

@@ -32,8 +32,10 @@ extension ChatViewController {
     func shoppingOpen(_ card: ProductsCardRow, index: Int) {
         guard card.products.products.indices.contains(index) else { return }
         let product = card.products.products[index]
+        let liveAnswers = ShoppingCards.answers(session.messages, queued: shoppingQueuedTexts)
+        let asks = card.asks(product).union(liveAnswers.asked[product.id] ?? [])
         AppLog.trace("shopping", "product \(AppLog.tag(product.id)) opened \(logTag)")
-        ProductPageSheet.present(product, asks: card.asks(product), from: self) { [weak self] ask in
+        ProductPageSheet.present(product, asks: asks, from: self) { [weak self] ask in
             self?.shoppingAsk(card, index: index, ask: ask)
         }
     }
@@ -41,7 +43,9 @@ extension ChatViewController {
     func shoppingAsk(_ card: ProductsCardRow, index: Int, ask: ShoppingCards.Ask) {
         guard card.products.products.indices.contains(index) else { return }
         let product = card.products.products[index]
-        guard !card.asks(product).contains(ask), let text = ShoppingCards.message(ask, product) else { return }
+        let liveAnswers = ShoppingCards.answers(session.messages, queued: shoppingQueuedTexts)
+        let asks = card.asks(product).union(liveAnswers.asked[product.id] ?? [])
+        guard !asks.contains(ask), let text = ShoppingCards.message(ask, product) else { return }
         AppLog.trace("shopping", "product \(AppLog.tag(product.id)) \(ask.rawValue) \(logTag)")
         Haptics.play(.selection)
         // `display` given: the words go out as they are (a task's chat wraps typed words; the mark must lead).
@@ -55,6 +59,13 @@ extension ChatViewController {
 
     func orderCard(_ card: OrderCardRow, tapped answer: ShoppingCards.OrderAnswer) {
         guard card.state == .waiting else { return }
+        let liveAnswers = ShoppingCards.answers(session.messages, queued: shoppingQueuedTexts)
+        guard liveAnswers.orders[card.order.id] == nil else { return }
+        let prefix = "\(card.messageId)|order"
+        if card.rowId.hasPrefix(prefix) {
+            let callId = String(card.rowId.dropFirst(prefix.count))
+            if let liveState = liveAnswers.orderStates[callId], liveState != .waiting { return }
+        }
         AppLog.trace("shopping", "order \(AppLog.tag(card.order.id)) \(answer.rawValue) \(logTag)")
         Haptics.play(answer == .pay ? .success : .selection)
         let text = answer == .pay ? ShoppingCards.payMessage(card.order) : ShoppingCards.cancelMessage(card.order)
@@ -71,7 +82,10 @@ extension ChatViewController {
         AppLog.trace("shopping", "order \(AppLog.tag(card.order.id)) opened item \(index) \(logTag)")
         Haptics.play(.selection)
         ProductPageSheet.present(product, asks: answers.asked[product.id] ?? [], from: self) { [weak self] ask in
-            guard let self, let text = ShoppingCards.message(ask, product) else { return }
+            guard let self else { return }
+            let liveAnswers = ShoppingCards.answers(self.session.messages, queued: self.shoppingQueuedTexts)
+            guard !(liveAnswers.asked[product.id]?.contains(ask) ?? false),
+                  let text = ShoppingCards.message(ask, product) else { return }
             Haptics.play(.selection)
             self.sendFromCard(text, display: text)
             self.rebuildMessage(card.messageId)

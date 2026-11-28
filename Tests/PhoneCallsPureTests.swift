@@ -493,7 +493,9 @@ struct PhoneSetupCheckTests {
     static func good() -> PhoneSetupCheck.Reads {
         PhoneSetupCheck.Reads(
             numbers: .success([number]),
-            app: .success(samplehostCallControlApp(active: true, application_name: "Calls", outbound: .init(outbound_voice_profile_id: "ovp-1"))),
+            app: .success(samplehostCallControlApp(active: true, application_name: "Calls",
+                                               webhook_event_url: PhoneLimits.voiceWebhookURL,
+                                               outbound: .init(outbound_voice_profile_id: "ovp-1"))),
             profile: .success(samplehostVoiceProfile(enabled: true, whitelisted_destinations: ["US", "CA"])),
             assistant: .success(samplehostAssistantDetail(json: ["id": "assistant-1", "name": "Otto", "model": "openai/gpt-4o",
                                                              "enabled_features": ["telephony"],

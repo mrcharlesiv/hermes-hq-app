@@ -36,10 +36,26 @@ final class TasksWidgetWriter {
     private let currentStore: @MainActor () -> TasksStore?
     /// How long a row ticked on the widget stays ticked at least, before it moves (as the page's row does).
     var holdTicked: TimeInterval = 1
+    /// Override for how many polling iterations `storeWhenReady()` waits (tests set 0 for immediate cold-launch fallback).
+    var readyWaitAttempts: Int?
 
-    init(enabled: Bool = TasksWidgetWriter.enabled, store: @escaping @MainActor () -> TasksStore? = { TasksHub.current }) {
+    /// Minimal authenticated gateway transport used when `TaskCheckOffIntent` cold-launches the app in the background
+    /// with no `UIWindowScene` / `AppModel` / `TasksStore`.
+    nonisolated struct HeadlessContext: Sendable {
+        var accountKey: String
+        var bots: [ShareBot]
+        var send: @Sendable (_ method: String, _ path: String, _ json: Data?) async throws -> ShareRESTAnswer
+    }
+
+    typealias HeadlessResolver = @Sendable (_ expectedAccountKey: String?) -> (context: HeadlessContext?, signedOut: Bool)
+    private let headlessResolver: HeadlessResolver?
+
+    init(enabled: Bool = TasksWidgetWriter.enabled,
+         store: @escaping @MainActor () -> TasksStore? = { TasksHub.current },
+         headlessResolver: HeadlessResolver? = nil) {
         self.enabled = enabled
         self.currentStore = store
+        self.headlessResolver = headlessResolver
     }
 
     private var account: GatewayAccount?
@@ -396,52 +412,210 @@ final class TasksWidgetWriter {
 
     // MARK: The check circle
 
-    /// A row's circle on a widget: ticked at once, saved through the page's store, put back when refused. Task text
-    /// never goes into the log (docs/tasks.md rule 6).
+    private enum TickResult {
+        case live(TasksStore)
+        case headless
+        case refused
+    }
+
+    /// A row's circle on a widget: ticked at once, saved through the page's store, put back when refused. On a cold
+    /// background launch with no `UIWindowScene` / `AppModel`, completes the task directly via saved Keychain credentials.
+    /// Task text never goes into the log (docs/tasks.md rule 6).
     func checkOff(_ id: String, account accountKey: String) async -> Bool {
-        guard let store = await tick(id, account: accountKey) else { return false }
-        return await save(id, store: store)
+        switch await tick(id, account: accountKey) {
+        case .live(let store): return await save(id, store: store)
+        case .headless: return await checkOffHeadless(id, account: accountKey)
+        case .refused: return false
+        }
     }
 
     /// The intent's way in: the row ticked and written, then back to WidgetKit at once, so the widget redraws it ticked
     /// while the save runs on in the app (under a background task, so a launch for the intent isn't suspended first).
     /// WidgetKit only reads the widget's timeline again once `perform` returns: a save awaited inside it would show
     /// nothing until the row was already gone or back (seen on the simulator, 2026-11-19).
+    /// On a cold background launch with no scene/store, runs the headless PATCH synchronously before returning so iOS
+    /// does not suspend the process before the network write and widget snapshot update finish.
     func checkOffFromWidget(_ id: String, account accountKey: String) async -> Bool {
-        guard let store = await tick(id, account: accountKey) else { return false }
-        let time = BackgroundTime.begin("widgets.check-off") {
-            AppLog.note("widgets", "tasks widget: check-off out of background time")
-        }
-        Task { @MainActor in
-            _ = await self.save(id, store: store)
+        switch await tick(id, account: accountKey) {
+        case .live(let store):
+            let time = BackgroundTime.begin("widgets.check-off") {
+                AppLog.note("widgets", "tasks widget: check-off out of background time")
+            }
+            Task { @MainActor in
+                _ = await self.save(id, store: store)
+                time.end()
+            }
+            return true
+        case .headless:
+            let time = BackgroundTime.begin("widgets.check-off.headless") {
+                AppLog.note("widgets", "tasks widget: headless check-off out of background time")
+            }
+            let saved = await checkOffHeadless(id, account: accountKey)
             time.end()
+            return saved
+        case .refused:
+            return false
         }
-        return true
     }
 
-    /// The checks, then the row drawn ticked where it stands. The store, or nil when there's nothing to tick.
-    private func tick(_ id: String, account accountKey: String) async -> TasksStore? {
+    /// The checks, then the row drawn ticked where it stands. Falls back to `.headless` when launched in the background
+    /// without a scene / `AppModel` / `TasksStore`.
+    private func tick(_ id: String, account accountKey: String) async -> TickResult {
         let state = UIApplication.shared.applicationState == .background ? "background" : "foreground"
         AppLog.note("widgets", "tasks widget: check-off asked (\(state))")
         guard let store = await storeWhenReady() else {
-            AppLog.note("widgets", "tasks widget: check-off with no Tasks store in this launch (nobody signed in yet)")
-            return nil
+            if self.account == nil {
+                AppLog.note("widgets", "tasks widget: no Tasks store in this launch, trying headless check-off")
+                return .headless
+            }
+            AppLog.note("widgets", "tasks widget: check-off with no Tasks store in this launch")
+            return .refused
         }
         guard accountKey == self.accountKey else {
             AppLog.note("widgets", "tasks widget: check-off for another account, refused")
             await writeAsyncResult(reason: "another account")
-            return nil
+            return .refused
         }
         store.prepare()
         if !store.hasList { await store.refresh() }
         guard let task = store.task(id), !task.isDone, ticking[id] == nil else {
             AppLog.note("widgets", "tasks widget: check-off for a task not open on the list")
             await writeAsyncResult(reason: "task gone")
-            return nil
+            return .refused
         }
         ticking[id] = task
         await writeAsyncResult(reason: "ticked")
-        return store
+        return .live(store)
+    }
+
+    /// Cold-launch background fallback: verifies the saved Keychain account matches `accountKey`, loads the task list
+    /// via `ShareSender.rest`, sends `PATCH /api/plugins/hermes-hq-push/tasks/<id>` with `status: "done"`, and updates
+    /// `TasksWidgetStore` + reloads widget timelines.
+    private func checkOffHeadless(_ id: String, account accountKey: String) async -> Bool {
+        let resolved = headlessResolver?(accountKey) ?? Self.liveHeadlessContext(expectedAccountKey: accountKey)
+        if resolved.signedOut {
+            let scheme = AppIdentity.current.urlScheme
+            let changed: Bool = await withCheckedContinuation { continuation in
+                Self.ioQueue.async { continuation.resume(returning: TasksWidgetStore.quiet(.signedOut, scheme: scheme)) }
+            }
+            if changed { Self.reload() }
+            AppLog.note("widgets", "tasks widget: headless check-off refused (signed out)")
+            return false
+        }
+        guard let context = resolved.context else {
+            AppLog.note("widgets", "tasks widget: headless check-off for another account, refused")
+            return false
+        }
+        guard let listAnswer = try? await context.send("GET", TasksAPI.base, nil), listAnswer.ok,
+              let decoded = try? JSONDecoder().decode(TodoListAnswer.self, from: listAnswer.data) else {
+            AppLog.note("widgets", "tasks widget: headless check-off could not load list")
+            return false
+        }
+        let currentTasks = decoded.tasks ?? []
+        guard let target = currentTasks.first(where: { $0.id == id && !$0.isDone }) else {
+            AppLog.note("widgets", "tasks widget: headless check-off task not open on list")
+            await persistHeadlessSnapshot(decoded, accountKey: context.accountKey, bots: context.bots, reason: "headless task gone")
+            return false
+        }
+        guard let patchBody = try? JSONValue.object(["rev": .number(Double(target.rev)), "status": .string("done")]).encoded(),
+              let patchAnswer = try? await context.send("PATCH", TasksAPI.base + "/" + PagesREST.segment(target.id), patchBody),
+              patchAnswer.ok else {
+            AppLog.note("widgets", "tasks widget: headless check-off PATCH refused")
+            return false
+        }
+        var refreshed = decoded
+        if let freshAnswer = try? await context.send("GET", TasksAPI.base, nil), freshAnswer.ok,
+           let freshDecoded = try? JSONDecoder().decode(TodoListAnswer.self, from: freshAnswer.data) {
+            refreshed = freshDecoded
+        } else {
+            let updated = (try? TasksAPI.task(patchAnswer.data)) ?? {
+                var copy = target
+                copy.status = "done"
+                copy.rev += 1
+                copy.doneAt = TodoDates.now()
+                return copy
+            }()
+            var tasks = currentTasks
+            if let idx = tasks.firstIndex(where: { $0.id == updated.id }) {
+                tasks[idx] = updated
+            }
+            refreshed.tasks = tasks
+        }
+        await persistHeadlessSnapshot(refreshed, accountKey: context.accountKey, bots: context.bots, reason: "headless check-off")
+        AppLog.note("widgets", "tasks widget: headless check-off saved")
+        return true
+    }
+
+    /// Updates `TasksWidgetStore` directly from the gateway when no in-process `TasksStore` is attached (e.g. cold
+    /// background Shortcuts execution of `AddTaskIntent` or `CompleteTaskIntent`).
+    func refreshHeadless(reason: String = "shortcut") async {
+        guard enabled else { return }
+        let resolved = headlessResolver?(nil) ?? Self.liveHeadlessContext(expectedAccountKey: nil)
+        guard let context = resolved.context else { Self.reload(); return }
+        guard let answer = try? await context.send("GET", TasksAPI.base, nil), answer.ok,
+              let decoded = try? JSONDecoder().decode(TodoListAnswer.self, from: answer.data) else {
+            Self.reload()
+            return
+        }
+        await persistHeadlessSnapshot(decoded, accountKey: context.accountKey, bots: context.bots, reason: reason)
+    }
+
+    private func persistHeadlessSnapshot(_ answer: TodoListAnswer, accountKey: String, bots: [ShareBot], reason: String) async {
+        let scheme = AppIdentity.current.urlScheme
+        let tasks = answer.tasks ?? []
+        let sections = answer.sections ?? []
+        let goals = answer.goals ?? []
+        let sort = answer.settings?.sort ?? "smart"
+        let enabledTasks = answer.settings?.enabled ?? true
+        let now = Date()
+        let prep: PreparedWrite
+        if !enabledTasks {
+            prep = .quiet(state: .off, scheme: scheme, account: accountKey)
+        } else {
+            let namesByProfile = Dictionary(uniqueKeysWithValues: bots.map { ($0.profile, $0.name) })
+            let botName: @Sendable (String?) -> String = { profile in
+                let id = profile ?? "default"
+                return namesByProfile[id] ?? (id == "default" ? "Hermes" : id.capitalized)
+            }
+            let input = Input(tasks: tasks, sections: sections, bots: bots.map(\.profile), sort: sort,
+                              paused: GoalViews.paused(goals), goals: goals, ticking: [])
+            prep = .live(scheme: scheme, account: accountKey, input: input, botName: botName, now: now)
+        }
+        let result: (changed: Bool, logLine: String?) = await withCheckedContinuation { continuation in
+            Self.ioQueue.async { continuation.resume(returning: Self.performWrite(prep)) }
+        }
+        #if DEBUG
+        TileWidgetWriter.showProbe()
+        #endif
+        if result.changed {
+            Self.reload()
+            if let logLine = result.logLine { AppLog.note("widgets", "tasks widget (\(reason)): \(logLine)") }
+        }
+    }
+
+    private nonisolated static func liveHeadlessContext(expectedAccountKey: String?) -> (context: HeadlessContext?, signedOut: Bool) {
+        let keychain = SystemShareKeychain()
+        guard let data = try? keychain.read(),
+              let saved = ShareAccounts.current(in: data),
+              !ShareAccounts.isLegacyPasswordItem(data),
+              !saved.cookies.isEmpty || saved.nous != nil else {
+            return (nil, true)
+        }
+        let key = TileWidgetIndex.key(saved.url + "|" + saved.username)
+        if let expectedAccountKey, expectedAccountKey != key {
+            return (nil, false)
+        }
+        let storedRoster = AskRoster.read()
+        let roster: ShareRoster = if let storedRoster, storedRoster.account == saved.key {
+            storedRoster
+        } else {
+            ShareRoster(account: saved.key, url: saved.url, username: saved.username,
+                        limitBytes: ShareRules.defaultLimitBytes, bots: [], savedAt: 0)
+        }
+        let context = HeadlessContext(accountKey: key, bots: roster.bots) { method, path, json in
+            try await ShareSender().rest(method, path, json: json, roster: roster, timeout: 15)
+        }
+        return (context, false)
     }
 
     /// The page's own save (`setDone`), the ticked row held a moment, then written again: gone, or put back.
@@ -457,11 +631,25 @@ final class TasksWidgetWriter {
         return saved
     }
 
-    /// The Tasks store once the app has one (a launch for the intent makes its tabs first): up to 10 s.
+    /// The Tasks store once the app has one. On a cold background launch with no connected `UIWindowScene`
+    /// (`LiveActivityIntent`), returns quickly so the headless REST fallback can run within background time limits.
     private func storeWhenReady() async -> TasksStore? {
-        for _ in 0..<50 {
+        if account != nil, let store = currentStore() { return store }
+        let headlessLaunch = UIApplication.shared.connectedScenes.isEmpty
+        let attempts: Int
+        if let readyWaitAttempts {
+            attempts = max(0, readyWaitAttempts)
+        } else if headlessLaunch {
+            attempts = 5    // ~0.5 s when no window scene is connected
+        } else if UIApplication.shared.applicationState == .background {
+            attempts = 8    // ~1.6 s in background
+        } else {
+            attempts = 50   // ~10 s in foreground
+        }
+        let interval: Duration = headlessLaunch ? .milliseconds(100) : .milliseconds(200)
+        for _ in 0..<attempts {
+            try? await Task.sleep(for: interval)
             if account != nil, let store = currentStore() { return store }
-            try? await Task.sleep(for: .milliseconds(200))
         }
         return nil
     }

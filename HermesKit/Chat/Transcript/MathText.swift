@@ -33,10 +33,36 @@ nonisolated enum MathText {
     /// only when it reads as math ("It costs $5 and $10" stays text). An unclosed delimiter is text.
     static func spans(in text: String) -> [Span] {
         guard text.contains("$") || text.contains("\\(") || text.contains("\\[") || text.contains("\\begin{") else { return [] }
+        enum CloserCache { case unknown, none, at(Range<String.Index>) }
         var out: [Span] = []
         var i = text.startIndex
         let end = text.endIndex
-        func find(_ needle: String, from: String.Index) -> Range<String.Index>? { text.range(of: needle, range: from..<end) }
+        var inlineParenCloser: CloserCache = .unknown
+        var bracketCloser: CloserCache = .unknown
+        var dollarDollarCloser: CloserCache = .unknown
+        var doubleNewlineCache: CloserCache = .unknown
+        var envClosers: [String: CloserCache] = [:]
+
+        func findCached(_ needle: String, from: String.Index, cache: inout CloserCache) -> Range<String.Index>? {
+            switch cache {
+            case .none:
+                return nil
+            case .at(let range) where range.lowerBound >= from:
+                return range
+            case .unknown, .at:
+                if let range = text.range(of: needle, range: from..<end) {
+                    cache = .at(range)
+                    return range
+                }
+                cache = .none
+                return nil
+            }
+        }
+        func hasDoubleNewline(in range: Range<String.Index>) -> Bool {
+            guard let found = findCached("\n\n", from: range.lowerBound, cache: &doubleNewlineCache) else { return false }
+            return found.upperBound <= range.upperBound
+        }
+
         while i < end {
             let c = text[i]
             if c == "\\" {
@@ -45,10 +71,13 @@ nonisolated enum MathText {
                 if text[next] == "(" || text[next] == "[" {
                     let block = text[next] == "["
                     let open = text.index(after: next)
-                    if let close = find(block ? "\\]" : "\\)", from: open) {
-                        let source = String(text[open..<close.lowerBound])
-                        if !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, block || !source.contains("\n\n") {
-                            out.append(Span(range: i..<close.upperBound, source: source.trimmingCharacters(in: .whitespacesAndNewlines), block: block))
+                    let close: Range<String.Index>? = block
+                        ? findCached("\\]", from: open, cache: &bracketCloser)
+                        : findCached("\\)", from: open, cache: &inlineParenCloser)
+                    if let close, block || !hasDoubleNewline(in: open..<close.lowerBound) {
+                        let source = String(text[open..<close.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !source.isEmpty {
+                            out.append(Span(range: i..<close.upperBound, source: source, block: block))
                             i = close.upperBound
                             continue
                         }
@@ -56,13 +85,21 @@ nonisolated enum MathText {
                 }
                 // A math environment written bare, with no `$$` or `\[` around it (tester 2026-11-09: models write
                 // `\begin{align}…\end{align}` on its own lines): a display formula, its `\begin` and `\end` kept.
-                if text[next] == "b", let name = bareEnvironment(text, at: i),
-                   let close = find("\\end{\(name)}", from: next) {
-                    let source = String(text[i..<close.upperBound])
-                    if source.count <= maxLength {
-                        out.append(Span(range: i..<close.upperBound, source: source, block: true))
-                        i = close.upperBound
-                        continue
+                if text[next] == "b", let name = bareEnvironment(text, at: i) {
+                    var cached = envClosers[name] ?? .unknown
+                    let close = findCached("\\end{\(name)}", from: next, cache: &cached)
+                    envClosers[name] = cached
+                    if let close {
+                        let spanRange = i..<close.upperBound
+                        let utf8Len = text.utf8.distance(from: spanRange.lowerBound, to: spanRange.upperBound)
+                        if utf8Len <= maxLength * 4 {
+                            let slice = text[spanRange]
+                            if slice.prefix(maxLength + 1).count <= maxLength {
+                                out.append(Span(range: spanRange, source: String(slice), block: true))
+                                i = close.upperBound
+                                continue
+                            }
+                        }
                     }
                 }
                 // An escaped character (including "\$") is never a delimiter.
@@ -73,7 +110,7 @@ nonisolated enum MathText {
                 let next = text.index(after: i)
                 if next < end, text[next] == "$" {
                     let open = text.index(after: next)
-                    if open < end, !priceTier(text, at: open), let close = find("$$", from: open) {
+                    if open < end, !priceTier(text, at: open), let close = findCached("$$", from: open, cache: &dollarDollarCloser) {
                         let source = String(text[open..<close.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
                         if !source.isEmpty {
                             out.append(Span(range: i..<close.upperBound, source: source, block: true))
@@ -105,8 +142,11 @@ nonisolated enum MathText {
     /// The name of the math environment a `\begin{` at `at` opens, if it is one.
     private static func bareEnvironment(_ text: String, at: String.Index) -> String? {
         let rest = text[at...]
-        guard rest.hasPrefix("\\begin{"), let close = rest.firstIndex(of: "}") else { return nil }
-        let name = String(rest[rest.index(rest.startIndex, offsetBy: 7)..<close])
+        guard rest.hasPrefix("\\begin{") else { return nil }
+        let nameStart = rest.index(rest.startIndex, offsetBy: 7)
+        let searchLimit = rest.index(nameStart, offsetBy: 16, limitedBy: rest.endIndex) ?? rest.endIndex
+        guard let close = rest[nameStart..<searchLimit].firstIndex(of: "}") else { return nil }
+        let name = String(rest[nameStart..<close])
         return bareEnvironments.contains(name) ? name : nil
     }
 
@@ -229,6 +269,7 @@ nonisolated enum MathText {
             out += plain[cursor...]
             plain = ""
         }
+        var noCloseTicks = Set<Int>()
         var i = prose.startIndex
         while i < prose.endIndex {
             if prose[i] == "`" {
@@ -236,11 +277,14 @@ nonisolated enum MathText {
                 var j = i
                 while j < prose.endIndex, prose[j] == "`" { j = prose.index(after: j) }
                 let ticks = String(prose[i..<j])
-                if let end = prose.range(of: ticks, range: j..<prose.endIndex) {
-                    flushPlain()
-                    out += prose[i..<end.upperBound]
-                    i = end.upperBound
-                    continue
+                if !noCloseTicks.contains(ticks.count) {
+                    if let end = prose.range(of: ticks, range: j..<prose.endIndex) {
+                        flushPlain()
+                        out += prose[i..<end.upperBound]
+                        i = end.upperBound
+                        continue
+                    }
+                    noCloseTicks.insert(ticks.count)
                 }
                 plain += ticks
                 i = j
@@ -256,8 +300,8 @@ nonisolated enum MathText {
     /// The token's formula index, when `text` is exactly one display-formula token (its paragraph).
     static func blockToken(_ text: String) -> Int? {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard t.first == blockOpen, t.last == close else { return nil }
-        return Int(t.dropFirst().dropLast())
+        guard t.first == blockOpen, t.last == close, let index = Int(t.dropFirst().dropLast()), index >= 0 else { return nil }
+        return index
     }
 
     /// Splits text holding tokens into its words and formulas, in order.
@@ -271,7 +315,7 @@ nonisolated enum MathText {
         while i < text.endIndex {
             let c = text[i]
             if c == inlineOpen || c == blockOpen, let end = text[i...].firstIndex(of: close),
-               let index = Int(text[text.index(after: i)..<end]) {
+               let index = Int(text[text.index(after: i)..<end]), index >= 0 {
                 if !run.isEmpty { out.append(.text(run)); run = "" }
                 out.append(.formula(index))
                 i = text.index(after: end)
@@ -290,7 +334,7 @@ nonisolated enum MathText {
         return pieces(text).map { piece in
             switch piece {
             case .text(let t): return t
-            case .formula(let i): return i < formulas.count ? formulas[i].written : ""
+            case .formula(let i): return i >= 0 && i < formulas.count ? formulas[i].written : ""
             }
         }.joined()
     }
@@ -371,7 +415,9 @@ nonisolated enum MathText {
     /// Bounded: at most 2,000 characters and a few milliseconds.
     static func readable(_ source: String, block: Bool = false) -> String? {
         guard source.count <= maxLength else { return nil }
-        var parser = Parser(chars: Array(source), block: block, deadline: DispatchTime.now().uptimeNanoseconds + 5_000_000)
+        // Strip raw private-use limit delimiters from untrusted input so only `limitScript` emits them.
+        let sanitized = source.filter { $0 != limitBelowOpen && $0 != limitAboveOpen && $0 != limitClose }
+        var parser = Parser(chars: Array(sanitized), block: block, deadline: DispatchTime.now().uptimeNanoseconds + 5_000_000)
         guard let out = parser.sequence(until: nil) else { return nil }
         guard parser.at >= parser.chars.count else { return nil }
         let tidy = out.split(separator: "\n", omittingEmptySubsequences: false)
@@ -476,8 +522,22 @@ nonisolated enum MathText {
         /// same ∑) — the `^`/`_` ahead of the cursor is a limit, not an ordinary sub/superscript.
         private func endsWithLimitOperator(_ out: String) -> Bool {
             var s = Substring(out)
-            if s.last == MathText.limitClose, let open = s.lastIndex(where: { $0 == MathText.limitBelowOpen || $0 == MathText.limitAboveOpen }) {
-                s = s[s.startIndex..<open]
+            if s.last == MathText.limitClose {
+                var level = 0
+                var idx = s.endIndex
+                while idx > s.startIndex {
+                    idx = s.index(before: idx)
+                    let ch = s[idx]
+                    if ch == MathText.limitClose {
+                        level += 1
+                    } else if ch == MathText.limitBelowOpen || ch == MathText.limitAboveOpen {
+                        level -= 1
+                        if level == 0 {
+                            s = s[s.startIndex..<idx]
+                            break
+                        }
+                    }
+                }
             }
             return MathText.limitBaseOperators.contains { s.hasSuffix($0) }
         }

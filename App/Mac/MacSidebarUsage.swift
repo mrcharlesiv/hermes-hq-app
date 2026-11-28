@@ -136,7 +136,6 @@ final class SidebarUsageStore {
             updatedAt = snap.updatedAt
             show(snap.options)
             scheduleNextReset()
-            // Refresh silently in background only if stale (>= 5 min).
             refresh(reason: .foreground)
             return
         }
@@ -327,7 +326,7 @@ final class SidebarUsageStore {
     private func announce() { NotificationCenter.default.post(name: Self.changed, object: nil) }
 
     #if DEBUG
-    /// `-HQDemoUsage YES` (pictures): two plans with their allowances, no gateway asked. `low` shows a plan nearly out.
+    /// `-HQDemoUsage YES|low|pool|extremes` (pictures): exercises real gateway provider names, pools, 0%, and 100%.
     private static func demoBlocks() -> [UsageBlock]? {
         guard let kind = UserDefaults.standard.string(forKey: "HQDemoUsage"), kind != "NO" else { return nil }
         let now = Date()
@@ -335,12 +334,32 @@ final class SidebarUsageStore {
             let resets = now.addingTimeInterval(hours * 3600)
             return UsageGauge(id: id, title: title, left: left, reset: "resets \(UsageDates.until(resets, now: now))", resetsAt: resets)
         }
+        if kind == "pool" {
+            // Mirrors real gateway names ("ChatGPT or Codex Subscription" with 2 pooled logins + "Anthropic Account" at 100%).
+            return [
+                UsageBlock(id: "openai-codex.1", provider: "openai-codex", title: "ChatGPT or Codex Subscription", account: "Account 1", current: false,
+                           gauges: [gauge("c1.0", "Session", 0.0, hours: 1.5), gauge("c1.1", "Weekly", 0.30, hours: 72)], notes: []),
+                UsageBlock(id: "openai-codex.2", provider: "openai-codex", title: "ChatGPT or Codex Subscription", account: "Account 2", current: false,
+                           gauges: [gauge("c2.0", "Session", 1.0, hours: 5.0), gauge("c2.1", "Weekly", 0.90, hours: 140)], notes: []),
+                UsageBlock(id: "anthropic", provider: "anthropic", title: "Anthropic Account", account: nil, current: false,
+                           gauges: [gauge("a.0", "Current session", 1.0, hours: 4.8), gauge("a.1", "Current week", 1.0, hours: 160)], notes: []),
+            ]
+        }
+        if kind == "extremes" {
+            // Stress test: 0% red + 100% full side by side with real long gateway provider names.
+            return [
+                UsageBlock(id: "openai-codex", provider: "openai-codex", title: "ChatGPT or Codex Subscription", account: nil, current: false,
+                           gauges: [gauge("c.0", "Session", 0.0, hours: 1.5), gauge("c.1", "Weekly", 0.0, hours: 72)], notes: []),
+                UsageBlock(id: "anthropic", provider: "anthropic", title: "Anthropic Account", account: nil, current: false,
+                           gauges: [gauge("a.0", "Current session", 1.0, hours: 4.8), gauge("a.1", "Current week", 1.0, hours: 160)], notes: []),
+            ]
+        }
         let low = kind == "low"
         return [
-            UsageBlock(id: "anthropic", provider: "anthropic", title: "Claude", account: nil, current: false,
+            UsageBlock(id: "anthropic", provider: "anthropic", title: "Anthropic Account", account: nil, current: false,
                        gauges: [gauge("a.0", "Current session", low ? 0.07 : 0.62, hours: 2.2), gauge("a.1", "Current week", low ? 0.19 : 0.41, hours: 75)],
                        notes: []),
-            UsageBlock(id: "openai-codex", provider: "openai-codex", title: "Codex", account: nil, current: false,
+            UsageBlock(id: "openai-codex", provider: "openai-codex", title: "ChatGPT or Codex Subscription", account: nil, current: false,
                        gauges: [gauge("c.0", "Session", 0.88, hours: 3.5), gauge("c.1", "Weekly", 0.73, hours: 120)],
                        notes: []),
         ]
@@ -376,7 +395,8 @@ final class MacSidebarUsage: UIView {
     func show(_ rows: [SidebarUsageRow], more: Int, folded: Bool) {
         let chrome = MacSidebar.chrome
         let next = "\(folded)|\(chrome)|\(more)|" + rows.map { row in
-            row.id + row.title + row.shortName + (row.note ?? "") + row.all.map { "\($0.title)\(Int($0.left * 1000))\($0.reset ?? "")" }.joined()
+            "\(row.id)|\(row.title)|\(row.accountCount)|\(row.note ?? "")|"
+                + row.all.map { "\($0.title)\(Int($0.left * 1000))\($0.reset ?? "")" }.joined()
         }.joined(separator: "|")
         guard next != signature else {
             stack.arrangedSubviews.forEach { $0.setNeedsLayout() }   // the theme may have changed: the rings' ink again
@@ -428,7 +448,7 @@ final class MacSidebarUsage: UIView {
     }
 }
 
-/// One plan in the open sidebar: its name, then a line per allowance (name, bar, what is left).
+/// One provider in the open sidebar: its clean name (plus subtle pool count when 2+ logins), then a line per allowance.
 private final class UsagePlan: UIControl {
     private var hovered = false
 
@@ -455,7 +475,20 @@ private final class UsagePlan: UIControl {
         title.font = MacSidebar.font(type.heading, weight: .semibold)
         title.textColor = HQPalette.label2
         title.lineBreakMode = .byTruncatingTail
-        lines.addArrangedSubview(title)
+        if row.accountCount > 1 {
+            let count = UILabel()
+            count.text = "\(row.accountCount) accounts"
+            count.font = MacSidebar.font(type.count)
+            count.textColor = MacSidebar.quietInk
+            count.setContentCompressionResistancePriority(.required, for: .horizontal)
+            let header = UIStackView(arrangedSubviews: [title, UIView(), count])
+            header.axis = .horizontal
+            header.alignment = .firstBaseline
+            header.spacing = 6
+            lines.addArrangedSubview(header)
+        } else {
+            lines.addArrangedSubview(title)
+        }
 
         // One column for the names, one for the figures, so the bars start and end together down the block.
         let nameFont = MacSidebar.font(type.count)
@@ -467,20 +500,21 @@ private final class UsagePlan: UIControl {
             name.text = SidebarUsage.shortTitle(gauge)
             name.font = nameFont
             name.textColor = HQPalette.label.withAlphaComponent(0.74)
-            name.lineBreakMode = .byTruncatingTail
+            name.lineBreakMode = .byClipping
             let bar = UsageBarView(left: gauge.left, ink: MacSidebarUsage.ink(gauge))
             let figure = UILabel()
             figure.text = SidebarUsage.figure(gauge)
             figure.font = figureFont
             figure.textAlignment = .right
+            figure.lineBreakMode = .byClipping
             figure.textColor = SidebarUsage.level(gauge) == .fine ? HQPalette.label.withAlphaComponent(0.74) : MacSidebarUsage.ink(gauge)
             let line = UIStackView(arrangedSubviews: [name, bar, figure])
             line.axis = .horizontal
             line.alignment = .center
             line.spacing = (8 * chrome).rounded()
             NSLayoutConstraint.activate([
-                name.widthAnchor.constraint(equalToConstant: min(ceil(nameWidth), (96 * chrome).rounded())),
-                figure.widthAnchor.constraint(equalToConstant: ceil(figureWidth)),
+                name.widthAnchor.constraint(equalToConstant: min(ceil(nameWidth) + 2, (96 * chrome).rounded())),
+                figure.widthAnchor.constraint(equalToConstant: ceil(figureWidth) + 2),
                 bar.heightAnchor.constraint(equalToConstant: UsageBarView.height),
             ])
             lines.addArrangedSubview(line)
@@ -520,8 +554,8 @@ private final class UsagePlan: UIControl {
     }
 }
 
-/// One plan on the folded rail: a circular progress ring with the percentage left inside and the plan's name
-/// directly underneath — instantly readable at a glance without cryptic initials.
+/// One provider on the folded rail: a roomy circular progress ring with the percentage left inside (never clipped
+/// or ellipsized, even at 100%) and the crisp provider name underneath.
 private final class UsageRing: UIControl {
     private let ringHost = UIView()
     private let trackLayer = CAShapeLayer()
@@ -533,7 +567,8 @@ private final class UsageRing: UIControl {
 
     init(row: SidebarUsageRow) {
         let chrome = MacSidebar.chrome
-        side = (34 * chrome).rounded()
+        // 38 pt outer ring with 2.5 pt stroke leaves 33 pt inner diameter — plenty of room for "100%" without clipping.
+        side = (38 * chrome).rounded()
         left = row.tightest?.left ?? 0
         ink = row.tightest.map(MacSidebarUsage.ink) ?? HQPalette.orange
         super.init(frame: .zero)
@@ -542,7 +577,7 @@ private final class UsageRing: UIControl {
         ringHost.translatesAutoresizingMaskIntoConstraints = false
         addSubview(ringHost)
 
-        let line = max(2.5, (2.75 * chrome).rounded())
+        let line = max(2.5, (2.5 * chrome).rounded())
         for shape in [trackLayer, ringLayer] {
             shape.fillColor = UIColor.clear.cgColor
             shape.lineWidth = line
@@ -553,28 +588,34 @@ private final class UsageRing: UIControl {
         let value = UILabel()
         let text = row.ringText
         value.text = text
-        let valueSize: CGFloat = text.count >= 4 ? 9.5 : 10.5
+        let valueSize: CGFloat = text.count >= 4 ? 9.5 : 11
         value.font = HQFont.monoDigit(ofSize: (valueSize * chrome).rounded(), weight: .semibold)
         let warn = row.tightest.map { SidebarUsage.level($0) != .fine } ?? true
-        value.textColor = warn ? ink : HQPalette.label.withAlphaComponent(0.84)
+        value.textColor = warn ? ink : HQPalette.label.withAlphaComponent(0.86)
         value.textAlignment = .center
+        value.numberOfLines = 1
+        // Never draw "10…" inside a gauge ring — fit cleanly to inner chord width.
+        value.lineBreakMode = .byClipping
         value.adjustsFontSizeToFitWidth = true
-        value.minimumScaleFactor = 0.78
+        value.minimumScaleFactor = 0.6
         value.isUserInteractionEnabled = false
         value.translatesAutoresizingMaskIntoConstraints = false
         ringHost.addSubview(value)
 
         let caption = UILabel()
-        caption.text = row.shortName
+        caption.text = row.title
         caption.font = MacSidebar.font(10.5, weight: .medium)
         caption.textColor = HQPalette.label2
         caption.textAlignment = .center
+        caption.numberOfLines = 1
+        caption.adjustsFontSizeToFitWidth = true
+        caption.minimumScaleFactor = 0.72
         caption.lineBreakMode = .byTruncatingTail
         caption.isUserInteractionEnabled = false
         caption.translatesAutoresizingMaskIntoConstraints = false
         addSubview(caption)
 
-        let boxWidth = max(side + 16, (54 * chrome).rounded())
+        let boxWidth = max(side + 18, (MacSidebar.compactRailWidth - 6).rounded())
         NSLayoutConstraint.activate([
             widthAnchor.constraint(equalToConstant: boxWidth),
             ringHost.topAnchor.constraint(equalTo: topAnchor, constant: 3),
@@ -583,8 +624,8 @@ private final class UsageRing: UIControl {
             ringHost.heightAnchor.constraint(equalToConstant: side),
             value.centerXAnchor.constraint(equalTo: ringHost.centerXAnchor),
             value.centerYAnchor.constraint(equalTo: ringHost.centerYAnchor),
-            value.widthAnchor.constraint(lessThanOrEqualTo: ringHost.widthAnchor, constant: -(line * 2 + 2)),
-            caption.topAnchor.constraint(equalTo: ringHost.bottomAnchor, constant: 2),
+            value.widthAnchor.constraint(lessThanOrEqualTo: ringHost.widthAnchor, constant: -(line * 2)),
+            caption.topAnchor.constraint(equalTo: ringHost.bottomAnchor, constant: 3),
             caption.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
             caption.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
             caption.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -3),
@@ -757,8 +798,13 @@ private struct SidebarUsagePanelView: View {
                         .font(Font.hq(.subheadline)).foregroundStyle(Color.hqLabel2)
                 }
                 ForEach(blocks) { block in
+                    let providerName = SidebarUsage.providerName(slug: block.provider, fallback: block.title)
+                    let heading = [providerName, block.account].compactMap { $0 }
+                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .filter { !$0.isEmpty }
+                        .joined(separator: " · ")
                     VStack(alignment: .leading, spacing: 10) {
-                        Text([block.title, block.account].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
+                        Text(heading)
                             .font(Font.hq(.subheadline).weight(.semibold)).foregroundStyle(Color.hqLabel)
                         ForEach(block.gauges) { gauge in
                             let label = SidebarUsage.shortTitle(gauge)

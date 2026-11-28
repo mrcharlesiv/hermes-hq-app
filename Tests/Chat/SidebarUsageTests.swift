@@ -3,8 +3,8 @@ import Testing
 @testable import HermesHQNative
 
 /// [sidebar-usage] Owner 2026-11-28: "make it so that usage bars can show up on the bottom" of the Mac's sidebar. What
-/// the foot lists (`SidebarUsage`): a few plans, each plan's tightest two allowances in the plan's own order, with
-/// normalized labels, screenshot-safe titles, clear folded rings, and event-driven refresh gating.
+/// the foot lists (`SidebarUsage`): one clean entry per provider (rolling up pooled logins), crisp short provider names,
+/// normalized labels, clear ring text, and event-driven refresh gating.
 @Suite struct SidebarUsageTests {
     private func gauge(_ title: String, _ left: Double, reset: String? = nil, resetsAt: Date? = nil) -> UsageGauge {
         UsageGauge(id: title, title: title, left: left, reset: reset, resetsAt: resetsAt)
@@ -56,22 +56,45 @@ import Testing
         #expect(listed.more == 0)
     }
 
-    @Test func sidebarTitlesStayScreenshotSafeWhileFullTitleKeepsPoolAccount() {
-        let single = SidebarUsage.rows([
-            block("a", provider: "anthropic", title: "Claude", account: "Work", gauges: [gauge("Session", 0.5)]),
-            block("b", provider: "openai-codex", title: "Codex", account: "  ", gauges: [gauge("Session", 0.5)]),
-        ])
-        #expect(single.rows.map(\.title) == ["Claude", "Codex"])
-        #expect(single.rows.map(\.shortName) == ["Claude", "Codex"])
-        #expect(single.rows.map(\.fullTitle) == ["Claude · Work", "Codex"])
+    @Test func verboseGatewayProviderNamesBecomeCrispShortNames() {
+        #expect(SidebarUsage.providerName(slug: "openai-codex", fallback: "ChatGPT or Codex Subscription") == "Codex")
+        #expect(SidebarUsage.providerName(slug: "anthropic", fallback: "Anthropic Account") == "Claude")
+        #expect(SidebarUsage.providerName(slug: "claude-code", fallback: "Anthropic OAuth: Required Extra Usage Credits") == "Claude")
+        #expect(SidebarUsage.providerName(slug: "nous", fallback: "Nous Portal") == "Nous")
+        #expect(SidebarUsage.providerName(slug: "openrouter", fallback: "OpenRouter") == "OpenRouter")
+        #expect(SidebarUsage.providerName(slug: "custom-acme", fallback: "Acme Subscription") == "Acme")
+    }
 
-        let pooled = SidebarUsage.rows([
-            block("a.1", provider: "anthropic", title: "Claude", account: "alice@acme.com", gauges: [gauge("Session", 0.5)]),
-            block("a.2", provider: "anthropic", title: "Claude", account: "Personal", gauges: [gauge("Session", 0.8)]),
+    @Test func pooledAccountsRollUpIntoOneCleanProviderRow() throws {
+        let listed = SidebarUsage.rows([
+            block("openai-codex.1", provider: "openai-codex", title: "ChatGPT or Codex Subscription", account: "alice@acme.com",
+                  gauges: [gauge("Session", 0.0), gauge("Weekly", 0.30)]),
+            block("openai-codex.2", provider: "openai-codex", title: "ChatGPT or Codex Subscription", account: "Personal",
+                  gauges: [gauge("Session", 1.0), gauge("Weekly", 0.90)]),
+            block("anthropic", provider: "anthropic", title: "Anthropic Account", account: nil,
+                  gauges: [gauge("Current session", 1.0), gauge("Current week", 0.80)]),
         ])
-        #expect(pooled.rows.map(\.title) == ["Claude · 1", "Claude · 2"])
-        #expect(pooled.rows.map(\.shortName) == ["Claude 1", "Claude 2"])
-        #expect(pooled.rows.map(\.fullTitle) == ["Claude · alice@acme.com", "Claude · Personal"])
+        #expect(listed.rows.count == 2)
+        #expect(listed.rows.map(\.title) == ["Codex", "Claude"])
+        let codex = try #require(listed.rows.first)
+        #expect(codex.accountCount == 2)
+        #expect(codex.gauges.map(SidebarUsage.shortTitle) == ["Session", "Weekly"])
+        #expect(codex.gauges.map(SidebarUsage.figure) == ["50%", "60%"])
+        #expect(codex.ringText == "50%")
+        #expect(!SidebarUsage.tip(codex).contains("alice@acme.com"))
+        #expect(SidebarUsage.tip(codex).contains("Codex (2 accounts)"))
+    }
+
+    @Test func pooledAccountExhaustedWithoutWindowsCountsAsZero() throws {
+        let listed = SidebarUsage.rows([
+            block("openai-codex.1", provider: "openai-codex", title: "ChatGPT or Codex Subscription", account: "Account 1",
+                  gauges: [], notes: ["Used up · resets in 2h"]),
+            block("openai-codex.2", provider: "openai-codex", title: "ChatGPT or Codex Subscription", account: "Account 2",
+                  gauges: [gauge("Session", 1.0)]),
+        ])
+        let codex = try #require(listed.rows.first)
+        #expect(codex.accountCount == 2)
+        #expect(codex.ringText == "50%")
     }
 
     @Test func theTightestTwoAllowancesKeepThePlansOrder() {
@@ -86,7 +109,7 @@ import Testing
 
     @Test func theRowKeepsEveryAllowanceForThePointersNote() {
         let all = [gauge("Current session", 0.9), gauge("Current week", 0.2, reset: "resets in 3d"), gauge("Opus week", 0.5)]
-        let row = SidebarUsage.rows([block("claude", gauges: all)]).rows[0]
+        let row = SidebarUsage.rows([block("claude", provider: "anthropic", title: "Anthropic Account", gauges: all)]).rows[0]
         #expect(row.gauges.count == 2)
         #expect(row.all.count == 3)
         #expect(row.tightest?.title == "Current week")
@@ -116,18 +139,17 @@ import Testing
         #expect(SidebarUsage.level(gauge("a", 0.1)) == .warning)
         #expect(SidebarUsage.level(gauge("a", 0.09)) == .low)
         #expect(SidebarUsage.figure(gauge("a", 0.624)) == "62%")
+        #expect(SidebarUsage.figure(gauge("a", 1.0)) == "100%")
+        #expect(SidebarUsage.figure(gauge("a", 0.0)) == "0%")
     }
 
     @Test func eventDrivenIntervalsGateRedundantReads() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         #expect(SidebarUsage.due(last: nil, now: now, every: SidebarUsage.foregroundStaleAfter))
-        // Foreground return waits 5 minutes.
         #expect(!SidebarUsage.due(last: now.addingTimeInterval(-299), now: now, every: SidebarUsage.foregroundStaleAfter))
         #expect(SidebarUsage.due(last: now.addingTimeInterval(-300), now: now, every: SidebarUsage.foregroundStaleAfter))
-        // Post-turn refresh waits 2 minutes (gateway cache TTL).
         #expect(!SidebarUsage.due(last: now.addingTimeInterval(-119), now: now, every: SidebarUsage.afterTurnMinimum))
         #expect(SidebarUsage.due(last: now.addingTimeInterval(-120), now: now, every: SidebarUsage.afterTurnMinimum))
-        // Click refresh waits 1 minute.
         #expect(!SidebarUsage.due(last: now.addingTimeInterval(-59), now: now, every: SidebarUsage.clickMinimum))
         #expect(SidebarUsage.due(last: now.addingTimeInterval(-60), now: now, every: SidebarUsage.clickMinimum))
     }
@@ -145,12 +167,15 @@ import Testing
         #expect(SidebarUsage.nextReset(in: [block("c", gauges: [gauge("Session", 0.5, resetsAt: past)])], now: now) == nil)
     }
 
-    /// The gateway's catalog as the sidebar reads it (`GET /api/model/options`): the same rows the chat's menu gets.
+    /// The gateway's catalog as the sidebar reads it (`GET /api/model/options`): real gateway names map to crisp titles.
     @Test func theCatalogsUsageRowsBecomeTheFootsPlans() throws {
         let reset = "2030-01-01T00:00:00+00:00"
         let json: JSONValue = [
             "providers": [
-                ["slug": "anthropic", "name": "Anthropic", "authenticated": true, "models": [],
+                ["slug": "openai-codex", "name": "ChatGPT or Codex Subscription", "authenticated": true, "models": [],
+                 "usage": ["windows": [["label": "Session", "used_percent": 0, "resets_at": .string(reset)],
+                                       ["label": "Weekly", "used_percent": 100, "resets_at": .string(reset)]]]],
+                ["slug": "anthropic", "name": "Anthropic Account", "authenticated": true, "models": [],
                  "usage": ["windows": [["label": "Current session", "used_percent": 38, "resets_at": .string(reset)],
                                        ["label": "Current week", "used_percent": 59, "resets_at": .string(reset)]]]],
                 ["slug": "plain", "name": "Plain", "authenticated": true, "models": []],
@@ -158,11 +183,11 @@ import Testing
         ]
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let listed = SidebarUsage.rows(UsageLimitsModel.blocks(ModelOptions(json: json), currentProvider: "", now: now))
-        #expect(listed.rows.count == 1)
-        let row = try #require(listed.rows.first)
-        #expect(row.gauges.map(SidebarUsage.shortTitle) == ["Session", "Weekly"])
-        #expect(row.gauges.map(SidebarUsage.figure) == ["62%", "41%"])
-        #expect(row.ringText == "41%")
-        #expect(row.shortName == "Anthropic")
+        #expect(listed.rows.count == 2)
+        #expect(listed.rows.map(\.title) == ["Codex", "Claude"])
+        let claude = try #require(listed.rows.last)
+        #expect(claude.gauges.map(SidebarUsage.shortTitle) == ["Session", "Weekly"])
+        #expect(claude.gauges.map(SidebarUsage.figure) == ["62%", "41%"])
+        #expect(claude.ringText == "41%")
     }
 }

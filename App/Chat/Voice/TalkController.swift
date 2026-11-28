@@ -230,6 +230,9 @@ import UIKit
         observers.append(center.addObserver(forName: UIScene.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.appLeftScreen() }
         })
+        AudioSessionCoordinator.shared.onInputMuteChanged = { [weak self] muted in
+            self?.setMuted(muted)
+        }
     }
 
     // MARK: Reading
@@ -458,6 +461,10 @@ import UIKit
 
     func end() { send(.end) }
     func toggleMute() { send(.muteToggled) }
+    func setMuted(_ muted: Bool) {
+        guard live != nil else { return }
+        send(.setMuted(muted))
+    }
 
     /// The centre button: Send Now while listening, Stop while thinking, Interrupt while speaking.
     func centerTapped() {
@@ -905,8 +912,12 @@ import UIKit
         }
         let next = Published(view: view, muted: live?.state.muted ?? false, problem: live?.state.problem, elapsed: Int(elapsed),
                              problemAway: live?.problemAway ?? false)
+        let previousMute = lastPublished?.muted
         guard force || next != lastPublished else { return }
         lastPublished = next
+        if live != nil, previousMute != next.muted || force {
+            AudioSessionCoordinator.shared.setInputMuted(next.muted)
+        }
         TalkActivity.shared.update(view: next.view, muted: next.muted, storedSessionId: live?.chat.storedSessionId)   // [talk-background]
         NotificationCenter.default.post(name: Self.didChange, object: self)
     }
@@ -1024,6 +1035,7 @@ extension TalkController {
         case .turnRunning(let running): .turnRunning(running)
         case .reply(let reply): .reply(reply)
         case .muteToggled: .muteToggled
+        case .setMuted(let muted): .setMuted(muted)
         case .sendNow: .sendNow
         case .stopOrInterrupt: .stopOrInterrupt
         case .end: .end

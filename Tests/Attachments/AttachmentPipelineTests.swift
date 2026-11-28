@@ -555,4 +555,44 @@ struct AttachmentPipelineTests {
         #expect(b.text == "")
         #expect(b.media.count == 1)
     }
+
+    /// Issue #613: A new unsent session keeps its composer draft under a stable pending scope across bot switches even
+    /// after `session.create` resolves an ephemeral stored session id; once the first message is sent, a subsequent new
+    /// session starts clean.
+    @Test func newUnsentSessionKeepsDraftAcrossBotSwitch() async throws {
+        let client = FakeGatewayClient()
+        let account = client.account
+        let center = AttachmentCenter(account: account, client: client)
+        center.debugReset()
+        AttachmentCenter.debugRegister(center)
+        defer { center.debugReset() }
+
+        // First new session resolves ephemeral id "ephemeral-1" before anything is sent.
+        let first = LiveChatSession(client: client, account: account, profile: "ivy", storedSessionId: nil,
+                                    title: "New Chat", head: nil, cache: makeTempCache(),
+                                    resolveSessionId: { "ephemeral-1" }, startsNew: true)
+        first.listsWhenStarted = true
+        first.pendingScope = "new"
+        #expect(await first.ensureStoredId() == "ephemeral-1")
+        #expect(first.draftScope == "\(account.id)|ivy|new")
+
+        // User types a draft without sending, then switches to another bot (dropping `first`).
+        center.setText("Draft before switching bots", scope: first.draftScope, profile: "ivy")
+
+        // User comes back and opens a new session with Ivy, which resolves a brand-new ephemeral id "ephemeral-2".
+        let second = LiveChatSession(client: client, account: account, profile: "ivy", storedSessionId: nil,
+                                     title: "New Chat", head: nil, cache: makeTempCache(),
+                                     resolveSessionId: { "ephemeral-2" }, startsNew: true)
+        second.listsWhenStarted = true
+        second.pendingScope = "new"
+        #expect(await second.ensureStoredId() == "ephemeral-2")
+        #expect(second.draftScope == "\(account.id)|ivy|new")
+        #expect(center.draft(second.draftScope).text == "Draft before switching bots")
+
+        // Once the first message is sent, the session's draftScope transitions to its stored id and clears the pending scope.
+        let taken = center.takeForSend(second.draftScope)
+        second.send(taken.text, attachments: taken.attachments)
+        #expect(second.draftScope == "\(account.id)|ivy|ephemeral-2")
+        #expect(center.draft("\(account.id)|ivy|new").text.isEmpty)
+    }
 }

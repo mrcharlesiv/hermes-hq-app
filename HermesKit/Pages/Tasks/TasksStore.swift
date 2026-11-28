@@ -320,10 +320,62 @@ final class TasksStore {
     /// the phone's due reminders to this account's tasks.
     @ObservationIgnored private var closed = false
 
-    init(api: TasksAPI, account: GatewayAccount, directory: URL?) {
+    /// Periodic refresh cadence while a Tasks surface is visible and the app is active (#509).
+    /// `GET /tasks?since=<rev>` returns a 28-byte `unchanged` response when nothing moved.
+    nonisolated struct Timing: Sendable {
+        var pollVisible: Duration = .seconds(30)
+    }
+
+    private let timing: Timing
+    /// Count of visible Tasks surfaces (list, task sheet, or task brief) so polling runs while any is on screen.
+    @ObservationIgnored private var visibleCount = 0
+    @ObservationIgnored private var appActive = true
+    @ObservationIgnored private var pollTask: Task<Void, Never>?
+
+    init(api: TasksAPI, account: GatewayAccount, directory: URL?, timing: Timing = Timing()) {
         self.api = api
         self.account = account
         self.directory = directory
+        self.timing = timing
+    }
+
+    func setVisible(_ shown: Bool) {
+        if shown {
+            visibleCount += 1
+        } else {
+            visibleCount = max(0, visibleCount - 1)
+        }
+        syncPolling()
+    }
+
+    func appDidBecomeActive() {
+        appActive = true
+        syncPolling()
+    }
+
+    func appDidEnterBackground() {
+        appActive = false
+        pollTask?.cancel()
+        pollTask = nil
+    }
+
+    private func syncPolling() {
+        guard !closed, visibleCount > 0, appActive else {
+            pollTask?.cancel()
+            pollTask = nil
+            return
+        }
+        guard pollTask == nil else { return }
+        let gap = timing.pollVisible
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await PowerPolls.wait(gap, floor: .zero)
+                guard !Task.isCancelled, let self, !self.closed else { return }
+                if self.visibleCount > 0 && self.appActive {
+                    await self.refresh()
+                }
+            }
+        }
     }
 
     // MARK: Cache & Offline Queue
@@ -1684,6 +1736,9 @@ final class TasksStore {
     /// Signed out or switched away: forget the list in memory (the cache folder is purged with the account's).
     func forget() {
         closed = true
+        pollTask?.cancel()
+        pollTask = nil
+        visibleCount = 0
         changedRefreshTask?.cancel()
         changedRefreshTask = nil
         gatewayReadyTask?.cancel()

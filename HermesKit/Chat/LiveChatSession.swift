@@ -997,11 +997,16 @@ final class LiveChatSession: ChatSessionModel {
             // The other waiter took it in already.
             if let storedSessionId { return storedSessionId }
             AppLog.trace("chat", "stored id resolved: \(AppLog.tag(id)) (profile \(profile))")
-            let draftScopeBefore = layoutScope
+            let draftScopeBefore = draftScope
             storedSessionId = id
             // [attachments] What was typed and attached before the id was known moves with the chat's draft
             // (docs/spec/1x-attachments.md A14): the screen and every hand-back follow the scope.
-            AttachmentCenter.existing(account.id)?.moveDraft(from: draftScopeBefore, to: layoutScope)
+            // #613: a fresh unsent chat keeps its deterministic `pendingScope` until the first send so switching
+            // bots before sending does not strand the draft on an unlisted ephemeral session id.
+            let draftScopeAfter = draftScope
+            if draftScopeBefore != draftScopeAfter {
+                AttachmentCenter.existing(account.id)?.moveDraft(from: draftScopeBefore, to: draftScopeAfter)
+            }
             queueScopeResolved()   // verify round 3: the chat's kept queue
             promptLink?.storedIdResolved(id, profile: profile, profileParam: profileParam)   // [questions] its row waits too
             onStoredIdResolved?(id)
@@ -1347,12 +1352,17 @@ final class LiveChatSession: ChatSessionModel {
         AppLog.trace("send", "send \(AppLog.tag(localId)) in \(logIds): queued=\(queued), attachments=\(attachments.count), memo=\(memo != nil), voice=\(voiceContext != nil), interrupted=\(interrupted), waits for stop=\(turn.stopTerminalPending), \(memo.map(Self.memoLogWords) ?? "\(text.count) chars")")
         if let voiceContext { voiceLiveSends[localId] = voiceContext }   // [gpt-live]
         let typed = display ?? text                                                                     // MENUS
-        let shown = attachments.isEmpty ? typed : AttachmentSender.bubbleText(typed: typed, attachments: attachments)  // [attachments]
+        let shown = (attachments.isEmpty || memo != nil) ? typed : AttachmentSender.bubbleText(typed: typed, attachments: attachments)  // [attachments] #521
+        let draftScopeBefore = draftScope
         var bubble = ChatMessage(id: localId, role: .user, parts: [.text(shown)], timestamp: Date(), rowId: nil)
         bubble.isPending = true
         if PhoneResultMessage.bubble(forStored: text) != nil { bubble.phoneResultText = text }
         appendMessage(bubble)
         if !attachments.isEmpty { noteLocalAttachments(localId, attachments) }                              // [attachments]
+        let draftScopeAfter = draftScope
+        if draftScopeBefore != draftScopeAfter {
+            AttachmentCenter.existing(account.id)?.moveDraft(from: draftScopeBefore, to: draftScopeAfter)
+        }
         let holdForStop = turn.stopTerminalPending
         turn.busy = true
         turn.awaitingResponse = true
@@ -1421,8 +1431,8 @@ final class LiveChatSession: ChatSessionModel {
             guard stopEpoch == epoch, threadable() else { return false }
             let payload: BusyThreadPayload
             if let memoContext = memoSends[localId] {
-                payload = BusyThreadPayload(text: memoContext.typed, memo: memoContext.memo,
-                                            localId: localId, reason: reason, proactive: false)
+                payload = BusyThreadPayload(text: memoContext.typed, attachments: memoContext.attachments,
+                                            memo: memoContext.memo, localId: localId, reason: reason, proactive: false)
             } else {
                 let cleanText = carriedContextNote != nil ? (ThreadContextNote.stripped(text) ?? text) : text
                 let cleanDisplay: String? = (carriedContextNote != nil && draft == cleanText) ? nil : (draft == text ? nil : draft)
@@ -1852,7 +1862,7 @@ final class LiveChatSession: ChatSessionModel {
         AppLog.trace("send", "queue drain \(logIds): \(AppLog.tag(next.id)) goes out (\(next.hidden ? "hidden goal" : next.memo != nil ? "memo" : "message"), \(queuedMessages.count) left, \(observing ? "on screen" : "off screen"))")
         changes.markState()
         if next.hidden { submitHidden(next.text, queued: true); return }    // [activity] goal continuation
-        if let memo = next.memo { beginMemoSend(memo, typed: next.text, queued: true); return }   // VOICE
+        if let memo = next.memo { beginMemoSend(memo, typed: next.text, queued: true, attachments: next.attachments); return }   // VOICE #521
         // [threads] §9 offline outbox: if a message queued while offline drains into an externally busy chat, route
         // directly to a thread instead of blocking behind the other run.
         if next.queuedOffline == true, shouldRouteToBusyThread?() == true,

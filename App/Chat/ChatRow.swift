@@ -185,6 +185,8 @@ nonisolated struct BackgroundResultRow {
     var face: ChatSender? = nil
     /// [botdm] This chat's bot wrote to `face` ("To Hermes"), rather than the other bot writing here ("From Hermes").
     var sentTo = false
+    /// #601: this "From <bot>" row is the other bot's answer to our `message_agent` (`bot_mode_dm.py --run-delivery`).
+    var replyToOurDM = false
     /// [voice record] What was said in a live voice chat (a waveform); `result` is the exchange.
     var voice = false
     /// [updates] The centred line that stands for a run of these (UpdateGroups.swift); nil for a row of its own.
@@ -638,6 +640,7 @@ nonisolated enum ChatRowBuilder {
                 var row = BackgroundResultRow(title: title, result: BackgroundResults.readable(text), process: false, expanded: expanded)
                 row.delivery = true
                 row.face = sender                                                                        // [botdm]
+                row.replyToOurDM = m.replyToOurDM                                                        // #601
                 rows.append(ChatRow(id: id, messageId: m.id, scope: input.scope, fingerprint: h.finalize(),
                                     kind: .backgroundResult(row), gapAbove: ChatMetrics.turnGap, variant: expanded ? 1 : 0))
                 return
@@ -675,11 +678,9 @@ nonisolated enum ChatRowBuilder {
                                     kind: .backgroundResult(row), gapAbove: ChatMetrics.turnGap, variant: expanded ? 1 : 0))
                 return
             }
-            if !attachments.isEmpty {
-                rows.append(ChatMediaRows.userBubble(m, text: text, attachments: attachments, input: input))   // [attachments]
-            } else if let memo = VoiceMemo.parse(text) {
+            if let memo = VoiceMemo.parse(text) {
                 // A voice memo: an audio message with its transcript in your bubble (VOICE, spec 1x-voice §5), anything
-                // typed with it as the next bubble.
+                // typed or attached with it as the next bubble (#521).
                 let memoId = "\(m.id)|b0"
                 let info = MemoBubbleInfo.make(memo, pending: m.isPending, failed: m.error != nil,
                                                open: input.expanded.contains(memoId))
@@ -692,7 +693,9 @@ nonisolated enum ChatRowBuilder {
                 hasher.combine(info)
                 rows.append(ChatRow(id: memoId, messageId: m.id, scope: input.scope, fingerprint: hasher.finalize(),
                                     kind: .bubble(bubble), gapAbove: ChatMetrics.turnGap, variant: 0))
-                if !memo.rest.isEmpty {
+                if !attachments.isEmpty {
+                    rows.append(ChatMediaRows.userBubble(m, text: memo.rest, attachments: attachments, input: input, partIndex: 1))
+                } else if !memo.rest.isEmpty {
                     let id = "\(m.id)|b1"
                     rows.append(ChatRow(id: id, messageId: m.id, scope: input.scope,
                                         fingerprint: bubbleFingerprint(memo.rest, mine: true, speaker: nil),
@@ -702,6 +705,8 @@ nonisolated enum ChatRowBuilder {
                                                                 expanded: input.expanded.contains(id))),
                                         gapAbove: ChatMetrics.turnGap, variant: 0))
                 }
+            } else if !attachments.isEmpty {
+                rows.append(ChatMediaRows.userBubble(m, text: text, attachments: attachments, input: input))   // [attachments]
             } else {
                 let id = "\(m.id)|b0"
                 let hasSendIssue = m.error != nil

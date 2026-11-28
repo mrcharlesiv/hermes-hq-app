@@ -14,6 +14,8 @@ struct MemoSendContext {
     let memo: MemoFile
     /// Typed beside the memo: the next bubble in the same turn; back into the empty field on a refusal.
     let typed: String
+    /// Photos or files attached alongside the voice memo (#521).
+    var attachments: [DraftAttachment] = []
     /// The Stop epoch the send began in (a send of an earlier epoch never holds the watchdog back).
     let epoch: Int
     /// The account the send belongs to: the memo stores are written only while it is still the one signed in.
@@ -85,12 +87,16 @@ extension LiveChatSession: ChatVoiceMemos {
     /// with its prompt. A queued send (Settings › Chat › Send While Replying set to Queue, Send › Queue, ⌘Return), or a
     /// reply that can't take a steer, keeps the old V13 path: the local queue as a memo item, drained with `queued:true`.
     func sendMemo(_ memo: MemoFile, text: String) {
+        sendMemo(memo, text: text, attachments: [])
+    }
+
+    func sendMemo(_ memo: MemoFile, text: String, attachments: [DraftAttachment]) {
         let toQueue = queuesNextSend
         queuesNextSend = false
         sendFailure = nil
         sessionProblem = nil
         flushDeltas()
-        if !toQueue, memoSteers(typed: text) {
+        if !toQueue, attachments.isEmpty, memoSteers(typed: text) {
             steerMemo(memo, typed: text)
             return
         }
@@ -98,20 +104,20 @@ extension LiveChatSession: ChatVoiceMemos {
         // busy thread), route the voice memo straight into the thread with zero wait, matching typed sends.
         if !toQueue, !turn.busy, queuedMessages.isEmpty || isQueueParked,
            shouldRouteToBusyThread?() == true,
-           deliverToBusyThread(BusyThreadPayload(text: text, memo: memo, localId: nil,
+           deliverToBusyThread(BusyThreadPayload(text: text, attachments: attachments, memo: memo, localId: nil,
                                                  reason: externalWorking ? .backgroundTask : nil, proactive: true)) {
             return
         }
         let waitInLine = turn.busy || (!queuedMessages.isEmpty && !isQueueParked)
         unparkQueue()   // verify round 3: a fresh message resumes a parked queue (as `send`)
         if waitInLine {
-            queuedMessages.append(QueuedMessage(id: nextQueuedId(), text: text, memo: memo))
+            queuedMessages.append(QueuedMessage(id: nextQueuedId(), text: text, attachments: attachments, memo: memo))
             changes.markState()
             scheduleFlush()
             if !turn.busy { drainQueueHead() }
             return
         }
-        beginMemoSend(memo, typed: text, queued: false)
+        beginMemoSend(memo, typed: text, queued: false, attachments: attachments)
     }
 
     /// A memo sent now can go into the running reply: the rules typed words follow (`steersTyped`), less the ones about
@@ -210,9 +216,9 @@ extension LiveChatSession: ChatVoiceMemos {
         if turn.busy { onNotice?(SteerRule.failedNotice) } else { drainQueueHead() }
     }
 
-    func beginMemoSend(_ memo: MemoFile, typed: String, queued: Bool) {
-        beginSend(MemoText.optimistic(localPath: memo.path, typed: typed), queued: queued,
-                  memo: MemoSendContext(memo: memo, typed: typed, epoch: stopEpoch, accountId: account.id))
+    func beginMemoSend(_ memo: MemoFile, typed: String, queued: Bool, attachments: [DraftAttachment] = []) {
+        beginSend(MemoText.optimistic(localPath: memo.path, typed: typed), queued: queued, attachments: attachments,
+                  memo: MemoSendContext(memo: memo, typed: typed, attachments: attachments, epoch: stopEpoch, accountId: account.id))
     }
 
     /// A memo of this Stop epoch is staging: the watchdog waits for its `prompt.submit` (spec §4.2 step 0).
@@ -236,14 +242,14 @@ extension LiveChatSession: ChatVoiceMemos {
         } catch {
             AppLog.note("send", "memo send \(AppLog.tag(localId)): staging failed: \(LiveChatSession.logError(error))")
             guard memoSends[localId] != nil else { return }
-            if stopEpoch != epoch { withdrawStoppedSend(localId: localId, text: context.typed); return }
+            if stopEpoch != epoch { withdrawStoppedSend(localId: localId, text: context.typed, attachments: context.attachments); return }
             let reason = (error as? MemoSendError)?.reason ?? MemoUploader.words(error, doing: "send the voice memo")
-            refuseSend(localId: localId, text: context.typed, reason: reason, queued: queued)
+            refuseSend(localId: localId, text: context.typed, reason: reason, queued: queued, attachments: context.attachments)
             return
         }
         guard memoSends[localId] != nil else { return }
         // Stop pressed while it staged: it never goes out; the memo comes back as the chat's draft.
-        if stopEpoch != epoch { withdrawStoppedSend(localId: localId, text: context.typed); return }
+        if stopEpoch != epoch { withdrawStoppedSend(localId: localId, text: context.typed, attachments: context.attachments); return }
         // The bubble shows the transcript at once (`rewriteOptimistic`), and keeps playing the same file and waveform.
         let prompt = MemoText.prompt(reference: staged.reference, typed: context.typed)
         updateMessage(localId) { m in m.parts = [.text(prompt)] }
@@ -268,7 +274,8 @@ extension LiveChatSession: ChatVoiceMemos {
         } else {
             outgoingPrompt = prompt
         }
-        await submit(outgoingPrompt, localId: localId, queued: queued, holdForStop: holdForStop, epoch: epoch)
+        await submit(outgoingPrompt, localId: localId, queued: queued, holdForStop: holdForStop, epoch: epoch,
+                     attachments: context.attachments)
     }
 
     /// (c) `file.attach {session_id, profile, name, path}`; a stale runtime id (4001) resumes once and attaches again

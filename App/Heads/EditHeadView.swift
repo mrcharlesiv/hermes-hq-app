@@ -521,6 +521,10 @@ struct EditHeadView: View {
                     .padding(.vertical, 12)
                     .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(uiColor: HQPalette.card)))
                     .accessibilityIdentifier("edit-head.glyph")
+                Text("Leaving this empty keeps the current emoji or letters.")
+                    .font(Font.hq(.footnote))
+                    .foregroundStyle(Color.hqLabel2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         case "shape":
             strip("Shape", HeadRecord.forms, HeadLabels.forms, \.form)
@@ -693,7 +697,7 @@ private struct GlyphField: View {
     @State private var text = ""
 
     var body: some View {
-        TextField("✨", text: $text)
+        TextField("Emoji or letters", text: $text)
             .textInputAutocapitalization(.characters)
             .autocorrectionDisabled()
             .font(Font.hq(.title3))
@@ -753,7 +757,7 @@ private struct StripHeadImage: View {
     }
 }
 
-private enum StripHeadImages {
+enum StripHeadImages {
     static let cache: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
         cache.countLimit = 300
@@ -764,10 +768,12 @@ private enum StripHeadImages {
         "\(head.cacheKey)|\(size)|\(scale)|\(dark)" as NSString
     }
 
-    /// The same picture `HeadImageCache` draws (idle, compact under 64 pt), made on a background thread.
+    /// Dots choices use the stage's full grid, rasterized at the thumbnail's pixel size; other heads keep their usual drawing.
     static func render(_ head: Head, size: CGFloat, scale: CGFloat, dark: Bool) async -> UIImage? {
         let image = await Task.detached(priority: .userInitiated) { () -> RenderedHead? in
-            HeadRenderer.picture(head, side: size, scale: scale, dark: dark).map(RenderedHead.init)
+            let side = head.themed?.theme == "dots" ? max(size, 64) : size
+            let renderScale = side == size ? scale : scale * size / side
+            return HeadRenderer.picture(head, side: side, scale: renderScale, dark: dark).map(RenderedHead.init)
         }.value
         return image.map { UIImage(cgImage: $0.image, scale: scale, orientation: .up) }
     }

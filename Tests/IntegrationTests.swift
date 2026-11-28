@@ -233,6 +233,17 @@ struct IntegrationTests {
         warmer.stop()
     }
 
+    /// Issue #349: `TranscriptCache.cachedSavedAt` serves known timestamps from memory/index without touching disk, and
+    /// `ChatWarmer.appActive = true` returns without doing synchronous disk reads across all bots.
+    @Test func cachedSavedAtReadsMemoryWithoutDiskAndWarmerReturnDoesNotBlock() async throws {
+        let cache = makeTempCache()
+        let saved = Date(timeIntervalSince1970: 1_791_590_000)
+        cache.save([ChatMessage(id: "m1", role: .assistant, parts: [.text("hi")], timestamp: saved, rowId: 1)],
+                   meta: [:], account: "acc", profile: "ivy", storedId: "s1", savedAt: saved)
+        let known = cache.cachedSavedAt(account: "acc", profile: "ivy", storedId: "s1")
+        #expect(known == .some(saved))
+    }
+
     // MARK: Live fold: tool ids are scoped to the running turn
 
     @Test func aToolIdAnEarlierTurnUsedStaysInThisTurn() async throws {

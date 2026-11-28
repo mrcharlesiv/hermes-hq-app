@@ -4420,7 +4420,8 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         // [send-while-busy] A memo follows Settings › Chat › Send While Replying as typed words do (owner 2026-11-18):
         // Steer puts it into the running reply, Queue keeps it waiting behind it.
         if composer.sendsToQueue { (session as? ChatSendQueueing)?.queuesNextSend = true }
-        memos.sendMemo(memo, text: text)
+        let taken = attachments?.takeForSend() ?? []   // #521: photos/files attached before or during memo review go with it
+        memos.sendMemo(memo, text: text, attachments: taken)
         (session as? ChatChangeFlushing)?.flushChanges()
         if flushScheduled {
             syncApply = true
@@ -4992,6 +4993,15 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     }
     /// [groups] The room chrome reads these to place and hide its dock.
     var hasPromptDock: Bool { promptDock != nil }
+    /// Active voice capture, review, prompt dock, or modal sheet over the composer: a task/goal brief tucked for focus
+    /// stays tucked when the text field resigns first responder (#512).
+    var keepsComposerOpen: Bool {
+        composer.memoActive || composer.memoPrimary != .normal || composer.dictating
+            || composer.recorderContent != nil || composer.memoChip != nil
+            || hasPromptDock || menus?.modelPanelOpen == true
+            || (presentedViewController != nil && presentedViewController?.isBeingDismissed == false)
+            || TalkController.shared.isLive(in: session as? ChatVoiceTurns)
+    }
     func roomChromeChanged(animated: Bool) {
         guard isViewLoaded else { return }
         applyState()

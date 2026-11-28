@@ -345,6 +345,7 @@ import UIKit
         let state = controller.state
         switch phase {
         case .holding:
+            composer.recorderKeepsPlus = false
             composer.recorderContent = holdRow
             composer.memoPrimary = .hidden
             overlay.show()
@@ -354,20 +355,24 @@ import UIKit
             overlay.setLevel(controller.level)
         case .ending where shown == .holding:
             overlay.hide()
+            composer.recorderKeepsPlus = false
             composer.recorderContent = holdRow
             composer.memoPrimary = .hidden
         case .locked, .ending:
             overlay.hide()
+            composer.recorderKeepsPlus = false
             composer.recorderContent = lockedRow
             composer.memoPrimary = .send(enabled: phase == .locked)
             lockedRow.showLocked(seconds: state.seconds, limit: controller.limit, level: controller.level, levels: controller.levels, ending: phase == .ending)
         case .review:
             overlay.hide()
+            composer.recorderKeepsPlus = true
             composer.recorderContent = lockedRow
             composer.memoPrimary = .send(enabled: true)
             if let file = controller.file { lockedRow.showReview(file: file, ending: false) }
         case .idle, .pressing:
             overlay.hide()
+            composer.recorderKeepsPlus = false
             if !composer.dictating { composer.recorderContent = nil }   // [talk] the dictation row is not the memo's to remove
             composer.memoPrimary = .normal
             if phase == .idle { scheduleTip() }

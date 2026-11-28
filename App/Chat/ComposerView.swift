@@ -241,7 +241,11 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboa
             leadingRevealToken += 1
             let wide = recorderContent != nil
             guard window != nil, !HQMotion.reduced else { leadingHeld = false; return }
-            if wide { leadingViews.forEach { $0.isHidden = true } }
+            if wide {
+                for view in leadingViews where !(recorderKeepsPlus && view !== commandsButton) {
+                    view.isHidden = true
+                }
+            }
             // Verify round 2: closing, ☰ and + stay hidden (at their own places) while the field narrows back, and fade
             // in as it reaches them — never un-hidden at once on top of a field that is still wide.
             if !wide { leadingHeld = true }
@@ -253,7 +257,11 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboa
             if !wide { revealLeading(after: 0.15, token: leadingRevealToken) }
         }
     }
-    /// The recorder shows: it has the whole row (☰ and + hidden).
+    /// The recorder shows: it has the whole row (☰ and + hidden), except in memo review where + stays available so the
+    /// user can still attach a photo after recording a voice note (#521).
+    var recorderKeepsPlus = false {
+        didSet { if recorderKeepsPlus != oldValue { setNeedsLayout() } }
+    }
     private var recorderTakesRow: Bool { recorderContent != nil }
     /// ☰ and + wait hidden while the field narrows back after the recorder closed.
     private var leadingHeld = false {
@@ -781,11 +789,19 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboa
         // + slid out from under ☰ when they came back).
         if !commandsInRow, !commandsButton.isHidden { commandsButton.isHidden = true }   // in the row the loop below shows it
         var slot = side + pad
-        let hideLeading = recorderTakesRow || leadingHeld
+        let keepsPlusInRecorder = recorderTakesRow && recorderKeepsPlus && !leadingHeld
+        let hideLeading = (recorderTakesRow && !keepsPlusInRecorder) || leadingHeld
         for accessory in leadingViews {
-            accessory.frame = CGRect(x: slot, y: chip + fieldHeight - c - pad, width: c, height: c)
-            if accessory.isHidden != hideLeading { accessory.isHidden = hideLeading }
-            slot += leadingStep
+            if keepsPlusInRecorder {
+                let hide = accessory === commandsButton
+                accessory.frame = CGRect(x: slot, y: chip + fieldHeight - c - pad, width: c, height: c)
+                if accessory.isHidden != hide { accessory.isHidden = hide }
+                if !hide { slot += leadingStep }
+            } else {
+                accessory.frame = CGRect(x: slot, y: chip + fieldHeight - c - pad, width: c, height: c)
+                if accessory.isHidden != hideLeading { accessory.isHidden = hideLeading }
+                slot += leadingStep
+            }
         }
         fieldLeading = lead
         glassContainer.frame = CGRect(x: 0, y: rowTop, width: bounds.width, height: chip + fieldHeight)
@@ -842,10 +858,12 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboa
             modelChip.frame = CGRect(x: (start + (room - w) / 2).rounded(), y: (p.midY - h / 2).rounded(), width: w, height: h)
         }
         // [composer-bar] The recorder keeps clear of the circle at the bar's end, as it did beside the old field.
+        let recorderLead: CGFloat = barMode && keepsPlusInRecorder ? leadingStep : 0
         let recorderTrail = barMode ? c + barScaled(2) : 0
         // [live words] Under the words the recorder has the bar's bottom row, where it sat before the bar grew.
         let recorderHeight = heardShown ? c : field.bounds.height
-        recorderContent?.frame = CGRect(x: 0, y: field.bounds.height - recorderHeight, width: max(0, field.bounds.width - recorderTrail), height: recorderHeight)
+        recorderContent?.frame = CGRect(x: recorderLead, y: field.bounds.height - recorderHeight,
+                                        width: max(0, field.bounds.width - recorderLead - recorderTrail), height: recorderHeight)
         if heardShown { heardView.frame = heardFrame(fieldW: fieldW, fieldX: lead) }
         applySurfaces(side: side, rowTop: rowTop + chip)
     }
@@ -986,6 +1004,7 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboa
     }
 
     func textViewDidBeginEditing(_ textView: UITextView) {
+        if ComposerKeyboard.followsSystem { ComposerKeyboard.apply(to: textView) }
         #if targetEnvironment(macCatalyst)
         ChatTextSelector.putAwayActive()   // [Mac UI check 2026-11-13] V21: one selection at a time
         #endif
@@ -1036,7 +1055,13 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboa
     private func rowGeometry(width: CGFloat, side: CGFloat) -> (lead: CGFloat, fieldW: CGFloat) {
         if barMode { return (side, width - 2 * side) }
         let c = ChatMetrics.control
-        let lead = recorderTakesRow ? side : side + CGFloat(leadingViews.count) * leadingStep
+        let leadCount: CGFloat
+        if recorderTakesRow {
+            leadCount = recorderKeepsPlus ? CGFloat(leadingAccessories.count) : 0
+        } else {
+            leadCount = CGFloat(leadingViews.count)
+        }
+        let lead = side + leadCount * leadingStep
         return (lead, width - side - c - ChatMetrics.composerGap - lead - primaryInset)
     }
 
@@ -1128,6 +1153,9 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboa
         }
         let width = rowWidth > 0 ? textWidth(fieldW: geometry.fieldW) : 280 - 2 * ChatMetrics.fieldPadH
         measuredWidth = bounds.width > 0 ? width : -1
+        if let layoutManager = textView.textLayoutManager {
+            layoutManager.ensureLayout(for: layoutManager.documentRange)
+        }
         let fitting = textView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
         let line = textView.font?.lineHeight ?? 20
         let maxH = ceil(line * CGFloat(maxLines) + textInsets.top + textInsets.bottom)
@@ -1302,7 +1330,7 @@ final class ComposerView: UIView, UITextViewDelegate, HoldsOwnGlass, KeepsKeyboa
     nonisolated static func choosePrimary(memoSend: Bool?, enabled: Bool, preparing: Bool, hasText: Bool, attachments: Int, memoChip: Bool,
                                           dictating: Bool, running: Bool, talkAvailable: Bool, editingQueued: Bool = false,
                                           allowsDeferredSend: Bool = false) -> Primary {
-        if let memoSend { return memoSend ? .send : .disabled }
+        if let memoSend { return (memoSend && !preparing) ? .send : .disabled }
         // A dictation's Stop comes before Send: its words aren't in the field yet, so a Send now would go without them
         // (owner 2026-11-01: with a picture in the tray the circle was Send, and only the picture went). It works even
         // while the chat is reconnecting (§8).

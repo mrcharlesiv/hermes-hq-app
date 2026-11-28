@@ -13,6 +13,9 @@ import Synchronization
         var staleDrop: Duration = .seconds(15)
         /// A running clarify tool with no question this long after its `tool.start` is probed (§3.5).
         var undeliveredAfter: Duration = .seconds(4)
+        /// How soon after a tool starts to check `approval.pending` for queue-only approvals (#530).
+        var approvalPollDelay: Duration = .seconds(1)
+        var approvalPollInterval: Duration = .seconds(3)
         /// An answered approval card fades out this long before it goes (§4.2).
         var leaving: Duration = .milliseconds(200)
         var approvalRespondTimeout: Duration = .seconds(330)
@@ -119,6 +122,7 @@ import Synchronization
     private var probeTasks: [String: Task<Void, Never>] = [:]
     private var probing: Set<String> = []
     private var clarifyWatch: [String: Task<Void, Never>] = [:]
+    private var approvalWatch: [String: Task<Void, Never>] = [:]
     private var readyGeneration = 0
     private var staleTask: Task<Void, Never>?
     private var leavingTasks: [String: Task<Void, Never>] = [:]
@@ -153,7 +157,7 @@ import Synchronization
     nonisolated static func makeEventFilter() -> @Sendable (GatewayEvent) -> Bool {
         let allowedTypes: Set<String> = [
             LocalEvent.serverRequest, LocalEvent.openRequests, "gateway.ready",
-            "request.cancel", "clarify.request", "clarify.settled", "approval.cancelled",
+            "request.cancel", "clarify.request", "clarify.settled", "approval.request", "approval.cancelled",
             "message.start", "tool.start", "tool.complete", "message.complete", "error", "session.info",
         ]
         let seenLiveDelta = Mutex<Set<String>>(Set())
@@ -197,8 +201,8 @@ import Synchronization
         eventsTask?.cancel(); eventsTask = nil
         statesTask?.cancel(); statesTask = nil
         staleTask?.cancel(); staleTask = nil
-        (Array(probeTasks.values) + Array(clarifyWatch.values) + Array(leavingTasks.values)).forEach { $0.cancel() }
-        probeTasks = [:]; clarifyWatch = [:]; leavingTasks = [:]
+        (Array(probeTasks.values) + Array(clarifyWatch.values) + Array(approvalWatch.values) + Array(leavingTasks.values)).forEach { $0.cancel() }
+        probeTasks = [:]; clarifyWatch = [:]; approvalWatch = [:]; leavingTasks = [:]
         let sessions = Set(entries.map(\.sessionId)).union(sent.keys).union(undelivered)
         entries = []
         drafts = [:]
@@ -357,6 +361,7 @@ import Synchronization
         case "request.cancel": withdrawn(event)
         case "clarify.request": if enabled { promptAsked(event) }
         case "clarify.settled": promptSettled(event)
+        case "approval.request": if enabled { replayApprovals(session) }
         case "approval.cancelled": approvalsCancelled(event)
         case "message.start":
             liveTurns.insert(session)
@@ -365,14 +370,20 @@ import Synchronization
             liveTurns.insert(session)
         case "tool.start":
             liveTurns.insert(session)
-            if event.payload["name"]?.string == "clarify" { watchClarify(session, toolId: event.payload["tool_id"]?.string) }
+            if event.payload["name"]?.string == "clarify" {
+                watchClarify(session, toolId: event.payload["tool_id"]?.string)
+            } else if enabled {
+                watchApproval(session)
+            }
         case "tool.complete":
+            approvalWatch.removeValue(forKey: session)?.cancel()
             if event.payload["name"]?.string == "clarify" { clarifySettled(session) }
             // The vault tool returned after our login answer: Hermes took it (a dropped one is cancelled first).
             if event.payload["name"]?.string?.hasPrefix("browser_vault") == true { forgetSentLogins(session) }
             agentMovedOn(session)
         case "message.complete", "error":
             guard !session.isEmpty else { return }
+            approvalWatch.removeValue(forKey: session)?.cancel()
             if event.type == "message.complete" { forgetSentLogins(session); dropSharedPrompts(session) }
             turnEnded(session)
             clarifySettled(session)
@@ -768,6 +779,28 @@ import Synchronization
     }
 
     // MARK: approval.pending (rule 3)
+
+    /// Polls `approval.pending` while a tool call stays open so queue-only dangerous-command approvals appear live
+    /// without leaving and re-entering the chat (#530).
+    private func watchApproval(_ session: String) {
+        guard !session.isEmpty else { return }
+        approvalWatch[session]?.cancel()
+        let firstWait = timing.approvalPollDelay
+        let interval = timing.approvalPollInterval
+        approvalWatch[session] = Task { [weak self] in
+            try? await Task.sleep(for: firstWait)
+            for _ in 0..<8 {
+                guard let self, !Task.isCancelled, !self.shutDown else { return }
+                if self.entries.contains(where: { $0.sessionId == session && $0.kind == .approval }) {
+                    self.approvalWatch[session] = nil
+                    return
+                }
+                self.replayApprovals(session)
+                try? await Task.sleep(for: interval)
+            }
+            self?.approvalWatch[session] = nil
+        }
+    }
 
     func replayApprovals(_ session: String) {
         guard !session.isEmpty else { return }

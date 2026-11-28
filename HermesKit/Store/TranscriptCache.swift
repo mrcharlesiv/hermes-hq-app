@@ -146,12 +146,26 @@ nonisolated final class TranscriptCache: Sendable {
         loadEntry(account: account, profile: profile, storedId: storedId, allowPartial: true)?.savedAt
     }
 
+    /// In-memory-only `savedAt` lookup (zero disk `open()`): returns `.some(date)` if known in pending/memory/loaded
+    /// index, `.some(nil)` if the index is loaded and definitely has no entry, or `nil` if disk must be consulted (#349).
+    func cachedSavedAt(account: String, profile: String, storedId: String) -> Date?? {
+        let key = Self.key(account: account, profile: profile, storedId: storedId)
+        let rel = relativePath(key)
+        return state.withLock { s in
+            if let hit = s.pending[key]?.entry.savedAt ?? s.memory[key]?.savedAt { return .some(hit) }
+            guard s.indexLoaded else { return nil }
+            if let entry = s.index[rel] { return .some(Date(timeIntervalSince1970: entry.saved)) }
+            return .some(nil)
+        }
+    }
+
     /// [perf] `savedAt` without the decode: the warmer asks this of ~30 chats per check, and through `loadEntry` each
     /// miss read and decoded a whole tail on main and pushed it into the 8-entry memory LRU, evicting the tails the owner
-    /// actually opens. This reads the pending or in-memory copy, else the file's 13-byte header, and touches no LRU.
+    /// actually opens. This reads the pending, in-memory, or loaded-index copy, else the file's 13-byte header, and
+    /// touches no LRU.
     func savedAtPeek(account: String, profile: String, storedId: String) -> Date? {
+        if let known = cachedSavedAt(account: account, profile: profile, storedId: storedId) { return known }
         let key = Self.key(account: account, profile: profile, storedId: storedId)
-        if let hit = state.withLock({ s in s.pending[key]?.entry.savedAt ?? s.memory[key]?.savedAt }) { return hit }
         guard let handle = try? FileHandle(forReadingFrom: fileURL(relativePath(key))) else { return nil }
         defer { try? handle.close() }
         guard let head = try? handle.read(upToCount: 13), head.count == 13 else { return nil }

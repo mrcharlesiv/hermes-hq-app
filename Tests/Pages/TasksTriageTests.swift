@@ -462,4 +462,101 @@ struct TasksTriageTests {
         model.revealLivePrompt()
         #expect(model.tucked && model.tuckReason == TodoSheetModel.TuckReason.alert)
     }
+
+    /// Issue #509: TasksStore periodically polls while visible and active, picking up bot updates without app-switch.
+    @Test func visibleTasksStorePollsAndPausesInBackground() async throws {
+        let rev = Mutex<Int>(1)
+        let title = Mutex<String>("Initial title")
+        let gets = Mutex<Int>(0)
+        let client = PagesFakeClient { request in
+            if request.method == "GET" {
+                gets.withLock { $0 += 1 }
+                let currentRev = rev.withLock { $0 }
+                let currentTitle = title.withLock { $0 }
+                return .object([
+                    "rev": .number(Double(currentRev)),
+                    "fields": true,
+                    "tasks": .array([Self.wire(Self.makeTask("t_poll", currentTitle))]),
+                ])
+            }
+            return .object([:])
+        }
+        let store = TasksStore(api: TasksAPI(client: client), account: client.account, directory: nil,
+                               timing: .init(pollVisible: .milliseconds(40)))
+        defer { store.forget() }
+
+        await store.refresh(force: true)
+        #expect(store.task("t_poll")?.title == "Initial title")
+
+        // Simulate bot updating task on gateway while the Mac app stays frontmost.
+        rev.withLock { $0 = 2 }
+        title.withLock { $0 = "Bot updated while frontmost" }
+        // Advance past the 2 s refresh throttle by forcing lastReadAt via refresh cooldown? Wait: poll calls refresh()
+        // which honors 2 s throttle on consecutive calls, so test polling cadence directly once throttle clears, OR
+        // check that polling fires and respects background/invisible pause.
+        store.setVisible(true)
+        let before = gets.withLock { $0 }
+        // Wait briefly past the 2.1 s throttle so the poll loop's refresh fetches the updated task.
+        for _ in 0..<60 {
+            if store.task("t_poll")?.title == "Bot updated while frontmost" { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(store.task("t_poll")?.title == "Bot updated while frontmost",
+                "visible TasksStore must refresh while frontmost (GETs: \(before) -> \(gets.withLock { $0 }))")
+
+        // Backgrounding must stop polling.
+        store.appDidEnterBackground()
+        try await Task.sleep(for: .milliseconds(80))
+        let pausedGets = gets.withLock { $0 }
+        try await Task.sleep(for: .milliseconds(160))
+        #expect(gets.withLock { $0 } == pausedGets, "backgrounding must pause polling")
+
+        // Closing visibility also stops polling.
+        store.appDidBecomeActive()
+        store.setVisible(false)
+        try await Task.sleep(for: .milliseconds(80))
+        let hiddenGets = gets.withLock { $0 }
+        try await Task.sleep(for: .milliseconds(160))
+        #expect(gets.withLock { $0 } == hiddenGets, "hiding all task views must pause polling")
+    }
+
+    /// Issue #512: Keyboard dismissal while dictation or memo recording is active must not close the task chat.
+    @Test func taskChatStaysTuckedWhenKeyboardHidesForDictationOrMemo() async throws {
+        let client = PagesFakeClient()
+        let store = TasksStore(api: TasksAPI(client: client), account: client.account, directory: nil)
+        let pages = TriageFakePages(client)
+        let context = MorePages.Context(services: FakeAppServices(), pages: pages, client: client, account: client.account,
+                                        makeChat: { _ in UIViewController() })
+        let chat = ChatViewController(session: FakeChatSession(count: 0))
+        chat.loadViewIfNeeded()
+        let model = TodoSheetModel(taskID: "t_dict", store: store, context: context)
+        model.embedded = true
+        model.chat = chat
+        let host = TaskBriefHost(model: model)
+        host.watch(field: chat.composer.textView)
+
+        model.tuck(.focus)
+        #expect(model.tucked)
+
+        // Dictation starts and keyboard hides: chat must stay open.
+        chat.composer.dictating = true
+        NotificationCenter.default.post(name: UIResponder.keyboardWillHideNotification, object: nil)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(model.tucked, "task chat must remain open while dictating")
+
+        // Memo active and keyboard hides: chat must stay open.
+        chat.composer.dictating = false
+        chat.composer.memoActive = true
+        chat.composer.memoPrimary = ComposerView.MemoPrimary.send(enabled: true)
+        NotificationCenter.default.post(name: UIResponder.keyboardWillHideNotification, object: nil)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(model.tucked, "task chat must remain open while a voice memo is active")
+
+        // Once voice is inactive and keyboard hides with no first responder, untuck works normally.
+        chat.composer.memoActive = false
+        chat.composer.memoPrimary = ComposerView.MemoPrimary.normal
+        NotificationCenter.default.post(name: UIResponder.keyboardWillHideNotification, object: nil)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(!model.tucked, "task chat should untuck once keyboard hides and no voice capture is active")
+    }
 }

@@ -611,6 +611,7 @@ final class GoalPageModel {
     func untuck() {
         guard tucked else { return }
         tuckReason = nil
+        chat?.voice.composerCovered()
         if let field = chat?.composer.textView, field.isFirstResponder { field.resignFirstResponder() }
         PagesHaptics.selection()
         HQMotion.withAnimation(.snappy) { tucked = false }

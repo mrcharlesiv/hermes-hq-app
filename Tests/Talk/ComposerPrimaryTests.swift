@@ -114,4 +114,46 @@ struct ComposerPrimaryTests {
         #expect(composer.target(for: composer.textView, touchTime: after + 0.2) === composer.textView)
         #expect(composer.target(for: mic, touchTime: after + ComposerView.quietAfterDock + 0.01) === mic, "and it works again right after")
     }
+
+    /// Issue #521: Memo review keeps `+` visible so photos can be attached after recording, holds Send while preparing,
+    /// and renders combined memo + photo messages without leaking raw MEDIA: syntax.
+    @MainActor @Test func memoReviewKeepsPlusButtonAndRendersCombinedMemoAndAttachment() {
+        #expect(pick(memoSend: true, preparing: true) == .disabled)
+        #expect(pick(memoSend: true, preparing: false) == .send)
+
+        let composer = ComposerView(frame: CGRect(x: 0, y: 0, width: 390, height: 60))
+        let plus = UIButton(type: .system)
+        composer.leadingAccessories = [plus]
+        let review = UIView()
+        composer.recorderKeepsPlus = true
+        composer.recorderContent = review
+        composer.layoutIfNeeded()
+        #expect(!plus.isHidden, "plus button must stay visible in memo review")
+        #expect(composer.commandsButton.isHidden, "commands button stays hidden during memo review")
+
+        composer.recorderKeepsPlus = false
+        composer.layoutIfNeeded()
+        #expect(plus.isHidden, "plus button hides while actively recording")
+
+        // Rendering a user message containing both a voice memo and a photo attachment produces two clean bubbles.
+        let memoText = #"MEDIA:"/tmp/memo.m4a""# + "\n\nHere is the receipt"
+        let msg = ChatMessage(id: "m1", role: .user, parts: [.text(memoText)], timestamp: Date(), rowId: 1)
+        var input = ChatRowBuilder.Input(messages: [msg], isRunning: false, botName: "Ivy", expanded: [], scope: "s")
+        let photo = MessageAttachment(kind: .image, source: .gateway(path: "/tmp/receipt.jpg"), name: "receipt.jpg", byteSize: 1024)
+        input.media.attachments["m1"] = [photo]
+        let rows = ChatRowBuilder.build(input).filter(\.isBubble)
+        #expect(rows.count == 2)
+        if case .bubble(let b0) = rows[0].kind {
+            #expect(b0.memo != nil)
+        } else {
+            Issue.record("expected memo bubble first")
+        }
+        if case .bubble(let b1) = rows[1].kind {
+            #expect(b1.media.count == 1)
+            #expect(!b1.text.contains("MEDIA:"), "raw MEDIA directive must not leak into attachment bubble")
+            #expect(b1.text == "Here is the receipt")
+        } else {
+            Issue.record("expected attachment bubble second")
+        }
+    }
 }

@@ -828,4 +828,27 @@ final class ServerRequestCenterTests {
         #expect(await center.approvalTimeout(profile: "default", fresh: false) == 20)   // cached
         #expect(await center.approvalTimeout(profile: "default", fresh: true) == 300)   // fresh read: unset → 300
     }
+
+    /// Issue #530: Queue-only dangerous-command approvals surface live in an open chat on `approval.request` or while
+    /// a running tool blocks for approval, without leaving and re-entering the chat.
+    @Test func queueOnlyApprovalAppearsLiveOnApprovalRequestOrBlockingTool() async {
+        let pending: JSONValue = ["approvals": [["request_id": "req-rm", "command": "rm -rf /tmp/scratch",
+                                                 "description": "Recursive delete", "allow_permanent": true]]]
+        client.onCall { method, _ in method == "approval.pending" ? pending : [:] }
+
+        // 1. Live `approval.request` event immediately triggers `approval.pending` replay.
+        #expect(ServerRequestCenter.makeEventFilter()(GatewayEvent(type: "approval.request", sessionId: session, seq: nil, payload: [:])))
+        event("approval.request", [:])
+        #expect(await waitUntil { self.prompts.approvals.first?.command == "rm -rf /tmp/scratch" })
+
+        // 2. When no `approval.request` arrives, a blocking `tool.start` (e.g. `terminal`) triggers `watchApproval`.
+        var fastTiming = ServerRequestCenter.Timing()
+        fastTiming.approvalPollDelay = .milliseconds(30)
+        fastTiming.approvalPollInterval = .milliseconds(40)
+        let watched = ServerRequestCenter(client: client, timing: fastTiming, autoStart: false)
+        watched.bound(runtime: session, previous: nil, profile: "default", profileParam: nil, storedId: "st-1")
+        watched.receive(GatewayEvent(type: "tool.start", sessionId: session, seq: nil, payload: ["name": "terminal", "tool_id": "t-rm"]))
+        #expect(await waitUntil { watched.prompts(for: [self.session]).approvals.first?.command == "rm -rf /tmp/scratch" })
+        watched.shutdown()
+    }
 }

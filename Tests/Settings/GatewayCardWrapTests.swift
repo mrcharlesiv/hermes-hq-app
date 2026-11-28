@@ -214,4 +214,30 @@ struct GatewayCardWrapTests {
             settingsPrevY = screenY
         }
     }
+
+    /// Issue #616: Mac Auxiliary Models rows with long model names must truncate inside the card instead of overflowing.
+    @MainActor @Test func macChooserRowWithLongModelNameFitsInsideCard() {
+        let cardWidth: CGFloat = 520
+        let row = MacFormRow(label: "Compression") {
+            MacChooserButton(label: "Compression", value: "GPT-6.1-terra · ChatGPT or Codex Subscription") {}
+        }
+        .environment(\.macFormLabelWidth, 180)
+        .frame(width: cardWidth)
+        let host = UIHostingController(rootView: row)
+        let fitted = host.sizeThatFits(in: CGSize(width: cardWidth, height: UIView.layoutFittingExpandedSize.height))
+        #expect(fitted.width <= cardWidth + 0.5,
+                "MacChooserButton row overflowed card width: got \(fitted.width) > \(cardWidth)")
+
+        let popupRow = MacFormRow(label: "Review") {
+            MacPopUp(label: "Review",
+                     selection: .constant("GPT-6.1-terra · ChatGPT or Codex Subscription"),
+                     options: ["GPT-6.1-terra · ChatGPT or Codex Subscription"]) { $0 }
+        }
+        .environment(\.macFormLabelWidth, 180)
+        .frame(width: cardWidth)
+        let popupHost = UIHostingController(rootView: popupRow)
+        let popupFitted = popupHost.sizeThatFits(in: CGSize(width: cardWidth, height: UIView.layoutFittingExpandedSize.height))
+        #expect(popupFitted.width <= cardWidth + 0.5,
+                "MacPopUp row overflowed card width: got \(popupFitted.width) > \(cardWidth)")
+    }
 }

@@ -520,6 +520,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
         Self.onScreen = true
         searchCapsule?.restoreIfTyped()
         claimStore()
+        store.setVisible(true)
         store.readOnlyGateway = context.readOnly
         reload(animated: false)
         startMinuteClock()
@@ -537,6 +538,7 @@ final class TasksViewController: UIViewController, UICollectionViewDelegate, UIS
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
+        store.setVisible(false)
         minuteTimer?.invalidate()
         minuteTimer = nil
         let anyVisible = Self.live.allObjects.contains { $0 !== self && $0.viewIfLoaded?.window != nil }

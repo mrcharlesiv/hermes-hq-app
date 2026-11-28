@@ -90,6 +90,18 @@ nonisolated enum BotDMs {
         return false
     }
 
+    /// #601: an explicit internal bot-to-bot acknowledgement stating the bot is not replying to the owner, even when it
+    /// omits the sending bot's name in the opening clause.
+    static func isInternalAck(_ text: String) -> Bool {
+        let opening = String(text.drop(while: { $0.isWhitespace || "*_#>`".contains($0) }).prefix(200))
+        let patterns = [
+            #"\b(not|won['’]?t|am not|i['’]?m not)\s+(writing|messaging|replying|responding|notifying|pinging)\s+(to\s+)?(the\s+)?(owner|user)\b"#,
+            #"\bno\s+user[- ]facing\b"#,
+            #"\bstaying\s+silent\s+for\s+(the\s+)?(owner|user)\b"#,
+        ]
+        return patterns.contains { opening.range(of: $0, options: [.regularExpression, .caseInsensitive]) != nil }
+    }
+
     /// The bot a target names, as the incoming deliveries find it (handle, then name, then `hermes` → default).
     static func sender(_ target: String, roster: [DeliveryMessages.Seat]) -> ChatSender {
         let bare = target.split(separator: "/").last.map(String.init) ?? target
@@ -119,6 +131,7 @@ nonisolated enum BotDMs {
             switch outcome(words) {
             case .replied(let reply):
                 out![index].sender = who ?? sender("hermes", roster: roster)
+                out![index].replyToOurDM = true
                 out![index].parts = [.text(reply)]
             case .delivered:
                 out![index].role = .system

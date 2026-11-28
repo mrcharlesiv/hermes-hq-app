@@ -23,11 +23,19 @@ protocol ChatVoiceMemos: AnyObject {
     /// Sends `memo` (with `text` typed beside it, possibly "") through the upload pipeline (spec §4.2); while a
     /// reply runs it steers into it, or queues for a queued send (V13).
     func sendMemo(_ memo: MemoFile, text: String)
+    /// Sends `memo` with any attached photos/files (#521).
+    func sendMemo(_ memo: MemoFile, text: String, attachments: [DraftAttachment])
     /// The memo waiting in this chat's composer (a draft chip), persisted per chat (spec §3.6).
     var memoDraft: MemoFile? { get }
     func setMemoDraft(_ memo: MemoFile?)
     /// The chat's cache scope ("<account id>|<profile>|<stored session id>"): the draft store's key.
     var memoScope: String { get }
+}
+
+extension ChatVoiceMemos {
+    func sendMemo(_ memo: MemoFile, text: String, attachments: [DraftAttachment]) {
+        sendMemo(memo, text: text)
+    }
 }
 
 /// REST with an explicit body type and a longer ceiling than `GatewayClient.rest` (multipart uploads, transcription:

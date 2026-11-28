@@ -117,6 +117,44 @@ struct ComposerKeyboardTests {
         #expect(view.returnKeyType == .default)
         #expect(view.keyboardType == .default)
     }
+
+    /// Issue #554: On Mac Catalyst, disable smart quotes/dashes when macOS System Settings has them turned off.
+    @Test func smartQuotesAndDashesRespectSystemPreferenceOnMac() {
+        #expect(ComposerKeyboard.smartQuotesType(followsSystem: true, systemEnabled: false) == .no)
+        #expect(ComposerKeyboard.smartQuotesType(followsSystem: true, systemEnabled: true) == .default)
+        #expect(ComposerKeyboard.smartQuotesType(followsSystem: true, systemEnabled: nil) == .default)
+        #expect(ComposerKeyboard.smartQuotesType(followsSystem: false, systemEnabled: false) == .default)
+
+        #expect(ComposerKeyboard.smartDashesType(followsSystem: true, systemEnabled: false) == .no)
+        #expect(ComposerKeyboard.smartDashesType(followsSystem: true, systemEnabled: true) == .default)
+        #expect(ComposerKeyboard.smartDashesType(followsSystem: true, systemEnabled: nil) == .default)
+        #expect(ComposerKeyboard.smartDashesType(followsSystem: false, systemEnabled: false) == .default)
+    }
+
+    /// Issue #508: Narrow Task-pane composer must grow monotonically and never leave top lines scrolled off while non-scrolling.
+    @Test @MainActor func narrowComposerGrowsWithoutClippingTopLines() {
+        let composer = ComposerView(frame: CGRect(x: 0, y: 0, width: 320, height: 100))
+        #expect(composer.textView.contentInsetAdjustmentBehavior == .never)
+
+        composer.text = "Line 1"
+        composer.layoutIfNeeded()
+        let h1 = composer.intrinsicContentSize.height
+
+        composer.text = "Line 1\nLine 2\nLine 3"
+        composer.textView.contentOffset = CGPoint(x: 0, y: 24)
+        composer.layoutIfNeeded()
+        let h3 = composer.intrinsicContentSize.height
+
+        #expect(h3 > h1, "3-line draft (\(h3)) must grow taller than 1-line draft (\(h1))")
+        if !composer.textView.isScrollEnabled {
+            #expect(composer.textView.contentOffset.y == 0, "non-scrolling draft must keep contentOffset.y at 0")
+        }
+
+        composer.text = (1...12).map { "Long wrapped line number \($0) in task pane" }.joined(separator: "\n")
+        composer.layoutIfNeeded()
+        #expect(composer.intrinsicContentSize.height >= h3)
+        #expect(composer.textView.isScrollEnabled)
+    }
 }
 
 struct ModelLoadTests {

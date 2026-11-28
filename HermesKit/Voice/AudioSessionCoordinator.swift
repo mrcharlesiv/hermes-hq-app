@@ -55,11 +55,16 @@ nonisolated enum AudioWork {
     }
 
     private nonisolated static let heldLock = Mutex<Bool>(false)
+    private nonisolated static let conversationLock = Mutex<Bool>(false)
     /// Lock-backed nonisolated check safe on `AudioWork.queue` so ambient cues never stomp a newly-acquired session.
     nonisolated static var isHeld: Bool { heldLock.withLock { $0 } }
+    nonisolated static var isConversationHeld: Bool { conversationLock.withLock { $0 } }
 
     private(set) var owner: Owner? {
-        didSet { Self.heldLock.withLock { $0 = (owner != nil) } }
+        didSet {
+            Self.heldLock.withLock { $0 = (owner != nil) }
+            Self.conversationLock.withLock { $0 = (owner == .conversation) }
+        }
     }
     /// Counts every time the session changes hands (`acquire` returns it), so a start that was abandoned can tell
     /// whether the session it took is still its own (`releaseAbandoned`).
@@ -77,6 +82,10 @@ nonisolated enum AudioWork {
     var onConversationBorrowed: ((Owner) -> Void)?
     /// A memo or a dictation wants the microphone a conversation holds: the conversation ends first (§6.8).
     var endConversation: (() async -> Void)?
+    /// AirPods / Bluetooth headset mute gesture toggled input mute during a live conversation (#566).
+    var onInputMuteChanged: ((Bool) -> Void)?
+    /// Test seam for `AVAudioApplication.shared.setInputMuted(_:)`. Nil uses the system API off the main thread.
+    var systemInputMuteSetter: ((Bool) -> Void)?
 
     /// [talk] A conversation plays on the loudspeaker unless the person chose the earpiece (the bar's speaker button);
     /// headphones, Bluetooth, CarPlay and AirPlay always win. Back to on for every new conversation (owner, 2026-10-27:
@@ -84,6 +93,7 @@ nonisolated enum AudioWork {
     private(set) var loudspeaker = true
     static let loudspeakerChanged = Notification.Name("hq.audio.loudspeakerChanged")
     private var routeObserver: (any NSObjectProtocol)?
+    private var inputMuteObserver: (any NSObjectProtocol)?
 
     #if DEBUG
     /// Owners whose stand-in (the simulator's fixture recorder, capture or speaker) never touches the real session.
@@ -140,14 +150,23 @@ nonisolated enum AudioWork {
         grant += 1
         let held = grant
         VoiceEvents.note("audio session: \(owner.rawValue) acquired")
-        if isSimulated(owner) { return held }
+        if isSimulated(owner) {
+            if owner == .conversation { watchInputMute() }
+            return held
+        }
         do {
             let speaker = loudspeaker
             try await AudioWork.run {
                 try Self.activate(owner, mode: mode)
-                if owner == .conversation { Self.applyLoudspeaker(speaker) }
+                if owner == .conversation {
+                    Self.applyLoudspeaker(speaker)
+                    try? AVAudioApplication.shared.setInputMuted(false)
+                }
             }
-            if owner == .conversation { watchRoute() }
+            if owner == .conversation {
+                watchRoute()
+                watchInputMute()
+            }
         } catch {
             VoiceEvents.note("audio session: \(owner.rawValue) failed: \(VoiceReport.scrub(error.localizedDescription))")
             throw error
@@ -166,10 +185,17 @@ nonisolated enum AudioWork {
         guard self.owner == owner else { return }
         self.owner = nil
         borrower = nil
-        if owner == .conversation { unwatchRoute() }
+        if owner == .conversation {
+            unwatchRoute()
+            unwatchInputMute()
+            if let setter = systemInputMuteSetter { setter(false) }
+        }
         VoiceEvents.note("audio session: \(owner.rawValue) released")
         if isSimulated(owner) { return }
-        AudioWork.later { try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) }
+        AudioWork.later {
+            if owner == .conversation { try? AVAudioApplication.shared.setInputMuted(false) }
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
     }
 
     /// A start that was ended while its session came up (End or Stop during "Starting…"): its owner may have been
@@ -277,8 +303,53 @@ nonisolated enum AudioWork {
     /// Whether `owner` plays or records right now (as the holder or inside a conversation).
     func holds(_ owner: Owner) -> Bool { self.owner == owner || borrower == owner }
 
+    /// Syncs app-side mute state back to `AVAudioApplication` so AirPods/headset mute gestures stay in sync (#566).
+    func setInputMuted(_ muted: Bool) {
+        guard owner == .conversation else { return }
+        if let setter = systemInputMuteSetter {
+            setter(muted)
+            return
+        }
+        guard !isSimulated(.conversation) else { return }
+        AudioWork.later { try? AVAudioApplication.shared.setInputMuted(muted) }
+    }
+
+    /// Entry point invoked by `AVAudioApplication.inputMuteStateChangeNotification` and tests (#566).
+    nonisolated static func handleSystemInputMute(_ isMuted: Bool) -> Bool {
+        guard isConversationHeld else { return false }
+        Task { @MainActor in
+            guard AudioSessionCoordinator.shared.owner == .conversation else { return }
+            AudioSessionCoordinator.shared.onInputMuteChanged?(isMuted)
+        }
+        return true
+    }
+
+    private func watchInputMute() {
+        guard inputMuteObserver == nil else { return }
+        inputMuteObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioApplication.inputMuteStateChangeNotification, object: nil, queue: .main) { note in
+                guard let muted = (note.userInfo?[AVAudioApplication.muteStateKey] as? NSNumber)?.boolValue else { return }
+                _ = Self.handleSystemInputMute(muted)
+            }
+    }
+
+    private func unwatchInputMute() {
+        if let inputMuteObserver { NotificationCenter.default.removeObserver(inputMuteObserver) }
+        inputMuteObserver = nil
+    }
+
     /// Media services were reset: nobody holds the session any more.
-    func reset() { owner = nil; borrower = nil; unwatchRoute() }
+    func reset() {
+        let wasConversation = owner == .conversation
+        owner = nil
+        borrower = nil
+        unwatchRoute()
+        unwatchInputMute()
+        if wasConversation {
+            if let setter = systemInputMuteSetter { setter(false) }
+            else if !isSimulated(.conversation) { AudioWork.later { try? AVAudioApplication.shared.setInputMuted(false) } }
+        }
+    }
 
     /// On the audio queue.
     private nonisolated static func activate(_ owner: Owner, mode: AVAudioSession.Mode) throws {

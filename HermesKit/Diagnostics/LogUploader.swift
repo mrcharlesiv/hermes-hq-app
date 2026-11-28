@@ -80,7 +80,16 @@ nonisolated final class LogUploader: @unchecked Sendable {
     /// `directory`: where the outbox lives (tests); the diagnostic log's own folder otherwise.
     init(directory: URL? = nil) {
         customDirectory = directory
-        owner = ((try? String(contentsOf: ownerFile, encoding: .utf8)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if directory != nil {
+            owner = ((try? String(contentsOf: ownerFile, encoding: .utf8)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            // #349: avoid synchronous `open()` on the main thread during cold launch.
+            queue.async { [self] in
+                files.lock(); defer { files.unlock() }
+                let loaded = ((try? String(contentsOf: ownerFile, encoding: .utf8)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                lock.withLock { if owner.isEmpty { owner = loaded } }
+            }
+        }
     }
 
     static let enabledKey = "hqn.perfLog.enabled"

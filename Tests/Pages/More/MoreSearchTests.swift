@@ -114,6 +114,19 @@ struct MoreSearchTests {
         #expect((group?.rows.count ?? 0) <= MoreSearch.limit)
     }
 
+    @Test func settingsResultsHaveUniqueIDsForSo() {
+        let settings = SettingsSearch.index()
+        let entries = SettingsSearch.results("so", in: settings)
+        let fastModes = entries.filter { $0.id == "field:agent.service_tier" }
+        #expect(fastModes.count == 1)
+        #expect(fastModes.first?.context == "Main Model")
+
+        let group = find("so").first { $0.kind == .settings }
+        let ids = group?.rows.map(\.id) ?? []
+        #expect(!ids.isEmpty)
+        #expect(ids.count == Set(ids).count)
+    }
+
     @Test func actionsShowOnlyWhereTheyWork() {
         let full = MoreSearch.actions(.init(kanban: true, commandCenter: true, version: "v0.9.1+abc"))
         #expect(full.map(\.id) == ["new-chat", "new-bot", "new-task", "restart-gateway", "update-hermes", "perf-logs"])

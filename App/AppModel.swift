@@ -336,6 +336,12 @@ final class AppModel: AppServices {
             chat.menus.cwd = folder   // [new-chat-project] known on frame 0 before session.create / session.resume answers
         }
         chat.listsWhenStarted = extra["hidden"]?.bool != true   // [#440] a task's or a tile's chat stays off the lists
+        if chat.listsWhenStarted {
+            // #613: stable unsent draft scope per bot (and optional project folder) so switching away before sending
+            // keeps the composer draft when returning to a new session with this bot.
+            let cleanFolder = folder?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            chat.pendingScope = cleanFolder.isEmpty ? "new" : "new|\(cleanFolder)"
+        }
         if allowsThreads, chat.listsWhenStarted { wireThreads(on: chat) }
         chat.activityLink.store = activityStore       // [activity]
         wire(chat)
@@ -397,7 +403,12 @@ final class AppModel: AppServices {
     private func liveStatusChanged() {
         pushRunning()
         pushWaiting()
-        botStore?.setLiveStatus(working: liveStatus?.working ?? [], waiting: liveStatus?.waiting ?? [])
+        let waiting = liveStatus?.waiting ?? []
+        botStore?.setLiveStatus(working: liveStatus?.working ?? [], waiting: waiting)
+        // Issue #530: if the open chat transitioned to waiting (e.g. queue-only approval), pull pending approvals live.
+        if let chat = focusedChat, let stored = chat.storedSessionId, waiting.contains(stored) {
+            chat.promptsCameOnScreen()
+        }
     }
 
     func prefetchChat(for bot: Bot) {
@@ -1096,7 +1107,11 @@ final class AppModel: AppServices {
         default: ended = false
         }
         guard ended else { return }
-        offScreenTurnEnded(event.sessionId, tracked, reply: event.type == "message.complete" ? event.payload["text"]?.string : nil)
+        let rawReply = event.type == "message.complete" ? event.payload["text"]?.string : nil
+        // #612: tool-only or [SILENT] turns wrote nothing to the user; do not force an unread dot from empty text.
+        let trimmedReply = rawReply?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let reply: String? = (trimmedReply.isEmpty || trimmedReply.caseInsensitiveCompare("[SILENT]") == .orderedSame) ? nil : rawReply
+        offScreenTurnEnded(event.sessionId, tracked, reply: reply)
     }
 
     private func offScreenTurnEnded(_ runtime: String, _ tracked: (profile: String, storedId: String?), reply: String?) {

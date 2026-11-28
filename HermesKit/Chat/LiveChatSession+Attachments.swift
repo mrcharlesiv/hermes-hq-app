@@ -338,7 +338,14 @@ extension LiveChatSession {
 // MARK: - Screen side (contract `ChatAttachmentSending`)
 
 extension LiveChatSession: ChatAttachmentSending {
-    var draftScope: String { layoutScope }
+    /// #613: a fresh unsent chat (`startsNew && listsWhenStarted`) with a deterministic `pendingScope` keeps its draft
+    /// under that scope until the first message is sent, so switching bots and returning restores the unsent draft.
+    var draftScope: String {
+        if startsNew, listsWhenStarted, let pendingScope, messages.isEmpty, !turn.busy, queuedMessages.isEmpty {
+            return "\(account.id)|\(profile)|\(pendingScope)"
+        }
+        return layoutScope
+    }
 
     /// A bot's chat opening with its stored id known takes in words left under `"<account>|<profile>|"` by an earlier
     /// open whose id never resolved (it was left first, or offline). The bot's row reads that scope when the chat's own

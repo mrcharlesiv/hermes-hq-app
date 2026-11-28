@@ -25,6 +25,7 @@ nonisolated enum TalkLoopInput: Sendable, Equatable {
     case bargeSpeech
     case bargeUtterance(file: URL?)
     case muteToggled
+    case setMuted(Bool)
     /// Read Replies Aloud was switched (the bar's Speak Replies, the voice options, Settings). Off mid-reply stops the
     /// voice; the reply carries on as text.
     case speaksReplies(Bool)
@@ -413,6 +414,13 @@ nonisolated enum TalkLoop {
 
         case .muteToggled:
             setMuted(!state.muted, auto: false)
+
+        case .setMuted(let muted):
+            if state.muted != muted {
+                setMuted(muted, auto: false)
+            } else {
+                state.autoMuted = false
+            }
 
         case .speaksReplies(let on):
             state.speaksReplies = on

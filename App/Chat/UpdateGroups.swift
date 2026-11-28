@@ -302,10 +302,13 @@ nonisolated enum UpdateGroups {
                         return false
                     }
                     guard !from.sentTo else { return false }
+                    // #601: `bot_mode_dm.py --run-delivery` (`process_complete`) is the other bot's reply to our own
+                    // `message_agent`; Hermes never routes this turn's final answer back to that bot.
+                    if from.replyToOurDM { return false }
                     if let bot = from.face, !asked(bot, before: Member(message: i, row: r)) { return true }
                     let title = BackgroundResults.split(from.title).head
                     let names = [from.face?.name, from.face?.profile, title.hasPrefix("From ") ? String(title.dropFirst(5)) : nil]
-                    return BotDMs.speaksTo(names.compactMap { $0 }, in: b.text)
+                    return BotDMs.speaksTo(names.compactMap { $0 }, in: b.text) || BotDMs.isInternalAck(b.text)
                 }
             }
             return false
@@ -821,7 +824,7 @@ nonisolated enum UpdateGroups {
         let title = talk ?? cronTitle.map { short($0) } ?? (sameBot ? short(head(all[0].title)) : "Updates")
         let dated = days(group, input: input) != nil
         let members = all.map { member($0, dated: dated, input: input) }
-        let times = all.compactMap { input.messages[$0.message].timestamp }
+        let times = members.compactMap(\.time)
         var subtitle = counts(all, talk: talk).whole
         if let first = times.min(), let last = times.max() {
             subtitle += " · " + span(first, last, now: input.now)
@@ -874,9 +877,10 @@ nonisolated enum UpdateGroups {
 
     private static func member(_ item: Item, dated: Bool, input: ChatRowBuilder.Input) -> UpdateMemberRow {
         let m = input.messages[item.message]
+        let stamp = m.latestTimestamp ?? m.timestamp
         var row = UpdateMemberRow(id: item.id + memberSuffix, messageId: m.id, mark: item.mark, title: head(item.title),
-                                  time: m.timestamp, preview: "", full: "")
-        if dated, let t = m.timestamp { row.day = ChatRowBuilder.dayName(t, now: input.now) }
+                                  time: stamp, preview: "", full: "")
+        if dated, let t = stamp { row.day = ChatRowBuilder.dayName(t, now: input.now) }
         switch item.original.kind {
         case .backgroundResult(var b):
             b.expanded = false

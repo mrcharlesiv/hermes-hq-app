@@ -14,6 +14,7 @@ final class ComposerTextView: UITextView {
 
     override init(frame: CGRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
+        contentInsetAdjustmentBehavior = .never
         pasteConfiguration = UIPasteConfiguration(acceptableTypeIdentifiers: [UTType.image.identifier, UTType.plainText.identifier,
                                                                                UTType.text.identifier, UTType.url.identifier,
                                                                                UTType.fileURL.identifier])
@@ -29,11 +30,17 @@ final class ComposerTextView: UITextView {
     private var edgeFade: CAGradientLayer?
 
     override var isScrollEnabled: Bool {
-        didSet { if isScrollEnabled != oldValue { setNeedsLayout() } }
+        didSet {
+            if !isScrollEnabled, contentOffset != .zero { contentOffset = .zero }
+            if isScrollEnabled != oldValue { setNeedsLayout() }
+        }
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        if !isScrollEnabled, contentOffset != .zero {
+            contentOffset = .zero
+        }
         settleOnLastLine()
         updateEdgeFade()   // a scroll view lays out on every scroll: the mask follows the visible bounds
     }
@@ -43,11 +50,14 @@ final class ComposerTextView: UITextView {
     /// to the foot with the caret on the last line, the field goes the rest of the way.
     private func settleOnLastLine() {
         guard isScrollEnabled, isFirstResponder, !isTracking, !isDecelerating, let end = selectedTextRange?.end else { return }
-        let bottom = contentSize.height - bounds.height + adjustedContentInset.bottom
+        let bottom = max(0, contentSize.height - bounds.height + adjustedContentInset.bottom)
+        let caret = caretRect(for: end)
         let short = bottom - contentOffset.y
-        guard short > 0.5, short <= textContainerInset.bottom + (font?.lineHeight ?? 20) * 0.5,
-              caretRect(for: end).maxY >= contentSize.height - textContainerInset.bottom - 1 else { return }
-        contentOffset.y = bottom
+        if caret.maxY >= contentSize.height - textContainerInset.bottom - 1,
+           short > 0.5,
+           (short <= textContainerInset.bottom + (font?.lineHeight ?? 20) * 0.5 || caret.maxY > contentOffset.y + bounds.height - textContainerInset.bottom) {
+            contentOffset.y = bottom
+        }
     }
 
     /// [mac] The draft is clipped at the text's insets whenever it scrolls (not only at accessibility sizes).

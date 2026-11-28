@@ -127,6 +127,52 @@ struct ThemeHeadTests {
     }
 }
 
+/// The editor's small choices must show the same Dots design as the large stage, not the compact list-row design.
+@MainActor @Suite struct EditHeadPreviewTests {
+    @Test(arguments: HeadRecord.patterns, [true, false])
+    func dotsChoicesMatchTheStage(pattern: String, eyes: Bool) async throws {
+        var record = HeadRecord()
+        record.theme = "dots"
+        record.pattern = pattern
+        record.eyes = eyes
+        record.color = "teal"
+        record.seed = 17
+        let head = try #require(Head(record: record))
+        for side: CGFloat in [56, 60] {
+            let preview = try #require(await StripHeadImages.render(head, size: side, scale: 2, dark: false)?.cgImage)
+            let stage = try #require(HeadRenderer.picture(head, side: 64, scale: side * 2 / 64, dark: false))
+            #expect(preview.width == Int(side * 2))
+            #expect(preview.height == Int(side * 2))
+            let previewPixels = try #require(preview.dataProvider?.data as Data?)
+            let stagePixels = try #require(stage.dataProvider?.data as Data?)
+            #expect(previewPixels == stagePixels, "\(pattern), eyes: \(eyes), side: \(side)")
+        }
+    }
+
+    @Test func ordinarySmallDotsStayCompact() throws {
+        var record = HeadRecord()
+        record.theme = "dots"
+        record.pattern = "bloom"
+        let head = try #require(Head(record: record))
+        let compact = try #require(HeadRenderer.picture(head, side: 56, scale: 2, dark: false))
+        let full = try #require(HeadRenderer.picture(head, side: 64, scale: 56 * 2 / 64, dark: false))
+        let compactPixels = try #require(compact.dataProvider?.data as Data?)
+        let fullPixels = try #require(full.dataProvider?.data as Data?)
+        #expect(compactPixels != fullPixels)
+    }
+
+    @Test func otherThemeChoicesKeepTheirSmallRendering() async throws {
+        var record = HeadRecord()
+        record.theme = "robot"
+        let head = try #require(Head(record: record))
+        let preview = try #require(await StripHeadImages.render(head, size: 56, scale: 2, dark: false)?.cgImage)
+        let ordinary = try #require(HeadRenderer.picture(head, side: 56, scale: 2, dark: false))
+        let previewPixels = try #require(preview.dataProvider?.data as Data?)
+        let ordinaryPixels = try #require(ordinary.dataProvider?.data as Data?)
+        #expect(previewPixels == ordinaryPixels)
+    }
+}
+
 /// [perf] A themed head under 32 pt is drawn off the main thread (`HeadImage` → `SmallHeadPicture`): the async draw
 /// must land in the shared cache, where the next row with that head finds it in place.
 @MainActor @Suite struct HeadImageCacheTests {

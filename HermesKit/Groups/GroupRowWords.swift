@@ -177,7 +177,7 @@ nonisolated enum NameColor {
 /// stream's (parity L302).
 nonisolated enum DeliverySender {
     private static let pattern = try! NSRegularExpression(
-        pattern: "^(?:Message from (?:🤖\\s*)?([^:\\n(]{1,64}?)(?:\\s*\\(@([a-z0-9][a-z0-9_-]{0,63})(?:@[a-zA-Z0-9][a-zA-Z0-9_-]{0,63})?\\))?:\\s*|\\[Message from agent '([^']{1,64})'\\]\\s*)")
+        pattern: "^(?:Message from (?:🤖\\s*)?([^:\\n(]{1,64}?)(?:\\s*\\(@([a-zA-Z0-9][a-zA-Z0-9_.-]{0,63})(?:@[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63})?\\))?:\\s*|\\[Message from agent '([^']{1,64})'\\]\\s*)")
 
     struct Parsed: Equatable, Sendable {
         var name: String

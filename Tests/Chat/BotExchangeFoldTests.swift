@@ -518,6 +518,50 @@ struct BotExchangeFoldTests {
         }
     }
 
+    /// Issue #601 Case 1 & 2:
+    /// - A final answer to the owner after a `process_complete` (`bot_mode_dm.py --run-delivery`) stays unfolded as a
+    ///   normal bubble even when "To <bot>" is missing from the window, and folded multi-row turns keep their latest time.
+    /// - An explicit internal ACK after an inbound `internal_notification` DM folds into "With <bot>" even after a prior exchange.
+    @Test func processCompleteReplyStaysVisibleAndInternalAckFolds() throws {
+        let t0 = 1_790_000_000.0
+        let delivery = "[IMPORTANT: A background process has finished. Inform the user concisely about the result.]\n\n"
+            + "Command: python3 /Users/me/bot_mode_dm.py --run-delivery --target home\nExit code: 0\n"
+            + "Output:\nStatus is green."
+        let stored: [JSONValue] = [
+            ["id": 1, "role": "user", "content": "Check on Home for me.", "timestamp": .number(t0)],
+            // No "To Home" message_agent tool call in this window (e.g. paged/earlier):
+            ["id": 2, "role": "user", "display_kind": "process_complete", "content": .string(delivery), "timestamp": .number(t0 + 360)],
+            ["id": 3, "role": "assistant", "content": "", "timestamp": .number(t0 + 480),
+             "tool_calls": .array([["id": "c1", "function": ["name": "terminal", "arguments": "{\"command\":\"echo ok\"}"]]])],
+            ["id": 4, "role": "tool", "tool_call_id": "c1", "name": "terminal", "content": "ok", "timestamp": .number(t0 + 481)],
+            ["id": 5, "role": "assistant", "content": "Home: everything is green and verified.", "timestamp": .number(t0 + 485)],
+        ]
+        let folded = Hydration.fold(stored).messages
+        let built = input(folded)
+        let rows = ChatRowBuilder.build(built)
+        // Final answer to the user MUST stay visible as a bubble (never folded into "With Home").
+        #expect(bubbles(rows).count == 2, "expected user prompt + bot final answer, got \(rows.map(\.id))")
+        let answerMsg = try #require(folded.last)
+        #expect(answerMsg.latestTimestamp == Date(timeIntervalSince1970: t0 + 485))
+
+        // Case 2: prior completed exchange with Home, then an inbound DM and an internal ACK ("I'm not writing to the owner").
+        let ask = ChatMessage(id: "a1", role: .assistant, parts: [
+            .tool(ToolCall(id: "t1", name: "message_agent", title: "message_agent", argsText: #"{"target":"home","message":"Ping"}"#,
+                           summary: "Queued", state: .done, durationSeconds: 1)),
+            .text("Pinged Home."),
+        ], timestamp: now.addingTimeInterval(-600), rowId: nil)
+        let ackChat = [
+            ChatMessage(id: "u1", role: .user, parts: [.text("Ping Home")], timestamp: now.addingTimeInterval(-610), rowId: nil),
+            ask,
+            ChatMessage(id: "d1", role: .user, parts: [.text("Message from 🤖 Home (@home): Pong.")], timestamp: now.addingTimeInterval(-580), rowId: nil),
+            ChatMessage(id: "a2", role: .assistant, parts: [.text("Home responded with Pong.")], timestamp: now.addingTimeInterval(-570), rowId: nil),
+            ChatMessage(id: "d2", role: .user, parts: [.text("Message from 🤖 Home (@home): FYI background sync complete.")], timestamp: now.addingTimeInterval(-60), rowId: nil),
+            ChatMessage(id: "a3", role: .assistant, parts: [.text("Got it, I’m not writing to the owner about this.")], timestamp: now.addingTimeInterval(-55), rowId: nil),
+        ]
+        let ackRows = ChatRowBuilder.build(input(ackChat))
+        #expect(bubbles(ackRows) == ["u1|b0", "a2|b0"], "internal ACK meant for Home must fold, got \(bubbles(ackRows))")
+    }
+
     /// Context written before or after a clarify card stays visible in the chat instead of folding into "With … · N messages",
     /// even when the reply opens by naming the other bot or another bot exchange follows.
     @Test func contextAroundClarifyQuestionsNeverFoldsIntoBotTalk() throws {

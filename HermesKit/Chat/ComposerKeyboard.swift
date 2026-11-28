@@ -27,12 +27,33 @@ nonisolated enum ComposerKeyboard {
         #endif
     }()
 
+    /// On Mac Catalyst, `UITextView` with `.default` does not honor macOS's System Settings › Keyboard › Text Input
+    /// "Use smart quotes and dashes" toggle (`NSAutomaticQuoteSubstitutionEnabled` / `NSAutomaticDashSubstitutionEnabled`).
+    /// When the user explicitly turns that preference off, return `.no` so straight quotes and dashes stay untouched.
+    static var systemSmartQuotesEnabled: Bool? {
+        UserDefaults.standard.object(forKey: "NSAutomaticQuoteSubstitutionEnabled") as? Bool
+    }
+
+    static var systemSmartDashesEnabled: Bool? {
+        UserDefaults.standard.object(forKey: "NSAutomaticDashSubstitutionEnabled") as? Bool
+    }
+
+    static func smartQuotesType(followsSystem: Bool = Self.followsSystem,
+                                systemEnabled: Bool? = Self.systemSmartQuotesEnabled) -> UITextSmartQuotesType {
+        followsSystem && systemEnabled == false ? .no : .default
+    }
+
+    static func smartDashesType(followsSystem: Bool = Self.followsSystem,
+                                systemEnabled: Bool? = Self.systemSmartDashesEnabled) -> UITextSmartDashesType {
+        followsSystem && systemEnabled == false ? .no : .default
+    }
+
     @MainActor static func apply(to textView: UITextView) {
         textView.autocorrectionType = followsSystem ? .default : .yes
         textView.spellCheckingType = followsSystem ? .default : .yes
         textView.autocapitalizationType = .sentences
-        textView.smartQuotesType = .default
-        textView.smartDashesType = .default
+        textView.smartQuotesType = smartQuotesType()
+        textView.smartDashesType = smartDashesType()
         textView.smartInsertDeleteType = .default
         textView.inlinePredictionType = .default
         textView.keyboardType = .default

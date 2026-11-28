@@ -30,7 +30,9 @@ final class ChatWarmer {
             if !appActive { scheduled?.cancel(); scheduled = nil; return }
             guard !oldValue else { return }
             if passTask != nil { passAgain = true }
-            else if scheduled == nil, !staleTargets(latest).isEmpty { schedule() }
+            // #349: never call `staleTargets` synchronously on the main thread during foreground return; let the
+            // scheduled pass check staleness off the main thread after settling.
+            else if scheduled == nil, (!latest.isEmpty || !sessionRows().isEmpty || lastChat() != nil) { schedule() }
         }
     }
     /// [offline] §6.10: the chat the next launch would reopen, and the Sessions list's rows (the first 15 are read ahead).
@@ -133,6 +135,27 @@ final class ChatWarmer {
         }
     }
 
+    /// Off-main staleness filter so `pass()` never performs `FileHandle` / `open()` syscalls on `@MainActor` (#349).
+    private func staleTargetsOffMain(_ bots: [Bot]) async -> [WarmOrder.Candidate] {
+        let ordered = WarmOrder.order(lastChat: lastChat(), bots: bots, sessions: sessionRows()).filter { candidate in
+            let target = candidate.target
+            guard !isOpen(target.profile) else { return false }
+            if let seen = readAt[target], seen == candidate.lastActive { return false }
+            return true
+        }
+        guard !ordered.isEmpty else { return [] }
+        let cache = self.cache
+        let accountId = self.account.id
+        return await Task.detached(priority: .utility) {
+            ordered.filter { candidate in
+                let target = candidate.target
+                guard let saved = cache.savedAtPeek(account: accountId, profile: target.profile, storedId: target.storedId) else { return true }
+                guard let active = candidate.lastActive else { return false }
+                return saved.addingTimeInterval(1) < active
+            }
+        }.value
+    }
+
     private func pass() async {
         guard appActive else { return }
         let first = lastPass == nil
@@ -156,7 +179,9 @@ final class ChatWarmer {
         // Each next chat comes from the roster as it is now (a fuller roster may land while this pass reads).
         while tried.count < limit {
             guard appActive, !Task.isCancelled else { aborted = true; break }
-            guard let next = staleTargets(latest).first(where: { !tried.contains($0.target) }) else { break }
+            let stale = await staleTargetsOffMain(latest)
+            guard appActive, !Task.isCancelled else { aborted = true; break }
+            guard let next = stale.first(where: { !tried.contains($0.target) }) else { break }
             let bot = (id: next.target.profile, stored: next.target.storedId), stored = next.target.storedId
             tried.insert(next.target)
             // A finger-down read of this chat is out already (or just landed and was saved).
@@ -183,8 +208,9 @@ final class ChatWarmer {
         // [perf] A full pass that left stale chats unread plans one more (at the normal gap). The roster's poll used to
         // notify every 30-120 s even when nothing changed, and that is what drained the backlog; it now notifies only
         // on a real change. Not after a pass that read nothing: an unreachable gateway isn't asked again and again.
-        if !aborted, reads > 0, tried.count >= limit, staleTargets(latest).contains(where: { !tried.contains($0.target) }) {
-            passAgain = true
+        if !aborted, reads > 0, tried.count >= limit {
+            let remaining = await staleTargetsOffMain(latest)
+            if remaining.contains(where: { !tried.contains($0.target) }) { passAgain = true }
         }
         AppLog.trace("store", "warm pass (\(first ? "first" : "later")): \(tried.count) tried, \(reads) read, aborted=\(aborted), again=\(passAgain)")
     }
@@ -193,8 +219,24 @@ final class ChatWarmer {
     /// already out). The open that follows takes the read over; if the tap never comes, the rows are saved for later.
     func prefetch(_ bot: Bot) {
         guard appActive, let stored = bot.canonicalSessionId, !stored.isEmpty, !isOpen(bot.id) else { return }
-        if let saved = cache.savedAtPeek(account: account.id, profile: bot.id, storedId: stored),
-           bot.lastActive.map({ saved.addingTimeInterval(1) >= $0 }) ?? true { return }
+        // #349: check in-memory freshness first; if disk peek is needed, do it off the main thread.
+        if let known = cache.cachedSavedAt(account: account.id, profile: bot.id, storedId: stored) {
+            if let saved = known, bot.lastActive.map({ saved.addingTimeInterval(1) >= $0 }) ?? true { return }
+            startPrefetch(bot, stored: stored)
+            return
+        }
+        let cache = self.cache, accountId = self.account.id, lastActive = bot.lastActive
+        Task { [weak self] in
+            let saved = await Task.detached(priority: .utility) {
+                cache.savedAtPeek(account: accountId, profile: bot.id, storedId: stored)
+            }.value
+            guard let self, self.appActive, !self.isOpen(bot.id) else { return }
+            if let saved, lastActive.map({ saved.addingTimeInterval(1) >= $0 }) ?? true { return }
+            self.startPrefetch(bot, stored: stored)
+        }
+    }
+
+    private func startPrefetch(_ bot: Bot, stored: String) {
         let key = HistoryFlights.Key(account: account.id, profile: bot.id, storedId: stored)
         let client = self.client, cache = self.cache, account = self.account.id
         HistoryFlights.shared.start(key, { HistoryFlights.openRead(client: client, storedId: stored, profile: bot.id) }) {

@@ -27,18 +27,20 @@ nonisolated enum ChatMediaRows {
 
     /// Your message with attachments: one bubble, photos at its top, file rows, then the caption. The default question
     /// of a photo-only send draws no text (A4).
-    static func userBubble(_ m: ChatMessage, text: String, attachments: [MessageAttachment], input: ChatRowBuilder.Input) -> ChatRow {
+    static func userBubble(_ m: ChatMessage, text: String, attachments: [MessageAttachment], input: ChatRowBuilder.Input,
+                           partIndex: Int = 0) -> ChatRow {
         let (media, files) = split(attachments, context: input.media.context)
         var shown = text
         if !media.isEmpty && ChatText.trimmed(text) == AttachmentSender.defaultQuestion { shown = "" }
-        var bubble = BubbleRow(mine: true, text: shown, markdown: true, partIndex: 0, joinsAbove: false, joinsBelow: false, tail: false,
-                               time: nil, pending: m.isPending, streaming: false, speaker: "You", expanded: true)
+        let speaker: String? = partIndex == 0 ? "You" : nil
+        var bubble = BubbleRow(mine: true, text: shown, markdown: true, partIndex: partIndex, joinsAbove: false, joinsBelow: false, tail: false,
+                               time: nil, pending: m.isPending, streaming: false, speaker: speaker, expanded: true)
         bubble.media = media
         bubble.files = files
         var h = Hasher()
-        h.combine(ChatRowBuilder.bubbleFingerprint(shown, mine: true, speaker: "You"))
+        h.combine(ChatRowBuilder.bubbleFingerprint(shown, mine: true, speaker: speaker))
         MediaLayout.hash(media, files, into: &h)
-        return ChatRow(id: "\(m.id)|b0", messageId: m.id, scope: input.scope, fingerprint: h.finalize(), kind: .bubble(bubble),
+        return ChatRow(id: "\(m.id)|b\(partIndex)", messageId: m.id, scope: input.scope, fingerprint: h.finalize(), kind: .bubble(bubble),
                        gapAbove: ChatMetrics.turnGap, variant: 0)
     }
 

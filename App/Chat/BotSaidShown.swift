@@ -111,13 +111,33 @@ nonisolated extension BotSaidRules {
             // The bot's reply, unless the chat folds it into a talk with another bot; yours and anyone else's count.
             if UpdateGroups.isBotsReply(row) { return !rows.interim(member) && !bubble.text.isEmpty }
             return true
-        case .backgroundResult, .phoneResult:
-            return !UpdateGroups.isBotTalk(row)          // "From Otto" / "To Otto" are the bots' own business
+        case .backgroundResult(let result):
+            if UpdateGroups.isBotTalk(row) { return false }   // "From Otto" / "To Otto" are the bots' own business
+            // #612: a background process/helper completion inside a bot-to-bot turn with no reply to the user is not news for you.
+            if !result.cron && !result.voice && isInBotTalkTurn(member, in: rows) { return false }
+            return true
+        case .phoneResult:
+            return true
         case .error, .prompt, .slashOutput:
             return true
         case .toolRun, .thought, .day, .notice, .modelFallback, .caption, .stoppedEarly, .waiting, .sendState, .actions,
              .activity, .reactions, .thread:   // [threads] a thread speaks for itself (its own chat's row)
             return false
         }
+    }
+
+    /// True when `member` sits inside a bot-to-bot turn (preceded by a bot-talk row with no user message or cron report
+    /// in between), so background tool completions from that bot-to-bot turn do not light an unread dot (#612).
+    private static func isInBotTalkTurn(_ member: UpdateGroups.Member, in rows: UpdateGroups.Rows) -> Bool {
+        for i in stride(from: member.message, through: max(0, member.message - 8), by: -1) {
+            let own = rows.at(i)
+            let upper = i == member.message ? member.row : own.count
+            for row in own[..<upper].reversed() {
+                if UpdateGroups.isBotTalk(row) { return true }
+                if UpdateGroups.endsTalk(row) { return false }
+                if UpdateGroups.isBotsReply(row), !rows.interim(UpdateGroups.Member(message: i, row: 0)) { return false }
+            }
+        }
+        return false
     }
 }

@@ -1,5 +1,6 @@
 // docs/spec/3x-talk.md §4.2 and §14.1: the conversation loop as a table of input sequences against effects.
 
+import AVFAudio
 import Foundation
 import Testing
 @testable import HermesHQNative
@@ -524,5 +525,64 @@ struct TalkLoopTests {
         }
         #expect(TalkEnd.user.showsEndedCaption && TalkEnd.said.showsEndedCaption && !TalkEnd.replaced.showsEndedCaption)
         #expect(!TalkEnd.paused(.silence, detail: nil).showsEndedCaption && !TalkEnd.gone.showsEndedCaption)
+    }
+
+    /// Issue #566: Explicit headset/AirPods mute setter is idempotent in both standard and live loops, and
+    /// `AudioSessionCoordinator` routes system mute gestures only while a conversation owns the session.
+    @Test @MainActor func headsetMuteStateSyncsInBothLoopsAndCoordinator() async throws {
+        var std = LoopHarness()
+        std.listening()
+        #expect(std.send(.setMuted(true)) == [.cancelTake])
+        #expect(std.state.muted)
+        // Idempotent duplicate mute emits no duplicate effects.
+        #expect(std.send(.setMuted(true)).isEmpty)
+        #expect(std.send(.setMuted(false)) == [.beginTake])
+        #expect(!std.state.muted)
+
+        // LiveTalkLoop explicit setMuted
+        var liveState = TalkLoopState(now: 0, speaksReplies: true)
+        var live = LiveTalkState(engine: .gptLive)
+        _ = LiveTalkLoop.reduce(&liveState, &live, .start, now: 0)
+        _ = LiveTalkLoop.reduce(&liveState, &live, .sessionReady, now: 1)
+        #expect(LiveTalkLoop.reduce(&liveState, &live, .setMuted(true), now: 2) == [.setMuted(true)])
+        #expect(liveState.muted)
+        #expect(LiveTalkLoop.reduce(&liveState, &live, .setMuted(true), now: 3).isEmpty)
+        #expect(LiveTalkLoop.reduce(&liveState, &live, .setMuted(false), now: 4) == [.setMuted(false)])
+        #expect(!liveState.muted)
+
+        // AudioSessionCoordinator bridge: ignored outside a conversation, delivered during one, reset on release.
+        let coord = AudioSessionCoordinator.shared
+        let prevSim = coord.simulatedOwners
+        let prevOnMute = coord.onInputMuteChanged
+        let prevSetter = coord.systemInputMuteSetter
+        defer {
+            coord.release(.conversation)
+            coord.simulatedOwners = prevSim
+            coord.onInputMuteChanged = prevOnMute
+            coord.systemInputMuteSetter = prevSetter
+        }
+        coord.simulatedOwners.insert(.conversation)
+        #expect(!AudioSessionCoordinator.handleSystemInputMute(true), "outside a conversation, mute handler declines")
+
+        var received: [Bool] = []
+        var pushed: [Bool] = []
+        coord.onInputMuteChanged = { received.append($0) }
+        coord.systemInputMuteSetter = { pushed.append($0) }
+        _ = try await coord.acquire(.conversation)
+
+        #expect(AudioSessionCoordinator.handleSystemInputMute(true), "during a conversation, mute handler accepts")
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(received == [true])
+
+        // Real AVAudioApplication notification delivers mute-off through watchInputMute().
+        NotificationCenter.default.post(name: AVAudioApplication.inputMuteStateChangeNotification, object: nil,
+                                        userInfo: [AVAudioApplication.muteStateKey: false])
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(received == [true, false])
+
+        coord.setInputMuted(true)
+        coord.setInputMuted(false)
+        coord.release(.conversation)
+        #expect(pushed == [true, false, false], "app mute syncs to system and resets to unmuted on release")
     }
 }

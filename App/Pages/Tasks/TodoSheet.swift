@@ -222,7 +222,9 @@ final class TodoSheetModel {
         if let latest = glimpse() { seenGlimpse = latest.id }   // what the chat showed has been seen
         tuckReason = nil
         // Owner 2026-11-08: "Clicking on the task from the chat should minimize the keyboard." The task's view has
-        // the screen; what you were writing stays in the field for when you go back.
+        // the screen; what you were writing stays in the field for when you go back. Active voice recording stops so
+        // it never keeps running invisibly behind the task brief (#512).
+        chat?.voice.composerCovered()
         if let field = chat?.composer.textView, field.isFirstResponder { field.resignFirstResponder() }
         PagesHaptics.selection()
         HQMotion.withAnimation(.snappy) { tucked = false }
@@ -888,9 +890,20 @@ final class TodoSheetHost: UIHostingController<HQScaledRoot<TodoSheetView>> {
                                                name: UIResponder.keyboardWillHideNotification, object: nil)
     }
 
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        model.store.setVisible(true)
+        Task { await model.store.refresh() }
+    }
+
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         model.flushUnsavedEdits()
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        model.store.setVisible(false)
     }
 
     /// The keyboard's overlap is this page's own bottom safe area, so the Ask bar rides above it (as the Kanban task's).

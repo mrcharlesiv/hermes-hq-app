@@ -65,6 +65,7 @@ extension LiveChatSession {
             guard generation == externalGeneration, !Task.isCancelled, observing else { return }
             setExternalWork(verdict, why: round == 1 ? why : "read \(round)", readAfter: true)
             if verdict == nil { return }
+            promptsCameOnScreen()   // #530: surface queue-only approvals while an external turn runs
             try? await Task.sleep(for: ExternalTurn.pollInterval)
         }
         // Our own turn started (or the screen left) with the loop still on: that turn's state takes over.

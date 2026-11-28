@@ -95,6 +95,9 @@ enum TasksHub {
         center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { foreground() }
         }
+        center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { current?.appDidEnterBackground() }
+        }
         center.addObserver(forName: NotificationHub.taskPushed, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { _ = Task { await current?.refresh(force: true) } }
         }
@@ -111,7 +114,9 @@ enum TasksHub {
     /// Back in front: the list is read (cheap: `?since=` answers `unchanged` when nothing moved). An add-on without
     /// Tasks is asked again only while the page shows.
     private static func foreground() {
-        guard let store = current, !store.needsAddOn || TasksViewController.onScreen else { return }
+        guard let store = current else { return }
+        store.appDidBecomeActive()
+        guard !store.needsAddOn || TasksViewController.onScreen else { return }
         Task { await store.refresh() }
     }
 

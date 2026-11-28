@@ -44,7 +44,8 @@ final class TaskBriefHost: UIHostingController<HQScaledRoot<TaskBriefRoot>> {
     /// that rolled the task back over the chat and dropped the words being typed.
     @objc private func keysHiding() {
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.model.tuckReason == .focus, self.field?.isFirstResponder != true else { return }
+            guard let self, self.model.tuckReason == .focus, self.field?.isFirstResponder != true,
+                  self.model.chat?.keepsComposerOpen != true else { return }
             self.model.untuck()
         }
     }
@@ -61,6 +62,12 @@ final class TaskBriefHost: UIHostingController<HQScaledRoot<TaskBriefRoot>> {
     /// and whenever its width changes, the page caps the task's view again.
     private var laidWidth: CGFloat = 0
 
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        model.store.setVisible(true)
+        Task { await model.store.refresh() }
+    }
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         if model.chat?.promptsUI?.prompts.needsInput != nil { model.revealLivePrompt() }
@@ -70,6 +77,11 @@ final class TaskBriefHost: UIHostingController<HQScaledRoot<TaskBriefRoot>> {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         model.flushUnsavedEdits()
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        model.store.setVisible(false)
     }
 
     override func viewDidLayoutSubviews() {

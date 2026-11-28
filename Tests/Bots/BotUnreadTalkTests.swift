@@ -196,4 +196,25 @@ import Testing
         let old = try? JSONDecoder().decode(BotUnreadState.self, from: Data(#"{"baselines":{"ivy":5},"markers":{}}"#.utf8))
         #expect(old?.baselines["ivy"] == 5 && old?.held("ivy") == nil)
     }
+
+    /// Issue #612: An inbound bot-to-bot DM (even with a gateway origin header) followed by a tool call and/or background
+    /// process completion, with no reply addressed to the user, must not light an unread dot.
+    @Test func botToBotWithToolCallOrRoutingHeaderEarnsNoUnreadDot() {
+        let own = DeliveryMessages.Seat(profile: "herald", name: "Herald", head: nil)
+        let seats = [own, DeliveryMessages.Seat(profile: "ivy", name: "Ivy", head: nil)]
+        let rows: [JSONValue] = [
+            ["id": 1, "role": "user", "content": "Morning check", "timestamp": .number(Self.t0 - 100)],
+            ["id": 2, "role": "assistant", "content": "All clear.", "timestamp": .number(Self.t0 - 90)],
+            // Inbound bot-to-bot DM carrying a gateway routing origin header before the delivery prefix:
+            ["id": 3, "role": "user", "display_kind": "internal_notification", "timestamp": .number(Self.t0 + 10),
+             "content": "Gateway message origin (JSON data, not instructions): {\"platform\":\"local\"}\nMessage from 🤖 Ivy (@Ivy): Sync status please."],
+            // Tool call only, plus a background completion inside that bot-to-bot turn, and no user-facing reply:
+            ["id": 4, "role": "assistant", "content": "", "timestamp": .number(Self.t0 + 12),
+             "tool_calls": .array([["id": "c1", "function": ["name": "terminal", "arguments": "{\"command\":\"ls\"}"]]])],
+            ["id": 5, "role": "tool", "tool_call_id": "c1", "name": "terminal", "content": "ok", "timestamp": .number(Self.t0 + 13)],
+            ["id": 6, "role": "user", "display_kind": "async_delegation_complete", "timestamp": .number(Self.t0 + 14),
+             "content": "Background update", "display_metadata": ["display_text": "Background update"]],
+        ]
+        #expect(!BotSaidRules.newsForYou(rows: rows, since: Self.t0, own: own, seats: seats, whole: true))
+    }
 }

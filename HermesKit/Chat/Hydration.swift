@@ -89,7 +89,14 @@ nonisolated enum Hydration {
         }
         if kind == "internal_notification" {
             var meta = record["display_metadata"]?.looseObject ?? [:]
-            let body = String(text.drop(while: { $0.isWhitespace }))
+            // #612: strip any gateway routing header / turn context before checking for bot-to-bot delivery,
+            // otherwise an inbound bot DM with a routing prefix falls through to "Background update" and triggers an unread dot.
+            var strippedText = strippingTurnContext(text)
+            let range = NSRange(strippedText.startIndex..., in: strippedText)
+            if let m = originRE.firstMatch(in: strippedText, range: range), let r = Range(m.range, in: strippedText) {
+                strippedText = String(strippedText[r.upperBound...])
+            }
+            let body = String(strippedText.drop(while: { $0.isWhitespace }))
             // [botdm] Another bot's message ("Message from 🤖 ivy (@ivy): …") likewise, so DeliveryMessages gives it its
             // sender: the line has that bot's face and name, as live (owner, 2026-10-28: it drew the message glyph).
             if DeliveryMessages.mayBeDelivery(body), DeliverySender.parse(body) != nil {
@@ -990,8 +997,12 @@ nonisolated private struct Folder {
                     meta.tools[call.id] = detail
                 }
             }
+            let latestTs = ([h.timestamp] + parts.map(\.timestamp)).compactMap { $0 }.max()
             var message = ChatMessage(id: h.id, role: h.role, parts: chatParts,
                                       timestamp: h.timestamp.map { Date(timeIntervalSince1970: $0) }, rowId: h.rowId)
+            if let latestTs, h.timestamp.map({ latestTs > $0 + 0.5 }) ?? false {
+                message.latestTimestamp = Date(timeIntervalSince1970: latestTs)
+            }
             message.reactions = h.reactions
             message.helperReport = h.helperReport
             message.job = h.job

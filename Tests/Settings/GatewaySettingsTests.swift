@@ -509,6 +509,15 @@ nonisolated private let defaults: JSONValue = [
                        SettingsSearchEntry(id: "b", label: "x", context: "y", target: .root("b"))]
         #expect(SettingsSearch.results("x", in: entries).count == 1)
     }
+
+    @Test func duplicateIDsDoNotHideOtherMatchingEntries() {
+        let entries = [SettingsSearchEntry(id: "a", label: "X", context: "First", target: .root("a")),
+                       SettingsSearchEntry(id: "a", label: "X", context: "Second", target: .root("a")),
+                       SettingsSearchEntry(id: "b", label: "X", context: "Second", target: .root("b"))]
+        let results = SettingsSearch.results("x", in: entries, limit: 2)
+        #expect(results.map(\.id) == ["a", "b"])
+        #expect(results.map(\.context) == ["First", "Second"])
+    }
 }
 
 // MARK: - Diagnostics

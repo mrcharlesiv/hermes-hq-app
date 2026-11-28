@@ -244,7 +244,8 @@ final class GoalLeadHost: UIHostingController<HQScaledRoot<GoalLeadRoot>> {
     @objc private func fieldBegan() { model.tuck(.focus) }
     @objc private func keysHiding() {
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.model.tuckReason == .focus, self.field?.isFirstResponder != true else { return }
+            guard let self, self.model.tuckReason == .focus, self.field?.isFirstResponder != true,
+                  self.model.chat?.keepsComposerOpen != true else { return }
             self.model.untuck()
         }
     }

@@ -1043,6 +1043,7 @@ struct MacPopUpFace: View {
             Image(systemName: "chevron.up.chevron.down")
                 .font(Font.hq(.caption2).weight(.semibold))
                 .foregroundStyle(enabled ? Color.hqLabel2 : MacField.dimmed)
+                .fixedSize()
                 .accessibilityHidden(true)
         }
         .padding(.leading, MacPopUpInsets.leading)
@@ -1075,7 +1076,7 @@ struct MacPopUp<Value: Hashable>: View {
         }
         .menuStyle(.button)
         .buttonStyle(MacPopUpButtonStyle())   // [mac] Stress test 2026-10-28 round 8
-        .fixedSize()
+        .fixedSize(horizontal: false, vertical: true)
         .accessibilityLabel(label)
         .accessibilityValue(title(selection))
     }
@@ -1091,7 +1092,7 @@ struct MacChooserButton: View {
     var body: some View {
         Button(action: action) { MacPopUpFace(text: value, isEnabled: enabled) }
             .buttonStyle(MacPopUpButtonStyle())   // [mac] Stress test 2026-10-28 round 8
-            .fixedSize()
+            .fixedSize(horizontal: false, vertical: true)
             .accessibilityLabel(label)
             .accessibilityValue(value)
     }

@@ -29,6 +29,7 @@ nonisolated enum LiveTalkInput: Sendable, Equatable {
     /// The tool the running turn is in (its row's title), or nil.
     case tool(String?)
     case muteToggled
+    case setMuted(Bool)
     case sendNow
     case stopOrInterrupt
     case end
@@ -437,6 +438,9 @@ nonisolated enum LiveTalkLoop {
 
         case .muteToggled:
             setMuted(!state.muted, auto: false)
+
+        case .setMuted(let muted):
+            setMuted(muted, auto: false)
 
         case .sendNow:
             guard state.micReady, !state.muted else { break }

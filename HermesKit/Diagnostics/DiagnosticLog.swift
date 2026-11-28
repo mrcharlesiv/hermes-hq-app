@@ -311,38 +311,43 @@ nonisolated enum CrashCapture {
 
         // Fatal signals: the raw backtrace of the thread that died, written with async-signal-safe calls only, then the
         // message a library left for the system's crash report (Swift's "Fatal error: …"), which the backtrace lacks.
+        // #349: install handlers synchronously, but open the pending signal file and sweep old files off the main thread
+        // so cold launch never stalls on a slow macOS `open()`.
         CrashMessages.install()
-        let path = log.directory.appendingPathComponent("signal-\(DiagnosticLog.fileStamp(Date()))-pending.txt").path
-        signalFD = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
-        if signalFD >= 0 {
-            let header = "Fatal signal in Hermes HQ \(version)\n\(binaryImageNote())\nBacktrace of the thread that died:\n"
-            _ = header.withCString { write(signalFD, $0, strlen($0)) }
-            for sig in [SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGTRAP, SIGFPE] {
-                signal(sig) { sig in
-                    let fd = CrashCapture.signalFD
-                    if fd >= 0 {
-                        var buffer = [UnsafeMutableRawPointer?](repeating: nil, count: 128)
-                        let count = backtrace(&buffer, 128)
-                        let label: StaticString = "signal\n"
-                        _ = write(fd, label.utf8Start, label.utf8CodeUnitCount)
-                        backtrace_symbols_fd(&buffer, count, fd)
-                        CrashMessages.write(to: fd)
-                        fsync(fd)
-                    }
-                    signal(sig, SIG_DFL)
-                    raise(sig)
+        for sig in [SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGTRAP, SIGFPE] {
+            signal(sig) { sig in
+                let fd = CrashCapture.signalFD
+                if fd >= 0 {
+                    var buffer = [UnsafeMutableRawPointer?](repeating: nil, count: 128)
+                    let count = backtrace(&buffer, 128)
+                    let label: StaticString = "signal\n"
+                    _ = write(fd, label.utf8Start, label.utf8CodeUnitCount)
+                    backtrace_symbols_fd(&buffer, count, fd)
+                    CrashMessages.write(to: fd)
+                    fsync(fd)
                 }
+                signal(sig, SIG_DFL)
+                raise(sig)
             }
         }
-        // An earlier launch's empty signal file means that launch did not die of a signal.
-        cleanEmptySignalFiles(except: path)
-        StabilityCounts.countCaughtCrashes(log.crashRecords())   // [diagnostics] "Crashes caught by Hermes HQ"
-        if let last = log.crashRecords().first {
-            let defaults = UserDefaults.standard
-            if let line = crashRecordNote(name: last.lastPathComponent, modified: DiagnosticLog.modified(last),
-                                          lastNoted: defaults.string(forKey: lastNotedCrashKey), now: Date()) {
-                log.note("launch", line)
-                defaults.set(last.lastPathComponent, forKey: lastNotedCrashKey)
+        DispatchQueue.global(qos: .utility).async {
+            let path = log.directory.appendingPathComponent("signal-\(DiagnosticLog.fileStamp(Date()))-pending.txt").path
+            let fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
+            if fd >= 0 {
+                let header = "Fatal signal in Hermes HQ \(version)\n\(binaryImageNote())\nBacktrace of the thread that died:\n"
+                _ = header.withCString { write(fd, $0, strlen($0)) }
+                signalFD = fd
+            }
+            // An earlier launch's empty signal file means that launch did not die of a signal.
+            cleanEmptySignalFiles(except: path)
+            StabilityCounts.countCaughtCrashes(log.crashRecords())   // [diagnostics] "Crashes caught by Hermes HQ"
+            if let last = log.crashRecords().first {
+                let defaults = UserDefaults.standard
+                if let line = crashRecordNote(name: last.lastPathComponent, modified: DiagnosticLog.modified(last),
+                                              lastNoted: defaults.string(forKey: lastNotedCrashKey), now: Date()) {
+                    log.note("launch", line)
+                    defaults.set(last.lastPathComponent, forKey: lastNotedCrashKey)
+                }
             }
         }
 

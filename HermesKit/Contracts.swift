@@ -476,6 +476,11 @@ nonisolated struct ChatMessage: Identifiable, Hashable, Sendable {
     /// [groups] Another sender's message (a room member, a delivery from another bot): an incoming bubble with its
     /// name and face (docs/spec/3x-groups.md §7.12). nil = you, or the chat's own bot.
     var sender: ChatSender? = nil
+    /// #601: true when this bot delivery came from `bot_mode_dm.py --run-delivery` (`process_complete`, the other
+    /// bot's answer to our `message_agent`) rather than an unsolicited inbound DM (`internal_notification`).
+    var replyToOurDM: Bool = false
+    /// #601: latest stored row timestamp folded into a multi-row assistant message (when newer than `timestamp`).
+    var latestTimestamp: Date? = nil
     /// [transcript] A cron delivery's job name, on the byline beside its bot (docs/spec/3x-transcript.md §2.1); and a
     /// turn whose reply was the scheduler's "[SILENT]": the note drawn after its tool rows. Display-time only (set by
     /// the resolver pass the chat screen runs; never stored).

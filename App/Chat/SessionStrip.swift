@@ -24,12 +24,6 @@ import UIKit
 // underline) and no redundant `<` Back chevron in the nav bar. It has no keys of its own: ⇧⌘[ / ⇧⌘] and ⌃Tab /
 // ⌃⇧Tab walk the window's tabs at its very top (`MacWorkspaceBar.cycleTabs`; owner 2026-11-27).
 
-// [typing-header] Owner 2026-11-20 ("Is there any way to reduce the height of that whole top section? … with the
-// keyboard up, there's really not much screen real estate left for the actual chat"; of the drawn study he said
-// "That works!!!"): on the iPhone the row folds away while the software keyboard covers the chat and comes back as
-// it goes. Only the row's height changes (`setKeyboardOccludesChat`): Back, the title and ⋯ stay as they are, ⋯ ›
-// Chats with the bot still lists every chat, and the pills, their scroll place and the draft are kept.
-
 /// Settings › Chat › Other Chats at the Top (opt-in).
 enum SessionStripPref {
     static let key = "hqn.sessionStrip"
@@ -403,10 +397,9 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
     private let macIOSBand = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterial))
     private let macIOSVeil = UIView()
     private var topBandShown = false
-    /// [bot-tabs-seamless] Whether this mobile strip currently has active chats to display (even if temporarily folded
-    /// away while the software keyboard covers the chat), so `ChatViewController` keeps the unified translucent top
-    /// banner across the navigation bar and strip in both Native and Hermes looks.
-    var hasBanner: Bool { !tabs && availableHeight > 0 }
+    /// [bot-tabs-seamless] Whether this mobile strip currently has active chats to display, so `ChatViewController`
+    /// keeps the unified translucent top banner across the navigation bar and strip in both Native and Hermes looks.
+    private(set) var hasBanner = false
     /// [mac-session-tabs] On the Mac, the bot's own chat stays pinned at the leading edge outside `scroller`, parted
     /// from the scrolling session tabs by a subtle vertical tick (`leftRule`).
     private let pinnedSlot = UIView()
@@ -440,8 +433,6 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
     private var allChatsHeight: NSLayoutConstraint?
     private var shown: [SessionStripEntry] = []
     private var watches: [NSObjectProtocol] = []
-    private var availableHeight: CGFloat = 0
-    private var keyboardOccludesChat = false
     /// The pill of the chat on screen is kept in view as the pills change, until the person scrolls the strip.
     private var personScrolled = false
     private var placedCurrent = false
@@ -919,20 +910,6 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
 
     @objc private func scrolledByPerson() { personScrolled = true }
 
-    /// The keyboard guide follows actual occlusion, including interactive dismissal; focus alone is not enough.
-    /// Only change the height here: the existing pills and their scroll position remain untouched.
-    func setKeyboardOccludesChat(_ occludes: Bool) {
-        guard keyboardOccludesChat != occludes else { return }
-        keyboardOccludesChat = occludes
-        updateHeight(animated: false)
-    }
-
-    private func updateHeight(animated: Bool) {
-        let height = keyboardOccludesChat ? 0 : availableHeight
-        view.isHidden = height == 0
-        screen?.setTopAccessoryHeight(height, insets: true, animated: animated)
-    }
-
     private func reload(animated: Bool = true) {
         guard let screen else { return }
         #if targetEnvironment(macCatalyst)
@@ -968,8 +945,9 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
         let height: CGFloat = SessionStripPref.isOn && drawn ? stripHeight : 0
         showAllCount(height > 0 ? others : 0)
         app?.setChatList(self, shown: appeared && (DeviceWord.isMac ? height > 0 : SessionStripPref.isOn))
-        availableHeight = height
-        updateHeight(animated: animated && view.window != nil && !HQMotion.reduced)
+        hasBanner = !tabs && height > 0
+        view.isHidden = height == 0
+        screen.setTopAccessoryHeight(height, insets: true, animated: animated && view.window != nil && !HQMotion.reduced)
         let botChanged = tabs && botEntry != shownBot
         if botChanged {
             shownBot = botEntry

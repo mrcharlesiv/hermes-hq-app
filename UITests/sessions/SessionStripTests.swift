@@ -44,8 +44,8 @@ final class SessionStripTests: XCTestCase {
     }
     @MainActor func all(_ app: XCUIApplication) -> XCUIElement { app.buttons["session-strip.all"] }
 
-    /// A real software keyboard must hide only the bot's row, and dismissal restores it without losing the draft.
-    @MainActor func testTypingHidesAndRestoresBotStrip() throws {
+    /// A real software keyboard keeps the bot's row visible and hittable without losing the draft.
+    @MainActor func testTypingKeepsBotStripVisible() throws {
         let app = launch(stripOn: true)
         bot(app)
         let all = all(app)
@@ -63,14 +63,16 @@ final class SessionStripTests: XCTestCase {
         field.typeText("An unsent fixture draft")
         XCTAssertTrue(waitUntil(10) { app.keyboards.firstMatch.exists }, "software keyboard returns after typing")
         shot(app, "typing-during")
-        XCTAssertTrue(waitUntil(5) { !all.exists }, "the row is hidden while the keyboard occludes the chat")
+        XCTAssertTrue(all.exists && all.isHittable, "the row stays visible while the keyboard is up")
+        XCTAssertEqual(all.frame.minX, beforeFrame.minX, accuracy: 1)
+        XCTAssertEqual(all.frame.minY, beforeFrame.minY, accuracy: 1)
         XCTAssertTrue(more.isHittable && title.exists && backButton.isHittable, "the navigation bar stays intact")
         XCTAssertEqual(field.value as? String, "An unsent fixture draft")
 
         // Open the actual menu while the keyboard is up; it may dismiss the keyboard as it presents.
         more.tap()
         let chatsWhileTyping = app.buttons["chat.more.bot-chats"]
-        XCTAssertTrue(chatsWhileTyping.waitForExistence(timeout: 5), "Chats is reachable from the compact header")
+        XCTAssertTrue(chatsWhileTyping.waitForExistence(timeout: 5), "Chats is reachable from the header")
         chatsWhileTyping.tap()
         let doneWhileTyping = app.buttons["phone-bot-chats.done"]
         XCTAssertTrue(doneWhileTyping.waitForExistence(timeout: 8)); doneWhileTyping.tap()
@@ -81,7 +83,7 @@ final class SessionStripTests: XCTestCase {
         table.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35))
             .press(forDuration: 0.1, thenDragTo: table.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)))
         XCTAssertTrue(waitUntil(10) { !app.keyboards.firstMatch.exists })
-        XCTAssertTrue(all.waitForExistence(timeout: 10), "the row returns when the keyboard is dismissed")
+        XCTAssertTrue(all.waitForExistence(timeout: 10), "the row stays visible when the keyboard is dismissed")
         XCTAssertEqual(field.value as? String, "An unsent fixture draft")
         XCTAssertEqual(all.frame.minX, beforeFrame.minX, accuracy: 1)
         shot(app, "typing-after")
@@ -99,8 +101,8 @@ final class SessionStripTests: XCTestCase {
         XCTAssertEqual(field.value as? String, "An unsent fixture draft")
     }
 
-    /// A long bot chat read from higher up: the line being read stays on screen as the row folds away and returns,
-    /// and neither focusing nor dismissing jumps the chat to its newest end.
+    /// A long bot chat read from higher up: the line being read stays on screen while typing and dismissing,
+    /// with the row staying visible, and neither focusing nor dismissing jumps the chat to its newest end.
     @MainActor func testTypingKeepsTheReadingPlaceInALongChat() throws {
         let digest = SHA256.hash(data: Data("default".utf8)).map { String(format: "%02x", $0) }.joined()
         let lines: [[String: Any]] = (1...48).map { n in
@@ -136,7 +138,7 @@ final class SessionStripTests: XCTestCase {
         let field = app.textViews["composer.text"]
         field.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10))
-        XCTAssertTrue(waitUntil(5) { !all.exists }, "the row folds away")
+        XCTAssertTrue(all.exists && all.isHittable, "the row stays visible while typing")
         Thread.sleep(forTimeInterval: 0.8)
         let during = onScreen()
         shot(app, "long-during")
@@ -147,7 +149,7 @@ final class SessionStripTests: XCTestCase {
         table.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25))
             .press(forDuration: 0.1, thenDragTo: table.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)))
         XCTAssertTrue(waitUntil(10) { !app.keyboards.firstMatch.exists })
-        XCTAssertTrue(all.waitForExistence(timeout: 10), "the row returns")
+        XCTAssertTrue(all.exists, "the row stays visible after dismissing")
         Thread.sleep(forTimeInterval: 0.8)
         let after = onScreen()
         shot(app, "long-after")

@@ -1610,11 +1610,6 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
             relayoutEverything(reason: "column width changed \(Int(was.rounded())) → \(Int(column.width.rounded()))"
                                + (view.window == nil ? ", off screen" : ""))
         }
-        if !DeviceWord.isMac, traitCollection.userInterfaceIdiom == .phone,
-           let strip = topAccessory as? SessionStripController {
-            let keys = view.keyboardLayoutGuide.layoutFrame
-            strip.setKeyboardOccludesChat(keys.height > view.safeAreaInsets.bottom + 20)
-        }
         activity.layoutChanged()         // [activity] an opened card's cap follows the keyboard in this same pass
         updateInsets()
         updateBottomEdge()

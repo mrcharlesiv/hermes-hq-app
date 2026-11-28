@@ -1112,7 +1112,7 @@ final class ChatEdgeStandIn: UIView {
     }
 
     /// Draws a whisper bottom hairline at the foot of the hard translucent sheet (used in Native mode when the
-    /// extra-chats banner owns the header edge, including while the keyboard temporarily folds the strip away).
+    /// extra-chats banner owns the header edge).
     var showsHairline = false {
         didSet { if showsHairline != oldValue { updateColors() } }
     }

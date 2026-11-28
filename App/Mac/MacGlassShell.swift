@@ -12,6 +12,11 @@ enum MacGlassShell {
     static let canvasInset: CGFloat = 10
     /// Continuous corner radius of the floating content canvas card (app pts; ≈ 11.5 screen pts, concentric with macOS window corners).
     static let canvasCornerRadius: CGFloat = 15
+    /// Top safe-area inset inside `macCanvas` so navigation bars (which UIKit otherwise pins at y = 10 pt) breathe
+    /// cleanly below the 15 pt top corner border while keeping left list, chat, and inspector headers level (app pts).
+    static let canvasTopInset: CGFloat = 18
+    /// Minimum leading inset for list-pane inline titles inside `macCanvas`'s 15 pt top-left corner curve (app pts).
+    static let canvasTitleLeading: CGFloat = 24
     /// Height of the unified top chrome / workspace tab bar aligned dead-center with the traffic lights (app pts; ≈ 35.4 screen pts).
     static let topBarHeight: CGFloat = 46
     /// Leading clearance reserved for the native red/yellow/green traffic lights (app pts).

@@ -508,6 +508,11 @@ final class RootSplitController: UIViewController {
         #endif
         #if targetEnvironment(macCatalyst)
         let shell = macShellFrames(windowRect)
+        // [mac-glass] Give `macCanvas`'s children (tabs, detail, inspector) breathing room below the 15 pt top corner border
+        // without cropping full-bleed scroll fades, keeping both panes' navigation bars and inspector header level.
+        let baseTop = view.safeAreaInsets.top - additionalSafeAreaInsets.top
+        let wantTop = max(0, shell.canvas.minY + MacGlassShell.canvasTopInset - baseTop)
+        if abs(additionalSafeAreaInsets.top - wantTop) > 0.5 { additionalSafeAreaInsets.top = wantTop }
         if macBackdrop.frame != windowRect { macBackdrop.frame = windowRect }
         if macSidebar.frame != shell.sidebar { macSidebar.frame = shell.sidebar }
         if macWorkspaceBar.frame != shell.topBar { macWorkspaceBar.frame = shell.topBar }

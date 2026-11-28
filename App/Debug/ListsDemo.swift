@@ -105,10 +105,33 @@ enum ListsDemo {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
             let bots = root.botsViewController
+            if let gw = defaults.string(forKey: "HQDemoGatewaySubtitle"), !gw.isEmpty {
+                for vc in [bots as UIViewController, root.sessionsViewController] {
+                    var config = UIButton.Configuration.plain()
+                    config.contentInsets = NSDirectionalEdgeInsets(top: 2, leading: 0, bottom: 2, trailing: 0)
+                    var words = AttributedString(gw)
+                    words.foregroundColor = HQPalette.label2
+                    words.font = HQFont.preferred(.footnote)
+                    config.attributedTitle = words
+                    config.image = UIImage(systemName: "chevron.down", withConfiguration: UIImage.SymbolConfiguration(textStyle: .caption2, scale: .small)
+                        .applying(UIImage.SymbolConfiguration(weight: .semibold)))
+                    config.imagePlacement = .trailing
+                    config.imagePadding = 4
+                    config.baseForegroundColor = HQPalette.label2
+                    let btn = UIButton(configuration: config)
+                    btn.sizeToFit()
+                    vc.navigationItem.largeSubtitleView = btn
+                    vc.navigationController?.navigationBar.setNeedsLayout()
+                }
+            }
             if defaults.integer(forKey: "HQDemoTab") == 1 { root.select(.sessions) }
             if defaults.bool(forKey: "HQDemoShowHidden") { bots.setSection(.hidden, collapsed: false) }
             if let text = defaults.string(forKey: "HQDemoSearch") { bots.search(text) }
-            if let id = defaults.string(forKey: "HQDemoOpen") { root.select(.bots); bots.open(id) }   // as a click on its sidebar head
+            if let id = defaults.string(forKey: "HQDemoOpen") {
+                let keepSessions = defaults.integer(forKey: "HQDemoTab") == 1
+                root.select(.bots); bots.open(id)
+                if keepSessions { root.select(.sessions) }
+            }   // as a click on its sidebar head
             if defaults.bool(forKey: "HQDemoAccount") { bots.showAccount() }
             if defaults.bool(forKey: "HQDemoScrollEnd") {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {

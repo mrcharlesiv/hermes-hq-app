@@ -298,6 +298,56 @@ final class TallTouchButton: UIButton {
 /// `point(inside:)` can't reach past the bar's wrappers, which are exactly its size). Touches on the bar's buttons are
 /// left as they are.
 final class TallTouchNavigationBar: UINavigationBar {
+    #if targetEnvironment(macCatalyst)
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        // [mac-glass] Guarantee clean leading clearance inside `macCanvas`'s 15 pt rounded corner on every macOS
+        // version (UIKit's inline large title can start as tight as ~12 pt and ignores bar layoutMargins).
+        guard let content = contentContainerView() else { return }
+        guard topItem?.largeTitleDisplayMode == .inline,
+              topItem?.leftBarButtonItems?.isEmpty ?? true,
+              let naturalLeading = inlineTitleLeading(in: content) else {
+            if content.frame != bounds { content.frame = bounds }
+            return
+        }
+        let shift = bounds.width > 120 ? max(0, min(MacGlassShell.canvasTitleLeading - naturalLeading, 20)) : 0
+        let rtl = effectiveUserInterfaceLayoutDirection == .rightToLeft
+        let want = CGRect(x: rtl ? 0 : shift, y: 0, width: bounds.width - shift, height: bounds.height)
+        if content.frame != want { content.frame = want }
+    }
+
+    /// Direct full-height content subview of the bar (excludes the background, which extends above `y = 0`, and zero-sized helper views).
+    private func contentContainerView() -> UIView? {
+        subviews.first { view in
+            abs(view.frame.minY) < 0.5 && abs(view.frame.height - bounds.height) < 0.5 && view.frame.width > 0
+        }
+    }
+
+    /// Natural leading distance from `container`'s edge to the inline title or gateway subtitle (invariant to `container.frame.minX`).
+    private func inlineTitleLeading(in container: UIView) -> CGFloat? {
+        let rtl = effectiveUserInterfaceLayoutDirection == .rightToLeft
+        func leadingEdge(of view: UIView) -> CGFloat {
+            let rect = view.convert(view.bounds, to: container)
+            return rtl ? container.bounds.width - rect.maxX : rect.minX
+        }
+        if let sub = topItem?.largeSubtitleView, sub.isDescendant(of: container), sub.bounds.width > 0 {
+            return leadingEdge(of: sub)
+        }
+        if let title = topItem?.title, !title.isEmpty, let label = Self.findLabel(named: title, in: container), label.bounds.width > 0 {
+            return leadingEdge(of: label)
+        }
+        return nil
+    }
+
+    private static func findLabel(named title: String, in root: UIView) -> UILabel? {
+        if let label = root as? UILabel, label.text == title, !label.isHidden, label.alpha > 0.01 { return label }
+        for sub in root.subviews {
+            if let hit = findLabel(named: title, in: sub) { return hit }
+        }
+        return nil
+    }
+    #endif
+
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         let hit = super.hitTest(point, with: event)
         if let hit, sequence(first: hit, next: \.superview).contains(where: Self.takesTouches) { return hit }

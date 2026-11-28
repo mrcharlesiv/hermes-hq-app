@@ -29,7 +29,7 @@ public class MsixPackTests : IDisposable
 
     // ---------------------------------------------------------------- synthetic inputs
 
-    private const string PreviousPackageVersion = "0.1.0.0", CurrentPackageVersion = "0.1.1.0";
+    private const string PreviousPackageVersion = "0.1.1.0", CurrentPackageVersion = "0.1.2.0";
 
     // Only the historical unit fixture needs version XML. Always test the current version against the actual project.
     private string ProjectFor(string packageVersion)
@@ -37,7 +37,7 @@ public class MsixPackTests : IDisposable
         if (packageVersion == CurrentPackageVersion) return AppProject;
         Assert.Equal(PreviousPackageVersion, packageVersion);
         var path = Path.Combine(root, "previous-version.xml");
-        File.WriteAllText(path, "<Project><PropertyGroup><Version>0.1.0</Version></PropertyGroup></Project>");
+        File.WriteAllText(path, "<Project><PropertyGroup><Version>0.1.1</Version></PropertyGroup></Project>");
         return path;
     }
 
@@ -92,7 +92,7 @@ public class MsixPackTests : IDisposable
     {
         var doc = XDocument.Load(AppProject);
         Assert.Equal("None", doc.Descendants("WindowsPackageType").Single().Value);
-        Assert.Equal("0.1.1", doc.Descendants("Version").Single().Value);
+        Assert.Equal("0.1.2", doc.Descendants("Version").Single().Value);
         Assert.Equal(CurrentPackageVersion, MsixPlan.ProjectPackageVersion(AppProject));
         Assert.False(File.Exists(Path.Combine(WindowsDir(), "src", "HermesHQ.Windows", "Package.appxmanifest")));
         // The logos are the app's existing icon: a square PNG at least 150 px.

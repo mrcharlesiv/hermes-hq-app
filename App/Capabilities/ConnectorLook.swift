@@ -154,7 +154,7 @@ struct ConnectorSymbolTile: View {
     }
 }
 
-enum ConnectorSymbol {
+nonisolated enum ConnectorSymbol {
     /// Words in a connector's name and the symbol each one suggests; the first that appears wins.
     private static let words: [(String, String)] = [
         ("browser", "globe"), ("chrome", "globe"), ("web", "globe"), ("fetch", "arrow.down.circle"),

@@ -370,6 +370,12 @@ struct CatalogBrowseView: View {
     static let shared = CatalogLogoStore()
     private let cache = NSCache<NSString, UIImage>()
     private var misses: Set<String> = []
+    private let diskDirectory: URL? = {
+        guard let root = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
+        let dir = root.appendingPathComponent("CatalogLogos", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
     /// A key no source gave a definite answer for (offline, a timeout) is not asked again before this time, so a row
     /// scrolled back into view while offline does not send its requests again.
     private var retryAfter: [String: Date] = [:]
@@ -394,8 +400,32 @@ struct CatalogBrowseView: View {
         }()
     }
 
-    func image(key: String, slugs: [String], site: URL?) async -> UIImage? {
+    private func diskURL(for key: String) -> URL? {
+        guard let diskDirectory else { return nil }
+        let safe = key.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) ? String($0) : "_" }.joined()
+        return diskDirectory.appendingPathComponent(String(safe.prefix(96)) + ".png")
+    }
+
+    /// Synchronous lookup (memory cache, then disk cache) so scrolled chat rows paint cached brand logos on frame 0.
+    func cachedImage(key: String) -> UIImage? {
         if let hit = cache.object(forKey: key as NSString) { return hit }
+        if let url = diskURL(for: key), let data = try? Data(contentsOf: url), let image = UIImage(data: data) {
+            cache.setObject(image, forKey: key as NSString)
+            return image
+        }
+        return nil
+    }
+
+    private func saveToDisk(_ image: UIImage, key: String) {
+        guard let url = diskURL(for: key) else { return }
+        Task.detached(priority: .utility) {
+            guard let data = image.pngData() else { return }
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    func image(key: String, slugs: [String], site: URL?) async -> UIImage? {
+        if let hit = cachedImage(key: key) { return hit }
         if misses.contains(key) { return nil }
         if let until = retryAfter[key], Date() < until { return nil }
         #if DEBUG
@@ -421,6 +451,7 @@ struct CatalogBrowseView: View {
                 case .image(let data):
                     guard data != placeholder, let image = await SVGLogo.decode(data) else { continue }
                     cache.setObject(image, forKey: key as NSString)
+                    saveToDisk(image, key: key)
                     retryAfter[key] = nil
                     return image
                 }
@@ -437,6 +468,7 @@ struct CatalogBrowseView: View {
                 case .image(let data):
                     guard let image = UIImage(data: data), image.size.width >= 16 else { continue }
                     cache.setObject(image, forKey: key as NSString)
+                    saveToDisk(image, key: key)
                     retryAfter[key] = nil
                     return image
                 }
@@ -515,7 +547,7 @@ struct CatalogLogo: View {
                 // [mac] Stress test 2026-10-28 round 7: a one-colour mark filled about 70 % of its tile at full contrast
                 // beside the plugs' grey ~40 %. In both appearances it is now drawn as the plug is: the label 2 grey, at
                 // the plug's share of the tile. A coloured logo keeps its colours and room.
-                let mono = CatalogLogoTone.isDarkMark(image)
+                let mono = CatalogLogoTone.isDarkMark(image, key: key)
                 Image(uiImage: mono ? image.withRenderingMode(.alwaysTemplate) : image)
                     .resizable().scaledToFit()
                     .foregroundStyle(mono ? Color.hqLabel2 : Color.hqLabel)
@@ -540,13 +572,12 @@ struct CatalogLogo: View {
 /// [mac] Stress test 2026-10-28 round 6: whether a logo is a dark one-colour mark (GitHub's black cat), which vanishes on
 /// a dark tile. Read once per image from a 16 × 16 copy: its drawn pixels are dark and nearly grey.
 @MainActor enum CatalogLogoTone {
-    private static var known: [ObjectIdentifier: Bool] = [:]
+    private static var known: [String: Bool] = [:]
 
-    static func isDarkMark(_ image: UIImage) -> Bool {
-        let id = ObjectIdentifier(image)
-        if let answer = known[id] { return answer }
+    static func isDarkMark(_ image: UIImage, key: String? = nil) -> Bool {
+        if let key, let answer = known[key] { return answer }
         let answer = measure(image)
-        known[id] = answer
+        if let key { known[key] = answer }
         return answer
     }
 

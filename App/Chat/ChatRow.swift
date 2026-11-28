@@ -755,6 +755,7 @@ nonisolated enum ChatRowBuilder {
                         return
                     }
                     if let found = AskCards.answer(in: text),
+                       !found.answer.isOther,
                        AskCards.isAdjacentAnswerEcho(input.messages, at: index, askId: found.id) {
                         return
                     }

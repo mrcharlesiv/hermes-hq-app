@@ -28,7 +28,9 @@ public sealed record AskCard(
     IReadOnlyList<AskAttachment> Attachments,
     AskLink? Link,
     IReadOnlyList<string> Replies,
-    AskReplyTo? ReplyTo);
+    AskReplyTo? ReplyTo,
+    int? Recommended = null,
+    string Why = "");
 
 public abstract record AskAnswer
 {
@@ -189,8 +191,35 @@ public static class AskCards
             Attachments: attachments,
             Link: link,
             Replies: replies,
-            ReplyTo: replyTo);
+            ReplyTo: replyTo,
+            Recommended: ParseRecommended(o.Get("recommended"), choices),
+            Why: OneLine(o.Get("why"), 200));
     }
+
+    private static int? ParseRecommended(JsonNode? value, IReadOnlyList<string> choices)
+    {
+        if (value is JsonValue jv)
+        {
+            if (jv.TryGetValue(out int n) && n >= 0 && n < choices.Count) return n;
+            if (jv.TryGetValue(out bool b) && b && choices.Count > 0) return 0;
+            if (jv.TryGetValue(out string? s) && !string.IsNullOrWhiteSpace(s))
+            {
+                var needle = BareChoice(s.Trim());
+                for (var i = 0; i < choices.Count; i++)
+                    if (string.Equals(BareChoice(choices[i]), needle, StringComparison.OrdinalIgnoreCase))
+                        return i;
+            }
+        }
+        for (var i = 0; i < choices.Count; i++)
+            if (choices[i].EndsWith(" (Recommended)", StringComparison.Ordinal))
+                return i;
+        return null;
+    }
+
+    public static string BareChoice(string choice) =>
+        choice.EndsWith("(Recommended)", StringComparison.Ordinal)
+            ? choice[..^"(Recommended)".Length].Trim()
+            : choice;
 
     public static IReadOnlyList<string> ParseChoices(JsonNode? value)
     {

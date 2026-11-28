@@ -358,6 +358,34 @@ private let allStates: [ThemeState] = SkinCatalog.all.flatMap { skin in
         #expect(failures.isEmpty, "\(failures.joined(separator: "\n"))")
     }
 
+    /// [asks] Every elevated decision card (Ask & Draft cards) must hold ≥ 4.5:1 primary text contrast, ≥ 4.5:1
+    /// `Recommended` badge contrast (`decisionTagFg` on `decisionTagBg`), and a visible hairline edge across every
+    /// skin, look, mode, and Increase Contrast setting.
+    @Test func everyDecisionCardAndBadgeMeetsContrast() {
+        var failures: [String] = []
+        func check(_ tag: String, _ tokens: ThemeTokens) {
+            let page = tokens.page.over(.white)
+            let card = tokens.decisionCard.over(page)
+            let edgeOnCard = tokens.decisionEdge.over(card)
+            let tagGround = tokens.decisionTagBg.over(card)
+            let labelContrast = tokens.label.over(card).contrast(with: card)
+            let tagContrast = tokens.decisionTagFg.over(tagGround).contrast(with: tagGround)
+            let edgeDelta = edgeOnCard.labDistance(to: card)
+            if tokens.decisionEdge.a <= 0 { failures.append("\(tag) decisionEdgeAlpha=0") }
+            if edgeDelta < 3.0 { failures.append("\(tag) edgeCardΔE=\(String(format: "%.2f", edgeDelta))") }
+            if labelContrast < 4.5 - 0.01 { failures.append("\(tag) labelContrast=\(String(format: "%.2f", labelContrast))") }
+            if tagContrast < 4.5 - 0.01 { failures.append("\(tag) tagContrast=\(String(format: "%.2f", tagContrast))") }
+        }
+        for state in allStates {
+            let set = ThemeResolver.resolve(state)
+            check("\(state.skinID) light look=\(state.desktopLook) hc=\(state.highContrast)", set.light)
+            check("\(state.skinID) dark look=\(state.desktopLook) hc=\(state.highContrast)", set.dark)
+        }
+        check("standard-increase-contrast light", ThemedColor.increasedLight)
+        check("standard-increase-contrast dark", ThemedColor.increasedDark)
+        #expect(failures.isEmpty, "\(failures.joined(separator: "\n"))")
+    }
+
     /// Owner 2026-10-17: a mid blue bubble had dark text. In the iOS look your message is white unless the skin's accent
     /// is so light white can't reach 3:1 on it (then the bubble keeps its colour and the text goes black).
     @Test func yourMessageIsWhiteUnlessTheAccentIsLight() {

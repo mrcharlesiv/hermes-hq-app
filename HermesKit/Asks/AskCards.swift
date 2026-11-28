@@ -30,6 +30,7 @@
 
 import CryptoKit
 import Foundation
+import os
 
 nonisolated enum AskCards {
     static let tool = "ask_to_act"
@@ -68,6 +69,16 @@ nonisolated enum AskCards {
         var replies: [String] = []
         /// Where those replies go (`reply_to`); nil without replies.
         var replyTo: ReplyTo? = nil
+        /// Optional 0-based index of the bot's recommended choice (explicit `"recommended"` field or trailing
+        /// `"(Recommended)"` on a choice). Nil when the choices are neutral peers.
+        var recommended: Int? = nil
+        /// Optional one-line rationale displayed quietly under the recommended choice.
+        var why: String = ""
+
+        /// True when the ask came from an external channel / person / link and should show the Grok-style source header.
+        var hasExternalSource: Bool {
+            !app.isEmpty || !from.isEmpty || !place.isEmpty || !when.isEmpty || link != nil
+        }
     }
 
     /// [asks v2] Where a choice's ready reply goes: the app, and who, about what, from which account.
@@ -78,6 +89,18 @@ nonisolated enum AskCards {
         var from: String = ""
     }
 
+    enum DeliveryState: Hashable, Sendable {
+        case sent
+        case sending
+        case queued
+        case failed
+    }
+
+    struct RowAnswer: Hashable, Sendable {
+        var answer: Answer
+        var delivery: DeliveryState
+    }
+
     enum Answer: Hashable, Sendable {
         /// The choice's 1-based number, and the words its message carries.
         case choice(Int, String)
@@ -86,6 +109,11 @@ nonisolated enum AskCards {
         /// [asks v2] A choice with its ready reply approved to send (`: N send`): the choice's words and the reply that
         /// went, your edits included (empty when the message carried none).
         case sent(Int, String, reply: String)
+
+        var isOther: Bool {
+            if case .other = self { return true }
+            return false
+        }
     }
 
     // MARK: The add-on
@@ -109,13 +137,23 @@ nonisolated enum AskCards {
         return text.utf8.count <= maxArgsBytes ? text : nil
     }
 
+    private static let parseCache = OSAllocatedUnfairLock(initialState: [String: Ask?]())
+
     /// The ask a tool call holds; nil when it isn't one, it failed, its arguments aren't whole (a cached transcript
     /// cut them: it then draws as the plain step it is) or it has no question.
     static func parse(_ call: ToolCall) -> Ask? {
-        guard call.name == tool, call.state != .failed, let text = call.argsText,
-              let args = ChatJSON.parse(string: text)?.object else { return nil }
-        return parse(args)
+        guard call.name == tool, call.state != .failed, let text = call.argsText else { return nil }
+        if let hit = parseCache.withLock({ $0[text] }) { return hit }
+        let parsed = ChatJSON.parse(string: text)?.object.flatMap(parse(_:))
+        parseCache.withLock { cache in
+            if cache.count >= 128 { cache.removeAll(keepingCapacity: true) }
+            cache[text] = parsed
+        }
+        return parsed
     }
+
+    /// Choice label cleaned for display (removes a trailing `"(Recommended)"` tag since the pill draws it).
+    static func choiceTitle(_ choice: String) -> String { ClarifyText.bareChoice(choice) }
 
     static func parse(_ o: [String: JSONValue]) -> Ask? {
         let question = trimmed(o["question"])
@@ -129,6 +167,8 @@ nonisolated enum AskCards {
         ask.place = line(o["where"], 120)
         ask.when = line(o["when"], 60)
         ask.quote = quote
+        ask.why = line(o["why"], 200)
+        ask.recommended = parseRecommended(o["recommended"], choices: choices)
         ask.attachments = (o["attachments"]?.array ?? []).compactMap { value -> Attachment? in
             if let a = value.object {
                 let name = line(a["name"], 80)
@@ -143,6 +183,17 @@ nonisolated enum AskCards {
         }
         readReplies(o, into: &ask)
         return ask
+    }
+
+    private static func parseRecommended(_ value: JSONValue?, choices: [String]) -> Int? {
+        if let n = value?.int, choices.indices.contains(n) { return n }
+        if case .bool(true)? = value, !choices.isEmpty { return 0 }
+        if let label = value?.string?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
+            let needle = ClarifyText.bareChoice(label).lowercased()
+            if let idx = choices.firstIndex(where: { ClarifyText.bareChoice($0).lowercased() == needle }) { return idx }
+        }
+        if let idx = choices.firstIndex(where: ClarifyText.isRecommended) { return idx }
+        return nil
     }
 
     /// [asks v2] Each reply may run this long (the add-on's own limit).
@@ -440,17 +491,71 @@ nonisolated enum AskCards {
         return out
     }
 
+    /// Positional answer map keyed by ask `rowId`, preventing identical repeat asks from colliding with an earlier
+    /// answer: each user answer matches only the latest ask with the same `ask.id` appearing before it, and tracks
+    /// delivery state (`sent`, `sending`, `queued`, `failed`).
+    static func answersByRow(_ messages: [ChatMessage], queued: [String] = []) -> [String: RowAnswer] {
+        var latestRowByAskId: [String: String] = [:]
+        var out: [String: RowAnswer] = [:]
+        for message in messages {
+            switch message.role {
+            case .assistant:
+                for part in message.parts {
+                    guard case .tool(let call) = part, call.name == tool, let ask = parse(call) else { continue }
+                    latestRowByAskId[ask.id] = rowId(messageId: message.id, callId: call.id)
+                }
+            case .user:
+                let delivery: DeliveryState = message.error != nil ? .failed : (message.isPending ? .sending : .sent)
+                for part in message.parts {
+                    guard case .text(let text) = part, let found = answer(in: text),
+                          let targetRowId = latestRowByAskId[found.id] else { continue }
+                    out[targetRowId] = RowAnswer(answer: found.answer, delivery: delivery)
+                }
+            case .system:
+                break
+            }
+        }
+        for text in queued {
+            if let found = answer(in: text), let targetRowId = latestRowByAskId[found.id] {
+                out[targetRowId] = RowAnswer(answer: found.answer, delivery: .queued)
+            }
+        }
+        return out
+    }
+
+    /// Short answer phrase for compact receipts ("Yes", "Yes · Reply sent", or what you typed).
+    static func receiptTitle(_ ask: Ask, _ answer: Answer, delivery: DeliveryState = .sent) -> String {
+        let base: String
+        switch answer {
+        case .choice(let n, let line):
+            let words = ask.choices.indices.contains(n - 1) ? choiceTitle(ask.choices[n - 1]) : choiceWords(line)
+            base = words.isEmpty ? "Choice \(n)" : words
+        case .other(let words):
+            base = words.isEmpty ? "Something else" : words
+        case .sent(let n, let line, _):
+            let words = ask.choices.indices.contains(n - 1) ? choiceTitle(ask.choices[n - 1]) : choiceWords(line)
+            let lead = words.isEmpty ? "Choice \(n)" : words
+            base = delivery == .sent ? "\(lead) · Reply approved" : lead
+        }
+        switch delivery {
+        case .sent: return base
+        case .sending: return "Sending… · \(base)"
+        case .queued: return "Queued · \(base)"
+        case .failed: return "Not sent · \(base)"
+        }
+    }
+
     /// The quiet line an answered card shows: "You answered: Yes".
     static func status(_ ask: Ask, _ answer: Answer) -> String {
         switch answer {
         case .choice(let n, let line):
-            let words = ask.choices.indices.contains(n - 1) ? ask.choices[n - 1] : choiceWords(line)
+            let words = ask.choices.indices.contains(n - 1) ? choiceTitle(ask.choices[n - 1]) : choiceWords(line)
             return "You answered: \(words)"
         case .other(let words):
             return "You answered: \(words.isEmpty ? "something else" : words)"
         case .sent(let n, let line, _):
             // [asks v2] "You answered: Yes · Reply approved" (the reply that went shows under it).
-            let words = ask.choices.indices.contains(n - 1) ? ask.choices[n - 1] : choiceWords(line)
+            let words = ask.choices.indices.contains(n - 1) ? choiceTitle(ask.choices[n - 1]) : choiceWords(line)
             return "You answered: \(words) · Reply approved"
         }
     }

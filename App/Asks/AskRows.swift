@@ -6,20 +6,25 @@ import UIKit
 
 /// What the chat screen hands the row builder about its ask cards (`ChatRowBuilder.Input.asks`).
 nonisolated struct AskRowsInput: Sendable, Equatable {
-    /// Ask id → your answer, read from the chat's own messages (`AskCards.answers`).
+    /// Ask id → your answer (legacy/test lookup when `rowAnswers` is nil).
     var answers: [String: AskCards.Answer] = [:]
-    /// The ask whose "Something else…" strip is open over the message field.
+    /// Positional ask `rowId` → answer + delivery state (`AskCards.answersByRow`), preventing identical repeat asks from
+    /// colliding across turns.
+    var rowAnswers: [String: AskCards.RowAnswer]? = nil
+    /// The ask (`rowId` or `ask.id`) whose "Something else…" strip is open over the message field.
     var answering: String? = nil
-    /// [asks v2] Ask id → the choice (0-based) you tapped whose ready reply the card shows (nothing sent yet).
+    /// [asks v2] Ask `rowId` (or `ask.id`) → the choice (0-based) you tapped whose ready reply the card shows.
     var picked: [String: Int] = [:]
-    /// [asks v2] "<ask id>|<choice index>" → the words you changed that choice's reply to, not sent yet.
+    /// [asks v2] "<rowId or ask.id>|<choice index>" → the words you changed that choice's reply to, not sent yet.
     var edits: [String: String] = [:]
-    /// [asks v2] The ask whose reply is in the message field ("Editing Reply").
+    /// [asks v2] The ask (`rowId` or `ask.id`) whose reply is in the message field ("Editing Reply").
     var editingReply: String? = nil
     /// [calm-chat] Ask row ids left unanswered after later turns; nil computes from `messages`.
     var stale: Set<String>? = nil
 
     static func editKey(_ id: String, _ index: Int) -> String { "\(id)|\(index)" }
+    static func quoteExpandKey(_ rowId: String) -> String { "\(rowId)|quote" }
+    static func replyExpandKey(_ rowId: String) -> String { "\(rowId)|reply" }
 }
 
 /// An `ask_to_act` call's row.
@@ -29,9 +34,11 @@ nonisolated struct AskCardRow: Sendable, Hashable {
     var messageId: String
     /// Your answer, once a message of yours (or a queued one) names the card.
     var answer: AskCards.Answer?
+    /// Delivery state of the user message that answered this card.
+    var delivery: AskCards.DeliveryState = .sent
     /// Its "Something else…" strip is open (the buttons wait).
     var answering: Bool
-    /// [asks v2] The choice you picked whose ready reply shows under the buttons (while it waits).
+    /// [asks v2] The choice you picked whose ready reply shows inline beneath that choice row.
     var picked: Int? = nil
     /// [asks v2] The reply the card shows for `picked`: your edit, or the bot's words.
     var reply: String? = nil
@@ -39,12 +46,19 @@ nonisolated struct AskCardRow: Sendable, Hashable {
     var edited = false
     /// [asks v2] The reply is in the message field (the buttons wait).
     var editingReply = false
-    /// [asks v2] Show All was tapped on a long reply, or a folded/answered receipt was expanded.
+    /// Receipt or stale disclosure is expanded.
     var expanded = false
-    /// [calm-chat] Unanswered ask left behind by later conversation; drops live buttons and folds quietly.
+    /// Long quote is expanded ("More" / "Show less").
+    var quoteExpanded = false
+    /// Long v2 ready reply is expanded ("Show All" / "Show Less").
+    var replyExpanded = false
+    /// [calm-chat] Unanswered ask left behind by later conversation; folds quietly when collapsed, answerable when expanded.
     var stale = false
 
+    /// Unanswered and still active (used by the offscreen waiting-ask jumper).
     var waiting: Bool { answer == nil && !stale }
+    /// Unanswered and eligible for interactive choice / "Something else…" taps (including an opened stale fold).
+    var answerable: Bool { answer == nil }
     var isQuietFolded: Bool { stale && answer == nil && !expanded }
 }
 
@@ -56,16 +70,35 @@ nonisolated extension PromptRows {
     static func askRow(_ call: ToolCall, message: ChatMessage, input: ChatRowBuilder.Input) -> ChatRow? {
         guard let ask = AskCards.parse(call) else { return nil }
         let id = AskCards.rowId(messageId: message.id, callId: call.id)
-        let answer = input.asks.answers[ask.id]
+        let resolved: AskCards.RowAnswer? = {
+            if let byRow = input.asks.rowAnswers { return byRow[id] }
+            if let legacy = input.asks.answers[ask.id] { return AskCards.RowAnswer(answer: legacy, delivery: .sent) }
+            return nil
+        }()
+        let answer = resolved?.answer
+        let delivery = resolved?.delivery ?? .sent
         let stale = answer == nil && (input.asks.stale ?? AskCards.staleRowIds(input.messages)).contains(id)
-        var card = AskCardRow(ask: ask, rowId: id, messageId: message.id, answer: answer,
-                              answering: answer == nil && !stale && input.asks.answering == ask.id,
-                              expanded: input.expanded.contains(id), stale: stale)
-        if answer == nil, !stale, let index = input.asks.picked[ask.id], let own = AskCards.reply(ask, index: index) {
+        let isAnswering = answer == nil && (input.asks.answering == id || input.asks.answering == ask.id)
+        var card = AskCardRow(
+            ask: ask,
+            rowId: id,
+            messageId: message.id,
+            answer: answer,
+            delivery: delivery,
+            answering: isAnswering,
+            expanded: input.expanded.contains(id),
+            quoteExpanded: input.expanded.contains(AskRowsInput.quoteExpandKey(id)),
+            replyExpanded: input.expanded.contains(AskRowsInput.replyExpandKey(id)),
+            stale: stale
+        )
+        if answer == nil, let index = input.asks.picked[id] ?? input.asks.picked[ask.id],
+           let own = AskCards.reply(ask, index: index) {
             card.picked = index
-            card.reply = input.asks.edits[AskRowsInput.editKey(ask.id, index)] ?? own
+            card.reply = input.asks.edits[AskRowsInput.editKey(id, index)]
+                ?? input.asks.edits[AskRowsInput.editKey(ask.id, index)]
+                ?? own
             card.edited = card.reply != own
-            card.editingReply = input.asks.editingReply == ask.id
+            card.editingReply = input.asks.editingReply == id || input.asks.editingReply == ask.id
         }
         return row(id: id, messageId: message.id, kind: .ask(card), scope: input.scope)
     }

@@ -1,28 +1,26 @@
 import UIKit
 
-// [asks] The chat screen's side of an ask card (HermesKit/Asks/AskCards.swift): a choice's button goes into the chat
-// as your message naming the card (`sendFromCard`), as a draft card's Send does; "Something else…" opens a strip over
-// the message field ("Answering: …", Cancel), as a draft's Edit does, and what you then send goes out as the card's
-// `other` answer. The card is drawn again in its new state. [asks v2] A choice with a ready reply only picks it; the
-// reply's Send answers with the choice and the reply, its Edit opens the draft card's "Editing Reply" strip.
+// [asks] The chat screen's side of an ask card (HermesKit/Asks/AskCards.swift): keyed per `rowId` so identical repeat
+// asks never collide; toggling a picked v2 choice collapses its inline drawer; answering an inline card keeps scroll
+// position calm instead of jumping to the bottom; external answers auto-dismiss any open composer strip for that card.
 
-/// The ask whose "Something else…" strip is open, and (v2) the choices you picked, your unsent changes to their ready
-/// replies and the reply being edited: kept while the app runs (a chat left and reopened still shows them), as
-/// `DraftEdits` keeps a draft card's.
 @MainActor final class AskAnswering {
     static let shared = AskAnswering()
-    /// "<chat scope>|<ask id>".
+    /// "<chat scope>|<rowId>".
     private(set) var current: String?
-    /// [asks v2] "<chat scope>|<ask id>" → the picked choice (0-based).
+    /// [asks v2] "<chat scope>|<rowId>" → the picked choice (0-based).
     private var picks: [String: Int] = [:]
-    /// [asks v2] "<chat scope>|<ask id>|<choice index>" → the words.
+    /// [asks v2] "<chat scope>|<rowId>|<choice index>" → edited reply text.
     private var texts: [String: String] = [:]
-    /// [asks v2] "<chat scope>|<ask id>" whose reply is in a message field.
+    /// [asks v2] "<chat scope>|<rowId>" whose reply is currently in the message field.
     private(set) var editing: String?
 
     func rowsInput(_ messages: [ChatMessage], queued: [String] = [], scope: String) -> AskRowsInput {
-        var input = AskRowsInput(answers: AskCards.answers(messages, queued: queued),
-                                 stale: AskCards.staleRowIds(messages))
+        var input = AskRowsInput(
+            answers: AskCards.answers(messages, queued: queued),
+            rowAnswers: AskCards.answersByRow(messages, queued: queued),
+            stale: AskCards.staleRowIds(messages)
+        )
         let lead = scope + "|"
         func own(_ key: String) -> String? { key.hasPrefix(lead) ? String(key.dropFirst(lead.count)) : nil }
         if let current { input.answering = own(current) }
@@ -32,24 +30,31 @@ import UIKit
         return input
     }
 
-    func set(_ id: String?, scope: String) { current = id.map { scope + "|" + $0 } }
+    func set(_ rowId: String?, scope: String) { current = rowId.map { scope + "|" + $0 } }
 
-    /// [asks v2] Show `index`'s ready reply (nil: none picked).
-    func pick(_ index: Int?, scope: String, ask: String) { picks[scope + "|" + ask] = index }
+    /// [asks v2] Show `index`'s inline ready reply for `rowId` (nil: none picked).
+    func pick(_ index: Int?, scope: String, rowId: String) { picks[scope + "|" + rowId] = index }
 
     /// [asks v2] `text` nil (or the bot's own words) forgets the change.
-    func setReply(_ text: String?, scope: String, ask: AskCards.Ask, index: Int) {
+    func setReply(_ text: String?, scope: String, rowId: String, ask: AskCards.Ask, index: Int) {
         let words = text?.trimmingCharacters(in: .whitespacesAndNewlines)
-        texts[scope + "|" + AskRowsInput.editKey(ask.id, index)] = (words?.isEmpty == false && words != AskCards.reply(ask, index: index)) ? words : nil
+        texts[scope + "|" + AskRowsInput.editKey(rowId, index)] = (words?.isEmpty == false && words != AskCards.reply(ask, index: index)) ? words : nil
     }
 
     /// [asks v2] Forget an answered card's picks and edits.
-    func forget(scope: String, ask: AskCards.Ask) {
-        picks[scope + "|" + ask.id] = nil
-        for i in ask.choices.indices { texts[scope + "|" + AskRowsInput.editKey(ask.id, i)] = nil }
+    func forget(scope: String, rowId: String, ask: AskCards.Ask) {
+        picks[scope + "|" + rowId] = nil
+        for i in ask.choices.indices { texts[scope + "|" + AskRowsInput.editKey(rowId, i)] = nil }
     }
 
-    func setEditing(_ id: String?, scope: String) { editing = id.map { scope + "|" + $0 } }
+    func setEditing(_ rowId: String?, scope: String) { editing = rowId.map { scope + "|" + $0 } }
+
+    func activeRowId(in scope: String) -> String? {
+        let lead = scope + "|"
+        if let current, current.hasPrefix(lead) { return String(current.dropFirst(lead.count)) }
+        if let editing, editing.hasPrefix(lead) { return String(editing.dropFirst(lead.count)) }
+        return nil
+    }
 }
 
 extension ChatViewController {
@@ -59,31 +64,41 @@ extension ChatViewController {
     }
 
     /// The chat changed: a card whose answer arrived some other way than its own buttons (another device, the queue
-    /// going out or a queued answer taken back) is drawn again. Returns the messages to rebuild.
+    /// going out, delivery state update, or a queued answer taken back) is drawn again. Also dismisses any active
+    /// "Answering: …" / "Editing Reply" composer strip if its target ask just got answered externally.
     func askMessagesToRebuild() -> [String] {
         let messages = session.messages
-        let now = AskCards.answers(messages, queued: askQueuedTexts)
+        let now = AskCards.answersByRow(messages, queued: askQueuedTexts)
         guard now != askAnswersShown else { return [] }
         let changed = Set(now.keys).union(askAnswersShown.keys).filter { now[$0] != askAnswersShown[$0] }
         askAnswersShown = now
+        // Auto-dismiss an open composer strip if its ask was just answered from another device/queue.
+        if let activeRow = AskAnswering.shared.activeRowId(in: scope), now[activeRow] != nil {
+            (composer.editBanner as? ComposerEditBanner)?.onCancel?()
+        }
         return messages.filter { m in
             m.role == .assistant && m.parts.contains { part in
-                guard case .tool(let call) = part, call.name == AskCards.tool, let ask = AskCards.parse(call) else { return false }
-                return changed.contains(ask.id)
+                guard case .tool(let call) = part, call.name == AskCards.tool, AskCards.parse(call) != nil else { return false }
+                return changed.contains(AskCards.rowId(messageId: m.id, callId: call.id))
             }
         }.map(\.id)
     }
 
     // MARK: ChatPromptCellHandling
 
+    func askCardToggle(rowId: String, key: String) {
+        toggleExpandedKey(key, forRowId: rowId)
+    }
+
     func askCard(_ card: AskCardRow, chose index: Int) {
-        guard card.waiting else { return }
-        // [asks v2] A choice with a ready reply only picks it: the card shows the reply with Send and Edit.
+        guard card.answerable else { return }
+        // [asks v2] A choice with a ready reply toggles its inline accordion preview (nothing sent yet).
         if AskCards.reply(card.ask, index: index) != nil {
-            guard card.picked != index else { return }
-            AppLog.trace("asks", "ask \(AppLog.tag(card.ask.id)) picked \(index + 1) \(logTag)")
+            let next: Int? = card.picked == index ? nil : index
+            AppLog.trace("asks", "ask \(AppLog.tag(card.ask.id)) \(next == nil ? "unpicked" : "picked \(index + 1)") \(logTag)")
             Haptics.play(.selection)
-            AskAnswering.shared.pick(index, scope: scope, ask: card.ask.id)
+            AskAnswering.shared.pick(next, scope: scope, rowId: card.rowId)
+            holdRowIfNeeded(card.rowId)
             rebuildMessage(card.messageId)
             return
         }
@@ -93,10 +108,10 @@ extension ChatViewController {
         answerAsk(card, text)
     }
 
-    /// [asks v2] Send under the ready reply answers with the choice and the reply (your edits included); Edit puts the
-    /// reply in the message field under an "Editing Reply" strip, as a draft card's Edit does.
+    /// [asks v2] Send under the inline ready reply answers with the choice and reply (your edits included); Edit puts
+    /// the reply in the message field under an "Editing Reply" strip.
     func askCardReply(_ card: AskCardRow, tapped button: DraftButton) {
-        guard card.waiting, let index = card.picked, let reply = card.reply else { return }
+        guard card.answerable, let index = card.picked, let reply = card.reply else { return }
         switch button {
         case .send:
             guard let text = AskCards.sendMessage(card.ask, index: index, reply: reply) else { return }
@@ -111,7 +126,6 @@ extension ChatViewController {
     }
 
     private func beginAskReplyEdit(_ card: AskCardRow, index: Int, reply: String) {
-        // One strip at a time: a message edit, a queued edit, a draft's edit or a reply in progress gives way first.
         (composer.editBanner as? ComposerEditBanner)?.onCancel?()
         let typed = composer.text
         let banner = ComposerEditBanner(title: "Editing Reply", symbol: "pencil", note: nil, cancelLabel: "Cancel",
@@ -130,7 +144,7 @@ extension ChatViewController {
         }
         let save: (String) -> Void = { [weak self] text in
             guard let self else { return }
-            AskAnswering.shared.setReply(text, scope: self.scope, ask: card.ask, index: index)
+            AskAnswering.shared.setReply(text, scope: self.scope, rowId: card.rowId, ask: card.ask, index: index)
             AppLog.trace("asks", "ask \(AppLog.tag(card.ask.id)) reply edit saved \(self.logTag)")
             close(self)
         }
@@ -142,14 +156,13 @@ extension ChatViewController {
             save(text)
         }
         composer.editBanner = banner
-        composer.editingQueued = true   // the circle reads Save and the mic steps aside, as for a draft's edit
+        composer.editingQueued = true
         composer.text = reply
-        // The circle and Return save (a blank field keeps editing).
         sendOverride = { text in
             if !text.isEmpty { save(text) }
             return true
         }
-        AskAnswering.shared.setEditing(card.ask.id, scope: scope)
+        AskAnswering.shared.setEditing(card.rowId, scope: scope)
         rebuildMessage(card.messageId)
         focusComposer()
     }
@@ -160,11 +173,13 @@ extension ChatViewController {
         LinkOpener.open(url, from: self)
     }
 
-    /// "Something else…": a strip over the message field; the send circle sends your words as the card's answer.
+    /// "Something else…": clears any open v2 pick and opens a strip over the message field.
     func askCardOther(_ card: AskCardRow) {
-        guard card.waiting else { return }
-        // One strip at a time: a message edit, a queued edit, a draft's edit or a reply in progress gives way first.
+        guard card.answerable else { return }
         (composer.editBanner as? ComposerEditBanner)?.onCancel?()
+        if card.picked != nil {
+            AskAnswering.shared.pick(nil, scope: scope, rowId: card.rowId)
+        }
         let typed = composer.text
         let question = card.ask.question.count > 60 ? String(card.ask.question.prefix(59)).trimmingCharacters(in: .whitespaces) + "…" : card.ask.question
         let banner = ComposerEditBanner(title: "Answering: \(question)", symbol: "arrowshape.turn.up.left", note: nil, cancelLabel: "Cancel",
@@ -182,7 +197,6 @@ extension ChatViewController {
         }
         composer.editBanner = banner
         composer.text = ""
-        // The circle and Return send the words as the answer (a blank field keeps the strip open).
         sendOverride = { [weak self] text in
             guard let self else { return true }
             let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -193,16 +207,18 @@ extension ChatViewController {
             self.answerAsk(card, AskCards.otherMessage(card.ask, text: words))
             return true
         }
-        AskAnswering.shared.set(card.ask.id, scope: scope)
+        AskAnswering.shared.set(card.rowId, scope: scope)
         rebuildMessage(card.messageId)
         focusComposer()
     }
 
-    /// Your answer goes into the chat as a message of yours (its bubble reads "Yes"); the card then shows it.
+    /// Your answer goes into the chat as a message of yours; keeps scroll position calm when answering an inline card
+    /// above the fold (so multi-ask streams or expanded stale folds never yank the reader away).
     private func answerAsk(_ card: AskCardRow, _ text: String) {
-        // `display` given: the words go out as they are (a task's chat wraps typed words; the mark must lead).
-        sendFromCard(text, display: text)
-        AskAnswering.shared.forget(scope: scope, ask: card.ask)   // [asks v2]
+        let shouldHold = !isScrolledToBottom
+        if shouldHold { holdRowIfNeeded(card.rowId) }
+        sendFromCard(text, display: text, scrollToBottom: !shouldHold)
+        AskAnswering.shared.forget(scope: scope, rowId: card.rowId, ask: card.ask)
         rebuildMessage(card.messageId)
     }
 
@@ -212,8 +228,9 @@ extension ChatViewController {
         let input = AskAnswering.shared.rowsInput(session.messages, scope: scope)
         for m in session.messages.reversed() where m.role == .assistant {
             for case .tool(let call) in m.parts.reversed() {
-                guard let ask = AskCards.parse(call), input.answers[ask.id] == nil else { continue }
-                let row = AskCardRow(ask: ask, rowId: "\(m.id)|ask\(call.id)", messageId: m.id, answer: nil, answering: false)
+                let rowId = AskCards.rowId(messageId: m.id, callId: call.id)
+                guard let ask = AskCards.parse(call), input.rowAnswers?[rowId] == nil else { continue }
+                let row = AskCardRow(ask: ask, rowId: rowId, messageId: m.id, answer: nil, answering: false)
                 askCardOther(row)
                 if let words { composer.text = words }
                 return
@@ -226,8 +243,9 @@ extension ChatViewController {
         let input = AskAnswering.shared.rowsInput(session.messages, scope: scope)
         for m in session.messages.reversed() where m.role == .assistant {
             for case .tool(let call) in m.parts.reversed() {
-                guard let ask = AskCards.parse(call), input.answers[ask.id] == nil else { continue }
-                let row = AskCardRow(ask: ask, rowId: "\(m.id)|ask\(call.id)", messageId: m.id, answer: nil, answering: false)
+                let rowId = AskCards.rowId(messageId: m.id, callId: call.id)
+                guard let ask = AskCards.parse(call), input.rowAnswers?[rowId] == nil else { continue }
+                let row = AskCardRow(ask: ask, rowId: rowId, messageId: m.id, answer: nil, answering: false)
                 askCard(row, chose: n - 1)
                 return
             }

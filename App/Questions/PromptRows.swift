@@ -966,6 +966,8 @@ nonisolated struct DraftCardLayout: @unchecked Sendable {
     var threadTitle = ""
     /// The bar down the side of the preview of the conversation.
     var quote: CGRect? = nil
+    /// [asks] Real brand icon tile frame in row coordinates (replaces generic circle glyph on Draft headers).
+    var brandFrame: CGRect? = nil
 }
 
 nonisolated extension PromptRows {
@@ -1288,17 +1290,21 @@ nonisolated extension PromptLayout {
     private static func draftWaiting(_ d: DraftCardRow, gap: CGFloat, width: CGFloat, category: UIContentSizeCategory) -> RowLayout {
         let side = cardSide
         let cardW = cardWidth(for: width), innerW = cardW - 2 * notePadH
-        let top = max(0, gap) + 4, x = side + notePadH
+        let top = max(0, gap) + 8, x = side + notePadH
         let title = DraftCards.heading(d.draft) + (d.edited ? " · Edited" : "")
         let fields = DraftCards.fields(d.draft)
 
         let headFont = PromptFonts.font(.subheadline, category, weight: .semibold, cap: 26)
-        let mark = ceil(min(30, max(22, headFont.pointSize * 1.4)))
-        let textX = x + mark + 8
+        let hasBrand = AppBrandResolver.resolve(draft: d.draft) != nil
+        let mark = hasBrand
+            ? ceil(min(28, max(22, headFont.pointSize * 1.45)))
+            : ceil(min(30, max(22, headFont.pointSize * 1.4)))
+        let textX = x + mark + 9
         let headTop = top + notePadV
 
         var texts: [PromptPlacedText] = []
         var symbols: [PromptSymbol] = []
+        var brandFrame: CGRect?
         var spoken = [title]
         var y: CGFloat
 
@@ -1309,8 +1315,12 @@ nonisolated extension PromptLayout {
             line.append(text(fields[0].value, PromptFonts.font(.subheadline, category, weight: .medium, cap: 26), ChatPalette.label))
             let (headLayout, _) = clamped(line, width: max(60, innerW - (textX - x)), maxLines: 2)
             let firstH = max(mark, headLayout.size.height)
-            symbols.append(PromptSymbol(frame: CGRect(x: x, y: headTop + ((firstH - mark) / 2).rounded(), width: mark, height: mark),
-                                        name: DraftCards.glyph(d.draft), style: .picked))
+            let markRect = CGRect(x: x, y: headTop + ((firstH - mark) / 2).rounded(), width: mark, height: mark)
+            if hasBrand {
+                brandFrame = markRect
+            } else {
+                symbols.append(PromptSymbol(frame: markRect, name: DraftCards.glyph(d.draft), style: .picked))
+            }
             texts.append(PromptPlacedText(text: headLayout,
                                           frame: CGRect(x: textX, y: headTop + ((firstH - headLayout.size.height) / 2).rounded(),
                                                         width: headLayout.size.width, height: headLayout.size.height)))
@@ -1319,8 +1329,12 @@ nonisolated extension PromptLayout {
         } else {
             let headLayout = TextKitLayout(text(title, headFont, ChatPalette.label), width: max(60, innerW - (textX - x)))
             let firstH = max(mark, headLayout.size.height)
-            symbols.append(PromptSymbol(frame: CGRect(x: x, y: headTop + ((firstH - mark) / 2).rounded(), width: mark, height: mark),
-                                        name: DraftCards.glyph(d.draft), style: .picked))
+            let markRect = CGRect(x: x, y: headTop + ((firstH - mark) / 2).rounded(), width: mark, height: mark)
+            if hasBrand {
+                brandFrame = markRect
+            } else {
+                symbols.append(PromptSymbol(frame: markRect, name: DraftCards.glyph(d.draft), style: .picked))
+            }
             texts.append(PromptPlacedText(text: headLayout,
                                           frame: CGRect(x: textX, y: headTop + ((firstH - headLayout.size.height) / 2).rounded(),
                                                         width: headLayout.size.width, height: headLayout.size.height)))
@@ -1449,7 +1463,8 @@ nonisolated extension PromptLayout {
         draft.threadFrame = threadFrame
         draft.threadTitle = threadTitle
         draft.quote = quote
+        draft.brandFrame = brandFrame
         layout.draft = draft
-        return RowLayout(height: ceil(card.maxY + 4), content: .prompt(layout))
+        return RowLayout(height: ceil(card.maxY + 10), content: .prompt(layout))
     }
 }

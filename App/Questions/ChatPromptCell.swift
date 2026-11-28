@@ -36,6 +36,8 @@ import UIKit
     func askCardOpen(_ card: AskCardRow)
     /// [asks v2] A picked choice's ready reply: Send or Edit.
     func askCardReply(_ card: AskCardRow, tapped button: DraftButton)
+    /// [asks] Independent expansion toggle (e.g. `rowId|quote` or `rowId|reply`).
+    func askCardToggle(rowId: String, key: String)
 }
 
 extension ChatPromptCellHandling {
@@ -45,11 +47,13 @@ extension ChatPromptCellHandling {
     func travelOpenHotel(_ card: HotelsCardRow, index: Int) {}
     func travelAskHotel(_ card: HotelsCardRow, index: Int, ask: TravelCards.Ask) {}
     func travelFollowUp(rowId: String, text: String) {}
+    func askCardToggle(rowId: String, key: String) { draftCardToggle(rowId: rowId) }
 }
 
 final class ChatPromptCell: ChatBaseCell {
     static let reuse = "prompt"
     private let card = UIView()
+    var askHostCard: UIView { card }
     private var textViews: [TextDrawView] = []
     private var symbols: [PromptSymbol] = []
     private var symbolViews: [UIImageView] = []
@@ -67,6 +71,8 @@ final class ChatPromptCell: ChatBaseCell {
     private let draftDivider = UIView()                      // [calm-chat] subtle hairline above waiting draft buttons
     private let draftToggle = UIControl()                    // [calm-chat] tap target to expand/collapse folded drafts & settled clarifies
     private var toggleRowId: String?                         // [calm-chat] rowId targeted by `draftToggle`
+    private let draftBrandTile = AppBrandTileView()          // [asks] real app icon on Draft cards (sibling congruence)
+    private var usesDecisionSurface = false                  // [asks] Ask & Draft cards share elevated decision surface
     private let threadToggle = UIControl()
     private var settled: SettledClarifyCard?                 // [questions] a settled question card
     private let answerNow = UIButton(type: .system)
@@ -85,6 +91,9 @@ final class ChatPromptCell: ChatBaseCell {
         card.layer.cornerCurve = .continuous
         card.isAccessibilityElement = true
         contentView.addSubview(card)
+        contentView.addInteraction(UIContextMenuInteraction(delegate: self))
+        draftBrandTile.isHidden = true
+        contentView.addSubview(draftBrandTile)
         paper.isUserInteractionEnabled = false; paper.isHidden = true
         paper.layer.cornerRadius = 12; paper.layer.cornerCurve = .continuous
         card.addSubview(paper)
@@ -169,6 +178,9 @@ final class ChatPromptCell: ChatBaseCell {
         contentView.alpha = 1
         approval = nil
         draft = nil
+        usesDecisionSurface = false
+        draftBrandTile.cancel()
+        draftBrandTile.isHidden = true
         toggleRowId = nil
         settled = nil
         stopTicking()
@@ -197,11 +209,12 @@ final class ChatPromptCell: ChatBaseCell {
                 v.set(layout: nil)
             }
         }
+        usesDecisionSurface = (l.ask != nil || l.draft != nil)
         if let frame = l.cardFrame {
             card.isHidden = false
             card.frame = frame
             card.layer.cornerRadius = ChatMetrics.insetCardRadius
-            card.backgroundColor = ChatPalette.promptCard
+            card.backgroundColor = usesDecisionSurface ? ChatPalette.decisionCard : ChatPalette.promptCard
             // [calm-chat] Draft and ask cards render single-surface with an accent bar instead of a nested bordered box.
             let panel = (l.draft != nil || l.ask != nil) ? nil : l.approval?.paper
             paper.isHidden = panel == nil
@@ -257,6 +270,7 @@ final class ChatPromptCell: ChatBaseCell {
                 configureDraft(d, dl, hasCard: l.cardFrame != nil)
             } else {
                 draft = nil
+                draftBrandTile.configure(nil)
                 showAll.isHidden = true
                 threadToggle.isHidden = true
                 draftButtons.values.forEach { $0.isHidden = true }
@@ -286,6 +300,7 @@ final class ChatPromptCell: ChatBaseCell {
             return
         }
         draft = nil
+        draftBrandTile.configure(nil)
         toggleRowId = nil
         draftToggle.isHidden = true
         draftButtons.values.forEach { $0.isHidden = true }
@@ -352,10 +367,31 @@ final class ChatPromptCell: ChatBaseCell {
 
     private func updateBorder() {
         let hair = HQShape.pixel(traitCollection.displayScale)
-        // [cards] Every standalone prompt card (drafts, approvals, asks, orders, questions) carries a crisp edge.
-        let edge = ChatPalette.promptEdge.resolvedColor(with: traitCollection)
-        card.layer.borderColor = edge.cgColor
-        card.layer.borderWidth = edge.cgColor.alpha > 0 ? max(hair, 1) : 0
+        let highContrast = traitCollection.accessibilityContrast == .high || HQAccessibility.overrides.contrast
+        if usesDecisionSurface {
+            let edge = ChatPalette.decisionEdge.resolvedColor(with: traitCollection)
+            card.layer.borderColor = edge.cgColor
+            card.layer.borderWidth = edge.cgColor.alpha > 0 ? (highContrast ? max(hair, 1) : hair) : 0
+            // Soft Grok-style ambient elevation in Light Mode (iOS look only); dark & Desktop Look use hairline alone.
+            let showShadow = !card.isHidden && traitCollection.userInterfaceStyle != .dark && !Theme.isDesktop && !highContrast
+            if showShadow, !card.bounds.isEmpty {
+                card.layer.shadowColor = UIColor(hex: 0x1F2328).cgColor
+                card.layer.shadowOpacity = 0.075
+                card.layer.shadowRadius = 10
+                card.layer.shadowOffset = CGSize(width: 0, height: 3)
+                card.layer.shadowPath = UIBezierPath(roundedRect: card.bounds, cornerRadius: ChatMetrics.insetCardRadius).cgPath
+            } else {
+                card.layer.shadowOpacity = 0
+                card.layer.shadowPath = nil
+            }
+        } else {
+            // [cards] Every standalone prompt card (approvals, orders, questions) carries a crisp edge.
+            let edge = ChatPalette.promptEdge.resolvedColor(with: traitCollection)
+            card.layer.borderColor = edge.cgColor
+            card.layer.borderWidth = edge.cgColor.alpha > 0 ? max(hair, 1) : 0
+            card.layer.shadowOpacity = 0
+            card.layer.shadowPath = nil
+        }
         // Inset draft / command / reply panel: a hairline edge keeps it distinct inside the card in every theme.
         let panelEdge = ChatPalette.separator.resolvedColor(with: traitCollection)
         paper.layer.borderColor = panelEdge.cgColor
@@ -528,6 +564,13 @@ final class ChatPromptCell: ChatBaseCell {
     private func configureDraft(_ d: DraftCardRow, _ dl: DraftCardLayout, hasCard: Bool) {
         draft = d
         card.accessibilityIdentifier = "draft.card"
+        if let bf = dl.brandFrame, let spec = AppBrandResolver.resolve(draft: d.draft) {
+            draftBrandTile.frame = bf
+            draftBrandTile.configure(spec)
+            contentView.bringSubviewToFront(draftBrandTile)
+        } else {
+            draftBrandTile.configure(nil)
+        }
         showAll.isHidden = dl.showAllFrame == nil
         showAll.frame = dl.showAllFrame ?? .zero
         showAll.accessibilityLabel = dl.showAllTitle
@@ -642,5 +685,13 @@ final class ChatPromptCell: ChatBaseCell {
         let label = handler?.promptExpiryLabel(clockKey: a.clockKey, firstSeen: a.firstSeen) ?? ""
         if expiry.text != label { expiry.text = label }
         card.accessibilityLabel = label.isEmpty ? baseAccessibility : "\(baseAccessibility). \(label)"
+    }
+}
+
+extension ChatPromptCell: UIContextMenuInteractionDelegate {
+    func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
+        guard !card.isHidden, card.frame.contains(location), let menu = askContextMenu() else { return nil }
+        return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in menu }
     }
 }

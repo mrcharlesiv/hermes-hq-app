@@ -129,6 +129,11 @@ nonisolated enum ThemedColor {
         // this skin's near-white page).
         tokens.separator = pick(RGBA(hex: 0x85858A), RGBA(hex: 0x6C6C70))
         tokens.promptEdge = tokens.separator
+        tokens.decisionEdge = tokens.separator
+        tokens.decisionTagBg = tokens.tint.alpha(dark ? 0.22 : 0.14)
+        let decisionGround = tokens.decisionCard.over(tokens.page.over(.white))
+        tokens.decisionTagFg = ThemeMath.readable(tokens.tintText, text: dark ? .white : .black,
+                                                  on: [tokens.decisionTagBg.over(decisionGround), decisionGround], ratio: 4.5)
         tokens.fill3 = pick(RGBA(118, 118, 128, 0.2), RGBA(118, 118, 128, 0.32))
         tokens.orange = pick(RGBA(hex: 0xA82A00), RGBA(hex: 0xFFB340))
         tokens.red = pick(RGBA(hex: 0xB00012), RGBA(hex: 0xFF6961))

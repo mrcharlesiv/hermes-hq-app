@@ -32,6 +32,12 @@ nonisolated struct ThemeTokens: Sendable, Hashable {
     /// actionable entity in every skin, look and mode.
     var promptCard: RGBA
     var promptEdge: RGBA
+    /// [asks] Elevated decision-card surface (ask cards and draft cards): crisp white + soft shadow in light mode,
+    /// distinct deep elevated tone in dark mode, with a fine hairline edge and a WCAG-checked `Recommended` badge pair.
+    var decisionCard: RGBA
+    var decisionEdge: RGBA
+    var decisionTagBg: RGBA
+    var decisionTagFg: RGBA
     var meBubble: RGBA
     var meText: RGBA
     var meTime: RGBA
@@ -145,6 +151,13 @@ nonisolated enum ThemeResolver {
         let separator = pick(RGBA(60, 60, 67, 0.29), RGBA(84, 84, 88, 0.6))
         let groupedCard = pick(RGBA(hex: 0xF2F2F7), RGBA(hex: 0x1C1C1E))
         let tint = pick(RGBA(hex: 0x0053FD), RGBA(hex: 0x4A84FE))
+        let decisionCard = pick(RGBA(hex: 0xFFFFFF), RGBA(hex: 0x1A1D22))
+        let decisionEdge = pick(RGBA(31, 35, 40, 0.10), RGBA(255, 255, 255, 0.11))
+        let decisionTagBg = tint.alpha(dark ? 0.18 : 0.12)
+        let decisionGround = decisionCard.over(page)
+        let decisionTagFg = ThemeMath.readable(pick(RGBA(hex: 0x0040DD), RGBA(hex: 0x0A84FF)),
+                                               text: dark ? .white : .black,
+                                               on: [decisionTagBg.over(decisionGround), decisionGround], ratio: 4.5)
         return ThemeTokens(
             page: page, label: ink.alpha(0.94), label2: ink.alpha(0.74), label3: ink.alpha(0.36),
             tint: tint, tintText: pick(RGBA(hex: 0x0040DD), RGBA(hex: 0x0A84FF)), onTint: .white,
@@ -163,6 +176,10 @@ nonisolated enum ThemeResolver {
             botBubble: pick(RGBA(hex: 0xE9E9EB), RGBA(hex: 0x26282C)),
             promptCard: pick(RGBA(hex: 0xE9E9EB), RGBA(hex: 0x26282C)),
             promptEdge: pick(RGBA(60, 60, 67, 0.22), RGBA(255, 255, 255, 0.14)),
+            decisionCard: decisionCard,
+            decisionEdge: decisionEdge,
+            decisionTagBg: decisionTagBg,
+            decisionTagFg: decisionTagFg,
             meBubble: pick(RGBA(hex: 0x0053FD), RGBA(hex: 0x3863BF)), meText: .white,
             meTime: pick(RGBA.white.alpha(0.85), RGBA.white.alpha(0.88)),
             codeFill: pick(RGBA(116, 116, 128, 0.08), RGBA(hex: 0x1F2023)),
@@ -195,7 +212,8 @@ nonisolated enum ThemeResolver {
         var t = base(dark: dark)
         if skin.id == SkinCatalog.defaultID {
             let pageGround = t.page.over(.white)
-            let statusGrounds = [pageGround, t.groupedCard.over(pageGround), t.botBubble.over(pageGround)]
+            let decisionGround = t.decisionCard.over(pageGround)
+            let statusGrounds = [pageGround, t.groupedCard.over(pageGround), t.botBubble.over(pageGround), decisionGround]
             let anchor: RGBA = dark ? .white : .black
             t.red = ThemeMath.readable(t.red, text: anchor, on: statusGrounds, ratio: 4.5)
             t.orange = ThemeMath.readable(t.orange, text: anchor, on: statusGrounds, ratio: 4.5)
@@ -214,9 +232,14 @@ nonisolated enum ThemeResolver {
             t.cellPressed = dark ? RGBA(hex: 0x3A3A3C) : RGBA(hex: 0xD1D1D6)
             t.grouped = dark ? .black : RGBA(hex: 0xF2F2F7)
             t.codeFill = dark ? RGBA(hex: 0x1C1C1E) : RGBA(hex: 0xF2F2F7)
+            t.decisionCard = dark ? RGBA(hex: 0x1C1C1E) : .white
+            t.decisionEdge = dark ? RGBA(255, 255, 255, 0.13) : RGBA(60, 60, 67, 0.12)
             let pageGround = t.page.over(.white)
-            let statusGrounds = [pageGround, t.groupedCard.over(pageGround), t.botBubble.over(pageGround)]
+            let decisionGround = t.decisionCard.over(pageGround)
+            t.decisionTagBg = t.tint.alpha(dark ? 0.18 : 0.12)
             let anchor: RGBA = dark ? .white : .black
+            t.decisionTagFg = ThemeMath.readable(t.tintText, text: anchor, on: [t.decisionTagBg.over(decisionGround), decisionGround], ratio: 4.5)
+            let statusGrounds = [pageGround, t.groupedCard.over(pageGround), t.botBubble.over(pageGround), decisionGround]
             t.red = ThemeMath.readable(t.red, text: anchor, on: statusGrounds, ratio: 4.5)
             t.orange = ThemeMath.readable(t.orange, text: anchor, on: statusGrounds, ratio: 4.5)
             t.green = ThemeMath.readable(t.green, text: anchor, on: statusGrounds, ratio: 4.5)
@@ -258,6 +281,9 @@ nonisolated enum ThemeResolver {
                 ? t.botBubble
                 : liftedCard(page: t.page, ink: ink, label: t.label, dark: dark, contrast: false)
             t.promptEdge = ink.alpha(dark ? 0.16 : 0.14)
+            // [asks] Decision cards: lifted toward white in light mode, calm distinct step above page in dark mode.
+            t.decisionCard = dark ? t.page.mix(92, ink) : (t.page.labL > 96 ? .white : t.page.mix(24, .white))
+            t.decisionEdge = ink.alpha(dark ? 0.14 : 0.12)
             if dark {
                 t.codeFill = t.page.mix(95, ink)
                 t.codeFillOnBubble = t.codeFill
@@ -276,17 +302,20 @@ nonisolated enum ThemeResolver {
             let cardGround = t.groupedCard.over(groupedGround)
             let bubbleGround = t.botBubble.over(pageGround)
             let promptGround = t.promptCard.over(pageGround)
+            let decisionGround = t.decisionCard.over(pageGround)
             let pressedGround = t.cellPressed.over(pageGround)
             let anchor: RGBA = dark ? .white : .black
             // Primary text, links, code text and semantic status colours must read at >= 4.5:1 on cards and replies too.
             t.label = ThemeMath.readable(t.label, text: anchor,
-                                         on: [pageGround, groupedGround, cardGround, bubbleGround, promptGround, pressedGround], ratio: 4.5)
-            t.label2 = ThemeMath.readable(t.label2, text: t.label, on: [pageGround, groupedGround, cardGround, bubbleGround], ratio: 4.5)
+                                         on: [pageGround, groupedGround, cardGround, bubbleGround, promptGround, decisionGround, pressedGround], ratio: 4.5)
+            t.label2 = ThemeMath.readable(t.label2, text: t.label, on: [pageGround, groupedGround, cardGround, bubbleGround, decisionGround], ratio: 4.5)
             t.tintText = ThemeMath.readable(t.tint, text: t.label,
-                                            on: [pageGround, groupedGround, cardGround, bubbleGround, promptGround], ratio: 4.5)
+                                            on: [pageGround, groupedGround, cardGround, bubbleGround, promptGround, decisionGround], ratio: 4.5)
+            t.decisionTagBg = t.tint.alpha(dark ? 0.18 : 0.12)
+            t.decisionTagFg = ThemeMath.readable(t.tintText, text: anchor, on: [t.decisionTagBg.over(decisionGround), decisionGround], ratio: 4.5)
             let codeGrounds = [t.codeFill.over(pageGround), t.codeFillOnBubble.over(bubbleGround)]
             t.codeText = ThemeMath.readable(t.codeText, text: anchor, on: codeGrounds, ratio: 4.5)
-            let statusGrounds = [pageGround, cardGround, bubbleGround, promptGround]
+            let statusGrounds = [pageGround, cardGround, bubbleGround, promptGround, decisionGround]
             t.red = ThemeMath.readable(t.red, text: anchor, on: statusGrounds, ratio: 4.5)
             t.orange = ThemeMath.readable(t.orange, text: anchor, on: statusGrounds, ratio: 4.5)
             t.green = ThemeMath.readable(t.green, text: anchor, on: statusGrounds, ratio: 4.5)
@@ -440,6 +469,9 @@ nonisolated enum ThemeResolver {
         t.botBubble = own.reply ?? own.card
         t.promptCard = chatCard
         t.promptEdge = own.separator
+        let isDarkOwn = own.page.labL < 50
+        t.decisionCard = isDarkOwn ? (own.card == own.page ? (own.reply ?? own.page.mix(92, ink)) : own.card) : own.card
+        t.decisionEdge = ink.alpha(isDarkOwn ? 0.14 : 0.12)
         t.cellPressed = own.pressed
         t.codeFill = own.codeFill; t.codeFillOnBubble = own.codeFill
         t.codeText = ink
@@ -544,6 +576,10 @@ nonisolated enum ThemeResolver {
         t.botBubble = editor
         t.promptCard = promptCard
         t.promptEdge = contrast ? strokePrimary : strokeSecondary
+        t.decisionCard = editor
+        t.decisionEdge = contrast ? strokePrimary : strokeSecondary
+        t.decisionTagBg = accentText.alpha(dark ? 0.18 : 0.12)
+        t.decisionTagFg = ThemeMath.readable(accentText, text: anchor, on: [t.decisionTagBg.over(editorGround), editorGround], ratio: 4.5)
         // Your message is text on a box. Where a skin's box is too close to its text, the text goes toward plain
         // black or white until it reads (the web leaves it; Solarized dark is 4.4:1 there).
         let meGround = meBubble.over(pageGround)

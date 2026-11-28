@@ -205,19 +205,22 @@ struct AskCardsTests {
         let made = AskCardLayout.make(card, gap: 6, width: 402, category: .large)
         guard case .prompt(let layout) = made.content, let g = layout.ask else { Issue.record("layout"); return }
         let frame = try #require(layout.cardFrame)
-        #expect(g.buttons.map(\.0) == [0, 1] && !g.stacked)
-        #expect(g.buttons.allSatisfy { frame.contains($0.1) && $0.1.height >= 44 })
-        #expect(g.buttons[0].1.minX < g.buttons[1].1.minX && g.buttons[0].1.width == g.buttons[1].1.width)
-        #expect(g.other != nil && g.link != nil && g.quote != nil && g.chips.count == 1)
+        // Concept 1: full-width vertical hairline-divided action rows (>= 46 pt).
+        #expect(g.buttons.map(\.0) == [0, 1] && g.stacked)
+        #expect(g.buttons.allSatisfy { frame.contains($0.1) && $0.1.height >= 46 })
+        #expect(g.buttons[0].1.minY < g.buttons[1].1.minY && g.buttons[0].1.width == frame.width)
+        #expect(g.other != nil && g.otherPencilFrame != nil && g.link != nil && g.linkGlyphFrame != nil)
+        #expect(g.brandFrame != nil && g.brandSpec != nil && g.quote != nil && g.chips.count == 1)
         #expect(g.linkTitle == "Open Dana's DM ↗")
         #expect(layout.accessibility.contains("Start with the pilot group?") && layout.accessibility.contains("Q3_Plan"))
         // Nothing past the card's bottom.
         #expect(layout.texts.allSatisfy { $0.frame.maxY <= frame.maxY + 0.5 })
-        // At accessibility sizes the choices stack, the bot's pick on top.
+        // At accessibility sizes the choices stay stacked cleanly inside the card.
         let big = AskCardLayout.make(card, gap: 6, width: 402, category: .accessibilityExtraLarge)
-        guard case .prompt(let bl) = big.content, let bg = bl.ask else { Issue.record("big"); return }
+        guard case .prompt(let bl) = big.content, let bg = bl.ask, let bf = bl.cardFrame else { Issue.record("big"); return }
         #expect(bg.stacked && bg.buttons[0].1.minY < bg.buttons[1].1.minY)
-        // While its strip is open the buttons wait.
+        #expect(bl.texts.allSatisfy { $0.frame.maxY <= bf.maxY + 0.5 })
+        // While its strip is open the choices wait.
         let (_, open) = try #require(askRow([bot([call(args)])], answering: "a-9cfc6386"))
         #expect(open.answering)
         guard case .prompt(let ol) = AskCardLayout.make(open, gap: 6, width: 402, category: .large).content else { return }
@@ -423,7 +426,9 @@ struct AskCardsTests {
         #expect(Set(g.replyButtons.map(\.0)) == [.send, .edit] && !g.replyStacked)
         let sendFrame = try #require(g.replyButtons.first { $0.0 == .send }?.1), editFrame = try #require(g.replyButtons.first { $0.0 == .edit }?.1)
         #expect(editFrame.maxX < sendFrame.minX && sendFrame.height >= 44)
-        #expect(g.buttons.allSatisfy { $0.1.maxY < paper.minY } && paper.maxY <= sendFrame.minY && sendFrame.maxY < g.other!.midY)
+        // Inline accordion: picked choice 0 sits directly above its reply paper and Send/Edit, which sit ABOVE choice 1.
+        #expect(g.buttons[0].1.maxY <= paper.minY && paper.maxY <= sendFrame.minY && sendFrame.maxY <= g.buttons[1].1.minY && g.buttons[1].1.maxY <= g.other!.minY)
+        #expect(g.pickedBand != nil)
         #expect(frame.contains(paper) && frame.contains(sendFrame))
         #expect(layout.texts.contains { $0.text.text.string == "Reply to Dana Reyes · Slack" })
         #expect(layout.texts.contains { $0.text.text.string == yesReply && paper.contains($0.frame) })
@@ -460,7 +465,9 @@ struct AskCardsTests {
         let made = AskCardLayout.make(card, gap: 6, width: 402, category: .large)
         guard case .prompt(let layout) = made.content, let g = layout.ask else { Issue.record("layout"); return }
         #expect(g.buttons.isEmpty && g.replyButtons.isEmpty && g.paper == nil && g.other == nil)
-        #expect(layout.texts.contains { $0.text.text.string == "You answered: Yes · Reply approved" })
+        #expect(g.brandFrame != nil)
+        #expect(layout.texts.contains { $0.text.text.string.contains("Yes · Reply approved") })
+        #expect(layout.accessibility.contains("You answered: Yes · Reply approved"))
         let shown = try #require(layout.texts.first { $0.text.text.string.hasPrefix("Line 1 of the reply") })
         #expect(PromptLayout.lineCount(shown.text) <= PromptRows.askSentLines)
     }
@@ -532,7 +539,8 @@ struct AskCardsTests {
         opened.expanded = true
         let expanded = AskCardLayout.make(opened, gap: 6, width: 402, category: .large)
         guard case .prompt(let el) = expanded.content, let eg = el.ask else { Issue.record("expanded"); return }
-        #expect(el.cardFrame != nil && eg.buttons.isEmpty && eg.other == nil && eg.toggleExpanded)
+        // Expanding a stale fold opens the full interactive card so the user can still answer it inline.
+        #expect(el.cardFrame != nil && eg.buttons.count == 2 && eg.other != nil && eg.toggleExpanded && opened.answerable)
         #expect(expanded.height > collapsed.height)
 
         // A newer ask card also retires an earlier unanswered ask while staying live itself.
@@ -556,7 +564,7 @@ struct AskCardsTests {
         let collapsed = AskCardLayout.make(collapsedCard, gap: 6, width: 402, category: .large)
         guard case .prompt(let cl) = collapsed.content, let cg = cl.ask else { Issue.record("collapsed"); return }
         #expect(cl.cardFrame != nil && cg.buttons.isEmpty && cg.toggleFrame != nil && !cg.toggleExpanded)
-        #expect(cg.bodyBar != nil && !cg.bodyBarTint)
+        #expect(cg.brandFrame != nil)
 
         var expandedCard = collapsedCard
         expandedCard.expanded = true
@@ -564,6 +572,112 @@ struct AskCardsTests {
         guard case .prompt(let el) = expanded.content, let eg = el.ask else { Issue.record("expanded"); return }
         #expect(el.cardFrame != nil && eg.buttons.isEmpty && eg.toggleExpanded)
         #expect(expanded.height > collapsed.height)
+    }
+
+    // MARK: Redesign & Audit Guarantees
+
+    @Test func bareAskOmitsHeaderChromeAndPlacesThenAboveChoices() throws {
+        let bareArgs: [String: JSONValue] = [
+            "question": .string("Review the internal applicant first or both in parallel?"),
+            "then": .string("Nothing goes out without your approval."),
+            "choices": .array([.string("Review internal first"), .string("Review both in parallel")]),
+        ]
+        let (_, card) = try #require(askRow([bot([call(bareArgs)])]))
+        #expect(!card.ask.hasExternalSource && card.ask.recommended == nil)
+        let made = AskCardLayout.make(card, gap: 6, width: 402, category: .large)
+        guard case .prompt(let layout) = made.content, let g = layout.ask else { Issue.record("bare"); return }
+        #expect(g.brandFrame == nil && g.link == nil)
+        #expect(!layout.texts.contains { $0.text.text.string.contains("A question for you") })
+        let qRect = try #require(layout.texts.first { $0.text.text.string == card.ask.question }?.frame)
+        let thenRect = try #require(layout.texts.first { $0.text.text.string == card.ask.then }?.frame)
+        let firstChoice = try #require(g.buttons.first?.1)
+        // iOS Alert order: question → safety promise (`then`) → choices.
+        #expect(qRect.maxY < thenRect.minY && thenRect.maxY < firstChoice.minY)
+        // Neutral choices carry no false Recommended pill.
+        #expect(g.choiceRows.allSatisfy { $0.tagFrame == nil && !$0.isRecommended })
+    }
+
+    @Test func recommendedPillAndWhyDrawOnlyWhenExplicit() throws {
+        let recArgs: [String: JSONValue] = [
+            "question": .string("Which lane should we open first?"),
+            "choices": .array([.string("Internal track"), .string("External track")]),
+            "recommended": .number(0),
+            "why": .string("Notes and references are already ready."),
+        ]
+        let (_, card) = try #require(askRow([bot([call(recArgs)])]))
+        #expect(card.ask.recommended == 0 && card.ask.why == "Notes and references are already ready.")
+        let made = AskCardLayout.make(card, gap: 6, width: 402, category: .large)
+        guard case .prompt(let layout) = made.content, let g = layout.ask else { Issue.record("rec"); return }
+        #expect(g.choiceRows[0].isRecommended && g.choiceRows[0].tagFrame != nil)
+        #expect(!g.choiceRows[1].isRecommended && g.choiceRows[1].tagFrame == nil)
+        #expect(layout.texts.contains { $0.text.text.string == "Notes and references are already ready." })
+        // Trailing "(Recommended)" suffix on a choice also sets recommended and cleans display title.
+        let suffixAsk = try ask(["question": .string("Proceed?"), "choices": .array([.string("Run checks (Recommended)"), .string("Skip")])])
+        #expect(suffixAsk.recommended == 0 && AskCards.choiceTitle(suffixAsk.choices[0]) == "Run checks")
+    }
+
+    @Test func identicalRepeatAsksDoNotCollideAndTrackDeliveryState() throws {
+        let a = try ask()
+        let yes = try #require(AskCards.choiceMessage(a, index: 0))
+        let m1 = bot([call(args, id: "c1")], id: "m1")
+        let u1 = you(yes, id: "u1")
+        let m2 = bot([call(args, id: "c2")], id: "m2")
+        let byRow = AskCards.answersByRow([m1, u1, m2])
+        let row1 = AskCards.rowId(messageId: "m1", callId: "c1")
+        let row2 = AskCards.rowId(messageId: "m2", callId: "c2")
+        #expect(byRow[row1] == AskCards.RowAnswer(answer: .choice(1, "Yes."), delivery: .sent))
+        #expect(byRow[row2] == nil)
+        // Pending / failed / queued delivery states propagate accurately to the matching row.
+        var pendingReply = you(yes, id: "u2")
+        pendingReply.isPending = true
+        #expect(AskCards.answersByRow([m1, u1, m2, pendingReply])[row2]?.delivery == .sending)
+        var failedReply = you(yes, id: "u2")
+        failedReply.error = "offline"
+        #expect(AskCards.answersByRow([m1, u1, m2, failedReply])[row2]?.delivery == .failed)
+        #expect(AskCards.answersByRow([m1, u1, m2], queued: [yes])[row2]?.delivery == .queued)
+    }
+
+    @Test func somethingElsePreservesUserBubbleAndSplitsQuoteAndReplyExpansions() throws {
+        let a = try ask()
+        let custom = AskCards.otherMessage(a, text: "Only the two team leads first, then check back Monday.")
+        let built = ChatRowBuilder.build(input([bot([call(args)]), you(custom)]))
+        #expect(built.contains { if case .bubble(let b) = $0.kind { return b.mine && b.text.contains("two team leads") } else { return false } })
+
+        // Split expansion keys: expanding the quote does not expand the reply or receipt.
+        let rowId = AskCards.rowId(messageId: "m1", callId: "c1")
+        var longArgs = replyArgs
+        longArgs["quote"] = .string(String(repeating: "Here is a long external quote with full project details. ", count: 12))
+        var i = input([bot([call(longArgs)])])
+        i.asks.picked[rowId] = 0
+        i.expanded = [AskRowsInput.quoteExpandKey(rowId)]
+        let rows = ChatRowBuilder.build(i)
+        let card = try #require(rows.compactMap { row -> AskCardRow? in
+            if case .prompt(let p) = row.kind, case .ask(let c) = p.kind { return c }
+            return nil
+        }.first)
+        #expect(card.quoteExpanded && !card.replyExpanded && !card.expanded)
+    }
+
+    @Test func appBrandResolverMapsThirdPartyAliasesInferredHostsAndAppleFirstParty() {
+        if case .remote(let key, let slugs, _, _) = AppBrandResolver.resolve(app: "Slack") {
+            #expect(key == "brand:slack" && slugs == ["slack"])
+        } else { Issue.record("Expected remote Slack spec") }
+
+        if case .remote(let key, let slugs, _, _) = AppBrandResolver.resolve(app: "Teams") {
+            #expect(key == "brand:microsoft_teams" && slugs.contains("microsoft_teams"))
+        } else { Issue.record("Expected remote Teams alias") }
+
+        if case .remote(let key, _, _, _) = AppBrandResolver.resolve(app: "Email", linkURL: URL(string: "https://mail.google.com/mail/u/0/#inbox/1")) {
+            #expect(key == "brand:gmail")
+        } else { Issue.record("Expected inferred Gmail from link host") }
+
+        if case .firstParty(let symbol, let bg, _) = AppBrandResolver.resolve(app: "Messages") {
+            #expect(symbol == "message.fill" && bg == 0x34C759)
+        } else { Issue.record("Expected Apple Messages first-party tile") }
+
+        if case .firstParty(let symbol, let bg, _) = AppBrandResolver.resolve(app: "Email") {
+            #expect(symbol == "envelope.fill" && bg == 0x007AFF)
+        } else { Issue.record("Expected generic Mail first-party tile") }
     }
 
     @Test func askReadyBoilerplateSuppressedWhileRealProseKept() {

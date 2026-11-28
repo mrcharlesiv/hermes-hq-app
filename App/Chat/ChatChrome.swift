@@ -18,15 +18,53 @@ final class JumpButton: UIView {
     /// activity pill's: over a dark message the glass alone took its colour and its words read through.
     private let backing = UIView()
     private(set) var isShown = false
-    /// L422: "Approval needed", a tinted glass capsule, while an approval waits out of sight. `onSizeChange` asks the
-    /// screen to resize it.
-    private(set) var approvalMode = false
+    /// Capsule modes for the floating jump control: plain jump-to-latest circle, "Approval needed", or
+    /// "Question waiting" when a live ask card is scrolled out of sight (no dot or badge count).
+    enum Mode: Equatable {
+        case latest
+        case approval
+        case ask(up: Bool)
+
+        var isCapsule: Bool { self != .latest }
+        var title: String {
+            switch self {
+            case .latest: ""
+            case .approval: "Approval needed"
+            case .ask(let up): up ? "↑ Question waiting" : "↓ Question waiting"
+            }
+        }
+        var accessibilityLabel: String {
+            switch self {
+            case .latest: "Jump to Latest"
+            case .approval: "Approval needed"
+            case .ask: "Question waiting"
+            }
+        }
+        var accessibilityHint: String? {
+            switch self {
+            case .latest: nil
+            case .approval: "Scrolls to the request."
+            case .ask: "Scrolls to the waiting question."
+            }
+        }
+        var identifier: String {
+            switch self {
+            case .latest: "chat.jump"
+            case .approval: "jump.approval"
+            case .ask: "jump.ask"
+            }
+        }
+    }
+
+    private(set) var mode: Mode = .latest
+    /// L422: true while in approval mode (kept for callers/tests).
+    var approvalMode: Bool { mode == .approval }
     var onSizeChange: (() -> Void)?
     private let approvalLabel = UILabel()
 
     /// The width the button wants now: a circle, or a capsule around the words.
     var preferredWidth: CGFloat {
-        guard approvalMode else { return ChatMetrics.jumpSize }
+        guard mode.isCapsule else { return ChatMetrics.jumpSize }
         // [desktop-frost] The look's flat capsule around the words; off the look, the glass capsule.
         if desktop { return max(ChatMetrics.jumpSize, ceil(flatLabel.intrinsicContentSize.width) + 24) }
         return ceil(approvalLabel.intrinsicContentSize.width) + 32
@@ -53,7 +91,7 @@ final class JumpButton: UIView {
         flat.isHidden = !desktop
         countLabel.alpha = desktop ? 0 : 1
         if desktop {
-            let accent = approvalMode
+            let accent = mode.isCapsule
             circle.color = ChatPalette.editor
             circle.tintAlpha = 0.88
             circle.layer.borderWidth = accent ? 1.5 : HQShape.hairline
@@ -75,19 +113,26 @@ final class JumpButton: UIView {
     var flatCircleFrame: CGRect { circle.frame }
 
     func setApproval(_ on: Bool) {
-        guard on != approvalMode else { return }
-        approvalMode = on
+        setMode(on ? .approval : .latest)
+    }
+
+    func setMode(_ next: Mode) {
+        guard next != mode else { return }
+        mode = next
+        let capsule = next.isCapsule
         defer { if desktop { applyLook(); onSizeChange?() } }   // [desktop-frost] the round button's accent
         let effect = UIGlassEffect(style: .regular)
         effect.isInteractive = true
-        if on { effect.tintColor = ChatPalette.tint }
+        if capsule { effect.tintColor = ChatPalette.tint }
         glass.effect = effect
-        approvalLabel.isHidden = !on
-        chevron.isHidden = on
+        approvalLabel.text = next.title
+        flatLabel.text = next.title
+        approvalLabel.isHidden = !capsule
+        chevron.isHidden = capsule
         isAccessibilityElement = true
-        accessibilityLabel = on ? "Approval needed" : "Jump to Latest"
-        accessibilityHint = on ? "Scrolls to the request." : nil
-        accessibilityIdentifier = on ? "jump.approval" : "chat.jump"
+        accessibilityLabel = next.accessibilityLabel
+        accessibilityHint = next.accessibilityHint
+        accessibilityIdentifier = next.identifier
         invalidateIntrinsicContentSize()
         setNeedsLayout()
         onSizeChange?()
@@ -151,7 +196,7 @@ final class JumpButton: UIView {
         isHidden = true
         // The words grow with the text size (to their cap), so the capsule asks to be resized with them.
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (view: JumpButton, _) in
-            guard view.approvalMode else { return }
+            guard view.mode.isCapsule else { return }
             view.invalidateIntrinsicContentSize()
             view.setNeedsLayout()
             view.onSizeChange?()
@@ -170,8 +215,8 @@ final class JumpButton: UIView {
         if desktop {
             flat.frame = bounds
             let d = min(Self.desktopDiameter, bounds.width, bounds.height)
-            // The plain jump is the 36 pt circle; an approval, a capsule as wide as the tap area.
-            let w = approvalMode ? max(d, bounds.width - (ChatMetrics.jumpSize - d)) : d
+            // The plain jump is the 36 pt circle; an approval or waiting ask, a capsule as wide as the tap area.
+            let w = mode.isCapsule ? max(d, bounds.width - (ChatMetrics.jumpSize - d)) : d
             circle.frame = CGRect(x: (bounds.width - w) / 2, y: (bounds.height - d) / 2, width: w, height: d)
             circle.layer.cornerRadius = d / 2
             flatArrow.frame = circle.bounds

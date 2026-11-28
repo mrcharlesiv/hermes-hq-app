@@ -51,6 +51,11 @@ nonisolated enum ChatPalette {
     /// [paper-cards] `ThemeTokens.promptCard` / `promptEdge`.
     static let promptCard = ThemedColor.make(\.promptCard)
     static let promptEdge = ThemedColor.make(\.promptEdge)
+    /// [asks] Elevated decision-card surface and badge tokens (`ThemeTokens.decisionCard` / `decisionEdge` / `decisionTag*`).
+    static let decisionCard = ThemedColor.make(\.decisionCard)
+    static let decisionEdge = ThemedColor.make(\.decisionEdge)
+    static let decisionTagBg = ThemedColor.make(\.decisionTagBg)
+    static let decisionTagFg = ThemedColor.make(\.decisionTagFg)
     static let meBubble = ThemedColor.make(\.meBubble)
     static let meText = ThemedColor.make(\.meText)
     static let meTime = ThemedColor.make(\.meTime)

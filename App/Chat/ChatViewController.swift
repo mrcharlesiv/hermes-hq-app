@@ -327,8 +327,8 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     var shoppingAnswersShown = ShoppingCards.Answers()
     /// [travel] The travel answers the rows were last built with (App/Travel/ChatViewController+Travel.swift).
     var travelAnswersShown = TravelCards.Answers()
-    /// [asks] The ask answers the rows were last built with (App/Asks/ChatViewController+Asks.swift).
-    var askAnswersShown: [String: AskCards.Answer] = [:]
+    /// [asks] The ask answers (keyed by rowId + delivery state) the rows were last built with (App/Asks/ChatViewController+Asks.swift).
+    var askAnswersShown: [String: AskCards.RowAnswer] = [:]
     /// [questions] The later answers to skipped questions the rows were last built with (ChatViewController+Prompts).
     var clarifyLateShown: [String: ClarifyLate.Found] = [:]
     private var pendingNewest = false
@@ -926,7 +926,11 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         view.addSubview(memoNotice)
         jumpButton.onTap = { [weak self] in
             guard let self else { return }
-            if self.jumpButton.approvalMode { self.jumpToApproval() } else { self.jumpToLatest() }
+            switch self.jumpButton.mode {
+            case .approval: self.jumpToApproval()
+            case .ask: self.jumpToWaitingAsk()
+            case .latest: self.jumpToLatest()
+            }
         }
         jumpButton.onSizeChange = { [weak self] in
             guard let self else { return }
@@ -4011,13 +4015,73 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         if UserDefaults.standard.bool(forKey: "HQDebugJumpApproval") { jumpButton.setApproval(true); jumpButton.setShown(true); return }
         #endif
         let approvalOut = approvalOutOfSight
-        jumpButton.setApproval(approvalOut)
-        if approvalOut { jumpButton.setShown(true); return }
+        if approvalOut {
+            jumpButton.setMode(.approval)
+            jumpButton.setShown(true)
+            return
+        }
         // DECISION (L422): with the approval's buttons in sight the plain jump arrow would sit over Run; the card is the
         // newest thing in the chat, so there is nothing below it to jump to.
-        if approvalIndex != nil, promptDock == nil { jumpButton.setShown(false); return }
+        if approvalIndex != nil, promptDock == nil {
+            jumpButton.setMode(.latest)
+            jumpButton.setShown(false)
+            return
+        }
+        // [asks] Priority 2: a waiting ask card scrolled out of view surfaces a "Question waiting" jump capsule.
+        if let askDirection = waitingAskOutOfSight {
+            jumpButton.setMode(.ask(up: askDirection))
+            jumpButton.setShown(true)
+            return
+        }
+        jumpButton.setMode(.latest)
         let away = tableView.contentOffset.y - minOffset > 120
         jumpButton.setShown(away || (!following && glideLink == nil && tableView.contentOffset.y - minOffset > 2))
+    }
+
+    // MARK: Jump to waiting ask ([asks])
+
+    /// Index of the newest active waiting ask row (lowest index in the inverted table).
+    private var waitingAskIndex: Int? {
+        rows.firstIndex { row in
+            guard case .prompt(let p) = row.kind, case .ask(let card) = p.kind else { return false }
+            return card.waiting
+        }
+    }
+
+    /// Returns `true` if the waiting ask is scrolled above the viewport, `false` if below, or `nil` if wholly visible
+    /// (or no waiting ask exists).
+    private var waitingAskOutOfSight: Bool? {
+        guard let index = waitingAskIndex, promptDock == nil else { return nil }
+        let path = IndexPath(row: index, section: 0)
+        if let cell = tableView.cellForRow(at: path) {
+            let rect = view.convert(cell.bounds, from: cell)
+            let visibleTop = view.safeAreaInsets.top
+            let visibleBottom = composer.frame.minY
+            // Consider visible if at least part of the card's action area is inside the safe viewport.
+            if rect.maxY > visibleTop + 44 && rect.minY < visibleBottom - 44 { return nil }
+            return rect.midY < visibleTop
+        }
+        let visibleRows = tableView.indexPathsForVisibleRows?.map(\.row) ?? []
+        guard let minVisible = visibleRows.min(), let maxVisible = visibleRows.max() else { return nil }
+        // Inverted table: higher row index = older = higher up on screen.
+        if index > maxVisible { return true }
+        if index < minVisible { return false }
+        return nil
+    }
+
+    func jumpToWaitingAsk() {
+        guard let index = waitingAskIndex else { return }
+        leadPinEnded = true
+        Haptics.play(.selection)
+        endLift(); stopGlide(); stopStreamGlide()
+        anchorMessageId = nil
+        tableView.setContentOffset(tableView.contentOffset, animated: false)
+        let path = IndexPath(row: index, section: 0)
+        following = index == 0
+        tableView.scrollToRow(at: path, at: .middle, animated: !HQMotion.reduced)
+        DispatchQueue.main.asyncAfter(deadline: .now() + (HQMotion.reduced ? 0.05 : 0.35)) { [weak self] in
+            self?.updateJumpButton()
+        }
     }
 
     // MARK: Jump to approval (L422)
@@ -4278,7 +4342,8 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
 
     /// [tasks] A card's own message (Ask Hermes to Help): goes out as a typed one would, with `display` in your bubble.
     /// `engage: false` ([tasks] an answer tapped on the task's view): the words go out, and the task's view stays.
-    func sendFromCard(_ text: String, display: String, engage: Bool = true) {
+    /// `scrollToBottom: false` ([asks] answering an inline ask above the fold keeps the user's reading position).
+    func sendFromCard(_ text: String, display: String, engage: Bool = true, scrollToBottom shouldScroll: Bool = true) {
         leadPinEnded = true   // [tasks] a send: the newest end wins over the task's details
         endLanding()
         if engage { onEngage?(.send) }
@@ -4286,8 +4351,10 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         awaitingReply = true
         awaitFromIndex = session.messages.count
         lastSendTime = CACurrentMediaTime()
-        if !isAtBottom { scrollToBottom(animated: true) }
-        following = true
+        if shouldScroll {
+            if !isAtBottom { scrollToBottom(animated: true) }
+            following = true
+        }
         if let live = session as? LiveChatSession { live.send(text, display: display) } else { session.send(text) }
     }
 
@@ -4658,6 +4725,22 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
         holdRowId = rowId
         rebuildMessage(row.messageId)
     }
+
+    /// [asks] Toggle an independent expansion key (`rowId|quote`, `rowId|reply`) while holding scroll position.
+    func toggleExpandedKey(_ key: String, forRowId rowId: String) {
+        guard let row = rows.first(where: { $0.id == rowId }) else { return }
+        if expanded.contains(key) { expanded.remove(key) } else { expanded.insert(key) }
+        if !(following && rows.first?.id == rowId) { holdRowId = rowId }
+        rebuildMessage(row.messageId)
+    }
+
+    /// [asks] Hold `rowId` steady across a height change when not pinned at the newest end.
+    func holdRowIfNeeded(_ rowId: String) {
+        if !(following && rows.first?.id == rowId) { holdRowId = rowId }
+    }
+
+    /// [asks] Whether the chat is currently scrolled to the newest bottom end.
+    var isScrolledToBottom: Bool { isAtBottom }
 
     /// Rebuilds one message's rows in place (an expansion changed), however deep in history it is.
     func rebuildMessage(_ messageId: String) {

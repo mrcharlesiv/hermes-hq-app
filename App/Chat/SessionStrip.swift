@@ -14,12 +14,15 @@ import UIKit
 // The Mac draws them as tabs, not pills (owner 2026-11-18, picking "A · Underline tabs" of four designs: the pills
 // read as a second row of buttons): plain words on the bar's own ground, the chat on screen in the label colour with
 // a line of the tint under it, the rest grey, a hairline under the row.
-// [bot-tabs-ux] Owner 2026-11-18, on the built tabs ("I don't want these to show on every session. Only on a bot chat
-// … same direction, [just] better. The UX needs improvement"): on the Mac the row is drawn on a bot's own chat only,
-// which makes it that bot's doorway to its live chats. A tab is a whole target (it lights under the pointer, no dead
-// gaps between tabs), a short rule parts Bot Chat from the chats, the tabs keep their places as chats work (a new one
-// comes in first; nothing is re-sorted under the pointer), a tab's tip gives its whole title and last line, and a
-// right-click offers Mark as Read, Pin, Archive and Remove from Tabs.
+// [bot-tabs-ux] Owner 2026-11-18: a tab is a whole target (it lights under the pointer, no dead gaps between tabs),
+// a short rule parts Bot Chat from the chats, the tabs keep their places as chats work (a new one comes in first;
+// nothing is re-sorted under the pointer), a tab's tip gives its whole title and last line, and a right-click offers
+// Mark as Read, Pin, Archive and Remove from Tabs.
+// [mac-session-tabs] A tester & owner 2026-11-27: on the Mac the strip stays consistent across every chat with a bot
+// (Bot Chat and its sessions, excluding tasks and group rooms): a pinned Bot Chat tab on the left separated by a
+// vertical rule from the scrolling session tabs, with the active tab highlighted (soft accent fill + bottom accent
+// underline) and no redundant `<` Back chevron in the nav bar. It has no keys of its own: ⇧⌘[ / ⇧⌘] and ⌃Tab /
+// ⌃⇧Tab walk the window's tabs at its very top (`MacWorkspaceBar.cycleTabs`; owner 2026-11-27).
 
 // [typing-header] Owner 2026-11-20 ("Is there any way to reduce the height of that whole top section? … with the
 // keyboard up, there's really not much screen real estate left for the actual chat"; of the drawn study he said
@@ -153,10 +156,22 @@ nonisolated enum SessionStripRules {
         let placed = fresh + old
         return (entries.filter(\.isBotChat) + placed, placed.map(\.id))
     }
-    /// [bot-tabs-seamless] The Mac's strip draws only the bot's other chats (never its own Bot Chat: the header right
-    /// above already names the bot and the strip only lives on Bot Chat).
+    /// [mac-session-tabs] The Mac's persistent tab bar keeps the bot's own chat pinned first, followed by its live
+    /// sessions in settled order.
     static func macEntries(_ entries: [SessionStripEntry]) -> [SessionStripEntry] {
-        entries.filter { !$0.isBotChat }
+        let split = macSplit(entries)
+        return (split.bot.map { [$0] } ?? []) + split.sessions
+    }
+
+    /// Splits settled Mac entries into the pinned Bot Chat tab and the horizontally scrolling session tabs.
+    static func macSplit(_ entries: [SessionStripEntry]) -> (bot: SessionStripEntry?, sessions: [SessionStripEntry]) {
+        (entries.first(where: \.isBotChat), entries.filter { !$0.isBotChat })
+    }
+
+    /// Whether the Mac strip should be drawn: whenever the bot has other chats or live session tabs, or when viewing
+    /// a child session so the pinned Bot Chat tab stays one click away.
+    static func macDrawsStrip(bot: SessionStripEntry?, sessions: [SessionStripEntry], otherCount: Int, onBotChat: Bool) -> Bool {
+        otherCount > 0 || !sessions.isEmpty || (!onBotChat && bot != nil)
     }
 }
 
@@ -192,8 +207,9 @@ extension SessionStripRules {
     /// when the chat first appears, so a task's page, which puts its own panel there, keeps it.
     static func offer(to screen: ChatViewController, model: any ChatSessionModel, app: AppModel) {
         guard let live = model as? LiveChatSession, !(model is ChatRoomSurface) else { return }
-        // Both platforms use the bot's canonical chat as the doorway; child and group chats have no row.
-        let wanted = live.isBotChat
+        // [mac-session-tabs] On the Mac every chat with a bot (except tasks and group rooms) keeps the same tab strip;
+        // iPhone and iPad keep the strip on the bot's own chat only.
+        let wanted = DeviceWord.isMac || live.isBotChat
         if wanted { screen.makeTopStrip = { [weak screen, weak app] in
             // A task keeps its one chat: none over the Mac's task pane either (a chat with no panel of the task's on it).
             guard let screen, let app, screen.menus?.isTaskChat != true else { return nil }
@@ -212,7 +228,7 @@ extension SessionStripRules {
     static func count(app: AppModel, model: any ChatSessionModel) -> Int {
         if !DeviceWord.isMac { return phoneChats(app: app, model: model).count }
         let profile = model.profile.isEmpty ? "default" : model.profile
-        let current = (model as? LiveChatSession)?.storedSessionId
+        let current = (model as? LiveChatSession).flatMap { $0.storedSessionId ?? $0.resolvedStoredId }
         return SessionStripRules.chats(bot: app.botStore?.bot(named: profile), sessions: app.sessionsOutsideKeptProjects(keeping: current),
                                        profile: profile).count
     }
@@ -257,9 +273,10 @@ extension SessionStripRules {
         }
         let live = model as? LiveChatSession
         let profile = model.profile.isEmpty ? "default" : model.profile
+        let currentId = live?.storedSessionId ?? live?.resolvedStoredId
         let entries = SessionStripRules.entries(bot: app.botStore?.bot(named: profile),
-                                                sessions: app.sessionsOutsideKeptProjects(keeping: live?.storedSessionId), profile: profile,
-                                                currentId: live?.storedSessionId, onBotChat: live?.isBotChat == true,
+                                                sessions: app.sessionsOutsideKeptProjects(keeping: currentId), profile: profile,
+                                                currentId: currentId, onBotChat: live?.isBotChat == true,
                                                 kept: shownBefore[profile] ?? [], recent: !DeviceWord.isMac)
         shownBefore[profile, default: []].formUnion(entries.filter { !$0.isBotChat }.map(\.id))
         guard DeviceWord.isMac else { return entries }
@@ -390,6 +407,12 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
     /// away while the software keyboard covers the chat), so `ChatViewController` keeps the unified translucent top
     /// banner across the navigation bar and strip in both Native and Hermes looks.
     var hasBanner: Bool { !tabs && availableHeight > 0 }
+    /// [mac-session-tabs] On the Mac, the bot's own chat stays pinned at the leading edge outside `scroller`, parted
+    /// from the scrolling session tabs by a subtle vertical tick (`leftRule`).
+    private let pinnedSlot = UIView()
+    private let leftRule = UIView()
+    private var pinnedBotButton: UIButton?
+    private var shownBot: SessionStripEntry?
     private let scroller = UIScrollView()
     private let row = UIStackView()
     private let newChat = UIButton(configuration: .glass())
@@ -404,6 +427,8 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
     private let phoneCluster = UIView()
     private var allCount = -1
     private var phoneShowsAll = false
+    private lazy var scrollerToLeading = scroller.leadingAnchor.constraint(equalTo: view.leadingAnchor)
+    private lazy var scrollerToPinned = scroller.leadingAnchor.constraint(equalTo: leftRule.trailingAnchor, constant: 2)
     private lazy var scrollerToNew = scroller.trailingAnchor.constraint(equalTo: newChat.leadingAnchor, constant: -6)
     private lazy var scrollerToAll = tabs
         ? scroller.trailingAnchor.constraint(equalTo: allChats.leadingAnchor, constant: -6)
@@ -432,6 +457,15 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
 
     private func fileDropTarget(at point: CGPoint) -> SessionFileDrop.Target? {
         guard let screen, let app else { return nil }
+        if tabs, let botButton = pinnedBotButton, let entry = shownBot, !pinnedSlot.isHidden,
+           botButton.convert(botButton.bounds, to: view).contains(point) {
+            return SessionFileDrop.Target(key: "bot", view: botButton, cornerRadius: 6,
+                                          chat: SessionStrip.dropChat(entry, screen: screen),
+                                          open: { [weak screen, weak app] in
+                                              guard let screen, let app else { return }
+                                              SessionStrip.open(entry, from: screen, app: app)
+                                          })
+        }
         for pill in row.arrangedSubviews where !pill.isHidden {
             guard let entry = pillEntries[ObjectIdentifier(pill)], pill.convert(pill.bounds, to: view).contains(point) else { continue }
             return SessionFileDrop.Target(key: entry.isBotChat ? "bot" : entry.id, view: pill, cornerRadius: tabs ? 6 : pill.bounds.height / 2,
@@ -444,7 +478,22 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
         return nil
     }
 
-    init(screen: ChatViewController, app: AppModel) {
+    #if DEBUG
+    /// Pure in-memory driver for `-HQDemoLists -HQDemoRealChat YES -HQDemoSessionTabs YES` Mac captures.
+    struct DemoDriver {
+        var entries: () -> [SessionStripEntry]
+        var count: () -> Int
+        var open: (SessionStripEntry, ChatViewController) -> Void
+    }
+    private var demo: DemoDriver?
+
+    convenience init(screen: ChatViewController, demo: DemoDriver) {
+        self.init(screen: screen, app: nil)
+        self.demo = demo
+    }
+    #endif
+
+    init(screen: ChatViewController, app: AppModel?) {
         self.screen = screen
         self.app = app
         super.init(nibName: nil, bundle: nil)
@@ -565,7 +614,7 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
     /// the longest give way first, evenly, down to `narrowestTab` (then the row scrolls). A fixed cap cut titles in a
     /// half-empty row.
     private static let widestTab: CGFloat = 300
-    private static let narrowestTab: CGFloat = 110
+    private static let narrowestTab: CGFloat = 136
     private var tabCaps: [(tab: UIButton, cap: NSLayoutConstraint)] = []
     private var fittedFor: CGFloat = -1
 
@@ -628,6 +677,21 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
             phoneCluster.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(phoneCluster)
         }
+        rule.backgroundColor = Self.ruleColor
+        rule.isUserInteractionEnabled = false
+        rule.isHidden = !tabs && !Theme.isDesktop
+        rule.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(rule)
+        if tabs {
+            pinnedSlot.translatesAutoresizingMaskIntoConstraints = false
+            pinnedSlot.isHidden = true
+            view.addSubview(pinnedSlot)
+            leftRule.backgroundColor = Self.ruleColor
+            leftRule.isUserInteractionEnabled = false
+            leftRule.isHidden = true
+            leftRule.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(leftRule)
+        }
         let host: UIView = tabs ? view : phoneCluster
         scroller.showsHorizontalScrollIndicator = false
         scroller.alwaysBounceHorizontal = tabs
@@ -685,11 +749,6 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
         host.addSubview(allChats)
         row.axis = .horizontal
         row.spacing = 2
-        rule.backgroundColor = Self.ruleColor
-        rule.isUserInteractionEnabled = false
-        rule.isHidden = !tabs && !Theme.isDesktop
-        rule.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(rule)
         row.alignment = .center
         row.translatesAutoresizingMaskIntoConstraints = false
         scroller.addSubview(row)
@@ -699,13 +758,13 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
         let newW = newChat.widthAnchor.constraint(equalToConstant: tabs ? max(28, pillHeight) : 44)
         newChatWidth = newW
         var constraints: [NSLayoutConstraint] = [
-            allChats.centerYAnchor.constraint(equalTo: scroller.centerYAnchor),
+            allChats.centerYAnchor.constraint(equalTo: tabs ? view.centerYAnchor : scroller.centerYAnchor),
             rightRule.trailingAnchor.constraint(equalTo: newChat.leadingAnchor, constant: -6),
-            rightRule.centerYAnchor.constraint(equalTo: scroller.centerYAnchor),
+            rightRule.centerYAnchor.constraint(equalTo: tabs ? view.centerYAnchor : scroller.centerYAnchor),
             rightRule.widthAnchor.constraint(equalToConstant: pixel),
             rightRule.heightAnchor.constraint(equalToConstant: 12),
             newChat.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: tabs ? -10 : -14),
-            tabs ? newChat.centerYAnchor.constraint(equalTo: scroller.centerYAnchor)
+            tabs ? newChat.centerYAnchor.constraint(equalTo: view.centerYAnchor)
                 : newChat.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: -1),
             newW,
             rule.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -713,7 +772,7 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
             rule.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             rule.heightAnchor.constraint(equalToConstant: pixel),
             newH,
-            row.leadingAnchor.constraint(equalTo: scroller.contentLayoutGuide.leadingAnchor, constant: tabs ? 8 : 6),
+            row.leadingAnchor.constraint(equalTo: scroller.contentLayoutGuide.leadingAnchor, constant: tabs ? 4 : 6),
             row.trailingAnchor.constraint(equalTo: scroller.contentLayoutGuide.trailingAnchor, constant: tabs ? -8 : -6),
             row.topAnchor.constraint(equalTo: scroller.contentLayoutGuide.topAnchor),
             row.bottomAnchor.constraint(equalTo: scroller.contentLayoutGuide.bottomAnchor),
@@ -721,11 +780,18 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
         ]
         if tabs {
             constraints += [
-                scroller.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                pinnedSlot.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
+                pinnedSlot.topAnchor.constraint(equalTo: view.topAnchor),
+                pinnedSlot.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+                leftRule.leadingAnchor.constraint(equalTo: pinnedSlot.trailingAnchor, constant: 4),
+                leftRule.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+                leftRule.widthAnchor.constraint(equalToConstant: pixel),
+                leftRule.heightAnchor.constraint(equalToConstant: 12),
+                scrollerToLeading,
                 scrollerToNew,
                 allChats.trailingAnchor.constraint(equalTo: rightRule.leadingAnchor, constant: -6),
                 scroller.topAnchor.constraint(equalTo: view.topAnchor),
-                scroller.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -4),
+                scroller.bottomAnchor.constraint(equalTo: view.bottomAnchor),
                 macDesktopFrost.leadingAnchor.constraint(equalTo: view.leadingAnchor),
                 macDesktopFrost.trailingAnchor.constraint(equalTo: view.trailingAnchor),
                 macDesktopFrost.topAnchor.constraint(equalTo: view.topAnchor),
@@ -776,9 +842,10 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
                     self.newChatHeight?.constant = self.pillHeight
                     self.newChatWidth?.constant = max(28, self.pillHeight)
                 }
+                self.shownBot = nil
                 self.shown = []      // the pills again, in the look's colours
                 self.allCount = -1
-                self.reload()
+                self.reload(animated: false)
             }
         })
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (strip: SessionStripController, _) in
@@ -788,11 +855,12 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
                 strip.newChatHeight?.constant = strip.pillHeight
                 strip.newChatWidth?.constant = max(28, strip.pillHeight)
             }
+            strip.shownBot = nil
             strip.shown = []
             strip.allCount = -1
-            strip.reload()
+            strip.reload(animated: false)
         }
-        reload()
+        reload(animated: false)
     }
 
     private func configureNewChat() {
@@ -813,7 +881,7 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        reload()
+        reload(animated: false)
     }
 
     /// [bot-tabs-seamless] The Mac's iOS look bar switches between clear and frosted (`ChatViewController.updateTopBand`):
@@ -840,6 +908,7 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
             macIOSVeil.backgroundColor = solid ? ChatPalette.page : ChatPalette.popupVeil
             macIOSBand.alpha = topBandShown ? 1 : 0
             rule.backgroundColor = Self.ruleColor
+            leftRule.backgroundColor = Self.ruleColor
             rightRule.backgroundColor = Self.ruleColor
             return
         }
@@ -864,31 +933,86 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
         screen?.setTopAccessoryHeight(height, insets: true, animated: animated)
     }
 
-    private func reload() {
-        guard let app, let screen else { return }
-        let raw = SessionStripPref.isOn ? SessionStrip.entries(app: app, model: screen.session) : []
-        // [bot-tabs-seamless] On the Mac, omit the redundant Bot Chat tab; the header right above names the bot.
-        let entries = tabs ? SessionStripRules.macEntries(raw) : raw
-        // The Mac: only for a bot with a chat besides its own (its sidebar already says whose chat this is).
-        let others = SessionStripPref.isOn ? SessionStrip.count(app: app, model: screen.session) : 0
-        let drawn = DeviceWord.isMac ? others > 0 || !entries.isEmpty : !entries.isEmpty
+    private func reload(animated: Bool = true) {
+        guard let screen else { return }
+        #if targetEnvironment(macCatalyst)
+        screen.updateBackToBotChatButton()
+        #endif
+        let raw: [SessionStripEntry]
+        let others: Int
+        let onBotChat: Bool
+        #if DEBUG
+        if let demo {
+            raw = SessionStripPref.isOn ? demo.entries() : []
+            others = SessionStripPref.isOn ? demo.count() : 0
+            onBotChat = raw.first(where: \.isBotChat)?.current == true
+        } else if let app {
+            raw = SessionStripPref.isOn ? SessionStrip.entries(app: app, model: screen.session) : []
+            others = SessionStripPref.isOn ? SessionStrip.count(app: app, model: screen.session) : 0
+            onBotChat = (screen.session as? LiveChatSession)?.isBotChat == true
+        } else {
+            return
+        }
+        #else
+        guard let model = app else { return }   // not `app` itself: it stays optional below, as in the debug build
+        raw = SessionStripPref.isOn ? SessionStrip.entries(app: model, model: screen.session) : []
+        others = SessionStripPref.isOn ? SessionStrip.count(app: model, model: screen.session) : 0
+        onBotChat = (screen.session as? LiveChatSession)?.isBotChat == true
+        #endif
+        let macParts = tabs ? SessionStripRules.macSplit(raw) : (bot: nil, sessions: raw)
+        let botEntry = macParts.bot
+        let entries = macParts.sessions
+        let drawn = DeviceWord.isMac
+            ? SessionStripRules.macDrawsStrip(bot: botEntry, sessions: entries, otherCount: others, onBotChat: onBotChat)
+            : !entries.isEmpty
         let height: CGFloat = SessionStripPref.isOn && drawn ? stripHeight : 0
         showAllCount(height > 0 ? others : 0)
-        app.setChatList(self, shown: appeared && (DeviceWord.isMac ? height > 0 : SessionStripPref.isOn))
+        app?.setChatList(self, shown: appeared && (DeviceWord.isMac ? height > 0 : SessionStripPref.isOn))
         availableHeight = height
-        updateHeight(animated: view.window != nil && !HQMotion.reduced)
-        guard entries != shown else { return }
-        shown = entries
-        row.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        tabCaps = []
-        fittedFor = -1
-        pillEntries = [:]
-        for (index, entry) in entries.enumerated() {
-            if index > 0 { row.addArrangedSubview(middot()) }
-            let pill = pill(entry, index: index)
-            pillEntries[ObjectIdentifier(pill)] = entry
-            row.addArrangedSubview(pill)
+        updateHeight(animated: animated && view.window != nil && !HQMotion.reduced)
+        let botChanged = tabs && botEntry != shownBot
+        if botChanged {
+            shownBot = botEntry
+            pinnedSlot.subviews.forEach { $0.removeFromSuperview() }
+            pinnedBotButton = nil
+            if let botEntry {
+                let button = pill(botEntry, index: -1)
+                button.translatesAutoresizingMaskIntoConstraints = false
+                pinnedSlot.addSubview(button)
+                NSLayoutConstraint.activate([
+                    button.leadingAnchor.constraint(equalTo: pinnedSlot.leadingAnchor),
+                    button.trailingAnchor.constraint(equalTo: pinnedSlot.trailingAnchor),
+                    button.topAnchor.constraint(equalTo: pinnedSlot.topAnchor),
+                    button.bottomAnchor.constraint(equalTo: pinnedSlot.bottomAnchor),
+                ])
+                pinnedBotButton = button
+                pinnedSlot.isHidden = false
+                leftRule.isHidden = false
+                scrollerToLeading.isActive = false
+                scrollerToPinned.isActive = true
+            } else {
+                pinnedSlot.isHidden = true
+                leftRule.isHidden = true
+                scrollerToPinned.isActive = false
+                scrollerToLeading.isActive = true
+            }
+            fittedFor = -1
         }
+        let sessionsChanged = entries != shown
+        if sessionsChanged {
+            shown = entries
+            row.arrangedSubviews.forEach { $0.removeFromSuperview() }
+            tabCaps = []
+            fittedFor = -1
+            pillEntries = [:]
+            for (index, entry) in entries.enumerated() {
+                if index > 0 { row.addArrangedSubview(middot()) }
+                let pill = pill(entry, index: index)
+                pillEntries[ObjectIdentifier(pill)] = entry
+                row.addArrangedSubview(pill)
+            }
+        }
+        guard botChanged || sessionsChanged else { return }
         DispatchQueue.main.async { [weak self] in
             self?.updatePhoneAllVisibility()
             self?.view.setNeedsLayout()
@@ -956,44 +1080,80 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
     /// The chat on screen sits a little in from the leading edge, the pill before it peeking (there is more that way).
     private func showCurrent() {
         view.layoutIfNeeded()
-        guard let index = shown.firstIndex(where: \.current), index > 0,
+        guard let index = shown.firstIndex(where: \.current),
               !scroller.isTracking, !scroller.isDecelerating else { return }
         let targetEntry = shown[index]
         guard let pillView = row.arrangedSubviews.first(where: { pillEntries[ObjectIdentifier($0)] == targetEntry }) else { return }
         let pill = row.convert(pillView.frame, to: scroller)
         let most = max(0, scroller.contentSize.width - scroller.bounds.width)
+        guard most > 0 else { return }
+        if pill.minX >= scroller.contentOffset.x + 8 && pill.maxX <= scroller.contentOffset.x + scroller.bounds.width - 8 {
+            return
+        }
         let leading = view.effectiveUserInterfaceLayoutDirection == .rightToLeft
             ? max(0, most - (scroller.contentSize.width - pill.maxX - 56)) : pill.minX - 56
         scroller.setContentOffset(CGPoint(x: min(most, max(0, leading)), y: 0), animated: false)
+        placeFade()
     }
 
-    /// [bot-tabs-seamless] The Mac's seamless plain-text item: borderless at rest on the top bar's own ground, a 6 pt
-    /// dot before a chat at work or with a reply not read, and a soft hover fill under the pointer (`pill: true`:
-    /// crisp 4 pt box in Desktop Look, capsule in iOS Look).
+    /// [bot-tabs-seamless] [mac-session-tabs] The Mac's persistent tab item: borderless at rest on the top bar's own
+    /// ground, a 6 pt dot before a chat at work or with a reply not read (or the bot glyph on the pinned Bot Chat tab),
+    /// a soft hover fill under the pointer, and a subtle accent surface + bottom tint underline on the active tab.
     private func tab(_ entry: SessionStripEntry) -> UIButton {
         let inset: CGFloat = 8
         let live = entry.working || entry.unread
         var config = UIButton.Configuration.plain()
-        config.contentInsets = NSDirectionalEdgeInsets(top: 3, leading: inset, bottom: 3, trailing: inset)
+        config.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: inset, bottom: 0, trailing: inset)
         config.imagePadding = 6
         config.titleLineBreakMode = .byTruncatingTail
-        let face = macFont(weight: live ? .medium : .regular)
+        let weight: UIFont.Weight = entry.current ? .semibold : (live ? .medium : .regular)
+        let face = macFont(weight: weight)
         config.attributedTitle = AttributedString(entry.title, attributes: AttributeContainer([.font: face]))
         if entry.working {
             config.image = SessionStrip.dot(SessionStrip.workingColor, side: 6)
         } else if entry.unread {
             config.image = SessionStrip.dot(SessionStrip.unreadColor, side: 6)
+        } else if entry.isBotChat {
+            config.image = SessionStrip.robot(side: 12)
         }
-        config.baseForegroundColor = live ? ChatPalette.label : ChatPalette.label2
+        config.baseForegroundColor = (entry.current || live) ? ChatPalette.label : ChatPalette.label2
+        if entry.current {
+            config.background.backgroundColor = ChatPalette.tint.withAlphaComponent(0.12)
+            config.background.cornerRadius = Theme.isDesktop ? 5 : 6
+            config.background.backgroundInsets = NSDirectionalEdgeInsets(top: 4, leading: 1, bottom: 4, trailing: 1)
+        }
         let button = UIButton(configuration: config)
         button.isPointerInteractionEnabled = true
-        button.heightAnchor.constraint(equalToConstant: pillHeight).isActive = true
-        // Its width is shared out with the other tabs once the row is laid out (`fitTabs`).
-        let cap = button.widthAnchor.constraint(lessThanOrEqualToConstant: Self.widestTab)
-        cap.isActive = true
-        tabCaps.append((button, cap))
+        button.heightAnchor.constraint(equalToConstant: stripHeight).isActive = true
+        if entry.isBotChat {
+            button.setContentHuggingPriority(.required, for: .horizontal)
+            button.setContentCompressionResistancePriority(.required, for: .horizontal)
+            button.widthAnchor.constraint(lessThanOrEqualToConstant: 180).isActive = true
+        } else {
+            // Its width is shared out with the other tabs once the row is laid out (`fitTabs`).
+            let cap = button.widthAnchor.constraint(lessThanOrEqualToConstant: Self.widestTab)
+            cap.isActive = true
+            tabCaps.append((button, cap))
+        }
+        if entry.current {
+            let underline = UIView()
+            underline.backgroundColor = ChatPalette.tint
+            underline.layer.cornerRadius = 1
+            underline.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+            underline.isUserInteractionEnabled = false
+            underline.accessibilityElementsHidden = true
+            underline.translatesAutoresizingMaskIntoConstraints = false
+            button.addSubview(underline)
+            NSLayoutConstraint.activate([
+                underline.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: inset),
+                underline.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -inset),
+                underline.bottomAnchor.constraint(equalTo: button.bottomAnchor),
+                underline.heightAnchor.constraint(equalToConstant: 2),
+            ])
+        }
         PointerEffects.surface(button, pill: true)
-        button.toolTip = entry.detail.isEmpty ? entry.title : entry.title + "\n" + entry.detail
+        let botTip = entry.isBotChat ? "\(entry.title) — Bot Chat" : entry.title
+        button.toolTip = entry.detail.isEmpty ? botTip : entry.title + "\n" + entry.detail
         if !entry.isBotChat { button.menu = tabMenu(entry) }
         return button
     }
@@ -1013,12 +1173,13 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
 
     /// A right-click on a chat's tab: what the Sessions list's row offers that fits a tab.
     private func tabMenu(_ entry: SessionStripEntry) -> UIMenu {
-        var items: [UIMenuElement] = [
-            UIAction(title: "Open", image: UIImage(systemName: "bubble.left")) { [weak self] _ in
+        var items: [UIMenuElement] = []
+        if !entry.current {
+            items.append(UIAction(title: "Open", image: UIImage(systemName: "bubble.left")) { [weak self] _ in
                 guard let self, let screen = self.screen, let app = self.app else { return }
                 SessionStrip.open(entry, from: screen, app: app)
-            },
-        ]
+            })
+        }
         if entry.unread {
             items.append(UIAction(title: "Mark as Read", image: UIImage(systemName: "envelope.open")) { [weak self] _ in
                 self?.act(entry, failed: "") { store, chat in store.setUnread(chat, false) }
@@ -1030,7 +1191,7 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
             }
         })
         var tail: [UIMenuElement] = []
-        if !entry.working, !entry.unread, !entry.pinned {
+        if !entry.current, !entry.working, !entry.unread, !entry.pinned {
             tail.append(UIAction(title: "Remove from Tabs", image: UIImage(systemName: "xmark")) { [weak self] _ in
                 guard let screen = self?.screen else { return }
                 SessionStrip.forget(entry.id, profile: screen.session.profile.isEmpty ? "default" : screen.session.profile)
@@ -1055,13 +1216,21 @@ final class SessionStripController: UIViewController, UIScrollViewDelegate {
 
     private func pill(_ entry: SessionStripEntry, index: Int) -> UIButton {
         let button = tabs ? tab(entry) : phoneTab(entry)
-        button.accessibilityIdentifier = tabs ? "chat.strip.pill.\(index)" : "strip.session.\(entry.id)"
+        button.accessibilityIdentifier = tabs ? (entry.isBotChat ? "chat.strip.bot" : "chat.strip.pill.\(index)") : "strip.session.\(entry.id)"
         button.accessibilityLabel = [entry.title, entry.isBotChat ? "Bot Chat" : nil, entry.working ? "Working" : nil,
                                      entry.unread ? "New reply" : nil].compactMap { $0 }.joined(separator: ", ")
         if entry.current { button.accessibilityTraits.insert(.selected) }
         button.addAction(UIAction { [weak self] _ in
-            guard let self, let screen = self.screen, let app = self.app else { return }
+            guard let self, let screen = self.screen else { return }
             Haptics.play(.selection)
+            #if DEBUG
+            if let demo = self.demo {
+                guard !entry.current else { return }
+                demo.open(entry, screen)
+                return
+            }
+            #endif
+            guard let app = self.app else { return }
             SessionStrip.open(entry, from: screen, app: app)
         }, for: .primaryActionTriggered)
         return button

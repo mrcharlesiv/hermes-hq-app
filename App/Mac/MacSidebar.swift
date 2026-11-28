@@ -1254,7 +1254,17 @@ final class MacSidebar: UIView {
 
     private func markHeads() {
         let onBots = tabs?.shownTab == .bots
-        for (key, head) in heads { head.isMarked = onBots && key == openHead }
+        let chatMarked = onBots && openHead.flatMap { chatRows[$0] } != nil
+        // [mac-session-tabs] When browsing a bot's session without a dedicated child row under it in the sidebar, keep
+        // the parent bot highlighted so the workspace context stays clear across tab switches.
+        let markedHead: String? = if !onBots || chatMarked {
+            nil
+        } else if let openHead, openHead.contains("\u{1F}") {
+            openHead.split(separator: "\u{1F}", maxSplits: 1).first.map(String.init)
+        } else {
+            openHead
+        }
+        for (key, head) in heads { head.isMarked = onBots && key == markedHead }
         for (key, row) in chatRows { row.isMarked = onBots && key == openHead }
         let marked: UIView? = heads.values.first(where: \.isMarked) ?? chatRows.values.first(where: \.isMarked)
         if let marked, marked.superview != nil { reveal(marked) }

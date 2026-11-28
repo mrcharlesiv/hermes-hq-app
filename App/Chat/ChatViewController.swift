@@ -5353,20 +5353,25 @@ final class ChatViewController: UIViewController, UITableViewDataSource, UITable
     /// no bot of its own (a group room).
     var makeChatsPanel: (() -> BotChatsPanel?)?
 
-    /// [bot-chat-back] Owner 2026-11-19 ("When you click a chat from inside a bot chat I need for the chat that opens
-    /// to have a back button on the left side of the top bar to go back to the bot chat"): a chat opened from a bot's
-    /// own chat (a tab, the Chats list, New Chat) takes the bot chat's place in the pane, so the bar had no Back. This
-    /// is that Back: set by `SessionStrip.carryBack`, it leads the bar, and ⌘[ and Escape's last step run it too.
+    /// [bot-chat-back] Owner 2026-11-19: a chat opened from a bot's own chat (a tab, the Chats list, New Chat) takes
+    /// the bot chat's place in the pane. While the Mac session tab bar is on (`SessionStripPref.isOn`), the pinned Bot
+    /// Chat tab replaces the `<` chevron so the header stays steady, while ⌘[ and Escape's last step still return to
+    /// Bot Chat; turning the strip off restores `<` in the bar.
     var backToBotChat: (() -> Void)? {
-        didSet {
-            let had = navigationItem.leftBarButtonItems?.filter { $0.accessibilityIdentifier != Self.backToBotChatID } ?? []
-            guard backToBotChat != nil else { navigationItem.leftBarButtonItems = had.isEmpty ? nil : had; return }
-            let item = UIBarButtonItem(image: Self.barImage("chevron.backward"), primaryAction: UIAction { [weak self] _ in self?.backToBotChat?() })
-            item.accessibilityIdentifier = Self.backToBotChatID
-            item.accessibilityLabel = "Back to Bot Chat"
-            item.title = "Back to Bot Chat"   // the Mac shows a bar button's title as its tip
-            navigationItem.leftBarButtonItems = [item] + had
+        didSet { updateBackToBotChatButton() }
+    }
+
+    func updateBackToBotChatButton() {
+        let had = navigationItem.leftBarButtonItems?.filter { $0.accessibilityIdentifier != Self.backToBotChatID } ?? []
+        guard backToBotChat != nil, !SessionStripPref.isOn else {
+            navigationItem.leftBarButtonItems = had.isEmpty ? nil : had
+            return
         }
+        let item = UIBarButtonItem(image: Self.barImage("chevron.backward"), primaryAction: UIAction { [weak self] _ in self?.backToBotChat?() })
+        item.accessibilityIdentifier = Self.backToBotChatID
+        item.accessibilityLabel = "Back to Bot Chat"
+        item.title = "Back to Bot Chat"   // the Mac shows a bar button's title as its tip
+        navigationItem.leftBarButtonItems = [item] + had
     }
     #endif
     static let backToBotChatID = "chat.back-to-bot"

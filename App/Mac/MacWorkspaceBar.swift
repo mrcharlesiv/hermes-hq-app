@@ -38,6 +38,8 @@ final class MacWorkspaceBar: UIView {
     private let scroll = UIScrollView()
     private let strip = UIStackView()
     private var tabViews: [WorkspaceTabButton] = []
+    /// The row's tabs as drawn, left to right (the place's own tab first while it shows): what the keys walk.
+    private var shownItems: [TabItem] = []
     private var dividers: [UIView] = []
 
     // Trailing + button
@@ -440,6 +442,8 @@ final class MacWorkspaceBar: UIView {
             ))
         }
 
+        shownItems = displayItems
+
         // Rebuild arranged subviews cleanly.
         strip.arrangedSubviews.forEach { $0.removeFromSuperview() }
         tabViews.removeAll()
@@ -530,6 +534,25 @@ final class MacWorkspaceBar: UIView {
             tabs.sessionsViewController.openChat(session)
         }
         sync()
+    }
+
+    /// [mac-session-tabs] Owner 2026-11-27 ("is this tabbing between the tabs at the very top or the chats in the bot
+    /// chat header? … that doesn't make any sense"): Window › Show Next Tab and Show Previous Tab (⇧⌘] ⇧⌘[, and ⌃Tab
+    /// ⌃⇧Tab as in Safari) walk this row, the window's tabs, not the bot's chats under a chat's bar. On while there is
+    /// another tab to go to.
+    var canCycleTabs: Bool { cycleTarget(step: 1) != nil }
+
+    private func cycleTarget(step: Int) -> TabItem? {
+        WorkspaceTabList.cycledIndex(count: shownItems.count, active: shownItems.firstIndex(where: \.isActive), step: step)
+            .map { shownItems[$0] }
+    }
+
+    /// The next (`step` 1) or previous (-1) tab of the row, wrapping round at either end. False when it has no other.
+    @discardableResult
+    func cycleTabs(step: Int) -> Bool {
+        guard let target = cycleTarget(step: step) else { return false }
+        activate(target.destination)
+        return true
     }
 
     /// Closes the currently active workspace tab (wired to ⌘W). Returns true if a workspace tab was closed.

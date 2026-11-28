@@ -58,25 +58,33 @@ import UIKit
             }
             if !section.rows.isEmpty { out.append(section) }
         }
-        // The second keys: ⌃Tab / ⌃⇧Tab, ⌘. (Escape's), ↑ / ↓ and Return with no field taking them, ⌘=.
+        // The second keys: ⌘. (Escape's), ↑ / ↓ and Return with no field taking them, ⌘=. Not ⌃Tab / ⌃⇧Tab: they
+        // walk the window's tabs first ([mac-session-tabs]), so Window lists them, beside Show Next / Previous Tab.
         for command in KeyCommands.alternates {
-            guard let action = command.action, let at = place[action], let input = command.input else { continue }
+            guard let action = command.action, let at = place[action], let input = command.input, input != "\t" else { continue }
             out[at.section].rows[at.row].keys.append(keyName(input, command.modifierFlags))
         }
-        // Only while this gateway has a Terminal (the sidebar's Tool), in the menu bar's order: before Help.
-        if KeyCommands.root?.placedTabs.contains(where: { $0.tabBarItem.accessibilityIdentifier == "tab-page-terminal" }) == true {
-            out.insert(window, at: out.firstIndex { $0.title == "Help" } ?? out.count)
-        }
+        // [mac-session-tabs] Window lists the tab keys: the window's own tabs, and the Terminal's while this gateway has one.
+        let hasTerminal = KeyCommands.root?.placedTabs.contains(where: { $0.tabBarItem.accessibilityIdentifier == "tab-page-terminal" }) == true
+        out.insert(window(hasTerminal: hasTerminal), at: out.firstIndex { $0.title == "Help" } ?? out.count)
         return out
     }
 
-    /// [keys] Mac UI check 2026-11-13 (K7): the Terminal's own keys, and what View's text size keys do there.
-    /// [Mac AAA 2026-11-17] Owner's call Q10: they are the Window menu's items now (`KeyCommands.windowItems`, listed
-    /// while the Terminal is open), so they are listed under Window, by the items' own names and keys.
-    static var window: Section {
-        Section(title: "Window", rows: KeyCommands.windowItems().compactMap { command in
-            command.input.map { Row(title: command.title, keys: [keyName($0, command.modifierFlags)]) }
-        }, footer: "In the Window menu while the Terminal is open. While it is in front, Make Text Bigger, Actual Size and Make Text Smaller (⌘+ ⌘0 ⌘-) size its text, not the app’s.")
+    /// [keys] Mac UI check 2026-11-13 (K7) + [Mac AAA 2026-11-17] Q10 + [mac-session-tabs]: the Window menu's tab keys.
+    static func window(hasTerminal: Bool) -> Section {
+        var rows: [Row] = []
+        for command in KeyCommands.windowItems() {
+            if command.action == KeyCommands.terminalNewTab, !hasTerminal { continue }
+            guard let input = command.input else { continue }
+            var keys = [keyName(input, command.modifierFlags)]
+            if command.action == KeyCommands.terminalPreviousTab { keys.append("⌃⇧⇥") }
+            if command.action == KeyCommands.terminalNextTab { keys.append("⌃⇥") }
+            rows.append(Row(title: command.title, keys: keys))
+        }
+        let footer = hasTerminal
+            ? "Show Next Tab and Show Previous Tab walk the tabs at the top of the window, or the Terminal’s tabs while it is in front. While the Terminal is in front, Make Text Bigger, Actual Size and Make Text Smaller (⌘+ ⌘0 ⌘-) size its text, not the app’s."
+            : "Show Next Tab and Show Previous Tab walk the tabs at the top of the window, wrapping round at either end."
+        return Section(title: "Window", rows: rows, footer: footer)
     }
 
     /// A key as the menu bar draws it: ⌃⌥⇧⌘ then the key ("⇧⌘F", "⌘↩", "⎋").

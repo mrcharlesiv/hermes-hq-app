@@ -106,6 +106,18 @@ nonisolated public struct WorkspaceTabList: Equatable, Sendable {
         return true
     }
 
+    /// The slot Show Next Tab (`step` 1) or Show Previous Tab (`step` -1) lands on in a row of `count` tabs, the one at
+    /// `active` being on show: the neighbour, wrapping round at either end as Safari's ⌃Tab does. With no tab on show
+    /// (a page that has no tab of its own) the walk starts at the row's first tab, or its last going backwards. Nil
+    /// when there is nowhere else to go: one tab or none, or no step.
+    public static func cycledIndex(count: Int, active: Int?, step: Int) -> Int? {
+        guard count > 0, step != 0 else { return nil }
+        guard let active, (0..<count).contains(active) else { return step > 0 ? 0 : count - 1 }
+        guard count > 1 else { return nil }
+        let next = ((active + step) % count + count) % count
+        return next == active ? nil : next
+    }
+
     // MARK: - Persistence (per gateway)
 
     public static let storagePrefix = "HQMacWorkspaceTabs."

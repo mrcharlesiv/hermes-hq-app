@@ -159,14 +159,41 @@ struct SessionStripTests {
         #expect(SessionStripRules.settled([entry("bc", bot: true), entry("plain"), unread, busy], order: []).order == ["busy", "unread", "plain"])
     }
 
-    @Test("The Mac's seamless strip drops the redundant Bot Chat tab and keeps only the bot's other chats in order")
-    func macEntriesDropsBotChat() {
-        func entry(_ id: String, bot: Bool = false) -> SessionStripEntry {
-            SessionStripEntry(id: id, title: id, isBotChat: bot, working: false, unread: false, current: bot)
+    @Test("The Mac's persistent tab bar keeps the pinned Bot Chat tab first and splits it from scrolling session tabs")
+    func macEntriesAndSplit() {
+        func entry(_ id: String, bot: Bool = false, current: Bool = false) -> SessionStripEntry {
+            SessionStripEntry(id: id, title: id, isBotChat: bot, working: false, unread: false, current: current)
         }
-        let settled = SessionStripRules.settled([entry("bc", bot: true), entry("a"), entry("b")], order: []).entries
-        #expect(SessionStripRules.macEntries(settled).map(\.id) == ["a", "b"])
-        #expect(SessionStripRules.macEntries([entry("bc", bot: true)]).isEmpty)
+        let settled = SessionStripRules.settled([entry("bc", bot: true), entry("a", current: true), entry("b")], order: []).entries
+        #expect(SessionStripRules.macEntries(settled).map(\.id) == ["bc", "a", "b"])
+        let split = SessionStripRules.macSplit(settled)
+        #expect(split.bot?.id == "bc" && split.bot?.isBotChat == true)
+        #expect(split.sessions.map(\.id) == ["a", "b"])
+        #expect(SessionStripRules.macEntries([entry("bc", bot: true, current: true)]).map(\.id) == ["bc"])
+    }
+
+    @Test("The Mac strip draws whenever the bot has other chats or live tabs, or on a child session so Bot Chat stays reachable")
+    func macDrawsStripRules() {
+        let botEntry = SessionStripEntry(id: "bc", title: "Hermes HQ", isBotChat: true, working: false, unread: false, current: true)
+        let session = SessionStripEntry(id: "a", title: "Chat a", isBotChat: false, working: false, unread: false, current: false)
+        #expect(!SessionStripRules.macDrawsStrip(bot: botEntry, sessions: [], otherCount: 0, onBotChat: true))
+        #expect(SessionStripRules.macDrawsStrip(bot: botEntry, sessions: [], otherCount: 2, onBotChat: true))
+        #expect(SessionStripRules.macDrawsStrip(bot: botEntry, sessions: [session], otherCount: 0, onBotChat: true))
+        #expect(SessionStripRules.macDrawsStrip(bot: botEntry, sessions: [], otherCount: 0, onBotChat: false))
+        #expect(!SessionStripRules.macDrawsStrip(bot: nil, sessions: [], otherCount: 0, onBotChat: false))
+    }
+
+    @Test("Opening a child session highlights it, clears its unread badge, and preserves Bot Chat's unread badge")
+    func childSessionActiveTabState() {
+        let chats = [chat("a", ago: 600, running: true), chat("b", ago: 900, unread: true)]
+        let raw = SessionStripRules.entries(bot: bot(working: false, unread: true), sessions: chats, profile: "hermes-hq",
+                                            currentId: "b", onBotChat: false, recent: false, now: now)
+        let settled = SessionStripRules.settled(raw, order: ["a", "b"]).entries
+        let split = SessionStripRules.macSplit(settled)
+        #expect(split.bot?.current == false && split.bot?.unread == true)
+        #expect(split.sessions.map(\.id) == ["a", "b"])
+        #expect(split.sessions[0].current == false && split.sessions[0].working == true)
+        #expect(split.sessions[1].current == true && split.sessions[1].unread == false)
     }
 
     @Test("A tab carries its last line for the tip, or the step while it works, and whether it is pinned")

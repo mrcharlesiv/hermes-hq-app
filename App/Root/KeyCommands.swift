@@ -220,17 +220,20 @@ extension MoreViewController: KeySearchable {}
     /// Notion (⇧⌘/ stays the system's Help search).
     static func helpItems() -> [UIMenuElement] { [command("Keyboard Shortcuts", keyboardShortcuts, "/", .command)] }
 
-    /// [Mac AAA 2026-11-17] Owner's call Q10: the Terminal's tab keys, listed in the Window menu while the Terminal is
-    /// on screen and on while it is in front, as Apple's Terminal lists its tabs there (`build`, `validate`). They were
-    /// keys in no menu.
+    /// [Mac AAA 2026-11-17] Owner's call Q10 + [mac-session-tabs]: the Window menu's tab items.
+    /// `New Tab` (⌘T) shows only while a Terminal is on screen; `Show Previous Tab` (⇧⌘[) and `Show Next Tab` (⇧⌘])
+    /// walk the Terminal's tabs while it is in front, and otherwise the window's own tabs: the row at its very top
+    /// (`MacWorkspaceBar`), as Safari's do. Never the bot's chats under a chat's bar (owner 2026-11-27).
     static let terminalNewTab = #selector(AppDelegate.hqTerminalNewTab(_:))
     static let terminalNextTab = #selector(AppDelegate.hqTerminalNextTab(_:))
     static let terminalPreviousTab = #selector(AppDelegate.hqTerminalPreviousTab(_:))
     static let terminalActions: Set<Selector> = [terminalNewTab, terminalNextTab, terminalPreviousTab]
     static func windowItems() -> [UIKeyCommand] {
-        [command("New Tab", terminalNewTab, "t", .command),
-         command("Show Previous Tab", terminalPreviousTab, "[", [.command, .shift]),
-         command("Show Next Tab", terminalNextTab, "]", [.command, .shift])]
+        let previous = command("Show Previous Tab", terminalPreviousTab, "[", [.command, .shift])
+        let next = command("Show Next Tab", terminalNextTab, "]", [.command, .shift])
+        previous.repeatBehavior = .nonRepeatable
+        next.repeatBehavior = .nonRepeatable
+        return [command("New Tab", terminalNewTab, "t", .command), previous, next]
     }
     /// [mac-feel D30] Page Up, Page Down, Home and End scroll the chat on show (`ChatViewController.keyScroll`).
     static let scrollChat = #selector(AppDelegate.hqScrollChat(_:))
@@ -336,11 +339,9 @@ extension MoreViewController: KeySearchable {}
         MacUpdater.addMenuItem(builder)
         // [mac-audit K] Owner 2026-11-02: Help › Keyboard Shortcuts lists every key in a sheet (MacShortcutsSheet).
         builder.insertChild(UIMenu(title: "", options: .displayInline, children: helpItems()), atStartOfMenu: .help)
-        // After Minimize and Zoom, where Apple's Terminal lists its tabs; only while a Terminal is on screen (it asks for
-        // the menu again as it shows and goes: a hidden group left two lines in a row behind).
-        if TerminalViewController.onShow {
-            builder.insertSibling(UIMenu(title: "", options: .displayInline, children: windowItems()), afterMenu: .minimizeAndZoom)
-        }
+        // After Minimize and Zoom, where Safari and Terminal list their tabs: Show Previous/Next Tab walk the
+        // Terminal's tabs while it is in front, else the window's top row; New Tab hides unless a Terminal is on screen.
+        builder.insertSibling(UIMenu(title: "", options: .displayInline, children: windowItems()), afterMenu: .minimizeAndZoom)
         TypeToChatKeys.install()   // [Mac AAA 2026-11-17] owner's call Q1
         #endif
         builder.insertChild(UIMenu(title: "", options: .displayInline, children: fileItems()), atStartOfMenu: .file)
@@ -598,6 +599,19 @@ extension MoreViewController: KeySearchable {}
         #endif
     }
 
+    #if targetEnvironment(macCatalyst)
+    /// [mac-session-tabs] Whether the window's tab row (the one at its very top) has another tab to show.
+    static func canCycleWindowTabs(_ root: MainTabController) -> Bool {
+        root.split?.macWorkspaceBar.canCycleTabs == true
+    }
+
+    /// The window's next (`step` 1) or previous (-1) tab, wrapping round. False when the row has no other tab.
+    @discardableResult
+    static func cycleWindowTabs(_ root: MainTabController, step: Int) -> Bool {
+        root.split?.macWorkspaceBar.cycleTabs(step: step) ?? false
+    }
+    #endif
+
     /// [macpass-tools] The list's page while it shows a folder it opened in place (Files' table): Back goes up one.
     static func inPlaceBack(_ root: MainTabController) -> InPlaceBack? {
         guard let page = listOnShow(root) as? InPlaceBack, page.canGoBackInPlace else { return nil }
@@ -814,13 +828,21 @@ extension AppDelegate {
             let find = settings != nil || KeyCommands.fileInFront != nil ? nil : KeyCommands.root.flatMap { KeyCommands.presented($0) == nil ? $0.chatOnShow?.findController : nil }
             command.attributes = find?.canStep == true ? [] : .disabled
             return
-        case KeyCommands.terminalNewTab, KeyCommands.terminalNextTab, KeyCommands.terminalPreviousTab:
-            // [Mac AAA 2026-11-17] Owner's call Q10: listed while a Terminal is on screen (`build`), on while it is in
-            // front with something to do (no shell open yet, one tab or the most tabs dim them; so do a sheet over it
-            // and another window in front).
-            guard let terminal = TerminalViewController.front else { command.attributes = .disabled; return }
-            let can = command.action == KeyCommands.terminalNewTab ? terminal.canAddTab : terminal.canCycleTabs
-            command.attributes = can ? [] : .disabled
+        case KeyCommands.terminalNewTab:
+            // [Mac AAA 2026-11-17] Owner's call Q10: New Tab (⌘T) stays hidden unless a Terminal is on screen.
+            guard TerminalViewController.onShow else { command.attributes = .hidden; return }
+            command.attributes = TerminalViewController.front?.canAddTab == true ? [] : .disabled
+            return
+        case KeyCommands.terminalNextTab, KeyCommands.terminalPreviousTab:
+            // [Mac AAA 2026-11-17] [mac-session-tabs] Show Previous/Next Tab (⇧⌘[ / ⇧⌘]) walk the Terminal's tabs
+            // while it is in front, and otherwise the window's own row of tabs at its top.
+            if let terminal = TerminalViewController.front {
+                command.attributes = terminal.canCycleTabs ? [] : .disabled
+                return
+            }
+            let canWalk = settings == nil && KeyCommands.fileInFront == nil
+                && KeyCommands.root.map { KeyCommands.presented($0) == nil && KeyCommands.canCycleWindowTabs($0) } == true
+            command.attributes = canWalk ? [] : .disabled
             return
         case KeyCommands.keyboardShortcuts:
             // [mac] Mac polish #21: before the main page is up (the sign-in form) there is nothing to list keys for.
@@ -908,6 +930,11 @@ extension AppDelegate {
         case KeyCommands.nextChat, KeyCommands.previousChat:
             enabled = enabled && KeyCommands.walkTarget(root, forward: command.action == KeyCommands.nextChat) != nil
             #if targetEnvironment(macCatalyst)
+            // [mac-session-tabs] ⌃Tab / ⌃⇧Tab walk the window's tabs first (as in Safari), so they stay on with one
+            // row in the list and `walkTarget` nil.
+            if (command as? UIKeyCommand)?.input == "\t", !covered, KeyCommands.canCycleWindowTabs(root) {
+                enabled = true
+            }
             // [Mac AAA 2026-11-17] The second keys (`alternates`: plain ↑ / ↓, ⌃Tab) have no title; they may reach here as
             // plain commands, so the title tells them from the menu's items. At either end of a walked list they stay
             // taken and do nothing, so the press never moves the system's grey focus mark down the rows; the menu's
@@ -1507,15 +1534,25 @@ extension AppDelegate {
     }
 
     @objc func hqTerminalNextTab(_ sender: Any?) {
-        guard let terminal = TerminalViewController.front else { return }
-        AppLog.note("keys", "terminal: next tab")
-        terminal.menuCycle(1)
+        if let terminal = TerminalViewController.front {
+            AppLog.note("keys", "terminal: next tab")
+            terminal.menuCycle(1)
+            return
+        }
+        if let root = uncovered, KeyCommands.cycleWindowTabs(root, step: 1) {
+            AppLog.note("keys", "window tabs: next tab")
+        }
     }
 
     @objc func hqTerminalPreviousTab(_ sender: Any?) {
-        guard let terminal = TerminalViewController.front else { return }
-        AppLog.note("keys", "terminal: previous tab")
-        terminal.menuCycle(-1)
+        if let terminal = TerminalViewController.front {
+            AppLog.note("keys", "terminal: previous tab")
+            terminal.menuCycle(-1)
+            return
+        }
+        if let root = uncovered, KeyCommands.cycleWindowTabs(root, step: -1) {
+            AppLog.note("keys", "window tabs: previous tab")
+        }
     }
 
     /// [mac-feel D30] Page Up, Page Down, Home, End: the chat on show scrolls (which key: `KeyCommands.scrollKey`).
@@ -1564,8 +1601,25 @@ extension AppDelegate {
         menus.performListAction(.archive)
     }
 
-    @objc func hqNextChat(_ sender: Any?) { walk(forward: true) }
-    @objc func hqPreviousChat(_ sender: Any?) { walk(forward: false) }
+    @objc func hqNextChat(_ sender: Any?) {
+        #if targetEnvironment(macCatalyst)
+        if (sender as? UIKeyCommand)?.input == "\t", let root = uncovered, KeyCommands.cycleWindowTabs(root, step: 1) {
+            AppLog.note("keys", "window tabs: next tab (⌃Tab)")
+            return
+        }
+        #endif
+        walk(forward: true)
+    }
+
+    @objc func hqPreviousChat(_ sender: Any?) {
+        #if targetEnvironment(macCatalyst)
+        if (sender as? UIKeyCommand)?.input == "\t", let root = uncovered, KeyCommands.cycleWindowTabs(root, step: -1) {
+            AppLog.note("keys", "window tabs: previous tab (⌃⇧Tab)")
+            return
+        }
+        #endif
+        walk(forward: false)
+    }
 
     private func walk(forward: Bool) {
         guard let root = uncovered, let target = KeyCommands.walkTarget(root, forward: forward) else {
@@ -1777,6 +1831,21 @@ extension KanbanBoardListController: ListPaneContent {}
         }
         let flags = (event.value(forKey: "modifierFlags") as? NSNumber)?.uintValue ?? 0
         let mods = flags & (1 << 17 | 1 << 18 | 1 << 19 | 1 << 20)   // shift, control, option, command
+        // [mac-session-tabs] AppKit swallows ⌃Tab / ⌃⇧Tab before UIKit sees them; with no Terminal, sheet or other
+        // window in front they walk the window's tabs (the row at its very top) here, as Safari's do.
+        let controlTab = code == 48 && (mods == 1 << 18 || mods == ((1 << 18) | (1 << 17)))
+        if controlTab, (event.value(forKey: "isARepeat") as? Bool) != true,
+           !composing(), sheetWindow() == nil, appWindowIsKey(),
+           KeyCommands.settingsInFront == nil, KeyCommands.fileInFront == nil,
+           TerminalViewController.front == nil,
+           let root = KeyCommands.root, KeyCommands.presented(root) == nil {
+            let step = (mods & (1 << 17)) != 0 ? -1 : 1
+            if KeyCommands.cycleWindowTabs(root, step: step) {
+                AppLog.note("keys", step > 0 ? "window tabs: next tab (⌃Tab)" : "window tabs: previous tab (⌃⇧Tab)")
+                taken = code
+                return true
+            }
+        }
         let characters = event.value(forKey: "charactersIgnoringModifiers") as? String
         let commandPeriod = characters == "." && mods == 1 << 20
         guard (code == 53 && mods == 0) || commandPeriod, (event.value(forKey: "isARepeat") as? Bool) != true else { return false }

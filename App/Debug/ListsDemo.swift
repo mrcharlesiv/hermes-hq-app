@@ -12,7 +12,12 @@ enum ListsDemo {
     static func makeRoot() -> UIViewController {
         let services = FakeAppServices()
         services.onSignOut = { swapRoot(to: makeSignIn()) }
-        let root = MainTabController(services: services) { model in
+        var makeChat: ((ChatSessionModel) -> UIViewController)!
+        #if targetEnvironment(macCatalyst)
+        var tabOrder: [String: [String]] = [:]
+        var shownBefore: [String: Set<String>] = [:]
+        #endif
+        makeChat = { model in
             // [mac-layout] `-HQDemoRealChat`: a real chat screen (generated messages, the bot's face in the title) in
             // place of the placeholder, so the chat's bar can be judged in the Mac's root.
             guard UserDefaults.standard.bool(forKey: "HQDemoRealChat") else { return DemoChatViewController(model: model) }
@@ -31,8 +36,54 @@ enum ListsDemo {
             chat.makeInfoContent = { [weak session] in
                 session.map { ChatInfoSheet.makeContent(model: $0, account: nil, modelName: "claude-opus-4-5") }
             }
+            #if targetEnvironment(macCatalyst)
+            if UserDefaults.standard.bool(forKey: "HQDemoSessionTabs") {
+                let profile = model.profile.isEmpty ? "default" : model.profile
+                let currentId = (model as? FakeChatModel)?.sessionId
+                let onBotChat = currentId == nil
+                chat.makeTopStrip = { [weak chat] in
+                    guard let chat else { return nil }
+                    return SessionStripController(screen: chat, demo: .init(
+                        entries: {
+                            let bot = services.bots.first { $0.id == profile }
+                            let raw = SessionStripRules.entries(bot: bot, sessions: services.sessions, profile: profile,
+                                                                currentId: currentId, onBotChat: onBotChat,
+                                                                kept: shownBefore[profile] ?? [], recent: false)
+                            shownBefore[profile, default: []].formUnion(raw.filter { !$0.isBotChat }.map(\.id))
+                            let settled = SessionStripRules.settled(raw, order: tabOrder[profile] ?? [])
+                            tabOrder[profile] = settled.order
+                            return settled.entries
+                        },
+                        count: {
+                            let bot = services.bots.first { $0.id == profile }
+                            return SessionStripRules.chats(bot: bot, sessions: services.sessions, profile: profile).count
+                        },
+                        open: { entry, screen in
+                            guard !entry.current, let navigation = screen.navigationController else { return }
+                            let nextModel: ChatSessionModel
+                            if entry.isBotChat {
+                                guard let bot = services.bots.first(where: { $0.id == profile }) else { return }
+                                nextModel = services.chat(for: bot)
+                            } else {
+                                guard let summary = services.sessions.first(where: { $0.id == entry.id }) else { return }
+                                nextModel = services.chat(for: summary)
+                            }
+                            let next = makeChat(nextModel)
+                            next.hidesBottomBarWhenPushed = true
+                            next.navigationItem.largeTitleDisplayMode = .never
+                            var stack = navigation.viewControllers
+                            if let index = stack.firstIndex(where: { $0 === screen }) { stack.remove(at: index) }
+                            stack.append(next)
+                            navigation.setViewControllers(stack, animated: false)
+                            AppModel.markPane(navigation)
+                        }
+                    ))
+                }
+            }
+            #endif
             return chat
         }
+        let root = MainTabController(services: services, makeChat: makeChat)
         // Screenshot controls (the simulator can't be tapped from scripts): -HQDemoTab 1, -HQDemoShowHidden YES,
         // -HQDemoSearch <text>, -HQDemoOpen <bot id>, -HQDemoAccount YES, -HQDemoScrollEnd YES,
         // -HQDemoScrollBy <points> (both lists), -HQDemoOfflineAfter <s> / -HQDemoReconnectingAfter <s> (the link drops).
@@ -166,14 +217,14 @@ final class FakeAppServices: AppServices {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in self?.onSessionsChange?() }
     }
 
-    func chat(for bot: Bot) -> ChatSessionModel { FakeChatModel(title: bot.name, profile: bot.id, head: bot.head) }
+    func chat(for bot: Bot) -> ChatSessionModel { FakeChatModel(title: bot.name, profile: bot.id, head: bot.head, sessionId: nil) }
 
     func chat(for session: SessionSummary) -> ChatSessionModel {
         if let i = sessions.firstIndex(where: { $0.id == session.id }), sessions[i].unread {
             sessions[i].unread = false
             onSessionsChange?()
         }
-        return FakeChatModel(title: session.title, profile: session.profile, head: bots.first { $0.id == session.profile }?.head)
+        return FakeChatModel(title: session.title, profile: session.profile, head: bots.first { $0.id == session.profile }?.head, sessionId: session.id)
     }
 
     func markRead(_ bot: Bot) {
@@ -275,11 +326,15 @@ final class FakeAppServices: AppServices {
                                     60 * 190, 60 * 200, 60 * 230, 60 * 260, 60 * 280, 60 * 300, 60 * 330, 60 * 360,
                                     60 * 380, 60 * 400, 60 * 420, 60 * 440, 60 * 460, 60 * 480, 60 * 500, 60 * 520,
                                     60 * 540, 60 * 560, 60 * 600, 60 * 700]
-        let chats = minutesAgo.enumerated().map { i, minutes in
-            SessionSummary(id: "session-\(i)", profile: profiles[i % profiles.count],
-                           title: i == 7 ? "" : titles[i % titles.count], preview: previews[i % previews.count],
-                           lastActive: now.addingTimeInterval(-minutes * 60), source: "desktop",
-                           unread: [1, 4, 9].contains(i), isRunning: i == 0)
+        let sessionTabsDemo = UserDefaults.standard.bool(forKey: "HQDemoSessionTabs")
+        let chats = minutesAgo.enumerated().map { i, minutes -> SessionSummary in
+            let title = (sessionTabsDemo && i == 16) ? "Quarterly budget" : (i == 7 ? "" : titles[i % titles.count])
+            var row = SessionSummary(id: "session-\(i)", profile: profiles[i % profiles.count],
+                                     title: title, preview: previews[i % previews.count],
+                                     lastActive: now.addingTimeInterval(-minutes * 60), source: "desktop",
+                                     unread: [1, 4, 9].contains(i) || (sessionTabsDemo && i == 16), isRunning: i == 0)
+            if sessionTabsDemo && i == 8 { row.pinned = true }
+            return row
         }
         // Background and cron runs: not listed nor counted (spec 02 §9.2), so these never show.
         let runs = [
@@ -298,6 +353,7 @@ final class FakeChatModel: ChatSessionModel {
     let title: String
     let profile: String
     let head: JSONValue?
+    let sessionId: String?
     var messages: [ChatMessage] = []
     var isRunning = false
     var hasOlder = false
@@ -306,8 +362,8 @@ final class FakeChatModel: ChatSessionModel {
     var statusText: String?
     var onChange: ((ChatChange) -> Void)?
 
-    init(title: String, profile: String, head: JSONValue?) {
-        self.title = title; self.profile = profile; self.head = head
+    init(title: String, profile: String, head: JSONValue?, sessionId: String? = nil) {
+        self.title = title; self.profile = profile; self.head = head; self.sessionId = sessionId
     }
     func start() {}
     func stopObserving() {}

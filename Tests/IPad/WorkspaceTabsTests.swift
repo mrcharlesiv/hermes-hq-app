@@ -105,4 +105,24 @@ struct WorkspaceTabsTests {
         gwA.save(gatewayId: "gw-a", defaults: defaults)
         #expect(WorkspaceTabList.load(gatewayId: "gw-a", defaults: defaults).tabs.isEmpty)
     }
+
+    @Test("Show Next Tab and Show Previous Tab step to the neighbour and wrap round at either end, as Safari's ⌃Tab does")
+    func cyclingWrapsRound() {
+        #expect(WorkspaceTabList.cycledIndex(count: 4, active: 0, step: 1) == 1)
+        #expect(WorkspaceTabList.cycledIndex(count: 4, active: 2, step: -1) == 1)
+        #expect(WorkspaceTabList.cycledIndex(count: 4, active: 3, step: 1) == 0)
+        #expect(WorkspaceTabList.cycledIndex(count: 4, active: 0, step: -1) == 3)
+    }
+
+    @Test("With one tab, none, or no step there is nowhere to go; from a page with no tab the walk starts at an end")
+    func cyclingEdges() {
+        #expect(WorkspaceTabList.cycledIndex(count: 1, active: 0, step: 1) == nil)
+        #expect(WorkspaceTabList.cycledIndex(count: 1, active: 0, step: -1) == nil)
+        #expect(WorkspaceTabList.cycledIndex(count: 0, active: nil, step: 1) == nil)
+        #expect(WorkspaceTabList.cycledIndex(count: 3, active: 1, step: 0) == nil)
+        #expect(WorkspaceTabList.cycledIndex(count: 3, active: nil, step: 1) == 0)
+        #expect(WorkspaceTabList.cycledIndex(count: 3, active: nil, step: -1) == 2)
+        #expect(WorkspaceTabList.cycledIndex(count: 1, active: nil, step: 1) == 0)
+        #expect(WorkspaceTabList.cycledIndex(count: 3, active: 7, step: 1) == 0)
+    }
 }

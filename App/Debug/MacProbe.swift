@@ -68,6 +68,12 @@ import UIKit
                     // [bot-chat-sessions] tap <file> <label>: that control's own action, or that table row's selection
                     let bits = arg.split(separator: " ", maxSplits: 1).map(String.init)
                     write(tap(bits.count > 1 ? bits[1] : ""), to: folder.appending(path: "\(name)-\(bits[0])"), "txt")
+                case "nexttab", "prevtab":
+                    // [mac-session-tabs] Window › Show Next / Previous Tab by the menu's own action (the window's tabs).
+                    let action = verb == "nexttab" ? KeyCommands.terminalNextTab : KeyCommands.terminalPreviousTab
+                    let target = UIApplication.shared.delegate
+                    let sent = UIApplication.shared.sendAction(action, to: target, from: nil, for: nil)
+                    write("\(verb): sent=\(sent) chat='\(KeyCommands.root?.chatOnShow?.title ?? "")'", to: file, "txt")
                 case "pins":
                     // [rest-hands 2026-11-17] pins <file>: pin the stand-in's artifacts as tiles from the Artifacts list
                     // on show (the stand-ins have no tiles), as the rest tour does.
